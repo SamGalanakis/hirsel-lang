@@ -1,8 +1,8 @@
 //! Extern dispatch (S-13): each extern's `hirsel_rt_v2_foreign_enter` dispatch word, from its
 //! package's trusted `threads` and its `@blocking`, and the build check that a callback which
 //! can reach a `home` package is handed only to a `home` package's extern.
+use super::queries::root_source::LinkSource;
 use super::stages::{NativeError, ReadyProgram, StageName};
-use hirsel_engine::{NativeInput, ValidatedNativeInput};
 use hirsel_lir::runtime_abi::{
     FOREIGN_BLOCKING, FOREIGN_PACKAGE_SHIFT, FOREIGN_THREADS_ANY, FOREIGN_THREADS_HOME,
     FOREIGN_THREADS_MASK, FOREIGN_THREADS_SERIAL,
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// Each extern's dispatch word: its package's `threads`, its `@blocking` and its package's
 /// ordinal among the program's `unsafe ffi` packages, which names the package's `serial`
 /// gate in the run.
-pub(crate) fn dispatch(input: &NativeInput) -> BTreeMap<DefPath, u64> {
+pub(crate) fn dispatch(input: &LinkSource<'_>) -> BTreeMap<DefPath, u64> {
     let ordinals: BTreeMap<_, u64> = input
         .foreign_threads
         .keys()
@@ -52,7 +52,7 @@ pub(crate) fn dispatch(input: &NativeInput) -> BTreeMap<DefPath, u64> {
         .collect()
 }
 
-fn threads(input: &NativeInput, path: &DefPath) -> ForeignThreads {
+fn threads(input: &LinkSource<'_>, path: &DefPath) -> ForeignThreads {
     input
         .foreign_threads
         .get(&path.0.package)
@@ -70,13 +70,13 @@ fn threads(input: &NativeInput, path: &DefPath) -> ForeignThreads {
 /// packages' records apart.
 pub(crate) fn check_callbacks(
     program: &ReadyProgram,
-    input: &ValidatedNativeInput,
+    input: &LinkSource<'_>,
 ) -> Result<(), NativeError> {
-    let snapshot = input.snapshot();
+    let snapshot = input;
     // Each callback type a parameter of a non-home extern carries, with the first such
     // extern.
     let mut handed: BTreeMap<String, DefPath> = BTreeMap::new();
-    for (path, signature) in &snapshot.signatures {
+    for (path, signature) in snapshot.signatures {
         match program.foreign_dispatch.get(path) {
             Some(word) if word & FOREIGN_THREADS_MASK != FOREIGN_THREADS_HOME => {}
             _ => continue,
@@ -110,7 +110,7 @@ pub(crate) fn check_callbacks(
         let Some(extern_) = handed.get(&function_shape(&snapshot.types, function)) else {
             continue;
         };
-        if let Some(reach) = input.home_reach(callback) {
+        if let Some(reach) = input.semantic.home_reach(callback) {
             let home = reach.path.last().unwrap_or(callback);
             return Err(NativeError {
                 definition: Some(callback.clone()),

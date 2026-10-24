@@ -14,6 +14,7 @@ pub mod local;
 pub mod products;
 pub mod ready;
 pub mod recipes;
+pub mod root_source;
 pub mod source;
 pub mod tasks;
 

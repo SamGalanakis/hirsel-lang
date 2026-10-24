@@ -3,8 +3,8 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
-mod work;
 pub mod runtime;
+mod work;
 pub use work::WorkStats;
 mod operations;
 pub use operations::*;
@@ -12,6 +12,8 @@ mod native_audit;
 pub use native_audit::{CleanupSite, SourceAudit};
 mod native_input;
 pub use native_input::*;
+mod native_semantic;
+pub use native_semantic::NativeSemanticProgram;
 mod native_queries;
 pub use native_queries::*;
 mod representation;

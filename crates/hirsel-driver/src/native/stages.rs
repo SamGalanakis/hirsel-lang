@@ -290,7 +290,13 @@ impl ReadyProgram {
     /// Attach checked semantic code selection, independently of pass options and topology.
     /// Adapted-program clients retain and supply their validated source input here.
     pub fn bind_revisions(&mut self, input: &ValidatedNativeInput) -> Result<(), NativeError> {
-        if self.input != adapt::input_identity(input.snapshot()) {
+        self.bind_source(&super::queries::root_source::LinkSource::snapshot(input))
+    }
+    pub(crate) fn bind_source(
+        &mut self,
+        input: &super::queries::root_source::LinkSource<'_>,
+    ) -> Result<(), NativeError> {
+        if self.input != input.input {
             return Err(NativeError::new(
                 StageName::Launch,
                 "semantic binding belongs to another input",
@@ -298,7 +304,7 @@ impl ReadyProgram {
         }
         for unit in &self.summaries {
             let covered = match self.semantic_owners.get(&unit.definition) {
-                Some(Some(owner)) => input.semantic_contains(owner),
+                Some(Some(owner)) => input.semantic.semantic_contains(owner),
                 Some(None) => unit.origin == hirsel_lir::ir::UnitOrigin::Library,
                 None => false,
             };
@@ -321,6 +327,7 @@ impl ReadyProgram {
             .keys()
             .map(|entry| {
                 input
+                    .semantic
                     .semantic_program_revision(entry)
                     .map(|revision| (entry.clone(), revision))
                     .map_err(|error| {
@@ -328,14 +335,14 @@ impl ReadyProgram {
                     })
             })
             .collect::<Result<_, _>>()?;
-        self.foreign_links = input.snapshot().foreign_links.clone();
-        self.foreign_unreplayable = input.snapshot().foreign_unreplayable;
-        self.foreign_dispatch = super::foreign::dispatch(input.snapshot());
+        self.foreign_links = input.foreign_links.clone();
+        self.foreign_unreplayable = input.foreign_unreplayable;
+        self.foreign_dispatch = super::foreign::dispatch(input);
         super::foreign::check_callbacks(self, input)?;
         self.escaping = self
             .launches
             .keys()
-            .filter(|entry| input.unsafe_reach(entry).is_some())
+            .filter(|entry| input.semantic.unsafe_reach(entry).is_some())
             .cloned()
             .collect();
         self.exit_reports = self
@@ -343,12 +350,14 @@ impl ReadyProgram {
             .keys()
             .filter(|entry| self.functions.contains_key(*entry))
             .map(|entry| {
-                super::exit_report::derive(input.snapshot(), self, entry)
-                    .map(|report| (entry.clone(), report))
+                super::exit_report::derive(input, self, entry).map(|report| (entry.clone(), report))
             })
             .collect::<Result<_, _>>()?;
         self.failure_table = Some({
-            super::observe::failure_table(self, &super::observe::Sites::new(input.snapshot()))
+            super::observe::failure_table(
+                self,
+                &super::observe::Sites::from_anchors(input.sources, input.anchors.clone()),
+            )
         });
         Ok(())
     }
@@ -1078,6 +1087,183 @@ fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hirsel_engine::DefinitionQueries;
+
+    #[test]
+    fn bodyless_source_binding_preserves_launch_metadata_and_semantic_refusals() {
+        hirsel_engine::with_compiler_stack(|| {
+            use super::super::queries::{
+                declarations::NativeDeclarations, root_source::NativeLinkSource,
+            };
+            use hirsel_engine::{NativeDiscoveryCache, QueryEngine, default_context};
+            let directory = tempfile::tempdir().unwrap();
+            let store = std::sync::Arc::new(hirsel_engine::store::DirStore::new(
+                directory.path().to_path_buf(),
+            ));
+            let mut engine = QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            )
+            .with_result_store(store.clone());
+            let file = engine.sources.add("bodyless-launch.hir", "pub type Problem { n:u64 }\nfn helper(x:u64)->u64 { 9u64/x }\npub fn main()->Result[(),Problem] { Error(Problem(n:helper(1u64))) }\n".into()).unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let main = hirsel_engine::entry_path(&default_context());
+            let trace = hirsel_lir::construction::ValueTrace::default();
+            let observe = trace.enter();
+            let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+            let mut declarations =
+                NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
+            let source = NativeLinkSource::capture(&mut engine, &declarations).unwrap();
+            assert_eq!(
+                trace.totals(),
+                Default::default(),
+                "source binding constructs no native Value"
+            );
+            drop(observe);
+            let definition = declarations.body(&mut engine, &main).unwrap();
+            let weak = std::sync::Arc::downgrade(&definition);
+            drop(definition);
+            // The retained old path is an equivalence oracle only. The new
+            // source capture above ran before any NativeInput was exported.
+            let input = engine.export_native_input().unwrap();
+            let input = engine.import_native_input(input).unwrap();
+            let mut ready = build_full(
+                &input,
+                &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+            )
+            .unwrap();
+            let revision = ready.revision(&main).unwrap().clone();
+            let failure_table = ready.failure_table.as_ref().unwrap().encode();
+            let report = ready.exit_reports.remove(&main).unwrap();
+            let escaping = ready.escaping.clone();
+            let dispatch = ready.foreign_dispatch.clone();
+            let semantic_units = ready.semantic_units.clone();
+            ready.input = declarations.program.input.clone();
+            ready.units.clear();
+            ready.semantic_units = None;
+            ready.revisions.clear();
+            ready.failure_table = None;
+            drop(input);
+            drop(declarations);
+            drop(engine);
+            assert!(
+                weak.upgrade().is_none(),
+                "source metadata retains no Definition"
+            );
+            let trace = hirsel_lir::construction::ValueTrace::default();
+            let _observe = trace.enter();
+            source.bind(&mut ready).unwrap();
+            assert!(ready.units.is_empty());
+            assert_eq!(trace.totals(), Default::default());
+            assert_eq!(ready.revision(&main), Some(&revision));
+            assert_eq!(ready.semantic_units, semantic_units);
+            assert_eq!(
+                ready.failure_table.as_ref().unwrap().encode(),
+                failure_table
+            );
+            assert_eq!(ready.escaping, escaping);
+            assert_eq!(ready.foreign_dispatch, dispatch);
+            let actual = &ready.exit_reports[&main];
+            assert_eq!(actual.declarations, report.declarations);
+            assert_eq!(format!("{:?}", actual.nodes), format!("{:?}", report.nodes));
+            assert_eq!(
+                (
+                    actual.offset,
+                    actual.root,
+                    actual.result,
+                    actual.return_kind,
+                    actual.success_offset
+                ),
+                (
+                    report.offset,
+                    report.root,
+                    report.result,
+                    report.return_kind,
+                    report.success_offset
+                )
+            );
+            let expected_input = ready.input.clone();
+            ready.input.digest = ContentHash::of_bytes(b"different input");
+            assert!(source.bind(&mut ready).is_err());
+            ready.input = expected_input;
+            let definition = ready.summaries[0].definition.clone();
+            ready
+                .semantic_owners
+                .insert(definition, Some(DefPath::core("unselected")));
+            assert!(source.bind(&mut ready).is_err());
+            // A fresh engine must reconstruct these source facets from checked
+            // descriptors with the Lower producer unavailable.
+            let mut fresh = QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            )
+            .with_result_store(store.clone());
+            let file = fresh.sources.add("bodyless-launch.hir", "pub type Problem { n:u64 }\nfn helper(x:u64)->u64 { 9u64/x }\npub fn main()->Result[(),Problem] { Error(Problem(n:helper(1u64))) }\n".into()).unwrap();
+            fresh.parse_file(file, &default_context()).unwrap();
+            fresh.adapters.lowering = None;
+            let mut discovery = NativeDiscoveryCache::new(fresh.types().clone(), store);
+            let declarations =
+                NativeDeclarations::collect(&mut fresh, &mut discovery, &[]).unwrap();
+            let source = NativeLinkSource::capture(&mut fresh, &declarations).unwrap();
+            assert_eq!(
+                source
+                    .view()
+                    .semantic
+                    .semantic_program_revision(&main)
+                    .unwrap(),
+                revision
+            );
+            assert_eq!(trace.totals(), Default::default());
+        });
+    }
+
+    #[test]
+    fn bodyless_semantic_capture_preserves_unsafe_and_home_reach() {
+        hirsel_engine::with_compiler_stack(|| {
+            for threads in [
+                hirsel_types::ForeignThreads::Home,
+                hirsel_types::ForeignThreads::Serial,
+                hirsel_types::ForeignThreads::Any,
+            ] {
+                let directory = tempfile::tempdir().unwrap();
+                std::fs::write(directory.path().join("main.hir"), "/// Reads nothing and retains nothing.\nextern \"c\" fn ext(u:Unsafe)->u64\npub fn main(u:Unsafe)->Result[(),()] { let _=ext(u); Ok(()) }\n").unwrap();
+                std::fs::write(directory.path().join("link.o"), b"foreign identity only").unwrap();
+                let manifest = serde_json::json!({"schema":1,
+                    "package":{"name":"app","version":"1"},
+                    "entry":{"module":[],"name":"main"},
+                    "sources":[{"path":"main.hir","module":[]}],"dependencies":[],
+                    "unsafe_ffi":{"link":["link.o"],"headers_checked":false,
+                        "threads":threads.name(),
+                        "wrappers":[{"module":[],"name":"main","kind":"effect","model":"none"}]}});
+                let path = directory.path().join("hirsel.json");
+                std::fs::write(&path, manifest.to_string()).unwrap();
+                let mut loaded = crate::load_program(&path).unwrap();
+                loaded.check_for_execution().unwrap();
+                let main = loaded.entry.clone();
+                let engine = &mut loaded.engine;
+                let expected_reach = engine.unsafe_reach(&main).unwrap().unwrap();
+                let semantic = engine.native_semantic_program([main.clone()]).unwrap();
+                let revision = engine.semantic_program_revision(&main).unwrap();
+                let input = engine.export_native_input().unwrap();
+                let input = engine.import_native_input(input).unwrap();
+                assert_eq!(semantic.semantic_program_revision(&main).unwrap(), revision);
+                assert_eq!(semantic.unsafe_reach(&main), Some(expected_reach.clone()));
+                assert_eq!(semantic.unsafe_reach(&main), input.unsafe_reach(&main));
+                assert_eq!(semantic.home_reach(&main), input.home_reach(&main));
+                assert_eq!(
+                    semantic.home_reach(&main).is_some(),
+                    threads == hirsel_types::ForeignThreads::Home
+                );
+                assert!(semantic.semantic_contains(&main));
+                assert!(semantic.semantic_contains(expected_reach.path.last().unwrap()));
+                assert!(!semantic.semantic_contains(&DefPath::core("unselected")));
+                drop(input);
+                drop(loaded);
+                assert_eq!(semantic.unsafe_reach(&main), Some(expected_reach));
+                assert_eq!(semantic.semantic_program_revision(&main).unwrap(), revision);
+            }
+        });
+    }
 
     #[test]
     fn semantic_binding_rejects_unplanned_units_and_object_exports() {
