@@ -220,11 +220,11 @@ fn shared_credits_preserve_multiplicity_through_update_and_scope_cleanup() {
             value: root.clone(),
             additions: vec![shared, shared],
         }));
-        assert_eq!(roots::count(journal.ctx, shared), 3);
+        assert_eq!(roots::count(journal.ctx.as_ref(), shared), 3);
         let clone = root.clone();
         drop(root);
         drop(clone);
-        assert_eq!(roots::count(journal.ctx, shared), 3);
+        assert_eq!(roots::count(journal.ctx.as_ref(), shared), 3);
         let next = node(run, semantic::Origin::Arena(journal.grant()), 8, &[leaf]);
         accept(journal.replace(
             id,
@@ -234,7 +234,7 @@ fn shared_credits_preserve_multiplicity_through_update_and_scope_cleanup() {
                 additions: vec![],
             },
         ));
-        assert_eq!(roots::count(journal.ctx, shared), 2);
+        assert_eq!(roots::count(journal.ctx.as_ref(), shared), 2);
         assert_eq!(journal.inventory().seal_charge(&next), Ok(Charge::Bytes(0)));
         drop(journal);
         assert_eq!(roots::count(&*ctx, shared), 1);
@@ -266,7 +266,7 @@ fn rejected_events_return_input_and_leave_both_metadata_and_credits_unchanged() 
             value: good.clone(),
             additions: input.additions,
         }));
-        count::hirsel_rt_v2_dup(journal.ctx, source);
+        count::hirsel_rt_v2_dup(journal.ctx.as_ptr(), source);
         let input = Update {
             value: good.clone(),
             additions: vec![source],
@@ -287,7 +287,7 @@ fn rejected_events_return_input_and_leave_both_metadata_and_credits_unchanged() 
         };
         assert_eq!((*source).count, 3);
         // Still caller-owned after both rejections; explicitly retire it once.
-        retire(journal.ctx, input.additions[0]);
+        retire(journal.ctx.as_ptr(), input.additions[0]);
         assert_eq!((*source).count, 2);
         assert_eq!(
             journal.inventory().entries().next().unwrap().1.generation(),

@@ -16,6 +16,8 @@ use crate::alloc::Header;
 use crate::context::TaskCtx;
 use crate::region::sealed_cleanup::Credits;
 use std::collections::BTreeMap;
+use std::marker::PhantomData;
+use std::ptr::NonNull;
 
 /// Proposed next metadata plus only the NEW source credits for an event.
 /// On rejection this entire input is returned and its source custody stays
@@ -38,18 +40,35 @@ mod seal;
 pub use seal::SealError;
 
 /// One open arena's private source credits and retained semantic metadata.
-/// The source task context stays borrowed until cleanup; no such context is
-/// stored inside the immutable snapshots or a published sealed owner.
+/// A lifetime marker protects the source context through cleanup. Only a raw
+/// task identity is retained, so source operations can enter runtime helpers
+/// with transient borrows. No such pointer/reference is stored in immutable
+/// snapshots or a published sealed owner.
 /// There is no remove-on-last-use operation and no Clone/Send implementation.
 pub struct Journal<'ctx> {
-    ctx: &'ctx mut TaskCtx,
+    ctx: NonNull<TaskCtx>,
+    lifetime: PhantomData<&'ctx mut TaskCtx>,
     inventory: Inventory,
     holders: BTreeMap<AllocationId, Vec<*mut Header>>,
 }
 impl<'ctx> Journal<'ctx> {
     pub fn new(ctx: &'ctx mut TaskCtx, run: MetadataRun) -> Self {
+        // SAFETY: the reference/lifetime protects this task through cleanup.
+        unsafe { Self::from_raw(ctx, run) }
+    }
+
+    /// Construct task-scoped custody without retaining a Rust mutable reference
+    /// across native runtime calls on the same context.
+    ///
+    /// # Safety
+    /// The nonnull context stays live for 'ctx and is used only by its current
+    /// task/worker role, with no concurrent access. Every context reference is
+    /// a transient runtime-entry borrow. Nested journals can share the raw task
+    /// identity, never simultaneous Rust mutable references to the task.
+    pub(crate) unsafe fn from_raw(ctx: *mut TaskCtx, run: MetadataRun) -> Self {
         Self {
-            ctx,
+            ctx: NonNull::new(ctx).unwrap_or_else(|| crate::fault("null receipt journal context")),
+            lifetime: PhantomData,
             inventory: Inventory::new(run),
             holders: BTreeMap::new(),
         }
@@ -142,7 +161,7 @@ impl<'ctx> Journal<'ctx> {
         self.holders.insert(id, next);
         // Both state components now describe the committed payload. The old
         // raw holder vector drops without releasing transferred credits.
-        unsafe { Credits::from_owned(removed).release(self.ctx) };
+        unsafe { Credits::from_owned(removed).release(self.ctx.as_mut()) };
         Ok(previous)
     }
 }
@@ -156,7 +175,7 @@ impl Drop for Journal<'_> {
             let owned = std::mem::take(holders);
             // SAFETY: successful events transferred these exact credits, and
             // retained updates moved them rather than duplicating ownership.
-            unsafe { Credits::from_owned(owned).release(self.ctx) };
+            unsafe { Credits::from_owned(owned).release(self.ctx.as_mut()) };
         }
     }
 }

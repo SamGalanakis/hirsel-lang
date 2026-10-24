@@ -59,7 +59,7 @@ impl<'ctx> Journal<'ctx> {
         // ctx through an overlapping mutable journal borrow.
         let result = unsafe {
             transaction::run_with_journal(
-                self.ctx,
+                self.ctx.as_ptr(),
                 arena,
                 plan,
                 checkpoint,

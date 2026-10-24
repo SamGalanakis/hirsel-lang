@@ -192,7 +192,7 @@ fn recoverable_staging_failure_never_disarms_journal_custody() {
             assert_eq!(arena.cleanup, cleanup);
             assert_eq!((*case.source).count, 3);
             assert_eq!(journal.inventory().entries().len(), 1);
-            assert_eq!(journal.ctx.region, ptr::from_mut(&mut *arena));
+            assert_eq!(journal.ctx.as_ref().region, ptr::from_mut(&mut *arena));
             drop(journal);
             assert_eq!((*case.source).count, 1);
             close(ctx, &mut arena);
@@ -304,7 +304,7 @@ fn shared_staging_rollback_restores_destination_but_preserves_source_journal() {
         let Err((SealError::Transaction(TransactionError::Interrupted), journal)) = result else {
             panic!("expected rollback")
         };
-        assert_eq!(roots::count(journal.ctx, source), 3);
+        assert_eq!(roots::count(journal.ctx.as_ref(), source), 3);
         drop(journal);
         assert_eq!(roots::count(&*ctx, source), 1);
         close(ctx, &mut arena);
