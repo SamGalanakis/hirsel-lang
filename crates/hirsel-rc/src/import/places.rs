@@ -50,9 +50,8 @@ impl Importer<'_> {
         // A field access can extend a computed origin without binding a new
         // origin of its own. Preserve that prefix's site for its bounds check.
         let site = self.origin_sites.get(&id).copied().or_else(|| {
-            self.origin_sites
-                .iter()
-                .filter_map(|(id, site)| {
+            prefix_origin_site(
+                self.origin_sites.iter().filter_map(|(id, site)| {
                     let prefix = &self.body.places[id.0 as usize];
                     (prefix.root == place.root
                         && prefix.projection.iter().any(|step| {
@@ -63,9 +62,9 @@ impl Importer<'_> {
                         })
                         && place.projection.starts_with(&prefix.projection))
                     .then_some((prefix.projection.len(), *site))
-                })
-                .max_by_key(|(len, site)| (*len, site.start))
-                .map(|(_, site)| site)
+                }),
+                |span| self.site(span).source,
+            )
         });
         let temporary = self.out.slots[self.slot_for(place.root.0 as usize)?.index()].kind
             == SlotKind::Temporary;
@@ -1132,5 +1131,91 @@ impl Importer<'_> {
     /// A value consumed by an operation leaves the pending set.
     pub(super) fn consumed(&mut self, v: ValueId) {
         self.failure.pending.retain(|&p| p != v);
+    }
+}
+
+// Keep the selection at the place-resolution seam: the iterator may be a
+// HashMap's order, which is not a source program property. For equal prefix
+// and start, the smallest complete projection is the bounds operation, rather
+// than its enclosing compound assignment (diagnostics.md, Primary sites).
+// Finish a full-coordinate tie with original source order; session Anchor
+// numbers must never choose between source owners. Return the original Span.
+fn prefix_origin_site(
+    candidates: impl Iterator<Item = (usize, hirsel_span::Span)>,
+    source: impl Fn(hirsel_span::Span) -> u32,
+) -> Option<hirsel_span::Span> {
+    candidates
+        .max_by_key(|(len, site)| {
+            (
+                *len,
+                site.start,
+                std::cmp::Reverse(site.end),
+                std::cmp::Reverse(source(*site)),
+            )
+        })
+        .map(|(_, site)| site)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefix_origin_site;
+    use hirsel_span::{Anchor, Span};
+
+    fn span(anchor: u32, start: u32, end: u32) -> Span {
+        Span {
+            anchor: Anchor(anchor),
+            start,
+            end,
+        }
+    }
+
+    #[test]
+    fn equal_prefix_and_start_preserve_the_smallest_complete_origin_in_any_order() {
+        let narrow = span(7, 1762, 1770);
+        let wide = span(7, 1762, 1775);
+        for candidates in [vec![(1, narrow), (1, wide)], vec![(1, wide), (1, narrow)]] {
+            assert_eq!(
+                prefix_origin_site(candidates.into_iter(), |_| 0),
+                Some(narrow)
+            );
+        }
+    }
+
+    #[test]
+    fn longest_projection_then_latest_origin_remain_the_primary_order() {
+        let expected = span(7, 18, 23);
+        let candidates = [(1, span(7, 40, 42)), (2, span(7, 10, 12)), (2, expected)];
+        for reverse in [false, true] {
+            let mut candidates = candidates.to_vec();
+            if reverse {
+                candidates.reverse();
+            }
+            assert_eq!(
+                prefix_origin_site(candidates.into_iter(), |_| 0),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn source_owner_ties_use_original_source_order_after_session_relocation() {
+        // Source owner0 stays owner0 after session-local Anchor numbers move.
+        // Returned spans retain that owner's Anchor rather than being rebuilt
+        // with the current use's or another source owner's Anchor.
+        for anchors in [[2, 91], [701, 3]] {
+            let original = span(anchors[0], 18, 23);
+            let other = span(anchors[1], 18, 23);
+            for candidates in [
+                vec![(2, original), (2, other)],
+                vec![(2, other), (2, original)],
+            ] {
+                assert_eq!(
+                    prefix_origin_site(candidates.into_iter(), |span| {
+                        if span.anchor == original.anchor { 0 } else { 1 }
+                    }),
+                    Some(original)
+                );
+            }
+        }
     }
 }
