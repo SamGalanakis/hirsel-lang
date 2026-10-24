@@ -250,6 +250,26 @@ fn a_fragment_binds_into_a_program_that_numbers_its_layouts_apart() {
                     }
                 };
                 let (fa, fb) = (fragment(ua, a, &ia), fragment(ub, b, &ib));
+                let summary = fa.summary.encode(ia.layouts, ia.keys).unwrap();
+                assert_eq!(
+                    summary,
+                    fb.summary.encode(ib.layouts, ib.keys).unwrap(),
+                    "{what}"
+                );
+                let restored = UnitSummary::decode(&summary, &|k| layouts.get(k).copied(), &|k| {
+                    abis.get(k).copied()
+                })
+                .unwrap();
+                assert_eq!(restored, fb.summary, "{what}");
+                assert!(UnitSummary::decode(&summary, &|_| None, &|_| None).is_err());
+                assert!(
+                    UnitSummary::decode(
+                        &summary[..summary.len() / 2],
+                        &|k| layouts.get(k).copied(),
+                        &|k| abis.get(k).copied()
+                    )
+                    .is_err()
+                );
                 let bytes = fa.encode(ia.layouts, ia.keys).unwrap();
                 assert_eq!(bytes, fb.encode(ib.layouts, ib.keys).unwrap(), "{what}");
                 let decoded = UnitFragment::decode(&bytes, &|k| layouts.get(k).copied(), &|k| {
