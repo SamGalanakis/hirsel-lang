@@ -1,0 +1,8 @@
+type Item { n: u64 }
+fn first(a: Arena, n: u64) -> (box Item) in a {
+  if n == 0u64 { let h: (box Item) in heap = box Item(n:6u64); h }
+  else { second(a,n-1u64) }
+}
+fn second(a: Arena, n: u64) -> (box Item) in a { first(a,n) }
+fn wrapper(a: Arena) -> (box Item) in a { second(a,2u64) }
+fn main() { arena.with(fn(a: Arena) { let item = wrapper(a); }); }
