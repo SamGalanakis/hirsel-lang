@@ -220,6 +220,9 @@ impl QueryTask for TraceTask {
     fn weight(&self) -> MemoryWeight {
         self.0.weight()
     }
+    fn continuation_bytes(&self) -> u64 {
+        self.0.continuation_bytes()
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let _guard = self.1.enter();
         self.0.poll(cx)
