@@ -8,7 +8,8 @@ tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
 
 Land first joins a FIFO ticket queue shared by every worktree under
 `$(git rev-parse --git-common-dir)/land-queue/`. Only its head fetches,
-rebases, checks and pushes. A short `flock` protects an atomic sequence
+rebases, checks and pushes, and it lands the waiting tickets with its own
+change as one batch (see [Batches](#batches)). A short `flock` protects an atomic sequence
 counter and atomic JSON ticket publication; increasing numeric ticket
 filenames define arrival order. A ticket keeps its place across rejected
 push retries and re-execution into an updated `tools/land`. Exiting releases
@@ -64,9 +65,76 @@ unbounded. The lane retains its FIFO place during this wait; the short metadata
 lock is released. External writers that do not use the queue can still
 cause a rejected push.
 
+## Batches
+
+A ticket records the commit it lands (`head`). When the head has rebased
+its own change, it claims up to 15 live tickets behind it, oldest first, so
+a batch holds at most 16. It replays each ticket's commits after the
+captured `origin/main`, in ticket order, onto the tree of the tickets ahead
+of it (`git rebase --onto <batch> <main> <head>`), detached in the head's
+own worktree. It reads other lanes' commits by SHA from the shared object
+store and never touches their worktrees or branches. The checks (hot files,
+regenerated build files, build, Clippy and fmt) run once on the combined
+tree, and one push carries every commit. Each lane's commits stay separate,
+with their authors; nothing is squashed. Each landed ticket gets its own row
+in `hirsel-landings.jsonl`.
+
+The head writes each waiting ticket's outcome into its ticket file. The
+waiting `tools/land` prints it and exits with its code: 0 with its own
+landed SHAs, after which its branch points at its last landed commit; 1
+with its conflict or its first error. Commits made after queueing do not
+land; land says so, and you run it again for them.
+
+A ticket whose commits do not replay leaves the batch with the conflict
+message a single land prints; the rest stay on the tree before it. A
+change that touches generated files is refused the same way. A red batch
+splits into halves, each checked on the green tree before it. A half that
+is already known red is split without another check. A ticket is blamed
+only when a check of its change alone, on a green tree, is red; the culprit
+exits with that check's first error and the rest land. A red that does not
+repeat blames nobody. A batch of one is a single land, as before.
+
+Every pushed tree is one this attempt checked green. Before the push, the
+head confirms that it still owns the queue head and that every batched
+ticket is still held by its live process; a dropped ticket's commits never
+land, and the head rebuilds the batch without it. A lost push race retries
+the whole batch with the usual jitter. A dead or expired waiting ticket is
+dropped from the batch and removed. If the head dies, its waiting tickets
+keep their places, and the next head batches them. A revoked head neither
+pushes nor delivers outcomes. If the head's own change is a culprit, it
+still pushes the green rest; after a lost race it exits instead, and the
+next head lands the rest.
+
+A ticket queued by an older `tools/land` has no `head`. The batch takes the
+tip of the branch that its worktree has checked out, as `git worktree list`
+reports it. That waiting process never reads its outcome. When it reaches
+the head, its rebase drops the commits that already landed, and it exits 0
+with "nothing to land".
+
+The design follows four merge trains:
+
+- [bors-ng](https://github.com/bors-ng/bors-ng/blob/ca725797e53a88e954998de0bbb14a8a5acb13ab/lib/worker/batcher.ex#L10)
+  builds every waiting change as one batch and bisects a red batch into
+  halves (`lib/worker/batcher.ex` lines 10–22, `lib/worker/batcher/divider.ex`
+  lines 9–27 and 89–94). Its `max_batch_size` is the cap.
+- [Zuul's dependent pipeline](https://opendev.org/zuul/zuul/src/commit/3daef6c4f92672347ba9a2dcabef4415e35f7ac1/zuul/manager/__init__.py#L1955)
+  tests each change on the changes ahead of it. A failing change leaves,
+  and the rest move onto the nearest non-failing item (lines 1955–1972).
+- [GitHub's merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
+  groups up to a maximum number of pull requests per merge group, and
+  removes only the failing one.
+- [LUCI CV](https://chromium.googlesource.com/infra/luci/luci-go/+/f46b764fe10a5595c02d8779d520bbfec9705fe4/cv/internal/tryjob/execute/retry.go#43),
+  the Chromium CQ, gives each verdict to one change, and retries failed
+  tryjobs before it blames that change (lines 43–60).
+
+Unlike bors-ng, land never blames by elimination, and it does not queue a
+separate batch for each half: one process settles the whole batch, so the
+lanes behind it keep waiting.
+
 ## When a retry can check fewer crates
 
-The first attempt always checks everything. A subsequent attempt can reuse
+The first attempt always checks everything, and so does every bisection
+check. A subsequent attempt can reuse
 an unaffected part of this process's preceding successful check only if:
 
 - The previous base is an ancestor of the new base.
@@ -148,9 +216,16 @@ The test uses a bare local Git remote, real rebases and pushes, and fake
 build tools. Three concurrent worktrees queue behind a deliberately slow
 first check.
 The remote's receive hook requires build, Clippy and fmt records for the
-exact proposed SHA and base; all three land once, in ticket order. Killed
+exact proposed SHA and base; all three land in ticket order, the first
+alone and the other two as one batch. Killed
 and expired live holders are reaped; a resumed holder refuses to push
 after losing its ticket. Re-execution retains the ticket and PID identity.
+Batch cases: three clean changes
+land with one check run; one red change in a batch of four is isolated in
+five checks, and the other three land; a conflict in the middle ticket
+leaves only that ticket; a dead lane's ticket is dropped; a batch that
+loses a push race is checked again and lands whole; and a ticket queued
+by an older land is batched and later finds nothing to land.
 Further cases cover
 22 rejected attempts, a red retry in each aggregate, worktree/HEAD edits,
 legacy lint-pass environment variables and conservative scope selection.

@@ -186,18 +186,173 @@ if pathlib.Path.cwd().name == 'lane':
         self.addCleanup(cleanup)
         return proc, log
 
-    def finish_land(self, process):
+    def finish_land(self, process, code=0):
         proc, log = process
         proc.wait(timeout=30)
         log.seek(0)
         output = log.read()
-        self.assertEqual(proc.returncode, 0, output)
+        self.assertEqual(proc.returncode, code, output)
         return output
+
+    @staticmethod
+    def landed(output):
+        """The commits a waiting lane says a batch landed for it."""
+        [line] = [line for line in output.splitlines() if line.startswith('land: landed ') and ' led by ' in line]
+        return line.rsplit(': ', 1)[1].split()
+
+    def batch_lanes(self, count, edits=None, old=(), red=False):
+        """`count` worktrees with one commit each, queued in lane order behind a live ticket this test holds.
+
+        Lanes in `old` are queued as an older tools/land queues them: a ticket
+        without its commit, held by a live process that never reads a result.
+        """
+        checks = self.recording_remote()
+        if red:
+            with (self.lane / 'tools/buck2/fmt.py').open('a') as out:
+                out.write("if pathlib.Path('red.txt').exists():\n"
+                          "    print('Diff in red.txt at line 1:')\n    sys.exit(1)\n")
+            self.git(self.lane, 'commit', '-qam', 'red fmt')
+        # The fake checks are main's; only each lane's own commit is queued.
+        hook = self.origin / 'hooks/pre-receive'
+        hook.rename(hook.with_name('held'))
+        self.git(self.lane, 'push', '-q', 'origin', 'HEAD:main')
+        hook.with_name('held').rename(hook)
+        lanes = [self.lane]
+        for i in range(1, count):
+            lane = self.top / f'lane{i}'
+            self.git(self.lane, 'worktree', 'add', '-qb', f'lane{i}', str(lane), 'HEAD')
+            (lane / '.buck2/bin').mkdir(parents=True)
+            shutil.copy(self.lane / '.buck2/bin/buck2', lane / '.buck2/bin/buck2')
+            lanes.append(lane)
+        for i, lane in enumerate(lanes):
+            path, text = (edits or {}).get(i, (f'lane-{i}.txt', f'{i}\n'))
+            (lane / path).write_text(text)
+            self.git(lane, 'add', path)
+            self.git(lane, 'commit', '-qm', f'lane {i}')
+        queue = runpy.run_path(str(ROOT / 'tools/land'))['LandQueue']
+        directory = self.lane / '.git/land-queue'
+        directory.mkdir()
+        def ticket(number, pid, lane, worktree):
+            now = time.time()
+            path = directory / f'{number:020d}'
+            path.write_text(json.dumps(dict(pid=pid, process_start=queue.process(pid), started=now,
+                                            heartbeat=now, lane=lane, worktree=str(worktree))))
+            (directory / 'sequence').write_text(f'{number}\n')
+            return path
+        # As a head running its checks would, this ticket holds every lane behind it.
+        holder = ticket(1, os.getpid(), 'holder', self.top / 'holder')
+        lands = []
+        for i, lane in enumerate(lanes):
+            if i in old:
+                sleeper = subprocess.Popen(['sleep', '60'])
+                self.addCleanup(sleeper.wait)
+                self.addCleanup(sleeper.kill)
+                ticket(i + 2, sleeper.pid, lane.name if i else 'my-lane', lane)
+                lands.append(sleeper)
+            else:
+                lands.append(self.start_land(lane))
+            self.wait_for(lambda i=i: len(self.queued()) == i + 2)
+        for i in range(count):
+            if i not in old:
+                log = self.top / (lanes[i].name + '.log')
+                self.wait_for(lambda log=log: 'queue position' in log.read_text())
+        return checks, lanes, lands, holder
+
+    def subjects(self, shas):
+        return [self.git(self.origin, 'show', '-s', '--format=%s', sha).strip() for sha in shas]
+
+    def test_a_batch_of_three_clean_changes_lands_with_one_check_run(self):
+        checks, lanes, lands, holder = self.batch_lanes(3)
+        holder.unlink()
+        outputs = [self.finish_land(land) for land in lands]
+        self.assertIn('batch of 3 tickets', outputs[0])
+        self.assertEqual(sum(out.count('pass  workspace build') for out in outputs), 1, outputs)
+        self.assertEqual(sum(out.count('pass  formatting') for out in outputs), 1, outputs)
+        # One push of all three commits, each lane's own and in ticket order.
+        self.assertEqual(len((checks / 'received').read_text().splitlines()), 1)
+        self.assertEqual(self.main_log()[:4], ['lane 2', 'lane 1', 'lane 0', 'record checks'])
+        for i in (1, 2):
+            self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
+            self.assertEqual(self.git(lanes[i], 'rev-parse', 'HEAD'), self.git(self.origin, 'rev-parse', f'main~{2 - i}'))
+        self.assertEqual(self.queued(), [])
+
+    def test_one_red_change_in_a_batch_of_four_is_isolated_and_the_rest_land(self):
+        checks, lanes, lands, holder = self.batch_lanes(4, edits={1: ('red.txt', 'red\n')}, red=True)
+        holder.unlink()
+        outputs = [self.finish_land(land, 1 if i == 1 else 0) for i, land in enumerate(lands)]
+        self.assertIn('Diff in red.txt at line 1:', outputs[1])
+        self.assertIn('refusing to push a red tree', outputs[1])
+        self.assertNotIn('Diff in', outputs[2] + outputs[3])
+        # All four red; lanes 0-1 red; lane 0 green; lane 1 alone red; lanes 2-3 green.
+        self.assertEqual(outputs[0].count('workspace build'), 5, outputs[0])
+        self.assertEqual(outputs[0].count('FAIL  formatting'), 3, outputs[0])
+        self.assertEqual(len((checks / 'received').read_text().splitlines()), 1)
+        self.assertEqual(self.main_log()[:4], ['lane 3', 'lane 2', 'lane 0', 'red fmt'])
+        self.assertEqual(self.queued(), [])
+
+    def test_a_conflict_in_the_middle_ticket_leaves_only_that_ticket(self):
+        edits = {0: ('shared.txt', 'zero\n'), 1: ('shared.txt', 'one\n')}
+        checks, lanes, lands, holder = self.batch_lanes(3, edits=edits)
+        holder.unlink()
+        outputs = [self.finish_land(land, 1 if i == 1 else 0) for i, land in enumerate(lands)]
+        self.assertIn('conflicts in: shared.txt', outputs[1])
+        self.assertEqual(outputs[0].count('pass  workspace build'), 1, outputs[0])
+        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 0', 'record checks'])
+        self.assertEqual(self.git(lanes[1], 'status', '--porcelain'), '')
+        self.assertEqual(self.queued(), [])
+
+    def test_a_dead_lanes_ticket_is_dropped_from_the_batch(self):
+        checks, lanes, lands, holder = self.batch_lanes(3)
+        lands[1][0].kill()
+        lands[1][0].wait(timeout=10)
+        holder.unlink()
+        outputs = [self.finish_land(lands[i]) for i in (0, 2)]
+        self.assertIn('dropped ticket 00000000000000000003 for lane1 from the batch: dead process', outputs[0])
+        self.assertIn('batch of 2 tickets', outputs[0])
+        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 0', 'record checks'])
+        self.assertEqual(self.queued(), [])
+
+    def test_a_batch_that_loses_a_push_race_is_checked_again_and_lands_whole(self):
+        checks, lanes, lands, holder = self.batch_lanes(3)
+        with (self.origin / 'hooks/pre-receive').open('a') as out:
+            out.write("""
+marker = root / 'race-0'
+if not marker.exists():
+    marker.touch()
+    print('[rejected] simulated sibling won', file=sys.stderr)
+    sys.exit(1)
+""")
+        holder.unlink()
+        outputs = [self.finish_land(land) for land in lands]
+        self.assertIn('main moved during the checks', outputs[0])
+        self.assertEqual(outputs[0].count('pass  workspace build'), 2, outputs[0])
+        self.assertEqual(outputs[0].count('batch of 3 tickets'), 2, outputs[0])
+        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 1', 'lane 0'])
+        for i in (1, 2):
+            self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
+
+    def test_an_older_lands_waiting_ticket_is_batched_and_later_finds_nothing_to_land(self):
+        checks, lanes, lands, holder = self.batch_lanes(2, old=(1,))
+        holder.unlink()
+        output = self.finish_land(lands[0])
+        self.assertIn('batch of 2 tickets', output)
+        self.assertEqual(self.main_log()[:2], ['lane 1', 'lane 0'])
+        # The older land never reads its result; when it runs again its rebase drops the landed commit.
+        [old] = self.queued()
+        self.assertEqual(json.loads(old.read_text())['result']['code'], 0)
+        lands[1].kill()
+        lands[1].wait(timeout=10)
+        again = subprocess.run([sys.executable, '-c', DRIVER], cwd=lanes[1], env=self.env,
+                               capture_output=True, text=True)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn('nothing to land; HEAD is on origin/main', again.stdout)
+        self.assertEqual(self.main_log()[:2], ['lane 1', 'lane 0'])
+        self.assertEqual(self.queued(), [])
 
     def queued(self):
         return sorted((self.lane / '.git/land-queue').glob('[0-9]*'))
 
-    def test_three_concurrent_lands_are_fifo_and_check_exactly_their_push_base(self):
+    def test_three_concurrent_lands_are_fifo_batch_the_waiters_and_check_exactly_their_push_base(self):
         checks, lanes = self.queue_lanes()
         first = self.start_land(lanes[0])
         self.wait_for(lambda: (checks / 'holding').exists())
@@ -211,16 +366,18 @@ if pathlib.Path.cwd().name == 'lane':
         self.wait_for(lambda: json.loads(waiting.read_text())['heartbeat'] > before)
         (checks / 'release').touch()
         outputs = [self.finish_land(proc) for proc in (first, second, third)]
-        for out in outputs:
+        # The holder had no waiters when it started; the second lands the third with its own.
+        for out, runs in zip(outputs, (1, 1, 0)):
             for stage in ('workspace build', 'Clippy', 'formatting'):
-                self.assertEqual(out.count('pass  ' + stage), 1, out)
+                self.assertEqual(out.count('pass  ' + stage), runs, out)
             self.assertNotIn('main moved during the checks', out)
         self.assertIn('queue position 2; head my-lane', outputs[1])
         self.assertIn('queue position 3; head my-lane', outputs[2])
+        self.assertIn('batch of 2 tickets', outputs[1])
         received = (checks / 'received').read_text().splitlines()
-        self.assertEqual(len(received), 3)
-        self.assertEqual([self.git(self.origin, 'show', '-s', '--format=%s', sha).strip()
-                          for sha in received], ['lane 0', 'lane 1', 'lane 2'])
+        self.assertEqual(len(received), 2)
+        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 1', 'lane 0'])
+        self.assertEqual(self.landed(outputs[2]), [self.git(self.origin, 'rev-parse', 'main').strip()])
         self.assertEqual(self.queued(), [])
 
     def test_killed_holder_is_reaped_and_the_next_lane_lands(self):
