@@ -244,10 +244,6 @@ pub enum LayoutKind {
     Shared {
         payload: LayoutId,
     },
-    /// An affine pointer-sized sealed owner with a typed read-only root.
-    SealedRegion {
-        root: LayoutId,
-    },
     /// The payload of a `Shared` root block: the frozen value inline at offset
     /// 0. Its drop program thaws the value before releasing it.
     Frozen {
@@ -311,6 +307,8 @@ pub enum LayoutKind {
     PayloadReceipt {
         root: crate::operation::NativeType,
     },
+    /// An affine pointer-sized sealed owner with a typed read-only root.
+    SealedRegion { root: LayoutId },
 }
 
 /// One step of a checked size expression, evaluated as a postfix program.
@@ -527,8 +525,6 @@ pub enum DropStep {
     /// Release one `Shared` root (MEM-11) through `hirsel_rt_v2_root_release`, never the
     /// inline count edge: the root count is exact and its releases may be deferred.
     ReleaseRoot { offset: u64 },
-    /// Mechanical sealed-owner destruction, never an ordinary RC release.
-    ReleaseSealed { offset: u64 },
     /// Drop an inline child with its own layout.
     Child { offset: u64, layout: LayoutId },
     /// Drop the active variant's steps; the ordinal is read as `form`.
@@ -564,6 +560,8 @@ pub enum DropStep {
     ColumnsReverse(SoaColumns),
     /// Mechanical metadata destruction; never a language holder/root release.
     ReleaseReceipt { offset: u64 },
+    /// Mechanical sealed-owner destruction, never an ordinary RC release.
+    ReleaseSealed { offset: u64 },
 }
 
 /// Column placement of a structure-of-arrays sequence payload (#47 assumption).
@@ -785,7 +783,6 @@ snapshot_enum!(LayoutKind {
     Block { payload },
     Box { payload },
     Shared { payload },
-    SealedRegion { root },
     Frozen { value },
     Slice { element },
     Opaque { owner },
@@ -802,6 +799,7 @@ snapshot_enum!(LayoutKind {
     Sequence { element },
     Sequential { element },
     PayloadReceipt { root },
+    SealedRegion { root },
 });
 snapshot_enum!(SizeTerm {
     Constant(value),
@@ -880,7 +878,6 @@ snapshot_enum!(ScanStep {
     Root { offset },
 });
 snapshot_enum!(DropStep {
-    ReleaseSealed { offset },
     Finalize,
     Release { offset },
     Child { offset, layout },
@@ -907,6 +904,7 @@ snapshot_enum!(DropStep {
     ColumnsReverse(columns),
     ReleaseRoot { offset },
     ReleaseReceipt { offset },
+    ReleaseSealed { offset },
 });
 snapshot_struct!(SoaColumns {
     count_offset,
