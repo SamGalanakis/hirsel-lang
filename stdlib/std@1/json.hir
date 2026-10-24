@@ -34,9 +34,24 @@ fn json_peek(data: Bytes, pos: u64) -> u8 uses {} {
 fn json_whitespace(data: Bytes, mut pos: u64) -> u8 uses {} {
   let size = core@1/bytes.len(data)
   // Public Reader cursors may be outside the extent; leave them unchanged.
-  if pos >= size { return 0 }
-  pos = core@1/bytes.find_any(data, JSON_NON_WHITESPACE, pos)
-  if pos < size { data[pos] } else { 0 }
+  if pos >= size {
+    return 0
+  }
+  // serde_json's cached lookahead: compact JSON usually has no whitespace.
+  // Avoid constructing a wide membership table at every token boundary.
+  let byte = data[pos]
+  if byte > 32 {
+    return byte
+  }
+  if byte != 32 && byte != 9 && byte != 10 && byte != 13 {
+    return byte
+  }
+  pos = core@1/bytes.find_any(data, JSON_NON_WHITESPACE, pos + 1)
+  if pos < size {
+    data[pos]
+  } else {
+    0
+  }
 }
 
 // Adapted serde_json src/de.rs parse_integer/parse_decimal/parse_exponent,
@@ -46,7 +61,11 @@ fn json_whitespace(data: Bytes, mut pos: u64) -> u8 uses {} {
 fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
   let (end, valid) = core@1/bytes.json_number_end(data, pos)
   pos = end
-  if valid == 0 { Error(Syntax(pos)) } else { Ok(()) }
+  if valid == 0 {
+    Error(Syntax(pos))
+  } else {
+    Ok(())
+  }
 }
 
 // An explicitly owned decoder token has independent, exact-length storage.
@@ -219,7 +238,10 @@ fn json_keyword(data: Bytes, mut pos: u64, word: String) -> Result[(), JsonError
 // ordered-object duplicate rejection. Ordinary owned locals clean up on every ?.
 // Pass the already scanned lookahead into each child. Like serde SeqAccess,
 // each token boundary consumes whitespace once, including empty containers.
-fn json_node(take data: Bytes, mut pos: u64, depth: u64, c: u8) -> Result[Value, JsonError] uses {} {
+fn json_node(take data: Bytes, mut pos: u64, depth: u64, c: u8) -> Result[
+  Value,
+  JsonError
+] uses {} {
   match c {
     110 => {
       json_keyword(data, mut pos, "null")?

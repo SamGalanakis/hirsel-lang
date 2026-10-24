@@ -5557,7 +5557,6 @@ conformance/SEM/SEM-3-flate-long-codes-run.hir
 conformance/SEM/SEM-3-flate-read-errors-run.hir
 conformance/SEM/SEM-3-flate-read-run.hir
 conformance/SEM/SEM-3-flate-zlib-run.hir
-conformance/SEM/SEM-3-float-fast-38-run.hir
 conformance/SEM/SEM-3-fnv-vectors-run.hir
 conformance/SEM/SEM-3-form-urlencoded-run.hir
 conformance/SEM/SEM-3-format-alias-bad.hir

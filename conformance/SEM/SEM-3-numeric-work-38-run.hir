@@ -2,12 +2,13 @@
 // expect: run
 // JSON grammar/offset vectors extend serde_json de.rs:462-623. Integer
 // limits and invalid-overflow priority retain Hirsel's stricter grammar.
-fn syntax(source: String, at: u64) -> () uses {} {
-  match json.parse(copy source) {
+fn syntax(take source: String, at: u64) -> () uses {} {
+  match json.parse(take source) {
     Error(Syntax(pos)) => failure.check(pos == at, TextInvariant()),
     _ => failure.check(false, TextInvariant()),
   }
 }
+
 pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   let _ = rt
   let _ = args
@@ -21,32 +22,102 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   syntax("{\"x\":1,}", 7)
   syntax("[1x]", 2)
   let mut outside = json.Reader(data: b"", pos: 18446744073709551615, depth: 0)
-  failure.check(json.peek(mut outside) == 0u8 && outside.pos == 18446744073709551615, TextInvariant())
-  failure.check(json.finish_reader(mut outside) == Error(Syntax(18446744073709551615)), TextInvariant())
-  let cases: List[String] = ["0", "-0", "1.2300e+004", "1E999999999999999999999999999999999", "-1E-9999999999999999999999999999"]
-  for source in cases {
+  failure.check(
+    json.peek(mut outside) == 0u8 && outside.pos == 18446744073709551615,
+    TextInvariant()
+  )
+  failure.check(
+    json.finish_reader(mut outside) == Error(Syntax(18446744073709551615)),
+    TextInvariant()
+  )
+  let cases: List[String] = [
+    "0",
+    "-0",
+    "1.2300e+004",
+    "1E999999999999999999999999999999999",
+    "-1E-9999999999999999999999999999"
+  ]
+  for source in take cases {
     match json.parse(copy source) {
       Ok(Number(n)) => failure.check(n == source, TextInvariant()),
       _ => failure.check(false, TextInvariant()),
     }
   }
-  failure.check(u128.parse("340282366920938463463374607431768211455") == Ok(340282366920938463463374607431768211455u128), TextInvariant())
-  failure.check(u128.parse("340282366920938463463374607431768211456") == Error(OutOfRange()), TextInvariant())
-  failure.check(u128.parse("340282366920938463463374607431768211456x") == Error(Invalid()), TextInvariant())
-  failure.check(i128.parse("-170141183460469231731687303715884105728") == Ok(-170141183460469231731687303715884105728i128), TextInvariant())
-  failure.check(i128.parse("170141183460469231731687303715884105728") == Error(OutOfRange()), TextInvariant())
+  failure.check(
+    u128.parse("340282366920938463463374607431768211455") == Ok(
+      340282366920938463463374607431768211455u128
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    u128.parse("340282366920938463463374607431768211456") == Error(OutOfRange()),
+    TextInvariant()
+  )
+  failure.check(
+    u128.parse("340282366920938463463374607431768211456x") == Error(Invalid()),
+    TextInvariant()
+  )
+  failure.check(
+    i128.parse("-170141183460469231731687303715884105728") == Ok(
+      -170141183460469231731687303715884105728i128
+    ),
+    TextInvariant()
+  )
+  failure.check(
+    i128.parse("170141183460469231731687303715884105728") == Error(OutOfRange()),
+    TextInvariant()
+  )
   failure.check(u64.parse("-0") == Error(Invalid()), TextInvariant())
   failure.check(u64.parse("+1") == Error(Invalid()), TextInvariant())
   failure.check(u64.parse_radix("fF", 16) == Ok(255), TextInvariant())
   failure.check(u64.parse_radix("zZ", 36) == Ok(1295), TextInvariant())
-  let values: List[u64] = [0, 9, 10, 99, 100, 999, 1000, 9999, 10000, 99999, 100000, 9999999999999999999, 18446744073709551615]
+  let values: List[u64] = [
+    0,
+    9,
+    10,
+    99,
+    100,
+    999,
+    1000,
+    9999,
+    10000,
+    99999,
+    100000,
+    9999999999999999999,
+    18446744073709551615
+  ]
   for value in values {
-    let mut scratch: Inline[u8, 20] = [42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8,42u8]
+    let mut scratch: Inline[u8, 20] = [
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8,
+      42u8
+    ]
     let count = core@1/bytes.decimal_word(value, mut scratch)
     let mut out: List[u8] = []
-    for at in 0u64..count { list.push(mut out, scratch[at]) }
+    for at in 0u64..count {
+      list.push(mut out, scratch[at])
+    }
     failure.check(text.finish_valid(take out) == u64.to_string(value), TextInvariant())
-    for at in count..20u64 { failure.check(scratch[at] == 42u8, TextInvariant()) }
+    for at in count..20u64 {
+      failure.check(scratch[at] == 42u8, TextInvariant())
+    }
   }
   let (end, valid) = core@1/bytes.json_number_end(b"xx-12.5e+1]", 2)
   failure.check(end == 10 && valid == 1, TextInvariant())
@@ -54,6 +125,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), OutputError] {
   failure.check(bad_end == 1 && bad_valid == 0, TextInvariant())
   failure.check(diff.split_lines("") == [], TextInvariant())
   failure.check(diff.split_lines("\n") == ["\n"], TextInvariant())
-  failure.check(diff.split_lines("a\r\n羊\nlast") == ["a\r\n", "羊\n", "last"], TextInvariant())
+  failure.check(
+    diff.split_lines("a\r\n羊\nlast") == ["a\r\n", "羊\n", "last"],
+    TextInvariant()
+  )
   Ok(())
 }

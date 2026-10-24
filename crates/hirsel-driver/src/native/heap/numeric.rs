@@ -85,7 +85,13 @@ pub(super) fn call(name: &str, args: &[OpValue]) -> Option<OpOutcome> {
             }
             Some(OpOutcome::Updated {
                 value: word(digits.len() as u64),
-                arguments: vec![(1, OpValue::Sequence(buffer))],
+                arguments: vec![(
+                    1,
+                    OpValue::Elements {
+                        scalar: ScalarKind::U8,
+                        bits: buffer.iter().map(bits).collect::<Option<Vec<_>>>()?,
+                    },
+                )],
             })
         }
         _ => None,

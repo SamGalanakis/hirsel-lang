@@ -7,12 +7,14 @@ fn check64(text: String, expected: u64) -> () uses {} {
     _ => failure.check(false, TextInvariant()),
   }
 }
+
 fn check32(text: String, expected: u32) -> () uses {} {
   match f32.parse(text) {
     Ok(value) => failure.check(core@1/f32.bits(value) == expected, TextInvariant()),
     _ => failure.check(false, TextInvariant()),
   }
 }
+
 pub fn main(t: Test) -> Result[(), ()] {
   let _ = t
   let cases64: List[(String, u64)] = [
@@ -226,7 +228,9 @@ pub fn main(t: Test) -> Result[(), ()] {
     ("0.125000", 4593671619917905920u64),
     ("5.9604644775390625e-8", 4499096027743125504u64)
   ]
-  for (text, expected) in cases64 { check64(text, expected) }
+  for (text, expected) in cases64 {
+    check64(text, expected)
+  }
   let cases32: List[(String, u32)] = [
     ("0e-11", 0u32),
     ("-0e-11", 2147483648u32),
@@ -438,6 +442,8 @@ pub fn main(t: Test) -> Result[(), ()] {
     ("0.125000", 1040187392u32),
     ("5.9604644775390625e-8", 864026624u32)
   ]
-  for (text, expected) in cases32 { check32(text, expected) }
+  for (text, expected) in cases32 {
+    check32(text, expected)
+  }
   Ok(())
 }
