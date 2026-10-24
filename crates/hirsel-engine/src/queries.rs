@@ -2,7 +2,7 @@ use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod candidate_products;
 pub(crate) mod catalog;
-pub use candidate_products::CheckedProducts;
+pub use candidate_products::{CheckedProductEncoder, CheckedProducts};
 mod arm_fixes;
 mod frontier;
 pub use frontier::FrontChanges;
