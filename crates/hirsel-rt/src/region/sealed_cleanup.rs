@@ -14,6 +14,16 @@ impl Credits {
         Self(Vec::new())
     }
 
+    /// Accept actual source holder credits without duplicating them. The
+    /// caller transfers custody only after its source operation commits.
+    ///
+    /// # Safety
+    /// Every nonnull holder is live, resource-free and owned once by this
+    /// batch, with multiplicity preserved. No other cleanup owns these credits.
+    pub(crate) unsafe fn from_owned(holders: Vec<*mut Header>) -> Self {
+        Self(holders)
+    }
+
     /// # Safety
     /// `value` is a live, resource-free inline value of the named descriptor.
     pub(crate) unsafe fn value(&mut self, ctx: &TaskCtx, index: u32, value: *mut u8) {

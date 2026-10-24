@@ -17,6 +17,7 @@ use std::marker::PhantomData;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+pub mod journal;
 pub mod semantic;
 
 static RUNS: AtomicU64 = AtomicU64::new(1);
