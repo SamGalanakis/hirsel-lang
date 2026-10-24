@@ -175,7 +175,14 @@ fn immutable_native_compilation_links_both_backends_and_reopens_body_free_hits_a
 fn immutable_native_compilation_at_width_one() {
     with_compiler_stack(|| run(1));
 }
+#[test]
+fn immutable_root_observation_uses_only_admitted_portable_summaries() {
+    with_compiler_stack(|| run_case(1, true));
+}
 fn run(jobs: usize) {
+    run_case(jobs, false);
+}
+fn run_case(jobs: usize, observation_only: bool) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
@@ -207,7 +214,10 @@ fn run(jobs: usize) {
     let policy = ContentHash::of_bytes(b"immutable native compilation control");
     let mut previous: Option<(Vec<store::Reference>, store::Reference)> = None;
     let mut addresses = None;
-    for (literal, fresh) in [(7, false), (7, true), (8, false), (8, true)] {
+    for (literal, fresh) in [(7, false), (7, true), (8, false), (8, true)]
+        .into_iter()
+        .take(if observation_only { 2 } else { 4 })
+    {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
         let file = engine.sources.add("immutable-compilation.hir", format!(
@@ -326,6 +336,7 @@ fn run(jobs: usize) {
         let calls = Arc::new(AtomicU64::new(0));
         let backends = [native::Backend::Llvm, native::Backend::Cranelift]
             .into_iter()
+            .filter(|backend| !observation_only || *backend == native::Backend::Llvm)
             .map(|backend| CompilationBackend {
                 backend: backend.name().into(),
                 backend_version: ContentHash::of_parts(
@@ -408,7 +419,8 @@ fn run(jobs: usize) {
             )
         })[0];
         let outputs = compilation.outputs(selected).unwrap();
-        assert_eq!(outputs.len(), 2);
+        let backend_count = if observation_only { 1 } else { 2 };
+        assert_eq!(outputs.len(), backend_count);
         let current_addresses = outputs
             .iter()
             .map(|output| output.address)
@@ -417,7 +429,10 @@ fn run(jobs: usize) {
             assert_eq!(&current_addresses, previous);
         }
         addresses = Some(current_addresses);
-        assert_eq!(calls.load(Ordering::Relaxed), if fresh { 0 } else { 2 });
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            if fresh { 0 } else { backend_count as u64 }
+        );
         let native = compilation.native(selected).unwrap();
         if fresh {
             assert_eq!(instances.imports.load(Ordering::Relaxed), 0);
@@ -457,6 +472,17 @@ fn run(jobs: usize) {
         previous = Some((records, root.launch_manifest));
         let before = trace.totals();
         let bodies = native.snapshot.ready_materializations();
+        let observation = observation_only.then(|| {
+            let metadata = view.observation_metadata(&root).unwrap();
+            assert!(!metadata.sites.is_empty());
+            assert_eq!(&metadata.anchors, source.source_anchors());
+            let mut wrong = root.as_ref().clone();
+            wrong.static_manifest = wrong.launch_manifest;
+            assert!(view.observation_metadata(&Arc::new(wrong)).is_err());
+            assert_eq!(trace.totals(), before);
+            assert_eq!(native.snapshot.ready_materializations(), bodies);
+            metadata
+        });
         for (index, output) in outputs.iter().enumerate() {
             let linked = linked_product(store.as_ref(), *output).unwrap();
             let destination = directory
@@ -468,6 +494,10 @@ fn run(jobs: usize) {
             let run = native::launch(&executable, &target, &tools, &destination, true).unwrap();
             view.with_link_context(&root, &ready, |program| {
                 assert!(program.units.is_empty());
+                if let Some(metadata) = &observation {
+                    assert_eq!(metadata.failure_rules, native::failure_rules(program));
+                    assert_eq!(metadata.sites, native::site_codes(program));
+                }
                 let observed =
                     native::observe(&run, program, &source.sites()).map_err(|e| e.to_string())?;
                 if let Some(reference) = &reference {

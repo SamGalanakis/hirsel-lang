@@ -201,6 +201,69 @@ impl RootProducts {
         self.admitted_root(root)?;
         Ok(self.source.test_entries().to_vec())
     }
+    /// Diagnostic tables for this exact admitted root and its explicit Ready
+    /// dependency scope. Only portable summaries are opened; no ReadyProgram,
+    /// layout binding, native body or source-engine query is constructed.
+    pub fn observation_metadata(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+    ) -> Result<crate::requests::NativeObservation, String> {
+        self.admitted_root(root)?;
+        let snapshot = &self.inner.snapshot;
+        let environment = snapshot.environment();
+        let mut observations = Vec::with_capacity(root.instances.len());
+        for owner in &root.instances {
+            let selected = self
+                .inner
+                .selected
+                .get(&owner.ready_query_id().address.0)
+                .ok_or("observation metadata has an unread Ready dependency")?;
+            let ready = self
+                .inner
+                .local
+                .queries
+                .lookup(owner, selected.action, &environment)
+                .ok_or("observation Ready dependency lost current C admission")?;
+            if ready.product != *selected || ready.unit_summary.domain != UNIT_SUMMARY_DOMAIN {
+                return Err("observation metadata differs from selected Ready".into());
+            }
+            let bytes = snapshot
+                .store
+                .get_content(ready.unit_summary)
+                .ok_or("missing observation unit summary")?;
+            let observation = hirsel_lir::fragment::UnitSummary::observation(&bytes)?;
+            if observation.definition != *owner.instance.definition()
+                || observation.instance != owner.instance.digest()
+                || (observation.origin == hirsel_lir::ir::UnitOrigin::Source
+                    && !self
+                        .source
+                        .semantic()
+                        .semantic_contains(&observation.definition))
+            {
+                return Err("observation summary differs from admitted owner/source".into());
+            }
+            observations.push(observation);
+        }
+        Ok(crate::requests::NativeObservation {
+            failure_rules: crate::native::emit::failure_rules_from(
+                observations
+                    .iter()
+                    .flat_map(|unit| unit.failure_rules.iter().map(String::as_str)),
+            ),
+            sites: crate::native::observe::site_codes_from(
+                observations.iter().map(|unit| {
+                    (
+                        &unit.definition,
+                        &unit.implementation_revision,
+                        unit.sites.as_slice(),
+                    )
+                }),
+                Clone::clone,
+            ),
+            anchors: self.source.source_anchors().clone(),
+        })
+    }
+
     fn launch_bytes(&self) -> Result<Vec<u8>, String> {
         let snapshot = &self.inner.snapshot;
         serde_json::to_vec(&(

@@ -32,13 +32,21 @@ pub use hirsel_lir::emission::KIND_BUG;
 /// The rules a program can fail with, in order: a rule's runtime code is its
 /// index here plus one, so zero never names a rule.
 pub fn failure_rules(program: &ReadyProgram) -> Vec<String> {
-    let rules: BTreeSet<&str> = program
-        .summaries
-        .iter()
-        .flat_map(|s| s.glue.failure_rules.iter())
-        .map(String::as_str)
-        .collect();
-    rules.into_iter().map(str::to_string).collect()
+    failure_rules_from(
+        program
+            .summaries
+            .iter()
+            .flat_map(|summary| summary.glue.failure_rules.iter().map(String::as_str)),
+    )
+}
+
+pub(crate) fn failure_rules_from<'a>(rules: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    rules
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn failure_codes(program: &ReadyProgram) -> FailureCodes {

@@ -38,6 +38,18 @@ pub struct UnitSummary {
     pub references: Vec<Symbol>,
 }
 
+/// Layout-free diagnostic facts from the exact portable unit summary. These
+/// contain no native body, program-local layout/ABI IDs or acceptance authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnitObservation {
+    pub definition: DefPath,
+    pub instance: ContentHash,
+    pub origin: UnitOrigin,
+    pub implementation_revision: ContentHash,
+    pub sites: Vec<SiteRange>,
+    pub failure_rules: Vec<String>,
+}
+
 impl UnitSummary {
     /// The summary of a Ready unit.
     pub fn of(
@@ -347,6 +359,21 @@ impl UnitSummary {
             abis,
         };
         Ok(hirsel_codec::to_text(&wire).into_bytes())
+    }
+    /// Read only diagnostic metadata with the same summary codec. Layouts
+    /// remain content names; no table binding or Value/Ready construction runs.
+    pub fn observation(bytes: &[u8]) -> Result<UnitObservation, String> {
+        let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        let wire: SummaryWire = hirsel_codec::from_text(text).map_err(|e| e.message)?;
+        let summary = wire.summary;
+        Ok(UnitObservation {
+            definition: summary.definition,
+            instance: summary.instance,
+            origin: summary.origin,
+            implementation_revision: summary.implementation_revision,
+            sites: summary.sites,
+            failure_rules: summary.failure_rules,
+        })
     }
     pub fn decode(
         bytes: &[u8],
