@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 mod dir;
+mod request;
 pub use dir::{DirStore, GcReport};
+pub use request::RequestStore;
 
 /// Stable logical address plus explicit source inputs. The address does not
 /// change when the body changes; variants bind inputs and dependency outputs
