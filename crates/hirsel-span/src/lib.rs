@@ -174,6 +174,14 @@ pub struct SourceFile {
     ordinal: u32,
 }
 impl SourceFile {
+    /// Owned path buffers only. Text and line indexes retain their shared
+    /// source owner; cloning a SourceFile does not copy those allocations.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        self.path
+            .capacity()
+            .saturating_add(self.logical_path.capacity()) as u64
+    }
+
     pub fn ordinal(&self) -> u32 {
         self.ordinal
     }
