@@ -159,3 +159,4 @@ mod borrowed_match_guidance_49;
 mod source_invocations_19;
 mod native_source_products_19;
 mod scheduled_front;
+mod settled_native_source_19;

@@ -72,7 +72,9 @@ pub use input::{
     IdentifiedSignature, SignatureLookup, SignatureMap, UniverseErrors, VRead, ValidatedSignatures,
     ValidationDigest, ViewInput, ViewVerdict, check_view, digest, errors_digest, read_holds,
 };
-pub use instances::{InstanceViolation, validate_instance_bodies};
+pub use instances::{
+    InstanceViolation, validate_instance_bodies, validate_instance_catalog, validate_instance_uses,
+};
 pub use matching::{MAX_MATCH_WORK, tooling_limit_error};
 
 /// Deterministic compiler-invariant violations from full validation.
