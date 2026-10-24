@@ -13,8 +13,8 @@ mod scheduled_lower;
 pub use scheduled_check::{FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries};
 mod scheduled_growth;
 pub use parallel::{
-    FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput, ModeResult,
-    PublishedDefinition, PublishedResult,
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
+    FrontStorageOutput, FrontStorageQueries, ModeResult, PublishedDefinition, PublishedResult,
 };
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};

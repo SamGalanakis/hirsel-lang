@@ -10,6 +10,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
+mod storage;
+pub use storage::{FRONT_STORAGE_KIND, FrontStorageOutput, FrontStorageQueries};
 pub const FRONT_BODY_KIND: u32 = 0x4600_0001;
 const FAILURE: Domain = Domain {
     kind: 0x4600_0002,
@@ -105,6 +107,22 @@ pub struct FrontCheckedOutput {
 }
 impl FrontBodyQueries {
     /// Actual phase invocations, including failed or discarded producers.
+    fn completed_product(&self, query: QueryId) -> Option<Result<ProductRef, Reference>> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let outcome = outcomes.get(&query.address.0)?;
+        Some(match &outcome.status {
+            Err(_) => Err(outcome.reference),
+            Ok(()) => Ok(ProductRef {
+                address: query.address,
+                action: crate::store::query_action(
+                    &self.inputs.get(&query.address.0)?.key,
+                    self.inputs.get(&query.address.0)?.key.1,
+                    &outcome.reads,
+                ),
+                record: outcome.reference,
+            }),
+        })
+    }
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions.load(Relaxed)
     }
@@ -445,6 +463,9 @@ impl BodyTask {
         }))
     }
     fn run(&mut self) -> Result<ProductRef, Reference> {
+        if let Some(product) = self.queries.completed_product(self.query) {
+            return product;
+        }
         if self.queries.verify_store == crate::store::VerifyStore::Off {
             if let Some(hit) = self.load() {
                 return hit;

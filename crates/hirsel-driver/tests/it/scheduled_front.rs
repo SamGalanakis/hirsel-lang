@@ -609,7 +609,26 @@ fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path, "pub fn main()->u8{1u8}\n").unwrap();
-        let store = Arc::new(MemStore::default());
+        struct ContentOnly(MemStore);
+        impl ResultStore for ContentOnly {
+            fn get(
+                &self,
+                key: &hirsel_engine::store::EntryKey,
+            ) -> Option<hirsel_engine::store::Bytes> {
+                (key.2 == QueryKind::Interpret)
+                    .then(|| self.0.get(key))
+                    .flatten()
+            }
+            fn put(&self, key: &hirsel_engine::store::EntryKey, value: &[u8]) {
+                if key.2 == QueryKind::Interpret {
+                    self.0.put(key, value);
+                }
+            }
+            fn name(&self) -> &'static str {
+                "active-content-only-test"
+            }
+        }
+        let store = Arc::new(ContentOnly(MemStore::default()));
         let mut program = COMPILER
             .with_config(CompileConfig {
                 store,
@@ -683,5 +702,125 @@ fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
             "held output retains admitted immutable owner after shutdown"
         );
         drop(held);
+    });
+}
+
+#[test]
+fn admitted_storage_recipe_waits_for_checked_body_and_matches_scalar_adapter() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(
+            &path,
+            "fn helper(x:u8)->u8{x}\npub fn main()->u8{helper(1u8)}\n",
+        )
+        .unwrap();
+        for jobs in [1, 2] {
+            let store = Arc::new(MemStore::default());
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    hold_bytes: 0,
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let budget = ProcessBudget::new(1 << 30);
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(jobs),
+                budget.reserve(512 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+            let weight = MemoryWeight {
+                retained: 1 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let front = program
+                .engine
+                .front_body_queries(
+                    &[program.entry.clone()],
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            let storage = program
+                .engine
+                .front_storage_queries(
+                    front.clone(),
+                    weight,
+                    budget.reserve(8 << 20).unwrap(),
+                    errors(),
+                )
+                .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            runtime
+                .register(FRONT_STORAGE_KIND, storage.factory())
+                .unwrap();
+            let query = storage.query(&program.entry).unwrap();
+            let request = runtime.request(&[query]);
+            let product = runtime
+                .wait(request)
+                .unwrap_or_else(|error| panic!("{:?}", storage.failure(error)))[0];
+            let actual = storage.outcome(product).unwrap();
+            assert_eq!(storage.executions(), 1);
+            assert_eq!(
+                front.live_body_count(),
+                0,
+                "storage equations retain no analyzed body"
+            );
+            let analyzed = program.engine.mode_definition(&program.entry).unwrap();
+            let snapshot = program.engine.signature_snapshot();
+            let signature = snapshot
+                .signature(hirsel_syntax::DefId::intern(&program.entry))
+                .unwrap()
+                .unwrap();
+            let mut reads = hirsel_engine::ReadsBuilder::new();
+            let mut provider = hirsel_engine::FrozenProvider::for_body(
+                &snapshot,
+                program.entry.0.package.clone(),
+                &mut reads,
+            );
+            let expected = ModeAdapter
+                .storage(
+                    program.engine.types(),
+                    &hirsel_types::TypeMemo::new(),
+                    &analyzed.value,
+                    signature,
+                    &mut provider,
+                )
+                .unwrap();
+            let records = NativeRecords::new(program.engine.types().clone(), store.clone());
+            assert_eq!(
+                records.encode(&program.engine, &actual.output.value),
+                records.encode(&program.engine, &expected.value)
+            );
+            let expected_reads = reads.finish().unwrap();
+            for (key, value) in expected_reads.iter() {
+                assert!(
+                    actual.reads.iter().any(
+                        |(actual_key, actual_value)| actual_key == key && actual_value == value
+                    ),
+                    "missing actual storage signature read"
+                );
+            }
+            let repeated = runtime.request(&[query]);
+            assert_eq!(runtime.wait(repeated).unwrap(), vec![product]);
+            assert_eq!(
+                storage.executions(),
+                1,
+                "second consumer performs no storage transformation"
+            );
+            assert_eq!(
+                runtime.stats().claims,
+                2,
+                "storage and its actual P dependency only"
+            );
+            runtime.shutdown();
+        }
     });
 }
