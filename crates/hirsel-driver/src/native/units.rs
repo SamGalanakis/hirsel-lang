@@ -579,7 +579,7 @@ fn symbol_name<S>(unit: &LirUnit<S>) -> String {
 }
 
 /// Every function the unit names directly, by a function reference or as closure code.
-fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
+pub(crate) fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
     let calls = unit.tables.calls.iter().filter_map(|c| match c.callee {
         Callee::Direct(s) | Callee::Bound { code: s, .. } => Some(s),
         _ => None,
