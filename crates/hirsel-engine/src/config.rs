@@ -83,6 +83,12 @@ impl QueryEngine {
     pub fn hold_bytes(&self) -> u64 {
         self.hold_bytes
     }
+    /// The worker policy captured by an explicit CompileConfig. None means
+    /// this engine is unconfigured; reading it never consults the environment
+    /// or chooses host defaults. Host adapters capture those at request entry.
+    pub fn configured_jobs(&self) -> Option<Jobs> {
+        self.configured_jobs
+    }
     pub(crate) fn jobs(&self) -> Jobs {
         self.configured_jobs
             .unwrap_or_else(|| Jobs::new(hirsel_guard::jobs()))
@@ -105,6 +111,10 @@ mod tests {
         };
         let engine =
             QueryEngine::new(crate::default_environment(), Default::default()).with_config(config);
+        let unconfigured = QueryEngine::new(crate::default_environment(), Default::default());
+        let _guard = forbid_host_defaults();
+        assert_eq!(engine.configured_jobs().map(Jobs::get), Some(8));
+        assert_eq!(unconfigured.configured_jobs(), None);
         assert_eq!(engine.jobs().get(), 8);
         assert_eq!(engine.hold_bytes(), 0);
         assert_eq!(engine.retention, Retention::Resident);
