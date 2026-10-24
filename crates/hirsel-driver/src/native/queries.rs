@@ -6,6 +6,7 @@ pub use hirsel_rc::arena_credit::equations::LocalArenaEquations;
 use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
+pub mod arena_tasks;
 pub mod declarations;
 pub mod demand;
 pub mod graph;
