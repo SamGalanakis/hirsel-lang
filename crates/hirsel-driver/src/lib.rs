@@ -23,6 +23,7 @@ pub mod resident;
 pub mod serve;
 pub mod session;
 pub mod testing;
+mod tir_execution;
 mod trial;
 pub use pipeline::{BodyAdapter, FrontPhases, LowerAdapter, ModeAdapter};
 use std::{io::Write, path::Path};
@@ -511,6 +512,15 @@ pub(crate) fn def_path(spelled: &str) -> Option<hirsel_syntax::DefPath> {
 pub(crate) fn bind_host_run(
     program: &mut LoadedProgram,
     launch: HostLaunch<'_>,
+    host: hirsel_rt::host_launch::HostGrants,
+) -> Result<HostRun, ToolError> {
+    let bound = bind_launch(program, launch)?;
+    admit_bound_host_run(bound, launch, host)
+}
+
+pub(crate) fn admit_bound_host_run(
+    bound: BoundHostRun,
+    launch: HostLaunch<'_>,
     mut host: hirsel_rt::host_launch::HostGrants,
 ) -> Result<HostRun, ToolError> {
     let (record, revocations) = match &launch {
@@ -522,7 +532,7 @@ pub(crate) fn bind_host_run(
         HostLaunch::Callee { record, .. } => (*record, None),
         HostLaunch::Replay(_) => (None, None),
     };
-    match bind_launch(program, launch)? {
+    match bound {
         BoundHostRun::Live(bound) => {
             if let Some(path) = revocations {
                 host.read_revocations(path)
