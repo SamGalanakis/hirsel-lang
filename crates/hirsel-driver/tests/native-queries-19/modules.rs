@@ -4,3 +4,4 @@ mod instances;
 mod ready;
 mod recipes;
 mod demand;
+mod local;

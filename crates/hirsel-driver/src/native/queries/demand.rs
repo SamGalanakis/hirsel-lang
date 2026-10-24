@@ -111,6 +111,32 @@ impl DemandInstances {
     pub fn counts(&self) -> &InstanceQueryCounts {
         &self.queries.counts
     }
+    /// Read a completed instance from this request snapshot, retaining C's
+    /// independent current environment admission. No recipe or Value decode.
+    pub(super) fn admitted(
+        &self,
+        key: &InstanceAddress,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<
+        (
+            Arc<DiscoveredInstance>,
+            hirsel_lir::validate::CheckedLinkage,
+        ),
+        String,
+    > {
+        if key.target_abi != self.target.digest() || key.policy != self.policy {
+            return Err("native dependency differs from the request snapshot".into());
+        }
+        let output = self
+            .completed
+            .get(key.instance.encoding())
+            .ok_or("native instance dependency has not completed")?;
+        let linkage = self
+            .queries
+            .linkage(key, output.product.product.action, environment)
+            .ok_or("native instance dependency lost current C admission")?;
+        Ok((output.clone(), linkage))
+    }
     fn address(&self, key: InstanceKey) -> InstanceAddress {
         InstanceAddress {
             instance: key,
@@ -268,7 +294,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v2",
+            "hirsel.native.demand-import-action.v3",
             [bytes.as_slice()],
         )))
     }
@@ -531,12 +557,16 @@ impl DemandInstances {
             })
             .collect::<Vec<_>>();
         let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
-        let mut portable_finalizers = finalizers
-            .0
+        let reached_finalizers = finalizers.reached(&unit, &table);
+        let additional_abis = reached_finalizers
             .iter()
+            .map(|(_, f)| f.abi)
+            .collect::<Vec<_>>();
+        let mut portable_finalizers = reached_finalizers
+            .into_iter()
             .map(|(layout, finalizer)| {
                 (
-                    keys.key(*layout).0,
+                    keys.key(layout).0,
                     finalizer.definition.clone(),
                     finalizer.instance,
                     keys.fn_abi(&table.fn_abis[finalizer.abi.0 as usize]),
@@ -563,7 +593,7 @@ impl DemandInstances {
             action,
             unit,
             &inputs,
-            &instances.abis,
+            &additional_abis,
             discovery,
             statics_finalizers,
         )?;

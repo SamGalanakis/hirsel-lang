@@ -125,6 +125,25 @@ impl InstanceQueries {
         }
         output
     }
+
+    /// C-owned header observations after ordinary descriptor and current
+    /// environment admission. No Value body is decoded or bound.
+    pub fn linkage(
+        &self,
+        key: &InstanceAddress,
+        action: Action,
+        environment: &NativeEnvironment<'_>,
+    ) -> Option<hirsel_lir::validate::CheckedLinkage> {
+        self.lookup_inner(key, action, environment)?;
+        self.native
+            .lookup(
+                subject(key, action),
+                key.policy,
+                StageKind::Value,
+                environment,
+            )
+            .map(|output| output.linkage())
+    }
     fn lookup_inner(
         &self,
         key: &InstanceAddress,
