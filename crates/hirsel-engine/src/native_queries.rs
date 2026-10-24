@@ -44,6 +44,7 @@ pub struct NativeSourceRoots {
 
 /// Required constant initialization inputs, separate from source root lookup.
 /// Materialized values are ordinary source-query products, never native IR.
+#[derive(Clone)]
 pub struct NativeStaticInputs {
     pub constants: BTreeMap<DefPath, Materialized>,
     pub definitions: Vec<DefPath>,
