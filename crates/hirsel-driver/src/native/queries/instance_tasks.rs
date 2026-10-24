@@ -242,11 +242,11 @@ impl InstanceTasks {
             &output.templates,
             &output.operation_freedom,
             &output.emission,
-            &output.adapters,
         ))
         .map_err(|e| e.to_string())?;
         let bytes = ordinary
             .len()
+            .saturating_add(hirsel_codec::to_text(&output.adapters).len())
             .saturating_add(output.ready_source.encode()?.len())
             .saturating_add(
                 output
