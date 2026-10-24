@@ -117,6 +117,16 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
                     store.clone(),
                 )
                 .unwrap();
+            let work_before_metadata = lower.work_snapshot();
+            assert!(
+                reader.retained_metadata_bytes()
+                    >= std::mem::size_of::<NativeOriginalReader>() as u64
+            );
+            assert_eq!(
+                lower.work_snapshot(),
+                work_before_metadata,
+                "reader metadata inspection performs no producer work"
+            );
             runtime.shutdown();
             drop(program);
             let main = reader
