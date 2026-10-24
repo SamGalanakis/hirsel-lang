@@ -6002,11 +6002,10 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
 /// the Cranelift tape on every engine at width/permits 1/1 and 8/8, each to the
 /// same exit, bytes and full normalized projection (outputs, cuts, per-object
 /// sequences and key epochs). Damaged and truncated-invalid tapes refuse before
-/// any program output. This qualifies the F1 phase path only; the superseded
-/// default-off path records no phases to compare.
+/// any program output. Each case is one part: an LLVM replay width, the
+/// Cranelift tape, or the refusals.
 #[derive(Clone, Copy, PartialEq)]
 enum Runtime50 {
-    Whole,
     LlvmWidth1,
     LlvmWidth8,
     Cranelift,
@@ -6024,7 +6023,6 @@ fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
     for (index, backend) in BACKENDS.iter().enumerate() {
         let llvm = index == 0;
         let records = match part {
-            Runtime50::Whole => true,
             Runtime50::Cranelift => !llvm,
             _ => llvm,
         };
@@ -6061,12 +6059,11 @@ fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
         );
         assert!(!parsed.cut.is_empty(), "{name}: a terminal cut");
         let projection = std::fs::read_to_string(&report).unwrap();
-        let cells: &[(&str, usize)] = match (part, llvm) {
-            (Runtime50::Refusals, _) => &[],
-            (Runtime50::LlvmWidth1, _) => &[("1", 1), ("1", 8)],
-            (Runtime50::LlvmWidth8, _) => &[("8", 1), ("8", 8)],
-            (_, true) => &[("1", 1), ("1", 8), ("8", 1), ("8", 8)],
-            (_, false) => &[("1", 1), ("8", 8)],
+        let cells: &[(&str, usize)] = match part {
+            Runtime50::Refusals => &[],
+            Runtime50::LlvmWidth1 => &[("1", 1), ("1", 8)],
+            Runtime50::LlvmWidth8 => &[("8", 1), ("8", 8)],
+            Runtime50::Cranelift => &[("1", 1), ("8", 8)],
         };
         for engine in ENGINES {
             for &(width, permits) in cells {
@@ -6103,7 +6100,7 @@ fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
             }
         }
         // Refusal is a tape-format property: check it on the LLVM tape.
-        if !llvm || !matches!(part, Runtime50::Whole | Runtime50::Refusals) {
+        if !llvm || !matches!(part, Runtime50::Refusals) {
             continue;
         }
         let header = hirsel_free::tape::MAGIC.len();
@@ -6157,7 +6154,6 @@ fn runtime50_matrix(name: &str, text: &str, part: Runtime50) {
         }
     }
     let expected = match part {
-        Runtime50::Whole => (ENGINES.len() * 6, 2 + 2 * ENGINES.len()),
         Runtime50::Refusals => (0, 2 + 2 * ENGINES.len()),
         _ => (ENGINES.len() * 2, 0),
     };
@@ -6170,18 +6166,46 @@ fn corpus(path: &str) -> String {
 }
 
 #[test]
-fn runtime50_end_to_end_engine_replay_matrix_channel_gap() {
-    runtime50_matrix("gap", source("gap"), Runtime50::Whole);
+fn runtime50_end_to_end_engine_replay_matrix_channel_gap_llvm_width1() {
+    runtime50_matrix("gap", source("gap"), Runtime50::LlvmWidth1);
 }
 
 #[test]
-fn runtime50_end_to_end_engine_replay_matrix_mutex() {
-    runtime50_matrix(
-        "mutex",
-        &corpus("../../conformance/CLO/CLO-3-child-mutex-capture-run.hir"),
-        Runtime50::Whole,
-    );
+fn runtime50_end_to_end_engine_replay_matrix_channel_gap_llvm_width8() {
+    runtime50_matrix("gap", source("gap"), Runtime50::LlvmWidth8);
 }
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_channel_gap_cranelift() {
+    runtime50_matrix("gap", source("gap"), Runtime50::Cranelift);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_channel_gap_refusals() {
+    runtime50_matrix("gap", source("gap"), Runtime50::Refusals);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_mutex_llvm_width1() {
+    runtime50_matrix("mutex", &corpus(MUTEX), Runtime50::LlvmWidth1);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_mutex_llvm_width8() {
+    runtime50_matrix("mutex", &corpus(MUTEX), Runtime50::LlvmWidth8);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_mutex_cranelift() {
+    runtime50_matrix("mutex", &corpus(MUTEX), Runtime50::Cranelift);
+}
+
+#[test]
+fn runtime50_end_to_end_engine_replay_matrix_mutex_refusals() {
+    runtime50_matrix("mutex", &corpus(MUTEX), Runtime50::Refusals);
+}
+
+const MUTEX: &str = "../../conformance/CLO/CLO-3-child-mutex-capture-run.hir";
 
 const ATOMIC: &str = "../../conformance/CLO/CLO-3-child-atomic-capture-run.hir";
 const TASK_SET: &str = "../../conformance/CONC/CONC-2-task-set-first-completed-run.hir";
