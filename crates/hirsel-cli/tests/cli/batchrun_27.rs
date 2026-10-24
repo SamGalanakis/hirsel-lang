@@ -209,6 +209,11 @@ fn real(engine: &str) {
     )
     .unwrap();
     fs::write(
+        root.join("child_accounting.py"),
+        include_str!("../support/batchrun_27/child_accounting.py"),
+    )
+    .unwrap();
+    fs::write(
         root.join("cases.json"),
         include_str!("../support/batchrun_27/cases.json"),
     )
@@ -336,4 +341,57 @@ fn batchrun_27_admission_caps_native() {
 #[test]
 fn batchrun_27_scripted_native() {
     scripted_native(true)
+}
+
+fn oracle_control(identity: &str) {
+    let scratch = scratch("batchrun-27-oracle-");
+    let root = scratch.path();
+    for (name, source) in [
+        (
+            "child_accounting.py",
+            include_str!("../support/batchrun_27/child_accounting.py"),
+        ),
+        (
+            "oracle_controls.py",
+            include_str!("../support/batchrun_27/oracle_controls.py"),
+        ),
+        (
+            "child.py",
+            include_str!("../../../../examples/batchrun/fixtures/child.py"),
+        ),
+    ] {
+        fs::write(root.join(name), source).unwrap();
+    }
+    let output = Command::new("python3")
+        .arg(root.join("oracle_controls.py"))
+        .arg(identity)
+        .arg(root)
+        .arg(root.join("child.py"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{identity}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["passed"], true, "{report}");
+    eprintln!("batchrun_27 oracle {report}");
+}
+
+#[test]
+fn batchrun_27_exec_complete_before_python_readiness() {
+    oracle_control("pre_marker")
+}
+#[test]
+fn batchrun_27_observed_readiness_before_cancel() {
+    oracle_control("ready_cancel")
+}
+#[test]
+fn batchrun_27_exec_failure_is_distinct() {
+    oracle_control("exec_failure")
+}
+#[test]
+fn batchrun_27_empty_markers_do_not_prove_reaping() {
+    oracle_control("unreaped")
 }

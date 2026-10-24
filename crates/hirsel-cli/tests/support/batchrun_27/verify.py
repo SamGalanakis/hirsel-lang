@@ -2,7 +2,7 @@
 """Independent expected statuses; finite direct children, bounded pipes and reaping.
 
 Go os/exec TestPipes stdin-close/output sequence is adapted to discard-only wait.
-Every invoked argv is explicit, and fixture PIDs alone are checked after return.
+Every invoked argv is explicit. Kernel creation/wait events account for every child.
 """
 import argparse
 import copy
@@ -15,6 +15,8 @@ import select
 import subprocess
 import sys
 import time
+
+from child_accounting import account
 
 
 def digest(path):
@@ -43,7 +45,7 @@ def verify(args):
         (out / 'build.stderr').write_bytes(built.stderr)
         (out / 'build.json').write_text(json.dumps(dict(argv=argv, exit=built.returncode)))
         assert built.returncode == 0, (args.engine, built)
-    source_seal = {str(p): digest(p) for p in [selection, root/'main.hir', root/'model.hir', root/'verify.py', root/'child.py', root/'cases.json', root/'capped', args.hirsel]}
+    source_seal = {str(p): digest(p) for p in [selection, root/'main.hir', root/'model.hir', root/'verify.py', root/'child_accounting.py', root/'child.py', root/'cases.json', root/'capped', args.hirsel]}
     if binary.exists():
         source_seal[str(binary)] = digest(binary)
     (out/'source-seal-before.json').write_text(json.dumps(source_seal, indent=2))
@@ -98,7 +100,9 @@ def verify(args):
             requested_width=1, production_test_hooks={k:v for k,v in env.items() if k.startswith('HIRSEL_RT_')})
         receipts.append(receipt)
         (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
-        wrapper = [sys.executable,str(root/'capped'),'--timeout','60',*argv]
+        accounting = state/'children.json'
+        wrapper = [sys.executable,str(root/'capped'),'--timeout','60',
+                   sys.executable,str(root/'child_accounting.py'),str(accounting),*argv]
         with stdout.open('wb') as stdout_file, stderr.open('wb') as stderr_file:
             child = subprocess.Popen(wrapper, stdin=subprocess.DEVNULL, stdout=stdout_file, stderr=stderr_file, env=env)
             if identity == 'mixed':
@@ -118,19 +122,31 @@ def verify(args):
         app_stderr = ''.join(line+'\n' for line in text.splitlines() if not line.startswith('capped:'))
         actual = dict(exit=code, rows=rows, stderr=app_stderr)
         expected = dict(exit=case['exit'],rows=case['rows'],stderr=case['stderr'])
-        # Fixture receipts are independent of app output. Only these known PIDs
-        # are inspected; a remaining /proc entry includes an unreaped zombie.
+        # Readiness markers are a subset of kernel-created PIDs. They are
+        # never the creation boundary or evidence that a child was reaped.
         pids = {p.stem: int(p.read_text()) for p in state.glob('*.started')}
-        for pid in pids.values():
-            assert not Path('/proc',str(pid)).exists(), ('child not reaped',identity,pid)
+        children = account(json.loads(accounting.read_text()), pids)
+        if identity in ['child-deadline', 'global-deadline']:
+            for row in children:
+                if row['state'] == 'ready then signaled':
+                    row['state'] = 'ready then cancelled'
         if identity not in ['invalid','absent','grant-refusal','global-deadline']:
-            assert len(pids) == len(manifest['commands']), (identity,pids)
-        if identity == 'global-deadline':
-            assert len(pids) <= 2, ('admission cap and canceled queue',pids)
+            assert len(children) == len(manifest['commands']), (identity,children)
+        elif identity == 'global-deadline':
+            assert len(children) <= 2, ('admission cap and canceled queue',children)
+        elif identity in ['invalid', 'grant-refusal']:
+            assert not children, (identity,children)
+        else:
+            # ENOENT may be detected before fork or returned by a created
+            # child. Any such child still needs exact wait/reap proof.
+            assert len(children) <= 1 and all(not row.get('exec') for row in children), children
+        creation_state = ('created' if children else
+                          'denied' if identity == 'grant-refusal' else
+                          'absent' if identity == 'absent' else 'never spawned')
         if identity == 'both-pipes':
             done = json.loads((state/'0.done').read_text())
             assert done['stdout'] == done['stderr'] == 98304
-        receipt.update(state='completed', passed=actual==expected, actual=actual, fixture_pids=pids, reaped=True,
+        receipt.update(state='completed', passed=actual==expected, actual=actual, fixture_pids=pids, children=children, creation_state=creation_state, reaped=True,
                        tape_sha256=digest(tape) if tape.exists() else None)
         (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
         assert actual == expected, (identity,args.engine,actual,expected)
@@ -150,7 +166,8 @@ def verify(args):
         (out/'receipts.json').write_text(json.dumps(receipts,indent=2))
         assert receipt['replay']['passed'], (identity, replay)
     assert source_seal == {p:digest(Path(p)) for p in source_seal}
-    print(json.dumps(dict(engine=args.engine, selected=len(cases), completed=len(receipts),passed=sum(r['passed'] for r in receipts),replays=sum(r['replay']['passed'] for r in receipts),cleanup=True)))
+    print(json.dumps(dict(engine=args.engine, selected=len(cases), completed=len(receipts),passed=sum(r['passed'] for r in receipts),replays=sum(r['replay']['passed'] for r in receipts),cleanup=True,
+                          accounting=[dict(id=r['id'], creation_state=r['creation_state'], children=r['children']) for r in receipts])))
 
 
 if __name__ == '__main__':

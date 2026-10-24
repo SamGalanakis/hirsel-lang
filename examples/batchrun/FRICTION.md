@@ -105,3 +105,17 @@ real child fixtures establish host pipe backpressure/EOF and reaping. Scripted
 children have no timed step or stdin-EOF wait, so those script cells are not
 credited as real deadline/EOF evidence. The tool introduces no new concurrency
 construct or public combinator.
+
+13. **Creation and readiness are different boundaries.** Real-child tests count
+    kernel fork/vfork/clone events, excluding threads, rather than Python's
+    `.started` files. A successful exec can be killed by the unchanged 300ms
+    child deadline before Python writes that marker. Every created process,
+    including a failed exec, must have a terminal kernel wait status matching
+    its parent's successful wait and be absent from `/proc` after app exit.
+    Tapes contain logical child handles and language outcomes, not these host
+    PIDs or cancellation reap statuses. The Linux x86-64 harness therefore uses
+    ptrace via Python/libc; pool action images have no strace or systemd-run.
+    Missing creation still fails the original one-child cardinality assertion.
+    Readiness-before-cancel has a separate test identity with an observed
+    close-write handshake. Independent controls cover death at the exec stop,
+    failed exec, and rejection of a marker-free zombie or missing wait proof.
