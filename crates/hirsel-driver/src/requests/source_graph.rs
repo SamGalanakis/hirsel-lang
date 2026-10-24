@@ -121,6 +121,7 @@ impl SourceProducts {
         let front = self.front.clone();
         let sources = self.sources.clone();
         let errors = self.errors;
+        let growth = self._growth.clone();
         Arc::new(move |reference| {
             let selected = check
                 .failure(reference)
@@ -133,6 +134,11 @@ impl SourceProducts {
                     let outcome = front.outcome(reference)?.outcome;
                     outcome.result.err().map(|error| (error, outcome.phase))
                 });
+            let selected = selected.or_else(|| {
+                growth
+                    .failure(reference)
+                    .map(|error| (error, Some(QueryKind::Check)))
+            });
             if let Some((error, phase)) = selected {
                 return ToolError::Query {
                     error,
@@ -172,9 +178,10 @@ impl Plan {
         limits: RequestLimits,
         config: &CompileConfig,
         inputs: &FrozenInputs,
-        definitions: usize,
+        definitions: &[DefPath],
+        files: usize,
     ) -> Result<Self, ToolError> {
-        let count = u64::try_from(definitions).map_err(|_| uninstalled())?;
+        let count = u64::try_from(definitions.len()).map_err(|_| uninstalled())?;
         let source = (inputs.retained_bytes() as u64)
             .checked_mul(2)
             .and_then(|bytes| bytes.checked_add(count.checked_mul(8192)?))
@@ -193,12 +200,26 @@ impl Plan {
             .ok_or_else(|| {
                 ToolError::Runtime("compiler body inventory exceeds admission".into())
             })?;
+        let root_metadata = MemoryWeight::default();
+        let growth_inventory =
+            FrontGrowthQueries::input_bytes(definitions, root_metadata).ok_or_else(uninstalled)?;
+        let check_inventory = FrontCheckQueries::input_bytes(definitions, files, root_metadata)
+            .ok_or_else(uninstalled)?;
         let root_retained = growth
-            .checked_sub(count.checked_mul(8192).ok_or_else(uninstalled)?)
+            .checked_sub(growth_inventory)
+            .zip(check.checked_sub(check_inventory))
+            .map(|(growth, check)| growth.min(check))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler root inventory exceeds admission".into())
             })?;
+        let lower_inventory =
+            FrontLowerQueries::input_bytes(definitions).ok_or_else(uninstalled)?;
+        if lower_inventory > lower {
+            return Err(ToolError::Runtime(
+                "compiler Lower inventory exceeds admission".into(),
+            ));
+        }
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
             .ok_or_else(uninstalled)?;
@@ -237,7 +258,12 @@ pub(super) fn install(
     };
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
-    let mut program = compiler.load_check_package_inputs(&request.path, &request.inputs, true)?;
+    let loading = budget.begin(limits)?;
+    let mut program = match compiler.load_check_package_inputs(&request.path, &request.inputs, true)
+    {
+        Ok(program) => program,
+        Err(error) => return Err(loading.failed(error)),
+    };
     let sources = program.engine.sources.clone();
     let query_error = |error| ToolError::Query {
         error,
@@ -245,7 +271,13 @@ pub(super) fn install(
         sources: sources.clone(),
     };
     let definitions = program.engine.indexed_definitions();
-    let plan = Plan::new(limits, config, &request.inputs, definitions.len())?;
+    let plan = Plan::new(
+        limits,
+        config,
+        &request.inputs,
+        &definitions,
+        program.files.len(),
+    )?;
     let GraphAdmission {
         runtime,
         source,
@@ -254,7 +286,7 @@ pub(super) fn install(
         growth,
         check,
         transport,
-    } = budget.admit(limits, plan.snapshots)?;
+    } = loading.finish(plan.snapshots)?;
     let store = Arc::new(RequestStore::new(config.store.clone(), transport));
     program.engine = program.engine.with_result_store(store.clone());
     let errors = runtime_errors(store.as_ref())?;

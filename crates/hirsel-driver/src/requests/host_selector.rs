@@ -67,6 +67,59 @@ impl GraphAdmission {
     }
 }
 
+/// Charge the whole selected snapshot partition before S0 allocates a loader
+/// view. Partitioning transfers that existing charge to immutable producers;
+/// source maps returned on a loader failure keep their own charge as well.
+pub(super) struct LoadingAdmission {
+    runtime: MemoryReservation,
+    snapshot: MemoryReservation,
+    transport: MemoryReservation,
+}
+impl LoadingAdmission {
+    fn reserve(budget: &Arc<ProcessBudget>, limits: RequestLimits) -> Result<Self, ToolError> {
+        Ok(Self {
+            runtime: budget
+                .reserve(limits.runtime_bytes)
+                .map_err(ToolError::Io)?,
+            snapshot: budget
+                .reserve(limits.snapshot_bytes)
+                .map_err(ToolError::Io)?,
+            transport: budget
+                .reserve(limits.transport_bytes)
+                .map_err(ToolError::Io)?,
+        })
+    }
+    pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
+        let bytes = [plan.source, plan.front, plan.lower, plan.growth, plan.check]
+            .into_iter()
+            .try_fold(0u64, u64::checked_add);
+        if bytes.is_none_or(|bytes| bytes > self.snapshot.bytes()) {
+            return Err(ToolError::Runtime(
+                "compiler snapshot footprint exceeds admission".into(),
+            ));
+        }
+        // The checked total proves each split fits. No reservation is released
+        // while ownership transfers, even when another host is admitting work.
+        let source = self.snapshot.split(plan.source).unwrap();
+        let front = self.snapshot.split(plan.front).unwrap();
+        let lower = self.snapshot.split(plan.lower).unwrap();
+        let growth = self.snapshot.split(plan.growth).unwrap();
+        let check = self.snapshot.split(plan.check).unwrap();
+        Ok(GraphAdmission {
+            runtime: self.runtime,
+            source,
+            front,
+            lower,
+            growth,
+            check,
+            transport: self.transport,
+        })
+    }
+    pub fn failed(self, error: ToolError) -> ToolError {
+        retain_error(error, Arc::new(self.snapshot))
+    }
+}
+
 /// Implemented only by installed compiler producer views. Public requests
 /// carry no tasks, materializer callbacks or compiler/verifier capabilities.
 pub(super) trait GraphProducts: Send + Sync {
@@ -117,6 +170,15 @@ impl GraphBudget {
         });
         budgets.push((Arc::downgrade(budget), Arc::downgrade(&owner)));
         owner
+    }
+    pub fn begin(&self, limits: RequestLimits) -> Result<LoadingAdmission, ToolError> {
+        match LoadingAdmission::reserve(&self.budget, limits) {
+            Ok(admission) => Ok(admission),
+            Err(_) => {
+                self.release_idle();
+                LoadingAdmission::reserve(&self.budget, limits)
+            }
+        }
     }
     pub fn admit(
         &self,
