@@ -179,6 +179,7 @@ impl<'a> Observed<'a> {
     ) -> Option<Reads> {
         let reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
         if reads.unsupported {
+            eprintln!("[DEBUG-ca-pretransfer] unsupported independent receipt observation");
             return None;
         }
         let structural = reads
@@ -188,6 +189,9 @@ impl<'a> Observed<'a> {
                 let plan = self
                     .declarations
                     .structural_access(source, table, target)
+                    .map_err(|error| {
+                        eprintln!("[DEBUG-ca-pretransfer] structural capture {source:?}: {error:?}")
+                    })
                     .ok()?;
                 Some(StructuralRead {
                     source: source.clone(),
@@ -204,6 +208,10 @@ impl<'a> Observed<'a> {
                     .iter()
                     .find(|row| row.adapter == reference.adapter)?;
                 if keys.fn_abi(current) != expected.abi {
+                    eprintln!(
+                        "[DEBUG-ca-pretransfer] canonical adapter ABI mismatch: {:?}",
+                        reference.adapter
+                    );
                     return None;
                 }
             }
