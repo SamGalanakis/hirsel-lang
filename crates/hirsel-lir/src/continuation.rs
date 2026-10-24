@@ -40,8 +40,9 @@ pub fn resume_name(definition: &DefPath, instance: ContentHash, state: Option<u3
 
 /// The address preparations state `state` (1-based) re-runs before reissuing
 /// its boundary: each `Inst::Address` in a block that state does not emit
-/// (`skipped`) whose root base is frame-resident storage or a reloaded live
-/// value, bases first. Their checks passed before the suspension and read
+/// (`skipped`) that the resumed code accesses and whose root base is a
+/// parameter or capture slot, frame-resident storage or a reloaded live value,
+/// bases first. Their checks passed before the suspension and read
 /// only state the frame retains, so re-running them observes nothing.
 pub fn resume_preparations(
     u: &LirUnit<Ready>,
@@ -73,7 +74,13 @@ pub fn resume_preparations(
     let eligible = |a: AddressId| {
         carried.contains(&a)
             && match root(u, a) {
-                AddressBase::Slot(s) => plan.storage.iter().any(|f| f.slot == s),
+                // Parameter and capture slots are bound again at every entry.
+                AddressBase::Slot(s) => {
+                    matches!(
+                        u.slots[s.index()].kind,
+                        SlotKind::Parameter(_) | SlotKind::Capture(_)
+                    ) || plan.storage.iter().any(|f| f.slot == s)
+                }
                 AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
                 AddressBase::Address(_) => false,
             }
@@ -541,6 +548,21 @@ pub(crate) fn successors_of(u: &LirUnit<Ready>, b: BlockId) -> Vec<BlockId> {
     out
 }
 
+/// Where a state resumed at boundary `block` continues: its call's edges only,
+/// since the block's instructions ran before the save.
+pub fn resumed_successors(u: &LirUnit<Ready>, block: BlockId) -> Vec<BlockId> {
+    let term = &u.terminators[block.index()];
+    term.normal_edges(&u.pools)
+        .into_iter()
+        .map(|e| u.tables.edges[e.index()].target)
+        .chain(
+            term.failure_edges(&u.tables)
+                .into_iter()
+                .map(|f| u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target),
+        )
+        .collect()
+}
+
 /// The address an instruction accesses, which its preparation must precede.
 fn accessed(inst: &Inst) -> Option<AddressId> {
     match *inst {
@@ -592,18 +614,7 @@ pub(crate) fn carried(
     };
     call_uses(&u.terminators[block.index()], &mut used);
     let mut seen = BTreeSet::new();
-    // The boundary block's instructions ran before the save; only its call resumes.
-    let term = &u.terminators[block.index()];
-    let mut pending: Vec<BlockId> = term
-        .normal_edges(&u.pools)
-        .into_iter()
-        .map(|e| u.tables.edges[e.index()].target)
-        .chain(
-            term.failure_edges(&u.tables)
-                .into_iter()
-                .map(|f| u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target),
-        )
-        .collect();
+    let mut pending = resumed_successors(u, block);
     while let Some(b) = pending.pop() {
         if !seen.insert(b) {
             continue;

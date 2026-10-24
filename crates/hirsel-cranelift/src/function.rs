@@ -1014,9 +1014,16 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             },
         };
         let count = self.unit.blocks.len();
-        let adjacent: Vec<Vec<usize>> = (0..count)
+        let mut adjacent: Vec<Vec<usize>> = (0..count)
             .map(|b| self.successors(b))
             .collect::<Emitted<_>>()?;
+        if state != 0 {
+            let at = plan.states[state as usize - 1].boundary.block;
+            adjacent[at.index()] = hirsel_lir::continuation::resumed_successors(self.unit, at)
+                .iter()
+                .map(|b| b.index())
+                .collect();
+        }
         let order = hirsel_graph::reverse_postorder(&adjacent, start.index());
         if state == 0 {
             let entry = self.blocks[self.unit.entry.index()];
