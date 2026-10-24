@@ -5,13 +5,13 @@ use hirsel_syntax::ContentHash;
 use native::queries::{
     ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, INSTANCE_KIND, NativeRootKey, NativeRoots,
     READY_KIND, ROOT_KIND,
-    arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
+    arena_tasks::{ARENA_GRAPH_KIND, ArenaTasks},
     compilation_tasks::{
         COMPILATION_KIND, CompilationBackend, CompilationFactory, CompilationTasks,
     },
     declarations::NativeDeclarations,
-    instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
-    link_tasks::{LINK_INPUT_KIND, LINK_MANIFEST_KIND},
+    instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTasks},
+    link_tasks::LINK_MANIFEST_KIND,
     platform::FrozenPlatform,
     products::EmissionOptions,
     root_source::NativeLinkSource,
@@ -430,31 +430,10 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             errors,
         )
         .unwrap();
-        let instance_factory = Arc::new(TraceFactory(
-            Arc::new(InstanceTaskFactory::new(instances.clone())),
-            trace.clone(),
-        ));
-        let arena_factory = Arc::new(TraceFactory(
-            Arc::new(ArenaTaskFactory::new(arena.clone())),
-            trace.clone(),
-        ));
-        let compilation_factory = Arc::new(TraceFactory(compilation_factory, trace.clone()));
-        for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
-            runtime.register(kind, instance_factory.clone()).unwrap();
-        }
-        for kind in [ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, ARENA_GRAPH_KIND] {
-            runtime.register(kind, arena_factory.clone()).unwrap();
-        }
-        for kind in [
-            COMPILATION_KIND,
-            READY_KIND,
-            ROOT_KIND,
-            native::object_queries::CODEGEN_KIND,
-            native::object_queries::LINK_KIND,
-            LINK_INPUT_KIND,
-            LINK_MANIFEST_KIND,
-        ] {
-            runtime.register(kind, compilation_factory.clone()).unwrap();
+        for (kind, factory) in compilation.factories() {
+            runtime
+                .register(kind, Arc::new(TraceFactory(factory, trace.clone())))
+                .unwrap();
         }
         let events = Arc::new(Events::default());
         runtime.observe(events.clone()).unwrap();
@@ -759,8 +738,6 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
         assert_eq!(native.snapshot.ready_materializations(), bodies);
         drop(runtime);
         drop(compilation_factory);
-        drop(arena_factory);
-        drop(instance_factory);
         assert_eq!(budget.reserved(), 96 << 20);
         let retained_snapshot = native.snapshot.clone();
         drop(compilation);

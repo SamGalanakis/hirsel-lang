@@ -127,6 +127,45 @@ impl CompilationTasks {
     pub fn query_id(&self) -> QueryId {
         self.query
     }
+    /// Installable dispatch for this one immutable compilation request. Creating
+    /// factories only describes work; discovery, arena solving, native admission,
+    /// emission and linking still run solely through their dependency reads.
+    pub fn factories(self: &Arc<Self>) -> Vec<(u32, Arc<dyn QueryFactory>)> {
+        let instances: Arc<dyn QueryFactory> = Arc::new(
+            super::instance_tasks::InstanceTaskFactory::new(self.instances.clone()),
+        );
+        let arena: Arc<dyn QueryFactory> = Arc::new(super::arena_tasks::ArenaTaskFactory::new(
+            self.arena.clone(),
+        ));
+        let compilation: Arc<dyn QueryFactory> = Arc::new(CompilationFactory::new(self.clone()));
+        let mut factories = Vec::new();
+        for kind in [
+            INSTANCE_KIND,
+            super::instance_tasks::INSTANCE_INPUT_KIND,
+            super::instance_tasks::DISCOVERY_KIND,
+        ] {
+            factories.push((kind, instances.clone()));
+        }
+        for kind in [
+            ARENA_CANDIDATES_KIND,
+            ARENA_CHOSEN_KIND,
+            super::arena_tasks::ARENA_GRAPH_KIND,
+        ] {
+            factories.push((kind, arena.clone()));
+        }
+        for kind in [
+            COMPILATION_KIND,
+            READY_KIND,
+            ROOT_KIND,
+            CODEGEN_KIND,
+            LINK_KIND,
+            LINK_INPUT_KIND,
+            LINK_MANIFEST_KIND,
+        ] {
+            factories.push((kind, compilation.clone()));
+        }
+        factories
+    }
     fn initialize(&self, discovery: ProductRef, arena: ProductRef) -> Result<&Dispatch, String> {
         if let Some(dispatch) = self.dispatch.get() {
             return if dispatch.discovery == discovery && dispatch.arena == arena {
