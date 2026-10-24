@@ -376,8 +376,15 @@ impl Task {
                     &statics.constants,
                     &statics.definitions,
                     &extra,
-                    run_product,
-                    catalogue.iter().map(|d| d.product).collect::<Vec<_>>(),
+                    (
+                        run_product.address.0,
+                        run_product.action.0,
+                        run_product.record,
+                    ),
+                    catalogue
+                        .iter()
+                        .map(|d| d.product.map(|p| (p.address.0, p.action.0, p.record)))
+                        .collect::<Vec<_>>(),
                 ),
             )
             .ok_or(QueryError::NotImplemented)?;
