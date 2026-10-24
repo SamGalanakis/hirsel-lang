@@ -186,9 +186,17 @@ mod tests {
     fn immutable_callee_binding_selects_its_own_entry_and_preserves_call_kind() {
         hirsel_engine::with_compiler_stack(|| {
             let (types, signature, revision) = fixture("worker", "x:u8");
-            let run = hirsel_run_config::RunConfig::for_program(&revision, LaunchKind::Call)
-                .validated()
-                .unwrap();
+            let mut record = hirsel_run_config::RunConfig::for_program(&revision, LaunchKind::Call);
+            record.call = Some(hirsel_run_schema::CallRecord::new(
+                hirsel_run_schema::CallForm::Compute,
+                &hirsel_run_schema::Cause {
+                    instance: [1; 16],
+                    ordinal: 0,
+                    digest: [2; 32],
+                },
+                &[7],
+            ));
+            let run = record.validated().unwrap();
             let launch = HostLaunch::Callee {
                 run: &run,
                 record: None,
