@@ -750,6 +750,7 @@ impl<S: Stage> Machine<'_, S> {
     }
 
     pub fn check_counts(&mut self) -> Checked<()> {
+        self.ledger.check_sealed_owners_after_step()?;
         let incremental = self.holders.check(&mut self.ledger);
         let due = std::mem::take(&mut self.full_recount_due);
         let full = self.config.full_recount_every_step

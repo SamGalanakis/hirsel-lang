@@ -13,10 +13,6 @@ impl Ledger {
     ///
     /// The returned Shared multiplicities count physical owning occurrences,
     /// never unique target addresses. No language or metadata count is changed.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "sealed execution is not linked yet")
-    )]
     pub(crate) fn sealed_cells(&self, region: usize, word: u64) -> Checked<BTreeMap<Ptr, u64>> {
         if !matches!(word, 4 | 8) {
             return fail(V::Malformed, "invalid sealed cell pointer width");
@@ -145,6 +141,7 @@ mod tests {
     fn fixture() -> (Ledger, Ptr, Ptr, Ptr, Ptr) {
         let mut ledger = Ledger::default();
         ledger.regions.push(Region {
+            storage: StorageCustody::Scope,
             instance: RegionInstanceId(0),
             live: true,
             allocations: Snapshot::default(),
@@ -353,3 +350,6 @@ mod tests {
         ledger.sealed_cells(0, 8).unwrap();
     }
 }
+
+mod ownership;
+pub(crate) use ownership::{SealedOwner, StorageCustody};

@@ -464,6 +464,7 @@ pub(crate) struct Token {
 
 #[derive(Clone, Debug)]
 pub(crate) struct Region {
+    pub storage: sealed::StorageCustody,
     pub instance: RegionInstanceId,
     pub live: bool,
     pub allocations: Snapshot<AllocId>,
@@ -681,6 +682,7 @@ pub(crate) struct Ledger {
     pub resources: Snapshot<Resource>,
     pub tokens: Snapshot<Token>,
     pub regions: Snapshot<Region>,
+    sealed_owners: Snapshot<sealed::SealedOwner>,
     pub handles: Handles,
     pub exemptions: History<Exemption>,
     pub counters: Counters,
@@ -1163,4 +1165,4 @@ mod fork_tests {
     }
 }
 
-mod sealed;
+pub(crate) mod sealed;

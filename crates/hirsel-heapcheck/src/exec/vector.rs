@@ -689,6 +689,7 @@ impl<'p> Runner<'p> {
                 }
                 let rt = self.m.ledger.regions.len();
                 self.m.ledger.regions.push(LedgerRegion {
+                    storage: crate::ledger::sealed::StorageCustody::Scope,
                     instance: RegionInstanceId(g as u32),
                     live: true,
                     allocations: Default::default(),

@@ -5701,6 +5701,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let rt = self.ledger.regions.len();
                 self.ledger.regions.push(crate::ledger::Region {
+                    storage: crate::ledger::sealed::StorageCustody::Scope,
                     instance: region,
                     live: true,
                     allocations: Default::default(),
@@ -9807,20 +9808,24 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn exit_region(&mut self, f: &mut Frame, rt: usize) -> Checked<()> {
-        let inside = self.ledger.regions[rt].allocations.clone();
-        if let Some((source, offset, ptr)) =
-            self.physical.references.escaping(&self.ledger, &inside)
-        {
-            return fail(
-                V::RegionEscape,
-                format!(
-                    "{source:?}+{offset} references {:?} of a region at its exit",
-                    ptr.alloc
-                ),
-            );
-        }
-        for alloc in inside {
-            self.ledger.free(alloc)?;
+        if self.ledger.regions[rt].storage == crate::ledger::sealed::StorageCustody::Scope {
+            let inside = self.ledger.regions[rt].allocations.clone();
+            if let Some((source, offset, ptr)) =
+                self.physical.references.escaping(&self.ledger, &inside)
+            {
+                return fail(
+                    V::RegionEscape,
+                    format!(
+                        "{source:?}+{offset} references {:?} of a region at its exit",
+                        ptr.alloc
+                    ),
+                );
+            }
+            for alloc in inside {
+                self.ledger.free(alloc)?;
+            }
+        } else {
+            self.ledger.check_sealed_ownership()?;
         }
         self.ledger.regions[rt].live = false;
         f.regions.retain(|r| *r != rt);
@@ -10616,6 +10621,7 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     fn audit(&mut self) -> Checked<()> {
+        self.ledger.audit_sealed_owners()?;
         self.holders.sync(&mut self.ledger);
         self.cross_check_holders()?;
         let l = &self.ledger;
