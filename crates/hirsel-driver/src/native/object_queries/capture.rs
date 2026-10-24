@@ -188,6 +188,22 @@ impl FrozenLinker {
 }
 
 impl CapturedLink {
+    /// Exact bytes the selected linker read at an absolute input path. This
+    /// associates selected platform inputs with the captured probe, not with
+    /// another read of a mutable installation.
+    pub(crate) fn input(
+        self,
+        store: &dyn ResultStore,
+        path: &Path,
+    ) -> Result<Option<Reference>, String> {
+        Ok(self
+            .record(store)?
+            .files
+            .into_iter()
+            .find(|file| Path::new(&file.name) == path)
+            .map(|file| file.bytes.into()))
+    }
+
     pub fn reference(self) -> Reference {
         self.0
     }

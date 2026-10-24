@@ -987,6 +987,7 @@ mod transport_tests {
 }
 
 pub mod capture;
+pub mod platform;
 pub mod thin;
 
 pub mod runtime;
