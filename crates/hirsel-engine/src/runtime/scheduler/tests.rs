@@ -1096,3 +1096,188 @@ fn new_request_during_cancelled_local_destruction_keeps_the_replacement_claim() 
     );
     assert_eq!(rt.stats().claims, 3);
 }
+
+struct FrameFactory {
+    owner: Arc<MemoryReservation>,
+    drops: Arc<AtomicUsize>,
+}
+struct FrameTask {
+    id: QueryId,
+    next: u64,
+    allocation: Vec<u8>,
+    _owner: Arc<MemoryReservation>,
+    drops: Arc<AtomicUsize>,
+}
+impl QueryFactory for FrameFactory {
+    fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        Ok(Box::new(FrameTask {
+            id,
+            next: 1,
+            allocation: vec![],
+            _owner: self.owner.clone(),
+            drops: self.drops.clone(),
+        }))
+    }
+}
+impl Drop for FrameTask {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+impl QueryTask for FrameTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        MemoryWeight {
+            scratch: 64 << 10,
+            retained: (1 << 20) + 16,
+            stack: 0,
+        }
+    }
+    fn continuation_bytes(&self) -> u64 {
+        1 << 20
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if self.allocation.is_empty() {
+            self.allocation = vec![0; 1 << 20];
+        }
+        if self.id == query(0) {
+            while self.next <= 12 {
+                match cx.read(query(self.next)) {
+                    Poll::Pending => return QueryPoll::Waiting(vec![query(self.next)]),
+                    Poll::Ready(Err(error)) => return QueryPoll::Failed(error),
+                    Poll::Ready(Ok(_)) => self.next += 1,
+                }
+            }
+        }
+        QueryPoll::Complete(product(self.id))
+    }
+}
+#[test]
+fn continuation_frames_retire_after_drop_without_retiring_shared_output_owners() {
+    let process = ProcessBudget::new(5 << 20);
+    let owner = Arc::new(process.reserve(1 << 20).unwrap());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new(FrameFactory {
+        owner: owner.clone(),
+        drops: drops.clone(),
+    });
+    let mut rt = AdmittedRuntime::with_reservation(
+        Jobs::ONE,
+        process.reserve(4 << 20).unwrap(),
+        errors(),
+        STACK,
+    )
+    .unwrap();
+    rt.register(1, factory.clone()).unwrap();
+    let request = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+    assert_eq!(drops.load(Ordering::SeqCst), 13);
+    assert_eq!(
+        rt.stats().charged_bytes - rt.stats().bookkeeping_bytes,
+        STACK as u64 + 13 * 16
+    );
+    assert!(rt.stats().peak_bytes <= 4 << 20);
+    let repeated = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(repeated), Ok(vec![product(query(0))]));
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        13,
+        "settled compact outcomes remain reusable"
+    );
+    drop(rt);
+    assert_eq!(
+        process.reserved(),
+        1 << 20,
+        "the separately owned products outlive continuations and workers"
+    );
+    drop(factory);
+    drop(owner);
+    assert_eq!(process.reserved(), 0);
+}
+
+struct LocalFrameFactory {
+    owner: Arc<MemoryReservation>,
+    drops: Arc<AtomicUsize>,
+}
+struct LocalFrame {
+    id: QueryId,
+    allocation: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+    _owner: Arc<MemoryReservation>,
+    drops: Arc<AtomicUsize>,
+    home: std::thread::ThreadId,
+}
+impl LocalQueryFactory for LocalFrameFactory {
+    fn weight(&self, _: QueryId) -> Result<MemoryWeight, Reference> {
+        Ok(MemoryWeight {
+            scratch: 64 << 10,
+            retained: (1 << 20) + 16,
+            stack: 0,
+        })
+    }
+    fn create(&self, id: QueryId) -> Result<Box<dyn LocalQueryTask>, Reference> {
+        Ok(Box::new(LocalFrame {
+            id,
+            allocation: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            _owner: self.owner.clone(),
+            drops: self.drops.clone(),
+            home: std::thread::current().id(),
+        }))
+    }
+}
+impl Drop for LocalFrame {
+    fn drop(&mut self) {
+        assert_eq!(self.home, std::thread::current().id());
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+impl LocalQueryTask for LocalFrame {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        MemoryWeight {
+            scratch: 64 << 10,
+            retained: (1 << 20) + 16,
+            stack: 0,
+        }
+    }
+    fn continuation_bytes(&self) -> u64 {
+        1 << 20
+    }
+    fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
+        *self.allocation.borrow_mut() = vec![0; 1 << 20];
+        QueryPoll::Complete(product(self.id))
+    }
+}
+#[test]
+fn local_continuation_frame_charge_retires_only_after_home_destruction() {
+    let process = ProcessBudget::new(5 << 20);
+    let owner = Arc::new(process.reserve(1 << 20).unwrap());
+    let drops = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new(LocalFrameFactory {
+        owner: owner.clone(),
+        drops: drops.clone(),
+    });
+    let mut rt = AdmittedRuntime::with_reservation(
+        Jobs::ONE,
+        process.reserve(4 << 20).unwrap(),
+        errors(),
+        STACK,
+    )
+    .unwrap();
+    rt.register_local(1, factory.clone()).unwrap();
+    let request = rt.request(&[query(0)]);
+    assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        rt.stats().charged_bytes - rt.stats().bookkeeping_bytes,
+        STACK as u64 + 16
+    );
+    drop(rt);
+    assert_eq!(process.reserved(), 1 << 20);
+    drop(factory);
+    drop(owner);
+    assert_eq!(process.reserved(), 0);
+}
