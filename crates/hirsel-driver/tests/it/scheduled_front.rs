@@ -602,3 +602,86 @@ fn admitted_front_store_hits_validate_signature_reads_before_materializing_bodie
         }
     });
 }
+
+#[test]
+fn admitted_front_zero_hold_retains_only_archives_after_settlement() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main()->u8{1u8}\n").unwrap();
+        let store = Arc::new(MemStore::default());
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store,
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&path)
+            .unwrap();
+        let budget = ProcessBudget::new(1 << 30);
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::ONE,
+            budget.reserve(512 << 20).unwrap(),
+            errors(),
+        )
+        .unwrap();
+        let weight = MemoryWeight {
+            retained: 1 << 20,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let front = program
+            .engine
+            .front_body_queries(
+                &[program.entry.clone()],
+                weight,
+                budget.reserve(8 << 20).unwrap(),
+                errors(),
+            )
+            .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        let query = front.query(&program.entry).unwrap();
+        let request = runtime.request(&[query]);
+        let product = runtime.wait(request).unwrap()[0];
+        assert_eq!(
+            front.live_body_count(),
+            0,
+            "query owners retain no checked/analyzed body after settlement"
+        );
+        let first = front.outcome(product.record).unwrap();
+        assert_eq!(front.live_body_count(), 1);
+        let second = front.outcome(product.record).unwrap();
+        assert!(
+            Arc::ptr_eq(
+                first.outcome.result.as_ref().unwrap(),
+                second.outcome.result.as_ref().unwrap()
+            ),
+            "concurrent decoders share an active body"
+        );
+        drop(first);
+        drop(second);
+        assert_eq!(front.live_body_count(), 0);
+        runtime.evict_to(0);
+        let request = runtime.request(&[query]);
+        let repeated = runtime.wait(request).unwrap()[0];
+        assert_eq!(product, repeated);
+        assert_eq!(front.live_body_count(), 0);
+        for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+            assert_eq!(
+                front.recompute_count(&program.entry, kind),
+                1,
+                "archive demand does not repeat transformation"
+            );
+        }
+        runtime.shutdown();
+        let held = front.outcome(product.record).unwrap();
+        assert!(held.outcome.result.is_ok());
+        drop(front);
+        assert!(
+            budget.reserved() > 0,
+            "held output retains admitted immutable owner after shutdown"
+        );
+        drop(held);
+    });
+}
