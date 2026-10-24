@@ -1488,7 +1488,7 @@ fn resource_variant_cleanup_preserves_own_finalizer_and_active_payload() {
             ));
             assert_eq!(o.failures.len(), failures + usize::from(parent_fails));
             assert_eq!(
-                finalized(&execute(&b.table, &b.ready).trace).len(),
+                finalized(&execute(&b.operations, &b.table, &b.ready).trace).len(),
                 finalizers
             );
             same_finalizers(&b);
