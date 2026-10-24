@@ -144,3 +144,53 @@ fn arena_placement_capture_33_written_result_transports_its_outer_arena() {
         );
     });
 }
+
+#[test]
+fn arena_placement_capture_33_scope_grants_have_no_handle_drop_observation() {
+    with_compiler_stack(|| {
+        let (mut engine, _) =
+            prepared("pub fn main(){arena.with(fn(a:Arena){let xs:List[u64] in a=[9u64];});}");
+        for checked in [false, true] {
+            let runtime = if checked {
+                engine.checked_runtime_types()
+            } else {
+                engine.runtime_types()
+            }
+            .unwrap();
+            let run = RunConfiguration {
+                entry: entry_path(&default_context()),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let sources = engine.sources.clone();
+            let mut library =
+                hirsel_interp::library::Library::new(&run, SimulationConfig::default()).unwrap();
+            let execution = hirsel_interp::run_with_runtime(
+                &mut engine,
+                &sources,
+                &run,
+                vec![],
+                Default::default(),
+                &mut library,
+                &runtime,
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    execution.outcome,
+                    hirsel_interp::Outcome::Returned { exit_code: 0, .. }
+                ),
+                "checked={checked}: {:?}",
+                execution.outcome
+            );
+            assert!(
+                !execution.trace.iter().any(|event| matches!(event,
+                    hirsel_interp::TraceEvent::Effect(hirsel_interp::observation::OrderedEffect {
+                        effect: hirsel_interp::observation::Effect::HandleDropped { kind, .. }, ..
+                    }) if kind == "Arena"
+                )),
+                "an internal scope grant must not publish a handle event"
+            );
+        }
+    });
+}

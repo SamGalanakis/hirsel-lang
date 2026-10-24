@@ -1313,6 +1313,14 @@ pub(crate) fn execute_frames(
                     }
                 }
                 crate::resources::Work::Release(mut value, anchor, caller) => {
+                    // The arena opener owns the physical scope guard. Ending
+                    // its grant is mechanical, not a simulated handle drop;
+                    // the token's checker-local identity is not observable.
+                    if matches!(&value, Value::Handle { kind, .. }
+                        if kind == crate::checked::ARENA_HANDLE)
+                    {
+                        continue;
+                    }
                     if let Some(check) = &frame.check {
                         if matches!(
                             value,
