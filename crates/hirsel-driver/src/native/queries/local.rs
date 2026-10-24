@@ -92,6 +92,15 @@ impl LocalReadyQueries {
             store,
         }
     }
+    pub(super) fn with_validator(
+        store: Arc<dyn ResultStore>,
+        native: Arc<hirsel_lir::validate::NativeCache>,
+    ) -> Self {
+        Self {
+            queries: ReadyQueries::with_validator(store.clone(), native),
+            store,
+        }
+    }
 
     fn decode<T: hirsel_codec::Snapshot>(&self, reference: Reference) -> Result<T, String> {
         let bytes = self

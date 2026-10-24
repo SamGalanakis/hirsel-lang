@@ -149,16 +149,23 @@ pub struct ReadyQueryCounts {
 }
 pub struct ReadyQueries {
     store: Arc<dyn ResultStore>,
-    native: NativeCache,
+    native: Arc<NativeCache>,
     pub counts: ReadyQueryCounts,
 }
 impl ReadyQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
+        let native = Self::validator(&store);
+        Self::with_validator(store, native)
+    }
+    pub(super) fn validator(store: &Arc<dyn ResultStore>) -> Arc<NativeCache> {
+        Arc::new(NativeCache::new(
+            Arc::new(SelectedContents(store.clone())),
+            store.local_product_store(),
+        ))
+    }
+    pub(super) fn with_validator(store: Arc<dyn ResultStore>, native: Arc<NativeCache>) -> Self {
         Self {
-            native: NativeCache::new(
-                Arc::new(SelectedContents(store.clone())),
-                store.local_product_store(),
-            ),
+            native,
             store,
             counts: ReadyQueryCounts::default(),
         }

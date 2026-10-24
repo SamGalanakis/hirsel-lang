@@ -10,7 +10,7 @@ use native::queries::{
     declarations::NativeDeclarations,
     demand::DemandInstances,
     graph::{ArenaNode, settle_arena_queries},
-    products::{DemandProducts, EmissionOptions},
+    products::{DemandProducts, EmissionOptions, NativeSnapshot},
 };
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -103,12 +103,6 @@ fn run_product_case(aggregate: bool) {
         let manifest = hirsel_core_contract::Manifest::skeleton(
             declarations.program.operations.values().cloned(),
         );
-        let environment = hirsel_lir::validate::NativeEnvironment {
-            target: &target,
-            operations: &operations,
-            manifest: &manifest,
-            discharge: Some(&options.discharge),
-        };
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
             opt: hirsel_lir::emission::OptLevel::None,
@@ -122,32 +116,36 @@ fn run_product_case(aggregate: bool) {
             fuel: false,
         };
         let before_create = trace.totals();
-        let mut products = DemandProducts::new(
+        let key = completed
+            .iter()
+            .find(|(key, _)| key.instance.definition() == &entry_path(&default_context()))
+            .unwrap()
+            .0
+            .clone();
+        let counts = (instances.imports, instances.recipe_decodes);
+        let snapshot = NativeSnapshot::new(
             store.clone(),
-            &instances,
-            &arena,
-            &options,
-            &emission,
-            environment,
+            instances,
+            arena,
+            options.clone(),
+            emission,
+            manifest,
+            Arc::new(operations),
         )
         .unwrap();
+        let mut products = DemandProducts::new(snapshot);
         assert_eq!(
             trace.totals(),
             before_create,
             "provider creation must not execute dependencies"
         );
-        let key = &completed
-            .iter()
-            .find(|(key, _)| key.instance.definition() == &entry_path(&default_context()))
-            .unwrap()
-            .0;
-        let base = products.instance(key).unwrap();
-        let ready = products.ready(key).unwrap();
+        let base = products.instance(&key).unwrap();
+        let ready = products.ready(&key).unwrap();
         if fresh {
             assert_eq!(
                 (
-                    instances.imports,
-                    instances.recipe_decodes,
+                    counts.0,
+                    counts.1,
                     products.local.queries.counts.transformations
                 ),
                 (0, 0, 0)
