@@ -178,9 +178,19 @@ fn callee_metadata(
     let runtime = engine
         .runtime_types()
         .map_err(|e| failed(format!("runner request types: {e:?}")))?;
-    let schemas = hirsel_interp::library::runners::core_schema(&runtime, "GrantSet")
+    settled_callee_metadata(facts, &runtime)
+}
+
+/// Encode the same checked runner schemas from an already settled Run root.
+/// This boundary cannot demand source queries or reconstruct runtime types.
+pub(crate) fn settled_callee_metadata(
+    facts: std::collections::BTreeMap<String, hirsel_run_schema::CalleeFacts>,
+    runtime: &hirsel_interp::aggregate::RuntimeTypes,
+) -> Result<hirsel_rt::program::CalleeMetadata, NativeError> {
+    let failed = |error: String| NativeError::new(StageName::Launch, error);
+    let schemas = hirsel_interp::library::runners::core_schema(runtime, "GrantSet")
         .and_then(|grants| {
-            hirsel_interp::library::runners::allowlist_schema(&runtime)
+            hirsel_interp::library::runners::allowlist_schema(runtime)
                 .map(|definitions| (grants, definitions))
         })
         .map_err(|e| failed(format!("runner request schemas: {e:?}")))?;
