@@ -46,21 +46,8 @@ fn accepted(source: &str) {
         );
     });
 }
-fn closure_refused_by_v(source: &str) {
-    with_compiler_stack(|| {
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine
-            .sources
-            .add("sealed-placement-boundary.hir", source.into())
-            .unwrap();
-        let error = check_progress(&mut engine, file, &default_context())
-            .err()
-            .expect("strict V closure refusal");
-        assert!(
-            matches!(error, QueryError::Operational(ref failure) if failure.operation == "TIR validation" && failure.message.contains("seal storage closure")),
-            "{error:?}"
-        );
-    });
+fn scoped_root_refused_at_source(source: &str) {
+    rejected_by(source, "MEM-4", "arena.seal(take a,take root)");
 }
 fn region(callback: &str, declarations: &str) -> String {
     format!(
@@ -240,8 +227,8 @@ fn copied_callable_branch(leaf: &str) -> String {
 }
 
 #[test]
-fn sealed_storage_copied_producer_33_implicit_branch_refused_by_v() {
-    closure_refused_by_v(&copied_callable_branch(
+fn sealed_storage_copied_producer_33_implicit_branch_refused_at_source() {
+    scoped_root_refused_at_source(&copied_callable_branch(
         "fn leaf(take payload:Bytes)->fn()->u64{fn()->u64{bytes.len(payload)}}",
     ));
 }
@@ -251,7 +238,7 @@ fn sealed_storage_copied_producer_33_branch_allocation_retains_origin() {
     rejected(
         &copied_callable_branch(
             "fn leaf(take payload:Bytes)->fn()->u64{fn()->u64{let copied=unique payload;bytes.len(copied)}}",
-        ),
+        ).replace("else{fn()->u64{0u64}}", "else{let empty:fn()->u64=fn()->u64{0u64};take empty}"),
         "unique payload",
     );
 }
@@ -301,8 +288,8 @@ fn sealed_storage_map_producer_33_borrowed_allocating_root_refused() {
 }
 
 #[test]
-fn sealed_storage_retained_33_copied_map_local_branch_refused_by_v() {
-    closure_refused_by_v(
+fn sealed_storage_retained_33_copied_map_local_branch_refused_at_source() {
+    scoped_root_refused_at_source(
         &map_callable_branch(
             "fn leaf(take payload:Bytes)->fn()->u64{fn()->u64{bytes.len(payload)}}",
         )
@@ -316,7 +303,7 @@ fn sealed_storage_retained_33_copied_map_local_branch_refused_by_v() {
 #[test]
 fn sealed_storage_retained_33_copied_map_callable_allocation() {
     rejected(&map_callable_branch("fn leaf(take payload:Bytes)->fn()->u64{fn()->u64{let copied=unique payload;bytes.len(copied)}}")
-        .replace("Some(found)=>copy found", "Some(found)=>copy_to(heap,found)"), "unique payload");
+        .replace("Some(found)=>copy found", "Some(found)=>copy_to(heap,found)").replace("let selected=match", "let selected:fn()->u64 in heap=match"), "unique payload");
 }
 
 #[test]

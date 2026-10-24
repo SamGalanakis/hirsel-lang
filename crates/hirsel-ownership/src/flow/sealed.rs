@@ -166,9 +166,12 @@ impl Checker<'_, '_> {
             .ty(grant)
             .and_then(|ty| self.t.get(ty))
             .is_some_and(|row| row.allocation_target.is_some());
+        // An unresolved root environment is scoped storage, not heap storage
+        // owned by the grant. Owned parts retain their independent placement
+        // and content checks; a nested callable header is not an environment.
         let foreign = |relation: &Relation| {
             relation.reaches().iter().any(|reach| match reach {
-                Reach::Region(_) => true,
+                Reach::Region(_) | Reach::Environment => true,
                 Reach::Place(origin) if self.arenas.arena(origin) => {
                     Some(&origin.root) != allowed.as_ref()
                 }
