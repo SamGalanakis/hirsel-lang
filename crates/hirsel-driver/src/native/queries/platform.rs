@@ -2,7 +2,7 @@
 //! existing kit/resolver and S4 chunk transport; never supplies native authority.
 use super::{
     link_tasks::{LinkExecution, NativeLinkExecutor},
-    roots::{RootLinkInputs, RootProducts},
+    roots::RootProducts,
     *,
 };
 use crate::native::{Backend, TargetSpec, Toolchain};
@@ -17,7 +17,7 @@ use std::{
 
 const PLATFORM: Domain = Domain {
     kind: 0x4e00_0025,
-    schema: 1,
+    schema: 2,
 };
 #[derive(Serialize)]
 struct File {
@@ -35,6 +35,7 @@ pub struct FrozenPlatform {
     target: TargetSpec,
     manifest: Reference,
     runtime: Reference,
+    builtins: Option<Reference>,
     foreign: Vec<Reference>,
     foreign_files: Vec<PathBuf>,
     _directory: crate::native::executable::Scratch,
@@ -101,6 +102,9 @@ impl FrozenPlatform {
             crate::native::link::runtime_archive(tools, &target.triple, archive, tools.debug_info)
                 .map_err(|e| e.to_string())?;
         files.insert("runtime/libhirsel_rt.a".into(), (archive.into(), false));
+        if let Some(path) = tools.builtins.get(&target.triple) {
+            files.insert("runtime/libhirsel_builtins.a".into(), (path.clone(), false));
+        }
         for (index, path) in resolved.iter().enumerate() {
             let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
             let mut prefix = [0u8; 8];
@@ -162,6 +166,10 @@ impl FrozenPlatform {
             .find(|file| file.path == "runtime/libhirsel_rt.a")
             .unwrap()
             .content;
+        let builtins = captured
+            .iter()
+            .find(|file| file.path == "runtime/libhirsel_builtins.a")
+            .map(|file| file.content);
         let foreign = (0..resolved.len())
             .map(|index| {
                 captured
@@ -175,7 +183,7 @@ impl FrozenPlatform {
             .map(|index| directory.0.join(format!("foreign/{index}/input")))
             .collect();
         let bytes = serde_json::to_vec(&(
-            1u32,
+            2u32,
             crate::COMPILER_IDENTITY,
             target.digest(),
             tools.debug_info,
@@ -200,6 +208,13 @@ impl FrozenPlatform {
         selected.kit = directory.0.join("kit");
         selected.runtime.clear();
         selected.runtime_debug.clear();
+        selected.builtins.clear();
+        if builtins.is_some() {
+            selected.builtins.insert(
+                target.triple.clone(),
+                directory.0.join("runtime/libhirsel_builtins.a"),
+            );
+        }
         let archive = directory.0.join("runtime/libhirsel_rt.a");
         selected.runtime.insert(
             (target.triple.clone(), tools.runtime_build),
@@ -214,6 +229,7 @@ impl FrozenPlatform {
             target: target.clone(),
             manifest,
             runtime,
+            builtins,
             foreign,
             foreign_files,
             _directory: directory,
@@ -223,7 +239,7 @@ impl FrozenPlatform {
         self.manifest
     }
     pub fn runtime_archives(&self) -> Vec<Reference> {
-        vec![self.runtime]
+        std::iter::once(self.runtime).chain(self.builtins).collect()
     }
     pub fn foreign_inputs(&self) -> &[Reference] {
         &self.foreign
@@ -233,6 +249,14 @@ impl FrozenPlatform {
         backend: Backend,
         entry: &hirsel_syntax::DefPath,
     ) -> Result<ContentHash, String> {
+        self.linker_options_with_debug(backend, entry, false)
+    }
+    pub fn linker_options_with_debug(
+        &self,
+        backend: Backend,
+        entry: &hirsel_syntax::DefPath,
+        debug_sources: bool,
+    ) -> Result<ContentHash, String> {
         let bytes = serde_json::to_vec(&(
             self.manifest,
             backend.name(),
@@ -240,6 +264,9 @@ impl FrozenPlatform {
             hirsel_lir::ABI_VERSION,
             hirsel_lir::RUNTIME_ABI_VERSION,
             "standalone",
+            // Current source/anchor contents are the root launch manifest's
+            // explicit inputs; keep them out of this logical options address.
+            debug_sources,
         ))
         .map_err(|e| e.to_string())?;
         Ok(ContentHash::of_parts(
@@ -253,11 +280,21 @@ impl FrozenPlatform {
         entry: hirsel_syntax::DefPath,
         directory: PathBuf,
     ) -> Arc<dyn NativeLinkExecutor> {
+        self.executor_debug(backend, entry, directory, false)
+    }
+    pub fn executor_debug(
+        self: &Arc<Self>,
+        backend: Backend,
+        entry: hirsel_syntax::DefPath,
+        directory: PathBuf,
+        debug_sources: bool,
+    ) -> Arc<dyn NativeLinkExecutor> {
         Arc::new(Executor {
             platform: self.clone(),
             backend,
             entry,
             directory,
+            debug_sources,
         })
     }
 }
@@ -410,31 +447,58 @@ struct Executor {
     backend: Backend,
     entry: hirsel_syntax::DefPath,
     directory: PathBuf,
+    debug_sources: bool,
 }
 impl NativeLinkExecutor for Executor {
     fn link(&self, native: &mut RootProducts, input: LinkExecution<'_>) -> Result<Vec<u8>, String> {
         let platform = &self.platform;
         if input.key.target != platform.target.digest()
-            || input.key.linker_options != platform.linker_options(self.backend, &self.entry)?
-            || input.inputs.runtime_archives != vec![platform.runtime]
+            || input.key.linker_options
+                != platform.linker_options_with_debug(
+                    self.backend,
+                    &self.entry,
+                    self.debug_sources,
+                )?
+            || input.inputs.runtime_archives != platform.runtime_archives()
             || input.inputs.foreign_inputs != platform.foreign
             || platform.store.get_content(platform.manifest).is_none()
         {
             return Err("Link inputs differ from the selected frozen platform".into());
         }
         std::fs::create_dir_all(&self.directory).map_err(|e| e.to_string())?;
-        native.link_standalone(
-            input.root,
-            input.ready,
-            RootLinkInputs {
-                entry: &self.entry,
-                backend: self.backend,
-                objects: input.objects,
-                toolchain: &platform.tools,
-                directory: &self.directory,
-            },
-            &platform.foreign_files,
-        )
+        let sources = if self.debug_sources {
+            Some(native.profile_sources(input.root)?)
+        } else {
+            None
+        };
+        native.with_link_context(input.root, input.ready, |program| {
+            crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
+            let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                &program.table,
+                &program.finalizers,
+            );
+            let mut objects = input.objects.to_vec();
+            objects.push(
+                crate::native::emit_glue(program, self.backend, &registry)
+                    .map_err(|e| e.to_string())?,
+            );
+            if let Some(sources) = &sources {
+                objects.push(
+                    crate::native::link::debug_artifact(program, &objects, sources)
+                        .map_err(|e| e.to_string())?,
+                );
+            }
+            let path = crate::native::link::link_standalone_frozen(
+                program,
+                &self.entry,
+                &objects,
+                &platform.tools,
+                &self.directory,
+                &platform.foreign_files,
+            )
+            .map_err(|e| e.to_string())?;
+            std::fs::read(path).map_err(|e| e.to_string())
+        })
     }
 }
 

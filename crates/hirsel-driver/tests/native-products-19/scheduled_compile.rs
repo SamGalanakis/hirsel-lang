@@ -161,6 +161,7 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             source.join("runtime.a"),
         )
         .unwrap();
+        std::fs::copy(&tools.builtins[&target.triple], source.join("builtins.a")).unwrap();
         let foreign = source.join("foreign.a");
         let foreign_member = source.join("foreign-member.o");
         let member = hirsel_llvm::compile_ir(
@@ -196,6 +197,9 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             (target.triple.clone(), selected.runtime_build),
             source.join("runtime.a"),
         );
+        selected
+            .builtins
+            .insert(target.triple.clone(), source.join("builtins.a"));
         let frozen = FrozenPlatform::capture(
             store.clone(),
             &selected,
@@ -214,6 +218,8 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
         assert!(!selected.lld.exists());
         assert!(!selected.kit.exists());
         assert!(!selected.archive(&target.triple).unwrap().exists());
+        assert!(!selected.builtins[&target.triple].exists());
+        assert_eq!(frozen.runtime_archives().len(), 2);
         Some(frozen)
     } else {
         None
@@ -223,6 +229,8 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
     let mut previous_actions = std::collections::BTreeMap::new();
     let mut previous_ready = std::collections::BTreeMap::new();
     let mut reference = None;
+    let mut stale_launch = None;
+    let mut old_link_addresses = std::collections::BTreeMap::new();
     for (iteration, (literal, fresh)) in [(7u64, false), (7, true), (8, false), (8, true)]
         .into_iter()
         .enumerate()
@@ -338,7 +346,9 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                 }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: if let Some(platform) = &frozen {
-                    platform.linker_options(backend, &main).unwrap()
+                    platform
+                        .linker_options_with_debug(backend, &main, true)
+                        .unwrap()
                 } else {
                     ContentHash::of_parts(
                         "fixture selected backend",
@@ -353,12 +363,13 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
                     .map_or_else(Vec::new, |platform| platform.foreign_inputs().to_vec()),
                 executor: if let Some(platform) = &frozen {
                     Arc::new(CountedPlatform {
-                        inner: platform.executor(
+                        inner: platform.executor_debug(
                             backend,
                             main.clone(),
                             directory
                                 .path()
                                 .join(format!("{literal}-{fresh}-{}", backend.name())),
+                            true,
                         ),
                         calls: calls.clone(),
                     })
@@ -651,6 +662,52 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             }
         }
         previous = Some(current);
+        if freeze_platform {
+            // Current root owns the sole projection. Crossing its descriptor
+            // with an old launch/source map is rejected even when a valid
+            // executable exists and the real current Link is a fresh hit.
+            let original = *stale_launch.get_or_insert(root.launch_manifest);
+            let profiles = view.profile_sources(&root).unwrap();
+            assert!(
+                profiles
+                    .values()
+                    .any(|source| source.file.text().contains(&literal.to_string()))
+            );
+            if original != root.launch_manifest {
+                let mut wrong = root.as_ref().clone();
+                wrong.launch_manifest = original;
+                let before = trace.totals();
+                let bodies = native.snapshot.ready_materializations();
+                assert!(view.profile_sources(&Arc::new(wrong)).is_err());
+                assert_eq!(trace.totals(), before);
+                assert_eq!(native.snapshot.ready_materializations(), bodies);
+                if fresh {
+                    assert_eq!(calls.load(Ordering::Relaxed), 0);
+                }
+            }
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let key = native::object_queries::LinkKey {
+                    roots: root.instances.clone(),
+                    target: target.digest(),
+                    linker_options: frozen
+                        .as_ref()
+                        .unwrap()
+                        .linker_options_with_debug(
+                            backend,
+                            &hirsel_engine::entry_path(&default_context()),
+                            true,
+                        )
+                        .unwrap(),
+                };
+                if let Some(old) = old_link_addresses.insert(backend.name(), key.address()) {
+                    assert_eq!(
+                        key.address(),
+                        old,
+                        "source edits change action inputs, never logical Link address"
+                    );
+                }
+            }
+        }
         let before = trace.totals();
         let bodies = native.snapshot.ready_materializations();
         for (index, backend) in ["llvm", "cranelift"].into_iter().enumerate() {
@@ -663,6 +720,20 @@ fn run(jobs: usize, freeze_platform: bool, optimized: bool) {
             let executable = directory.join("program");
             native::object_queries::materialize_executable(store.as_ref(), &linked, &executable)
                 .unwrap();
+            if freeze_platform {
+                use object::Object as _;
+                let bytes = std::fs::read(&executable).unwrap();
+                let elf = object::File::parse(bytes.as_slice()).unwrap();
+                assert!(
+                    elf.section_by_name(".debug_line").is_some(),
+                    "{backend} link must retain source line tables"
+                );
+                assert!(
+                    bytes
+                        .windows(b"cold-scheduled-link.hir".len())
+                        .any(|part| part == b"cold-scheduled-link.hir")
+                );
+            }
             let run = native::launch(&executable, &target, &tools, &directory, true).unwrap();
             view.with_link_context(&root, &ready, |program| {
                 assert!(program.units.is_empty());

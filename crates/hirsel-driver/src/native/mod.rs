@@ -105,32 +105,69 @@ fn generator_site(syntax: &hirsel_syntax::ItemSyntax) -> Option<u32> {
 
 /// Retain immutable source ownership for line/site profiling without querying a backend.
 pub fn profile_sources(input: &hirsel_engine::NativeInput) -> ProfileSources {
-    input
-        .source_owners
-        .iter()
-        .filter_map(|(definition, owner)| {
-            let syntax = &owner.syntax;
-            let (file, base) = input.sources.anchor(syntax.anchor)?;
-            let file = input.sources.file(file)?;
-            let generated = generator_site(syntax);
+    profile_sources_for_owners(
+        &input.sources,
+        input.source_owners.iter().map(|(definition, owner)| {
+            let anchors = input.definitions.get(definition).map_or_else(
+                || vec![owner.syntax.anchor],
+                |body| hirsel_tir::source_anchors(body),
+            );
+            (definition, owner, anchors)
+        }),
+    )
+}
+
+/// The same line/source projection over compact native declaration products.
+/// Reading canonical source anchors never restores a Definition or native body.
+pub fn declaration_profile_sources(
+    declarations: &queries::declarations::NativeDeclarations,
+) -> ProfileSources {
+    declaration_profile_sources_in(declarations, &declarations.roots.sources)
+}
+
+pub(crate) fn declaration_profile_sources_in(
+    declarations: &queries::declarations::NativeDeclarations,
+    sources: &hirsel_span::SourceMap,
+) -> ProfileSources {
+    profile_sources_for_owners(
+        sources,
+        declarations.sources.iter().map(|(definition, product)| {
+            let anchors = declarations
+                .source_anchors
+                .get(definition)
+                .cloned()
+                .unwrap_or_else(|| vec![product.source.syntax.anchor]);
+            (definition, &product.source, anchors)
+        }),
+    )
+}
+
+fn profile_sources_for_owners<'a>(
+    sources: &hirsel_span::SourceMap,
+    owners: impl Iterator<
+        Item = (
+            &'a hirsel_syntax::DefPath,
+            &'a hirsel_engine::NativeSource,
+            Vec<hirsel_span::Anchor>,
+        ),
+    >,
+) -> ProfileSources {
+    owners
+        .filter_map(|(definition, owner, anchors)| {
+            let (file, base) = sources.anchor(owner.syntax.anchor)?;
+            let file = sources.file(file)?;
             Some((
                 definition.clone(),
                 ProfileSource {
                     path: file.path.clone(),
                     file: file.clone(),
                     base,
-                    generated,
-                    anchors: input
-                        .definitions
-                        .get(definition)
-                        .map_or_else(
-                            || vec![owner.syntax.anchor],
-                            |d| hirsel_tir::source_anchors(d),
-                        )
+                    generated: generator_site(&owner.syntax),
+                    anchors: anchors
                         .into_iter()
                         .filter_map(|anchor| {
-                            let (file, base) = input.sources.anchor(anchor)?;
-                            Some((input.sources.file(file)?.clone(), base))
+                            let (file, base) = sources.anchor(anchor)?;
+                            Some((sources.file(file)?.clone(), base))
                         })
                         .collect(),
                 },
@@ -178,4 +215,69 @@ fn callee_metadata(
         facts,
         request_schemas: Some(request_schemas),
     })
+}
+
+#[cfg(test)]
+mod declaration_profile_tests {
+    #[test]
+    fn compact_profile_sources_match_original_generated_and_closure_anchors() {
+        use super::queries::{
+            declarations::NativeDeclarations, source_inputs::NativeInstanceInputs,
+        };
+        use hirsel_engine::{
+            DefinitionQueries, NativeDiscoveryCache, QueryEngine, default_context,
+            default_environment,
+        };
+        hirsel_engine::with_compiler_stack(|| {
+            let store = std::sync::Arc::new(hirsel_engine::store::MemStore::default());
+            let source = "type P {n:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String] {Ok(codegen.body(\"fn(v:standalone@0/P)->u64 uses {} {v.n}\"))}\nfn chosen[T](v:T)->u64 uses {} = comptime gen(shape(T))\nfn invoke(f:fn()->u64 uses {})->u64 uses {f}{f()}\npub fn main()->u64 uses {} {let n=chosen(P(n:3u64));invoke(fn()->u64 uses {}{n})}";
+            let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine
+                .sources
+                .add("debug-projection.hir", source.into())
+                .unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+            let declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+            let inputs = NativeInstanceInputs::complete(&mut engine, declarations, store).unwrap();
+            assert!(inputs.declarations.program.definitions.is_empty());
+            let actual = super::declaration_profile_sources(&inputs.declarations);
+            let input = engine.export_native_input().unwrap();
+            let expected = super::profile_sources(&input);
+            assert_eq!(
+                actual.keys().collect::<Vec<_>>(),
+                expected.keys().collect::<Vec<_>>()
+            );
+            assert!(actual.values().any(|source| source.generated.is_some()));
+            for (path, actual) in actual {
+                let expected = &expected[&path];
+                assert_eq!(actual.path, expected.path);
+                assert_eq!(actual.logical_path(), expected.logical_path());
+                assert_eq!(actual.file.text(), expected.file.text());
+                assert_eq!(
+                    (actual.base, actual.generated),
+                    (expected.base, expected.generated)
+                );
+                let anchors = |source: &super::ProfileSource| {
+                    source
+                        .anchors
+                        .iter()
+                        .map(|(file, base)| {
+                            (
+                                file.logical_path().to_owned(),
+                                file.text().to_string(),
+                                *base,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(
+                    anchors(&actual),
+                    anchors(expected),
+                    "source selectors for {path}"
+                );
+            }
+        });
+    }
 }

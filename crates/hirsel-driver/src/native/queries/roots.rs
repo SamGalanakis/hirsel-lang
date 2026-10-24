@@ -21,7 +21,7 @@ const STATIC_MANIFEST: Domain = Domain {
 };
 const LAUNCH_MANIFEST: Domain = Domain {
     kind: 0x4e00_001a,
-    schema: 1,
+    schema: 2,
 };
 
 /// Explicit platform linker inputs for a selected root. The object query owns
@@ -202,6 +202,27 @@ impl RootProducts {
         })
     }
 
+    /// Sole root-owned debug projection, available only after this exact
+    /// current root has been admitted. Callers never supply a second map.
+    pub fn profile_sources(
+        &self,
+        root: &Arc<NativeRootProduct>,
+    ) -> Result<Arc<crate::native::ProfileSources>, String> {
+        self.admitted_root(root)?;
+        Ok(self.source.profiles())
+    }
+    fn launch_bytes(&self) -> Result<Vec<u8>, String> {
+        let snapshot = &self.inner.snapshot;
+        serde_json::to_vec(&(
+            self.source.manifest_bytes()?,
+            &snapshot.options.launch,
+            snapshot.emission.fuel,
+            snapshot.emission.tracking,
+            snapshot.context,
+        ))
+        .map_err(|e| e.to_string())
+    }
+
     fn put(&self, domain: Domain, bytes: &[u8]) -> Result<Reference, String> {
         let expected = domain
             .reference(bytes)
@@ -229,6 +250,9 @@ impl RootProducts {
             || selected.statics_finalizers != root.statics_finalizers
         {
             return Err("link root differs from selected native output".into());
+        }
+        if LAUNCH_MANIFEST.reference(&self.launch_bytes()?) != Some(root.launch_manifest) {
+            return Err("root source projection differs from admitted launch input".into());
         }
         let store = self.inner.snapshot.store.as_ref();
         let current = store
@@ -309,17 +333,7 @@ impl NativeRoots for RootProducts {
             STATIC_MANIFEST,
             &serde_json::to_vec(&statics).map_err(|e| e.to_string())?,
         )?;
-        let launch_manifest = self.put(
-            LAUNCH_MANIFEST,
-            &serde_json::to_vec(&(
-                self.source.manifest_bytes()?,
-                &snapshot.options.launch,
-                snapshot.emission.fuel,
-                snapshot.emission.tracking,
-                snapshot.context,
-            ))
-            .map_err(|e| e.to_string())?,
-        )?;
+        let launch_manifest = self.put(LAUNCH_MANIFEST, &self.launch_bytes()?)?;
         let address = key.query_id()?.address;
         let action_bytes = serde_json::to_vec(&(
             crate::COMPILER_IDENTITY.as_slice(),

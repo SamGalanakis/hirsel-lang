@@ -23,6 +23,7 @@ pub struct NativeLinkSource {
     representations: BTreeMap<DefPath, Option<RepresentationRecord>>,
     anchors: BTreeMap<DefPath, Vec<Anchor>>,
     sources: SourceMap,
+    profiles: Arc<crate::native::ProfileSources>,
     foreign_links: Vec<LinkInput>,
     foreign_unreplayable: bool,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, ForeignThreads>,
@@ -57,6 +58,10 @@ impl NativeLinkSource {
                 .collect(),
             anchors: declarations.source_anchors.clone(),
             sources: engine.sources.clone(),
+            profiles: Arc::new(crate::native::declaration_profile_sources_in(
+                declarations,
+                &engine.sources,
+            )),
             foreign_links: declarations.roots.foreign_links.clone(),
             foreign_unreplayable: declarations.roots.foreign_unreplayable,
             foreign_threads: declarations.roots.foreign_threads.clone(),
@@ -100,6 +105,40 @@ impl NativeLinkSource {
                 .map(|(path, anchors)| (path, anchors.clone()))
                 .collect(),
         )
+    }
+
+    pub(super) fn profiles(&self) -> Arc<crate::native::ProfileSources> {
+        self.profiles.clone()
+    }
+
+    /// Exact fields the source projection exposes to debug consumers. Primary
+    /// file/base/generated and ordered selectors are all bound; physical paths
+    /// are deliberately absent because artifacts consume logical paths only.
+    fn profile_binding(&self) -> Result<Vec<u8>, String> {
+        let file = |file: &hirsel_span::SourceFile| {
+            (
+                file.logical_path().to_path_buf(),
+                hirsel_syntax::ContentHash::of_bytes(file.text().as_bytes()),
+            )
+        };
+        let rows = self
+            .profiles
+            .iter()
+            .map(|(path, source)| {
+                (
+                    path,
+                    file(&source.file),
+                    source.base,
+                    source.generated,
+                    source
+                        .anchors
+                        .iter()
+                        .map(|(owner, base)| (file(owner), base))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_vec(&rows).map_err(|e| e.to_string())
     }
 
     pub(super) fn function(&self, key: &super::InstanceAddress) -> bool {
@@ -168,10 +207,11 @@ impl NativeLinkSource {
             .collect::<Vec<_>>();
         let dispatch = crate::native::foreign::dispatch(&self.view());
         serde_json::to_vec(&(
-            2u32,
+            3u32,
             self.input.digest,
             revisions,
             positions,
+            self.profile_binding()?,
             links,
             self.foreign_unreplayable,
             dispatch.iter().collect::<Vec<_>>(),
@@ -240,5 +280,102 @@ impl<'a> LinkSource<'a> {
             foreign_unreplayable: snapshot.foreign_unreplayable,
             foreign_threads: &snapshot.foreign_threads,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_engine::{
+        DefinitionQueries, NativeDiscoveryCache, default_context, default_environment,
+    };
+
+    #[test]
+    fn launch_manifest_binds_every_profile_field_and_preserves_physical_relocation() {
+        hirsel_engine::with_compiler_stack(|| {
+            let store = Arc::new(hirsel_engine::store::MemStore::default());
+            let mut engine = QueryEngine::new(default_environment(), crate::compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine
+                .sources
+                .add(
+                    "root-profile.hir",
+                    "fn helper()->u64 {7u64}\npub fn main()->Result[(),u64] {Error(helper())}"
+                        .into(),
+                )
+                .unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+            let declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+            let inputs = super::super::source_inputs::NativeInstanceInputs::complete(
+                &mut engine,
+                declarations,
+                store,
+            )
+            .unwrap();
+            let mut source = NativeLinkSource::capture(&mut engine, &inputs.declarations).unwrap();
+            let original = source.profiles.as_ref().clone();
+            let baseline = source.manifest_bytes().unwrap();
+            let path = original
+                .iter()
+                .find(|(_, profile)| !profile.anchors.is_empty())
+                .unwrap()
+                .0
+                .clone();
+            for change in 0..5 {
+                let mut profiles = original.clone();
+                let profile = profiles.get_mut(&path).unwrap();
+                match change {
+                    0 => profile.base += 1,
+                    1 => profile.generated = Some(1),
+                    2 => {
+                        let mut map = SourceMap::default();
+                        let file = map.add("another.hir", profile.file.text().into()).unwrap();
+                        profile.file = map.file(file).unwrap().clone();
+                    }
+                    3 => profile.anchors[0].1 += 1,
+                    4 => {
+                        let mut second = profile.anchors[0].clone();
+                        second.1 += 1;
+                        profile.anchors.push(second);
+                    }
+                    _ => unreachable!(),
+                }
+                source.profiles = Arc::new(profiles);
+                assert_ne!(
+                    source.manifest_bytes().unwrap(),
+                    baseline,
+                    "profile field {change} must enter root action inputs"
+                );
+            }
+            let mut profiles = original.clone();
+            let profile = profiles.get_mut(&path).unwrap();
+            let mut second = profile.anchors[0].clone();
+            second.1 += 1;
+            profile.anchors.push(second);
+            source.profiles = Arc::new(profiles.clone());
+            let ordered = source.manifest_bytes().unwrap();
+            profiles.get_mut(&path).unwrap().anchors.reverse();
+            source.profiles = Arc::new(profiles);
+            assert_ne!(source.manifest_bytes().unwrap(), ordered);
+            let mut profiles = original;
+            let profile = profiles.get_mut(&path).unwrap();
+            let mut moved = SourceMap::default();
+            let file = moved
+                .add_logical(
+                    "/relocated/root-profile.hir",
+                    profile.file.logical_path(),
+                    profile.file.text().into(),
+                )
+                .unwrap();
+            profile.file = moved.file(file).unwrap().clone();
+            profile.path = profile.file.path.clone();
+            source.profiles = Arc::new(profiles);
+            assert_eq!(
+                source.manifest_bytes().unwrap(),
+                baseline,
+                "physical relocation is not an emitted debug input"
+            );
+        });
     }
 }
