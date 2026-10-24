@@ -4,6 +4,7 @@ use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::*;
 use crate::sealed_payload::*;
 use crate::stage::Stage;
+mod pairing;
 
 pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     let unit = cx.unit;
@@ -19,6 +20,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     {
         return;
     }
+    let pairs = pairing::Pairing::new(unit);
     let mut observed = vec![];
     let origins = producers(unit, &cx.layouts.0.fn_abis[unit.header.abi.0 as usize]);
     for inst in &unit.instructions {
@@ -52,6 +54,9 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
         for (input, source) in inputs.iter().zip(&binding.recipe.inputs) {
             match input.receipt {
                 Some(receipt) => {
+                    if !pairs.paired(input.original, receipt) {
+                        reject("payload receipt child does not describe its paired original value");
+                    }
                     let kind = cx.layouts.get(cx.value_layout(receipt)).map(|r| &r.kind);
                     if cx.repr(receipt) != ValueRepr::PayloadReceipt
                         || !matches!(kind, Some(crate::layout_types::LayoutKind::PayloadReceipt { root }) if root == &source.ty)
