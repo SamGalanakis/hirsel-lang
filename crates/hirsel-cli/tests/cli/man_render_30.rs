@@ -292,6 +292,8 @@ fn native(backend: &str) {
     }
     eprintln!("{}", String::from_utf8_lossy(&result.stdout));
     hirsel_engine::with_compiler_stack(|| {
+        // Compile once; replay still constructs a new runtime for each bound tape.
+        hirsel_driver::session::enable_resident(1);
         for path in fs::read_dir(root)
             .unwrap()
             .map(|p| p.unwrap().path())
@@ -316,16 +318,14 @@ fn native(backend: &str) {
             ]
             .iter()
             .any(|id| path.file_name().unwrap().to_string_lossy().starts_with(id));
-            if large
-                && ordinary.as_ref().err().is_some_and(|e| {
-                    e.to_string()
-                        .contains("replay produced no semantic observation")
-                })
-            {
-                assert!(checked.as_ref().err().is_some_and(|e| {
-                    e.to_string()
-                        .contains("replay produced no semantic observation")
-                }));
+            let steps_stop = |error: &hirsel_engine::ToolError| {
+                let message = error.to_string();
+                message.contains("ToolingLimit")
+                    && message.contains("Steps")
+                    && message.contains("limit: 10000000")
+            };
+            if large && ordinary.as_ref().err().is_some_and(steps_stop) {
+                assert!(checked.as_ref().err().is_some_and(steps_stop));
                 eprintln!(
                     "MAN_RENDER_30_INCOMPLETE {} reference+checked-host-replay no observation at fixed10000000",
                     path.display()
