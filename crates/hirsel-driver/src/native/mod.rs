@@ -24,6 +24,7 @@ mod observe;
 mod pairwise;
 mod plan;
 mod proofs;
+pub mod queries;
 mod runner;
 mod runtime_cache;
 pub use runtime_cache::RuntimeInputs;

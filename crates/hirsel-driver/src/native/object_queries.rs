@@ -1,11 +1,165 @@
-//! Bounded native linker inputs in the ordinary selected artifact store.
-//! Byte transport and atomic file materialization confer no native authority.
-use hirsel_artifact_store::{Domain, MAX_RECORD, Output, Reference};
+//! Owned function fragments and linked outputs in the ordinary artifact store.
+//!
+//! Zig bff490a23889750de7096d9057c0a432efc929a8, src/link/Elf.zig:1664:
+//! a function owns its object update. rustc 1159e78c4747b02ef996e55082b704c09b970588,
+//! compiler/rustc_query_system/src/dep_graph/graph.rs:736,832: validate read
+//! outputs before loading a body, and retain equal recomputation's output.
+//! Changed manifests still invoke the platform linker; no image patching.
+use super::queries::{InstanceAddress, NativeProducts, ReadyProduct};
+use hirsel_artifact_store::{Action, Address, Domain, MAX_RECORD, Output, Reference};
 use hirsel_codec::{Snapshot, snapshot_struct};
-use hirsel_engine::store::ResultStore;
+use hirsel_engine::runtime::ProductRef;
+use hirsel_engine::store::{ResultStore, VerifyStore};
+use hirsel_lir::stage::ObjectArtifact;
 use hirsel_syntax::ContentHash;
 use std::path::Path;
+use std::sync::Arc;
 
+#[derive(Clone, Debug)]
+pub struct CodegenKey {
+    pub owner: InstanceAddress,
+    pub backend: String,
+    pub backend_version: ContentHash,
+    pub target_features: ContentHash,
+    pub profile_options: ContentHash,
+    pub runtime_abi: ContentHash,
+}
+
+#[derive(Clone, Debug)]
+pub struct FragmentProduct {
+    pub product: ProductRef,
+    pub object: Reference,
+    pub summary: Reference,
+}
+
+#[derive(Clone, Debug)]
+pub struct LinkKey {
+    pub roots: Vec<InstanceAddress>,
+    pub target: ContentHash,
+    /// Exact linker implementation, options, ABI and implicit toolchain inputs.
+    pub linker_options: ContentHash,
+}
+
+#[derive(Clone, Debug)]
+pub struct LinkInputs {
+    pub fragments: Vec<FragmentProduct>,
+    pub static_manifest: Reference,
+    /// Archive and foreign order is semantically significant, unlike fragments.
+    pub runtime_archives: Vec<Reference>,
+    pub foreign_inputs: Vec<Reference>,
+    pub launch_manifest: Reference,
+}
+
+#[derive(Clone, Debug)]
+pub struct LinkedProduct {
+    pub product: ProductRef,
+    /// A bounded chunk manifest, not an unchecked executable pathname.
+    pub executable: Reference,
+}
+
+pub trait ObjectProducts {
+    fn codegen(&mut self, key: &CodegenKey) -> Result<Arc<FragmentProduct>, String>;
+    fn link(&mut self, key: &LinkKey, inputs: &LinkInputs) -> Result<Arc<LinkedProduct>, String>;
+}
+
+impl CodegenKey {
+    pub fn address(&self) -> Address {
+        Address(hirsel_codec::digest(
+            "hirsel.codegen.address.v1",
+            "Codegen",
+            &CodegenAddress {
+                compiler: crate::COMPILER_IDENTITY.to_vec(),
+                owner: instance_bytes(&self.owner),
+                backend: self.backend.clone(),
+                backend_version: self.backend_version,
+                target_features: self.target_features,
+                profile_options: self.profile_options,
+                runtime_abi: self.runtime_abi,
+            },
+        ))
+    }
+}
+
+impl LinkKey {
+    pub fn address(&self) -> Address {
+        let mut roots: Vec<_> = self.roots.iter().map(instance_bytes).collect();
+        roots.sort();
+        roots.dedup();
+        Address(hirsel_codec::digest(
+            "hirsel.link.address.v1",
+            "Link",
+            &LinkAddress {
+                compiler: crate::COMPILER_IDENTITY.to_vec(),
+                roots,
+                target: self.target,
+                linker_options: self.linker_options,
+            },
+        ))
+    }
+}
+
+fn instance_bytes(key: &InstanceAddress) -> Vec<u8> {
+    hirsel_codec::to_text(&InstanceEncoding {
+        instance: key.instance.encoding().to_vec(),
+        target_abi: key.target_abi,
+        policy: key.policy,
+    })
+    .into_bytes()
+}
+
+struct InstanceEncoding {
+    instance: Vec<u8>,
+    target_abi: ContentHash,
+    policy: ContentHash,
+}
+struct CodegenAddress {
+    compiler: Vec<u8>,
+    owner: Vec<u8>,
+    backend: String,
+    backend_version: ContentHash,
+    target_features: ContentHash,
+    profile_options: ContentHash,
+    runtime_abi: ContentHash,
+}
+struct LinkAddress {
+    compiler: Vec<u8>,
+    roots: Vec<Vec<u8>>,
+    target: ContentHash,
+    linker_options: ContentHash,
+}
+snapshot_struct!(InstanceEncoding {
+    instance,
+    target_abi,
+    policy
+});
+snapshot_struct!(CodegenAddress {
+    compiler,
+    owner,
+    backend,
+    backend_version,
+    target_features,
+    profile_options,
+    runtime_abi
+});
+snapshot_struct!(LinkAddress {
+    compiler,
+    roots,
+    target,
+    linker_options
+});
+
+const FRAGMENT: Domain = Domain {
+    kind: 0x4f000001,
+    schema: 1,
+};
+const OBJECT: Domain = Domain {
+    kind: 0x4f000002,
+    schema: 1,
+};
+const LINKED: Domain = Domain {
+    kind: 0x4f000003,
+    schema: 1,
+};
 const BLOB: Domain = Domain {
     kind: 0x4f000004,
     schema: 1,
@@ -14,6 +168,329 @@ const CHUNK: Domain = Domain {
     kind: 0x4f000005,
     schema: 1,
 };
+
+/// The sole durable provider is shared with the source/native product graph.
+/// The link closure performs the existing semantic manifest checks and actual
+/// platform link. It is called only after a complete changed manifest is known.
+pub struct ObjectQueries<N, L> {
+    pub store: Arc<dyn ResultStore>,
+    pub native: N,
+    pub linker: L,
+    /// EveryStage/VerifyStore harnesses recompute hits and compare bytes.
+    pub verify_store: VerifyStore,
+}
+
+impl<N: NativeProducts, L> ObjectQueries<N, L>
+where
+    L: FnMut(&LinkKey, &LinkInputs, &[ObjectArtifact]) -> Result<Vec<u8>, String>,
+{
+    pub fn new(store: Arc<dyn ResultStore>, native: N, linker: L) -> Self {
+        Self {
+            store,
+            native,
+            linker,
+            verify_store: VerifyStore::Off,
+        }
+    }
+
+    pub fn with_verification(mut self, verify_store: VerifyStore) -> Self {
+        self.verify_store = verify_store;
+        self
+    }
+}
+
+impl<N: NativeProducts, L> ObjectProducts for ObjectQueries<N, L>
+where
+    L: FnMut(&LinkKey, &LinkInputs, &[ObjectArtifact]) -> Result<Vec<u8>, String>,
+{
+    fn codegen(&mut self, key: &CodegenKey) -> Result<Arc<FragmentProduct>, String> {
+        let backend = match key.backend.as_str() {
+            "llvm" => super::Backend::Llvm,
+            "cranelift" => super::Backend::Cranelift,
+            _ => return Err("unregistered native backend".into()),
+        };
+        // The producer checks its old reads and native authority before returning
+        // a descriptor. No Value or Ready decoding is needed to decide this hit.
+        let selected = self.native.codegen_units(&key.owner, &key.backend)?;
+        let ready = selected.first().ok_or("Codegen omitted its owner")?;
+        let optimizer = selected[1..]
+            .iter()
+            .map(|ready| ready.product)
+            .collect::<Vec<_>>();
+        codegen_checked(
+            self.store.as_ref(),
+            key,
+            ready,
+            &optimizer,
+            self.verify_store,
+            || {
+                self.native.with_ready(&selected, |units, inputs| {
+                    if units.len() != selected.len() + ready.optimizer_reads.len() {
+                        return Err("Ready materialization omitted optimizer bodies".into());
+                    }
+                    let owner = units[0].unit();
+                    if owner.header.instance != key.owner.instance.digest()
+                        || owner.header.definition != *key.owner.instance.definition()
+                    {
+                        return Err("Ready materialization returned another owner".into());
+                    }
+                    if (inputs.opt == hirsel_lir::emission::OptLevel::None
+                        || backend == super::Backend::Cranelift)
+                        && units.len() != 1
+                    {
+                        return Err("non-inlining emission received optimizer bodies".into());
+                    }
+                    let names: Vec<_> = units[1..]
+                        .iter()
+                        .map(|unit| {
+                            hirsel_lir::emission::symbol_name(
+                                &unit.unit().header.definition,
+                                Some(&unit.unit().header.instance),
+                            )
+                        })
+                        .collect();
+                    if names.windows(2).any(|pair| pair[0] >= pair[1]) {
+                        return Err("optimizer bodies are not sorted unique symbols".into());
+                    }
+                    let copies = units[1..]
+                        .iter()
+                        .map(|u| u.unit().header.instance)
+                        .collect();
+                    let inputs = hirsel_lir::emission::EmitInputs {
+                        available_externally: &copies,
+                        ..inputs.clone()
+                    };
+                    // Source paths/line-table binding are Link inputs; the producer
+                    // binds the interval-collection option to emission_context.
+                    let profile = hirsel_lir::debug::Profile {
+                        debug: ready.debug,
+                        sources: None,
+                    };
+                    match backend {
+                        super::Backend::Llvm => {
+                            hirsel_llvm::emit_object_profile(units, &inputs, profile)
+                                .map_err(|e| e.to_string())
+                        }
+                        super::Backend::Cranelift => {
+                            hirsel_cranelift::emit_object_profile(units, &inputs, profile)
+                                .map_err(|e| e.to_string())
+                        }
+                    }
+                })
+            },
+        )
+        .map(Arc::new)
+    }
+
+    fn link(&mut self, key: &LinkKey, inputs: &LinkInputs) -> Result<Arc<LinkedProduct>, String> {
+        link_checked(
+            self.store.as_ref(),
+            key,
+            inputs,
+            self.verify_store,
+            &mut self.linker,
+        )
+        .map(Arc::new)
+    }
+}
+
+#[cfg(test)]
+fn codegen(
+    store: &dyn ResultStore,
+    key: &CodegenKey,
+    ready: &ReadyProduct,
+    compute: impl FnOnce() -> Result<ObjectArtifact, String>,
+) -> Result<FragmentProduct, String> {
+    codegen_checked(store, key, ready, &[], VerifyStore::Off, compute)
+}
+
+fn codegen_checked(
+    store: &dyn ResultStore,
+    key: &CodegenKey,
+    ready: &ReadyProduct,
+    optimizer: &[ProductRef],
+    verify_store: VerifyStore,
+    compute: impl FnOnce() -> Result<ObjectArtifact, String>,
+) -> Result<FragmentProduct, String> {
+    let address = key.address();
+    let mut reads = vec![
+        ready.product.record,
+        ready.ready,
+        ready.layout_closure,
+        ready.emission_context,
+        ready.unit_summary,
+    ];
+    reads.extend(ready.optimizer_reads.iter().map(|p| p.record));
+    reads.extend(optimizer.iter().map(|p| p.record));
+    // References bind domains/lengths as well as content. Action revisions are
+    // deliberately absent: equal settled outputs cut off downstream work.
+    let action = action("hirsel.codegen.action.v2", address, &reads);
+    let mut cached = None;
+    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
+        let product = ProductRef {
+            address,
+            action,
+            record: previous.reference,
+        };
+        if let Ok(fragment) = fragment_product(store, product)
+            && fragment.summary == ready.unit_summary
+        {
+            if verify_store == VerifyStore::Off {
+                return Ok(fragment);
+            }
+            cached = Some(fragment);
+        }
+    }
+    let object = compute()?;
+    let bytes = put_blob(store, &object.bytes)?;
+    let object = put_record(
+        store,
+        OBJECT,
+        &ObjectRecord {
+            metadata: ObjectArtifact {
+                bytes: Vec::new(),
+                ..object
+            },
+            bytes: bytes.into(),
+        },
+    )?;
+    let record = put_record(
+        store,
+        FRAGMENT,
+        &FragmentRecord {
+            owner: key.owner.instance.encoding().to_vec(),
+            object: object.into(),
+            summary: ready.unit_summary.into(),
+        },
+    )?;
+    if cached.is_some_and(|old| old.product.record != record) {
+        return Err("recomputed object fragment differs from cached output".into());
+    }
+    store.associate_product(address, action, record);
+    Ok(FragmentProduct {
+        product: ProductRef {
+            address,
+            action,
+            record,
+        },
+        object,
+        summary: ready.unit_summary,
+    })
+}
+
+#[cfg(test)]
+fn link(
+    store: &dyn ResultStore,
+    key: &LinkKey,
+    inputs: &LinkInputs,
+    compute: &mut impl FnMut(&LinkKey, &LinkInputs, &[ObjectArtifact]) -> Result<Vec<u8>, String>,
+) -> Result<LinkedProduct, String> {
+    link_checked(store, key, inputs, VerifyStore::Off, compute)
+}
+
+fn link_checked(
+    store: &dyn ResultStore,
+    key: &LinkKey,
+    inputs: &LinkInputs,
+    verify_store: VerifyStore,
+    compute: &mut impl FnMut(&LinkKey, &LinkInputs, &[ObjectArtifact]) -> Result<Vec<u8>, String>,
+) -> Result<LinkedProduct, String> {
+    let mut fragments = Vec::with_capacity(inputs.fragments.len());
+    for fragment in &inputs.fragments {
+        let record: FragmentRecord = get_record(store, FRAGMENT, fragment.product.record)?;
+        if Reference::from(record.object.clone()) != fragment.object
+            || Reference::from(record.summary.clone()) != fragment.summary
+        {
+            return Err("fragment descriptor disagrees with its product".into());
+        }
+        require(store, fragment.summary)?;
+        let object: ObjectRecord = get_record(store, OBJECT, fragment.object)?;
+        if object.metadata.target != key.target || !object.metadata.bytes.is_empty() {
+            return Err("link fragment belongs to another target or embeds object bytes".into());
+        }
+        blob_chunks(store, object.bytes.into())?;
+        fragments.push((record.owner, fragment.clone()));
+    }
+    fragments.sort_by(|a, b| a.0.cmp(&b.0));
+    if fragments.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+        return Err("duplicate fragment owner".into());
+    }
+    let inputs = LinkInputs {
+        fragments: fragments.into_iter().map(|(_, product)| product).collect(),
+        ..inputs.clone()
+    };
+    let mut reads: Vec<_> = inputs.fragments.iter().map(|f| f.product.record).collect();
+    reads.push(inputs.static_manifest);
+    reads.extend(&inputs.runtime_archives);
+    reads.extend(&inputs.foreign_inputs);
+    reads.push(inputs.launch_manifest);
+    for read in &reads {
+        require(store, *read)?;
+    }
+    for read in inputs.runtime_archives.iter().chain(&inputs.foreign_inputs) {
+        if read.domain == BLOB {
+            blob_chunks(store, *read)?;
+        }
+    }
+    // Validate the entire fragment closure even on a linked-output hit. Missing
+    // objects must not be hidden by an old successful executable association.
+    let address = key.address();
+    let action = action("hirsel.link.action.v1", address, &reads);
+    let mut cached = None;
+    if let Some(previous) = store.lookup_product(address).filter(|p| p.action == action) {
+        let product = ProductRef {
+            address,
+            action,
+            record: previous.reference,
+        };
+        if let Ok(linked) = linked_product(store, product) {
+            if verify_store == VerifyStore::Off {
+                return Ok(linked);
+            }
+            cached = Some(linked);
+        }
+    }
+    let objects = inputs
+        .fragments
+        .iter()
+        .map(|f| load_object(store, f.object))
+        .collect::<Result<Vec<_>, _>>()?;
+    let bytes = compute(key, &inputs, &objects)?;
+    if bytes.is_empty() {
+        return Err("linker produced an empty executable".into());
+    }
+    let executable = put_blob(store, &bytes)?;
+    let record = put_record(
+        store,
+        LINKED,
+        &LinkedRecord {
+            executable: executable.into(),
+        },
+    )?;
+    if cached.is_some_and(|old| old.product.record != record) {
+        return Err("recomputed executable differs from cached output".into());
+    }
+    store.associate_product(address, action, record);
+    Ok(LinkedProduct {
+        product: ProductRef {
+            address,
+            action,
+            record,
+        },
+        executable,
+    })
+}
+
+fn action(domain: &str, address: Address, reads: &[Reference]) -> Action {
+    Action(hirsel_codec::digest(
+        domain,
+        "Reads",
+        &(
+            address.0,
+            reads.iter().copied().map(WireRef::from).collect::<Vec<_>>(),
+        ),
+    ))
+}
 
 fn require(
     store: &dyn ResultStore,
@@ -50,6 +527,51 @@ fn get_record<T: Snapshot>(
         return Err("noncanonical native product".into());
     }
     Ok(value)
+}
+
+/// Resolve a scheduler result through the same store; no output cache in clients.
+pub fn linked_product(
+    store: &dyn ResultStore,
+    product: ProductRef,
+) -> Result<LinkedProduct, String> {
+    let record: LinkedRecord = get_record(store, LINKED, product.record)?;
+    let executable = record.executable.into();
+    blob_chunks(store, executable)?;
+    Ok(LinkedProduct {
+        product,
+        executable,
+    })
+}
+
+pub fn fragment_product(
+    store: &dyn ResultStore,
+    product: ProductRef,
+) -> Result<FragmentProduct, String> {
+    let record: FragmentRecord = get_record(store, FRAGMENT, product.record)?;
+    let object = record.object.into();
+    let summary = record.summary.into();
+    require(store, summary)?;
+    let record: ObjectRecord = get_record(store, OBJECT, object)?;
+    blob_chunks(store, record.bytes.into())?;
+    Ok(FragmentProduct {
+        product,
+        object,
+        summary,
+    })
+}
+
+pub fn load_object(
+    store: &dyn ResultStore,
+    reference: Reference,
+) -> Result<ObjectArtifact, String> {
+    let record: ObjectRecord = get_record(store, OBJECT, reference)?;
+    if !record.metadata.bytes.is_empty() {
+        return Err("object metadata embeds bytes".into());
+    }
+    Ok(ObjectArtifact {
+        bytes: read_blob(store, record.bytes.into())?,
+        ..record.metadata
+    })
 }
 
 // A blob is an ordinary bounded record of checked chunk references. Large object
@@ -163,6 +685,20 @@ fn read_blob(store: &dyn ResultStore, reference: Reference) -> Result<Vec<u8>, S
     Ok(bytes)
 }
 
+/// Restore bytes atomically and check readiness before request completion.
+/// Identical existing bytes retain their inode. A stale pathname never counts
+/// as successful output, and no resident-specific linker/cache is involved.
+pub fn materialize_executable(
+    store: &dyn ResultStore,
+    product: &LinkedProduct,
+    destination: &Path,
+) -> Result<(), String> {
+    let checked = linked_product(store, product.product)?;
+    if checked.executable != product.executable {
+        return Err("executable descriptor mismatch".into());
+    }
+    materialize_blob(store, product.executable, destination, true)
+}
 fn materialize_blob(
     store: &dyn ResultStore,
     reference: Reference,
@@ -278,6 +814,18 @@ impl From<WireRef> for Reference {
         }
     }
 }
+struct FragmentRecord {
+    owner: Vec<u8>,
+    object: WireRef,
+    summary: WireRef,
+}
+struct ObjectRecord {
+    metadata: ObjectArtifact,
+    bytes: WireRef,
+}
+struct LinkedRecord {
+    executable: WireRef,
+}
 struct BlobRecord {
     len: u64,
     chunks: Vec<WireRef>,
@@ -288,10 +836,27 @@ snapshot_struct!(WireRef {
     schema,
     len
 });
+snapshot_struct!(FragmentRecord {
+    owner,
+    object,
+    summary
+});
+snapshot_struct!(ObjectRecord { metadata, bytes });
+snapshot_struct!(LinkedRecord { executable });
 snapshot_struct!(BlobRecord { len, chunks });
 
 #[cfg(test)]
-mod tests {
+#[path = "../../tests/native-validation/object_queries.rs"]
+mod tests;
+
+pub mod tasks;
+pub use tasks::{
+    CODEGEN_KIND, LINK_KIND, LinkDependencies, ObjectTaskFactory, ObjectTaskRequest,
+    ObjectTaskSnapshot,
+};
+
+#[cfg(test)]
+mod transport_tests {
     use super::*;
     use hirsel_engine::store::DirStore;
 
