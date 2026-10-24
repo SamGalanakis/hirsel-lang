@@ -49,6 +49,7 @@ mod uniqueness_loss_diagnostics_17;
 mod reuse_donor_credit_17;
 mod error_mapper_diagnostics_18;
 mod ordered_qualification;
+mod runtime50_ordered;
 mod localrpc_23;
 mod argvplan_23;
 mod versionaudit_23;

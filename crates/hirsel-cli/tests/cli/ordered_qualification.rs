@@ -98,7 +98,9 @@ fn corpus(program: &str, expected: &[u8]) {
     corpus_backends(program, expected, &["llvm", "cranelift"]);
 }
 
-fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) {
+/// Returns each backend's width-1 canonical trace, after every live and
+/// replay cell of that backend matched it.
+pub(super) fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) -> Vec<Vec<u8>> {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("main.hir");
     std::fs::write(&source, program).unwrap();
@@ -117,6 +119,7 @@ fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) {
         "interpreter: {interpreted:?}"
     );
     assert_eq!(interpreted.stdout, expected);
+    let mut traces = Vec::new();
     for &backend in backends {
         let executable = scratch.path().join(backend);
         let built = Command::new(env!("CARGO_BIN_EXE_hirsel"))
@@ -127,7 +130,7 @@ fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) {
             .output()
             .unwrap();
         assert!(built.status.success(), "{backend}: {built:?}");
-        let mut reference = None;
+        let mut reference: Option<(Vec<u8>, hirsel_rt::launch::Recording)> = None;
         let prerecorded = scratch.path().join(format!("{backend}-prerecorded.tape"));
         for width in [1, 2, 4, 8] {
             for jitter in [false, true] {
@@ -196,7 +199,9 @@ fn corpus_backends(program: &str, expected: &[u8], backends: &[&str]) {
         eprintln!(
             "{backend}: 32 live cells + 32 immutable-input replay cells; interpreter agreement"
         );
+        traces.push(reference.unwrap().0);
     }
+    traces
 }
 
 fn replay_cells(
@@ -407,7 +412,7 @@ fn ordered_qualification_corpus_two_holding_child_finalizers() {
     corpus(TWO_HOLDING, b"first\nsecond\n");
 }
 
-const CALLED_BEFORE_SEND: &str = r#"resource type Message { tasks: Tasks, sender: Sender[u64] }
+pub(super) const CALLED_BEFORE_SEND: &str = r#"resource type Message { tasks: Tasks, sender: Sender[u64] }
 drop(message) {
   let mut sender = sender.dup(message.tasks, message.sender)
   let _ = channel.send(message.tasks, mut sender, 11u64)

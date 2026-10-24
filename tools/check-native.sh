@@ -72,7 +72,7 @@ run_stage "native smoke with real Io record and replay" buck2 test //:gate-nativ
 # Host execution proves production Ordered widths 1/2/4/8; the pool executor
 # otherwise clamps wider cells to its two CPUs.
 run_stage "Ordered qualification: native trace, immutable-input replay and topology" \
-  buck2 test -c hirsel.tests=host //:hirsel-cli-test-cli-shard-1 -- "${long[@]}" $(libtest ordered_qualification:: --ignored --test-threads=1)
+  buck2 test -c hirsel.tests=host //:hirsel-cli-test-cli-shard-1 -- "${long[@]}" $(libtest ordered_qualification:: runtime50_ordered:: --ignored --test-threads=1)
 run_stage "native executables under Valgrind memcheck" buck2 test //:gate-native-sanitize -- "${long[@]}"
 run_stage "native library bodies on both targets" \
   buck2 test //:hirsel-pipeline-tests-test-rc-shard-1 -- "${long[@]}" $(libtest rc_library_ --include-ignored --test-threads=4)
