@@ -1486,9 +1486,9 @@ impl Importer<'_> {
                 false,
                 path,
             )?;
-            let instance = match self.program.instance_bodies.resolve(
+            let instance = match self.instances.resolve_generated(
+                self.program,
                 DefId::intern(path),
-                self.types,
                 &callee.arguments,
             ) {
                 Ok(Some(instance)) => instance.path().clone(),

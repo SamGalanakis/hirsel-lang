@@ -937,31 +937,43 @@ impl QueryEngine {
         self
     }
     fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
-        // A generated body's registration must still be replayed by S1; its
-        // transient syntax isn't a source-owned record.
-        if !self.items.contains_key(path) && self.catalog.body(path).is_some() {
-            if !self.catalog.storeable(path, kind) {
-                return None;
-            }
-        } else {
-            let item = self.items.get(path)?.first()?;
-            if kind == QueryKind::Generate {
-                if generation::generator(item).is_none() || generation::instance_bodied(item) {
+        // A generated body can reuse the ordinary Lower query only after
+        // its source generation/registration is current in this session. The
+        // key additionally binds the exact generated text; persisted Lower
+        // reads, execution receipts, selections, depth and independent V still
+        // use their sole existing validation path below.
+        let generated_lower = (kind == QueryKind::Lower)
+            .then(|| {
+                self.generated
+                    .get(path)
+                    .map(|source| ContentHash::of_bytes(source.text.as_bytes()))
+            })
+            .flatten();
+        if generated_lower.is_none() {
+            if !self.items.contains_key(path) && self.catalog.body(path).is_some() {
+                if !self.catalog.storeable(path, kind) {
                     return None;
                 }
-            } else if kind != QueryKind::GeneratedRegistration
-                && (generation::generator(item).is_some() || self.generated.contains_key(path))
-            {
-                return None;
-            }
-            if self
-                .sources
-                .file(self.item_file(item))?
-                .path
-                .to_string_lossy()
-                .starts_with('<')
-            {
-                return None;
+            } else {
+                let item = self.items.get(path)?.first()?;
+                if kind == QueryKind::Generate {
+                    if generation::generator(item).is_none() || generation::instance_bodied(item) {
+                        return None;
+                    }
+                } else if kind != QueryKind::GeneratedRegistration
+                    && (generation::generator(item).is_some() || self.generated.contains_key(path))
+                {
+                    return None;
+                }
+                if self
+                    .sources
+                    .file(self.item_file(item))?
+                    .path
+                    .to_string_lossy()
+                    .starts_with('<')
+                {
+                    return None;
+                }
             }
         }
         let env = ContentHash::of_parts(
@@ -975,17 +987,44 @@ impl QueryEngine {
                     .as_slice(),
             ],
         );
+        let text = self.key_text(path, kind).ok()?;
+        let text = generated_lower.map_or(text, |generated| {
+            ContentHash::of_parts(
+                "hirsel.query.generated-lower-input.v1",
+                [text.0.as_slice(), generated.0.as_slice()],
+            )
+        });
         Some(EntryKey::new(
             env,
             path,
-            self.key_text(path, kind).ok()?,
+            text,
             kind,
             LoweringPolicy::Reachable,
         ))
     }
+    /// Current owned source identity, including literal generated bodies. The
+    /// generated owner includes its exact text hash; arbitrary persisted ids
+    /// cannot name an anchor in another source generation.
+    pub(crate) fn record_anchor_owner(&self, anchor: Anchor) -> Option<(DefPath, u32)> {
+        artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
+            .or_else(|| self.catalog.owner(anchor))
+    }
+    pub(crate) fn record_anchor(&self, path: &DefPath, occurrence: u32) -> Option<Anchor> {
+        self.items
+            .get(path)
+            .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
+            .map(|item| item.anchor)
+            .or_else(|| self.catalog.anchor(path, occurrence))
+            .or_else(|| {
+                self.sources.anchors().find_map(|(anchor, _, _)| {
+                    (self.record_anchor_owner(anchor) == Some((path.clone(), occurrence)))
+                        .then_some(anchor)
+                })
+            })
+    }
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         let records = self.type_records()?;
-        encode_record(&records, &self.items, record)
+        records.encode_record(record, |anchor| self.record_anchor_owner(anchor))
     }
     fn type_records(&self) -> Option<Arc<TypeRecords>> {
         let store = self.result_store.clone()?;
@@ -1012,35 +1051,14 @@ impl QueryEngine {
         cache.execution_revalidated(
             subject,
             self.types.clone(),
-            |path, occurrence| {
-                self.items
-                    .get(path)
-                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                    .map(|item| item.anchor)
-                    .or_else(|| self.catalog.anchor(path, occurrence))
-                    .or_else(|| {
-                        self.sources.anchors().find_map(|(anchor, _, _)| {
-                            (artifact_anchor_owner(
-                                &self.items,
-                                &self.sources,
-                                &self.generated,
-                                anchor,
-                            ) == Some((path.clone(), occurrence)))
-                            .then_some(anchor)
-                        })
-                    })
-            },
+            |path, occurrence| self.record_anchor(path, occurrence),
             &*snapshot,
         )
     }
     fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
         let records = self.type_records()?;
         let record: T = records.decode_record(bytes, |path, occurrence| {
-            self.items
-                .get(path)
-                .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                .map(|item| item.anchor)
-                .or_else(|| self.catalog.anchor(path, occurrence))
+            self.record_anchor(path, occurrence)
         })?;
         // Check every nested payload TypeId before any semantic consumer indexes it.
         let (encoded, roots) = hirsel_types::with_table_collection(|| {
@@ -2435,10 +2453,7 @@ impl QueryEngine {
         let (report, executed, acceptance, evidence) = hirsel_validate::validate_definition(
             definition,
             self.types.clone(),
-            |anchor| {
-                artifact_anchor_owner(&self.items, &self.sources, &self.generated, anchor)
-                    .or_else(|| self.catalog.owner(anchor))
-            },
+            |anchor| self.record_anchor_owner(anchor),
             snapshot.validation(&definition.path.path().0.package),
             policy,
             cache.as_deref(),
@@ -2517,13 +2532,7 @@ impl QueryEngine {
         cache.read_definition(
             output,
             self.types.clone(),
-            |path, occurrence| {
-                self.items
-                    .get(path)
-                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                    .map(|item| item.anchor)
-                    .or_else(|| self.catalog.anchor(path, occurrence))
-            },
+            |path, occurrence| self.record_anchor(path, occurrence),
             self.source_verification_policy(),
             snapshot.validation(&output.owner().path().0.package),
         )

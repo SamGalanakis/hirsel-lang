@@ -11,7 +11,7 @@ use hirsel_lir::{
     products::LayoutClosure,
     validate::{Inputs, NativeEnvironment},
 };
-use hirsel_rc::instance::{InstanceId, Instances};
+use hirsel_rc::instance::{InstanceId, Instances, SelectionRead};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -63,6 +63,7 @@ struct Discovery {
     ready_source: Vec<u8>,
     callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     requests: Vec<Request>,
+    selection_reads: Vec<SelectionRead>,
 }
 
 /// The descriptor returned after one demand has been admitted by actual C or
@@ -72,6 +73,7 @@ pub struct DiscoveredInstance {
     pub ready_source: ReadySourceFacts,
     pub callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     pub dependencies: Vec<InstanceAddress>,
+    pub selection_reads: Vec<SelectionRead>,
 }
 
 /// One immutable request snapshot. Source/native proof authority stays in the
@@ -227,6 +229,7 @@ impl DemandInstances {
         declarations: &NativeDeclarations,
         request: &Request,
         options: &super::super::Options,
+        selection_reads: &[SelectionRead],
     ) -> Result<Action, String> {
         let source = if request.recipe.domain == SOURCE_RECIPE {
             let source = declarations
@@ -258,12 +261,43 @@ impl DemandInstances {
             source,
             options.flat_walk,
             format!("{:?}", options.discharge.sites(&request.key.definition)),
+            selection_reads
+                .iter()
+                .map(|read| read.current(&declarations.program.instance_bodies))
+                .collect::<Vec<_>>(),
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v1",
+            "hirsel.native.demand-import-action.v2",
             [bytes.as_slice()],
         )))
+    }
+
+    fn descriptor(
+        &self,
+        key: &InstanceAddress,
+        product: &InstanceProduct,
+    ) -> Result<Discovery, String> {
+        let bytes = self
+            .store
+            .get_content(product.discovery)
+            .ok_or("missing native discovery")?;
+        let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if discovery.schema != 2
+            || discovery.owner.bind()? != key.instance
+            || discovery
+                .requests
+                .windows(2)
+                .any(|w| w[0].key.encoding >= w[1].key.encoding)
+            || discovery.callees.windows(2).any(|w| w[0] >= w[1])
+            || discovery.selection_reads.iter().any(|read| !read.valid())
+            || discovery.selection_reads.windows(2).any(|w| {
+                (&w[0].declaration, &w[0].arguments) >= (&w[1].declaration, &w[1].arguments)
+            })
+        {
+            return Err("noncanonical native discovery".into());
+        }
+        Ok(discovery)
     }
 
     fn discovered(
@@ -271,21 +305,7 @@ impl DemandInstances {
         key: &InstanceAddress,
         product: Arc<InstanceProduct>,
     ) -> Result<Arc<DiscoveredInstance>, String> {
-        let bytes = self
-            .store
-            .get_content(product.discovery)
-            .ok_or("missing native discovery")?;
-        let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 1
-            || discovery.owner.bind()? != key.instance
-            || discovery
-                .requests
-                .windows(2)
-                .any(|w| w[0].key.encoding >= w[1].key.encoding)
-            || discovery.callees.windows(2).any(|w| w[0] >= w[1])
-        {
-            return Err("noncanonical native discovery".into());
-        }
+        let discovery = self.descriptor(key, &product)?;
         let ready_source = ReadySourceFacts::decode(&discovery.ready_source)?;
         let dependencies = discovery
             .requests
@@ -297,6 +317,7 @@ impl DemandInstances {
             ready_source,
             callees: discovery.callees,
             dependencies,
+            selection_reads: discovery.selection_reads,
         });
         self.completed
             .insert(key.instance.encoding().to_vec(), output.clone());
@@ -323,8 +344,18 @@ impl DemandInstances {
             .get(key.instance.encoding())
             .cloned()
             .ok_or("native instance was not discovered")?;
-        let action = self.action(engine, declarations, &request, options)?;
-        if let Some(output) = self.completed.get(key.instance.encoding())
+        // Read ordinary prior dependency metadata before deciding a hit.
+        // Only the later C lookup can admit the candidate as a native output.
+        let previous = self
+            .queries
+            .candidate(key)
+            .and_then(|product| self.descriptor(key, &product).ok());
+        let selection_reads = previous
+            .as_ref()
+            .map_or(&[][..], |record| record.selection_reads.as_slice());
+        let action = self.action(engine, declarations, &request, options, selection_reads)?;
+        if previous.is_some()
+            && let Some(output) = self.completed.get(key.instance.encoding())
             && output.product.product.action == action
         {
             return Ok(output.clone());
@@ -339,13 +370,17 @@ impl DemandInstances {
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };
-        if engine.native_query_policy().reuse
+        if previous.is_some()
+            && engine.native_query_policy().reuse
             && let Some(product) = self.queries.lookup(key, action, &environment)
             && let Ok(output) = self.discovered(key, product)
         {
             return Ok(output);
         }
 
+        if previous.is_none() || !engine.native_query_policy().reuse {
+            self.queries.counts.misses += 1;
+        }
         let recipe_bytes = self
             .store
             .get_content(request.recipe)
@@ -466,14 +501,17 @@ impl DemandInstances {
             .collect::<Vec<_>>();
         callees.sort();
         callees.dedup();
+        let selection_reads = instances.selection_reads();
+        let action = self.action(engine, declarations, &request, options, &selection_reads)?;
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 1,
+                schema: 2,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
                 requests,
+                selection_reads,
             })
             .map_err(|e| e.to_string())?,
         )?;
@@ -520,7 +558,6 @@ impl DemandInstances {
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };
-        let action = self.action(engine, declarations, &request, options)?;
         let (_, product) = self.queries.publish(
             key,
             action,

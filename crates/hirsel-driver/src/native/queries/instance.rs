@@ -14,7 +14,7 @@ pub const INSTANCE_RECORD_DOMAIN: Domain = Domain {
 };
 pub const INSTANCE_DISCOVERY_DOMAIN: Domain = Domain {
     kind: 0x4e00_0011,
-    schema: 1,
+    schema: 2,
 };
 pub const STATICS_FINALIZERS_DOMAIN: Domain = Domain {
     kind: 0x4e00_0012,
@@ -80,6 +80,34 @@ impl InstanceQueries {
         })
     }
 
+    /// Ordinary prior metadata for dependency revalidation. This performs no
+    /// native acceptance, Value decode or binding; callers must still use
+    /// lookup with a complete current action and independent environment.
+    pub fn candidate(&self, key: &InstanceAddress) -> Option<InstanceProduct> {
+        let address = key.address(INSTANCE_KIND);
+        let previous = self.store.lookup_product(address)?;
+        if previous.reference.domain != INSTANCE_RECORD_DOMAIN {
+            return None;
+        }
+        let bytes = self.store.get_content(previous.reference)?;
+        let record: Record = serde_json::from_slice(&bytes).ok()?;
+        if !self.metadata_present((record.2, record.3, record.4)) {
+            return None;
+        }
+        Some(InstanceProduct {
+            product: ProductRef {
+                address,
+                action: previous.action,
+                record: previous.reference,
+            },
+            value: record.0,
+            layout_closure: record.1,
+            local_equations: record.2,
+            discovery: record.3,
+            statics_finalizers: record.4,
+        })
+    }
+
     /// Adopt only after both the ordinary complete action and C's independently
     /// rechecked receipt agree. This reads descriptors/content integrity; it
     /// never decodes a Value, binds layouts, or constructs an instance body.
@@ -106,9 +134,8 @@ impl InstanceQueries {
         if key.target_abi != environment.target.digest() {
             return None;
         }
-        let address = key.address(INSTANCE_KIND);
-        let previous = self.store.lookup_product(address)?;
-        if previous.action != action || previous.reference.domain != INSTANCE_RECORD_DOMAIN {
+        let candidate = self.candidate(key)?;
+        if candidate.product.action != action {
             return None;
         }
         let accepted = self.native.lookup(
@@ -121,31 +148,22 @@ impl InstanceQueries {
         if !self.metadata_present(metadata) {
             return None;
         }
-        let bytes = self.store.get_content(previous.reference)?;
-        let record: Record = serde_json::from_slice(&bytes).ok()?;
-        if record
-            != (
-                accepted.body(),
-                accepted.layouts(),
-                metadata.0,
-                metadata.1,
-                metadata.2,
-            )
-        {
+        if (
+            candidate.value,
+            candidate.layout_closure,
+            candidate.local_equations,
+            candidate.discovery,
+            candidate.statics_finalizers,
+        ) != (
+            accepted.body(),
+            accepted.layouts(),
+            metadata.0,
+            metadata.1,
+            metadata.2,
+        ) {
             return None;
         }
-        Some(Arc::new(InstanceProduct {
-            product: ProductRef {
-                address,
-                action,
-                record: previous.reference,
-            },
-            value: record.0,
-            layout_closure: record.1,
-            local_equations: record.2,
-            discovery: record.3,
-            statics_finalizers: record.4,
-        }))
+        Some(Arc::new(candidate))
     }
 
     /// Actual one-instance miss: C chooses the Value/layout envelopes; equations

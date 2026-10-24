@@ -22,21 +22,15 @@ impl NativeRecords {
         if !Arc::ptr_eq(&self.types, engine.types()) {
             return None;
         }
-        self.records.encode_record(value, |anchor| {
-            super::persistent::anchor_owner(&engine.items, anchor)
-        })
+        self.records
+            .encode_record(value, |anchor| engine.record_anchor_owner(anchor))
     }
     pub fn decode<T: DeserializeOwned>(&self, engine: &QueryEngine, bytes: &[u8]) -> Option<T> {
         if !Arc::ptr_eq(&self.types, engine.types()) {
             return None;
         }
         self.records.decode_record(bytes, |owner, occurrence| {
-            engine
-                .items
-                .get(owner)
-                .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                .map(|item| item.anchor)
-                .or_else(|| engine.catalog.anchor(owner, occurrence))
+            engine.record_anchor(owner, occurrence)
         })
     }
 }

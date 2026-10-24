@@ -178,6 +178,52 @@ impl From<hirsel_layout::instance::InstanceBodyError> for InstanceError {
     }
 }
 
+/// A native CT-5 lookup, including a declaration-absence read. Arguments use
+/// the existing canonical CT-5 spellings, so rechecking needs no TypeId decode.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize)]
+pub struct SelectionRead {
+    pub declaration: DefPath,
+    pub arguments: Option<Vec<String>>,
+    pub generated: bool,
+    pub selected: Option<DefPath>,
+}
+impl SelectionRead {
+    pub fn current(&self, bodies: &hirsel_tir::InstanceBodies) -> Self {
+        let declaration = DefId::intern(&self.declaration);
+        let generated = bodies.declarations.contains(&declaration);
+        let selected = if generated {
+            self.arguments.as_ref().and_then(|arguments| {
+                bodies
+                    .instances
+                    .get(&declaration)
+                    .and_then(|rows| {
+                        rows.iter().find(|(key, _)| {
+                            key.spellings()
+                                .iter()
+                                .copied()
+                                .eq(arguments.iter().map(String::as_str))
+                        })
+                    })
+                    .map(|(_, row)| row.definition.path().clone())
+            })
+        } else {
+            None
+        };
+        Self {
+            generated,
+            selected,
+            ..self.clone()
+        }
+    }
+    pub fn valid(&self) -> bool {
+        if self.generated {
+            self.arguments.is_some() && self.selected.is_some()
+        } else {
+            self.arguments.is_none() && self.selected.is_none()
+        }
+    }
+}
+
 /// The expanded program: instance views in discovery order, their roles, the
 /// `FnAbi` of each and a key index.
 pub struct Instances {
@@ -206,6 +252,7 @@ pub struct Instances {
     /// Generic function names with no runtime environment: calls name code
     /// directly, and captures/storage of these lexical names are unnecessary.
     pub elided: HashMap<InstanceId, std::collections::HashSet<hirsel_tir::LocalId>>,
+    selection_reads: std::sync::Mutex<std::collections::BTreeSet<SelectionRead>>,
     by_key: HashMap<InstanceKey, InstanceId>,
     function_entries: BTreeMap<DefPath, BodyId>,
     producers: BTreeMap<DefPath, HashMap<(BodyId, hirsel_tir::LocalId), Option<Producer>>>,
@@ -235,10 +282,56 @@ impl Instances {
             direct_captures: HashMap::new(),
             direct_calls: HashMap::new(),
             elided: HashMap::new(),
+            selection_reads: Default::default(),
             by_key: HashMap::new(),
             function_entries: BTreeMap::new(),
             producers: BTreeMap::new(),
         }
+    }
+
+    pub fn selection_reads(&self) -> Vec<SelectionRead> {
+        self.selection_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The sole CT-5 resolution used by source discovery and native import.
+    /// Successful ordinary and generated lookups record their exact read.
+    pub fn resolve_generated(
+        &self,
+        program: &Program,
+        path: DefId,
+        arguments: &[GenericArgument],
+    ) -> Result<Option<DefId>, hirsel_types::QueryError> {
+        let selected = program
+            .instance_bodies
+            .resolve(path, &program.types, arguments)?;
+        let generated = program.instance_bodies.declarations.contains(&path);
+        let arguments = if generated {
+            Some(
+                hirsel_tir::InstanceBodies::key(&program.types, arguments)
+                    .expect("a successful CT-5 resolution has a closed key")
+                    .spellings()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        self.selection_reads
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(SelectionRead {
+                declaration: path.path().clone(),
+                arguments,
+                generated,
+                selected: selected.map(|path| path.path().clone()),
+            });
+        Ok(selected)
     }
 
     /// Register a source callable from its compact declaration and concrete
@@ -1259,15 +1352,11 @@ impl Expander<'_, '_, '_> {
             false,
             path,
         )?;
-        if generated {
-            let selected = self
-                .program
-                .instance_bodies
-                .resolve(DefId::intern(path), &self.program.types, &actuals.arguments)
-                .map_err(|e| {
-                    InstanceError::Malformed(format!("generated source reference: {e:?}"))
-                })?
-                .ok_or_else(|| InstanceError::MissingInstance(path.clone()))?;
+        let selected = self
+            .out
+            .resolve_generated(self.program, DefId::intern(path), &actuals.arguments)
+            .map_err(|e| InstanceError::Malformed(format!("generated source reference: {e:?}")))?;
+        if let Some(selected) = selected {
             self.function(selected.path(), Actuals::none())?;
         } else {
             self.function(path, actuals)?;

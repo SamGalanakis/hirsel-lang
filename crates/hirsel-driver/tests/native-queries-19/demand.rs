@@ -163,3 +163,135 @@ fn actual_library_graph_uses_admitted_environment_products_on_fresh_hits() {
         }
     });
 }
+
+#[test]
+fn ct5_selection_reads_recheck_before_native_hit_without_decoding_unchanged_values() {
+    with_compiler_stack(|| {
+        const SOURCE: &str = "type P {n:u64}\nfn gen[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String] {Ok(codegen.body(\"fn(v:standalone@0/P)->u64 uses {} {v.n}\"))}\nfn chosen[T](v:T)->u64 uses {} = comptime gen(shape(T))\nfn alternate(v:P)->u64 uses {} {v.n+1u64}\npub fn main()->u64 uses {} {chosen(P(n:3u64))}";
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(store::DirStore::new(directory.path().join("products")));
+        let session = || {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine
+                .sources
+                .add("selection-demand.hir", SOURCE.into())
+                .unwrap();
+            engine.parse_file(file, &default_context()).unwrap();
+            engine
+        };
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let options = native::Options::new(target.clone());
+        let policy = ContentHash::of_bytes(b"CT5 current selected native body");
+        let main = entry_path(&default_context());
+        let mut alternate = main.clone();
+        alternate.0.name = "alternate".into();
+        let mut chosen = main.clone();
+        chosen.0.name = "chosen".into();
+        let mut first = session();
+        let mut discovery = NativeDiscoveryCache::new(first.types().clone(), store.clone());
+        let mut declarations =
+            NativeDeclarations::collect(&mut first, &mut discovery, &[]).unwrap();
+        let mut graph = DemandInstances::new(&first, store.clone(), target.clone(), policy);
+        let root = graph
+            .roots(&first, &declarations)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.instance.definition() == &main)
+            .unwrap();
+        let original = graph
+            .instance(&mut first, &mut declarations, &root, &options)
+            .unwrap();
+        assert!(
+            original
+                .selection_reads
+                .iter()
+                .any(|read| read.declaration == chosen
+                    && read.generated
+                    && read.selected.is_some())
+        );
+        let original_product = original.product.product;
+        drop(graph);
+        drop(declarations);
+        drop(first);
+
+        let mut fresh = session();
+        let mut discovery = NativeDiscoveryCache::new(fresh.types().clone(), store.clone());
+        let mut declarations =
+            NativeDeclarations::collect(&mut fresh, &mut discovery, &[]).unwrap();
+        assert_eq!(discovery.counts.body_demands, 0);
+        // Source CT-5 generation performs its actual source-query work first.
+        // Native admission below has no lowering adapter to reconstruct a body.
+        fresh.adapters.lowering = None;
+        let trace = hirsel_lir::construction::ValueTrace::default();
+        let _observe = trace.enter();
+        let mut graph = DemandInstances::new(&fresh, store.clone(), target.clone(), policy);
+        graph.roots(&fresh, &declarations).unwrap();
+        let hit = graph
+            .instance(&mut fresh, &mut declarations, &root, &options)
+            .unwrap();
+        assert_eq!(hit.product.product, original_product);
+        assert_eq!((graph.imports, graph.recipe_decodes), (0, 0));
+        assert_eq!(
+            trace.totals(),
+            hirsel_lir::construction::ValueCounts::default()
+        );
+        drop(graph);
+        let declaration = hirsel_syntax::DefId::intern(&chosen);
+        for row in declarations
+            .program
+            .instance_bodies
+            .instances
+            .get_mut(&declaration)
+            .unwrap()
+            .values_mut()
+        {
+            row.definition = hirsel_syntax::DefId::intern(&alternate);
+        }
+        // The replacement is independently well typed at the original generic
+        // declaration. Only native selection changed, not source V or headers.
+        assert!(
+            hirsel_validate::validate_instance_catalog(
+                &declarations.program.types,
+                &declarations.program.instance_bodies,
+                &declarations.program.signatures,
+                &declarations.context.sources.keys().cloned().collect()
+            )
+            .is_empty()
+        );
+        let mut graph = DemandInstances::new(&fresh, store.clone(), target.clone(), policy);
+        graph.roots(&fresh, &declarations).unwrap();
+        let changed = graph
+            .instance(&mut fresh, &mut declarations, &root, &options)
+            .unwrap();
+        assert_eq!((graph.imports, graph.recipe_decodes), (1, 1));
+        assert_ne!(changed.product.product.action, original_product.action);
+        assert_ne!(changed.product.product.record, original_product.record);
+        assert!(
+            changed.selection_reads.iter().any(
+                |read| read.declaration == chosen && read.selected.as_ref() == Some(&alternate)
+            )
+        );
+        assert!(
+            changed
+                .dependencies
+                .iter()
+                .any(|dependency| dependency.instance.definition() == &alternate)
+        );
+        assert!(trace.snapshot().keys().all(|(path, _)| path == &main));
+        drop(graph);
+        declarations
+            .program
+            .instance_bodies
+            .instances
+            .remove(&declaration);
+        let mut graph = DemandInstances::new(&fresh, store, target, policy);
+        graph.roots(&fresh, &declarations).unwrap();
+        let error = graph
+            .instance(&mut fresh, &mut declarations, &root, &options)
+            .err()
+            .expect("a missing current selection cannot reuse old native C");
+        assert!(error.contains("Unselected"), "{error}");
+        assert_eq!(graph.imports, 0);
+    });
+}
