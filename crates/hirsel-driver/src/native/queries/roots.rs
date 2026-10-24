@@ -45,6 +45,17 @@ pub struct RootExecutableInputs<'a> {
     pub platform: crate::native::ExecutableLinkInputs<'a>,
 }
 
+/// Executable planning from a kit snapshot selected before codegen.
+pub struct RootFrozenExecutableInputs<'a> {
+    pub entry: &'a hirsel_syntax::DefPath,
+    pub backend: crate::native::Backend,
+    pub objects: &'a [hirsel_lir::stage::ObjectArtifact],
+    pub directory: &'a std::path::Path,
+    pub requested: Option<&'a hirsel_run_config::ValidatedRun>,
+    pub standalone: bool,
+    pub platform: crate::native::FrozenExecutableLinkInputs<'a>,
+}
+
 /// Task-local root view. Source metadata and completed native inputs are owned
 /// immutable snapshots; construction runs no instance/Ready/dependency query.
 pub struct RootProducts {
@@ -167,6 +178,34 @@ impl RootProducts {
             inputs.objects,
             |program, objects| {
                 crate::native::plan_executable_link(
+                    program,
+                    inputs.entry,
+                    objects,
+                    inputs.directory,
+                    inputs.requested,
+                    inputs.standalone,
+                    inputs.platform,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    /// Use the exact admitted root/Ready metadata with a previously snapshotted
+    /// kit. No live kit manifest or leaf is read during planning or capture.
+    pub fn plan_frozen_executable(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        inputs: RootFrozenExecutableInputs<'_>,
+    ) -> Result<crate::native::ExecutableLinkPlan, String> {
+        self.with_link_objects(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::plan_frozen_executable_link(
                     program,
                     inputs.entry,
                     objects,
