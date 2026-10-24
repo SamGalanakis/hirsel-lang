@@ -145,6 +145,49 @@ impl Proofs {
         validated: &ValidatedNativeInput,
         evidence: &Evidence,
     ) -> Result<Self, super::NativeError> {
+        let definitions = &validated.snapshot().definitions;
+        Self::assess_with(engine, entry, evidence, |path, exported| {
+            if definitions
+                .get(path)
+                .is_some_and(|definition| definition.as_ref() != exported)
+            {
+                return Err(format!(
+                    "proofs: the native snapshot's TIR of {path} is not the exported TIR"
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    /// Assess against selected original source products before native recipe
+    /// restoration. Only accepted obligations demand their original body; no
+    /// whole-program native-input export or Definition collection is required.
+    pub fn assess_source(
+        engine: &mut QueryEngine,
+        entry: &DefPath,
+        source: &std::sync::Arc<super::queries::source_inputs::NativeInstanceInputs>,
+        evidence: &Evidence,
+    ) -> Result<Self, super::NativeError> {
+        use super::queries::source_inputs::NativeSourceProvider;
+        let mut original = source.provider();
+        Self::assess_with(engine, entry, evidence, |path, exported| {
+            if source.declarations.sources.contains_key(path) {
+                let (definition, _) = original.original_source(path)?;
+                if definition.as_ref() != exported {
+                    return Err(format!(
+                        "proofs: the selected original TIR of {path} is not the exported TIR"
+                    ));
+                }
+            }
+            Ok(())
+        })
+    }
+    fn assess_with(
+        engine: &mut QueryEngine,
+        entry: &DefPath,
+        evidence: &Evidence,
+        mut original: impl FnMut(&DefPath, &hirsel_tir::Definition) -> Result<(), String>,
+    ) -> Result<Self, super::NativeError> {
         let error = |message: String| super::NativeError::new(StageName::Import, message);
         let input = engine
             .proof_export_input(entry)
@@ -152,7 +195,6 @@ impl Proofs {
         let export = hirsel_proof_export::build(&input);
         let assessment = sidecar::assess(&export, &evidence.records, &evidence.trusted)
             .map_err(|d| error(format!("proofs: two records share the key of {}", d.0)))?;
-        let definitions = &validated.snapshot().definitions;
         let mut discharge = Discharge::default();
         let mut lines = vec![];
         let mut missing = 0;
@@ -179,14 +221,7 @@ impl Proofs {
                 }
             };
             if let Ok(sites) = &licensed {
-                if definitions
-                    .get(path)
-                    .is_some_and(|d| **d != assessed.section.tir)
-                {
-                    return Err(error(format!(
-                        "proofs: the native snapshot's TIR of {path} is not the exported TIR"
-                    )));
-                }
+                original(path, &assessed.section.tir).map_err(error)?;
                 discharge
                     .0
                     .entry(path.clone())
@@ -213,11 +248,16 @@ impl Proofs {
 
     /// One line per record and per accepted obligation, then the counts.
     pub fn report(&self, ready: &ReadyProgram) -> Vec<String> {
+        self.report_discharge(&ready.discharged)
+    }
+    /// Report from the same independently checked discharge product used by a
+    /// demand build; no Ready body collection is needed for these diagnostics.
+    pub fn report_discharge(&self, discharge: &Discharge) -> Vec<String> {
         let mut out = vec![];
         let (mut removed, mut kept) = (0, 0);
         for line in &self.lines {
             let outcome = match &line.licensed {
-                Ok(()) if !ready.discharged.0.contains_key(&line.definition) => {
+                Ok(()) if !discharge.0.contains_key(&line.definition) => {
                     Ok("removed (the definition has no native code)")
                 }
                 Ok(()) => Ok("removed"),

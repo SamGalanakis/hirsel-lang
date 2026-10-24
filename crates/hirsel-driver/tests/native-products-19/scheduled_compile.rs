@@ -193,7 +193,16 @@ fn run(jobs: usize, freeze_platform: bool) {
     {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
-        let file = engine.sources.add("cold-scheduled-link.hir", format!("const SECOND:u64=comptime {literal}u64\npub fn main()->Result[(),u64] {{ Error(SECOND) }}\n")).unwrap();
+        let text = if freeze_platform {
+            format!(
+                "const SECOND:u64=comptime {literal}u64\nfn worker(n:u64)->Result[(),u64] uses {{}} {{let _=n;Error(SECOND)}}\nfn dispatch(f:fn(u64)->Result[(),u64] uses {{}})->Result[(),u64] uses {{f}} {{f(0u64)}}\npub fn main()->Result[(),u64] {{dispatch(worker)}}\n"
+            )
+        } else {
+            format!(
+                "const SECOND:u64=comptime {literal}u64\npub fn main()->Result[(),u64] {{ Error(SECOND) }}\n"
+            )
+        };
+        let file = engine.sources.add("cold-scheduled-link.hir", text).unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let main = entry_path(&default_context());
         if !fresh {
@@ -219,7 +228,9 @@ fn run(jobs: usize, freeze_platform: bool) {
         if fresh {
             assert_eq!(source_queries.counts.body_demands, 0);
         }
-        let source = Arc::new(NativeLinkSource::capture(&mut engine, &declarations).unwrap());
+        let source = Arc::new(
+            NativeLinkSource::capture_for_entry(&mut engine, &declarations, &main).unwrap(),
+        );
         let mut originals = Vec::new();
         if !fresh {
             let body = engine.lower_to_tir(&main).unwrap().value;
@@ -497,6 +508,16 @@ fn run(jobs: usize, freeze_platform: bool) {
             let run = native::launch(&executable, &target, &tools, &directory, true).unwrap();
             view.with_link_context(&root, &ready, |program| {
                 assert!(program.units.is_empty());
+                let callees = program
+                    .callee_metadata()
+                    .expect("actual checked runner metadata");
+                assert!(callees.request_schemas.is_some());
+                if freeze_platform {
+                    assert!(
+                        callees.facts.keys().any(|path| path.ends_with("/worker")),
+                        "referenced entry facts survive body-free link assembly"
+                    );
+                }
                 let actual =
                     native::observe(&run, program, &source.sites()).map_err(|e| e.to_string())?;
                 assert_eq!(Some(&actual), reference.as_ref());

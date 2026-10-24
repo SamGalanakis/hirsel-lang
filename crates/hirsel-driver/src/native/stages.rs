@@ -361,6 +361,12 @@ impl ReadyProgram {
         });
         Ok(())
     }
+    /// The source-selected callee facts and canonical runner request schemas
+    /// bound into this program's launch descriptor. Contains no native bodies.
+    pub fn callee_metadata(&self) -> Option<&hirsel_rt::program::CalleeMetadata> {
+        self.callee_facts.as_ref()
+    }
+
     /// Bind source-checked runner facts to the same native Entry table.
     pub(crate) fn bind_callees(
         &mut self,

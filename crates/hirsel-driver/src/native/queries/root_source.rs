@@ -26,6 +26,7 @@ pub struct NativeLinkSource {
     foreign_links: Vec<LinkInput>,
     foreign_unreplayable: bool,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, ForeignThreads>,
+    callees: Option<hirsel_rt::program::CalleeMetadata>,
 }
 impl NativeLinkSource {
     pub fn capture(
@@ -59,13 +60,36 @@ impl NativeLinkSource {
             foreign_links: declarations.roots.foreign_links.clone(),
             foreign_unreplayable: declarations.roots.foreign_unreplayable,
             foreign_threads: declarations.roots.foreign_threads.clone(),
+            callees: None,
         })
+    }
+
+    /// Capture the existing checked callee/runner request schemas for a selected
+    /// launch. This uses the sole production source algorithm, before native
+    /// dispatch; no runtime authority is inferred from source descriptions.
+    pub fn capture_for_entry(
+        engine: &mut QueryEngine,
+        declarations: &NativeDeclarations,
+        entry: &DefPath,
+    ) -> Result<Self, NativeError> {
+        let mut source = Self::capture(engine, declarations).map_err(|error| {
+            NativeError::new(
+                crate::native::StageName::Manifest,
+                format!("native source launch inputs: {error:?}"),
+            )
+        })?;
+        source.callees = Some(crate::native::callee_metadata(engine, entry)?);
+        Ok(source)
     }
 
     /// Bind the independently checked source closure to selected native unit
     /// summaries. This computes no Value/Ready body and performs no native query.
     pub fn bind(&self, program: &mut ReadyProgram) -> Result<(), NativeError> {
-        program.bind_source(&self.view())
+        program.bind_source(&self.view())?;
+        if let Some(callees) = &self.callees {
+            program.bind_callees(callees.clone())?;
+        }
+        Ok(())
     }
 
     pub fn sites(&self) -> crate::native::Sites<'_> {
@@ -144,7 +168,7 @@ impl NativeLinkSource {
             .collect::<Vec<_>>();
         let dispatch = crate::native::foreign::dispatch(&self.view());
         serde_json::to_vec(&(
-            1u32,
+            2u32,
             self.input.digest,
             revisions,
             positions,
@@ -152,6 +176,9 @@ impl NativeLinkSource {
             self.foreign_unreplayable,
             dispatch.iter().collect::<Vec<_>>(),
             self.functions.iter().collect::<Vec<_>>(),
+            self.callees
+                .as_ref()
+                .map(hirsel_rt::program::CalleeMetadata::json),
         ))
         .map_err(|e| e.to_string())
     }
