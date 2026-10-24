@@ -307,7 +307,7 @@ Incremental std `new/update/finish` retains its source-level checks and costs;
 one-shot hashing does not execute or double-charge those wrappers.
 
 The SHA primitive cutover resets ordinary tapes from v9 to binary v10 and adds
-the six exports at runtime ABI57. Semantic revisions
+the six exports at runtime ABI58. Semantic revisions
 bind the primitive source and resolved RustCrypto dependency versions/checksums;
 old-generation tapes are refused before entry, never upgraded into new passes.
 
