@@ -801,3 +801,7 @@ mod tests {
 
 #[cfg(test)]
 mod dispatch_tests;
+
+#[cfg(test)]
+#[path = "free/modules.rs"]
+mod audit_modules;
