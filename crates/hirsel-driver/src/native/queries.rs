@@ -401,3 +401,5 @@ type ReadyRecord = (
     Reference,
     Vec<(ContentHash, Reference)>,
 );
+
+pub mod source_inputs;
