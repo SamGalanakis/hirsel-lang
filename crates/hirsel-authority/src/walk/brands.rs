@@ -1997,7 +1997,7 @@ impl Checker<'_> {
         self.intern(row)
     }
     /// The binding the `index`th path written at `site` names, as a place.
-    fn relation_binding(&self, site: &NameSite, index: usize) -> Option<Origin> {
+    pub(super) fn relation_binding(&self, site: &NameSite, index: usize) -> Option<Origin> {
         let resolution = &self.out.body.resolution;
         let name = resolution
             .paths

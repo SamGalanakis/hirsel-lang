@@ -1,0 +1,72 @@
+// rule: MEM-6
+// expect: run
+fn local_annotation(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let callback = fn() -> u64 {
+        let xs: List[u64] in a = [9u64]
+        xs[0]
+      }
+      callback()
+    }
+  )
+  match outcome {
+    Ok(n) => cap >= 8u64 && n == 9u64,
+    Error(_) => cap < 8u64,
+  }
+}
+
+fn result_annotation(cap: u64) -> bool {
+  let outcome = arena.bounded(
+    cap,
+    fn(a: Arena) -> u64 {
+      let callback = fn() -> List[u64] in a {
+        [9u64]
+      }
+      let xs = callback()
+      xs[0]
+    }
+  )
+  match outcome {
+    Ok(n) => cap >= 8u64 && n == 9u64,
+    Error(_) => cap < 8u64,
+  }
+}
+
+fn nested_owner() -> bool {
+  let outcome = arena.bounded(
+    0u64,
+    fn(outer: Arena) -> u64 {
+      let inner_outcome = arena.bounded(
+        8u64,
+        fn(inner: Arena) -> u64 {
+          let callback = fn() -> u64 {
+            let xs: List[u64] in outer = [9u64]
+            xs[0]
+          }
+          callback()
+        }
+      )
+      match inner_outcome {
+        Ok(n) => n,
+        Error(_) => 0u64,
+      }
+    }
+  )
+  match outcome {
+    Ok(_) => false,
+    Error(_) => true,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  failure.check(local_annotation(0u64), Bounds())
+  failure.check(local_annotation(7u64), Bounds())
+  failure.check(local_annotation(8u64), Bounds())
+  failure.check(result_annotation(0u64), Bounds())
+  failure.check(result_annotation(7u64), Bounds())
+  failure.check(result_annotation(8u64), Bounds())
+  failure.check(nested_owner(), Bounds())
+  Ok(())
+}

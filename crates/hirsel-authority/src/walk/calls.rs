@@ -3047,6 +3047,29 @@ impl Checker<'_> {
         let mut owners = BTreeSet::from([owner.clone()]);
         let mut stack = vec![body];
         let mut all = Vec::new();
+        let mut annotations = Vec::new();
+        let signature_types =
+            |signature: &hirsel_syntax::FunctionSyntax, first, types: &mut Vec<_>| {
+                types.extend(signature.parameters.iter().map(|p| (p.ty, first)));
+                types.extend(signature.result.map(|ty| (ty, first)));
+            };
+        match owner {
+            NameSite::Expression(e) => {
+                if let ExprKind::Closure { signature, .. } =
+                    &self.tree.expressions[e.0 as usize].kind
+                {
+                    signature_types(signature, e, &mut annotations);
+                }
+            }
+            NameSite::Statement(s) => {
+                if let StmtKind::Function { signature, .. } =
+                    &self.tree.statements[s.0 as usize].kind
+                {
+                    signature_types(signature, body, &mut annotations);
+                }
+            }
+            _ => {}
+        }
         while let Some(e) = stack.pop() {
             if matches!(
                 self.tree.expressions[e.0 as usize].kind,
@@ -3054,8 +3077,22 @@ impl Checker<'_> {
             ) {
                 owners.insert(NameSite::Expression(e));
             }
+            if let ExprKind::Closure { signature, .. } = &self.tree.expressions[e.0 as usize].kind {
+                signature_types(signature, e, &mut annotations);
+            }
             if let ExprKind::Block { statements, .. } = &self.tree.expressions[e.0 as usize].kind {
                 for s in statements {
+                    match &self.tree.statements[s.0 as usize].kind {
+                        StmtKind::Let {
+                            ty: Some(ty),
+                            value,
+                            ..
+                        } => annotations.push((*ty, *value)),
+                        StmtKind::Function {
+                            signature, body, ..
+                        } => signature_types(signature, *body, &mut annotations),
+                        _ => {}
+                    }
                     if matches!(
                         self.tree.statements[s.0 as usize].kind,
                         StmtKind::Function { .. }
@@ -3110,6 +3147,75 @@ impl Checker<'_> {
                     first: reference,
                     take: explicit_take,
                 });
+            }
+        }
+        // An arena named only by `in a` still supplies a runtime allocation
+        // token. Carry it through the ordinary capture table so ownership,
+        // lowering and every engine see the same borrowed environment input.
+        let mut seen = BTreeSet::new();
+        while let Some((syntax, first)) = annotations.pop() {
+            if !seen.insert(syntax) {
+                continue;
+            }
+            match &self.tree.types[syntax.0 as usize].kind {
+                hirsel_syntax::TypeExprKind::Named { arguments, .. } => {
+                    annotations.extend(arguments.iter().filter_map(|a| match a {
+                        hirsel_syntax::TypeArgument::Type(ty) => Some((*ty, first)),
+                        _ => None,
+                    }));
+                }
+                hirsel_syntax::TypeExprKind::Tuple(parts) => {
+                    annotations.extend(parts.iter().map(|ty| (*ty, first)))
+                }
+                hirsel_syntax::TypeExprKind::Box(ty) => annotations.push((*ty, first)),
+                hirsel_syntax::TypeExprKind::Function(signature) => {
+                    signature_types(signature, first, &mut annotations)
+                }
+                hirsel_syntax::TypeExprKind::Qualified {
+                    base,
+                    brand,
+                    relation,
+                    ..
+                } => {
+                    annotations.push((*base, first));
+                    let mut index = usize::from(brand.as_ref().is_some_and(|b| !b.sibling));
+                    for place in relation.iter().flat_map(|r| &r.places) {
+                        if !matches!(place, hirsel_syntax::RelationPlace::Path(_)) {
+                            continue;
+                        }
+                        let origin = self.relation_binding(&NameSite::Type(syntax), index);
+                        index += 1;
+                        let Some(mut binding) = origin
+                            .as_ref()
+                            .and_then(|o| self.origin_binding(o))
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        if !self.arena_type(binding.ty)
+                            || owners.contains(&binding.owner)
+                            || (binding.site == owner
+                                && matches!(binding.binding, ResolvedName::Local(_)))
+                            || uses.iter().any(|u| {
+                                u.binding.owner == binding.owner
+                                    && u.binding.binding == binding.binding
+                            })
+                        {
+                            continue;
+                        }
+                        binding.ty = self
+                            .binding_types
+                            .get(&binding_key(&binding))
+                            .copied()
+                            .unwrap_or(binding.ty);
+                        uses.push(FreeUse {
+                            binding,
+                            first,
+                            take: false,
+                        });
+                    }
+                }
+                hirsel_syntax::TypeExprKind::Error => {}
             }
         }
         uses

@@ -2911,6 +2911,58 @@ impl Checker<'_> {
             model.refresh_cleanup(state, model.places[index].root.0 as usize);
         }
     }
+    /// An allocation destination is an implicit read of its exact Arena
+    /// binding. A lexical type origin alone cannot supply a missing capture.
+    fn allocation_destination(
+        &mut self,
+        model: &Model,
+        state: &State,
+        value: &Rvalue,
+        report: bool,
+    ) {
+        let (Rvalue::Construct {
+            destination: Destination::Arena(origin),
+            ..
+        }
+        | Rvalue::Closure {
+            destination: Destination::Arena(origin),
+            ..
+        }) = value
+        else {
+            return;
+        };
+        let parameter = match &origin.root {
+            hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::Body {
+                scope,
+                parameter,
+            }) if *scope == self.body.parameter_scope && origin.fields.is_empty() => {
+                self.body.parameters.get(parameter.0 as usize).copied()
+            }
+            _ => None,
+        };
+        let place = self
+            .body
+            .places
+            .iter()
+            .enumerate()
+            .find(|(_, place)| {
+                place.projection.is_empty()
+                    && (parameter == Some(place.root) || place.binding.as_ref() == Some(origin))
+                    && self.arena_type(place.ty)
+            })
+            .map(|(index, _)| PlaceId(index as u32));
+        if let Some(place) = place {
+            self.available(model, state, place, false, report);
+        } else {
+            self.flow_error(
+                report,
+                ViolationKind::TypeMismatch {
+                    entity: "allocation arena token",
+                },
+            );
+        }
+    }
+
     fn read(&mut self, model: &Model, state: &mut State, operand: &Operand, report: bool) {
         if self.site.instruction.is_none() && self.site.block.is_some_and(|b| matches!(&self.body.blocks[b.0 as usize].terminator, Terminator::Return { value, .. } if value == operand)) {
             self.mode_transfer(state, self.body.result, operand, report);
@@ -5090,6 +5142,7 @@ impl Checker<'_> {
                 }
                 InstructionKind::Assign { destination, value } => {
                     let rvalue = &self.body.rvalues[value.0 as usize];
+                    self.allocation_destination(model, state, rvalue, report);
                     let cursor_view =
                         self.cursor_assignment(model, state, *destination, *value, report);
                     self.assign_creation(model, state, *destination, rvalue);

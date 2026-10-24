@@ -143,3 +143,4 @@ mod replace_local_content_33;
 mod sealed_regions_33;
 mod ahead_scalar;
 mod ahead_native;
+mod arena_placement_capture_33;
