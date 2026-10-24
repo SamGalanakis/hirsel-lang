@@ -209,7 +209,8 @@ fn native_arena_recursive_source_edit_propagates_through_both_strata_without_rei
         let mut width_one = None;
         for jobs in [1, 2] {
             let directory = tempfile::tempdir().unwrap();
-            let store: Arc<dyn ResultStore> = Arc::new(store::DirStore::new(directory.path()));
+            let store: Arc<dyn ResultStore> =
+                Arc::new(store::DirStore::new(directory.path().to_path_buf()));
             let initial = observe(store.clone(), before, false, jobs);
             assert_eq!(initial, observe(store.clone(), before, true, jobs));
             for name in ["first", "second", "wrapper"] {
