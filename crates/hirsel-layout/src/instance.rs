@@ -26,6 +26,8 @@ pub enum InstanceKeyError {
     MissingType,
     StructuralCycle,
     RecoveryType,
+    /// Malformed framing or an encoding for another definition/body.
+    Encoding,
 }
 
 /// Complete identity of one native instance.
@@ -44,6 +46,30 @@ pub struct InstanceKey {
     body: u32,
     encoding: Vec<u8>,
     digest: ContentHash,
+}
+
+struct InstanceAtoms<'a>(&'a [u8]);
+impl<'a> InstanceAtoms<'a> {
+    fn next(&mut self) -> Result<&'a [u8], InstanceKeyError> {
+        let (prefix, rest) = self
+            .0
+            .split_at_checked(8)
+            .ok_or(InstanceKeyError::Encoding)?;
+        let len = usize::try_from(u64::from_le_bytes(prefix.try_into().unwrap()))
+            .map_err(|_| InstanceKeyError::Encoding)?;
+        let (atom, rest) = rest
+            .split_at_checked(len)
+            .ok_or(InstanceKeyError::Encoding)?;
+        self.0 = rest;
+        Ok(atom)
+    }
+    fn number(&mut self) -> Result<u64, InstanceKeyError> {
+        Ok(u64::from_le_bytes(
+            self.next()?
+                .try_into()
+                .map_err(|_| InstanceKeyError::Encoding)?,
+        ))
+    }
 }
 
 impl PartialEq for InstanceKey {
@@ -139,6 +165,91 @@ impl InstanceKey {
     }
     pub fn digest(&self) -> ContentHash {
         self.digest
+    }
+    /// Whether this selected implementation retains the exact complete origin
+    /// instance, including its type/size actuals and lexical body. This checks
+    /// ordinary identity framing and grants no validation authority.
+    pub fn is_same_or_derived_from(&self, origin: &Self) -> bool {
+        let mut encoding = self.encoding();
+        loop {
+            if encoding == origin.encoding() {
+                return true;
+            }
+            let mut atoms = InstanceAtoms(encoding);
+            if atoms.next().ok() != Some(b"hirsel.derived-instance.v1".as_slice()) {
+                return false;
+            }
+            let Ok(parent) = atoms.next() else {
+                return false;
+            };
+            encoding = parent;
+        }
+    }
+
+    /// Restore ordinary address metadata using the existing length-framed
+    /// encoding. Recompute symbol identity rather than accepting a saved digest.
+    /// This checks framing and the lexical owner, not source/native authority.
+    pub fn from_encoding(
+        definition: &DefPath,
+        body: u32,
+        encoding: Vec<u8>,
+    ) -> Result<Self, InstanceKeyError> {
+        let mut current = encoding.as_slice();
+        let mut derived = Vec::new();
+        let mut digest;
+        loop {
+            let mut atoms = InstanceAtoms(current);
+            match atoms.next()? {
+                b"hirsel.derived-instance.v1" => {
+                    let parent = atoms.next()?;
+                    let domain = std::str::from_utf8(atoms.next()?)
+                        .map_err(|_| InstanceKeyError::Encoding)?;
+                    let mut inputs = Vec::new();
+                    while !atoms.0.is_empty() {
+                        inputs.push(atoms.next()?);
+                    }
+                    derived.push((domain, inputs));
+                    current = parent;
+                }
+                b"hirsel.instance-key.v3" => {
+                    if atoms.next()? != definition.0.package.name.as_bytes()
+                        || atoms.next()? != definition.0.package.version.as_bytes()
+                        || atoms.number()? != definition.0.modules.len() as u64
+                    {
+                        return Err(InstanceKeyError::Encoding);
+                    }
+                    for module in &definition.0.modules {
+                        if atoms.next()? != module.as_bytes() {
+                            return Err(InstanceKeyError::Encoding);
+                        }
+                    }
+                    if atoms.next()? != definition.0.name.as_bytes()
+                        || atoms.number()? != u64::from(body)
+                    {
+                        return Err(InstanceKeyError::Encoding);
+                    }
+                    // Remaining flattened type/size/convention atoms retain their
+                    // exact canonical bytes. Their semantic interpretation stays
+                    // with instantiation, not this ordinary descriptor decoder.
+                    while !atoms.0.is_empty() {
+                        atoms.next()?;
+                    }
+                    digest = ContentHash::of_parts("hirsel.instance-key.sha256.v3", [current]);
+                    break;
+                }
+                _ => return Err(InstanceKeyError::Encoding),
+            }
+        }
+        for (domain, inputs) in derived.into_iter().rev() {
+            digest =
+                ContentHash::of_parts(domain, std::iter::once(digest.0.as_slice()).chain(inputs));
+        }
+        Ok(Self {
+            definition: definition.clone(),
+            body,
+            encoding,
+            digest,
+        })
     }
     /// A selected native implementation retains the complete lexical instance
     /// and transformation inputs. Preserve existing symbol digest domains,
@@ -637,3 +748,6 @@ impl InstanceView {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod encoding_tests;
