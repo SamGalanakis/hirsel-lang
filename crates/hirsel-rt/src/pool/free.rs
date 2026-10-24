@@ -412,19 +412,12 @@ impl ReadyBatch {
         }
         // SAFETY: the batch's creator retains the run's topology.
         let execs = unsafe { &*self.execs };
-        let entries = self.entries[..len]
-            .iter_mut()
-            .map(|entry| entry.take().expect("a batched entry"));
-        if home_computes(execs) {
-            for saved in entries {
-                execs.home.post(Post::Saved(saved), None);
-            }
-            return;
-        }
-        let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
-        dispatch.queued.fetch_add(len, Ordering::SeqCst);
-        dispatch.ready.inject(entries);
-        wake_ready(execs);
+        inject(
+            execs,
+            self.entries[..len]
+                .iter_mut()
+                .map(|entry| entry.take().expect("a batched entry")),
+        );
     }
 }
 
@@ -434,15 +427,24 @@ impl Drop for ReadyBatch {
     }
 }
 
-fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
+/// The one shared transport for Any-owned continuations: a single
+/// injection and a single wake decision for every entry.
+fn inject(execs: &Execs, entries: impl ExactSizeIterator<Item = Saved>) {
+    if home_computes(execs) {
+        for saved in entries {
+            execs.home.post(Post::Saved(saved), None);
+        }
+        return;
+    }
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
+    dispatch.queued.fetch_add(entries.len(), Ordering::SeqCst);
+    dispatch.ready.inject(entries);
+    wake_ready(execs);
+}
+
+fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
     match word_owner(saved.frame.owner.load(Ordering::Acquire)) {
         Owner::Any => {
-            if home_computes(execs) {
-                execs.home.post(Post::Saved(saved), None);
-                return;
-            }
-            dispatch.queued.fetch_add(1, Ordering::SeqCst);
             let me = own_exec();
             // SAFETY: an exec's local state belongs only to its OS thread.
             // Tokio's LIFO slot is private until the current poll returns.
@@ -452,6 +454,7 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
             // wider, it serves host work rather than searching that local.
             let local = if idle
                 && !execs.migrate
+                && !home_computes(execs)
                 && !me.is_null()
                 && matches!(unsafe { (*me).kind }, Kind::Compute(_))
             {
@@ -459,16 +462,16 @@ fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
             } else {
                 None
             };
-            let own_continuation = local.is_some();
-            if let Some(mut local) = local {
-                local.push(&dispatch.ready, saved, yielded);
-                unsafe { (*me).ready.set(Some(local)) };
-            } else {
-                dispatch.ready.inject([saved]);
-            }
+            let Some(mut local) = local else {
+                // A non-idle publisher may enter a pure interval indefinitely.
+                return inject(execs, std::iter::once(saved));
+            };
+            let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
+            dispatch.queued.fetch_add(1, Ordering::SeqCst);
+            local.push(&dispatch.ready, saved, yielded);
+            unsafe { (*me).ready.set(Some(local)) };
             // This idle worker will claim its own sole continuation next.
-            // A non-idle publisher may enter a pure interval indefinitely.
-            if !own_continuation || dispatch.queued.load(Ordering::SeqCst) > 1 {
+            if dispatch.queued.load(Ordering::SeqCst) > 1 {
                 wake_ready(execs);
             }
         }
