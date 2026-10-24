@@ -274,7 +274,7 @@ impl CapturedLink {
 
 const KIT: Domain = Domain {
     kind: 0x4f00000f,
-    schema: 1,
+    schema: 2,
 };
 struct KitRecord {
     root: String,
@@ -386,14 +386,38 @@ impl FrozenLinkKit {
             return Err("frozen kit target or root differs".into());
         }
         let manifest = link_input_bytes(store, record.manifest.into())?;
-        let kit = super::super::kit::Kit::from_manifest(
+        let mut kit = super::super::kit::Kit::from_manifest(
             Path::new(&record.root),
             &manifest,
-            record.digest,
+            record.digest.clone(),
         )
         .map_err(|e| e.to_string())?;
         let captured = CapturedLink::from_reference(store, record.capture.into())?;
-        let files = captured.record(store)?.files;
+        let captured = captured.record(store)?;
+        let files = captured.files;
+        let relative = files
+            .iter()
+            .map(|file| {
+                let name = Path::new(&file.name)
+                    .strip_prefix(&record.root)
+                    .unwrap_or_else(|_| Path::new(&file.name));
+                (
+                    name.to_string_lossy().into_owned(),
+                    Reference::from(file.bytes.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let encoding = serde_json::to_vec(&(
+            record.triple,
+            record.digest,
+            Reference::from(captured.tool),
+            relative,
+        ))
+        .map_err(|error| error.to_string())?;
+        kit.bind_input_identity(ContentHash::of_parts(
+            "hirsel.frozen-kit-build-id.v1",
+            [encoding.as_slice()],
+        ));
         // Every manifest leaf must be supplied by the closed captured file set.
         for path in kit.link_files(&target.triple).map_err(|e| e.to_string())? {
             if path == Path::new(&record.root).join("manifest.json")
