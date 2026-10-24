@@ -37,7 +37,7 @@ use hirsel_syntax::DefPath;
 use hirsel_tir::{BlockId, CleanupAction, RunConfiguration};
 use hirsel_types::{GenericArgument, QueryError, TypeId, TypeInterner};
 pub use profile::with_step_profile;
-pub use provider::AsyncTirProvider;
+pub use provider::{AsyncTirProvider, ImmediateTirProvider};
 pub use value::{Integer, Value};
 
 /// Default tooling step bound for the reference evaluator and corpus fixtures.
