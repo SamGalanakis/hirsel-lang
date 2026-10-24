@@ -4,7 +4,7 @@
 use super::{
     demand::{DemandInstances, DiscoveredInstance, Request},
     instance::InstanceQueries,
-    source_inputs::{NativeFrontLower, NativeInstanceInputs},
+    source_inputs::{NativeFrontLower, NativeInstanceInputs, NativeSourceProvider},
     *,
 };
 use hirsel_artifact_store::{Action, Address, Domain};
@@ -301,6 +301,76 @@ impl InstanceTasks {
     }
     pub(super) fn selected_store(&self) -> &Arc<dyn ResultStore> {
         &self.store
+    }
+    /// Current independent source V rows for all actual completed source
+    /// selections, assembled without source or candidate native body reads.
+    pub fn source_operations(
+        &self,
+        settled: ProductRef,
+    ) -> Result<hirsel_layout::operation::OperationRegistry, String> {
+        if self.completed.get() != Some(&settled) {
+            return Err("source operation inputs require settled native discovery".into());
+        }
+        let entries = self.entries();
+        let source = if let Some(front) = &self.front {
+            let mut selected = BTreeMap::new();
+            for entry in &entries {
+                if let Some(path) = entry.request.source_definition() {
+                    let (product, original) = entry
+                        .source
+                        .get()
+                        .ok_or("completed source instance has no settled Lower selection")?;
+                    if let Some((previous, _)) = selected.get(path) {
+                        if previous != product {
+                            return Err("source instances selected different Lower outputs".into());
+                        }
+                    } else {
+                        selected.insert(path.clone(), (*product, original.clone()));
+                    }
+                }
+            }
+            self.source.provider_from_products(
+                &front.context,
+                selected.into_values().map(|(_, original)| original),
+                self.store.clone(),
+            )?
+        } else {
+            self.source.provider()
+        };
+        let mut registry = self.source.declarations.program.operation_registry();
+        for entry in entries {
+            let Some(path) = entry.request.source_definition() else {
+                continue;
+            };
+            let output = source
+                .source_output(path)?
+                .ok_or("completed source instance has no independent V invocation output")?;
+            let selected = hirsel_lir::ir::Symbol {
+                kind: hirsel_lir::ir::SymbolKind::Function,
+                definition: entry.key.instance.definition().clone(),
+                instance: Some(entry.key.instance.digest()),
+            };
+            let evidence = hirsel_rc::invocations::source_instance_from_output(
+                &output.invocations(),
+                path,
+                &self.source.declarations.program.operations,
+                &selected,
+                hirsel_tir::BodyId(entry.key.instance.body()),
+            )
+            .map_err(str::to_owned)?;
+            if let Some(previous) = registry.invocations.insert(
+                evidence.body.definition.clone(),
+                evidence.invocations.clone(),
+            ) && previous != evidence.invocations
+            {
+                return Err("source invocation inventories differ within the request".into());
+            }
+            registry.invocation_bodies.push(evidence.body);
+        }
+        registry
+            .invocation_bodies
+            .sort_by(|a, b| (&a.definition, a.instance).cmp(&(&b.definition, b.instance)));
+        Ok(registry)
     }
     pub fn discovery_id(&self) -> QueryId {
         self.discovery

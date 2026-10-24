@@ -520,6 +520,65 @@ pub(crate) fn lower_unit(
     inputs: &Inputs<'_>,
     validation: &hirsel_lir::validate::ValidationContext<'_>,
 ) -> Result<ValidatedUnit<Ready>, NativeError> {
+    let facts = LocalRcFacts {
+        placement: hirsel_rc::placement::Options::for_instance(options.regions, instances, id),
+        proofs: Proofs::for_instance(instances, id),
+    };
+    lower_local_unit(unit, options, &facts, finalizers, inputs, validation)
+}
+
+/// The complete local source facts the existing RC passes consume. A native
+/// query records the independently accepted callable/placement inputs that
+/// established them, instead of retaining every instance's source body.
+#[derive(Clone, Debug)]
+pub(crate) struct LocalRcFacts {
+    pub placement: hirsel_rc::placement::Options,
+    pub proofs: Proofs,
+}
+
+impl LocalRcFacts {
+    pub fn canonical(&self) -> Vec<u8> {
+        let mut bytes = vec![
+            u8::from(self.placement.regions),
+            u8::from(self.placement.noalloc),
+            u8::from(self.proofs.noalloc),
+        ];
+        bytes.extend_from_slice(&(self.proofs.unique.len() as u64).to_le_bytes());
+        for parameter in &self.proofs.unique {
+            bytes.extend_from_slice(&parameter.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// One local miss transformation, with a reached input table and finalizers.
+/// No other unit's Value or RC result is an implicit input. Ready validation
+/// remains independent of every placement/RC/Reuse producer fact.
+pub(crate) fn lower_local_unit(
+    unit: LirUnit<hirsel_lir::stage::Value>,
+    options: &Options,
+    facts: &LocalRcFacts,
+    finalizers: &Finalizers,
+    inputs: &Inputs<'_>,
+    validation: &hirsel_lir::validate::ValidationContext<'_>,
+) -> Result<ValidatedUnit<Ready>, NativeError> {
+    let raw = lower_local_raw(unit, options, facts, finalizers, inputs, validation)?;
+    let ready = seal(StageName::Ready, || validation.validate(raw, inputs))?;
+    super::emit::check_unit_runtime_calls(ready.unit(), inputs.layouts, inputs.manifest)?;
+    Ok(ready)
+}
+
+/// The sole local placement/RC/Reuse/Ready transformation. The enclosing query
+/// performs independent final C and publication at its own completion boundary.
+/// Harnesses retain the same intermediate stage checkpoints.
+pub(crate) fn lower_local_raw(
+    unit: LirUnit<hirsel_lir::stage::Value>,
+    options: &Options,
+    facts: &LocalRcFacts,
+    finalizers: &Finalizers,
+    inputs: &Inputs<'_>,
+    validation: &hirsel_lir::validate::ValidationContext<'_>,
+) -> Result<LirUnit<Ready>, NativeError> {
     let table = inputs.layouts;
     let definition = unit.header.definition.clone();
     let fail = |stage, message: String| NativeError::of(stage, &definition, message);
@@ -531,9 +590,8 @@ pub(crate) fn lower_unit(
         validation,
         options.validation,
     )?;
-    let placement = hirsel_rc::placement::Options::for_instance(options.regions, instances, id);
     let placed = timed(Phase::Place, || {
-        hirsel_rc::placement::place(value, table, &placement)
+        hirsel_rc::placement::place(value, table, &facts.placement)
     })
     .map_err(|e| fail(StageName::Placement, e.to_string()))?;
     let placed = checkpoint(
@@ -543,9 +601,8 @@ pub(crate) fn lower_unit(
         validation,
         options.validation,
     )?;
-    let proofs = Proofs::for_instance(instances, id);
     let mut unit = timed(Phase::Rc, || {
-        hirsel_rc::insert::insert(placed, table, &proofs)
+        hirsel_rc::insert::insert(placed, table, &facts.proofs)
     })
     .map_err(|e| fail(StageName::Perceus, e.to_string()))?;
     if options.elide {
@@ -577,8 +634,6 @@ pub(crate) fn lower_unit(
         hirsel_rc::ready::ready_indexed(reused, finalizers, validation.index())
     })
     .map_err(|e| fail(StageName::Ready, e.to_string()))?;
-    let ready = seal(StageName::Ready, || validation.validate(ready, inputs))?;
-    super::emit::check_unit_runtime_calls(ready.unit(), table, inputs.manifest)?;
     Ok(ready)
 }
 

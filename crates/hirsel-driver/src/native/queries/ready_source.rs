@@ -66,4 +66,16 @@ impl ReadySourceFacts {
             unique,
         })
     }
+    pub(super) fn local(&self, regions: bool) -> crate::native::stages::LocalRcFacts {
+        crate::native::stages::LocalRcFacts {
+            placement: hirsel_rc::placement::Options {
+                regions,
+                noalloc: self.noalloc,
+            },
+            proofs: hirsel_rc::insert::Proofs {
+                noalloc: self.noalloc,
+                unique: self.unique.clone(),
+            },
+        }
+    }
 }
