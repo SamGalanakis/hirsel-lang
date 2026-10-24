@@ -29,6 +29,10 @@ impl LinkKey {
 /// does not enumerate bodies or rebuild a whole-program native plan.
 #[derive(Clone, Debug)]
 pub enum ObjectTaskRequest {
+    WholeCodegen {
+        key: super::whole::WholeCodegenKey,
+        weight: MemoryWeight,
+    },
     Codegen {
         key: CodegenKey,
         ready: QueryId,
@@ -43,13 +47,16 @@ pub enum ObjectTaskRequest {
 impl ObjectTaskRequest {
     fn id(&self) -> QueryId {
         match self {
+            Self::WholeCodegen { key, .. } => key.query_id(),
             Self::Codegen { key, .. } => key.query_id(),
             Self::Link { key, .. } => key.query_id(),
         }
     }
     fn weight(&self) -> MemoryWeight {
         match self {
-            Self::Codegen { weight, .. } | Self::Link { weight, .. } => *weight,
+            Self::WholeCodegen { weight, .. }
+            | Self::Codegen { weight, .. }
+            | Self::Link { weight, .. } => *weight,
         }
     }
 }
@@ -154,6 +161,28 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
     fn compute(&self, cx: &mut dyn QueryContext) -> Result<ProductRef, QueryPoll> {
         let failed = QueryPoll::Failed;
         let product = match &self.request {
+            ObjectTaskRequest::WholeCodegen { key, .. } => {
+                let ids = key
+                    .units()
+                    .iter()
+                    .map(|unit| unit.owner.ready_query_id())
+                    .collect::<Vec<_>>();
+                let settled = read(cx, &ids)?;
+                for product in &settled {
+                    let ready = self.snapshot.ready_descriptor(*product).map_err(failed)?;
+                    if ready.product != *product || !ready.optimizer_reads.is_empty() {
+                        return Err(failed(
+                            self.snapshot
+                                .failure("whole-module Ready dependency differs"),
+                        ));
+                    }
+                }
+                let mut products = self.snapshot.products(&settled).map_err(failed)?;
+                products
+                    .codegen_whole(key)
+                    .map_err(|e| failed(self.snapshot.failure(&e)))?
+                    .product
+            }
             ObjectTaskRequest::Codegen { key, ready, .. } => {
                 let own = read(cx, &[*ready])?[0];
                 let descriptor = self.snapshot.ready_descriptor(own).map_err(failed)?;
