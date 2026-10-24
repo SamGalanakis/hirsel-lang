@@ -10,7 +10,7 @@ use hirsel_engine::{
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::{Arc, Mutex, Weak},
+    sync::{Arc, Mutex, OnceLock, Weak},
 };
 
 /// Bounds supplied by the actual source/producer footprint planner. These are
@@ -80,18 +80,100 @@ pub(super) struct InstalledGraph {
 struct OutputOwner {
     _products: Arc<dyn GraphProducts>,
 }
-#[derive(Default)]
+/// One hot-graph retention authority per process budget. Releasing an idle
+/// graph drops its runtime/stacks outside the index lock. Live leases and
+/// externally held source products keep their independent admitted owners.
+pub(super) struct GraphBudget {
+    budget: Arc<ProcessBudget>,
+    hot: Mutex<Vec<Arc<InstalledGraph>>>,
+}
+type BudgetIndex = Vec<(Weak<ProcessBudget>, Weak<GraphBudget>)>;
+static BUDGETS: OnceLock<Mutex<BudgetIndex>> = OnceLock::new();
+impl GraphBudget {
+    fn shared(budget: &Arc<ProcessBudget>) -> Arc<Self> {
+        let mut budgets = BUDGETS
+            .get_or_init(Mutex::default)
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        budgets.retain(|(budget, owner)| budget.strong_count() != 0 && owner.strong_count() != 0);
+        if let Some(owner) = budgets.iter().find_map(|(selected, owner)| {
+            selected
+                .upgrade()
+                .filter(|selected| Arc::ptr_eq(selected, budget))
+                .and_then(|_| owner.upgrade())
+        }) {
+            return owner;
+        }
+        let owner = Arc::new(Self {
+            budget: budget.clone(),
+            hot: Mutex::new(vec![]),
+        });
+        budgets.push((Arc::downgrade(budget), Arc::downgrade(&owner)));
+        owner
+    }
+    pub fn admit(
+        &self,
+        limits: RequestLimits,
+        plan: SnapshotPlan,
+    ) -> Result<GraphAdmission, ToolError> {
+        let snapshot = plan
+            .source
+            .checked_add(plan.front)
+            .and_then(|bytes| bytes.checked_add(plan.lower))
+            .and_then(|bytes| bytes.checked_add(plan.check));
+        if snapshot.is_none_or(|bytes| bytes > limits.snapshot_bytes) {
+            return GraphAdmission::reserve(&self.budget, limits, plan);
+        }
+        match GraphAdmission::reserve(&self.budget, limits, plan) {
+            Ok(admission) => Ok(admission),
+            Err(_) => {
+                self.release_idle();
+                GraphAdmission::reserve(&self.budget, limits, plan)
+            }
+        }
+    }
+    fn keep(&self, graph: Arc<InstalledGraph>) {
+        let mut hot = self.hot.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(previous) = hot
+            .iter()
+            .position(|previous| Arc::ptr_eq(previous, &graph))
+        {
+            hot.remove(previous);
+        }
+        hot.push(graph);
+    }
+    fn release_idle(&self) {
+        let discarded = {
+            let mut hot = self.hot.lock().unwrap_or_else(|error| error.into_inner());
+            let mut discarded = vec![];
+            let mut index = 0;
+            while index < hot.len() {
+                if Arc::strong_count(&hot[index]) == 1 {
+                    discarded.push(hot.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            discarded
+        };
+        drop(discarded);
+    }
+}
 pub(super) struct GraphSelections {
-    // A current immutable graph is hot state in the one selector authority.
-    // Old graphs survive only through actual live requests, not revision history.
-    current: Option<Arc<InstalledGraph>>,
+    retention: Arc<GraphBudget>,
     live: Vec<Weak<InstalledGraph>>,
 }
 impl GraphSelections {
+    pub fn new(budget: &Arc<ProcessBudget>) -> Self {
+        Self {
+            retention: GraphBudget::shared(budget),
+            live: vec![],
+        }
+    }
     pub fn select(
         &mut self,
         request: &CompileRequest,
-        install: impl FnOnce() -> Result<Arc<InstalledGraph>, ToolError>,
+        install: impl FnOnce(&GraphBudget) -> Result<Arc<InstalledGraph>, ToolError>,
     ) -> Result<
         hirsel_engine::requests::SelectedRequest<AdmittedRuntime, CompilerReadiness>,
         ToolError,
@@ -105,10 +187,7 @@ impl GraphSelections {
         let graph = match selected {
             Some(graph) => graph,
             None => {
-                // Release an idle previous view before reserving its replacement.
-                // A queued lease's readiness still retains its exact old graph.
-                self.current = None;
-                let graph = install()?;
+                let graph = install(&self.retention)?;
                 if graph.path != request.path || graph.inputs != request.inputs {
                     return Err(ToolError::Runtime(
                         "installed compiler graph differs from selected inputs".into(),
@@ -118,10 +197,17 @@ impl GraphSelections {
                 graph
             }
         };
-        let (roots, output) = graph.products.select(&request.operation)?;
+        let (roots, output) = graph.products.select(&request.operation).map_err(|error| {
+            retain_error(
+                error,
+                Arc::new(OutputOwner {
+                    _products: graph.products.clone(),
+                }),
+            )
+        })?;
         let ready_graph = graph.clone();
         let failed_graph = graph.clone();
-        self.current = Some(graph.clone());
+        self.retention.keep(graph.clone());
         Ok(hirsel_engine::requests::SelectedRequest {
             runtime: graph.runtime.clone(),
             roots,
@@ -257,6 +343,126 @@ mod tests {
             assert_eq!(budget.reserved(), 0);
         }
     }
+    #[test]
+    fn shared_graph_budget_evicts_idle_views_but_refuses_to_overcommit_live_leases() {
+        struct Empty;
+        impl GraphProducts for Empty {
+            fn select(
+                &self,
+                _: &CompileOperation,
+            ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
+                let (_, inputs) = hirsel_engine::requests::observe_inputs(
+                    hirsel_engine::loader_inputs::InputLimits {
+                        bytes: 0,
+                        operations: 0,
+                    },
+                    1,
+                    |_| Ok::<_, std::io::Error>(()),
+                )
+                .unwrap();
+                Ok((
+                    vec![],
+                    CompilerReadiness {
+                        materialize: Arc::new(move |_| {
+                            Ok(Arc::new(CompileOutput::new(
+                                hirsel_engine::entry_path(&hirsel_engine::default_context()),
+                                inputs.clone(),
+                                Default::default(),
+                                CompileResult::Check(CheckOutput::default()),
+                            )))
+                        }),
+                        failure: Arc::new(|_| ToolError::Runtime("fixture runtime error".into())),
+                    },
+                ))
+            }
+        }
+        let (_, inputs) = hirsel_engine::requests::observe_inputs(
+            hirsel_engine::loader_inputs::InputLimits {
+                bytes: 0,
+                operations: 0,
+            },
+            1,
+            |_| Ok::<_, std::io::Error>(()),
+        )
+        .unwrap();
+        let request = CompileRequest {
+            path: "first.hir".into(),
+            inputs,
+            operation: CompileOperation::Check {
+                lowering: hirsel_engine::LoweringPolicy::Comptime,
+            },
+        };
+        let bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + 4096;
+        let budget = ProcessBudget::new(bytes);
+        let mut first = GraphSelections::new(&budget);
+        let mut second = GraphSelections::new(&budget);
+        assert!(Arc::ptr_eq(&first.retention, &second.retention));
+        let create = |owner: &GraphBudget, request: &CompileRequest| {
+            let admission = owner.admit(
+                RequestLimits {
+                    runtime_bytes: bytes,
+                    snapshot_bytes: 0,
+                    transport_bytes: 0,
+                },
+                SnapshotPlan {
+                    source: 0,
+                    front: 0,
+                    lower: 0,
+                    check: 0,
+                },
+            )?;
+            let error = hirsel_artifact_store::Domain {
+                kind: 0x4600_00fe,
+                schema: 1,
+            }
+            .reference(b"fixture error")
+            .unwrap();
+            let runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::ONE,
+                admission.runtime,
+                RuntimeErrors {
+                    resource: error,
+                    cycle: error,
+                    cancelled: error,
+                    protocol: error,
+                    panicked: error,
+                },
+            )
+            .map_err(ToolError::Io)?;
+            Ok(Arc::new(InstalledGraph {
+                path: request.path.clone(),
+                inputs: request.inputs.clone(),
+                runtime: Arc::new(Mutex::new(runtime)),
+                products: Arc::new(Empty),
+            }))
+        };
+        let active = first
+            .select(&request, |owner| create(owner, &request))
+            .unwrap();
+        let equal = first
+            .select(&request, |_| {
+                panic!("equal immutable inputs must reuse the installed graph")
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(&active.runtime, &equal.runtime));
+        assert!(
+            second
+                .select(&request, |owner| create(owner, &request))
+                .is_err()
+        );
+        assert_eq!(budget.reserved(), bytes);
+        drop(equal);
+        drop(active);
+        let replacement = second
+            .select(&request, |owner| create(owner, &request))
+            .unwrap();
+        assert_eq!(budget.reserved(), bytes);
+        drop(replacement);
+        drop(first);
+        drop(second);
+        assert_eq!(budget.reserved(), 0);
+    }
+
     #[test]
     fn completed_artifact_export_preserves_bytes_and_incomplete_check_boundary() {
         let checked = CheckOutput::default();
