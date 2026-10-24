@@ -56,6 +56,12 @@ pub trait QueryContext {
 pub trait QueryTask: Send {
     fn id(&self) -> QueryId;
     fn weight(&self) -> MemoryWeight;
+    /// Part of `weight().retained` owned solely by this continuation. Retire
+    /// only after its destructor runs. Shared products/mappings must retain
+    /// their independent reservation or remain in the non-continuation charge.
+    fn continuation_bytes(&self) -> u64 {
+        0
+    }
     /// Retain continuation state on Pending; no provisional publication.
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll;
 }
@@ -73,6 +79,12 @@ pub trait QueryFactory: Send + Sync {
 pub trait LocalQueryTask {
     fn id(&self) -> QueryId;
     fn weight(&self) -> MemoryWeight;
+    /// Part of `weight().retained` owned solely by this continuation. Retire
+    /// only after its destructor runs. Shared products/mappings must retain
+    /// their independent reservation or remain in the non-continuation charge.
+    fn continuation_bytes(&self) -> u64 {
+        0
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll;
 }
 

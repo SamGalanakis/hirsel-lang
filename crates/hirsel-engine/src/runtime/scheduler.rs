@@ -120,6 +120,7 @@ enum Task {
 struct Node {
     task: Task,
     weight: MemoryWeight,
+    continuation: u64,
     status: Status,
     dependencies: BTreeSet<Key>,
     waiters: BTreeSet<Key>,
@@ -547,7 +548,11 @@ impl State {
                     return Err(self.errors.protocol);
                 }
                 let weight = task.weight();
-                Ok((Task::Send(Some(task)), weight))
+                let continuation = task.continuation_bytes();
+                if continuation > weight.retained {
+                    return Err(self.errors.protocol);
+                }
+                Ok((Task::Send(Some(task)), weight, continuation))
             }
             Some(Factory::Local(factory)) => {
                 let weight = factory.weight(id(query))?;
@@ -557,13 +562,14 @@ impl State {
                         home: None,
                     },
                     weight,
+                    0,
                 ))
             }
             None => Err(self.errors.protocol),
         }))
         .unwrap_or(Err(self.errors.panicked));
-        let (task, weight, status) = match created {
-            Ok((task, weight))
+        let (task, weight, continuation, status) = match created {
+            Ok((task, weight, continuation))
                 if weight
                     .scratch
                     .checked_add(weight.retained)
@@ -575,16 +581,18 @@ impl State {
                             self.stacks + self.metadata + self.retained + self.scratch,
                         ) =>
             {
-                (task, weight, Status::Ready)
+                (task, weight, continuation, Status::Ready)
             }
             Ok(_) => (
                 Task::Send(None),
                 MemoryWeight::default(),
+                0,
                 Status::Settled(Err(self.errors.resource)),
             ),
             Err(error) => (
                 Task::Send(None),
                 MemoryWeight::default(),
+                0,
                 Status::Settled(Err(error)),
             ),
         };
@@ -595,6 +603,7 @@ impl State {
             Node {
                 task,
                 weight,
+                continuation,
                 status,
                 dependencies: BTreeSet::new(),
                 waiters: BTreeSet::new(),
@@ -625,9 +634,17 @@ impl State {
     fn remove(&mut self, query: Key) {
         self.unqueue(query);
         if let Some(node) = self.nodes.remove(&query) {
-            self.retained -= node.weight.retained;
-            self.edges -= node.dependencies.len();
-            for dependency in node.dependencies {
+            // A queued Send continuation still owns its frame until this drop.
+            let Node {
+                task,
+                weight,
+                dependencies,
+                ..
+            } = node;
+            drop(task);
+            self.retained -= weight.retained;
+            self.edges -= dependencies.len();
+            for dependency in dependencies {
                 if let Some(node) = self.nodes.get_mut(&dependency) {
                     node.waiters.remove(&query);
                 }
@@ -688,6 +705,15 @@ impl State {
             }
         }
         false
+    }
+    /// Called only after the unique task destructor has returned or unwound.
+    /// The remaining charge belongs to held products, not the task frame.
+    fn retire_continuation(&mut self, query: Key) {
+        if let Some(node) = self.nodes.get_mut(&query) {
+            let bytes = std::mem::take(&mut node.continuation);
+            node.weight.retained -= bytes;
+            self.retained -= bytes;
+        }
     }
     fn settle(&mut self, query: Key, result: Outcome) {
         let node = self.nodes.get_mut(&query).expect("claimed query");
@@ -804,6 +830,7 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 locals.remove(&query);
             }));
             let mut state = shared.lock();
+            state.retire_continuation(query);
             let live = state.nodes.get(&query).is_some_and(|n| n.live);
             if let Some(error) = terminal {
                 let error = if dropped.is_err() {
@@ -936,16 +963,27 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                     if task.id() != id(query) || task.weight() != weight {
                         return QueryPoll::Failed(shared.lock().errors.protocol);
                     }
+                    let continuation = task.continuation_bytes();
+                    if continuation > weight.retained {
+                        return QueryPoll::Failed(shared.lock().errors.protocol);
+                    }
+                    shared
+                        .lock()
+                        .nodes
+                        .get_mut(&query)
+                        .expect("running local task")
+                        .continuation = continuation;
                     entry.insert(task);
                 }
                 locals.get_mut(&query).unwrap().poll(&mut cx)
             }
         }));
-        // Completed/failed local states are destroyed on this worker before
-        // releasing its execution accounting. Waiting states stay in locals.
+        // Terminal task frames are destroyed before their charge is retired.
+        // Suspended Send/local continuations keep their full admitted weight.
         let keep_local = matches!(outcome, Ok(QueryPoll::Waiting(_)));
         if !keep_local
             && let Err(panic) = catch_unwind(AssertUnwindSafe(|| {
+                drop(send_task.take());
                 locals.remove(&query);
             }))
         {
@@ -953,6 +991,9 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
         }
         let cpu_ns = thread_cpu_ns().saturating_sub(start);
         let mut state = shared.lock();
+        if !keep_local {
+            state.retire_continuation(query);
+        }
         state.scratch -= weight.scratch;
         state.stats.active -= 1;
         state.account();
@@ -970,9 +1011,11 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
             // Drop without holding the shared graph lock.
             drop(state);
             let _ = catch_unwind(AssertUnwindSafe(|| {
+                drop(send_task.take());
                 locals.remove(&query);
             }));
             state = shared.lock();
+            state.retire_continuation(query);
             // A new request may attach while home-thread destruction runs
             // without the graph lock. Re-read liveness after that handoff.
             let live = state.nodes.get(&query).is_some_and(|node| node.live);
@@ -1019,9 +1062,11 @@ fn run_worker(shared: Arc<Shared>, worker: usize, stack: u64) {
                 _ => {
                     drop(state);
                     let _ = catch_unwind(AssertUnwindSafe(|| {
+                        drop(send_task.take());
                         locals.remove(&query);
                     }));
                     state = shared.lock();
+                    state.retire_continuation(query);
                     let error = state.errors.protocol;
                     state.settle(query, Err(error));
                 }
