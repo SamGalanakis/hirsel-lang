@@ -121,6 +121,7 @@ pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,
     pub observation: NativeObservation,
+    pub report: Vec<String>,
     pub entry: DefPath,
     pub signature: SignatureRef,
     pub sources: SourceMap,
