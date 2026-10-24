@@ -1,10 +1,15 @@
 //! Demand import over source and library recipes. Descriptor admission precedes
 //! typed recipe/body materialization; native C owns every reusable Value.
 use super::{
-    declarations::NativeDeclarations, instance::*, ready::ReadySourceFacts, recipes::*, *,
+    declarations::NativeDeclarations,
+    instance::*,
+    ready::ReadySourceFacts,
+    recipes::*,
+    source_inputs::{LiveNativeSource, NativeSourceProvider},
+    *,
 };
 use hirsel_artifact_store::{Action, Domain, Reference};
-use hirsel_engine::{NativeRecords, QueryEngine, Verify, store::ResultStore};
+use hirsel_engine::{NativeRecordSource, NativeRecords, QueryEngine, Verify, store::ResultStore};
 use hirsel_layout::{instance::InstanceKey, layout::LayoutBuilder};
 use hirsel_lir::{
     LayoutKeys,
@@ -98,8 +103,16 @@ impl DemandInstances {
         target: hirsel_lir::TargetSpec,
         policy: ContentHash,
     ) -> Self {
+        Self::new_from_source(engine, store, target, policy)
+    }
+    pub fn new_from_source(
+        source: &impl NativeRecordSource,
+        store: Arc<dyn ResultStore>,
+        target: hirsel_lir::TargetSpec,
+        policy: ContentHash,
+    ) -> Self {
         Self {
-            records: NativeRecords::new(engine.types().clone(), store.clone()),
+            records: NativeRecords::new(source.record_types().clone(), store.clone()),
             queries: InstanceQueries::new(store.clone()),
             store,
             target,
@@ -177,7 +190,7 @@ impl DemandInstances {
     }
     fn request(
         &self,
-        engine: &QueryEngine,
+        engine: &impl NativeRecordSource,
         instances: &Instances,
         id: InstanceId,
         table: &hirsel_lir::LayoutTable,
@@ -245,6 +258,19 @@ impl DemandInstances {
         engine: &QueryEngine,
         declarations: &NativeDeclarations,
     ) -> Result<Vec<InstanceAddress>, String> {
+        self.root_requests(engine, declarations)
+    }
+    pub fn roots_from(
+        &mut self,
+        source: &impl NativeSourceProvider,
+    ) -> Result<Vec<InstanceAddress>, String> {
+        self.root_requests(source, source.declarations())
+    }
+    fn root_requests(
+        &mut self,
+        engine: &impl NativeRecordSource,
+        declarations: &NativeDeclarations,
+    ) -> Result<Vec<InstanceAddress>, String> {
         let owners = hirsel_rc::library::owners(
             &declarations.program.types,
             &declarations.program.signatures,
@@ -269,26 +295,15 @@ impl DemandInstances {
 
     fn action(
         &self,
-        engine: &QueryEngine,
-        declarations: &NativeDeclarations,
+        inputs: &impl NativeSourceProvider,
         request: &Request,
         options: &super::super::Options,
         selection_reads: &[SelectionRead],
         constant_reads: &[hirsel_syntax::DefPath],
     ) -> Result<Action, String> {
+        let declarations = inputs.declarations();
         let source = if request.recipe.domain == SOURCE_RECIPE {
-            let source = declarations
-                .sources
-                .get(&request.key.definition)
-                .ok_or("missing native source output")?;
-            Some((
-                source.source.implementation_revision,
-                source.signature.fingerprint,
-                source
-                    .lower
-                    .as_ref()
-                    .map(|v| (v.reference(), v.observation_identity())),
-            ))
+            Some(inputs.source_observation(&request.key.definition)?)
         } else {
             None
         };
@@ -302,7 +317,7 @@ impl DemandInstances {
                     .map(|value| -> Result<ContentHash, String> {
                         let bytes = self
                             .records
-                            .encode(engine, value)
+                            .encode(inputs, value)
                             .ok_or("current static input cannot be encoded")?;
                         Ok(ContentHash::of_parts(
                             "hirsel.native.materialized-static-read.v1",
@@ -321,8 +336,8 @@ impl DemandInstances {
             hirsel_lir::ABI_VERSION,
             declarations.program.input.digest,
             declarations.roots.registry_revision,
-            engine.native_query_policy().source,
-            engine.verify == Verify::On,
+            inputs.query_policy().source,
+            inputs.verification() == Verify::On,
             request,
             source,
             options.flat_walk,
@@ -402,6 +417,24 @@ impl DemandInstances {
         key: &InstanceAddress,
         options: &super::super::Options,
     ) -> Result<Arc<DiscoveredInstance>, String> {
+        self.instance_from(
+            &mut LiveNativeSource {
+                engine,
+                declarations,
+            },
+            key,
+            options,
+        )
+    }
+
+    /// The sole native producer over source inputs. Lookup validates prior
+    /// dependency observations before any recipe/original body/Value decoding.
+    pub fn instance_from(
+        &mut self,
+        inputs: &mut impl NativeSourceProvider,
+        key: &InstanceAddress,
+        options: &super::super::Options,
+    ) -> Result<Arc<DiscoveredInstance>, String> {
         if key.target_abi != self.target.digest()
             || key.policy != self.policy
             || options.target != self.target
@@ -425,23 +458,16 @@ impl DemandInstances {
         let constant_reads = previous
             .as_ref()
             .map_or(&[][..], |record| record.constant_reads.as_slice());
-        let action = self.action(
-            engine,
-            declarations,
-            &request,
-            options,
-            selection_reads,
-            constant_reads,
-        )?;
+        let action = self.action(inputs, &request, options, selection_reads, constant_reads)?;
         if previous.is_some()
             && let Some(output) = self.completed.get(key.instance.encoding())
             && output.product.product.action == action
         {
             return Ok(output.clone());
         }
-        let operations = declarations.program.operation_registry();
+        let operations = inputs.declarations().program.operation_registry();
         let manifest = hirsel_core_contract::Manifest::skeleton(
-            declarations.program.operations.values().cloned(),
+            inputs.declarations().program.operations.values().cloned(),
         );
         let environment = NativeEnvironment {
             target: &self.target,
@@ -450,14 +476,14 @@ impl DemandInstances {
             discharge: Some(&options.discharge),
         };
         if previous.is_some()
-            && engine.native_query_policy().reuse
+            && inputs.query_policy().reuse
             && let Some(product) = self.queries.lookup(key, action, &environment)
             && let Ok(output) = self.discovered(key, product)
         {
             return Ok(output);
         }
 
-        if previous.is_none() || !engine.native_query_policy().reuse {
+        if previous.is_none() || !inputs.query_policy().reuse {
             self.queries.counts.misses += 1;
         }
         let recipe_bytes = self
@@ -477,13 +503,11 @@ impl DemandInstances {
             })
             .transpose()?;
         let source = if request.recipe.domain == SOURCE_RECIPE {
-            let recipe = SourceRecipe::decode(&self.records, engine, &recipe_bytes)?;
+            let recipe = SourceRecipe::decode(&self.records, inputs, &recipe_bytes)?;
             if recipe.key()? != key.instance {
                 return Err("source recipe differs from demanded key".into());
             }
-            let (original, source_input) = declarations
-                .original_source(engine, &request.key.definition)
-                .map_err(|e| format!("native source body: {e:?}"))?;
+            let (original, source_input) = inputs.original_source(&request.key.definition)?;
             if let Some(input) = &source_input {
                 input
                     .demand_body(&key.instance)
@@ -494,18 +518,18 @@ impl DemandInstances {
             None
         };
         let owners = hirsel_rc::library::owners(
-            &declarations.program.types,
-            &declarations.program.signatures,
+            &inputs.declarations().program.types,
+            &inputs.declarations().program.signatures,
         )
-        .over(&declarations.program.owners);
+        .over(&inputs.declarations().program.owners);
         let mut layouts =
             LayoutBuilder::from_products(&self.target, &owners, &bound.iter().collect::<Vec<_>>())
                 .map_err(|e| format!("native request layout binding: {e:?}"))?;
         layouts.prepare_native_controls();
         let (mut instances, id) = if let Some((recipe, original, source_input)) = source {
             let restored = recipe.restore(
-                &declarations.program,
-                &declarations.context,
+                &inputs.declarations().program,
+                &inputs.declarations().context,
                 original,
                 &mut layouts,
             )?;
@@ -515,15 +539,15 @@ impl DemandInstances {
             drop(source_input);
             restored
         } else {
-            let recipe = LibraryRecipe::decode(&self.records, engine, &recipe_bytes)?;
+            let recipe = LibraryRecipe::decode(&self.records, inputs, &recipe_bytes)?;
             if recipe.key()? != key.instance {
                 return Err("library recipe differs from demanded key".into());
             }
-            recipe.restore(&declarations.program, &mut layouts)?
+            recipe.restore(&inputs.declarations().program, &mut layouts)?
         };
         self.imports += 1;
         let imported = hirsel_rc::import::import_instance(
-            &declarations.program,
+            &inputs.declarations().program,
             &mut instances,
             id,
             options.discharge.sites(&request.key.definition),
@@ -553,7 +577,7 @@ impl DemandInstances {
                 .map_err(|e| format!("native library registration: {e:?}"))?;
         }
         let statics = hirsel_rc::import::instance_statics(
-            &declarations.program,
+            &inputs.declarations().program,
             &instances,
             &imported.unit,
             &mut layouts,
@@ -571,7 +595,7 @@ impl DemandInstances {
         let mut requests = instances
             .ids()
             .filter(|&other| other != id)
-            .map(|other| self.request(engine, &instances, other, &table))
+            .map(|other| self.request(inputs, &instances, other, &table))
             .collect::<Result<Vec<_>, _>>()?;
         requests.sort_by(|a, b| a.key.encoding.cmp(&b.key.encoding));
         let mut callees = unit
@@ -607,14 +631,7 @@ impl DemandInstances {
             .collect::<Vec<_>>();
         constant_reads.sort();
         constant_reads.dedup();
-        let action = self.action(
-            engine,
-            declarations,
-            &request,
-            options,
-            &selection_reads,
-            &constant_reads,
-        )?;
+        let action = self.action(inputs, &request, options, &selection_reads, &constant_reads)?;
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {

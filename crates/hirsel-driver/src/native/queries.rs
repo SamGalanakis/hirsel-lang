@@ -19,6 +19,7 @@ pub mod root_source;
 pub mod root_tasks;
 pub mod roots;
 pub mod source;
+pub mod source_inputs;
 pub mod tasks;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;

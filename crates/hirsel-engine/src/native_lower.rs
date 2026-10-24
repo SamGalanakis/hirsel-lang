@@ -75,6 +75,23 @@ impl NativeLowerReader {
             implementation_revision: selected.implementation_revision,
         })
     }
+    /// Observations of a current source-query-selected envelope, without
+    /// decoding its body. Query metadata alone is not a verification identity.
+    pub fn input(
+        &self,
+        path: &DefPath,
+    ) -> Option<(
+        &hirsel_validate::VerifiedDefinitionOutput,
+        ContentHash,
+        ContentHash,
+    )> {
+        let selected = self.selected.get(path)?;
+        Some((
+            &selected.output,
+            selected.implementation_revision,
+            selected.signature,
+        ))
+    }
     /// An inventory lookup opens no source or native body.
     pub fn contains(&self, path: &DefPath) -> bool {
         self.selected.contains_key(path)
