@@ -9,3 +9,5 @@ VALGRIND_LIB	valgrind	libexec/valgrind
 HIRSEL_VALGRIND_RUNTIME	valgrind	lib/x86_64-linux-gnu
 HIRSEL_LINK_KIT	kit	.
 HIRSEL_GLIBC_FLOOR	glibc_floor	.
+HIRSEL_CAPTURE_LINKER	linker	.
+HIRSEL_AUDITOR_PACKAGE	runtime-auditor	.
