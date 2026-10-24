@@ -5327,7 +5327,6 @@ conformance/SEM/SEM-2-std-total-order-run.hir
 conformance/SEM/SEM-2-sum-exact-and-f32-run.hir
 conformance/SEM/SEM-2-sum-tree.hir
 conformance/SEM/SEM-2-to-i32-contract.hir
-conformance/SEM/SEM-2-total-order-zero.hir
 conformance/SEM/SEM-2-wave2-f32-bits-boundary.hir
 conformance/SEM/SEM-2-wave2-f32-bits-success.hir
 conformance/SEM/SEM-2-wave2-f32-exact-oracle-000.hir
@@ -5415,6 +5414,7 @@ conformance/SEM/SEM-3-blake2s-long-key-fail.hir
 conformance/SEM/SEM-3-blake2s-long-key-run.hir
 conformance/SEM/SEM-3-blake2s-unkeyed-0-run.hir
 conformance/SEM/SEM-3-blake2s-unkeyed-1-run.hir
+conformance/SEM/SEM-3-bufio-cumulative-consume-run.hir
 conformance/SEM/SEM-3-bufio-peek-refill-bad.hir
 conformance/SEM/SEM-3-bufio-peek-run.hir
 conformance/SEM/SEM-3-bufio-writer5-file-run.hir
@@ -5789,7 +5789,6 @@ conformance/SEM/SEM-3-json-typed-numbers-run.hir
 conformance/SEM/SEM-3-json-typed-reader-run.hir
 conformance/SEM/SEM-3-json-typed-serde-enum-run.hir
 conformance/SEM/SEM-3-json-value-access-16-invalid-run.hir
-conformance/SEM/SEM-3-json-value-access-16-run.hir
 conformance/SEM/SEM-3-json-writer-error-run.hir
 conformance/SEM/SEM-3-jwt-audience-run.hir
 conformance/SEM/SEM-3-jwt-eddsa-reject-run.hir
@@ -7152,7 +7151,6 @@ conformance/SEM/SEM-5-std-ordered-map-range-backwards-4-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-borrowed-key-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-equal-empty-cases-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-equal-excluded-run.hir
-conformance/SEM/SEM-5-std-ordered-map-range-finding-ill-order-in-map-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-finding-ill-order-in-range-ord-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-height-1-run.hir
 conformance/SEM/SEM-5-std-ordered-map-range-inclusive-max-value-run.hir
@@ -7254,6 +7252,7 @@ conformance/SER/SER-2-char-run.hir
 conformance/SER/SER-2-checked-run.hir
 conformance/SER/SER-2-core-error-vectors-run.hir
 conformance/SER/SER-2-core-errors-run.hir
+conformance/SER/SER-2-document-codec-payload-run.hir
 conformance/SER/SER-2-duplicate-map-run.hir
 conformance/SER/SER-2-duplicate-set-run.hir
 conformance/SER/SER-2-flat-zero-stride-list-run.hir

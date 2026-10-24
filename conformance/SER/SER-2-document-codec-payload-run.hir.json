@@ -4,13 +4,9 @@
     "name": "application",
     "version": "1"
   },
-  "entry": {
-    "module": [],
-    "name": "main"
-  },
   "sources": [
     {
-      "path": "SEM-3-json-value-access-16-run.hir",
+      "path": "SER-2-document-codec-payload-run.hir",
       "module": []
     }
   ],
@@ -23,5 +19,9 @@
       },
       "expose": []
     }
-  ]
+  ],
+  "entry": {
+    "module": [],
+    "name": "main"
+  }
 }

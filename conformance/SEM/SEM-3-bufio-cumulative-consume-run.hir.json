@@ -1,12 +1,16 @@
 {
   "schema": 1,
   "package": {
-    "name": "deque_tests",
+    "name": "application",
     "version": "1"
+  },
+  "entry": {
+    "module": [],
+    "name": "main"
   },
   "sources": [
     {
-      "path": "SEM-5-std-ordered-map-range-finding-ill-order-in-map-run.hir",
+      "path": "SEM-3-bufio-cumulative-consume-run.hir",
       "module": []
     }
   ],
@@ -19,9 +23,5 @@
       },
       "expose": []
     }
-  ],
-  "entry": {
-    "module": [],
-    "name": "main"
-  }
+  ]
 }

@@ -1,0 +1,24 @@
+// rule: SEM-3
+// expect: run
+// Go ebe2feef src/bufio/bufio_test.go:843 TestPeek, with two consumes before refill.
+fn refill(mut source: (), mut out: List[u8], max: u64) -> Result[u64, ()] uses {} {
+  failure.check(max == 4, Bounds())
+  list.push(mut out, b'a')
+  list.push(mut out, b'b')
+  list.push(mut out, b'c')
+  list.push(mut out, b'd')
+  Ok(4)
+}
+
+pub fn main(t: Test) -> Result[(), bufio.ReadError[()]] {
+  let mut r = bufio.new(4)
+  let mut source = ()
+  test.check(t, bufio.read_more(mut r, mut source, refill, 4)? == 4)
+  test.check(t, bufio.peek(r, 99) == b"abcd")
+  bufio.consume(mut r, 1)
+  test.check(t, bufio.peek(r, 99) == b"bcd")
+  bufio.consume(mut r, 1)
+  test.check(t, bufio.peek(r, 99) == b"cd")
+  test.check(t, bufio.buffered(r) == 2)
+  Ok(())
+}
