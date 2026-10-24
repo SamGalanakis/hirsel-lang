@@ -372,6 +372,10 @@ impl QueryEngine {
             {
                 return Err(refusal());
             }
+            // A warm S0 catalog contains heads without syntax. Restore the
+            // demanded ordinary Parse product; semantic cache reads are still
+            // validated in load() before the Modes payload is decoded.
+            self.materialize(definition)?;
             let syntax = self.snapshot(definition)?;
             if generation::generator(&syntax).is_some() {
                 return Err(refusal());
