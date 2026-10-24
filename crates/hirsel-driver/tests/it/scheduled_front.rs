@@ -201,7 +201,47 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                     assert_eq!(front.recompute_count(path, kind), 1);
                 }
             }
+            let phase_rows = front.memo_snapshot();
+            for path in &definitions {
+                for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+                    assert!(
+                        phase_rows
+                            .iter()
+                            .any(|(key, _)| key.def.path() == path && key.kind == kind)
+                    );
+                }
+            }
+            let front_work = front.work_snapshot();
+            assert_eq!(
+                front_work.iter().map(|(_, _, count)| count).sum::<u64>(),
+                12
+            );
+            assert_eq!(
+                lower
+                    .work_snapshot()
+                    .iter()
+                    .map(|(_, work)| work.initializers)
+                    .sum::<u64>(),
+                3
+            );
+            let lower_rows = lower.memo_snapshot();
+            assert!(
+                lower_rows.iter().any(
+                    |(key, _)| key.def.path() == &program.entry && key.kind == QueryKind::Lower
+                )
+            );
             let actual = lower.outcome(products[0]).unwrap();
+            assert_eq!(
+                lower_rows
+                    .iter()
+                    .find(
+                        |(key, _)| key.def.path() == &program.entry && key.kind == QueryKind::Lower
+                    )
+                    .unwrap()
+                    .1
+                    .as_ref(),
+                &actual.reads
+            );
             let execution = actual
                 .execution
                 .as_ref()
