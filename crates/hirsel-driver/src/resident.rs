@@ -6,6 +6,9 @@ use hirsel_engine::runtime::{QueryRuntime, RequestId};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::Poll;
 
+mod compilation_session;
+pub use compilation_session::CompilationSession;
+
 /// Transport-owned host. Keeping this alive retains the engine's shared handles,
 /// without retaining a second program, verdict, output or invalidation cache.
 pub struct Host<E: RequestEngine> {
@@ -145,5 +148,32 @@ impl<R: QueryRuntime, O: OutputReadiness> RequestLease<R, O> {
 impl<R: QueryRuntime, O> Drop for RequestLease<R, O> {
     fn drop(&mut self) {
         self.subscription.cancel();
+    }
+}
+
+impl<O: OutputReadiness> RequestLease<hirsel_engine::runtime::AdmittedRuntime, O> {
+    /// Complete a synchronous host operation while leaving request admission,
+    /// cancellation and shutdown available to other users of this runtime.
+    /// The engine's completion latch never consumes the terminal product;
+    /// ordinary polling still owns diagnostics and output readiness.
+    pub fn wait(mut self) -> Result<O::Output, RequestError<O::Error>> {
+        let id = *self
+            .subscription
+            .active
+            .lock()
+            .expect("request subscription poisoned");
+        if let Some(id) = id {
+            let completion = self
+                .subscription
+                .runtime
+                .lock()
+                .expect("query runtime poisoned")
+                .completion();
+            completion.wait(id);
+        }
+        match self.poll() {
+            Poll::Ready(result) => result,
+            Poll::Pending => unreachable!("query completion woke before its request settled"),
+        }
     }
 }

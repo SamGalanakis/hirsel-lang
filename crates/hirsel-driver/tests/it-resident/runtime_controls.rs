@@ -259,3 +259,208 @@ fn actual_runtime_policy_change_restart_and_zero_retention_use_ordinary_products
     drop(fresh);
     assert_eq!(budget.reserved(), 0);
 }
+
+#[test]
+fn blocking_completion_preserves_coalescing_and_checks_ordinary_output() {
+    let tree = tempfile::tempdir().unwrap();
+    let source = tree.path().join("main.hir");
+    std::fs::write(&source, b"shared output").unwrap();
+    let budget = ProcessBudget::new(2 * ALLOWANCE);
+    let store = Arc::new(MemStore::default());
+    let polls = Arc::new(AtomicUsize::new(0));
+    let mut host = Host::new(engine(budget.clone(), store, polls.clone()));
+    let first = host.request(&(source.clone(), 0)).unwrap();
+    let second = host.request(&(source, 0)).unwrap();
+    assert_eq!(first.wait().unwrap(), b"shared output");
+    assert_eq!(second.wait().unwrap(), b"shared output");
+    assert_eq!(polls.load(Ordering::SeqCst), 1);
+    drop(host);
+    assert_eq!(budget.reserved(), 0);
+}
+
+#[test]
+fn blocking_completion_after_host_shutdown_reports_cancelled() {
+    let tree = tempfile::tempdir().unwrap();
+    let source = tree.path().join("main.hir");
+    std::fs::write(&source, b"cancelled output").unwrap();
+    let budget = ProcessBudget::new(2 * ALLOWANCE);
+    let store = Arc::new(MemStore::default());
+    let mut host = Host::new(engine(budget.clone(), store, Arc::new(AtomicUsize::new(0))));
+    let request = host.request(&(source, 0)).unwrap();
+    drop(host);
+    assert_eq!(request.wait(), Err(RequestError::Cancelled));
+    assert_eq!(budget.reserved(), 0);
+}
+
+/// Test-only immutable selector: reads the descriptor, never mutable disk.
+struct FrozenEngine {
+    store: Arc<dyn ResultStore>,
+    budget: Arc<ProcessBudget>,
+}
+impl RequestEngine for FrozenEngine {
+    type Request = hirsel_driver::requests::CompileRequest;
+    type Error = String;
+    type Runtime = AdmittedRuntime;
+    type Readiness = Readiness;
+    fn select(
+        &mut self,
+        request: &Self::Request,
+    ) -> Result<SelectedRequest<AdmittedRuntime, Readiness>, String> {
+        let bytes = request
+            .inputs
+            .read(&request.path)
+            .map_err(|e| e.to_string())?;
+        let parts = request.inputs.identity_parts();
+        let product = ProductRef {
+            address: root().address,
+            action: Action(ContentHash::of_parts(
+                "hirsel.resident.explicit-input-fixture.v1",
+                parts.iter().map(Vec::as_slice),
+            )),
+            record: self
+                .store
+                .put_content(
+                    Domain {
+                        kind: 123,
+                        schema: 1,
+                    },
+                    &bytes,
+                )
+                .unwrap(),
+        };
+        let mut runtime = AdmittedRuntime::new(
+            Jobs::new(1),
+            self.budget.reserve(ALLOWANCE).map_err(|e| e.to_string())?,
+            errors(),
+        )
+        .map_err(|e| e.to_string())?;
+        runtime
+            .register(
+                root().kind,
+                Arc::new(Factory {
+                    product,
+                    polls: Arc::new(AtomicUsize::new(0)),
+                }),
+            )
+            .unwrap();
+        Ok(SelectedRequest {
+            runtime: Arc::new(Mutex::new(runtime)),
+            roots: vec![root()],
+            output: Readiness {
+                store: self.store.clone(),
+            },
+        })
+    }
+}
+
+fn check_operation() -> hirsel_driver::requests::CompileOperation {
+    hirsel_driver::requests::CompileOperation::Check {
+        lowering: hirsel_engine::LoweringPolicy::Comptime,
+    }
+}
+
+#[test]
+fn compilation_session_delivers_explicit_bytes_without_mutating_live_requests_or_reading_disk() {
+    use hirsel_driver::resident::CompilationSession;
+    let tree = tempfile::tempdir().unwrap();
+    let source = tree.path().join("main.hir");
+    std::fs::write(&source, b"before").unwrap();
+    let (_, inputs) = observe_inputs(
+        InputLimits {
+            bytes: 65536,
+            operations: 100,
+        },
+        1,
+        |capture| capture.read(&source),
+    )
+    .unwrap();
+    let budget = ProcessBudget::new(2 * ALLOWANCE);
+    let mut session = CompilationSession::new(
+        FrozenEngine {
+            store: Arc::new(MemStore::default()),
+            budget: budget.clone(),
+        },
+        source.clone(),
+        inputs,
+    );
+    let before = session.request(check_operation()).unwrap();
+    std::fs::write(&source, b"newer disk state").unwrap();
+    let edits = [(source.clone(), Arc::<[u8]>::from(b"delivered".as_slice()))]
+        .into_iter()
+        .collect();
+    assert_eq!(session.apply_sources(&edits, 65536).unwrap(), 1);
+    assert_eq!(session.apply_sources(&edits, 65536).unwrap(), 1);
+    let after = session.request(check_operation()).unwrap();
+    assert_eq!(before.wait().unwrap(), b"before");
+    assert_eq!(after.wait().unwrap(), b"delivered");
+    assert_eq!(session.revision(), 1);
+    let accepted = session.inputs().clone();
+    assert!(session.apply_sources(&edits, 1).is_err());
+    let unknown = [(
+        tree.path().join("unknown.hir"),
+        Arc::<[u8]>::from(b"unknown".as_slice()),
+    )]
+    .into_iter()
+    .collect();
+    assert!(session.apply_sources(&unknown, 65536).is_err());
+    assert_eq!(session.inputs(), &accepted);
+    assert_eq!(session.revision(), 1);
+    drop(session);
+    assert_eq!(budget.reserved(), 0);
+}
+
+#[test]
+fn compilation_session_replaces_complete_observations_and_keeps_missing_inputs_watched() {
+    use hirsel_driver::resident::CompilationSession;
+    let tree = tempfile::tempdir().unwrap();
+    let source = tree.path().join("main.hir");
+    let alias = tree.path().join("alias.hir");
+    let sidecar = tree.path().join("main.hir.json");
+    std::fs::write(&source, b"original").unwrap();
+    std::os::unix::fs::symlink(&source, &alias).unwrap();
+    let limits = InputLimits {
+        bytes: 65536,
+        operations: 100,
+    };
+    let (_, inputs) = observe_inputs(limits, 1, |capture| -> std::io::Result<()> {
+        capture.read(&alias)?;
+        capture.read(&source)?;
+        capture.canonicalize(&alias)?;
+        assert_eq!(
+            capture.read(&sidecar).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        Ok(())
+    })
+    .unwrap();
+    let budget = ProcessBudget::new(2 * ALLOWANCE);
+    let mut session = CompilationSession::new(
+        FrozenEngine {
+            store: Arc::new(MemStore::default()),
+            budget: budget.clone(),
+        },
+        alias.clone(),
+        inputs,
+    );
+    assert_eq!(session.entry(), alias);
+    let watched = session
+        .watched()
+        .map(std::path::Path::to_path_buf)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        watched,
+        [source.clone(), alias.clone(), sidecar.clone()]
+            .into_iter()
+            .collect()
+    );
+    let old = session.request(check_operation()).unwrap();
+    std::fs::remove_file(&source).unwrap();
+    let (missing, inputs) = observe_inputs(limits, 1, |capture| capture.read(&alias)).unwrap();
+    assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(session.replace_inputs(inputs), 1);
+    assert!(session.request(check_operation()).is_err());
+    assert_eq!(old.wait().unwrap(), b"original");
+    assert!(session.watched().any(|path| path == alias));
+    drop(session);
+    assert_eq!(budget.reserved(), 0);
+}
