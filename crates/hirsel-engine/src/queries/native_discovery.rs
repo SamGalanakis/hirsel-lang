@@ -56,7 +56,7 @@ mod owned_anchors {
 }
 
 impl NativeBodyContracts {
-    fn of(definition: &hirsel_tir::Definition) -> Result<Self, QueryError> {
+    pub(crate) fn of(definition: &hirsel_tir::Definition) -> Result<Self, QueryError> {
         let invalid = || {
             QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "native source contracts".into(),

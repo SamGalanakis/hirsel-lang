@@ -296,6 +296,22 @@ impl FrontBodyQueries {
             _snapshot: self.clone(),
         })
     }
+    /// Immutable ordinary input transport. Decoding starts only on demand;
+    /// this performs no compiler phase or namespace publication.
+    pub(crate) fn native_input(
+        &self,
+        path: &DefPath,
+    ) -> Option<(
+        Arc<ItemSyntax>,
+        Arc<QueryOutput<hirsel_types::SignatureRef>>,
+    )> {
+        let input = self
+            .inputs
+            .values()
+            .find(|input| &input.definition == path)?;
+        Some((self.syntax(input)?, input.signature.as_ref().ok()?.clone()))
+    }
+
     /// Distinct decoded bodies currently owned by active output consumers.
     /// Settled archives and compact checked summaries contain no body owner.
     pub fn live_body_count(&self) -> usize {

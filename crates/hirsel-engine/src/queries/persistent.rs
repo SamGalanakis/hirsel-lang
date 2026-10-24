@@ -702,6 +702,7 @@ pub(super) fn restore_frozen_mode(
             .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
             .map(|item| item.anchor)
             .or_else(|| citations.catalog.anchor(path, occurrence))
+            .or_else(|| citations.owners.record_source_anchor(path, occurrence))
     })?;
     let (encoded, roots) =
         hirsel_types::with_table_collection(|| bincode::serialize_into(std::io::sink(), &record));
