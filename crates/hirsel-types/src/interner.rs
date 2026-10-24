@@ -297,11 +297,62 @@ impl TypeInterner {
             .find(|id| self.get(*id).is_some_and(|other| other == row))
     }
 
+    fn find_base(
+        &self,
+        index: &HashMap<u64, Ids, IdHasher>,
+        hash: u64,
+        row: &Type,
+    ) -> Option<TypeId> {
+        index.get(&hash)?.iter().find(|id| {
+            id.position()
+                .is_some_and(|position| position < self.base_len)
+                && self.get(*id).is_some_and(|other| other == row)
+        })
+    }
+
     /// The id of `row`, exact and lossless: equal rows (Rust `==`) get one id,
     /// and every field, parameter names and labels included, survives.
     pub fn intern(&self, row: Type) -> TypeId {
         let hash = row_hash(&row);
+        let source_backed = self.base.as_ref().is_some_and(|base| base.source.is_some());
+        if source_backed
+            && let Some(id) = self.find_base(
+                &self
+                    .shard(hash)
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner),
+                hash,
+                &row,
+            )
+        {
+            self.counters.hits.fetch_add(1, Ordering::Relaxed);
+            return id;
+        }
         if let Some(id) = self.base.as_ref().and_then(|b| b.find(hash, &row)) {
+            if source_backed {
+                // Reuse only a complete canonical base match. Misses and local
+                // rows still check the provider, including after missing input
+                // becomes available. At most one entry per matched base id is
+                // added to the existing shard index; no rows are copied.
+                let start = std::time::Instant::now();
+                let mut index = self
+                    .shard(hash)
+                    .write()
+                    .unwrap_or_else(PoisonError::into_inner);
+                self.counters
+                    .lock_wait_ns
+                    .fetch_add(start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                match index.get_mut(&hash) {
+                    Some(ids) => {
+                        if !ids.iter().any(|cached| cached == id) {
+                            ids.push(id);
+                        }
+                    }
+                    None => {
+                        index.insert(hash, Ids::One(id));
+                    }
+                }
+            }
             self.counters.hits.fetch_add(1, Ordering::Relaxed);
             return id;
         }
@@ -555,5 +606,81 @@ impl std::fmt::Debug for TypeInterner {
             .field("base", &self.base_len)
             .field("rows", &self.assigned.load(Ordering::Relaxed))
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod source_base_lookup_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+    struct Counted {
+        candidates: AtomicUsize,
+        available: AtomicBool,
+    }
+    impl TypeBaseSource for Counted {
+        fn rows(&self, _: u32, _: &TypeBase) -> Option<Vec<(u32, Type)>> {
+            self.available.load(Ordering::Relaxed).then(|| {
+                vec![
+                    (0, Type::unit()),
+                    (1, Type::with_kind(TypeKind::Primitive(Primitive::U8))),
+                ]
+            })
+        }
+        fn candidates(&self, _: &Type, _: &TypeBase) -> Vec<u32> {
+            self.candidates.fetch_add(1, Ordering::Relaxed);
+            if self.available.load(Ordering::Relaxed) {
+                vec![0, 1]
+            } else {
+                vec![]
+            }
+        }
+    }
+    fn fixture(available: bool) -> (Arc<Counted>, Arc<TypeBase>, Arc<TypeInterner>) {
+        let source = Arc::new(Counted {
+            candidates: AtomicUsize::new(0),
+            available: AtomicBool::new(available),
+        });
+        let base = TypeBase::from_source(2, source.clone());
+        let types = TypeInterner::new(Some(base.clone()));
+        (source, base, types)
+    }
+    #[test]
+    fn successful_base_lookup_is_reused_only_for_equal_rows() {
+        let (source, base, types) = fixture(true);
+        for _ in 0..32 {
+            assert_eq!(types.intern(Type::unit()), base.id_at(0).unwrap());
+        }
+        assert_eq!(source.candidates.load(Ordering::Relaxed), 1);
+        for _ in 0..32 {
+            assert_eq!(
+                types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U8))),
+                base.id_at(1).unwrap()
+            );
+        }
+        assert_eq!(source.candidates.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            types.len(),
+            base.len(),
+            "matching rows allocate no private types"
+        );
+    }
+    #[test]
+    fn base_misses_refresh_and_later_base_match_precedes_existing_private_row() {
+        let (source, base, types) = fixture(false);
+        let private = types.intern(Type::unit());
+        assert_ne!(private, base.id_at(0).unwrap());
+        assert_eq!(types.intern(Type::unit()), private);
+        assert_eq!(
+            source.candidates.load(Ordering::Relaxed),
+            2,
+            "misses are not retained"
+        );
+        source.available.store(true, Ordering::Relaxed);
+        assert_eq!(types.intern(Type::unit()), base.id_at(0).unwrap());
+        for _ in 0..32 {
+            assert_eq!(types.intern(Type::unit()), base.id_at(0).unwrap());
+        }
+        assert_eq!(source.candidates.load(Ordering::Relaxed), 3);
     }
 }
