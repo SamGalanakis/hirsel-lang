@@ -5,14 +5,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The store format version in the directory name.
-pub const FORMAT: u32 = 14;
+pub const FORMAT: u32 = 15;
 /// The default size cap.
 pub const DEFAULT_CAP: u64 = 2 << 30;
 
 #[derive(Debug)]
 pub struct DirStore {
     root: PathBuf,
-    physical: hirsel_artifact_store::Store,
+    physical: Option<hirsel_artifact_store::Store>,
     read_only: Vec<hirsel_artifact_store::Store>,
     cap: u64,
     verifier: std::sync::Arc<hirsel_validate::VerifierCache>,
@@ -35,7 +35,7 @@ impl DirStore {
             verifier: std::sync::Arc::new(hirsel_validate::VerifierCache::directory_store(
                 physical.clone(),
             )),
-            physical,
+            physical: Some(physical),
             root,
             read_only: vec![],
             cap: DEFAULT_CAP,
@@ -51,7 +51,9 @@ impl DirStore {
     }
     pub fn with_cap(mut self, cap: u64) -> Self {
         self.cap = cap;
-        self.physical.set_cache_cap(cap);
+        if let Some(physical) = &self.physical {
+            physical.set_cache_cap(cap);
+        }
         self
     }
     /// `$XDG_CACHE_HOME/hirsel/results-v<N>`, else `$HOME/.cache/...`.
@@ -74,28 +76,51 @@ impl DirStore {
                 .with_installed_products(),
         )
     }
-    /// Compose environment-selected local storage with installed ordinary
-    /// products. Explicit library providers remain exactly caller configured.
-    pub(super) fn with_installed_products(mut self) -> Self {
-        let installed = std::env::var_os("HIRSEL_PRODUCTS")
+    /// Installed ordinary products are independent of writable-cache policy.
+    fn installed_root() -> Option<PathBuf> {
+        std::env::var_os("HIRSEL_PRODUCTS")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .or_else(|| {
                 std::env::current_exe()
                     .ok()
                     .map(|executable| executable.with_file_name("hirsel-std.products"))
-            });
-        if let Some(installed) = installed {
+            })
+    }
+    pub(super) fn installed_only() -> Option<Self> {
+        let root = Self::installed_root().filter(|root| root.is_dir())?;
+        Some(Self {
+            read_only: vec![hirsel_artifact_store::Store::new(root.clone())],
+            root,
+            physical: None,
+            cap: 0,
+            // This reader owns only fresh, process-local verifier authority.
+            verifier: std::sync::Arc::default(),
+        })
+    }
+    /// Compose environment-selected local storage with installed ordinary
+    /// products. Explicit library providers remain exactly caller configured.
+    pub(super) fn with_installed_products(mut self) -> Self {
+        if let Some(installed) = Self::installed_root() {
             self = self.with_read_only_root(installed);
         }
         self
+    }
+    fn roots(&self) -> impl Iterator<Item = (bool, &hirsel_artifact_store::Store)> {
+        self.physical
+            .iter()
+            .map(|root| (true, root))
+            .chain(self.read_only.iter().map(|root| (false, root)))
     }
     pub fn root(&self) -> &Path {
         &self.root
     }
     /// Collect immutable outputs and action roots with bounded scratch.
     pub fn gc(&self, cap: u64) -> GcReport {
-        let report = self.physical.collect(cap);
+        let Some(physical) = &self.physical else {
+            return GcReport::default();
+        };
+        let report = physical.collect(cap);
         GcReport {
             entries: report.entries,
             bytes: report.bytes,
@@ -108,7 +133,9 @@ impl DirStore {
     }
     fn publish(&self, key: &EntryKey, action: super::Action, value: &[u8]) {
         use hirsel_artifact_store::{Address, Domain};
-        let store = &self.physical;
+        let Some(store) = &self.physical else {
+            return;
+        };
         let _batch = store.batch();
         let write = || -> std::io::Result<()> {
             let reference = store.put(
@@ -126,12 +153,10 @@ impl DirStore {
 
 impl ResultStore for DirStore {
     fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
-        Some(self.physical.clone())
+        self.physical.clone()
     }
     fn lookup_product(&self, address: super::Address) -> Option<super::Association> {
-        std::iter::once(&self.physical)
-            .chain(&self.read_only)
-            .find_map(|store| store.lookup(address))
+        self.roots().find_map(|(_, store)| store.lookup(address))
     }
     fn associate_product(
         &self,
@@ -139,7 +164,9 @@ impl ResultStore for DirStore {
         action: super::Action,
         reference: super::Reference,
     ) {
-        let store = &self.physical;
+        let Some(store) = &self.physical else {
+            return;
+        };
         // Shared immutable roots may supply ordinary content, but local writes
         // and GC remain in the writable root. A missing reference is a miss.
         if self.get_content(reference).is_some() {
@@ -150,13 +177,9 @@ impl ResultStore for DirStore {
         Some(self.verifier.clone())
     }
     fn get_content(&self, reference: super::Reference) -> Option<super::Bytes> {
-        for (index, root) in std::iter::once(&self.physical)
-            .chain(&self.read_only)
-            .enumerate()
-        {
-            let store = root;
+        for (local, store) in self.roots() {
             if let Some(bytes) = store.get(reference) {
-                if index == 0 {
+                if local {
                     store.touch(
                         hirsel_artifact_store::Address(reference.output.0),
                         reference,
@@ -168,17 +191,13 @@ impl ResultStore for DirStore {
         None
     }
     fn put_content(&self, domain: super::Domain, bytes: &[u8]) -> Option<super::Reference> {
-        let reference = self.physical.put(domain, bytes).ok()?;
+        let reference = self.physical.as_ref()?.put(domain, bytes).ok()?;
         Some(reference)
     }
     fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
-        for (index, root) in std::iter::once(&self.physical)
-            .chain(&self.read_only)
-            .enumerate()
-        {
-            let store = root;
+        for (local, store) in self.roots() {
             let Some(opened) = store.lookup_open(hirsel_artifact_store::Address(key.0)) else {
-                if index == 0
+                if local
                     && let Some(path) =
                         store.association_path(hirsel_artifact_store::Address(key.0))
                 {
@@ -197,12 +216,12 @@ impl ResultStore for DirStore {
                 continue;
             }
             let Some(bytes) = opened.get() else {
-                if index == 0 {
+                if local {
                     let _ = fs::remove_file(store.output_path(previous.reference));
                 }
                 continue;
             };
-            if index == 0 {
+            if local {
                 store.touch(hirsel_artifact_store::Address(key.0), previous.reference);
             }
             return Some(bytes);
@@ -230,6 +249,10 @@ impl ResultStore for DirStore {
         self.publish(key, action, value);
     }
     fn name(&self) -> &'static str {
-        "dir@1"
+        if self.physical.is_some() {
+            "dir@1"
+        } else {
+            "none@1"
+        }
     }
 }

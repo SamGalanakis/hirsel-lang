@@ -766,17 +766,23 @@ impl QueryEngine {
         }
     }
     pub(crate) fn evaluation_validation_holds(&mut self, value: &EvaluatedConstant) -> bool {
+        self.evaluation_context_holds(value.validation.as_deref(), &value.executed)
+    }
+    pub(crate) fn evaluation_context_holds(
+        &mut self,
+        validation: Option<&[(hirsel_syntax::PackageId, hirsel_syntax::ContentHash)]>,
+        executed: &crate::memo::Reads,
+    ) -> bool {
         if self.verify == Verify::Off {
             return true;
         }
-        if let Some(rows) = &value.validation {
+        if let Some(rows) = validation {
             let snapshot = self.signature_snapshot();
             return rows
                 .iter()
                 .all(|(package, digest)| snapshot.validation_input_digest(package) == *digest);
         }
-        value
-            .executed
+        executed
             .iter()
             .any(|(key, _)| matches!(key, crate::ReadKey::ValidationUniverse(_)))
     }

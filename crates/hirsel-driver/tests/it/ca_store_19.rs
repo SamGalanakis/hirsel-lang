@@ -1852,6 +1852,17 @@ fn ordinary_parse_heads_restore_names_and_signatures_without_syntax_or_type_tabl
             .unwrap()
             .value
             .fingerprint;
+        // Keep this fixture heads-only: the ordinary writer also publishes a
+        // separate Parse output now. Its absence must still require a parser.
+        let mut removed_syntax = 0;
+        for (key, bytes) in store.take() {
+            if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+                removed_syntax += 1;
+            } else {
+                store::ResultStore::put(&*store, &key, &bytes);
+            }
+        }
+        assert_eq!(removed_syntax, 1, "remove exactly the source Parse output");
         let mut reader = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
         reader.adapters.parser = None;
@@ -1923,6 +1934,21 @@ fn ordinary_parse_heads_materialize_only_demanded_files_and_preserve_resident_ed
             let file = writer.sources.add(name, text.into()).unwrap();
             writer.index_source(file, &default_context()).unwrap();
         }
+        // V independently needs every signature in its universe. Supply the
+        // ordinary header product so that this body-materialization control
+        // does not force an unrelated source parse to normalize that header.
+        writer.item_signature(&path("other")).unwrap();
+        // This control exercises materialization from heads without a Parse
+        // output; keep its exact parser-work and edit assertions below.
+        let mut removed_syntax = 0;
+        for (key, bytes) in store.take() {
+            if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+                removed_syntax += 1;
+            } else {
+                store::ResultStore::put(&*store, &key, &bytes);
+            }
+        }
+        assert_eq!(removed_syntax, 2);
         let mut reader =
             QueryEngine::new(default_environment(), compiler_adapters()).with_result_store(store);
         for (name, text) in [("heads.hir", source), ("other.hir", other)] {
@@ -1933,6 +1959,7 @@ fn ordinary_parse_heads_materialize_only_demanded_files_and_preserve_resident_ed
         let item = reader.parse_definition(&path("value")).unwrap().value;
         assert_eq!(reader.work_stats().parsed_bytes, source.len() as u64);
         assert!(reader.lower_to_tir(&path("value")).is_ok());
+        assert!(reader.body_validation_runs(&path("value")) > 0);
         let file = reader
             .sources
             .add("heads.hir", source.replace("7u32", "8u32"))
@@ -1965,6 +1992,17 @@ fn ordinary_parse_heads_preserve_duplicate_order_when_cached_and_new_files_mix()
                 let file = writer.sources.add("z.hir", source.into()).unwrap();
                 writer.index_source(file, &default_context()).unwrap();
                 drop(writer);
+                // Exercise the same heads-only duplicate transaction as
+                // before Parse outputs were independently persisted.
+                let mut removed_syntax = 0;
+                for (key, bytes) in store.take() {
+                    if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+                        removed_syntax += 1;
+                    } else {
+                        store::ResultStore::put(&*store, &key, &bytes);
+                    }
+                }
+                assert_eq!(removed_syntax, 1);
                 let mut reader = QueryEngine::new(default_environment(), compiler_adapters())
                     .with_result_store(store.clone());
                 let names = if reverse {
@@ -2847,5 +2885,143 @@ fn ordinary_generated_package_reopens_without_signature_or_constructor_errors() 
                 output.diagnostics
             );
         }
+    });
+}
+
+#[test]
+fn heads_only_signature_reuse_preserves_the_complete_durable_record() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let context = default_context();
+        let source = "const LEFT:Inline[u16,2]=[1,2]\n";
+        let left = definition("LEFT");
+        let mut seed = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = seed.sources.add("left.hir", source.into()).unwrap();
+        seed.index_source(file, &context).unwrap();
+        seed.item_signature(&left).unwrap();
+        assert!(
+            seed.resolver_snapshot(&left, QueryKind::Signature)
+                .is_some()
+        );
+        let mut entries = store.take();
+        let original: Vec<_> = entries
+            .iter()
+            .filter(|(key, _)| key.2 == QueryKind::Signature)
+            .map(|(key, bytes)| (key.clone(), bytes.clone()))
+            .collect();
+        assert_eq!(original.len(), 1);
+        for (key, bytes) in entries.drain() {
+            store::ResultStore::put(&*store, &key, &bytes);
+        }
+        drop(seed);
+        let mut reader = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store.clone());
+        let file = reader.sources.add("moved/left.hir", source.into()).unwrap();
+        reader.index_source(file, &context).unwrap();
+        assert_eq!(reader.work_stats().parsed_bytes, 0);
+        reader.item_signature(&left).unwrap();
+        assert!(
+            reader
+                .resolver_snapshot(&left, QueryKind::Signature)
+                .is_none()
+        );
+        let client = reader
+            .sources
+            .add("client.hir", "const NEXT:u16=comptime LEFT[1]\n".into())
+            .unwrap();
+        reader.index_source(client, &context).unwrap();
+        assert_eq!(
+            reader.materialize_constant(&definition("NEXT")).unwrap(),
+            hirsel_tir::Constant::Integer(2)
+        );
+        for (key, bytes) in &original {
+            assert_eq!(
+                &*store::ResultStore::get(&*store, key).unwrap(),
+                &**bytes,
+                "a heads-only in-memory projection must not replace its full durable signature"
+            );
+        }
+        let mut oracle = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(store)
+            .with_verify_store(store::VerifyStore::Recompute);
+        let file = oracle.sources.add("left.hir", source.into()).unwrap();
+        oracle.index_source(file, &context).unwrap();
+        oracle.item_signature(&left).unwrap();
+    });
+}
+
+#[test]
+fn frozen_workers_reuse_locally_validated_constant_inputs_without_rechecking() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "const BASE:u8=1u8\nconst NEXT:u8=comptime BASE+1u8\n";
+        let base = definition("BASE");
+        let next = definition("NEXT");
+        let mut seed = signature_session(store.clone(), source, true);
+        assert_eq!(
+            seed.materialize_constant(&base).unwrap(),
+            hirsel_tir::Constant::Integer(1)
+        );
+        drop(seed);
+        let mut reader = signature_session(store.clone(), source, true);
+        assert_eq!(
+            reader.materialize_constant(&base).unwrap(),
+            hirsel_tir::Constant::Integer(1)
+        );
+        assert_eq!(reader.recompute_count(&base, QueryKind::Check), 0);
+        let result = reader
+            .materialize_value_outcomes(vec![next.clone()], hirsel_intern::jobs::Jobs::new(1));
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result[0].result.as_ref().unwrap().root.kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(2))
+        );
+        assert_eq!(
+            reader.recompute_count(&base, QueryKind::Check),
+            0,
+            "a frozen nested demand must reuse the controller's locally validated constant"
+        );
+        let mut changed =
+            signature_session(store, &source.replace("BASE:u8=1u8", "BASE:u8=2u8"), true);
+        let result =
+            changed.materialize_value_outcomes(vec![next], hirsel_intern::jobs::Jobs::new(1));
+        assert_eq!(
+            result[0].result.as_ref().unwrap().root.kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(3))
+        );
+    });
+}
+
+#[test]
+fn frozen_nested_body_demand_restores_ordinary_modes_before_rechecking() {
+    with_compiler_stack(|| {
+        let store = Arc::new(store::MemStore::default());
+        let source = "fn helper(x:u8)->u8{x+1u8}\nconst NEXT:u8=comptime helper(1u8)\n";
+        let helper = definition("helper");
+        let next = definition("NEXT");
+        let mut seed = signature_session(store.clone(), source, true);
+        seed.mode_definition(&helper).unwrap();
+        drop(seed);
+        let mut reader = signature_session(store.clone(), source, true);
+        let result = reader
+            .materialize_value_outcomes(vec![next.clone()], hirsel_intern::jobs::Jobs::new(1));
+        assert_eq!(
+            result[0].result.as_ref().unwrap().root.kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(2))
+        );
+        assert_eq!(
+            reader.recompute_count(&helper, QueryKind::Check),
+            0,
+            "nested execution must try its persisted Modes before running P again"
+        );
+        let mut edited = signature_session(store, &source.replace("x+1u8", "x+2u8"), true);
+        let result =
+            edited.materialize_value_outcomes(vec![next], hirsel_intern::jobs::Jobs::new(1));
+        assert_eq!(
+            result[0].result.as_ref().unwrap().root.kind,
+            hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(3))
+        );
+        assert!(edited.recompute_count(&helper, QueryKind::Check) > 0);
     });
 }

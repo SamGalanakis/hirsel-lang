@@ -61,8 +61,8 @@ pub trait ResultStore: Send + Sync {
     fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
         None
     }
-    /// Whether this provider can retain results. An off provider disables
-    /// record capture and encoding as well as I/O; names are only labels.
+    /// Whether this provider can serve ordinary products. A disabled provider
+    /// skips record capture and encoding as well as I/O; names are only labels.
     fn enabled(&self) -> bool {
         true
     }
@@ -562,7 +562,10 @@ pub fn store_by_name(
     root: Option<std::path::PathBuf>,
 ) -> Result<Arc<dyn ResultStore>, String> {
     Ok(match name {
-        "none@1" => Arc::new(NoneStore),
+        "none@1" => match DirStore::installed_only() {
+            Some(store) => Arc::new(store),
+            None => Arc::new(NoneStore),
+        },
         "mem@1" => MemStore::shared(),
         "dir@1" => Arc::new(match root {
             Some(root) => DirStore::new(root).with_installed_products(),

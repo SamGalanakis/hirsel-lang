@@ -402,7 +402,7 @@ impl Parser<'_> {
                                     .get(self.pos)
                                     .copied()
                                     .unwrap_or(self.tokens.len());
-                                origin.tokens.end = end as u32;
+                                origin.tokens.end = self.local_token(end);
                             }
                             let height = self.heights.statement(&kind);
                             self.check_height(height);

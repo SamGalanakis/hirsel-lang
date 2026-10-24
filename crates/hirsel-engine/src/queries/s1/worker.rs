@@ -19,6 +19,7 @@ use std::sync::Mutex;
 #[derive(Clone, Debug)]
 pub(crate) enum Requirement {
     Syntax(DefPath),
+    Modes(DefPath),
     Staged(DefPath),
     Receipt(ReadKey),
     Generate(DefPath),

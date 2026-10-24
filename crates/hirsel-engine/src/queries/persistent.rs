@@ -792,6 +792,7 @@ impl QueryEngine {
         let mutable = Arc::get_mut(&mut entry).expect("unpublished signature");
         mutable.covered = record.covered;
         mutable.products = Arc::new(PhaseProducts {
+            signature_persisted: true,
             resolution,
             representation,
             mode_diagnostics: vec![],
@@ -806,6 +807,7 @@ impl QueryEngine {
         entry: &Entry<hirsel_types::SignatureRef>,
     ) -> Result<(), QueryError> {
         if self.result_store.is_none()
+            || entry.products.signature_persisted
             || !entry.consistent
             || !self.s1.is_empty()
             || !self.s1.failure_is_own()
