@@ -9,7 +9,7 @@ mod compact;
 mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
-pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries};
+pub use scheduled::{FRONT_BODY_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput};
 
 /// One input's outcome, including the phase that completed or stopped it.
 /// Results from `mode_definitions` always retain the caller's input order.
