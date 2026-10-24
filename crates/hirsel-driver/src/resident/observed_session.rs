@@ -89,6 +89,22 @@ where
             logical_entry: None,
         }
     }
+    /// Capture a replacement immutable compiler policy while preserving delivered
+    /// source observations. Previously returned outputs retain their own owners.
+    pub fn replace_engine(
+        &mut self,
+        compiler: Compiler,
+        config: CompileConfig,
+        engine: E,
+        limits: InputLimits,
+        attempts: usize,
+    ) {
+        self.host = Host::new(engine);
+        self.compiler = compiler.with_config(config.clone()).with_owned_engines();
+        self.config = config;
+        self.limits = limits;
+        self.attempts = attempts;
+    }
     pub fn entry(&self) -> &Path {
         &self.entry
     }

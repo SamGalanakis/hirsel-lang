@@ -62,6 +62,14 @@ impl Session {
         let attempts = engine.capture_attempts();
         Self::new(entry.to_owned(), compiler, config, engine, limits, attempts)
     }
+    /// Replace the compiler policy without replacing explicitly delivered inputs.
+    pub fn configure(&mut self, compiler: hirsel_engine::Compiler) {
+        let config = compiler.configuration();
+        let engine = crate::requests::CompilerRequests::for_host(compiler.clone(), config.clone());
+        let limits = engine.input_limits();
+        let attempts = engine.capture_attempts();
+        self.replace_engine(compiler, config, engine, limits, attempts);
+    }
 }
 
 /// The sessions a resident host keeps, by (working directory, entry as
