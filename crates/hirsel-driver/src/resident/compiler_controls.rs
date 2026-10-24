@@ -316,12 +316,14 @@ fn selected_run_callee_identity_and_cancellation_keep_the_shared_check_live() {
         .unwrap();
         let mut selected = request(&entry);
         selected.operation = CompileOperation::Tir { definition: None };
-        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
-        let main = host.request(&selected).unwrap();
-        let main_output = main.wait().unwrap();
-        let mut callee = main_output.entry.clone();
+        let metadata = crate::COMPILER
+            .with_config(config())
+            .load_check_package_inputs(&entry, &selected.inputs, false)
+            .unwrap();
+        let mut callee = metadata.entry.clone();
         callee.0.name = "callee".into();
-        drop(main_output);
+        drop(metadata);
+        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
         let pending_main = host.request(&selected).unwrap();
         selected.operation = CompileOperation::Tir {
             definition: Some(callee.clone()),
