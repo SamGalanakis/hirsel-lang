@@ -59,3 +59,5 @@ export_file(name = "lld-input-overlay.patch")
 
 runtime_auditor(name = "runtime-auditor", llvm = ":llvm", builder = "build_runtime_auditor.py", source = "runtime_auditor.c", visibility = ["PUBLIC"])
 toolchain_proof(name = "runtime-auditor-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu"], script = "runtime_auditor_proof.py", interpreter = "python3")
+
+toolchain_proof(name = "runtime-store-proof", tools = [":llvm", ":runtime-auditor", ":glibc_floor", ":qemu", "root//:hirsel-driver-unittest-harness"], script = "runtime_store_proof.sh")
