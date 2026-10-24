@@ -233,6 +233,18 @@ impl Importer<'_> {
         loans: &mut Vec<LoanId>,
         taken: &mut Vec<SlotId>,
     ) -> R<ValueId> {
+        self.compared_at(op, None, loans, taken)
+    }
+
+    /// Reuse a key address whose dynamic projections were evaluated before
+    /// preflight. The eventual transfer must read that same evaluated place.
+    pub(super) fn compared_at(
+        &mut self,
+        op: &tir::Operand,
+        prepared: Option<AddressId>,
+        loans: &mut Vec<LoanId>,
+        taken: &mut Vec<SlotId>,
+    ) -> R<ValueId> {
         if let Some(view) = self.joined_view(op) {
             return view;
         }
@@ -242,7 +254,10 @@ impl Importer<'_> {
             if op.usage == UseKind::Take {
                 return unsupported("a taken part of a flat value as a comparison operand");
             }
-            let address = self.address(&p)?;
+            let address = match prepared {
+                Some(address) => address,
+                None => self.address(&p)?,
+            };
             let loan = match p.loan {
                 Some(l) if op.usage == UseKind::Borrow => self.loan(l)?,
                 _ => {
@@ -254,7 +269,10 @@ impl Importer<'_> {
             return self.flat_view(address, loan, source);
         }
         if !matches!(op.usage, UseKind::Take | UseKind::Copy) || !self.owns(p.ty) {
-            return self.operand(op);
+            return match prepared {
+                Some(address) => self.operand_at(op.usage, &p, address, p.loan),
+                None => self.operand(op),
+            };
         }
         let take = op.usage == UseKind::Take && !self.borrowed_storage(p.slot);
         if take && (!p.fixed || !p.steps.is_empty()) {
@@ -273,7 +291,14 @@ impl Importer<'_> {
         } else {
             p
         };
-        let address = self.address(&p)?;
+        let address = if take {
+            self.address(&p)?
+        } else {
+            match prepared {
+                Some(address) => address,
+                None => self.address(&p)?,
+            }
+        };
         let loan = self.synthetic_loan(address);
         let reaching = self.reaching(p.slot)?;
         let v = self.value(p.ty, Holding::Borrowed(loan));

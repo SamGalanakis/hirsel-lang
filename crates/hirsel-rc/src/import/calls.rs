@@ -103,7 +103,7 @@ impl Importer<'_> {
                     self.invocation_live = true;
                     self.failure.cleanup = Some(*on_failure);
                 }
-                self.key_preflight(callee, arguments)?;
+                let key_address = self.key_preflight(callee, arguments)?;
                 if self.builders.calls.contains(&t) {
                     return self.removed_call(*returns);
                 }
@@ -120,23 +120,27 @@ impl Importer<'_> {
                     return self.back_edge(&site, arguments);
                 }
                 self.call_block = t;
-                self.call(callee, arguments, *returns)?;
+                self.call(callee, arguments, *returns, key_address)?;
             }
             T::Match { table, from } => self.match_from(*table, *from)?,
         }
         Ok(())
     }
 
-    fn key_preflight(&mut self, callee: &tir::Callee, arguments: &[tir::CallArgument]) -> R<()> {
+    fn key_preflight(
+        &mut self,
+        callee: &tir::Callee,
+        arguments: &[tir::CallArgument],
+    ) -> R<Option<(tir::PlaceId, AddressId)>> {
         let tir::Callee::Definition { path, .. } = callee else {
-            return Ok(());
+            return Ok(None);
         };
         if !self.program.operations.contains_key(path)
             || !["map.insert", "set.insert", "map.get", "set.contains"]
                 .iter()
                 .any(|name| path.is_core(name))
         {
-            return Ok(());
+            return Ok(None);
         }
         let key = arguments
             .iter()
@@ -155,7 +159,15 @@ impl Importer<'_> {
         };
         let mut loans = vec![];
         let mut owned = vec![];
-        let value = self.compared(&borrowed, &mut loans, &mut owned)?;
+        // Evaluate dynamic indices once. A second extraction can name a new
+        // SSA index even when it reads the same unchanged source local.
+        let address = if self.joined_view(&borrowed).is_some() {
+            None
+        } else {
+            let place = self.place(borrowed.place)?;
+            Some(self.address(&place)?)
+        };
+        let value = self.compared_at(&borrowed, address, &mut loans, &mut owned)?;
         let layout = self.layout_of(self.value_type(value));
         self.structural_access(self.body.places[key.value.place.0 as usize].ty, layout)?;
         let scalar = self.types.intern(hirsel_types::Type::with_kind(
@@ -174,7 +186,7 @@ impl Importer<'_> {
             Ok(())
         })?;
         self.failure.cleanup = entered;
-        Ok(())
+        Ok(address.map(|address| (key.value.place, address)))
     }
 
     /// An `ArenaPush` of the read's maximum through an address of its own
@@ -219,6 +231,7 @@ impl Importer<'_> {
         callee: &tir::Callee,
         arguments: &[tir::CallArgument],
         returns: Option<tir::CallReturn>,
+        key_address: Option<(tir::PlaceId, AddressId)>,
     ) -> R<()> {
         // `list.len` of a list inside a flat value reads its encoding's count
         // in place: a flat list has no ordinary List to lend (LIR schema
@@ -543,7 +556,15 @@ impl Importer<'_> {
                 writes.push((p.slot, version));
                 ArgumentValue::Address { address, version }
             } else {
-                let value = self.operand(&a.value)?;
+                let value = if let Some((place, address)) = key_address
+                    && a.parameter.0 == 1
+                    && place == a.value.place
+                {
+                    let place = self.place(place)?;
+                    self.operand_at(a.value.usage, &place, address, place.loan)?
+                } else {
+                    self.operand(&a.value)?
+                };
                 let value = if matches!(passing, Passing::Take | Passing::Borrow) {
                     let ty = self.intern(layout);
                     self.weaken(value, ty)
