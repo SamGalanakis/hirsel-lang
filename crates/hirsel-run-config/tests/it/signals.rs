@@ -20,6 +20,43 @@ fn validate(signals: Value) -> Result<ValidatedRun, RunRefusal> {
     RunConfig::validate(&serde_json::to_vec(&record(Some(signals))).unwrap())
 }
 
+#[test]
+fn every_signal_kind_permutation_has_the_same_canonical_bytes_and_identity() {
+    let permutations = [
+        ["hangup", "interrupt", "terminate"],
+        ["hangup", "terminate", "interrupt"],
+        ["interrupt", "hangup", "terminate"],
+        ["interrupt", "terminate", "hangup"],
+        ["terminate", "hangup", "interrupt"],
+        ["terminate", "interrupt", "hangup"],
+    ];
+    let canonical =
+        validate(json!({"provider": "signals.host@1", "kinds": permutations[0]})).unwrap();
+    for kinds in permutations {
+        let signals = json!({"provider": "signals.host@1", "kinds": kinds});
+        let run = validate(signals.clone()).unwrap();
+        assert_eq!(
+            run.signals_grant().unwrap().kinds,
+            [
+                SignalKind::Hangup,
+                SignalKind::Interrupt,
+                SignalKind::Terminate
+            ]
+        );
+        assert_eq!(run.canonical(), canonical.canonical(), "{kinds:?}");
+        assert_eq!(run.identity(), canonical.identity(), "{kinds:?}");
+        let standalone = validate_signals_grant(&serde_json::to_vec(&signals).unwrap()).unwrap();
+        assert_eq!(
+            standalone.kinds,
+            [
+                SignalKind::Hangup,
+                SignalKind::Interrupt,
+                SignalKind::Terminate
+            ]
+        );
+    }
+}
+
 fn invalid(signals: Value, expected: &str) {
     assert!(
         matches!(validate(signals), Err(RunRefusal::Invalid { field, .. }) if field == expected),
