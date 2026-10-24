@@ -175,3 +175,4 @@ mod scheduled_native;
 mod scheduled_native_root;
 mod runtime50_continuation;
 mod scheduled_stage;
+mod native_source_inputs_19;
