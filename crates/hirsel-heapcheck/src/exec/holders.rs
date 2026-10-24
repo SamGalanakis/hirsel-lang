@@ -815,6 +815,9 @@ mod tests {
             layouts,
             units: vec![],
             statics: vec![],
+            invocation_bodies: vec![],
+            pretransfer_adapters: vec![],
+            invocations: Default::default(),
         };
         let config = Config::default();
         let mut ops = NoOperations;
@@ -868,6 +871,9 @@ mod tests {
                 layouts,
                 units: vec![],
                 statics: vec![],
+                invocation_bodies: vec![],
+                pretransfer_adapters: vec![],
+                invocations: Default::default(),
             };
             let config = Config::default();
             let mut ops = NoOperations;
@@ -1028,6 +1034,9 @@ mod tests {
             layouts,
             units: vec![],
             statics: vec![],
+            invocation_bodies: vec![],
+            pretransfer_adapters: vec![],
+            invocations: Default::default(),
         };
         let config = Config {
             full_recount_every_step: full,
@@ -1152,6 +1161,9 @@ mod tests {
             layouts,
             units: vec![],
             statics: vec![],
+            invocation_bodies: vec![],
+            pretransfer_adapters: vec![],
+            invocations: Default::default(),
         };
         let config = Config::default();
         let mut ops = NoOperations;
@@ -1195,6 +1207,9 @@ mod tests {
                 layouts,
                 units: vec![],
                 statics: vec![],
+                invocation_bodies: vec![],
+                pretransfer_adapters: vec![],
+                invocations: Default::default(),
             };
             let config = Config::default();
             let mut ops = NoOperations;
