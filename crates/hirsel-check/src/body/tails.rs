@@ -247,7 +247,10 @@ impl Checker<'_, '_> {
                         } => {
                             todo.push(Visit::Introduce(pattern, state));
                             if let Some(otherwise) = otherwise {
-                                // LANG-13: a refused value runs the else block.
+                                // The refused initializer remains owned until the
+                                // else block exits, just as a match scrutinee does.
+                                // Its cleanup can outlive a recursive return.
+                                todo.push(Visit::ReleaseTemporary(value, state));
                                 todo.push(Visit::Fork(
                                     vec![
                                         Branch::expression(otherwise, false, barrier),
@@ -255,6 +258,7 @@ impl Checker<'_, '_> {
                                     ],
                                     state,
                                 ));
+                                todo.push(Visit::Hold(value, state));
                             }
                             todo.push(Visit::Expression(value, false, barrier, state));
                         }

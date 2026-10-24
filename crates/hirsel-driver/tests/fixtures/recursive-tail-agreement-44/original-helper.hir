@@ -1,0 +1,12 @@
+fn bounded(source: String, options: markdown.Options) -> unique markdown.ParsedDocument uses {} {
+  let Ok(d) = markdown.parse_located_bounded(unique source, options, markdown.ParseBudget(source_bytes: string.byte_len(source), work_items: 131072, nesting: 128)) else {
+    failure.check(false, TextInvariant())
+    let Ok(empty) = markdown.parse_located_bounded("", options, markdown.ParseBudget(source_bytes: 0, work_items: 5, nesting: 1)) else {
+      failure.check(false, TextInvariant())
+      return bounded("", options)
+    }
+    return take empty
+  }
+  take d
+}
+pub fn main()->Result[(),()] { let d = bounded("source", markdown.Options(ok: true)); failure.check(markdown.length(d) == 6, TextInvariant());Ok(()) }

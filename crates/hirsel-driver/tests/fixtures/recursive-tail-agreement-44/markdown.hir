@@ -1,0 +1,9 @@
+// Minimal package control; this is not the production Markdown parser.
+pub type Options { ok: bool }
+pub type ParseBudget { source_bytes: u64, work_items: u64, nesting: u64 }
+pub type ParseLimit = Refused | Other
+pub opaque type ParsedDocument: noalloc_drop uses {} { source: String }
+pub fn parse_located_bounded(take source: String, options: Options, budget: ParseBudget) -> Result[unique ParsedDocument, ParseLimit] uses {} {
+  if options.ok { Ok(ParsedDocument(source: unique source)) } else { Error(Refused()) }
+}
+pub fn length(d: ParsedDocument) -> u64 uses {} { string.byte_len(d.source) }

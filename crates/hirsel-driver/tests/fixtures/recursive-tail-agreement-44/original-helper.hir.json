@@ -1,0 +1,1 @@
+{"schema":1,"package":{"name":"standalone","version":"0"},"entry":{"module":[],"name":"main"},"sources":[{"path":"original-helper.hir","module":[]},{"path":"markdown.hir","module":["markdown"]}],"dependencies":[]}
