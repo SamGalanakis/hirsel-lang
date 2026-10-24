@@ -248,11 +248,12 @@ fn validated_host_admission_reports_recorder_overlap_before_entry_for_read_only_
     let scratch = Scratch::new("admission");
     let root = scratch.path("work");
     let json = format!(
-        r#"{{"schema":1,"program":"{}","entry":"app@1/main","launch":"main",
+        r#"{{"schema":1,"depth_semantics":"{}","program":"{}","entry":"app@1/main","launch":"main",
         "inputs":{{"hash_seed":0,"random_seed":0,"test_seed":0,"scheduler":null}},
         "io":{{"stdout":null,"tasks":null,"monotonic_clock":null,"wall_clock":null,
         "random":null,"dirs":[{{"path":"work","host":"{}","access":"read"}}],"net":null}},
         "args":null,"env":null,"unsafe":false,"admission":null}}"#,
+        hirsel_run_schema::DEPTH_SEMANTICS,
         "00".repeat(32),
         root.display()
     );
