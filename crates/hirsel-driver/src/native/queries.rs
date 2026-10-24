@@ -483,7 +483,12 @@ type ReadyRecord = (
 pub mod instance;
 
 pub mod demand;
-pub mod ready_source;
-pub mod optimizer;
 pub mod emission;
 pub mod instance_tasks;
+pub mod optimizer;
+pub mod ready_source;
+
+pub mod compilation_tasks;
+pub mod link_tasks;
+pub mod root_tasks;
+pub mod roots;
