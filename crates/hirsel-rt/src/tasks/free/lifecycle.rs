@@ -551,7 +551,7 @@ pub(crate) unsafe fn scope_enter_until(
     let token = if replay {
         None
     } else {
-        unsafe { crate::host_waits::arm(ctx, index, clock, at) }?
+        unsafe { crate::host_waits::arm(ctx, index, generation, clock, at) }?
     };
     // A fresh scope has no children or inner scopes, so immediate expiration
     // needs no allocation or graph walk inside this publication.

@@ -124,7 +124,7 @@ pub(crate) unsafe fn scope_enter_until(
     assert!(matches!(progress, Progress::Absorbed(_)));
     // No Frontier/Scheduler borrow spans this home bridge. The row remains
     // owned by this head and cannot be observed by a retirement poll yet.
-    let token = unsafe { crate::host_waits::arm(ctx, index, clock, at) }?;
+    let token = unsafe { crate::host_waits::arm(ctx, index, generation, clock, at) }?;
     if let Some(token) = token {
         role::with_role(ctx, |s| {
             s.scope(index).deadline.as_mut().unwrap().token = Some(token);

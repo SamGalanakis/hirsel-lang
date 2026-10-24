@@ -16,6 +16,7 @@
 hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
 mod base64;
+mod deadlines;
 mod depth;
 pub mod handles;
 mod host_child;

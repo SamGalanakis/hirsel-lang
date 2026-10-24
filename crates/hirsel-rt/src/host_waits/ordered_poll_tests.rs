@@ -284,7 +284,7 @@ fn an_injected_parked_wait_is_polled_even_with_a_published_future_scope_timer() 
             },
             |ctx| unsafe {
                 let _role = crate::tasks::role::Guard::new(ctx);
-                let timer = arm(ctx, 0, 11, 100).unwrap().unwrap();
+                let timer = arm(ctx, 0, 1, 11, 100).unwrap().unwrap();
                 // Derived watcher readiness has no driver Pending row. Mirror
                 // the normal parked insertion without inventing a task frame.
                 Binding::raw(ctx).waits.parked.insert(
@@ -443,7 +443,7 @@ fn home_timer_arming_lends_the_role_and_preserves_the_copied_issuer() {
             },
             |ctx| unsafe {
                 let _role = crate::tasks::role::Guard::new(ctx);
-                assert_eq!(arm(ctx, 0, 11, 100).unwrap(), None);
+                assert_eq!(arm(ctx, 0, 1, 11, 100).unwrap(), None);
                 assert!(
                     crate::tasks::role::IdleGuard::try_new((*ctx).run_ptr()).is_none(),
                     "issuer role restored after timer bridge"

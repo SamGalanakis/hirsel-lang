@@ -2656,7 +2656,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
         }),
     );
     // SAFETY: the context is live and its Io bound.
-    match unsafe { crate::stop::check(ctx, crate::host_waits::arm(ctx, index, clock, at)) } {
+    match unsafe {
+        crate::stop::check(
+            ctx,
+            crate::host_waits::arm(ctx, index, generation, clock, at),
+        )
+    } {
         Some(token) => {
             if let Some(d) = &mut scheduler(ctx).scope(index).deadline {
                 d.token = Some(token);

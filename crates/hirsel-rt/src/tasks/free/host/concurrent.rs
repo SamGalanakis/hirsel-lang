@@ -4,7 +4,7 @@
 use super::*;
 use crate::context::RunShared;
 use crate::io_concurrent::ConcurrentAdapter;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -15,10 +15,30 @@ pub(crate) struct Service {
     pub(super) live: Arc<super::live::State>,
     pub(super) jobs: super::jobs::Jobs,
     driver: Option<crate::readiness::Readiness>,
-    rows: Mutex<BTreeMap<u64, Row>>,
+    rows: Mutex<Rows>,
     pending: AtomicUsize,
     opaque: Mutex<Option<opaque::Wake>>,
     timers: timers::Timers,
+}
+
+#[derive(Default)]
+struct Rows {
+    entries: BTreeMap<u64, Row>,
+    /// Ready registrations whose saved owner has not acknowledged the edge.
+    /// Keep early edges here; only retry/finish or successful notification
+    /// removes them. Idle registrations are never visited by the merge.
+    ready: BTreeSet<u64>,
+}
+
+impl Rows {
+    fn ready(&mut self, token: u64) {
+        if let Some(row) = self.entries.get_mut(&token)
+            && !row.notified
+        {
+            row.ready = true;
+            self.ready.insert(token);
+        }
+    }
 }
 
 struct Row {
@@ -106,6 +126,7 @@ impl Service {
         self.rows
             .lock()
             .unwrap()
+            .entries
             .values()
             .any(|row| row.task.is_some())
     }
@@ -117,6 +138,7 @@ impl Service {
             self.rows
                 .lock()
                 .unwrap()
+                .entries
                 .insert(
                     wait,
                     Row {
@@ -135,23 +157,29 @@ impl Service {
     /// Called under the role, after the logical park and before physical save.
     pub(crate) fn park(&self, token: u64, task: u32, generation: u32) -> bool {
         let mut rows = self.rows.lock().unwrap();
-        let Some(row) = rows.get_mut(&token) else {
+        let Some(row) = rows.entries.get_mut(&token) else {
             return false;
         };
         row.task = Some((task, generation));
+        if row.ready {
+            rows.ready.insert(token);
+        }
         true
     }
 
     pub(super) fn retry(&self, token: u64) {
         let mut rows = self.rows.lock().unwrap();
-        let row = rows.get_mut(&token).unwrap();
+        let row = rows.entries.get_mut(&token).unwrap();
         row.task = None;
         row.ready = false;
         row.notified = false;
+        rows.ready.remove(&token);
     }
 
     pub(super) fn finish(&self, token: u64) {
-        assert!(self.rows.lock().unwrap().remove(&token).is_some());
+        let mut rows = self.rows.lock().unwrap();
+        assert!(rows.entries.remove(&token).is_some());
+        rows.ready.remove(&token);
         self.pending.fetch_sub(1, Ordering::Release);
     }
 }
@@ -161,7 +189,7 @@ impl Drop for Service {
         // The last physical continuation released the run. No issuer or
         // home poll can still use these request-owned registrations.
         self.timers.clear(&*self.adapter);
-        for token in self.rows.get_mut().unwrap().keys() {
+        for token in self.rows.get_mut().unwrap().entries.keys() {
             self.adapter.finish(token & !CONCURRENT);
         }
     }
@@ -323,7 +351,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
         return false;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
-    let (idle, canceled, scopes) = {
+    let (idle, canceled) = {
         let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
             return false;
         };
@@ -337,6 +365,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             });
         let rows = io.rows.lock().unwrap();
         let canceled = rows
+            .entries
             .iter()
             .filter_map(|(&token, row)| {
                 let (task, generation) = row.task?;
@@ -347,8 +376,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                 .then_some(token & !CONCURRENT)
             })
             .collect::<Vec<_>>();
-        let scopes = io.timers.scopes(s);
-        (idle, canceled, scopes)
+        (idle, canceled)
     };
     let result = io.adapter.ready().and_then(|ready| {
         io.timers.poll(&*io.adapter, &ready)?;
@@ -371,21 +399,43 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
     };
     let jobs = io.jobs.drain();
     let mut changed = false;
-    let mut waiting = io.timers.pending();
+    let waiting = io.pending();
     {
         let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
-        changed |= io.timers.expire(s, &scopes);
-        for (&token, row) in io.rows.lock().unwrap().iter_mut() {
-            row.ready |= ready.contains(token & !CONCURRENT)
-                || canceled.contains(&(token & !CONCURRENT))
-                || jobs.contains(&token);
-            let Some((task, generation)) = row.task else {
+        changed |= io.timers.expire(s);
+        let mut rows = io.rows.lock().unwrap();
+        match ready {
+            crate::io::Ready::Tokens(tokens) => {
+                for token in tokens {
+                    rows.ready(token | CONCURRENT);
+                }
+            }
+            crate::io::Ready::Every => {
+                let tokens = rows.entries.keys().copied().collect::<Vec<_>>();
+                for token in tokens {
+                    rows.ready(token);
+                }
+            }
+        }
+        for token in canceled {
+            rows.ready(token | CONCURRENT);
+        }
+        // Owned job completions and credit grants carry their row's wait token.
+        for token in jobs {
+            rows.ready(token);
+        }
+        let notifications = std::mem::take(&mut rows.ready);
+        for token in notifications {
+            let Some(row) = rows.entries.get_mut(&token) else {
                 continue;
             };
             if row.notified {
                 continue;
             }
-            waiting = true;
+            let Some((task, generation)) = row.task else {
+                rows.ready.insert(token);
+                continue;
+            };
             let valid = s
                 .tasks
                 .get(task as usize)
@@ -395,12 +445,15 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
                         && matches!(r.wait, Some(Wait::Host { token: t }) if t == token)
                         && super::super::super::readiness::saved(s, task)
                 });
-            if valid && row.ready {
+            if valid {
                 row.notified = true;
                 s.unpark(task);
                 changed = true;
+            } else {
+                rows.ready.insert(token);
             }
         }
+        drop(rows);
         // Expiry also wakes runtime-only waits (channels, joins and cleanup).
         // Poll saved owners before retiring the last external event source.
         if changed {

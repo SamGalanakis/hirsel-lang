@@ -1,7 +1,7 @@
 //! Host readiness for the cooperative schedulers (the interpreter's and the compiled run's).
 //! A host operation that would block (a socket, a resolver wakeup, stdin, a process job)
 //! records its descriptor interest or deadline under the scheduler's opaque wait token. The
-//! interests live in one persistent epoll set and the deadlines in a timer heap, so a
+//! interests live in one persistent epoll set and the deadlines in exact ordered indexes, so a
 //! scheduling point asks [`Readiness::ready`] for exactly the tokens that are ready, at a cost
 //! independent of how many operations are parked, and with no runnable task
 //! [`Readiness::wait`] sleeps in one `epoll_wait` until a descriptor is ready or the earliest
@@ -29,11 +29,11 @@
 //!   per-resource readiness bits cleared on WouldBlock (`runtime/io/scheduled_io.rs`
 //!   `clear_readiness`, :372). Register-once would save that one call per park; the
 //!   measurement is in the crate README.
+use crate::deadlines::Deadlines;
 use crate::id_map::{IdMap, IdSet};
 use crate::io::AdapterError;
 use crate::net::{NetError, SocketAddr};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -111,16 +111,18 @@ struct ReadyState {
     /// Tokens whose Pending a provider borrowed since the last scheduling point: their
     /// interest and deadline are registered before the next readiness question.
     touched: IdSet,
+    /// Requests that can become ready independently of a real timer. Updated
+    /// when the provider releases its PendingGuard, never by a population scan.
+    non_timer: usize,
     /// The epoll set, created at the first descriptor interest.
     epoll: Option<OwnedFd>,
     /// Each watched descriptor's tokens and the events each waits for; the descriptor's
     /// registration is the union. A descriptor no token watches keeps its registration and
     /// loses its row; its events are then ignored.
     fds: IdMap<Vec<(u64, libc::c_short)>>,
-    /// Deadlines by time, then token; an entry whose token no longer has that deadline is
-    /// stale and skipped.
-    timers: BinaryHeap<Reverse<(Instant, u64)>>,
-    virtual_timers: BinaryHeap<Reverse<(u64, u64)>>,
+    /// Exact per-domain deadlines, tied by registration token.
+    timers: Deadlines<Instant>,
+    virtual_timers: Deadlines<u64>,
     /// Parked tokens with neither interest nor deadline, or whose descriptor epoll cannot
     /// watch (a regular file): ready at every scheduling point, as a poll(2) of them is.
     always: IdSet,
@@ -158,8 +160,9 @@ pub(crate) struct Pending {
     delivery: bool,
     /// It waits on a scripted world ([`Readiness::scripted`]) since this progress epoch.
     scripted: Option<ScriptedWait>,
-    /// What the epoll set and the timer heaps hold for this token.
+    /// What the epoll set and the deadline indexes hold for this token.
     registered: Option<(libc::c_int, libc::c_short)>,
+    non_timer: bool,
     timer: Option<Instant>,
     virtual_timer: Option<u64>,
 }
@@ -188,6 +191,21 @@ impl std::ops::DerefMut for PendingGuard<'_> {
 }
 impl Drop for PendingGuard<'_> {
     fn drop(&mut self) {
+        let p = self.state.pending.get_mut(&self.token).unwrap();
+        let non_timer = p.deadline.is_none()
+            || p.interest.is_some()
+            || p.delivery
+            || p.scripted.is_some()
+            || p.process.is_some()
+            || p.resolver.is_some();
+        let was = std::mem::replace(&mut p.non_timer, non_timer);
+        if non_timer != was {
+            if non_timer {
+                self.state.non_timer += 1;
+            } else {
+                self.state.non_timer -= 1;
+            }
+        }
         self.state.notify_driver();
     }
 }
@@ -408,6 +426,9 @@ impl Readiness {
         let Some(pending) = state.pending.remove(&token) else {
             return;
         };
+        state.non_timer -= usize::from(pending.non_timer);
+        state.timers.remove(token);
+        state.virtual_timers.remove(token);
         state.touched.remove(&token);
         state.always.remove(&token);
         state.scripted.remove(&token);
@@ -483,24 +504,21 @@ impl Readiness {
     /// wake_on descriptors are readiness-neutral: poll removes WAKE_TOKEN;
     /// stop words are checked separately at the existing runtime entries.
     pub(crate) fn ready_deadline(&self) -> Option<Instant> {
-        let state = self.0.lock().unwrap();
-        if state.shared || state.virtual_time.is_some() || !state.woken.is_empty() {
+        let mut state = self.0.lock().unwrap();
+        if state.shared
+            || state.virtual_time.is_some()
+            || !state.woken.is_empty()
+            || state.non_timer != 0
+        {
             return None;
         }
-        let mut earliest = None;
-        for (_, pending) in state.pending.iter_unordered() {
-            if pending.interest.is_some()
-                || pending.delivery
-                || pending.scripted.is_some()
-                || pending.process.is_some()
-                || pending.resolver.is_some()
-            {
-                return None;
-            }
-            let deadline = pending.deadline?;
-            earliest = Some(earliest.map_or(deadline, |old: Instant| old.min(deadline)));
+        state.sync().ok()?;
+        // A consumed due entry with a still-live request also declines: a
+        // later deadline must never hide a request already ready at home.
+        if state.timers.len() != state.pending.len() {
+            return None;
         }
-        earliest
+        state.timers.next()
     }
 
     /// Whether [`ready`](Self::ready) would report a token of this run now, without taking
@@ -768,28 +786,22 @@ impl ReadyState {
                 pending.delivery,
                 pending.scripted.is_some(),
             );
-            let mut timers = Vec::new();
-            if let Some(deadline) = pending.deadline
-                && pending.timer != Some(deadline)
-            {
-                pending.timer = Some(deadline);
-                timers.push(deadline);
+            if pending.timer != pending.deadline {
+                self.timers.remove(token);
+                if let Some(deadline) = pending.deadline {
+                    self.timers.insert(token, deadline);
+                }
+                pending.timer = pending.deadline;
             }
-            let mut virtual_timer = None;
-            if let Some(deadline) = pending.virtual_deadline
-                && pending.virtual_timer != Some(deadline)
-            {
-                pending.virtual_timer = Some(deadline);
-                virtual_timer = Some(deadline);
+            if pending.virtual_timer != pending.virtual_deadline {
+                self.virtual_timers.remove(token);
+                if let Some(deadline) = pending.virtual_deadline {
+                    self.virtual_timers.insert(token, deadline);
+                }
+                pending.virtual_timer = pending.virtual_deadline;
             }
             let watched = interest.is_some() || pending.deadline.is_some();
             let timed = pending.virtual_deadline.is_some();
-            for deadline in timers {
-                self.timers.push(Reverse((deadline, token)));
-            }
-            if let Some(deadline) = virtual_timer {
-                self.virtual_timers.push(Reverse((deadline, token)));
-            }
             if let Some((fd, _)) = registered
                 && interest.is_none_or(|(new, _)| new != fd)
             {
@@ -963,66 +975,26 @@ impl ReadyState {
         self.wake = Some(wake);
         Ok(())
     }
-    /// Add the tokens whose deadline has passed.
+    /// Visit only the inclusive due prefix in the active clock domain.
     fn due(&mut self, ready: &mut IdSet) {
         if let Some(now) = self.virtual_time {
-            while let Some(&Reverse((deadline, token))) = self.virtual_timers.peek() {
-                if deadline > now {
-                    break;
-                }
-                self.virtual_timers.pop();
-                if let Some(pending) = self.pending.get_mut(&token)
-                    && pending.virtual_timer == Some(deadline)
-                {
-                    pending.virtual_timer = None;
-                    ready.insert(token);
-                }
+            while let Some((_, token)) = self.virtual_timers.pop_due(now) {
+                self.pending.get_mut(&token).unwrap().virtual_timer = None;
+                ready.insert(token);
             }
-            return;
-        }
-        if self.timers.is_empty() {
-            return;
-        }
-        let now = Instant::now();
-        while let Some(&Reverse((deadline, token))) = self.timers.peek() {
-            if deadline > now {
-                break;
-            }
-            self.timers.pop();
-            if let Some(pending) = self.pending.get_mut(&token)
-                && pending.timer == Some(deadline)
-            {
-                pending.timer = None;
+        } else if !self.timers.is_empty() {
+            let now = Instant::now();
+            while let Some((_, token)) = self.timers.pop_due(now) {
+                self.pending.get_mut(&token).unwrap().timer = None;
                 ready.insert(token);
             }
         }
     }
-    /// The earliest live deadline, dropping stale heap entries.
     fn next_timer(&mut self) -> Option<Instant> {
-        while let Some(&Reverse((deadline, token))) = self.timers.peek() {
-            if self
-                .pending
-                .get(&token)
-                .is_some_and(|p| p.timer == Some(deadline))
-            {
-                return Some(deadline);
-            }
-            self.timers.pop();
-        }
-        None
+        self.timers.next()
     }
     fn next_virtual(&mut self) -> Option<u64> {
-        while let Some(&Reverse((deadline, token))) = self.virtual_timers.peek() {
-            if self
-                .pending
-                .get(&token)
-                .is_some_and(|p| p.virtual_timer == Some(deadline))
-            {
-                return Some(deadline);
-            }
-            self.virtual_timers.pop();
-        }
-        None
+        self.virtual_timers.next()
     }
 }
 
@@ -1683,3 +1655,7 @@ mod timed_isolation_tests {
         assert_eq!(readiness.virtual_time(), Some(5));
     }
 }
+
+#[cfg(test)]
+#[path = "readiness/modules.rs"]
+mod runtime50;

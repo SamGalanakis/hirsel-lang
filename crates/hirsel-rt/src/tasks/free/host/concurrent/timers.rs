@@ -11,11 +11,16 @@ pub(super) struct Timers(Mutex<Table>);
 #[derive(Default)]
 struct Table {
     next: u64,
+    #[cfg(test)]
+    visits: AtomicUsize,
     rows: BTreeMap<u64, Timer>,
+    deadlines: crate::deadlines::Deadlines<(u64, u64)>,
+    due: std::collections::BTreeSet<(u64, u64)>,
 }
 
 struct Timer {
     scope: u32,
+    generation: u32,
     clock: u64,
     at: u64,
     due: bool,
@@ -23,7 +28,13 @@ struct Timer {
 
 impl Service {
     /// Home only, outside the role, while the entering scope retains its owner.
-    pub(crate) fn arm(&self, scope: u32, clock: u64, at: u64) -> Stopped<Option<u64>> {
+    pub(crate) fn arm(
+        &self,
+        scope: u32,
+        generation: u32,
+        clock: u64,
+        at: u64,
+    ) -> Stopped<Option<u64>> {
         let token = {
             let mut table = self.timers.0.lock().unwrap();
             assert!(table.next < 1 << 48, "timer counter below run tag bits");
@@ -40,10 +51,13 @@ impl Service {
         ) {
             Err(AdapterError::Blocked) => {
                 self.adapter.parked(token);
-                self.timers.0.lock().unwrap().rows.insert(
+                let mut table = self.timers.0.lock().unwrap();
+                table.deadlines.insert(token, (clock, at));
+                table.rows.insert(
                     token,
                     Timer {
                         scope,
+                        generation,
                         clock,
                         at,
                         due: false,
@@ -64,7 +78,7 @@ impl Service {
 
     /// Home only, after every child cleanup rest has returned.
     pub(crate) fn disarm(&self, token: u64) {
-        let timer = self.timers.0.lock().unwrap().rows.remove(&token);
+        let timer = self.timers.0.lock().unwrap().remove(token);
         if timer.is_some_and(|t| !t.due) {
             self.adapter.finish(token);
         }
@@ -76,23 +90,6 @@ impl Timers {
         !self.0.lock().unwrap().rows.is_empty()
     }
 
-    pub(super) fn scopes(&self, s: &Scheduler) -> Vec<(u64, u32, u32)> {
-        self.0
-            .lock()
-            .unwrap()
-            .rows
-            .iter()
-            .filter_map(|(&token, timer)| {
-                let scope = s.scopes.get(timer.scope as usize)?.as_ref()?;
-                (scope.deadline.as_ref()?.token == Some(token)).then_some((
-                    token,
-                    timer.scope,
-                    scope.generation,
-                ))
-            })
-            .collect()
-    }
-
     /// Use the same readiness snapshot as parked program operations. A timer
     /// may become ready before scope/Done publishes its token; latch that edge.
     pub(super) fn poll(
@@ -100,17 +97,34 @@ impl Timers {
         adapter: &dyn ConcurrentAdapter,
         ready: &crate::io::Ready,
     ) -> Result<(), AdapterError> {
-        let mut timers = self
-            .0
-            .lock()
-            .unwrap()
-            .rows
-            .iter()
-            .filter_map(|(&token, t)| {
-                (!t.due && ready.contains(token)).then_some((t.at, token, t.clock))
-            })
-            .collect::<Vec<_>>();
-        timers.sort_unstable();
+        // Readiness already identifies the affected registrations. An opaque
+        // provider's Every explicitly affects all of them; token providers do
+        // no work proportional to idle timers. Preserve (at, token) ties.
+        let timers = {
+            let table = self.0.lock().unwrap();
+            let mut selected = std::collections::BTreeSet::new();
+            let every = if matches!(ready, crate::io::Ready::Every) {
+                table.rows.keys().copied().collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let mut select = |token| {
+                #[cfg(test)]
+                {
+                    table.visits.fetch_add(1, Ordering::Relaxed);
+                }
+                if let Some(t) = table.rows.get(&token)
+                    && !t.due
+                {
+                    selected.insert((t.at, token, t.clock));
+                }
+            };
+            match ready {
+                crate::io::Ready::Tokens(tokens) => tokens.iter().copied().for_each(&mut select),
+                crate::io::Ready::Every => every.into_iter().for_each(&mut select),
+            }
+            selected
+        };
         for (at, token, clock) in timers {
             match adapter.call_at(
                 token,
@@ -125,39 +139,60 @@ impl Timers {
                 Err(error) => return Err(error),
             }
             adapter.finish(token);
-            self.0.lock().unwrap().rows.get_mut(&token).unwrap().due = true;
+            let mut table = self.0.lock().unwrap();
+            table.rows.get_mut(&token).unwrap().due = true;
+            table.deadlines.remove(token);
+            table.due.insert((at, token));
         }
         Ok(())
     }
 
-    pub(super) fn expire(&self, s: &mut Scheduler, scopes: &[(u64, u32, u32)]) -> bool {
+    pub(super) fn expire(&self, s: &mut Scheduler) -> bool {
         let mut table = self.0.lock().unwrap();
-        let mut due = scopes
-            .iter()
-            .filter_map(|&(token, scope, generation)| {
-                let timer = table.rows.get(&token)?;
-                let row = s.scopes.get(scope as usize)?.as_ref()?;
-                (timer.due
-                    && row.generation == generation
-                    && row.deadline.as_ref()?.token == Some(token))
-                .then_some((timer.at, token, scope))
-            })
-            .collect::<Vec<_>>();
-        due.sort_unstable();
-        let changed = !due.is_empty();
-        for (_, token, scope) in due {
-            table.rows.remove(&token);
+        let mut changed = false;
+        // Only completed timer tokens may inspect scope rows. A ready edge
+        // before Done stays latched until that scope publishes its token.
+        let due = std::mem::take(&mut table.due);
+        for (at, token) in due {
+            #[cfg(test)]
+            {
+                table.visits.fetch_add(1, Ordering::Relaxed);
+            }
+            let timer = &table.rows[&token];
+            let row = s.scopes.get(timer.scope as usize).and_then(Option::as_ref);
+            let Some(row) = row.filter(|r| r.generation == timer.generation) else {
+                table.remove(token);
+                continue;
+            };
+            if row.deadline.as_ref().and_then(|d| d.token) != Some(token) {
+                table.due.insert((at, token));
+                continue;
+            }
+            let scope = timer.scope;
+            table.remove(token);
             s.expire(scope);
+            changed = true;
         }
         changed
     }
 
     pub(super) fn clear(&mut self, adapter: &dyn ConcurrentAdapter) {
-        for (&token, timer) in &self.0.get_mut().unwrap().rows {
+        let table = self.0.get_mut().unwrap();
+        for (&token, timer) in &table.rows {
             if !timer.due {
                 adapter.finish(token);
             }
         }
+        *table = Table::default();
+    }
+}
+
+impl Table {
+    fn remove(&mut self, token: u64) -> Option<Timer> {
+        let timer = self.rows.remove(&token)?;
+        self.deadlines.remove(token);
+        self.due.remove(&(timer.at, token));
+        Some(timer)
     }
 }
 
@@ -167,9 +202,9 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[derive(Default)]
-    struct Clock {
-        due: AtomicBool,
-        finishes: Mutex<Vec<u64>>,
+    pub(super) struct Clock {
+        pub(super) due: AtomicBool,
+        pub(super) finishes: Mutex<Vec<u64>>,
     }
 
     impl ConcurrentAdapter for Clock {
@@ -222,35 +257,31 @@ mod tests {
             }),
             completions: Default::default(),
         }));
-        let token = io.arm(0, 11, 100).unwrap().unwrap();
+        let token = io.arm(0, 2, 11, 100).unwrap().unwrap();
         assert!(io.pending());
         // Home observes readiness while the worker has not published Done.
-        let before_done = io.timers.scopes(&s);
-        assert!(before_done.is_empty());
+
         clock.due.store(true, Ordering::Release);
         io.timers
             .poll(&*clock, &crate::io::Ready::Tokens(vec![token]))
             .unwrap();
-        assert!(!io.timers.expire(&mut s, &before_done));
+        assert!(!io.timers.expire(&mut s));
         s.scope(0).deadline.as_mut().unwrap().token = Some(token);
-        let saved = io.timers.scopes(&s);
+
         // An edge is consumed once; a later poll still sees the latched due bit.
         io.timers
             .poll(&*clock, &crate::io::Ready::Tokens(Vec::new()))
             .unwrap();
-        s.scope(0).generation += 1;
-        assert!(!io.timers.expire(&mut s, &saved), "stale scope generation");
-        let current = io.timers.scopes(&s);
-        assert!(io.timers.expire(&mut s, &current));
+        assert!(io.timers.expire(&mut s));
         assert!(s.scope(0).deadline.as_ref().unwrap().expired);
         assert_eq!(s.scope(0).deadline.as_ref().unwrap().token, None);
         assert!(!io.pending());
         io.disarm(token);
         clock.due.store(false, Ordering::Release);
-        let canceled = io.arm(0, 11, 100).unwrap().unwrap();
+        let canceled = io.arm(0, 2, 11, 100).unwrap().unwrap();
         io.disarm(canceled);
         assert!(!io.pending());
-        let abandoned = io.arm(0, 11, 100).unwrap().unwrap();
+        let abandoned = io.arm(0, 2, 11, 100).unwrap().unwrap();
         drop(io);
         assert_eq!(
             *clock.finishes.lock().unwrap(),
@@ -258,3 +289,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "timers/modules.rs"]
+mod runtime50;

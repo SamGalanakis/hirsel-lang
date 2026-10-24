@@ -883,6 +883,7 @@ pub(crate) unsafe fn issue_net(
 pub(crate) unsafe fn arm(
     ctx: *mut TaskCtx,
     scope: u32,
+    generation: u32,
     clock: u64,
     at: u64,
 ) -> Stopped<Option<u64>> {
@@ -890,12 +891,13 @@ pub(crate) unsafe fn arm(
     // also refreshes the run's armed/parked count before returning.
     // Both policies copy the issuer before the home callback leaves the role.
     let task = crate::tasks::current_path(ctx);
-    unsafe { at_home(ctx, || arm_here(ctx, scope, clock, at, &task)) }?
+    unsafe { at_home(ctx, || arm_here(ctx, scope, generation, clock, at, &task)) }?
 }
 
 unsafe fn arm_here(
     ctx: *mut TaskCtx,
     scope: u32,
+    generation: u32,
     clock: u64,
     at: u64,
     issuer: &[u32],
@@ -910,7 +912,7 @@ unsafe fn arm_here(
                 .get()
                 .expect("production Free service")
         };
-        return io.arm(scope, clock, at);
+        return io.arm(scope, generation, clock, at);
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.adapter.wants_issuer() {
@@ -966,18 +968,21 @@ unsafe fn expired_here(ctx: *mut TaskCtx, ready: &Ready) -> Stopped<Vec<u32>> {
 }
 
 fn expired_binding(binding: &mut Binding, ready: &Ready) -> Stopped<Vec<u32>> {
-    let mut armed: Vec<(u64, u64)> = binding
-        .waits
-        .armed
-        .iter_unordered()
-        .filter(|(token, _)| ready.contains(*token))
-        .map(|(token, (_, request))| match request {
-            Request::SleepUntil { deadline, .. } => (*deadline, token),
-            _ => crate::fault("an armed deadline that is not a timer"),
-        })
-        .collect();
-    // By deadline, ties in arming (token) order.
-    armed.sort_unstable();
+    let mut armed = std::collections::BTreeSet::new();
+    let mut select = |token| {
+        if let Some((_, Request::SleepUntil { deadline, .. })) = binding.waits.armed.get(&token) {
+            armed.insert((*deadline, token));
+        }
+    };
+    match ready {
+        Ready::Tokens(tokens) => tokens.iter().copied().for_each(&mut select),
+        Ready::Every => binding
+            .waits
+            .armed
+            .iter_unordered()
+            .map(|(t, _)| t)
+            .for_each(&mut select),
+    }
     let mut due = Vec::new();
     for (_, token) in armed {
         let (scope, request) = binding.waits.armed[&token].clone();
