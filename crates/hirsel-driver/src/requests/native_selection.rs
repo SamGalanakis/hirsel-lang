@@ -27,6 +27,7 @@ pub(super) struct Footprint {
 impl Footprint {
     const ROUTING: u64 = 16 << 10;
     const PLATFORM: u64 = 64 << 10;
+    const POLICY: u64 = 64 << 10;
     pub fn minimum(definitions: &[DefPath]) -> Option<u64> {
         Self::new(definitions, 0)?.bytes()
     }
@@ -51,6 +52,7 @@ impl Footprint {
             self.tasks,
             self.tasks,
             Self::ROUTING,
+            Self::POLICY,
             Self::PLATFORM,
             Self::PLATFORM,
         ]
@@ -62,6 +64,7 @@ impl Footprint {
 pub(super) struct NativeSelection {
     pub assembly: Arc<NativeAssembly>,
     pub readiness: Arc<NativeBuildReadiness>,
+    _allowance: MemoryReservation,
     key: ContentHash,
     request: NativeRequest,
     entry: DefPath,
@@ -104,6 +107,23 @@ impl NativeSelection {
             name_bytes: 64 << 10,
         };
         let validation = Arc::new(split(Footprint::PLATFORM)?);
+        let policy_allowance = split(Footprint::POLICY)?;
+        let mut copied = hirsel_engine::NativeMetadataWeight::default();
+        copied.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
+        super::native_products::request_metadata(&mut copied, &request);
+        copied.path(&entry);
+        copied.add(policy.linker.capacity());
+        copied.add(policy.auditors.capacity());
+        copied.add(policy.floor.capacity());
+        copied.vec(&links, |w, input| match input {
+            LinkInput::Library(name) => w.add(name.capacity()),
+            LinkInput::File(path) => w.add(path.capacity()),
+        });
+        if copied.bytes() > policy_allowance.bytes() {
+            return Err(failed(
+                "native selected policy metadata exceeds its original admission".into(),
+            ));
+        }
         let store = source.store.clone();
         let NativePlatformSelection { plan, platform } = NativePlatformSelection::capture(
             store.clone(),
@@ -151,6 +171,7 @@ impl NativeSelection {
                 .map_err(native_error)?,
         );
         Ok(Arc::new(Self {
+            _allowance: policy_allowance,
             key: request_key(&request)?,
             request,
             entry,
