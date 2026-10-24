@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const RECEIPT: Domain = Domain {
     kind: 0x4300_0001,
-    schema: 3,
+    schema: 4,
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,
@@ -69,6 +69,7 @@ struct Record {
     instance: ContentHash,
     implementation_revision: ContentHash,
     source_witness: Option<SealSourceWitness>,
+    declarations: super::declaration_reads::Reads,
     linkage: super::linkage::LinkageRecord,
     operations: Vec<OperationRead>,
     manifest: Vec<(OperationId, Option<OperationRow>)>,
@@ -88,6 +89,7 @@ snapshot_struct!(Record {
     instance,
     implementation_revision,
     source_witness,
+    declarations,
     linkage,
     operations,
     manifest,
@@ -290,6 +292,7 @@ impl NativeCache {
             || record.operations.iter().any(|read| {
                 operation_identity(environment, &read.id, &read.arguments) != Some(read.output)
             })
+            || !record.declarations.matches(environment.operations)
             || record.discharge != discharge_identity(environment.discharge, &record.definition)
             || record.source_witness
                 != environment
@@ -303,10 +306,22 @@ impl NativeCache {
         {
             return None;
         }
-        // Presence/integrity checks do not construct any Value or Ready. A
-        // product is decoded only by a demanded miss or with_ready callback.
+        // Value and Ready bodies remain unopened. Structural declaration reads
+        // may bind only the portable layout metadata needed for reconstruction.
         self.get(record.body.reference())?;
-        self.get(record.layouts.reference())?;
+        let layouts = self.get(record.layouts.reference())?;
+        if record.declarations.has_structural() {
+            let closure: LayoutClosure =
+                hirsel_codec::from_text(std::str::from_utf8(&layouts).ok()?).ok()?;
+            let binding = Binding::new(environment.target, &[&closure]).ok()?;
+            if !record.declarations.matches_structural(
+                environment.operations,
+                &binding.table,
+                environment.target,
+            ) {
+                return None;
+            }
+        }
         Some(NativeOutput { record })
     }
 
@@ -341,7 +356,16 @@ impl NativeCache {
         inputs: &Inputs<'_>,
         additional_abis: &[FnAbiId],
     ) -> Result<(ValidatedUnit<S>, Option<NativeOutput>), Box<Rejected<S>>> {
-        let checked = validate(unit, inputs)?;
+        let observed = super::declaration_reads::Observed::new(inputs.operations);
+        let checked_inputs = Inputs {
+            target: inputs.target,
+            layouts: inputs.layouts,
+            manifest: inputs.manifest,
+            operations: &observed,
+            discharge: inputs.discharge,
+            memo: Default::default(),
+        };
+        let checked = validate(unit, &checked_inputs)?;
         let capture = || -> Option<NativeOutput> {
             let domain = body_domain(S::KIND)?;
             // Observe the independent original-source provider, never candidate
@@ -358,6 +382,8 @@ impl NativeCache {
                 return None;
             }
             let (closure, body) = LayoutClosure::capture(&checked, inputs, additional_abis).ok()?;
+            let binding = Binding::new(inputs.target, &[&closure]).ok()?;
+            let declarations = observed.finish(&binding.table, inputs.target)?;
             let body = self.put(domain, hirsel_codec::to_text(&body).as_bytes())?;
             let layouts = self.put(LAYOUTS, hirsel_codec::to_text(&closure).as_bytes())?;
             let environment = NativeEnvironment {
@@ -396,6 +422,7 @@ impl NativeCache {
                 instance: header.instance,
                 implementation_revision: header.implementation_revision,
                 source_witness,
+                declarations,
                 linkage: super::linkage::LinkageRecord::capture(&checked, inputs.layouts)?,
                 operations: operation_reads.into_values().collect(),
                 manifest: checked
