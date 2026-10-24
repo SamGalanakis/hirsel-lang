@@ -107,7 +107,8 @@ impl Observation {
     }
 }
 impl Operation {
-    fn path(&self) -> &Path {
+    /// The observed path, including failed and negative input observations.
+    pub fn path(&self) -> &Path {
         match self {
             Self::Read(p) | Self::Canonicalize(p) | Self::Metadata(p) | Self::Directory(p) => p,
         }
@@ -239,6 +240,13 @@ impl CaptureInputs {
     }
 }
 impl FrozenInputs {
+    /// Transport/watch metadata for this exact snapshot. The iterator includes
+    /// failed reads, negative metadata, directories and canonicalization aliases.
+    /// Callers must still use LoaderInputs for bytes; paths confer no validity.
+    pub fn operations(&self) -> impl Iterator<Item = &Operation> {
+        self.observations.keys()
+    }
+
     /// Resolve only an alias observed by this snapshot, including a canonical
     /// path that appeared as the result of another observed resolution.
     pub fn known_path(&self, path: &Path) -> Option<PathBuf> {
