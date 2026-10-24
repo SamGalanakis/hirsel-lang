@@ -325,3 +325,84 @@ fn admitted_lower_depth_matches_scalar_after_warm_constant_dependencies() {
         }
     });
 }
+
+#[test]
+fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
+    use hirsel_engine::*;
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn spare()->u8{1u8}\npub fn main()->u8{2u8}\n").unwrap();
+        let store = Arc::new(hirsel_engine::store::MemStore::default());
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&path)
+            .unwrap();
+        let mut spare = program.entry.clone();
+        spare.0.name = "spare".into();
+        let definitions = vec![program.entry.clone(), spare.clone()];
+        let budget = ProcessBudget::new(1 << 30);
+        let weight = MemoryWeight {
+            retained: 64 << 10,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let errors = errors();
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::new(1),
+            budget.reserve(512 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+        let front = program
+            .engine
+            .front_body_queries(
+                &definitions,
+                weight,
+                budget.reserve(1 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let inventory = FrontLowerQueries::input_bytes(&definitions).unwrap();
+        let slot = FrontLowerQueries::output_bytes(weight).unwrap();
+        let lower = program
+            .engine
+            .front_lower_queries(
+                &definitions,
+                front.clone(),
+                weight,
+                32,
+                budget.reserve(inventory + slot).unwrap(),
+                errors,
+            )
+            .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        runtime
+            .register_local(FRONT_LOWER_KIND, lower.factory())
+            .unwrap();
+        runtime
+            .register_local(FRONT_EVALUATE_KIND, lower.factory())
+            .unwrap();
+        let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
+        let product = runtime.wait(request).unwrap()[0];
+        assert!(lower.outcome(product).is_some());
+        assert_eq!(lower.work(&program.entry).lowerings, 1);
+        assert_eq!(lower.work(&spare).lowerings, 0);
+        let request = runtime.request(&[lower.query(&spare).unwrap()]);
+        assert_eq!(runtime.wait(request).unwrap_err(), errors.resource);
+        assert_eq!(
+            lower.work(&spare).lowerings,
+            0,
+            "exhaustion refuses before transformation"
+        );
+        runtime.shutdown();
+        assert!(
+            lower.outcome(product).is_some(),
+            "held outputs survive worker shutdown with allowance owned"
+        );
+    });
+}
