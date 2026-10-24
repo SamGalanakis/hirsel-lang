@@ -134,7 +134,10 @@ fn tool(stage: StageName, command: &mut Command) -> Result<std::process::Output,
 
 /// Run `command` in its own process group to completion, or kill the group
 /// once `timeout` has passed and fail.
-pub(super) fn bounded(command: &mut Command, timeout: Duration) -> Result<std::process::Output, NativeError> {
+pub(super) fn bounded(
+    command: &mut Command,
+    timeout: Duration,
+) -> Result<std::process::Output, NativeError> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let child = command
