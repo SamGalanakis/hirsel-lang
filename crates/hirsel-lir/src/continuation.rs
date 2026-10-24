@@ -118,10 +118,21 @@ pub struct ResumeLabel {
     pub block: BlockId,
 }
 
+/// A resumable callee's own frame, nested in its caller's at the call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct NestedFrame {
+    pub body: ContentHash,
+    pub offset: u64,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ResumeState {
     pub boundary: ExistingBoundary,
+    /// Set when the boundary is a call of a resumable body.
+    pub callee: Option<NestedFrame>,
     pub live: Vec<LiveOwnedSlot>,
+    /// The frame-resident storage live here, at the plan's fixed offsets.
     pub storage: Vec<LiveStorage>,
     pub loans: Vec<LoanId>,
     pub cleanup: CleanupAnchor,
@@ -161,6 +172,9 @@ pub struct ContinuationPlan {
     pub body: ContentHash,
     pub digest: ContentHash,
     pub representation: Representation,
+    /// Storage live at any boundary. It lives in the frame at fixed offsets
+    /// for the whole body, so addresses into it stay valid across a suspension.
+    pub storage: Vec<LiveStorage>,
     pub states: Vec<ResumeState>,
     pub captures: Option<LayoutId>,
     pub cost: PlacementCost,
@@ -389,48 +403,32 @@ fn anchors_from(u: &LirUnit<Ready>, entry: BlockId) -> Vec<CleanupAnchorId> {
     anchors.into_iter().collect()
 }
 
-/// Lay out one state's image after the header, in value then slot order.
-fn place(
-    table: &LayoutTable,
-    values: &[(ValueId, LayoutId)],
-    slots: &[(SlotId, LayoutId)],
-) -> Option<(Vec<u64>, Vec<u64>, u64)> {
-    let mut at = FRAME_HEADER_BYTES;
-    let mut put = |layout| {
-        let (size, align) = fixed(table, layout)?;
-        at = at.checked_next_multiple_of(align)?;
-        let offset = at;
-        at = at.checked_add(size)?;
-        Some(offset)
-    };
-    let v = values
-        .iter()
-        .map(|(_, l)| put(*l))
-        .collect::<Option<Vec<_>>>()?;
-    let s = slots
-        .iter()
-        .map(|(_, l)| put(*l))
-        .collect::<Option<Vec<_>>>()?;
-    Some((v, s, at.next_multiple_of(8)))
+fn slot_layout(u: &LirUnit<Ready>, s: SlotId) -> (LayoutId, ValueRepr) {
+    let ty = &u.types[u.slots[s.index()].ty.index()];
+    (ty.layout, ty.repr)
 }
 
-fn state(
+/// Place items in order from `at`; the end, rounded to 8.
+fn place(table: &LayoutTable, at: u64, layouts: &[LayoutId]) -> Option<(Vec<u64>, u64)> {
+    let mut at = at;
+    let mut out = Vec::with_capacity(layouts.len());
+    for &layout in layouts {
+        let (size, align) = fixed(table, layout)?;
+        at = at.checked_next_multiple_of(align)?;
+        out.push(at);
+        at = at.checked_add(size)?;
+    }
+    Some((out, at.checked_next_multiple_of(8)?))
+}
+
+/// Values live across the boundary call at `block`: what its successors
+/// need, minus what it defines, plus what it reads (it has not yet run).
+fn live_across(
     u: &LirUnit<Ready>,
-    table: &LayoutTable,
     live: &crate::liveness::Liveness,
     block: BlockId,
-    ordinal: u32,
-    operation: DefPath,
-) -> Result<ResumeState, String> {
-    let Terminator::Call {
-        call,
-        normal: Some(normal),
-        failure,
-    } = u.terminators[block.index()]
-    else {
-        return Err("diverging boundary".into());
-    };
-    let site = &u.tables.calls[call.index()];
+    call: CallId,
+) -> Vec<ValueId> {
     let mut values = live.successor_needs(u, block);
     for d in crate::liveness::terminator_defs(u, &u.terminators[block.index()]) {
         values.remove(d);
@@ -438,6 +436,7 @@ fn state(
     for v in crate::liveness::terminator_uses(u, &u.terminators[block.index()]) {
         values.insert(v);
     }
+    let site = &u.tables.calls[call.index()];
     for a in site.arguments.get(&u.pools.call_arguments).unwrap_or(&[]) {
         if let ArgumentValue::Address { address, .. } = a.value
             && let AddressBase::Value(v) = u.addresses[address.index()].base
@@ -445,72 +444,182 @@ fn state(
             values.insert(v);
         }
     }
-    let values: Vec<_> = values
+    values.iter().collect()
+}
+
+/// Whether `to` is reachable from `from` along any edge.
+fn reaches(u: &LirUnit<Ready>, from: BlockId, to: BlockId) -> bool {
+    let mut seen = BTreeSet::from([from]);
+    let mut pending = vec![from];
+    while let Some(b) = pending.pop() {
+        if b == to {
+            return true;
+        }
+        let mut next = Vec::new();
+        for inst in u.blocks[b.index()]
+            .instructions
+            .get(&u.instructions)
+            .unwrap_or(&[])
+        {
+            if let Some(f) = inst.failure() {
+                next.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
+            }
+        }
+        let term = &u.terminators[b.index()];
+        next.extend(
+            term.normal_edges(&u.pools)
+                .into_iter()
+                .map(|e| u.tables.edges[e.index()].target),
+        );
+        next.extend(
+            term.failure_edges(&u.tables)
+                .into_iter()
+                .map(|f| u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target),
+        );
+        for n in next {
+            if seen.insert(n) {
+                pending.push(n);
+            }
+        }
+    }
+    false
+}
+
+/// One boundary: its call, operation and, for a resumable callee, its frame.
+pub(crate) struct Site {
+    pub(crate) block: BlockId,
+    pub(crate) call: CallId,
+    pub(crate) operation: DefPath,
+    pub(crate) callee: Option<(ContentHash, u64)>,
+}
+
+/// Lay out every state over one fixed storage area.
+fn states(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    sites: &[Site],
+) -> Result<(Vec<LiveStorage>, Vec<ResumeState>), String> {
+    let live = crate::liveness::liveness(u);
+    let mut at_sites = Vec::new();
+    let mut union = BTreeSet::new();
+    for site in sites {
+        let Terminator::Call {
+            normal: Some(normal),
+            ..
+        } = u.terminators[site.block.index()]
+        else {
+            return Err("diverging boundary".into());
+        };
+        if reaches(u, u.tables.edges[normal.index()].target, site.block) {
+            return Err("boundary on a cycle".into());
+        }
+        let (slots, loans) = storage_at(u, site.block);
+        union.extend(slots.iter().copied());
+        at_sites.push((slots, loans));
+    }
+    let slots: Vec<_> = union.into_iter().collect();
+    let (offsets, base) = place(
+        table,
+        FRAME_HEADER_BYTES,
+        &slots
+            .iter()
+            .map(|s| slot_layout(u, *s).0)
+            .collect::<Vec<_>>(),
+    )
+    .ok_or("dynamic live storage")?;
+    let storage: Vec<_> = slots
         .iter()
-        .map(|v| (v, u.types[u.values[v.index()].ty.index()].layout))
-        .collect();
-    let (slots, loans) = storage_at(u, block);
-    let slots: Vec<_> = slots
-        .into_iter()
-        .map(|s| (s, u.types[u.slots[s.index()].ty.index()].layout))
-        .collect();
-    let (voffsets, soffsets, bytes) = place(table, &values, &slots).ok_or("dynamic live layout")?;
-    let entry = u.tables.edges[u.tables.failures[failure.index()].cleanup.index()].target;
-    Ok(ResumeState {
-        boundary: ExistingBoundary {
-            block,
-            call,
-            operation,
-        },
-        live: values
-            .iter()
-            .zip(voffsets)
-            .map(|(&(value, layout), offset)| LiveOwnedSlot {
-                value,
-                layout,
-                repr: u.types[u.values[value.index()].ty.index()].repr,
-                holding: u.values[value.index()].holding,
-                offset,
-            })
-            .collect(),
-        storage: slots
-            .iter()
-            .zip(soffsets)
-            .map(|(&(slot, layout), offset)| LiveStorage {
+        .zip(&offsets)
+        .map(|(&slot, &offset)| {
+            let (layout, repr) = slot_layout(u, slot);
+            LiveStorage {
                 slot,
                 layout,
-                repr: u.types[u.slots[slot.index()].ty.index()].repr,
+                repr,
                 offset,
-            })
-            .collect(),
-        loans: loans.into_iter().collect(),
-        cleanup: CleanupAnchor {
+            }
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, (site, (slots, loans))) in sites.iter().zip(at_sites).enumerate() {
+        let Terminator::Call {
+            normal: Some(normal),
             failure,
-            entry,
-            anchors: anchors_from(u, entry),
-        },
-        regions: values
+            ..
+        } = u.terminators[site.block.index()]
+        else {
+            unreachable!()
+        };
+        let values = live_across(u, &live, site.block, site.call);
+        let layouts: Vec<_> = values
             .iter()
-            .filter_map(|&(value, layout)| {
-                match u.types[u.values[value.index()].ty.index()].repr {
-                    ValueRepr::RegionMark => Some(RegionKind::Mark),
-                    ValueRepr::Arena => Some(RegionKind::Arena),
-                    _ => None,
-                }
-                .map(|kind| RegionTokenLayout {
+            .map(|v| u.types[u.values[v.index()].ty.index()].layout)
+            .collect();
+        let (voffsets, mut bytes) = place(table, base, &layouts).ok_or("dynamic live layout")?;
+        let callee = site.callee.map(|(body, size)| {
+            let offset = bytes.next_multiple_of(16);
+            bytes = (offset + size).next_multiple_of(8);
+            NestedFrame {
+                body,
+                offset,
+                bytes: size,
+            }
+        });
+        let entry = u.tables.edges[u.tables.failures[failure.index()].cleanup.index()].target;
+        let ty = |v: ValueId| &u.types[u.values[v.index()].ty.index()];
+        out.push(ResumeState {
+            boundary: ExistingBoundary {
+                block: site.block,
+                call: site.call,
+                operation: site.operation.clone(),
+            },
+            callee,
+            live: values
+                .iter()
+                .zip(voffsets)
+                .map(|(&value, offset)| LiveOwnedSlot {
                     value,
-                    layout,
-                    kind,
+                    layout: ty(value).layout,
+                    repr: ty(value).repr,
+                    holding: u.values[value.index()].holding,
+                    offset,
                 })
-            })
-            .collect(),
-        target: ResumeLabel {
-            state: ordinal,
-            edge: normal,
-            block: u.tables.edges[normal.index()].target,
-        },
-        bytes,
-    })
+                .collect(),
+            storage: storage
+                .iter()
+                .filter(|s| slots.contains(&s.slot))
+                .cloned()
+                .collect(),
+            loans: loans.into_iter().collect(),
+            cleanup: CleanupAnchor {
+                failure,
+                entry,
+                anchors: anchors_from(u, entry),
+            },
+            regions: values
+                .iter()
+                .filter_map(|&value| {
+                    match ty(value).repr {
+                        ValueRepr::RegionMark => Some(RegionKind::Mark),
+                        ValueRepr::Arena => Some(RegionKind::Arena),
+                        _ => None,
+                    }
+                    .map(|kind| RegionTokenLayout {
+                        value,
+                        layout: ty(value).layout,
+                        kind,
+                    })
+                })
+                .collect(),
+            target: ResumeLabel {
+                state: i as u32 + 1,
+                edge: normal,
+                block: u.tables.edges[normal.index()].target,
+            },
+            bytes,
+        });
+    }
+    Ok((storage, out))
 }
 
 /// The certificate binds everything the plan was derived from.
@@ -520,6 +629,7 @@ pub(crate) fn certify(
     effects: &[CallEffect],
     callee_digests: &BTreeMap<ContentHash, ContentHash>,
     representation: &Representation,
+    storage: &[LiveStorage],
     states: &[ResumeState],
     captures: Option<LayoutId>,
 ) -> ValidatedContinuation {
@@ -541,12 +651,47 @@ pub(crate) fn certify(
         bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
     }
-    let tail = format!("{representation:?}{states:?}{captures:?}");
+    let tail = format!("{representation:?}{storage:?}{states:?}{captures:?}");
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
     ValidatedContinuation {
-        identity: ContentHash::of_parts("hirsel.continuation.plan.v1", [bytes.as_slice()]),
+        identity: ContentHash::of_parts("hirsel.continuation.plan.v2", [bytes.as_slice()]),
     }
+}
+
+/// The boundaries of a closed body, in block order; Err refuses the compact form.
+pub(crate) fn sites(
+    u: &LirUnit<Ready>,
+    effects: &[CallEffect],
+    plans: &BTreeMap<ContentHash, ContinuationPlan>,
+) -> Result<Vec<Site>, String> {
+    let mut out = Vec::new();
+    for (b, term) in u.terminators.iter().enumerate() {
+        let Terminator::Call { call, .. } = term else {
+            continue;
+        };
+        let (operation, callee) = match &effects[call.index()] {
+            CallEffect::Local => continue,
+            CallEffect::Unknown(why) => return Err(why.clone()),
+            CallEffect::Boundary(op) => (op.clone(), None),
+            CallEffect::Nested(id) => match plans.get(id) {
+                Some(p) if p.representation == Representation::Resumable => (
+                    callee_symbol(u, &u.tables.calls[call.index()])
+                        .unwrap()
+                        .definition,
+                    Some((*id, p.cost.frame_bytes)),
+                ),
+                _ => return Err(format!("suspends inside stackful callee {id:?}")),
+            },
+        };
+        out.push(Site {
+            block: BlockId(b as u32),
+            call: *call,
+            operation,
+            callee,
+        });
+    }
+    Ok(out)
 }
 
 fn plan_unit(
@@ -555,6 +700,7 @@ fn plan_unit(
     units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
     suspends: &BTreeSet<ContentHash>,
     digests: &BTreeMap<ContentHash, ContentHash>,
+    done: &BTreeMap<ContentHash, ContinuationPlan>,
 ) -> ContinuationPlan {
     let effects: Vec<_> = u
         .tables
@@ -567,72 +713,39 @@ fn plan_unit(
         .get(&u.header.instance)
         .copied()
         .flatten();
-    let mut cost = PlacementCost {
+    let built = sites(u, &effects, done).and_then(|sites| states(u, inputs.table, &sites));
+    let (representation, storage, states) = match built {
+        Err(why) => (Representation::Stackful(why), Vec::new(), Vec::new()),
+        Ok((_, states)) if states.is_empty() => (Representation::Direct, Vec::new(), states),
+        Ok((_, states)) if states.iter().any(|s| s.bytes > MAX_FRAME_BYTES) => (
+            Representation::Stackful("oversize live image".into()),
+            Vec::new(),
+            Vec::new(),
+        ),
+        Ok((storage, states)) => (Representation::Resumable, storage, states),
+    };
+    let cost = PlacementCost {
         instructions: (u.instructions.len() + u.terminators.len()) as u32,
-        ..Default::default()
+        boundaries: states.len() as u32,
+        frame_bytes: states.iter().map(|s| s.bytes).max().unwrap_or(0),
+        owned: states
+            .iter()
+            .map(|s| {
+                s.live
+                    .iter()
+                    .filter(|l| l.holding == Holding::Owned)
+                    .count() as u32
+            })
+            .max()
+            .unwrap_or(0),
     };
-    let refusal = effects.iter().find_map(|e| match e {
-        CallEffect::Unknown(why) => Some(why.clone()),
-        CallEffect::Nested(id) => Some(format!("suspends inside callee {id:?}")),
-        _ => None,
-    });
-    let mut states = Vec::new();
-    let representation = if let Some(why) = refusal {
-        Representation::Stackful(why)
-    } else {
-        let live = crate::liveness::liveness(u);
-        let mut built = Ok(());
-        for (b, term) in u.terminators.iter().enumerate() {
-            if let Terminator::Call { call, .. } = term
-                && let CallEffect::Boundary(op) = &effects[call.index()]
-            {
-                match state(
-                    u,
-                    inputs.table,
-                    &live,
-                    BlockId(b as u32),
-                    states.len() as u32 + 1,
-                    op.clone(),
-                ) {
-                    Ok(s) => states.push(s),
-                    Err(e) => {
-                        built = Err(e);
-                        break;
-                    }
-                }
-            }
-        }
-        let frame = states.iter().map(|s| s.bytes).max().unwrap_or(0);
-        match built {
-            Err(why) => Representation::Stackful(why),
-            Ok(()) if frame > MAX_FRAME_BYTES => {
-                Representation::Stackful(format!("{frame}-byte live image"))
-            }
-            Ok(()) if states.is_empty() => Representation::Direct,
-            Ok(()) => Representation::Resumable,
-        }
-    };
-    if !matches!(representation, Representation::Resumable) {
-        states.clear();
-    }
-    cost.boundaries = states.len() as u32;
-    cost.frame_bytes = states.iter().map(|s| s.bytes).max().unwrap_or(0);
-    cost.owned = states
-        .iter()
-        .map(|s| {
-            s.live
-                .iter()
-                .filter(|l| l.holding == Holding::Owned)
-                .count() as u32
-        })
-        .max()
-        .unwrap_or(0);
     let certificate = certify(
         u,
         inputs,
         &effects,
         digests,
         &representation,
+        &storage,
         &states,
         captures,
     );
@@ -640,11 +753,37 @@ fn plan_unit(
         body: u.header.instance,
         digest: u.digest(),
         representation,
+        storage,
         states,
         captures,
         cost,
         certificate,
     }
+}
+
+/// Callees first, so a caller sees each nested callee's final plan. A body
+/// reached again while being planned is recursive and keeps its stack.
+fn plan_in_order(
+    id: ContentHash,
+    inputs: &PlanInputs<'_>,
+    units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
+    suspends: &BTreeSet<ContentHash>,
+    digests: &BTreeMap<ContentHash, ContentHash>,
+    active: &mut BTreeSet<ContentHash>,
+    done: &mut BTreeMap<ContentHash, ContinuationPlan>,
+) {
+    if done.contains_key(&id) || !active.insert(id) {
+        return;
+    }
+    let u = units[&id];
+    for call in &u.tables.calls {
+        if let CallEffect::Nested(callee) = call_effect(u, call, units, suspends, inputs.classify) {
+            plan_in_order(callee, inputs, units, suspends, digests, active, done);
+        }
+    }
+    let plan = plan_unit(u, inputs, units, suspends, digests, done);
+    active.remove(&id);
+    done.insert(id, plan);
 }
 
 impl ContinuationPlans {
@@ -657,15 +796,18 @@ impl ContinuationPlans {
             .collect();
         let digests: BTreeMap<_, _> = index.iter().map(|(k, u)| (*k, u.digest())).collect();
         let suspends = suspending(&index, inputs.classify);
-        let plans: BTreeMap<_, _> = suspends
-            .iter()
-            .map(|id| {
-                (
-                    *id,
-                    plan_unit(index[id], inputs, &index, &suspends, &digests),
-                )
-            })
-            .collect();
+        let mut plans = BTreeMap::new();
+        for id in &suspends {
+            plan_in_order(
+                *id,
+                inputs,
+                &index,
+                &suspends,
+                &digests,
+                &mut BTreeSet::new(),
+                &mut plans,
+            );
+        }
         let identity = Self::identity_of(&plans, inputs);
         Self { plans, identity }
     }

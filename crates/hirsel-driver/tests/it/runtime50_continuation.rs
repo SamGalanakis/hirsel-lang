@@ -129,10 +129,33 @@ fn runtime50_resume_import_mutations_refused() {
         assert_ne!(plan.states[0].target.block, plan.states[1].target.block);
         assert_eq!(plan.cost.boundaries, 2);
         assert!(plan.cost.frame_bytes > 8 && plan.cost.frame_bytes <= 4096);
-        // Unknown and nested suspension keep the general stackful form.
+        // The child's specialized task wrapper nests the child's frame at its
+        // first boundary and finishes the task at its second.
+        let wrapper = plans
+            .plans
+            .values()
+            .find(|p| {
+                p.states
+                    .first()
+                    .and_then(|s| s.callee)
+                    .is_some_and(|c| c.body == id)
+            })
+            .expect("resumable wrapper nesting the child");
+        assert_eq!(wrapper.representation, Representation::Resumable);
+        let nested = wrapper.states[0].callee.unwrap();
+        assert_eq!(nested.bytes, plan.cost.frame_bytes);
+        assert!(wrapper.cost.frame_bytes >= nested.offset + nested.bytes);
+        assert!(
+            wrapper.states[1]
+                .boundary
+                .operation
+                .to_string()
+                .ends_with("TaskFinish")
+        );
+        // Unknown calls keep the general stackful form.
         assert!(plans.plans.values().any(|p| matches!(
             &p.representation,
-            Representation::Stackful(why) if why.contains("suspends inside callee")
+            Representation::Stackful(why) if why.contains("indirect call")
         )));
         let buffer = plan.states[0]
             .storage
@@ -226,6 +249,11 @@ fn runtime50_resume_import_mutations_refused() {
                     p.states[1].target.block = BlockId(0)
                 }),
                 |e| matches!(e, ContinuationError::ResumeLabel(_, 2)),
+            ),
+            (
+                "frame storage offset",
+                refused(&program, &plans, id, |p| p.storage[0].offset += 8),
+                |e| matches!(e, ContinuationError::Storage(_, 0)),
             ),
             (
                 "representation",
