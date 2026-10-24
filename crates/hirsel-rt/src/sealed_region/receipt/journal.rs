@@ -34,6 +34,9 @@ pub enum Error {
 
 pub type Rejected = (Error, Update);
 
+mod seal;
+pub use seal::SealError;
+
 /// One open arena's private source credits and retained semantic metadata.
 /// The source task context stays borrowed until cleanup; no such context is
 /// stored inside the immutable snapshots or a published sealed owner.

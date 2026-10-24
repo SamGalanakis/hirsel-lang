@@ -15,7 +15,7 @@ use crate::region::{
     hirsel_rt_v2_region_exit,
 };
 use crate::{STATUS_OK, TaskCtx, fault};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::MaybeUninit;
 use std::ptr;
 
@@ -99,13 +99,32 @@ pub enum Error {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Event {
+pub(super) enum Event {
     Owner,
     Snapshot,
     Extension,
     Block(usize),
     Shared(usize),
     Ready,
+}
+
+/// Actual journal holder batches, additional to root/physical guard credits.
+/// Snapshot is nonowning until disarm at commit; abort keeps the journal live.
+pub(super) trait JournalCredits {
+    fn snapshot(&self, credits: &mut Credits);
+    fn disarm(&mut self);
+}
+impl<K: Ord> JournalCredits for BTreeMap<K, Vec<*mut Header>> {
+    fn snapshot(&self, credits: &mut Credits) {
+        for holders in self.values() {
+            credits.journal_snapshot(holders);
+        }
+    }
+    fn disarm(&mut self) {
+        for holders in self.values_mut() {
+            holders.clear();
+        }
+    }
 }
 
 fn extent_valid(extent: usize, align: usize) -> bool {
@@ -204,6 +223,19 @@ unsafe fn run(
     plan: &Plan,
     checkpoint: &mut impl FnMut(Event) -> Result<(), Error>,
 ) -> Result<*mut SealedRegion, Error> {
+    unsafe { run_with_journal(ctx, arena, plan, checkpoint, None) }
+}
+
+/// The same transaction with separately owned source-journal credits.
+/// # Safety
+/// prepare_commit's contract plus exact, nonduplicated journal custody applies. No journal or source cleanup is disarmed before Ready succeeds.
+pub(super) unsafe fn run_with_journal(
+    ctx: *mut TaskCtx,
+    arena: *mut Region,
+    plan: &Plan,
+    checkpoint: &mut impl FnMut(Event) -> Result<(), Error>,
+    mut journal: Option<&mut dyn JournalCredits>,
+) -> Result<*mut SealedRegion, Error> {
     plan.check()?;
     let Charge::Bytes(charge) = plan.charge else {
         return Err(Error::Exhausted);
@@ -224,6 +256,9 @@ unsafe fn run(
         let mut credits = Credits::new();
         credits.value(prepared.ctx, plan.root.descriptor, plan.root.source);
         credits.arena(prepared.ctx, arena);
+        if let Some(journal) = journal.as_deref_mut() {
+            journal.snapshot(&mut credits);
+        }
         let mut addresses = Vec::with_capacity(plan.blocks.len());
         checkpoint(Event::Extension)?;
         let mut extension = Extension::new(ctx);
@@ -264,6 +299,9 @@ unsafe fn run(
             (*arena).remaining -= charge;
         }
         credits.disarm(arena);
+        if let Some(journal) = journal {
+            journal.disarm();
+        }
         for (block, &destination) in plan.blocks.iter().zip(&addresses) {
             if block.placement == Placement::Adopt && crate::region::is_tracked(destination) {
                 // A sealed payload is immutable, never an open tracked builder.

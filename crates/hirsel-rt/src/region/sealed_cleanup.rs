@@ -14,6 +14,12 @@ impl Credits {
         Self(Vec::new())
     }
 
+    /// Copy raw credit words while their journal still owns them. This acquires
+    /// no language credit and does not change journal cleanup on failure.
+    pub(crate) fn journal_snapshot(&mut self, holders: &[*mut Header]) {
+        self.0.extend_from_slice(holders);
+    }
+
     /// Accept actual source holder credits without duplicating them. The
     /// caller transfers custody only after its source operation commits.
     ///

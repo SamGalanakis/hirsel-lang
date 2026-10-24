@@ -405,3 +405,5 @@ fn invalid_holders_and_foreign_or_wrong_origin_replacements_cannot_retire_old_cr
         retire(ctx, source);
     });
 }
+
+mod seal_tests;
