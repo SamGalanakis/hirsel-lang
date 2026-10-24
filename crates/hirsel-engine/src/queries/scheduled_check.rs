@@ -101,6 +101,16 @@ impl FrontCheckQueries {
             _owner: self.clone(),
         })
     }
+    /// Inspect acceptance without cloning the ordered file/product inventory.
+    /// Conditional host continuations use this only after reading this root.
+    pub fn accepted(&self, product: ProductRef) -> Option<bool> {
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let (selected, data) = completed.as_ref()?;
+        (*selected == product).then(|| {
+            data.checked.completion == CheckCompletion::Complete
+                && !has_errors(&data.checked.diagnostics)
+        })
+    }
     pub fn failure(&self, reference: Reference) -> Option<(QueryError, Option<QueryKind>)> {
         let failures = self.failures.lock().unwrap_or_else(|e| e.into_inner());
         let (selected, error, phase) = failures.get(&reference.output.0)?;

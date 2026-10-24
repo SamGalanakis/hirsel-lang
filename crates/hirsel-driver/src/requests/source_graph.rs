@@ -25,6 +25,7 @@ struct SourceProducts {
     launch_entry: Option<DefPath>,
     foreign_unreplayable: bool,
     run: Option<Arc<FrontRunQueries>>,
+    safe: Option<Arc<super::safe_check::SafeCheck>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -41,6 +42,7 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
+            CompileOperation::SafeCheck => self.safe.is_some(),
             _ => false,
         }
     }
@@ -49,6 +51,9 @@ impl GraphProducts for SourceProducts {
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
         let roots = match operation {
+            CompileOperation::SafeCheck => {
+                vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
+            }
             CompileOperation::Check { lowering } if *lowering == self.lowering => {
                 vec![self.check.query()]
             }
@@ -74,6 +79,7 @@ impl GraphProducts for SourceProducts {
         let selected = roots.first().copied();
         let operation = operation.clone();
         let run = self.run.clone();
+        let safe = self.safe.clone();
         let lower = self.lower.clone();
         let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
@@ -101,6 +107,17 @@ impl GraphProducts for SourceProducts {
                     }
                     let work = meter.flush()?;
                     let result = match &operation {
+                        CompileOperation::SafeCheck => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|selected| selected.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            let (checked, reach) =
+                                safe.as_ref().ok_or_else(uninstalled)?.outcome(*product)?;
+                            CompileResult::SafeCheck { checked, reach }
+                        }
                         CompileOperation::Check { .. } => {
                             let [product] = products else {
                                 return Err(ToolError::Runtime(
@@ -347,6 +364,7 @@ pub(super) fn install(
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
         CompileOperation::Tir { .. } => (LoweringPolicy::Reachable, true),
+        CompileOperation::SafeCheck => (config.lowering, true),
         _ => return Err(uninstalled()),
     };
     // The loader reads exactly the supplied immutable observations. Declaration
@@ -377,7 +395,7 @@ pub(super) fn install(
         growth,
         check,
         transport,
-        run,
+        mut run,
     } = loading.finish(plan.snapshots)?;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
@@ -430,6 +448,14 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
+    let safe_allowance = if matches!(request.operation, CompileOperation::SafeCheck) {
+        Some(
+            run.split(super::safe_check::BYTES)
+                .ok_or_else(uninstalled)?,
+        )
+    } else {
+        None
+    };
     let run = if needs_run {
         Some(
             program
@@ -448,6 +474,18 @@ pub(super) fn install(
         drop(run);
         None
     };
+    let safe = safe_allowance
+        .map(|allowance| {
+            super::safe_check::SafeCheck::new(
+                check.clone(),
+                run.as_ref().unwrap().clone(),
+                launch_entry.clone(),
+                store.clone(),
+                errors,
+                allowance,
+            )
+        })
+        .transpose()?;
     let mut runtime = AdmittedRuntime::new(config.jobs, runtime, errors).map_err(ToolError::Io)?;
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
@@ -467,6 +505,11 @@ pub(super) fn install(
     if let Some(run) = &run {
         runtime
             .register(hirsel_engine::FRONT_RUN_KIND, run.factory())
+            .map_err(registration)?;
+    }
+    if let Some(safe) = &safe {
+        runtime
+            .register(super::safe_check::KIND, safe.factory())
             .map_err(registration)?;
     }
     let (input_operations, input_bytes) = request.inputs.read_work();
@@ -514,6 +557,7 @@ pub(super) fn install(
         launch_entry,
         foreign_unreplayable,
         run,
+        safe,
         front,
         lower,
         check,
