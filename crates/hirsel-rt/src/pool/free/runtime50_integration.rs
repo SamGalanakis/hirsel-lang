@@ -91,6 +91,14 @@ fn runtime50_full_protocol_integration() {
         role_waits,
         cancel_at_registration,
         stale_notices,
+        credit_waits,
+        late_handles,
+        credit_held_after_abandon,
+        index_equal_now,
+        index_equal_peers,
+        index_latched,
+        index_expired,
+        deadline_exit,
     } = total.clone();
     let cells = [
         ("wake before save", wake_before_save),
@@ -134,6 +142,14 @@ fn runtime50_full_protocol_integration() {
         ("role wait behind a loan", role_waits),
         ("cancel at registration", cancel_at_registration),
         ("stale cancellation notice", stale_notices),
+        ("job credit waits FIFO", credit_waits),
+        ("late initialized handle quarantined", late_handles),
+        ("abandoned job keeps its credit", credit_held_after_abandon),
+        ("index deadline equal to now", index_equal_now),
+        ("index deadlines equal to each other", index_equal_peers),
+        ("index edge before publication latched", index_latched),
+        ("index expiry", index_expired),
+        ("deadline scope exit on cancel", deadline_exit),
     ];
     let missing: Vec<_> = cells.iter().filter(|c| c.1 == 0).map(|c| c.0).collect();
     assert!(missing.is_empty(), "uncovered vectors: {missing:?}");

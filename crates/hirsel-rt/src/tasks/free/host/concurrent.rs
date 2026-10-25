@@ -533,3 +533,5 @@ pub(crate) unsafe fn wait(run: *mut RunShared) -> Stopped<bool> {
 
 mod opaque;
 mod timers;
+#[cfg(test)]
+pub(crate) use timers::runtime50::hooks as timer_hooks;

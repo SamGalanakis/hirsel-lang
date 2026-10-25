@@ -314,4 +314,4 @@ mod tests {
 
 #[cfg(test)]
 #[path = "timers/modules.rs"]
-mod runtime50;
+pub(super) mod runtime50;

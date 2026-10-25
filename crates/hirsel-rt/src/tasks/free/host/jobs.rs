@@ -34,6 +34,9 @@ struct Inner {
     work: Condvar,
     wake: OnceLock<Waker>,
     stats: Stats,
+    /// The deterministic driver runs each queued job itself: no thread.
+    #[cfg(test)]
+    manual: bool,
 }
 
 #[derive(Default)]
@@ -269,6 +272,8 @@ impl Jobs {
                 work: Condvar::new(),
                 wake: OnceLock::new(),
                 stats: Stats::default(),
+                #[cfg(test)]
+                manual: false,
             }),
         }
     }
@@ -330,6 +335,10 @@ impl Jobs {
             call: Box::new(call),
             credit,
         });
+        #[cfg(test)]
+        if self.inner.manual {
+            return slot;
+        }
         if pool.idle >= pool.queue.len() {
             self.inner.work.notify_one();
         } else {
@@ -394,20 +403,7 @@ fn serve(inner: Arc<Inner>) {
     loop {
         if let Some(job) = pool.queue.pop_front() {
             drop(pool);
-            let Job {
-                token,
-                slot,
-                call,
-                credit,
-            } = job;
-            let output = call();
-            inner.stats.returned.fetch_add(1, Ordering::Relaxed);
-            slot.finish(output);
-            drop(slot);
-            inner.pool.lock().unwrap().ready.push(token);
-            // Physical capacity ends only after the actual call returned.
-            drop(credit);
-            inner.wake();
+            run(&inner, job);
             pool = inner.pool.lock().unwrap();
             continue;
         }
@@ -418,6 +414,62 @@ fn serve(inner: Arc<Inner>) {
         pool.idle += 1;
         pool = inner.work.wait(pool).unwrap();
         pool.idle -= 1;
+    }
+}
+
+/// One job's actual call, then its result, its ready token and its credit.
+fn run(inner: &Inner, job: Job) {
+    let Job {
+        token,
+        slot,
+        call,
+        credit,
+    } = job;
+    let output = call();
+    inner.stats.returned.fetch_add(1, Ordering::Relaxed);
+    slot.finish(output);
+    drop(slot);
+    inner.pool.lock().unwrap().ready.push(token);
+    // Physical capacity ends only after the actual call returned.
+    drop(credit);
+    inner.wake();
+}
+
+/// The deterministic runtime driver's adapter: a manual pool whose queued
+/// jobs the driver's pool threads take in `serve`'s order and run when the
+/// driver chooses, so returns interleave as seeded transitions.
+#[cfg(test)]
+pub(crate) struct Taken(Job);
+
+#[cfg(test)]
+impl Jobs {
+    pub(crate) fn manual(limit: usize) -> Jobs {
+        let mut jobs = Jobs::new(limit);
+        Arc::get_mut(&mut jobs.inner).unwrap().manual = true;
+        jobs
+    }
+
+    /// A pool thread takes the oldest queued job.
+    pub(crate) fn take(&self) -> Option<Taken> {
+        assert!(self.inner.manual);
+        self.inner.pool.lock().unwrap().queue.pop_front().map(Taken)
+    }
+
+    pub(crate) fn queued(&self) -> usize {
+        self.inner.pool.lock().unwrap().queue.len()
+    }
+}
+
+#[cfg(test)]
+impl Taken {
+    pub(crate) fn token(&self) -> u64 {
+        self.0.token
+    }
+
+    /// The call returns on its pool thread.
+    pub(crate) fn run(self) {
+        let inner = self.0.credit.inner.clone();
+        run(&inner, self.0);
     }
 }
 

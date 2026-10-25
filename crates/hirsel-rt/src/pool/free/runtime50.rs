@@ -20,8 +20,11 @@
 //! (proofs/free, `models`) nor the native switch ABI (`progress`).
 use super::super::dispatch_tests::{Topology, topology};
 use super::super::*;
+use crate::io::{AdapterError, Completion};
 use crate::readiness::{Readiness, WaitSource};
-use crate::tasks::registry::{TaskKey, TaskLease};
+use crate::tasks::free::host::concurrent::timer_hooks::Deadlines;
+use crate::tasks::free::host::jobs::{self, Jobs, Owned, Taken};
+use crate::tasks::registry::{ScopeKey, TaskKey};
 use crate::tasks::role::Role;
 use crate::tasks::runtime50::hooks::Rows;
 use hirsel_free::claim::{Arbiter, Claim, Request, Requests};
@@ -194,6 +197,11 @@ enum Op {
     /// A synchronous home bridge while the task holds the scheduler role
     /// (`call_home_in`): home serves it by re-entering the caller's role.
     Loan,
+    /// A scope whose deadline, `after` ticks on, the concrete timer index
+    /// keeps; the task waits in it for expiry or cancellation.
+    Deadline {
+        after: u64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,12 +217,35 @@ enum Wait {
     Mutex,
     Host(u64),
     Timer { domain: usize, token: u64, at: u64 },
+    Deadline,
 }
 
 enum Mail {
-    /// A host completion: an initialized handle, or a failed call.
-    Result(Option<Handle>),
+    /// The job returned: its owner takes the result from the job's slot.
+    Returned,
     Canceled,
+    Due,
+}
+
+/// The scope-timer index's clock id for every deadline scope.
+const CLOCK: u64 = 11;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Deadline {
+    scope: ScopeKey,
+    at: u64,
+    stage: Arm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Arm {
+    /// Entered; home has not armed its timer.
+    Requested,
+    /// Due already at arming (a deadline equal to now).
+    DueAtArm,
+    /// Armed with this token, which the scope has not published.
+    Armed(u64),
+    Published(u64),
     Due,
 }
 
@@ -232,10 +263,11 @@ impl Drop for Handle {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Stage {
     Posted,
-    /// Delayed: the home polls it `remaining` more times before it completes.
-    Claimed {
-        remaining: u64,
-        fail: bool,
+    /// Claimed: its job credit reservation waits in the pool's FIFO.
+    Reserved,
+    /// The credit moved into a pool job at step `at`.
+    Submitted {
+        at: u64,
     },
     Returned,
 }
@@ -244,8 +276,10 @@ struct Job {
     request: Arc<Request<Handle>>,
     slot: u32,
     key: TaskKey,
-    /// The request's lease on its destination row (`host::jobs::Owned`).
-    _destination: TaskLease,
+    /// The concrete job ownership: reservation, result slot and the lease
+    /// on the destination row.
+    owned: Owned,
+    fail: bool,
     shielded: bool,
     stage: Stage,
 }
@@ -265,6 +299,7 @@ struct Task {
     remembered: bool,
     log: Arc<TaskLog>,
     wait: Option<Wait>,
+    deadline: Option<Deadline>,
     /// A completion the save gate held back: the frame had not acknowledged
     /// its save, so the policy may not resume the row. The idle save's
     /// after-save callback delivers it.
@@ -397,6 +432,18 @@ pub(super) struct Coverage {
     pub(super) role_waits: u64,
     pub(super) cancel_at_registration: u64,
     pub(super) stale_notices: u64,
+    /// A claimed request's job credit waited in the pool's FIFO.
+    pub(super) credit_waits: u64,
+    /// A job returned after its owner abandoned it and quarantined its result.
+    pub(super) late_handles: u64,
+    /// An abandoned running job kept its credit until it returned.
+    pub(super) credit_held_after_abandon: u64,
+    pub(super) index_equal_now: u64,
+    pub(super) index_equal_peers: u64,
+    /// A timer was due before its scope published the token: latched.
+    pub(super) index_latched: u64,
+    pub(super) index_expired: u64,
+    pub(super) deadline_exit: u64,
 }
 
 impl Coverage {
@@ -446,7 +493,15 @@ impl Coverage {
             home_refused,
             role_waits,
             cancel_at_registration,
-            stale_notices
+            stale_notices,
+            credit_waits,
+            late_handles,
+            credit_held_after_abandon,
+            index_equal_now,
+            index_equal_peers,
+            index_latched,
+            index_expired,
+            deadline_exit
         );
     }
 }
@@ -472,6 +527,16 @@ struct World {
     role: Role,
     /// The worker whose home loan holds the role, and whether home served it.
     loan: Option<(usize, bool)>,
+    /// The concrete owned job pool, run by the driver's pool threads.
+    pool: Jobs,
+    /// Jobs a pool thread took, by token, until their call returns.
+    running: BTreeMap<u64, Taken>,
+    /// The pool's waker fired: home has ready tokens to merge.
+    pool_woken: Arc<AtomicBool>,
+    /// The concrete scope-timer index.
+    deadlines: Deadlines,
+    armed_tokens: BTreeSet<u64>,
+    due_at_arm: u64,
     arbiter: Arbiter,
     requests: Requests<Handle>,
     tasks: Vec<Task>,
@@ -495,7 +560,6 @@ struct World {
     handles: BTreeSet<u64>,
     buffers: BTreeSet<u64>,
     closed: u64,
-    quarantined: u64,
     projection: String,
     coverage: Coverage,
 }
@@ -560,7 +624,7 @@ fn release(
 fn script(c: &mut Controller) -> Vec<Op> {
     let mut script = Vec::new();
     for _ in 0..2 + c.random("script-len", 4) {
-        match c.random("script-op", 8) {
+        match c.random("script-op", 9) {
             0 => script.push(Op::Compute),
             1 => script.push(Op::Yield),
             2 => script.extend([Op::Lock, Op::Yield, Op::Unlock]),
@@ -573,6 +637,9 @@ fn script(c: &mut Controller) -> Vec<Op> {
             }),
             5 => script.extend([Op::Dup, Op::Release]),
             6 => script.push(Op::Loan),
+            7 => script.push(Op::Deadline {
+                after: c.random("deadline", 3),
+            }),
             _ => script.extend([Op::Lock, Op::Unlock]),
         }
     }
@@ -612,6 +679,7 @@ fn prepare(
         remembered: false,
         log,
         wait: None,
+        deadline: None,
         deferred: None,
         job: None,
         mail: None,
@@ -682,6 +750,11 @@ impl World {
         let mut rows = Rows::new();
         let role = Role::default();
         role.enable();
+        // Fewer credits than tasks, so reservations queue FIFO.
+        let pool = Jobs::manual(2);
+        let pool_woken = Arc::new(AtomicBool::new(false));
+        let woken = pool_woken.clone();
+        pool.set_waker(Arc::new(move || woken.store(true, Ordering::Release)));
         for slot in 0..config.tasks {
             let script = match config.scripts {
                 Some(scripts) => scripts[slot as usize].to_vec(),
@@ -701,6 +774,12 @@ impl World {
             rows,
             role,
             loan: None,
+            pool,
+            running: BTreeMap::new(),
+            pool_woken,
+            deadlines: Deadlines::new(),
+            armed_tokens: BTreeSet::new(),
+            due_at_arm: 0,
             arbiter: Arbiter::new(true, usize::from(WIDTH)),
             requests: Requests::default(),
             tasks,
@@ -726,7 +805,6 @@ impl World {
             handles: BTreeSet::new(),
             buffers: BTreeSet::new(),
             closed: 0,
-            quarantined: 0,
             projection: String::new(),
             coverage: Coverage::default(),
         };
@@ -828,11 +906,39 @@ impl World {
             }
         }
         for (&id, job) in &self.jobs {
-            match job.stage {
-                Stage::Posted => events.push(1 << 24 | id as u32),
-                Stage::Claimed { .. } => events.push(2 << 24 | id as u32),
-                Stage::Returned => {}
+            if job.stage == Stage::Posted {
+                events.push(1 << 24 | id as u32);
             }
+        }
+        if self.pool_woken.load(Ordering::Acquire) {
+            events.push(2 << 24);
+        }
+        if self.pool.queued() > 0 {
+            events.push(6 << 24);
+        }
+        for &token in self.running.keys() {
+            events.push(7 << 24 | token as u32);
+        }
+        // After the terminal cut home merges no timer: teardown clears them,
+        // and a stopped segment may retire inside its deadline scope.
+        for task in self.tasks.iter().filter(|_| !self.stopped) {
+            match task.deadline.map(|d| d.stage) {
+                Some(Arm::Requested) => events.push(9 << 24 | task.slot),
+                Some(Arm::Armed(_)) => events.push(10 << 24 | task.slot),
+                _ => {}
+            }
+        }
+        if self.deadlines.watching() && !self.stopped {
+            events.push(11 << 24);
+        }
+        if !self.stopped
+            && (self.deadlines.due() > 0
+                || self
+                    .tasks
+                    .iter()
+                    .any(|t| t.deadline.is_some_and(|d| d.stage == Arm::DueAtArm)))
+        {
+            events.push(12 << 24);
         }
         for domain in 0..DOMAINS {
             if self.armed[domain] >= self.config.hold_clock
@@ -850,6 +956,13 @@ impl World {
         if matches!(self.loan, Some((_, false))) {
             events.push(5 << 24);
         }
+        // The stop's teardown may begin while pool calls still run.
+        if self.stopped
+            && (!self.running.is_empty() || self.pool.queued() > 0)
+            && !events.iter().any(|e| e >> 24 == 0)
+        {
+            events.push(13 << 24);
+        }
         events
     }
 
@@ -864,10 +977,21 @@ impl World {
                 break;
             }
             let Some(event) = event else { break };
+            if event >> 24 == 13 {
+                break;
+            }
             let arg = (event & 0xff_ffff) as usize;
             match event >> 24 {
                 0 => self.worker(arg),
                 5 => self.serve_loan(),
+                // Pool threads and home's adapter calls run outside the role.
+                6 => {
+                    let taken = self.pool.take().unwrap();
+                    assert!(self.running.insert(taken.token(), taken).is_none());
+                }
+                7 => self.running.remove(&(arg as u64)).unwrap().run(),
+                9 => self.arm(arg),
+                11 => self.poll_deadlines(),
                 home => {
                     // Home's merges take the role by its nonblocking idle claim.
                     if !self.role.driven_try_idle() {
@@ -881,9 +1005,11 @@ impl World {
                         self.handoff("home", Some(Role::IDLE));
                         match home {
                             1 => self.claim(arg as u64),
-                            2 => self.complete(arg as u64),
+                            2 => self.merge_jobs(),
                             3 => self.clock(arg),
-                            _ => self.cancellations(),
+                            4 => self.cancellations(),
+                            10 => self.publish_deadline(arg),
+                            _ => self.expire_deadlines(),
                         }
                         self.release(Role::IDLE);
                     }
@@ -1242,6 +1368,7 @@ impl World {
                 }
             }
             Op::Host { shielded } => self.host(w, t, index, shielded),
+            Op::Deadline { after } => self.deadline(w, t, index, after),
             Op::Loan => {
                 self.loan = Some((w, false));
                 self.coverage.loans += 1;
@@ -1284,28 +1411,29 @@ impl World {
 
     fn host(&mut self, w: usize, t: usize, index: u64, shielded: bool) {
         if let Some(mail) = self.tasks[t].mail.take() {
-            if self.arbiter.gate().unwrap().stopped() {
-                // A completion after the terminal cut is never delivered.
-                if let Mail::Result(Some(handle)) = mail {
-                    drop(handle);
-                    self.quarantined += 1;
-                    self.coverage.quarantined += 1;
-                }
-                return self.terminate(w);
-            }
+            // After the terminal cut the owner never takes the result: the
+            // stop's teardown abandons the job, which quarantines it.
             let section = section!(self, w);
             let canceled = self.rows.canceled(self.tasks[t].key);
-            let task = &mut self.tasks[t];
-            let id = task.job.take().unwrap();
+            let id = self.tasks[t].job.take().unwrap();
             match mail {
-                Mail::Result(handle) => {
-                    let job = self.jobs.remove(&id).unwrap();
+                Mail::Returned => {
+                    let mut job = self.jobs.remove(&id).unwrap();
                     assert_eq!(job.stage, Stage::Returned);
+                    let slot = job.owned.slot.take().unwrap();
+                    let output = slot.deliver().expect("the owner wins delivery");
                     job.request.finish();
                     self.requests.retire(id);
-                    match handle {
-                        Some(handle) => task.handles.push(handle),
-                        None => self.coverage.failed_calls += 1,
+                    match output {
+                        (Ok(Completion::Unit(Ok(()))), Some(handle)) => {
+                            assert!(self.handles.insert(handle));
+                            self.tasks[t].handles.push(Handle {
+                                id: handle,
+                                drops: self.handle_drops.clone(),
+                            });
+                        }
+                        (Err(AdapterError::Blocked), None) => self.coverage.failed_calls += 1,
+                        _ => unreachable!("the job returned what it was given"),
                     }
                     if shielded && canceled {
                         self.coverage.shielded_delivery += 1;
@@ -1314,8 +1442,8 @@ impl World {
                 Mail::Canceled => assert!(self.withdrawn.contains(&id)),
                 Mail::Due => unreachable!("a host wait received a timer"),
             }
-            effect(&section, &task.log, index, Phase::Done, DONE);
-            task.pc += 1;
+            effect(&section, &self.tasks[t].log, index, Phase::Done, DONE);
+            self.tasks[t].pc += 1;
             return;
         }
         if self.tasks[t].wait.is_some() || self.tasks[t].deferred.is_some() {
@@ -1353,7 +1481,11 @@ impl World {
             return;
         }
         drop(section);
-        let destination = self.rows.lease(key);
+        let owned = Owned {
+            reservation: None,
+            slot: None,
+            destination: self.rows.lease(key),
+        };
         let task = &mut self.tasks[t];
         self.jobs.insert(
             id,
@@ -1361,7 +1493,8 @@ impl World {
                 request,
                 slot: task.slot,
                 key,
-                _destination: destination,
+                owned,
+                fail: false,
                 shielded,
                 stage: Stage::Posted,
             },
@@ -1461,20 +1594,16 @@ impl World {
         self.slots[w].leaving = Some(Leave::Complete);
     }
 
-    /// The home claims a posted request by CAS (claim.rs).
+    /// The home claims a posted request by CAS (claim.rs); the claim winner
+    /// reserves one job credit before the call is issued.
     fn claim(&mut self, id: u64) {
         let job = self.jobs.get_mut(&id).unwrap();
         if job.request.claim() {
             assert!(self.claimed.insert(id));
-            let fail = self.c.random("host-fail", 6) == 0;
-            let delay = self.c.random("host-delay", 5);
-            if delay > 0 {
-                self.coverage.delayed_delivery += 1;
-            }
-            job.stage = Stage::Claimed {
-                remaining: delay,
-                fail,
-            };
+            job.fail = self.c.random("host-fail", 6) == 0;
+            job.owned.reservation = Some(self.pool.reserve(id));
+            job.stage = Stage::Reserved;
+            self.submit(id);
         } else {
             assert_eq!(job.request.state(), Claim::Withdrawn);
             assert!(self.withdrawn.contains(&id));
@@ -1483,47 +1612,178 @@ impl World {
         }
     }
 
-    /// A delayed host completion with an initialized handle.
-    fn complete(&mut self, id: u64) {
-        let Some(Job {
-            stage: Stage::Claimed { remaining, fail },
-            ..
-        }) = self.jobs.get_mut(&id)
-        else {
+    /// A granted credit moves into the job a pool thread will run; its
+    /// result is an initialized handle, or a failed call.
+    fn submit(&mut self, id: u64) {
+        let job = self.jobs.get_mut(&id).unwrap();
+        if !job.owned.reservation.as_mut().unwrap().granted() {
+            self.coverage.credit_waits += 1;
+            return;
+        }
+        let credit = job.owned.reservation.take().unwrap().take().unwrap();
+        let output: jobs::Output = if job.fail {
+            (Err(AdapterError::Blocked), None)
+        } else {
+            self.next_id += 1;
+            (Ok(Completion::Unit(Ok(()))), Some(self.next_id))
+        };
+        job.owned.slot = Some(self.pool.submit(credit, id, move || output));
+        job.stage = Stage::Submitted { at: self.step };
+    }
+
+    /// Home merges the pool's ready tokens in publication order: a granted
+    /// reservation submits; a returned call wakes its owner, which takes the
+    /// result itself (the single delivery winner).
+    fn merge_jobs(&mut self) {
+        self.pool_woken.store(false, Ordering::Release);
+        for id in self.pool.drain() {
+            let Some(job) = self.jobs.get_mut(&id) else {
+                continue;
+            };
+            match job.stage {
+                // After the stop no new call is issued; teardown returns it.
+                Stage::Reserved if !self.stopped => self.submit(id),
+                Stage::Submitted { at } if job.owned.slot.as_ref().unwrap().returned() => {
+                    if self.step > at + 2 {
+                        self.coverage.delayed_delivery += 1;
+                    }
+                    job.stage = Stage::Returned;
+                    let t = job.slot as usize;
+                    assert_eq!(
+                        self.tasks[t].key, job.key,
+                        "a completion reached a reused row"
+                    );
+                    assert!(self.rows.live(job.key));
+                    assert_eq!(self.tasks[t].wait, Some(Wait::Host(id)));
+                    if !self.stopped {
+                        self.deliver(t, Mail::Returned);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The task enters a deadline scope and waits in it; home arms the
+    /// concrete timer index outside the role.
+    fn deadline(&mut self, w: usize, t: usize, index: u64, after: u64) {
+        if let Some(mail) = self.tasks[t].mail.take() {
+            assert!(matches!(mail, Mail::Due | Mail::Canceled));
+            let section = section!(self, w);
+            // The scope exits: its timer is disarmed unless it already fired.
+            let Deadline { scope, stage, .. } = self.tasks[t].deadline.take().unwrap();
+            if let Arm::Armed(token) | Arm::Published(token) = stage {
+                self.deadlines.disarm(token);
+            }
+            self.rows.close_deadline(self.tasks[t].key, scope);
+            effect(&section, &self.tasks[t].log, index, Phase::Done, DONE);
+            self.tasks[t].pc += 1;
+            return;
+        }
+        if self.tasks[t].wait.is_some() || self.tasks[t].deferred.is_some() {
+            self.coverage.spurious_repark += 1;
+            return self.leave(w, false, "deadline-repark");
+        }
+        let key = self.tasks[t].key;
+        if self.rows.canceled(key) {
+            self.tasks[t].pc += 1;
+            return;
+        }
+        let section = section!(self, w);
+        let scope = self.rows.open_deadline(key);
+        effect(&section, &self.tasks[t].log, index, Phase::Entered, ENTERED);
+        drop(section);
+        self.tasks[t].deadline = Some(Deadline {
+            scope,
+            at: self.deadlines.now() + after,
+            stage: Arm::Requested,
+        });
+        self.tasks[t].wait = Some(Wait::Deadline);
+        self.leave(w, false, "deadline");
+    }
+
+    /// Home arms the scope's timer (`Service::arm`).
+    fn arm(&mut self, t: usize) {
+        let deadline = self.tasks[t].deadline.as_mut().unwrap();
+        deadline.stage = match self.deadlines.arm(deadline.scope, CLOCK, deadline.at) {
+            Some(token) => {
+                assert!(self.armed_tokens.insert(token));
+                Arm::Armed(token)
+            }
+            None => {
+                // Inclusive equality: a deadline at or before now is due.
+                assert!(deadline.at <= self.deadlines.now());
+                if deadline.at == self.deadlines.now() {
+                    self.coverage.index_equal_now += 1;
+                }
+                self.due_at_arm += 1;
+                Arm::DueAtArm
+            }
+        };
+    }
+
+    /// The scope publishes its armed token under the role.
+    fn publish_deadline(&mut self, t: usize) {
+        let deadline = self.tasks[t].deadline.as_mut().unwrap();
+        let Arm::Armed(token) = deadline.stage else {
             unreachable!()
         };
-        if *remaining > 0 {
-            *remaining -= 1;
-            return;
+        self.rows.publish_deadline(deadline.scope, token);
+        deadline.stage = Arm::Published(token);
+    }
+
+    /// Home's readiness poll: the index latches each due timer.
+    fn poll_deadlines(&mut self) {
+        let ready = self.deadlines.step();
+        let mut ats: Vec<u64> = ready.iter().map(|&(_, at)| at).collect();
+        ats.sort_unstable();
+        if ats.windows(2).any(|pair| pair[0] == pair[1]) {
+            self.coverage.index_equal_peers += 1;
         }
-        let fail = *fail;
-        let handle = (!fail).then(|| {
-            let handle = self.id();
-            self.handles.insert(handle);
-            Handle {
-                id: handle,
-                drops: self.handle_drops.clone(),
+        for (token, _) in ready {
+            if self
+                .tasks
+                .iter()
+                .any(|task| task.deadline.is_some_and(|d| d.stage == Arm::Armed(token)))
+            {
+                self.coverage.index_latched += 1;
             }
-        });
-        if self.stopped {
-            if let Some(handle) = handle {
-                drop(handle);
-                self.quarantined += 1;
-            }
-            self.coverage.quarantined += 1;
-            self.jobs.remove(&id);
-            return;
         }
-        let job = self.jobs.get_mut(&id).unwrap();
-        let t = job.slot as usize;
-        assert_eq!(
-            self.tasks[t].key, job.key,
-            "a completion reached a reused row"
-        );
-        assert!(self.rows.live(job.key));
-        assert_eq!(self.tasks[t].wait, Some(Wait::Host(id)));
-        job.stage = Stage::Returned;
-        self.deliver(t, Mail::Result(handle));
+    }
+
+    /// Home's expiry merge under the role: published due timers expire
+    /// their scopes, which wakes each owner; unpublished ones stay latched.
+    fn expire_deadlines(&mut self) {
+        for t in 0..self.tasks.len() {
+            if let Some(deadline) = self.tasks[t].deadline.as_mut()
+                && deadline.stage == Arm::DueAtArm
+            {
+                deadline.stage = Arm::Due;
+                let scope = deadline.scope;
+                self.rows.expire_now(scope);
+                self.wake_expired(t);
+            }
+        }
+        let deadlines = &self.deadlines;
+        self.rows.merge(|s| deadlines.expire(s));
+        for t in 0..self.tasks.len() {
+            if let Some(deadline) = self.tasks[t].deadline.as_mut()
+                && let Arm::Published(_) = deadline.stage
+                && self.rows.expired(deadline.scope)
+            {
+                deadline.stage = Arm::Due;
+                self.coverage.index_expired += 1;
+                self.wake_expired(t);
+            }
+        }
+    }
+
+    /// Expiry wakes an owner still waiting in its scope; a canceled one
+    /// already left the wait and only exits.
+    fn wake_expired(&mut self, t: usize) {
+        if self.tasks[t].wait == Some(Wait::Deadline) {
+            self.deliver(t, Mail::Due);
+        }
     }
 
     /// Housekeeping by steps: one domain's scheduling point, or its clock
@@ -1589,6 +1849,10 @@ impl World {
                 self.coverage.timer_exit += 1;
                 self.deliver(t, Mail::Canceled);
             }
+            Some(Wait::Deadline) => {
+                self.coverage.deadline_exit += 1;
+                self.deliver(t, Mail::Canceled);
+            }
             // Mutex take is not a cancellation point (CONC-3).
             Some(Wait::Mutex) | None => {}
         }
@@ -1638,7 +1902,7 @@ impl World {
         for job in self.jobs.values() {
             match job.stage {
                 Stage::Posted => self.coverage.stop_prepared += 1,
-                Stage::Claimed { .. } => self.coverage.stop_claimed += 1,
+                Stage::Reserved | Stage::Submitted { .. } => self.coverage.stop_claimed += 1,
                 Stage::Returned => self.coverage.stop_returned += 1,
             }
         }
@@ -1661,7 +1925,7 @@ impl World {
         for id in &sweep.in_doubt {
             assert!(matches!(
                 self.jobs[id].stage,
-                Stage::Claimed { .. } | Stage::Returned
+                Stage::Reserved | Stage::Submitted { .. } | Stage::Returned
             ));
         }
         self.coverage.in_doubt += sweep.in_doubt.len() as u64;
@@ -1751,15 +2015,26 @@ impl World {
                 assert_eq!(self.freed, [1, 1], "each root walked exactly once");
                 assert_eq!(self.mutex_owner, None);
                 assert!(self.jobs.is_empty());
-                assert_eq!(self.quarantined, 0);
+                assert_eq!(self.pool.stats().quarantined.load(Ordering::Relaxed), 0);
                 assert_eq!(self.loan, None);
+                assert!(!self.deadlines.pending());
+                // Each timer finished exactly once: at arming when already
+                // due, else by its expiry or its disarm.
+                let finishes = self.deadlines.finishes();
+                let finished: BTreeSet<u64> = finishes.iter().copied().collect();
+                assert_eq!(finished.len(), finishes.len(), "a timer finished twice");
+                assert!(self.armed_tokens.is_subset(&finished));
+                assert_eq!(
+                    (finished.len() - self.armed_tokens.len()) as u64,
+                    self.due_at_arm
+                );
             }
             assert_eq!(self.dispatch().queued.load(Ordering::SeqCst), 0);
         }
         let _ = writeln!(
             self.projection,
-            "end roots {:?} freed {:?} closed {} quarantined {} claimed {:?} withdrawn {:?}",
-            self.roots, self.freed, self.closed, self.quarantined, self.claimed, self.withdrawn
+            "end roots {:?} freed {:?} closed {} claimed {:?} withdrawn {:?}",
+            self.roots, self.freed, self.closed, self.claimed, self.withdrawn
         );
         for task in &self.tasks {
             let _ = writeln!(
@@ -1782,7 +2057,7 @@ impl World {
                 )
             })
             .collect();
-        let reclaimable = self.handles.len() as u64 - self.closed - self.quarantined;
+        let reclaimable = self.handles.len() as u64 - self.closed;
         for slot in &mut self.slots {
             slot.active = None;
         }
@@ -1801,15 +2076,43 @@ impl World {
             withdrawn,
             slots,
             projection,
-            coverage,
+            mut coverage,
+            pool,
+            running,
             ..
         } = self;
         drop(slots);
         drop(tasks);
+        // The owners leave: each undelivered job is abandoned, quarantining
+        // a returned result. A running call keeps its credit until it
+        // returns and then quarantines its own late result.
+        let quarantined = |pool: &Jobs| pool.stats().quarantined.load(Ordering::Relaxed);
         drop(jobs);
+        let abandoned = quarantined(&pool);
+        if pool.held() > 0 && !running.is_empty() {
+            coverage.credit_held_after_abandon += 1;
+        }
+        for (_, taken) in running {
+            taken.run();
+        }
+        while let Some(taken) = pool.take() {
+            taken.run();
+        }
+        let after = quarantined(&pool);
+        coverage.quarantined += after;
+        coverage.late_handles += after - abandoned;
         drop(requests);
         drop(execs);
         if divergence.is_none() {
+            assert_eq!(pool.held(), 0, "a credit outlived its call");
+            let stats = pool.stats();
+            let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+            assert_eq!(
+                count(&stats.returned),
+                count(&stats.delivered) + count(&stats.quarantined),
+                "every returned result was delivered or quarantined once"
+            );
+            assert_eq!(count(&stats.reclaimed), count(&stats.quarantined));
             let handle_drops = handle_drops.lock().unwrap();
             for id in &handles {
                 assert_eq!(
@@ -2099,4 +2402,89 @@ fn runtime50_missing_save_ack_makes_resumption_impossible() {
     }
     assert!(gated > 0, "no completion reached the unacknowledged row");
     eprintln!("RUNTIME50 missing save ack: {runs} stranded runs, {gated} with a gated completion");
+}
+
+#[test]
+fn runtime50_forced_concrete_vectors() {
+    // Each race has a scripted topology. The first seed whose schedule hits
+    // its concrete hook is replayed against its checked transcript; every
+    // step of both runs checks single custody of rows, tokens, permits, the
+    // role and the mutex.
+    const HOST: &[Op] = &[Op::Host { shielded: false }, Op::Release];
+    const HOSTS: &[Op] = &[
+        Op::Host { shielded: false },
+        Op::Host { shielded: false },
+        Op::Release,
+    ];
+    const SHORT: &[Op] = &[Op::Compute, Op::Release];
+    const DEADLINE: &[Op] = &[Op::Deadline { after: 1 }, Op::Release];
+    const NOW: &[Op] = &[Op::Deadline { after: 0 }, Op::Release];
+    let scripted = |scripts: &'static [&'static [Op]], reuse, stop| {
+        move |seed| Config {
+            seed,
+            tasks: scripts.len() as u32,
+            reuse,
+            stop,
+            scripts: Some(scripts),
+            hold_clock: 0,
+            mutant: None,
+        }
+    };
+    type Hit = fn(&Coverage) -> bool;
+    let vectors: [(&str, Box<dyn Fn(u64) -> Config>, Hit); 8] = [
+        (
+            "wake before save: the save gate defers a completion",
+            Box::new(scripted(&[HOST, HOST, HOST], 0, false)),
+            |c| c.deferred_until_save > 0,
+        ),
+        (
+            "reused row: a successor takes the retired slot",
+            Box::new(scripted(&[SHORT, SHORT], 2, false)),
+            |c| c.concrete_reuse > 0 && c.stale_generation_inert > 0,
+        ),
+        (
+            "claim cut: the stop leaves a claimed call in doubt",
+            Box::new(scripted(&[HOST, HOST, HOST], 0, true)),
+            |c| c.stop_claimed > 0 && c.in_doubt > 0,
+        ),
+        (
+            "late initialized handle: an abandoned call returns into quarantine",
+            Box::new(scripted(&[HOST, HOST, HOST], 0, true)),
+            |c| c.late_handles > 0 && c.credit_held_after_abandon > 0,
+        ),
+        (
+            "timer equality: equal deadlines expire in one index poll",
+            Box::new(scripted(&[DEADLINE, DEADLINE], 0, false)),
+            |c| c.index_equal_peers > 0 && c.index_expired > 1,
+        ),
+        (
+            "timer equality: a deadline equal to now is due at arming",
+            Box::new(scripted(&[NOW, SHORT], 0, false)),
+            |c| c.index_equal_now > 0,
+        ),
+        (
+            "subscription race: cancellation before registration",
+            Box::new(scripted(&[HOSTS, HOSTS], 0, false)),
+            |c| c.cancel_at_registration > 0,
+        ),
+        (
+            "subscription race: a delayed notice after the wait ended",
+            Box::new(scripted(&[HOSTS, HOSTS], 0, false)),
+            |c| c.stale_notices > 0 && c.cancel_withdrew + c.claim_beat_cancel > 0,
+        ),
+    ];
+    for (name, config, hit) in vectors {
+        let (seed, first) = (0..512)
+            .map(|seed| (seed, run(config(seed), None, None)))
+            .find(|(_, outcome)| hit(&outcome.coverage))
+            .unwrap_or_else(|| panic!("no schedule forced {name}"));
+        let again = run(config(seed), Some(first.transcript.clone()), None);
+        assert!(again.divergence.is_none(), "{name}: {:?}", again.divergence);
+        assert!(hit(&again.coverage), "{name}");
+        assert_eq!(first.projection, again.projection);
+        eprintln!(
+            "RUNTIME50 forced {name}: seed {seed}, {} entries",
+            first.transcript.len()
+        );
+    }
 }

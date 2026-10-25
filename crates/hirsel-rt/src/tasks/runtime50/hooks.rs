@@ -4,7 +4,7 @@
 //! the production ones. The adapter only names a row by its [`TaskKey`] and
 //! never decides an outcome; every answer comes from the scheduler.
 use super::super::*;
-use registry::{CancelRegistration, TaskKey, TaskLease};
+use registry::{CancelRegistration, ScopeKey, TaskKey, TaskLease};
 use std::sync::Arc;
 
 pub(crate) struct Rows {
@@ -140,5 +140,65 @@ impl Rows {
     /// Requeue a notice exactly as a delayed cancellation would deliver it.
     pub(crate) fn redeliver(&mut self, notice: registry::CancelNotice) {
         self.s.cancel_notices.push(notice);
+    }
+
+    /// The row enters a scope with a deadline (`task.scope_until`). Its
+    /// timer token is published once home armed it.
+    pub(crate) fn open_deadline(&mut self, key: TaskKey) -> ScopeKey {
+        let slot = self.slot(key);
+        let (scope, generation) = self.s.take_scope_slot();
+        self.s.scopes[scope as usize] = Some(Scope {
+            generation,
+            owner: slot,
+            children: Vec::new(),
+            canceled: Default::default(),
+            deadline: Some(ScopeDeadline {
+                token: None,
+                expired: false,
+            }),
+            completions: AtomicU64::new(0),
+        });
+        self.s.task(slot).scopes.push(scope);
+        self.s.cancel_epoch.changed();
+        self.s.scope_key(scope).unwrap()
+    }
+
+    /// The scope publishes its armed timer token.
+    pub(crate) fn publish_deadline(&mut self, scope: ScopeKey, token: u64) {
+        let scope = self.s.live_scope(scope).expect("a live deadline scope");
+        let deadline = self.s.scope(scope).deadline.as_mut().unwrap();
+        assert!(deadline.token.replace(token).is_none());
+    }
+
+    /// A deadline equal to now was due at arming: the scope expires at once.
+    pub(crate) fn expire_now(&mut self, scope: ScopeKey) {
+        let scope = self.s.live_scope(scope).expect("a live deadline scope");
+        self.s.expire(scope);
+        self.s.woken.clear();
+    }
+
+    pub(crate) fn expired(&self, scope: ScopeKey) -> bool {
+        let scope = self.s.live_scope(scope).expect("a live deadline scope");
+        self.s.scopes[scope as usize]
+            .as_ref()
+            .and_then(|row| row.deadline.as_ref())
+            .unwrap()
+            .expired
+    }
+
+    /// The owner leaves its deadline scope, as `scope_exit` does.
+    pub(crate) fn close_deadline(&mut self, key: TaskKey, scope: ScopeKey) {
+        let slot = self.slot(key);
+        let scope = self.s.live_scope(scope).expect("a live deadline scope");
+        assert_eq!(self.s.task(slot).scopes.pop(), Some(scope));
+        self.s.cancel_epoch.changed();
+        drop(self.s.take_scope(scope));
+    }
+
+    /// Run a home merge (the timer index's expiry) over the scheduler.
+    pub(crate) fn merge<T>(&mut self, f: impl FnOnce(&mut Scheduler) -> T) -> T {
+        let result = f(&mut self.s);
+        self.s.woken.clear();
+        result
     }
 }
