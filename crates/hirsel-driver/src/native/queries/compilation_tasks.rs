@@ -377,7 +377,8 @@ impl CompilationTasks {
         &self,
         compilation: ProductRef,
     ) -> Result<hirsel_lir::discharge::Discharge, String> {
-        self.instances.discharged(self.selected(compilation)?.discovery)
+        self.instances
+            .discharged(self.selected(compilation)?.discovery)
     }
     /// Body-free execution metadata of this exact completed compilation's
     /// settled Link scope. No dependency query or current-association lookup
