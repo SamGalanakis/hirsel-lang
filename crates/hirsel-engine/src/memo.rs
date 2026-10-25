@@ -3,7 +3,7 @@
 mod reads;
 pub use reads::{
     Durability, Inconsistent, LookupKey, LookupSource, ModuleKey, PackageKey, ReadKey, ReadKind,
-    Reads, ReadsBuilder, Revision, decode_def_path, encode_def_path,
+    Reads, ReadsBuilder, Revision, decode_def_path, encode_def_path, encoded_def_path_bytes,
 };
 mod graph;
 pub use graph::{

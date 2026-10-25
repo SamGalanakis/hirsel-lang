@@ -18,6 +18,41 @@ impl FrontCheckedInput {
     pub fn input(&self) -> &ExportInput {
         &self.input
     }
+    pub fn type_capture_bytes(&self) -> Result<u64, QueryError> {
+        FrontPreparedProof::capture_bytes(self)
+    }
+    pub fn capture_types_with_allowance(
+        self: Rc<Self>,
+        allowance: MemoryReservation,
+    ) -> Result<FrontPreparedProof, QueryError> {
+        FrontPreparedProof::capture(self, allowance)
+    }
+}
+impl AdmittedProofInput for FrontCheckedInput {
+    fn export_input(&self) -> &ExportInput {
+        &self.input
+    }
+    fn export_module_bytes(&self) -> usize {
+        let sources = self._scope.owner().plan.lower.sources();
+        sources
+            .anchors()
+            .filter_map(|(_, file, _)| sources.file(file))
+            .map(|file| {
+                file.logical_path()
+                    .as_os_str()
+                    .as_encoded_bytes()
+                    .len()
+                    .saturating_mul(3)
+            })
+            .max()
+            .unwrap_or(0)
+    }
+    fn export_clone_bytes(&self) -> u64 {
+        self._allowance.bytes()
+    }
+    fn checked_receipt(&self) -> Option<(&FrontCheckScope, &FrontCheckedSignatures)> {
+        Some((&self._scope, &self._headers))
+    }
 }
 impl FrontCheckScope {
     /// Size the exact completed scope's prospective input before fetching an
@@ -194,5 +229,95 @@ impl FrontCheckScope {
             annotations: vec![],
             locator,
         })
+    }
+}
+
+impl FrontCheckScope {
+    /// Receipt read-key maps and digest-part buffers, after canonical text is
+    /// separately admitted. No key encoder or allocation runs during inspection.
+    pub(crate) fn receipt_finish_bytes(
+        &self,
+        headers: &FrontCheckedSignatures,
+        canonical: usize,
+    ) -> Result<u64, QueryError> {
+        let missing = || QueryError::NotImplemented;
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(receipt_owner_bytes().ok_or_else(missing)?);
+        weight.tree::<DefPath, Arc<Reads>>(self.reads().len());
+        weight.tree::<DefPath, BTreeMap<Vec<u8>, ContentHash>>(self.reads().len());
+        let mut parts = 1usize
+            .checked_add(headers.registrations().len())
+            .ok_or_else(missing)?;
+        weight.add(canonical); // digest's independent canonical byte copy
+        for registration in headers.registrations() {
+            weight.add(registration.len());
+        }
+        weight.add(
+            headers
+                .registrations()
+                .len()
+                .checked_mul(size_of::<Vec<u8>>())
+                .ok_or_else(missing)?,
+        );
+        for (path, reads) in self.reads() {
+            weight.path(path);
+            weight.tree::<Vec<u8>, ContentHash>(reads.len());
+            let path_bytes = crate::memo::encoded_def_path_bytes(path).ok_or_else(missing)?;
+            weight.add(path_bytes.checked_mul(3).ok_or_else(missing)?);
+            parts = parts
+                .checked_add(1)
+                .and_then(|n| n.checked_add(reads.len().checked_mul(2)?))
+                .ok_or_else(missing)?;
+            for (key, _) in reads.iter() {
+                // Key encode growth plus retained key and digest clone overlap.
+                weight.add(
+                    key.encoded_bytes()
+                        .ok_or_else(missing)?
+                        .checked_mul(6)
+                        .ok_or_else(missing)?,
+                );
+                weight.add(32); // digest's independent value bytes
+            }
+        }
+        weight.add(
+            parts
+                .checked_mul(3)
+                .map(|n| n.max(4))
+                .and_then(|n| n.checked_mul(size_of::<Vec<u8>>()))
+                .ok_or_else(missing)?,
+        );
+        Ok(weight.bytes())
+    }
+}
+fn receipt_owner_bytes() -> Option<usize> {
+    fn arc<T>() -> Option<usize> {
+        Some(
+            std::alloc::Layout::new::<[usize; 2]>()
+                .extend(std::alloc::Layout::new::<T>())
+                .ok()?
+                .0
+                .pad_to_align()
+                .size(),
+        )
+    }
+    arc::<CheckedProducts>()?
+        .checked_add(arc::<()>()?)?
+        .checked_add(arc::<MemoryReservation>()?)?
+        .checked_add(arc::<(Arc<dyn Send + Sync>, Arc<dyn Send + Sync>)>()?.checked_mul(2)?)
+}
+impl CheckedProducts {
+    /// Retained maps only; canonical bytes have their separate detached owner.
+    pub(crate) fn receipt_retained_bytes(&self) -> Option<u64> {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(receipt_owner_bytes()?);
+        weight.tree::<DefPath, BTreeMap<Vec<u8>, ContentHash>>(self.reads.len());
+        for (path, reads) in &self.reads {
+            weight.path(path);
+            weight.tree::<Vec<u8>, ContentHash>(reads.len());
+            for key in reads.keys() {
+                weight.add(key.capacity());
+            }
+        }
+        Some(weight.bytes())
     }
 }
