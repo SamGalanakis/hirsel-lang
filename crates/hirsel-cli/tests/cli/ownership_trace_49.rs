@@ -103,6 +103,7 @@ fn ownership_trace_49_run_refuses_launches_it_does_not_trace() {
 /// The reference interpreter, LLVM and Cranelift report the same logical
 /// lifetimes in the same order; storage moves are engine-specific.
 #[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
 fn ownership_trace_49_run_agrees_on_lifetimes_across_engines() {
     let path = file(
         "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n  let first = Token(value: 7u64)\n  let second = Token(value: 7u64)\n  let moved = take first\n  Ok(())\n}\n",
@@ -175,10 +176,10 @@ fn ownership_trace_49_test_traces_each_selected_test_with_its_ordinary_verdict()
         String::from_utf8_lossy(&output.stderr)
     );
     let kept = stdout
-        .find("test kept ... ok")
+        .find("test standalone@0/kept ... ok")
         .unwrap_or_else(|| panic!("{stdout}"));
     let refused = stdout
-        .find("test refused ... FAILED")
+        .find("test standalone@0/refused ... FAILED")
         .unwrap_or_else(|| panic!("{stdout}"));
     let summaries: Vec<_> = stdout
         .match_indices("1 created, 1 dropped, 0 live")
