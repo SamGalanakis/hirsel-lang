@@ -243,7 +243,13 @@ impl QueryEngine {
                 message: "parse syntax differs from recomputation".into(),
             }));
         }
-        self.result_store.as_ref().unwrap().put(&key, &bytes);
+        let store = self.result_store.as_ref().unwrap();
+        // An explicit parse may reproduce an already persisted source tree.
+        // Equality is against the freshly validated canonical bytes, so corrupt
+        // records are still replaced and recomputation checks above still run.
+        if store.get(&key).as_deref() != Some(bytes.as_slice()) {
+            store.put(&key, &bytes);
+        }
         Ok(())
     }
 }
