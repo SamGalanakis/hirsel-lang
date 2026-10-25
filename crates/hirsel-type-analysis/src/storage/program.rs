@@ -89,7 +89,12 @@ struct Code {
     callable: StorageCallable,
     actuals: usize,
 }
-type CaptureCode = Vec<BTreeMap<Path, BTreeSet<Code>>>;
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum CaptureTarget {
+    Body(Code),
+    IntegerOrder(DefId),
+}
+type CaptureCode = Vec<BTreeMap<Path, BTreeSet<CaptureTarget>>>;
 
 /// Finite original producer equations. References are actual callable IDs,
 /// never recursively embedded environments; a recursive wrapper adds an edge.
@@ -161,6 +166,7 @@ fn map_producers(producers: &Producers, map: impl Fn(&Payload) -> Payload) -> Pr
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Target {
     Input(StorageSelector),
+    IntegerOrder(DefId),
     Body {
         callable: Code,
         captures: Vec<Payload>,
@@ -318,6 +324,7 @@ impl Value {
                         }
                         Ok(Target::Input(selector.clone()))
                     }
+                    Target::IntegerOrder(definition) => Ok(Target::IntegerOrder(*definition)),
                     Target::Body {
                         callable,
                         captures,
@@ -858,6 +865,7 @@ impl Program<'_> {
                     .iter()
                     .map(|target| match target {
                         Target::Input(selector) => Target::Input(selector.clone()),
+                        Target::IntegerOrder(definition) => Target::IntegerOrder(*definition),
                         Target::Body {
                             callable,
                             captures,
@@ -925,6 +933,7 @@ impl Program<'_> {
             for (path, targets) in &root.targets {
                 for target in targets {
                     let target = match target {
+                        Target::IntegerOrder(definition) => Target::IntegerOrder(*definition),
                         Target::Input(_) => {
                             value.payload.unknown = true;
                             continue;
@@ -989,6 +998,7 @@ impl Program<'_> {
                     .iter()
                     .map(|target| match target {
                         Target::Input(_) => Target::Input(selector.clone()),
+                        Target::IntegerOrder(definition) => Target::IntegerOrder(*definition),
                         Target::Body {
                             callable,
                             captures,
@@ -1019,7 +1029,7 @@ impl Program<'_> {
         actuals: usize,
         arguments: &BTreeMap<ParamId, Value>,
         captures: &[Payload],
-        capture_code: &[BTreeMap<Path, BTreeSet<Code>>],
+        capture_code: &[BTreeMap<Path, BTreeSet<CaptureTarget>>],
         producers: &Producers,
     ) -> usize {
         let mut code = BTreeMap::new();
@@ -1071,7 +1081,13 @@ impl Program<'_> {
                 .map(|(path, targets)| {
                     let targets = targets
                         .iter()
-                        .map(|callable| {
+                        .map(|target| {
+                            let callable = match target {
+                                CaptureTarget::IntegerOrder(definition) => {
+                                    return Target::IntegerOrder(*definition);
+                                }
+                                CaptureTarget::Body(callable) => callable,
+                            };
                             let producer = producers.get(callable);
                             Target::Body {
                                 callable: *callable,
@@ -1104,7 +1120,7 @@ impl Program<'_> {
         actuals: usize,
         arguments: &BTreeMap<ParamId, Value>,
         captures: &[Payload],
-        capture_code: &[BTreeMap<Path, BTreeSet<Code>>],
+        capture_code: &[BTreeMap<Path, BTreeSet<CaptureTarget>>],
         producers: &Producers,
         summaries: &[Summary],
         strict: bool,
@@ -1248,6 +1264,20 @@ impl Program<'_> {
                                 let mut value = Value::default();
                                 value.payload.unknown = !complete;
                                 for reference in code {
+                                    if reference.primitive == Some(StoragePrimitive::IntegerOrder)
+                                        && reference.arguments.is_empty()
+                                        && StoragePrimitive::integer_order_type(
+                                            reference.definition,
+                                        )
+                                        .is_some()
+                                    {
+                                        value
+                                            .targets
+                                            .entry(reference.parts.clone())
+                                            .or_default()
+                                            .insert(Target::IntegerOrder(reference.definition));
+                                        continue;
+                                    }
                                     // Materialized constants are closed global values. Never
                                     // close a forged open code leaf in a caller context: it
                                     // has no original call edge for the growth preflight.
@@ -1379,51 +1409,62 @@ impl Program<'_> {
                                     }
                                     let mut unknown_captures = false;
                                     let mut producers = Producers::new();
-                                    let capture_code =
-                                        captures
-                                            .iter()
-                                            .map(|capture| {
-                                                capture
-                                                    .targets
-                                                    .iter()
-                                                    .map(|(path, targets)| {
-                                                        let mut code = BTreeSet::new();
-                                                        for target in targets {
-                                                            match target {
-                                                                Target::Body {
-                                                                    callable,
-                                                                    captures,
-                                                                    capture_code,
-                                                                    producers: nested,
-                                                                    unknown_captures,
-                                                                } => {
-                                                                    code.insert(*callable);
-                                                                    join_producers(
-                                                                        &mut producers,
-                                                                        nested,
-                                                                    );
-                                                                    join_producers(
-                                                                &mut producers,
-                                                                &BTreeMap::from([(
+                                    let capture_code = captures
+                                        .iter()
+                                        .map(|capture| {
+                                            capture
+                                                .targets
+                                                .iter()
+                                                .map(|(path, targets)| {
+                                                    let mut code = BTreeSet::new();
+                                                    for target in targets {
+                                                        match target {
+                                                            Target::Body {
+                                                                callable,
+                                                                captures,
+                                                                capture_code,
+                                                                producers: nested,
+                                                                unknown_captures,
+                                                            } => {
+                                                                code.insert(CaptureTarget::Body(
                                                                     *callable,
-                                                                    ProducerCaptures {
-                                                                        captures: captures.clone(),
-                                                                        code: capture_code.clone(),
-                                                                        unknown: *unknown_captures,
-                                                                    },
-                                                                )]),
-                                                            );
-                                                                }
-                                                                Target::Input(_) => {
-                                                                    unknown_captures = true
-                                                                }
+                                                                ));
+                                                                join_producers(
+                                                                    &mut producers,
+                                                                    nested,
+                                                                );
+                                                                join_producers(
+                                                                    &mut producers,
+                                                                    &BTreeMap::from([(
+                                                                        *callable,
+                                                                        ProducerCaptures {
+                                                                            captures: captures
+                                                                                .clone(),
+                                                                            code: capture_code
+                                                                                .clone(),
+                                                                            unknown:
+                                                                                *unknown_captures,
+                                                                        },
+                                                                    )]),
+                                                                );
+                                                            }
+                                                            Target::Input(_) => {
+                                                                unknown_captures = true
+                                                            }
+                                                            Target::IntegerOrder(definition) => {
+                                                                code.insert(
+                                                                    CaptureTarget::IntegerOrder(
+                                                                        *definition,
+                                                                    ),
+                                                                );
                                                             }
                                                         }
-                                                        (path.clone(), code)
-                                                    })
-                                                    .collect()
-                                            })
-                                            .collect();
+                                                    }
+                                                    (path.clone(), code)
+                                                })
+                                                .collect()
+                                        })
+                                        .collect();
                                     value.targets.insert(
                                         Path::new(),
                                         BTreeSet::from([Target::Body {
@@ -1927,6 +1968,13 @@ impl Program<'_> {
             for target in targets {
                 let value = match target {
                     Target::Input(selector) => source(selector),
+                    Target::IntegerOrder(definition) => Value {
+                        targets: BTreeMap::from([(
+                            Path::new(),
+                            BTreeSet::from([Target::IntegerOrder(*definition)]),
+                        )]),
+                        ..Value::default()
+                    },
                     Target::Body {
                         callable,
                         captures,
@@ -2018,6 +2066,13 @@ impl Program<'_> {
             Some(targets) => {
                 for target in targets {
                     match target {
+                        Target::IntegerOrder(definition) => {
+                            result.unknown |= StoragePrimitive::integer_order_type(*definition)
+                                .is_none()
+                                || arguments.len() != 2
+                                || !arguments.contains_key(&ParamId(0))
+                                || !arguments.contains_key(&ParamId(1));
+                        }
                         Target::Input(_) => {
                             result.join(&unknown_summary());
                         }
@@ -2077,6 +2132,9 @@ impl Program<'_> {
             Some(targets) => {
                 for target in targets {
                     match target {
+                        // A region callback takes one root; integer comparison
+                        // has two operands and is only reached through an actual call.
+                        Target::IntegerOrder(_) => result.unknown = true,
                         Target::Input(_) => result.unknown = true,
                         Target::Body {
                             callable,

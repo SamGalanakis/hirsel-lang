@@ -40,6 +40,39 @@ pub enum StoragePlacement {
     Unknown,
 }
 
+/// A bodyless core callable whose storage effect is modeled directly.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StoragePrimitive {
+    IntegerOrder,
+}
+
+impl StoragePrimitive {
+    /// Identity vocabulary only. Source and V must independently review the
+    /// actual declaration before assigning a primitive effect model.
+    pub fn integer_order_type(definition: DefId) -> Option<crate::Primitive> {
+        use crate::Primitive::*;
+        [
+            ("u8", U8),
+            ("u16", U16),
+            ("u32", U32),
+            ("u64", U64),
+            ("u128", U128),
+            ("i8", I8),
+            ("i16", I16),
+            ("i32", I32),
+            ("i64", I64),
+            ("i128", I128),
+        ]
+        .into_iter()
+        .find_map(|(name, kind)| {
+            definition
+                .path()
+                .is_core(&format!("$intrinsic.OrderCompare_{name}"))
+                .then_some(kind)
+        })
+    }
+}
+
 /// A capture-free code leaf observed in a declared immutable field graph.
 /// Paths describe the actual value, never callable headers or inferred bodies.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -47,6 +80,8 @@ pub struct StorageConstantCode {
     pub parts: SharedPath<OwnedTypePart>,
     pub definition: DefId,
     pub arguments: Vec<crate::GenericArgument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primitive: Option<StoragePrimitive>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]

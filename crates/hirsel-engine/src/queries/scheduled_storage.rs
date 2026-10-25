@@ -337,10 +337,25 @@ impl Task {
                                 {
                                     self.reads.merge(&reads);
                                 }
-                                *value = crate::storage_graph::constant_value(
-                                    owner.lower.signatures().types(),
-                                    &materialized,
+                                let snapshot = owner.lower.signatures();
+                                let mut provider = crate::FrozenProvider::new(
+                                    &snapshot,
+                                    definition.path().0.package.clone(),
+                                    &mut self.reads,
                                 );
+                                *value = match crate::storage_graph::constant_value(
+                                    snapshot.types(),
+                                    &materialized,
+                                    &mut |id| {
+                                        hirsel_types::SignatureProvider::signature(
+                                            &mut provider,
+                                            id,
+                                        )
+                                    },
+                                ) {
+                                    Ok(value) => value,
+                                    Err(error) => return Poll::Ready(Err(owner.fail(error))),
+                                };
                             }
                         }
                     }

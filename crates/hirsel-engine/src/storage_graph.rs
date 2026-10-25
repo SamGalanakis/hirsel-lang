@@ -3,7 +3,7 @@
 //! recursively asks for a callee's mode result.
 use crate::{Diagnostic, QueryEngine, QueryError, RuleId};
 use hirsel_type_analysis::storage::{StorageDomain, program};
-use hirsel_types::storage::graph::{StorageCallee, StorageOp, StorageValue};
+use hirsel_types::storage::graph::{StorageCallee, StorageOp, StoragePrimitive, StorageValue};
 use hirsel_types::storage::{CallableStorageProfile, StorageProfile};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -104,7 +104,10 @@ fn derive(
                         {
                             *value = if arguments.is_empty() {
                                 let original = engine.materialize_value(definition.path())?;
-                                constant_value(&engine.types, &original)
+                                let types = engine.types.clone();
+                                constant_value(&types, &original, &mut |id| {
+                                    hirsel_types::SignatureProvider::signature(engine, id)
+                                })?
                             } else {
                                 StorageValue::Unknown
                             };
@@ -325,7 +328,8 @@ fn selected_definition(
 pub(crate) fn constant_value(
     types: &hirsel_types::TypeInterner,
     value: &hirsel_tir::Materialized,
-) -> StorageValue {
+    lookup: &mut impl FnMut(hirsel_syntax::DefId) -> Result<hirsel_types::SignatureRef, QueryError>,
+) -> Result<StorageValue, QueryError> {
     use hirsel_types::storage::graph::StorageConstantCode;
     use hirsel_types::{OwnedTypePart, SharedPath};
     let mut code = Vec::new();
@@ -338,10 +342,19 @@ pub(crate) fn constant_value(
                 arguments,
             } => {
                 complete &= hirsel_types::generated_actual_key(types, arguments).is_some();
+                let id = hirsel_syntax::DefId::intern(definition);
+                let primitive =
+                    if StoragePrimitive::integer_order_type(id).is_some() && arguments.is_empty() {
+                        let signature = lookup(id)?;
+                        integer_order(types, &signature)
+                    } else {
+                        None
+                    };
                 code.push(StorageConstantCode {
                     parts: path,
-                    definition: hirsel_syntax::DefId::intern(definition),
+                    definition: id,
                     arguments: arguments.clone(),
+                    primitive,
                 });
             }
             hirsel_tir::ValueKind::Construct {
@@ -373,5 +386,36 @@ pub(crate) fn constant_value(
             hirsel_tir::ValueKind::Constant(_) => (),
         }
     }
-    StorageValue::Constant { code, complete }
+    Ok(StorageValue::Constant { code, complete })
+}
+
+fn integer_order(
+    types: &hirsel_types::TypeInterner,
+    signature: &hirsel_types::Signature,
+) -> Option<StoragePrimitive> {
+    use hirsel_types::*;
+    let kind = StoragePrimitive::integer_order_type(signature.definition)?;
+    let SignatureKind::Function(function) = &signature.kind else {
+        return None;
+    };
+    let reviewed = signature.metadata.visibility == hirsel_syntax::Visibility::Private
+        && !signature.metadata.alias
+        && !signature.metadata.unsafe_ffi
+        && signature.metadata.wrapper.is_none()
+        && function.generics.is_empty()
+        && function.parameters.len() == 2
+        && function.parameters.iter().all(|parameter| {
+            parameter.passing == hirsel_syntax::PassingMode::Borrow
+                && types.row(parameter.ty).kind == TypeKind::Primitive(kind)
+        })
+        && types.row(function.result).kind == TypeKind::Primitive(Primitive::I32)
+        && function.error.is_none()
+        && function.allocation == Allocation::NoAlloc
+        && function.authority == AuthoritySummary::inert()
+        && function.uses == Uses::Only(AuthoritySummary::inert())
+        && function.contracts.is_empty()
+        && function.state_promises.is_empty()
+        && !function.incomplete
+        && function.foreign.is_none();
+    reviewed.then_some(StoragePrimitive::IntegerOrder)
 }

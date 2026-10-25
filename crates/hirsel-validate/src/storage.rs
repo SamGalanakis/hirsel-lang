@@ -360,10 +360,17 @@ impl Producer<'_> {
                     arguments,
                 } => {
                     complete &= generated_actual_key(self.types, arguments).is_some();
+                    let id = DefId::intern(definition);
+                    let primitive = if arguments.is_empty() {
+                        self.integer_order(id)
+                    } else {
+                        None
+                    };
                     code.push(StorageConstantCode {
                         parts: path,
-                        definition: DefId::intern(definition),
+                        definition: id,
                         arguments: arguments.clone(),
+                        primitive,
                     });
                 }
                 tir::ValueKind::Construct {
@@ -395,6 +402,36 @@ impl Producer<'_> {
             }
         }
         StorageValue::Constant { code, complete }
+    }
+    fn integer_order(&self, definition: DefId) -> Option<StoragePrimitive> {
+        let kind = StoragePrimitive::integer_order_type(definition)?;
+        let signature = self.signatures.get(definition)?;
+        let SignatureKind::Function(function) = &signature.kind else {
+            return None;
+        };
+        if signature.metadata.visibility != hirsel_syntax::Visibility::Private
+            || signature.metadata.alias
+            || signature.metadata.unsafe_ffi
+            || signature.metadata.wrapper.is_some()
+            || !function.generics.is_empty()
+            || function.parameters.len() != 2
+            || function.parameters.iter().any(|parameter| {
+                parameter.passing != PassingMode::Borrow
+                    || self.types.row(parameter.ty).kind != TypeKind::Primitive(kind)
+            })
+            || self.types.row(function.result).kind != TypeKind::Primitive(Primitive::I32)
+            || function.error.is_some()
+            || function.allocation != Allocation::NoAlloc
+            || function.authority != AuthoritySummary::inert()
+            || function.uses != Uses::Only(AuthoritySummary::inert())
+            || !function.contracts.is_empty()
+            || !function.state_promises.is_empty()
+            || function.incomplete
+            || function.foreign.is_some()
+        {
+            return None;
+        }
+        Some(StoragePrimitive::IntegerOrder)
     }
     fn rvalue(&self, value: &tir::Rvalue) -> StorageValue {
         match value {
