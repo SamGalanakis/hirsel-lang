@@ -62,8 +62,18 @@ fn shape_captured<T: Snapshot<Cx>>(
     depth: usize,
     rows: Option<&Arc<std::collections::HashSet<TypeId>>>,
 ) -> Option<WireShape> {
+    shape_in_section(value, input, depth, rows, None)
+}
+fn shape_in_section<T: Snapshot<Cx>>(
+    value: &T,
+    input: &ExportInput,
+    depth: usize,
+    rows: Option<&Arc<std::collections::HashSet<TypeId>>>,
+    section: Option<&Arc<[TypeId]>>,
+) -> Option<WireShape> {
     let mut cx = Cx::new(input.locator.clone(), input.types.clone());
     cx.captured_types = rows.cloned();
+    cx.section_types = section.cloned();
     cx.sizing = Some(WireShape::default());
     let mut writer = Writer::counting_at_depth(cx, depth);
     value.write(&mut writer);
@@ -223,6 +233,27 @@ fn path_len(path: &DefPath) -> Option<usize> {
     )
 }
 
+/// Construction terms, with source payloads already under their input owner.
+/// Inspection is metadata-only; each term retains the ordinary allocation bound.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BuildTablesLayout {
+    pub retained_sections: u64,
+    pub annotation_workspace: u64,
+    pub context_workspace: u64,
+    pub section_workspace: u64,
+    pub digest_workspace: u64,
+    pub owned_names: u64,
+}
+impl BuildTablesLayout {
+    pub fn total(self) -> Option<u64> {
+        self.retained_sections
+            .checked_add(self.annotation_workspace)?
+            .checked_add(self.context_workspace)?
+            .checked_add(self.section_workspace)?
+            .checked_add(self.digest_workspace)?
+            .checked_add(self.owned_names)
+    }
+}
 /// Exact already-loaded type closure selected by the canonical input fields.
 /// The capture contains no native or validation authority.
 pub struct CapturedTypes {
@@ -327,7 +358,17 @@ pub fn build_owned_tables_bytes(
     max_module_bytes: usize,
     types: &CapturedTypes,
 ) -> Option<u64> {
-    let base = build_captured_tables_bytes(input, max_module_bytes, types)?;
+    build_owned_tables_layout(input, max_module_bytes, types)?.total()
+}
+pub fn build_owned_tables_layout(
+    input: &ExportInput,
+    max_module_bytes: usize,
+    types: &CapturedTypes,
+) -> Option<BuildTablesLayout> {
+    if !Arc::ptr_eq(&input.types, &types.types) {
+        return None;
+    }
+    let mut layout = build_tables_layout(input, max_module_bytes, Some(&types.rows))?;
     let mut extra = Bytes::default();
     extra.tree::<DefPath, ()>(input.definitions.len().checked_add(input.skipped.len())?)?;
     for path in input
@@ -347,7 +388,8 @@ pub fn build_owned_tables_bytes(
         )?;
         extra.add(payload)?;
     }
-    base.checked_add(extra.0.try_into().ok()?)
+    layout.owned_names = extra.0.try_into().ok()?;
+    Some(layout)
 }
 /// Upper bound for canonical construction tables, digest-text scratch and
 /// section metadata. Input payload clones are a separate caller obligation.
@@ -362,6 +404,13 @@ fn build_tables(
     max_module_bytes: usize,
     captured: Option<&Arc<std::collections::HashSet<TypeId>>>,
 ) -> Option<u64> {
+    build_tables_layout(input, max_module_bytes, captured)?.total()
+}
+fn build_tables_layout(
+    input: &ExportInput,
+    max_module_bytes: usize,
+    captured: Option<&Arc<std::collections::HashSet<TypeId>>>,
+) -> Option<BuildTablesLayout> {
     let mut types = WireShape::default();
     let mut type_rows = 0usize;
     let mut max_contracts = 0usize;
@@ -391,7 +440,6 @@ fn build_tables(
     let mut largest_tables = 0usize;
     let mut max_path = 0usize;
     let mut max_path_clone = 0usize;
-    let mut path_payload = 0usize;
     for (path, section) in &input.signatures {
         max_path = max_path.max(path_len(path)?);
         let clone_bytes = path.0.modules.iter().try_fold(
@@ -405,7 +453,6 @@ fn build_tables(
             |n, module| n.checked_add(module.len()),
         )?;
         max_path_clone = max_path_clone.max(clone_bytes);
-        path_payload = path_payload.checked_add(path_len(path)?)?;
         for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
             data = data.add(shape_captured(signature, input, 0, captured)?)?;
             if let SignatureKind::Function(function) = &signature.kind {
@@ -431,13 +478,27 @@ fn build_tables(
         {
             return None;
         }
-        let own = shape_captured(&**definition, input, 0, captured)?;
+        let own = shape_in_section(&**definition, input, 0, captured, Some(&definition.types))?;
+        let mut section_types = WireShape::default();
+        for id in &*definition.types {
+            let row = input.types.get_if_loaded(*id)?;
+            section_types = section_types.add(shape_in_section(
+                row,
+                input,
+                2,
+                captured,
+                Some(&definition.types),
+            )?)?;
+        }
+        if section_types.unloaded {
+            return None;
+        }
         data = data.add(own)?;
         // Definition's TypeTable is nested two levels in its digest preimage.
         // The count, tags, separators and closing node fit this fixed header.
         let text = own
             .text_upper()?
-            .checked_add(types.text_upper()?)?
+            .checked_add(section_types.text_upper()?)?
             .checked_add(64)?;
         if own.unloaded {
             return None;
@@ -520,12 +581,13 @@ fn build_tables(
             .checked_add(1)?;
         let path_clone = max_path_clone
             .max(own.max_path_bytes)
-            .max(types.max_path_bytes);
+            .max(section_types.max_path_bytes);
         tables.add(path_copies.checked_mul(path_clone.checked_add(size_of::<DefPath>())?)?)?;
         // checksum's formatted owner paths and vector of byte slices overlap.
-        tables.rows::<String>(input.signatures.len())?;
-        tables.rows::<&[u8]>(input.signatures.len().checked_mul(2)?.checked_add(2)?)?;
-        tables.add(path_payload.checked_mul(2)?)?;
+        let references = own.paths.checked_add(section_types.paths)?;
+        tables.rows::<String>(references)?;
+        tables.rows::<&[u8]>(references.checked_mul(2)?.checked_add(2)?)?;
+        tables.add(references.checked_mul(max_path)?.checked_mul(2)?)?;
         tables.add(
             max_path
                 .checked_add(max_rule)?
@@ -534,18 +596,29 @@ fn build_tables(
         )?;
         largest_tables = largest_tables.max(tables.0);
         // Retained per-definition location/reference/operation/obligation rows.
-        weight.rows::<Location>(own.spans.checked_add(types.spans)?)?;
+        weight.rows::<Location>(own.spans.checked_add(section_types.spans)?)?;
         weight.add(
             own.spans
-                .checked_add(types.spans)?
+                .checked_add(section_types.spans)?
                 .checked_mul(max_module_bytes)?,
         )?;
-        weight.rows::<hirsel_types::SignatureDependency>(own.paths.checked_add(types.paths)?)?;
-        weight.add(tables.0)?;
+        weight.rows::<hirsel_types::SignatureDependency>(
+            own.paths.checked_add(section_types.paths)?,
+        )?;
+        // Only these rows survive section_owned. Contract/projected/canonical
+        // hash tables, counters and checksum vectors drop before the next body.
+        let mut retained = Bytes::default();
+        retained.rows::<crate::Obligation>(obligations)?;
+        retained.rows::<Site>(sites.checked_add(obligations.checked_mul(4)?)?)?;
+        retained.rows::<DefPath>(calls)?;
+        retained.add(obligations.checked_mul(max_rule)?.checked_mul(2)?)?;
+        retained.add(path_copies.checked_mul(path_clone.checked_add(size_of::<DefPath>())?)?)?;
+        weight.add(retained.0)?;
     }
     if data.unloaded {
         return None;
     }
+    let retained_sections = weight.0;
     // annotation_digest clones its input independently of Export's retained
     // annotation copy and creates a temporary empty type interner.
     weight.rows::<crate::Annotation>(input.annotations.len())?;
@@ -583,19 +656,26 @@ fn build_tables(
             .len()
             .checked_mul(max_path.checked_mul(2)?.checked_add(96)?)?,
     )?;
+    let annotation_workspace = weight.0.checked_sub(retained_sections)?;
     let context = contexts(data.add(types)?, type_rows, edges, max_module_bytes)?;
-    weight.add(context)?;
-    weight.add(largest_tables)?;
+    let mut digest_workspace = Bytes::default();
     // encode_with_output_limit constructs the trailing digest in a second
     // Writer and wraps it with newlines before appending it to the main text.
     let mut digest = Writer::counting(());
     digest.open("ExportDigest");
     digest.bytes(&[0; 32]);
     digest.close();
-    weight.add(digest.output_bytes()?.checked_add(2)?.checked_mul(3)?)?;
+    digest_workspace.add(digest.output_bytes()?.checked_add(2)?.checked_mul(3)?)?;
     // String growth can overlap its old allocation before realloc returns.
-    weight.add(largest_text.checked_mul(3)?.max(8))?;
-    weight.0.try_into().ok()
+    digest_workspace.add(largest_text.checked_mul(3)?.max(8))?;
+    Some(BuildTablesLayout {
+        retained_sections: retained_sections.try_into().ok()?,
+        annotation_workspace: annotation_workspace.try_into().ok()?,
+        context_workspace: context.try_into().ok()?,
+        section_workspace: largest_tables.try_into().ok()?,
+        digest_workspace: digest_workspace.0.try_into().ok()?,
+        owned_names: 0,
+    })
 }
 
 #[cfg(test)]
@@ -973,6 +1053,106 @@ pub(crate) mod tests {
             drop((shared, weak_owner));
         }
     }
+    #[test]
+    fn construction_uses_each_original_type_closure_and_reuses_section_scratch() {
+        fn fixture(width: usize, typed_headers: bool) -> ExportInput {
+            let mut input = construction_input(4);
+            let original = (**input.definitions.values().next().unwrap()).clone();
+            let signature = input.signatures.values().next().unwrap().clone();
+            input.definitions.clear();
+            input.signatures.clear();
+            for i in 0..width {
+                let mut definition = original.clone();
+                let mut path = input.header.entry.clone();
+                path.0.name = format!("body{i}");
+                definition.path = DefId::intern(&path);
+                for body in &mut definition.bodies {
+                    body.parameter_scope = hirsel_syntax::LexicalOwner::first(&path)
+                        .site(hirsel_syntax::NameSite::Item);
+                }
+                input.definitions.insert(path.clone(), Arc::new(definition));
+                let mut section = signature.clone();
+                section.path = path.clone();
+                section.public.definition = DefId::intern(&path);
+                input.signatures.insert(path, section);
+            }
+            for i in 0..32 {
+                let mut path = input.header.entry.clone();
+                path.0.name = format!("header{i}_{}", "named".repeat(8));
+                let id = DefId::intern(&path);
+                let ty = if typed_headers {
+                    input.types.intern(Type::with_kind(TypeKind::Named {
+                        definition: id,
+                        arguments: vec![].into(),
+                    }))
+                } else {
+                    original.types[0]
+                };
+                let mut section = signature.clone();
+                section.path = path.clone();
+                section.public.definition = id;
+                section.public.kind = SignatureKind::Const {
+                    ty,
+                    generics: vec![].into(),
+                };
+                input.signatures.insert(path, section);
+            }
+            input
+        }
+        let mut layouts = Vec::new();
+        for width in [1, 4, 16] {
+            let input = fixture(width, true);
+            let scalar = crate::export(&input);
+            let locator = input.locator.clone();
+            let captured = capture_types(&input, capture_types_bytes(&input).unwrap()).unwrap();
+            let (layout, sizing) = measured(|| build_owned_tables_layout(&input, 0, &captured));
+            assert_eq!(sizing.allocations, 0);
+            let layout = layout.unwrap();
+            let (built, storage) = measured(|| crate::build_owned(input));
+            let built = built.unwrap();
+            assert!(built.skipped.is_empty(), "{:?}", built.skipped);
+            assert!(
+                storage.peak as u64 <= layout.total().unwrap(),
+                "width {width}: actual {} layout {layout:?}",
+                storage.peak
+            );
+            assert_eq!(crate::encode(&built, &locator), scalar);
+            layouts.push(layout);
+        }
+        assert_eq!(
+            layouts[0].section_workspace, layouts[2].section_workspace,
+            "sequential checksum/obligation working tables do not multiply by body count"
+        );
+        // Extra captured headers grow their own metadata and global emit
+        // workspace, rather than each original's retained reference table.
+        let a = fixture(16, false);
+        let ac = capture_types(&a, capture_types_bytes(&a).unwrap()).unwrap();
+        let b = fixture(16, true);
+        let bc = capture_types(&b, capture_types_bytes(&b).unwrap()).unwrap();
+        let a = build_owned_tables_layout(&a, 0, &ac).unwrap();
+        let b = build_owned_tables_layout(&b, 0, &bc).unwrap();
+        assert_eq!(
+            a.retained_sections, b.retained_sections,
+            "header-only type rows do not belong to each body's retained reference/location table"
+        );
+        assert!(
+            b.context_workspace > a.context_workspace,
+            "the independent global encoding workspace still covers these header types"
+        );
+        let mut incomplete = fixture(1, false);
+        Arc::get_mut(incomplete.definitions.values_mut().next().unwrap())
+            .unwrap()
+            .types = Arc::from([]);
+        let captured =
+            capture_types(&incomplete, capture_types_bytes(&incomplete).unwrap()).unwrap();
+        let (bound, sizing) = measured(|| build_owned_tables_layout(&incomplete, 0, &captured));
+        assert!(
+            bound.is_none(),
+            "the producer's per-body closure must cover every emitted type edge"
+        );
+        assert_eq!(sizing.allocations, 0);
+    }
+
     #[test]
     fn construction_bound_covers_real_obligation_and_context_allocation_peaks() {
         for width in [1, 4, 16] {
