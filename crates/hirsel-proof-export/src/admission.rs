@@ -9,7 +9,7 @@ use hirsel_tir::{
     Body, Callee, Constructor, InstructionKind, LocalId, PlaceId, Projection, Rvalue, Terminator,
 };
 use hirsel_types::{SignatureKind, TypeId};
-use std::alloc::Layout;
+use std::{alloc::Layout, sync::Arc};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct WireShape {
@@ -54,7 +54,16 @@ impl WireShape {
     }
 }
 fn shape<T: Snapshot<Cx>>(value: &T, input: &ExportInput, depth: usize) -> Option<WireShape> {
+    shape_captured(value, input, depth, None)
+}
+fn shape_captured<T: Snapshot<Cx>>(
+    value: &T,
+    input: &ExportInput,
+    depth: usize,
+    rows: Option<&Arc<std::collections::HashSet<TypeId>>>,
+) -> Option<WireShape> {
     let mut cx = Cx::new(input.locator.clone(), input.types.clone());
+    cx.captured_types = rows.cloned();
     cx.sizing = Some(WireShape::default());
     let mut writer = Writer::counting_at_depth(cx, depth);
     value.write(&mut writer);
@@ -213,21 +222,128 @@ fn path_len(path: &DefPath) -> Option<usize> {
     )
 }
 
+/// Exact already-loaded type closure selected by the canonical input fields.
+/// The capture contains no native or validation authority.
+pub struct CapturedTypes {
+    rows: Arc<std::collections::HashSet<TypeId>>,
+    types: Arc<hirsel_types::TypeInterner>,
+}
+fn input_shape(input: &ExportInput) -> Option<WireShape> {
+    let mut total = WireShape::default();
+    for section in input.signatures.values() {
+        for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
+            total = total.add(shape(signature, input, 0)?)?;
+        }
+    }
+    for definition in input.definitions.values() {
+        total = total.add(shape(&**definition, input, 0)?)?;
+    }
+    for constant in input.constants.values() {
+        total = total.add(shape(constant, input, 0)?)?;
+    }
+    Some(total)
+}
+/// Workspace required to capture the selected type closure. Reads loaded rows
+/// only, allocates nothing and never calls a source/locator/provider.
+pub fn capture_types_bytes(input: &ExportInput) -> Option<u64> {
+    let roots = input_shape(input)?.types;
+    let mut edges = 0usize;
+    for id in input.types.ids() {
+        if let Some(row) = input.types.get_if_loaded(id) {
+            edges = edges.checked_add(shape(row, input, 0)?.types)?;
+        }
+    }
+    let mut weight = Bytes::default();
+    weight.rows::<TypeId>(roots)?;
+    weight.rows::<TypeId>(roots.checked_add(edges)?)?;
+    weight.rows::<hirsel_types::TypeGraphEdge>(edges)?;
+    weight.hash::<TypeId, ()>(input.types.len())?;
+    weight.rows::<TypeId>(input.types.len())?;
+    weight.rows::<TypeId>(input.types.len())?; // Arc conversion overlap
+    weight.add(
+        2 * size_of::<usize>()
+            + size_of::<std::collections::HashSet<TypeId>>()
+            + size_of::<CapturedTypes>(),
+    )?;
+    weight.0.try_into().ok()
+}
+/// Capture under an admitted workspace before any Vec/hash table is allocated.
+/// A lazy row on the selected closure refuses; unrelated lazy rows are ignored.
+/// No provider I/O or compiler work runs even during capture.
+pub fn capture_types(input: &ExportInput, limit: u64) -> Option<CapturedTypes> {
+    if capture_types_bytes(input)? > limit {
+        return None;
+    }
+    let count = input.types.len();
+    let mut cx = Cx::new(input.locator.clone(), input.types.clone());
+    cx.capture_roots = Some(Vec::new());
+    let mut writer = Writer::discarding(cx);
+    for section in input.signatures.values() {
+        for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
+            signature.write(&mut writer);
+        }
+    }
+    for definition in input.definitions.values() {
+        definition.write(&mut writer);
+    }
+    for constant in input.constants.values() {
+        constant.write(&mut writer);
+    }
+    let mut pending = writer.finish().1.capture_roots?;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = pending.pop() {
+        if id == TypeId::DANGLING || !seen.insert(id) {
+            continue;
+        }
+        if seen.len() > count || input.types.len() != count {
+            return None;
+        }
+        let row = input.types.get_if_loaded(id)?;
+        pending.extend(row.kind.graph_edges().into_iter().map(|edge| edge.ty));
+    }
+    Some(CapturedTypes {
+        rows: Arc::new(seen),
+        types: input.types.clone(),
+    })
+}
+/// Inspect construction using exactly the admitted, already-loaded closure.
+/// A capture from another interner or lacking an input edge is refused.
+pub fn build_captured_tables_bytes(
+    input: &ExportInput,
+    max_module_bytes: usize,
+    types: &CapturedTypes,
+) -> Option<u64> {
+    if !Arc::ptr_eq(&input.types, &types.types) {
+        return None;
+    }
+    build_tables(input, max_module_bytes, Some(&types.rows))
+}
 /// Upper bound for canonical construction tables, digest-text scratch and
 /// section metadata. Input payload clones are a separate caller obligation.
 /// `max_module_bytes` bounds every location module supplied by the locator.
 /// No locator or provider is called. Types needed by the input must already
 /// be materialized by its source producer; lazy gaps refuse this inspection.
 pub fn build_tables_bytes(input: &ExportInput, max_module_bytes: usize) -> Option<u64> {
+    build_tables(input, max_module_bytes, None)
+}
+fn build_tables(
+    input: &ExportInput,
+    max_module_bytes: usize,
+    captured: Option<&Arc<std::collections::HashSet<TypeId>>>,
+) -> Option<u64> {
     let mut types = WireShape::default();
     let mut type_rows = 0usize;
     let mut max_contracts = 0usize;
-    for id in input.types.ids() {
+    for id in input
+        .types
+        .ids()
+        .filter(|id| captured.is_none_or(|rows| rows.contains(id)))
+    {
         let Some(row) = input.types.get_if_loaded(id) else {
             continue;
         };
         // A materialized graph may not hide another type-source fetch in sizing.
-        let row_shape = shape(row, input, 2)?;
+        let row_shape = shape_captured(row, input, 2, captured)?;
         if row_shape.unloaded {
             return None;
         }
@@ -260,17 +376,17 @@ pub fn build_tables_bytes(input: &ExportInput, max_module_bytes: usize) -> Optio
         max_path_clone = max_path_clone.max(clone_bytes);
         path_payload = path_payload.checked_add(path_len(path)?)?;
         for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
-            data = data.add(shape(signature, input, 0)?)?;
+            data = data.add(shape_captured(signature, input, 0, captured)?)?;
             if let SignatureKind::Function(function) = &signature.kind {
                 max_contracts = max_contracts.max(function.contracts.len());
             }
         }
     }
     for section in input.signatures.values() {
-        data = data.add(shape(&section.dependencies, input, 0)?)?;
+        data = data.add(shape_captured(&section.dependencies, input, 0, captured)?)?;
     }
     for value in input.constants.values() {
-        data = data.add(shape(value, input, 0)?)?;
+        data = data.add(shape_captured(value, input, 0, captured)?)?;
     }
     weight.rows::<crate::DefinitionSection>(input.definitions.len())?;
     weight.rows::<crate::SignatureSection>(input.signatures.len())?;
@@ -284,7 +400,7 @@ pub fn build_tables_bytes(input: &ExportInput, max_module_bytes: usize) -> Optio
         {
             return None;
         }
-        let own = shape(&**definition, input, 0)?;
+        let own = shape_captured(&**definition, input, 0, captured)?;
         data = data.add(own)?;
         // Definition's TypeTable is nested two levels in its digest preimage.
         // The count, tags, separators and closing node fit this fixed header.
@@ -625,6 +741,74 @@ pub(crate) mod tests {
         let mut flat = Writer::with_context(Cx::new(input.locator.clone(), input.types.clone()));
         values.write(&mut flat);
         assert_eq!(actual.finish().0, flat.finish().0);
+    }
+    #[test]
+    fn captured_type_workspace_ignores_unrelated_lazy_rows_and_guards_every_input_edge() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct Partial(AtomicUsize);
+        impl TypeBaseSource for Partial {
+            fn rows(&self, position: u32, base: &TypeBase) -> Option<Vec<(u32, Type)>> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(position, 0, "capturing/sizing must not load the lazy child");
+                Some(vec![(
+                    0,
+                    Type::with_kind(TypeKind::Box(base.id_at(1).unwrap())),
+                )])
+            }
+            fn candidates(&self, _: &Type, _: &TypeBase) -> Vec<u32> {
+                vec![]
+            }
+        }
+        let source = Arc::new(Partial(AtomicUsize::new(0)));
+        let base = TypeBase::from_source(2, source.clone());
+        let unrelated = base.id_at(0).unwrap();
+        let types = TypeInterner::new(Some(base));
+        types.get(unrelated).unwrap();
+        let unit = types.intern(Type::unit());
+        let mut input = input(types.clone());
+        input.constants.insert(
+            DefPath::core("unit"),
+            hirsel_tir::Materialized {
+                root: hirsel_tir::ValueNode {
+                    ty: unit,
+                    kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                },
+            },
+        );
+        assert!(
+            build_tables_bytes(&input, 0).is_none(),
+            "the original all-loaded-rows inspection remains conservative"
+        );
+        let (needed, sizing) = measured(|| capture_types_bytes(&input));
+        assert_eq!(sizing.allocations, 0);
+        let needed = needed.unwrap();
+        let (missing, refused) = measured(|| capture_types(&input, needed - 1));
+        assert!(missing.is_none());
+        assert_eq!(
+            refused.allocations, 0,
+            "N-1 refuses before workspace allocation"
+        );
+        let (captured, actual) = measured(|| capture_types(&input, needed));
+        let captured = captured.unwrap();
+        assert!(actual.peak as u64 <= needed);
+        assert!(actual.allocations > 0);
+        let (bound, sizing) = measured(|| build_captured_tables_bytes(&input, 0, &captured));
+        assert!(bound.is_some());
+        assert_eq!(sizing.allocations, 0);
+        assert_eq!(
+            crate::encode(&crate::build(&input), &input.locator),
+            crate::export(&input)
+        );
+        input.constants.values_mut().next().unwrap().root.ty = unrelated;
+        assert!(
+            build_captured_tables_bytes(&input, 0, &captured).is_none(),
+            "a capture cannot omit an input root"
+        );
+        assert!(
+            capture_types(&input, capture_types_bytes(&input).unwrap()).is_none(),
+            "an actual lazy closure gap refuses"
+        );
+        assert_eq!(source.0.load(Ordering::Relaxed), 1);
     }
     #[test]
     fn construction_bound_covers_real_obligation_and_context_allocation_peaks() {

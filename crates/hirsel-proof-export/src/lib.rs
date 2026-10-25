@@ -10,7 +10,10 @@ hirsel_guard::install!(admission::tests::Counting: admission::tests::Counting);
 
 mod admission;
 mod annotations;
-pub use admission::build_tables_bytes;
+pub use admission::{
+    CapturedTypes, build_captured_tables_bytes, build_tables_bytes, capture_types,
+    capture_types_bytes,
+};
 mod constants;
 mod content;
 pub mod findings;
@@ -200,6 +203,9 @@ pub(crate) fn refuse(at: impl Into<String>, message: impl Into<String>) -> Impor
 
 impl Observe for Cx {
     fn def_path(&mut self, path: &DefPath) {
+        if self.capture_roots.is_some() {
+            return;
+        }
         if let Some(shape) = &mut self.sizing {
             shape.paths = shape.paths.checked_add(1).unwrap_or(usize::MAX);
             let payload = path
