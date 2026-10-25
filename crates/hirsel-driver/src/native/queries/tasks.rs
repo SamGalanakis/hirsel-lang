@@ -238,12 +238,15 @@ impl QueryTask for NativeTask {
         self.request.key
     }
     fn weight(&self) -> MemoryWeight {
-        self.tasks.weight
+        // The immutable request and completed products retain their snapshot
+        // reservations. Only these Arc handles and terminal state are local.
+        MemoryWeight {
+            retained: std::mem::size_of::<Self>() as u64,
+            ..self.tasks.weight
+        }
     }
     fn continuation_bytes(&self) -> u64 {
-        // Completed products remain owned by the registry/snapshot and its
-        // explicit reservation. This charge covers only the task frame.
-        self.tasks.weight.retained
+        std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
