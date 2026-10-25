@@ -244,18 +244,32 @@ impl Task {
         if bytes.len() as u64 > queries.weight.scratch {
             return Err(queries.errors.resource);
         }
-        let retained = (growth.edges.len() as u64)
-            .checked_mul(std::mem::size_of::<crate::GrowthEdge>() as u64)
-            .and_then(|n| {
-                n.checked_add(
-                    (reads.iter().count()
-                        * (std::mem::size_of::<(ReadKey, ContentHash)>()
-                            + 6 * std::mem::size_of::<usize>())) as u64,
-                )
-            })
-            .and_then(|n| n.checked_add(bytes.len() as u64))
-            .ok_or(queries.errors.resource)?;
-        if retained > queries.output_budget {
+        let data = Arc::new(Data {
+            growth: Arc::new(growth),
+            diagnostics: Arc::new(diagnostics),
+            reads: Arc::new(reads),
+        });
+        // Encoded bytes are temporary scratch and belong to the result store
+        // after publication. Bound only the actual retained allocation graph.
+        let mut retained = crate::memo::retained::Weight::default();
+        retained.arc(
+            &data,
+            |w,
+             Data {
+                 growth,
+                 diagnostics,
+                 reads,
+             }| {
+                w.arc(growth, |w, growth| {
+                    w.add(std::mem::size_of_val(&*growth.edges))
+                });
+                w.arc(diagnostics, |w, diagnostics| {
+                    w.vec(diagnostics, |w, diagnostic| w.diagnostic(diagnostic))
+                });
+                w.reads(reads);
+            },
+        );
+        if retained.bytes > queries.output_budget {
             return Err(queries.errors.resource);
         }
         let record = queries
@@ -280,11 +294,6 @@ impl Task {
             action,
             record,
         };
-        let data = Arc::new(Data {
-            growth: Arc::new(growth),
-            diagnostics: Arc::new(diagnostics),
-            reads: Arc::new(reads),
-        });
         *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((product, data));
         queries
             .store
