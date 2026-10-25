@@ -191,3 +191,4 @@ mod scheduled_check_scope;
 mod native_arena_recursion_19;
 mod scheduled_checked_products;
 mod receipt_provider_33;
+mod scheduled_constant_publication;
