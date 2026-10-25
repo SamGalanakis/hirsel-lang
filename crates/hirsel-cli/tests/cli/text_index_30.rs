@@ -642,3 +642,56 @@ fn replay_refusals(selection: &Path, root: &Path, tape: &Path, binaries: &[PathB
         "TEXT_INDEX_30_REFUSAL_PASS changed-source-and-input-config; original tape immutable"
     );
 }
+
+/// File-job suspension is physical: its completion keeps ordinary FIFO Io
+/// order, including when a younger task can start while the job is off-worker.
+#[test]
+fn ordered_file_jobs_preserve_host_replay_order() {
+    hirsel_engine::with_compiler_stack(|| {
+        let scratch = scratch("ordered-file-jobs-");
+        let root = scratch.path();
+        fs::write(root.join("0.txt"), b"a").unwrap();
+        fs::write(root.join("1.txt"), b"bb").unwrap();
+        let source = root.join("main.hir");
+        fs::write(
+            &source,
+            include_str!("../support/text_index_30/open_read.hir"),
+        )
+        .unwrap();
+        let tape = root.join("recording");
+        let grants = serde_json::json!({
+            "io": {"tasks":"tasks.cooperative@1", "dirs":[{
+                "path":"input", "host":root, "access":"read"
+            }]},
+            "args":[],
+            "placement":{"cores":1,"commit":"shared","reorder":"auto"}
+        });
+        let live = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .args(["run", "--native"])
+            .arg(&source)
+            .arg("--grants")
+            .arg(grants.to_string())
+            .arg("--record")
+            .arg(&tape)
+            .output()
+            .unwrap();
+        assert!(live.status.success(), "{live:?}");
+        assert!(live.stdout.is_empty() && live.stderr.is_empty(), "{live:?}");
+        let original = fs::read(&tape).unwrap();
+        let mut previous: Option<hirsel_interp::observation::Observable> = None;
+        for replay in [
+            hirsel_driver::replay_observations,
+            hirsel_driver::replay_observations_checked,
+        ] {
+            let observed = replay(&source, &tape, Some(1_000_000)).unwrap();
+            assert_eq!(observed.exit_code, Some(0));
+            assert!(observed.output.is_empty());
+            assert!(observed.failures.is_empty(), "{observed:?}");
+            if let Some(previous) = &previous {
+                assert!(previous.equivalent(&observed));
+            }
+            previous = Some(observed);
+        }
+        assert_eq!(fs::read(&tape).unwrap(), original);
+    });
+}

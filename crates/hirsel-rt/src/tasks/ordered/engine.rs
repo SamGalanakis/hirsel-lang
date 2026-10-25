@@ -910,6 +910,18 @@ pub(super) fn save_host_boundary(ctx: *mut TaskCtx) {
     suspend(ctx, task, false);
 }
 
+/// Save only the physical frame while a blocking file job owns the logical
+/// head. Home clears the job gate on completion; no retirement or poll occurs.
+pub(super) fn wait_host_job(ctx: *mut TaskCtx, token: u64) -> Stopped<()> {
+    let task = current(ctx);
+    with_driver(ctx, |d| {
+        assert!(d.head_ready(task));
+        assert!(d.head_job.replace((task, token)).is_none());
+    });
+    suspend(ctx, task, true);
+    at_head(ctx)
+}
+
 /// The owning runtime entry keeps its carriers live while a pending command
 /// waits. The accepted command owns its input bytes, so no saved slot is read
 /// or written by a different committing task.

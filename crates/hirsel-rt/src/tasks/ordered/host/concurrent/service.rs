@@ -269,7 +269,9 @@ impl Service {
         } else {
             Ok(BTreeMap::new())
         };
-        self.adapter.finish(token & !CONCURRENT);
+        if result != Err(AdapterError::Blocked) {
+            self.adapter.finish(token & !CONCURRENT);
+        }
         let evidence = observing.then(|| Attempt {
             result: super::super::super::events::owned_host_result(&result),
             discovery: discovered,
@@ -281,6 +283,15 @@ impl Service {
             .unwrap()
             .completion = Some(result);
         Some((true, evidence))
+    }
+
+    /// Delivery of a physical job does not poll the adapter or advance its
+    /// logical WaitLog. The issuer publishes the ordinary initial outcome.
+    pub(crate) fn poll_head_job(&self, token: u64, cause: Option<u32>) -> bool {
+        self.jobs.drain();
+        self.poll_job(token, cause, false)
+            .expect("owned head job")
+            .0
     }
 
     pub(crate) fn task(&self, token: u64) -> u32 {
@@ -471,23 +482,7 @@ pub(super) unsafe fn request(
                 .is_none()
         );
         io.pending.fetch_add(1, Ordering::Release);
-        unsafe { super::super::park(ctx, wait, yielded) }?;
-        let result = if super::super::return_pending(ctx, wait) {
-            io.rows
-                .lock()
-                .unwrap()
-                .get(&wait)
-                .unwrap()
-                .completion
-                .clone()
-        } else {
-            let row = io.rows.lock().unwrap().remove(&wait).unwrap();
-            io.pending.fetch_sub(1, Ordering::Release);
-            row.completion
-        }
-        .expect("completed saved wait");
-        super::super::super::events::complete_host(ctx, false, &result);
-        Ok(result)
+        unsafe { wait_registered(ctx, io, wait, yielded) }
     } else {
         if let Some(read) = &read {
             super::super::bounded_read(ctx, read, &result);
@@ -509,10 +504,36 @@ pub(super) unsafe fn request(
     }
 }
 
-/// A blocking built-in call: the retiring turn parks on a job row instead of
-/// holding its compute worker in the syscall. Its first observation is the
-/// park, as for a request that registered readiness; the retirement poll
-/// submits the job once its credit is granted and completes the row on return.
+/// Resume a genuine adapter wait, with the same logical park and completion
+/// ownership whether its first attempt ran inline or on a physical file job.
+unsafe fn wait_registered(
+    ctx: *mut TaskCtx,
+    io: &Service,
+    wait: u64,
+    yielded: bool,
+) -> Stopped<Result<Completion, AdapterError>> {
+    unsafe { super::super::park(ctx, wait, yielded) }?;
+    let result = if super::super::return_pending(ctx, wait) {
+        io.rows
+            .lock()
+            .unwrap()
+            .get(&wait)
+            .unwrap()
+            .completion
+            .clone()
+    } else {
+        let row = io.rows.lock().unwrap().remove(&wait).unwrap();
+        io.pending.fetch_sub(1, Ordering::Release);
+        row.completion
+    }
+    .expect("completed saved wait");
+    super::super::super::events::complete_host(ctx, false, &result);
+    Ok(result)
+}
+
+/// A blocking built-in call saves its physical frame while retaining the
+/// logical head. The syscall runs on an owned job; completion has the same
+/// observation and yield as an inline call, independent of worker timing.
 /// # Safety
 /// As for request, after the request's entry events.
 unsafe fn job(
@@ -543,24 +564,54 @@ unsafe fn job(
     io.pending.fetch_add(1, Ordering::Release);
     // Submit now when capacity is free; never wait for it under the role.
     let _ = io.poll_job(wait, cause, false);
-    super::super::super::events::record_host_initial(ctx, &Err(AdapterError::Blocked));
-    unsafe { super::super::park(ctx, wait, false) }?;
-    let result = if super::super::return_pending(ctx, wait) {
-        io.rows
-            .lock()
-            .unwrap()
-            .get(&wait)
-            .unwrap()
-            .completion
-            .clone()
+    engine::wait_host_job(ctx, wait)?;
+    let Row {
+        request,
+        completion,
+        ..
+    } = io.rows.lock().unwrap().remove(&wait).unwrap();
+    assert!(io.pending.fetch_sub(1, Ordering::Release) > 0);
+    let mut result = completion.expect("completed head job");
+    let observing = engine::with_driver(ctx, |d| d.events.is_some());
+    let discovery = if observing {
+        let _segment = unsafe { role::Segment::new(ctx) };
+        discover(&mut result, &*io.adapter)
     } else {
-        let row = io.rows.lock().unwrap().remove(&wait).unwrap();
-        io.pending.fetch_sub(1, Ordering::Release);
-        row.completion
+        Ok(BTreeMap::new())
+    };
+    let discovery =
+        discovery.and_then(|d| super::super::super::events::discover_host(ctx, &result, &d));
+    super::super::super::events::record_host_initial(ctx, &result);
+    discovery.map_err(|e| Stop::Refused(e.into()))?;
+    if result == Err(AdapterError::Blocked) {
+        let yielded = !matches!(
+            request,
+            Request::ReadStdin { .. } | Request::WatchNext { .. }
+        );
+        assert!(
+            io.rows
+                .lock()
+                .unwrap()
+                .insert(wait, Row::new(request, None))
+                .is_none()
+        );
+        io.pending.fetch_add(1, Ordering::Release);
+        return unsafe { wait_registered(ctx, io, wait, yielded) };
     }
-    .expect("completed job wait");
+    // No owned request remains on a stack that the following yield can abandon.
+    drop(request);
     super::super::super::events::complete_host(ctx, false, &result);
-    Ok(result)
+    unsafe { (*ctx).pending_ordered_host.as_mut().unwrap().result = Some(result) };
+    super::super::finish(ctx, Next::Yield)?;
+    Ok(unsafe {
+        (*ctx)
+            .pending_ordered_host
+            .as_mut()
+            .unwrap()
+            .result
+            .take()
+            .unwrap()
+    })
 }
 
 #[cfg(test)]

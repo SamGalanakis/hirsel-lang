@@ -1,0 +1,19 @@
+fn read(tasks: Tasks, directory: Dir, name: String) -> u64 {
+  task.scope(tasks, fn(s: Scope) -> u64 {
+    let mut Ok(file) = file.open(directory, path.of(name)) else { return 0u64 }
+    let Ok(bytes) = file.read_all_bounded(directory, mut file, 4096) else { return 0u64 }
+    bytes.len(bytes)
+  })
+}
+pub type AppError = Grant(GrantError) | File(FileError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)? Grant
+  let directory = io.dir(rt, path.of("input"))? File
+  let total = task.scope(tasks, fn(s: Scope) -> u64 {
+    let a = task.async(s, fn() -> u64 { read(tasks, directory, "0.txt") })
+    let b = task.async(s, fn() -> u64 { read(tasks, directory, "1.txt") })
+    task.await(s, take a) + task.await(s, take b)
+  })
+  failure.check(total == 3u64, Bounds())
+  Ok(())
+}

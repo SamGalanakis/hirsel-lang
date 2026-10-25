@@ -13,8 +13,11 @@ pub(in crate::tasks) fn needed_after_save(s: &Scheduler) -> bool {
     };
     !driver.host_poll
         && (driver
-            .poll_after_save
-            .is_some_and(|id| driver.physically_saved(id))
+            .head_job
+            .is_some_and(|(id, _)| driver.physically_saved(id))
+            || driver
+                .poll_after_save
+                .is_some_and(|id| driver.physically_saved(id))
             || driver.quiet())
 }
 
@@ -26,6 +29,52 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             && !unsafe { super::host::concurrent::pending(run) })
     {
         return false;
+    }
+    // Physical file-job completion is not a logical scheduling point. Keep
+    // its head reserved, while saved younger frames can run private compute.
+    let head_job = {
+        let Some(_guard) = (unsafe { role::IdleGuard::try_new(run) }) else {
+            return false;
+        };
+        let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+        let Logical::Ordered(driver) = &s.logical else {
+            return false;
+        };
+        driver
+            .head_job
+            .filter(|(id, _)| driver.physically_saved(*id))
+            .map(|(id, token)| {
+                let shield = s.task(id as u32).shield();
+                (id, token, s.canceled_task(id as u32, shield))
+            })
+    };
+    if let Some((id, token, cause)) = head_job {
+        let io = unsafe { (*run).ordered_io.get().unwrap() };
+        if !io.poll_head_job(token, cause) {
+            return false;
+        }
+        let selected = {
+            let _guard = unsafe { role::IdleGuard::home(run) };
+            let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+            let Logical::Ordered(driver) = &mut s.logical else {
+                unreachable!()
+            };
+            assert_eq!(driver.head_job.take(), Some((id, token)));
+            driver
+                .select()
+                .into_iter()
+                .map(|task| {
+                    let key = TaskKey::from_word(task);
+                    let row = super::ahead::physical(s, key).expect("live head-job continuation");
+                    (key, row.owner)
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
+        for (key, owner) in selected {
+            batch.schedule(key, owner);
+        }
+        return true;
     }
     let idle = unsafe { crate::pool::busy(&*run) } == 0;
     let reserved = {

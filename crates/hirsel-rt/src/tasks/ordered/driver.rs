@@ -44,6 +44,8 @@ pub(crate) struct Driver {
     pub(super) waiting: BTreeMap<TaskId, u64>,
     pub(super) returned: BTreeMap<TaskId, super::Returned>,
     pub(super) host_poll: bool,
+    /// A physical file job retains its logical head until completion.
+    pub(super) head_job: Option<(TaskId, u64)>,
     pub(super) host_ops: BTreeMap<TaskId, &'static str>,
     pub(super) next_host_token: u64,
     pub(super) bounded_reads: BTreeSet<TaskId>,
@@ -89,6 +91,7 @@ impl Driver {
             waiting: BTreeMap::new(),
             returned: BTreeMap::new(),
             host_poll: false,
+            head_job: None,
             host_ops: BTreeMap::new(),
             next_host_token: 1,
             host_returns: BTreeMap::new(),
@@ -126,6 +129,7 @@ impl Driver {
     /// A save notification only enables retry: Frontier still owns the log.
     pub(super) fn head_ready(&self, task: TaskId) -> bool {
         !self.awaiting_save
+            && self.head_job.is_none()
             && !self.host_poll
             && !self.poll_deferred()
             && self.frontier.as_ref().is_some_and(|f| f.head_ready(task))
@@ -149,6 +153,9 @@ impl Driver {
         let order: Vec<_> = std::iter::once(head).chain(frontier.queue()).collect();
         let mut ready = Vec::new();
         for task in order {
+            if self.head_job.is_some_and(|(owner, _)| owner == task) {
+                continue;
+            }
             let Some(Execution::Saved { head_only }) = self.execution.get(&task).copied() else {
                 continue;
             };
