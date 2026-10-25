@@ -68,3 +68,65 @@ fn source_records_rebind_real_owners_after_engine_release_and_refuse_another_con
     );
     assert!(wrong.decode::<Row>(&source, &bytes).is_none());
 }
+
+#[test]
+fn generated_source_owner_is_independent_of_codec_identity_and_selector_position() {
+    fn generated(text: &str) -> (NativeRecordContext, DefPath, Anchor, hirsel_types::TypeId) {
+        let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+        let path = DefPath::core("generated");
+        let file = engine.sources.add("generated.hir", text.into()).unwrap();
+        let anchor = engine.sources.item_anchor(file, 4);
+        engine.generated.insert(
+            path.clone(),
+            crate::queries::generation::GeneratedSource {
+                file,
+                text: text.into(),
+                site: hirsel_span::Span::default(),
+            },
+        );
+        let ty = engine.types().intern(hirsel_types::Type::unit());
+        (NativeRecordContext::capture(&engine), path, anchor, ty)
+    }
+    let (context, path, anchor, ty) = generated("    fn(x:u64)->u64 {9u64/x}");
+    assert_eq!(context.source_definition(anchor), Some(&path));
+    let (codec_owner, occurrence) = context.record_owner(anchor).unwrap();
+    assert_ne!(codec_owner, path);
+    assert!(
+        codec_owner
+            .0
+            .name
+            .starts_with("$generated-source:generated:")
+    );
+    assert_eq!(occurrence, 4);
+    assert_eq!(
+        context.record_source_anchor(&codec_owner, occurrence),
+        Some(anchor)
+    );
+    assert_eq!(context.record_source_anchor(&path, 0), None);
+    assert_eq!(context.source_definition(Anchor(u32::MAX)), None);
+    let store = Arc::new(crate::store::MemStore::default());
+    let records = NativeRecords::new(context.record_types().clone(), store.clone());
+    let bytes = records
+        .encode(
+            &context,
+            &Row {
+                origin: hirsel_span::Span::new(anchor, 0, 2).unwrap(),
+                ty,
+            },
+        )
+        .unwrap();
+    let same = records.decode::<Row>(&context, &bytes).unwrap();
+    assert_eq!(same.origin.anchor, anchor);
+    let (changed, changed_path, changed_anchor, _) = generated("    fn(x:u64)->u64 {8u64/x}");
+    assert_eq!(changed_path, path);
+    assert_eq!(changed.source_definition(changed_anchor), Some(&path));
+    assert_ne!(
+        changed.record_owner(changed_anchor),
+        Some((codec_owner, occurrence))
+    );
+    let other = NativeRecords::new(changed.record_types().clone(), store);
+    assert!(
+        other.decode::<Row>(&changed, &bytes).is_none(),
+        "a declaration association cannot admit a different generated text"
+    );
+}
