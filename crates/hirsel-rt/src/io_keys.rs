@@ -479,6 +479,9 @@ struct Epochs {
     /// Prepared transitions that have not taken their position yet; the queue keeps room
     /// for each, so a take inside a section never grows it.
     reserved: usize,
+    /// [`KeyTable::wait`]ers blocked on this cell's condvar. An end that sees none
+    /// skips the wake: a later waiter re-checks readiness under the same lock.
+    waiters: usize,
 }
 
 impl Epochs {
@@ -552,6 +555,8 @@ pub struct KeyTable {
 pub struct Positions {
     held: Vec<(Key, Mode, u64, Arc<Cell>)>,
     state: State,
+    /// Some cell had a blocked waiter when these positions ended.
+    wake: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -586,6 +591,7 @@ impl KeyTable {
         Positions {
             held,
             state: State::Prepared,
+            wake: false,
         }
     }
     /// Take prepared positions, in key order (a request's entered phase). It allocates
@@ -616,9 +622,11 @@ impl KeyTable {
                 continue;
             }
             let start = self.metrics.as_ref().map(|_| std::time::Instant::now());
+            epochs.waiters += 1;
             while !epochs.ready(*epoch) {
                 epochs = cell.ended.wait(epochs).unwrap();
             }
+            epochs.waiters -= 1;
             if let (Some(metrics), Some(start)) = (&self.metrics, start) {
                 metrics.key_wait(*key == NAMESPACE, start.elapsed());
             }
@@ -649,7 +657,9 @@ impl Positions {
     pub fn end_epochs(&mut self) {
         assert_eq!(self.state, State::Taken, "taken positions end once");
         for (_, _, epoch, cell) in &self.held {
-            cell.epochs.lock().unwrap().end(*epoch);
+            let mut epochs = cell.epochs.lock().unwrap();
+            epochs.end(*epoch);
+            self.wake |= epochs.waiters != 0;
         }
         self.state = State::Ended;
     }
@@ -669,6 +679,9 @@ impl Drop for Positions {
             }
             State::Taken => self.end_epochs(),
             State::Ended => {}
+        }
+        if !self.wake {
+            return;
         }
         for (_, _, _, cell) in &self.held {
             cell.ended.notify_all();
