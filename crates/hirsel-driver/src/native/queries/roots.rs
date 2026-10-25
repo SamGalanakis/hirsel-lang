@@ -7,7 +7,7 @@ use super::{
     *,
 };
 use crate::native::root_source::NativeLinkSource;
-use hirsel_artifact_store::{Action, Domain};
+use hirsel_engine::store::{Action, Domain};
 use hirsel_lir::{fragment::UnitSummary, products::Binding};
 use std::collections::{BTreeMap, BTreeSet};
 
