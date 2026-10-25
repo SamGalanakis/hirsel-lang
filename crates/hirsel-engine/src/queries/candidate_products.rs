@@ -14,7 +14,7 @@ pub(crate) struct CheckedScope {
     pub(crate) failed_lowered: BTreeSet<DefPath>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CheckedProducts {
     pub digest: ContentHash,
     /// Optional diagnostic export; the digest always commits to the full bytes.
@@ -23,8 +23,26 @@ pub struct CheckedProducts {
     pub reads: BTreeMap<DefPath, BTreeMap<Vec<u8>, ContentHash>>,
     pub type_rows: u64,
     pub type_bytes: u64,
+    owner: Arc<dyn Send + Sync>,
+}
+impl std::fmt::Debug for CheckedProducts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CheckedProducts")
+            .field("digest", &self.digest)
+            .field("canonical", &self.canonical)
+            .field("reads", &self.reads)
+            .field("type_rows", &self.type_rows)
+            .field("type_bytes", &self.type_bytes)
+            .finish()
+    }
 }
 impl CheckedProducts {
+    /// Keep producer and output admission alive through detached receipt clones.
+    /// The token controls lifetime only and grants no verification authority.
+    pub fn retain_owner(mut self, owner: Arc<dyn Send + Sync>) -> Self {
+        self.owner = Arc::new((self.owner, owner));
+        self
+    }
     /// Exact owner/read keys ordered by persisted bytes, independent of intern
     /// assignment and scheduling. Includes private views and negative reads.
     pub fn canonical_reads(&self) -> BTreeMap<(Vec<u8>, Vec<u8>), ContentHash> {
@@ -326,6 +344,7 @@ impl CheckedProductEncoder {
             reads,
             type_rows: stats.rows,
             type_bytes: stats.row_bytes,
+            owner: Arc::new(()),
         }
     }
 }
@@ -333,6 +352,30 @@ impl CheckedProductEncoder {
 #[cfg(test)]
 mod registration_tests {
     use super::*;
+
+    #[test]
+    fn detached_checked_product_clones_keep_all_output_reservations() {
+        let budget = crate::runtime::ProcessBudget::new(96);
+        let products = CheckedProducts {
+            digest: ContentHash::of_bytes(b"receipt"),
+            canonical: Some("canonical receipt".into()),
+            reads: BTreeMap::new(),
+            type_rows: 0,
+            type_bytes: 0,
+            owner: Arc::new(()),
+        }
+        .retain_owner(Arc::new(budget.reserve(64).unwrap()));
+        let original = products.clone();
+        let products = products.retain_owner(Arc::new(budget.reserve(32).unwrap()));
+        let detached = products.clone();
+        drop(products);
+        assert_eq!(budget.reserved(), 96);
+        drop(original);
+        assert_eq!(budget.reserved(), 96);
+        assert_eq!(detached.canonical.as_deref(), Some("canonical receipt"));
+        drop(detached);
+        assert_eq!(budget.reserved(), 0);
+    }
 
     #[test]
     fn registration_records_keep_generated_text_and_sorted_instance_actuals() {
