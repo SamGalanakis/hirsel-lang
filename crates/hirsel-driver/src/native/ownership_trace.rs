@@ -265,7 +265,11 @@ pub fn run_path(
     verify: hirsel_engine::Verify,
     event_limit: usize,
 ) -> Result<Result<LeafExecution, NativeError>, crate::ToolError> {
-    crate::session::with_program(path, verify, |loaded| {
+    hirsel_engine::with_compiler_stack(|| {
+        let mut loaded = crate::COMPILER
+            .with_verify(verify)
+            .with_owned_engines()
+            .load_program(path)?;
         loaded.check_for_execution()?;
         let input =
             loaded
