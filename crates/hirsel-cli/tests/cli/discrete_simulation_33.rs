@@ -109,7 +109,6 @@ fn fixture(row: &Value) -> Fixture {
 }
 fn original_steps(row: &Value) -> bool {
     [
-        "over-jobs",
         "never-admitted-events",
         "cap-events",
         "cap-jobs",
