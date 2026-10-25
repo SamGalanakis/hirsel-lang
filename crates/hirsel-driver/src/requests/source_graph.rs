@@ -244,6 +244,7 @@ fn uninstalled() -> ToolError {
 /// Runtime scratch is separate, and shared across the admitted worker width.
 struct Plan {
     snapshots: SnapshotPlan,
+    query_capacity: usize,
     body: MemoryWeight,
     root: MemoryWeight,
     run: MemoryWeight,
@@ -256,6 +257,7 @@ impl Plan {
         definitions: &[DefPath],
         files: usize,
         needs_run: bool,
+        needs_safe: bool,
         footprint: FrontInputFootprint,
         inspection_bytes: u64,
     ) -> Result<Self, ToolError> {
@@ -309,9 +311,33 @@ impl Plan {
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
             .ok_or_else(uninstalled)?;
-        let working = limits.runtime_bytes.checked_sub(stacks).ok_or_else(|| {
-            ToolError::Runtime("compiler runtime cannot admit its worker stacks".into())
-        })?;
+        // Each definition can name P, Lower, Evaluate and, when selected,
+        // Run. Growth/Check and the selected SafeCheck root have separate slots.
+        // Reserve the same row bound here and in the runtime constructor so
+        // task grants cannot spend the scheduler's bookkeeping allocation.
+        let per_definition = 3 + usize::from(needs_run);
+        let roots = 2 + usize::from(needs_safe);
+        let inventory = definitions
+            .len()
+            .checked_mul(per_definition)
+            .and_then(|entries| entries.checked_add(roots))
+            .ok_or_else(uninstalled)?;
+        let default_capacity =
+            AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
+                .ok_or_else(uninstalled)?;
+        let query_capacity = inventory.max(default_capacity);
+        let bookkeeping =
+            AdmittedRuntime::query_capacity_bytes(query_capacity).ok_or_else(uninstalled)?;
+        let working = limits
+            .runtime_bytes
+            .checked_sub(stacks)
+            .and_then(|bytes| bytes.checked_sub(bookkeeping))
+            .filter(|bytes| *bytes != 0)
+            .ok_or_else(|| {
+                ToolError::Runtime(
+                    "compiler runtime cannot admit its worker stacks and query inventory".into(),
+                )
+            })?;
         // Root continuations remain live while their P/Lower dependencies run.
         // A snapshot partition is not one task's executable memory allowance.
         let continuation_bound = working / (config.jobs.get() as u64 + 8);
@@ -342,6 +368,7 @@ impl Plan {
                 check,
                 run,
             },
+            query_capacity,
             body: MemoryWeight {
                 retained,
                 scratch,
@@ -424,6 +451,7 @@ pub(super) fn install(
         &definitions,
         program.files.len(),
         needs_run,
+        matches!(request.operation, CompileOperation::SafeCheck),
         footprint,
         GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
             .ok_or_else(uninstalled)?,
@@ -564,12 +592,14 @@ pub(super) fn install(
     {
         inventory.insert((query.kind, query.address.0));
     }
-    let default_capacity =
-        AdmittedRuntime::default_query_capacity(config.jobs, limits.runtime_bytes)
-            .ok_or_else(uninstalled)?;
-    let capacity = inventory.len().max(default_capacity);
-    let mut runtime = AdmittedRuntime::with_query_capacity(config.jobs, runtime, errors, capacity)
-        .map_err(ToolError::Io)?;
+    if inventory.len() > plan.query_capacity {
+        return Err(ToolError::Runtime(
+            "compiler query inventory exceeds its planned admission".into(),
+        ));
+    }
+    let mut runtime =
+        AdmittedRuntime::with_query_capacity(config.jobs, runtime, errors, plan.query_capacity)
+            .map_err(ToolError::Io)?;
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
         .map_err(registration)?;
