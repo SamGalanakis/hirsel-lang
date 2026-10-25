@@ -1902,3 +1902,199 @@ fn ownership_trace_finalizer_commit_api_refuses_a_retargeted_body() {
         Error::MissingMarker(MarkerId(9))
     );
 }
+
+fn native_semantic_plan(unit: &LirUnit<Rc>) -> Plan {
+    let mut observations = vec![];
+    for (block, info) in unit.blocks.iter().enumerate() {
+        for (index, instruction) in info
+            .instructions
+            .get(&unit.instructions)
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            let (kind, token, owner, site, moment) = match *instruction {
+                Inst::Construct {
+                    result, construct, ..
+                } => (
+                    Kind::Create,
+                    Location::Value(result),
+                    Location::Value(result),
+                    unit.tables.source_anchors
+                        [unit.tables.constructs[construct.index()].anchor.index()]
+                    .site,
+                    Moment::After,
+                ),
+                Inst::Store { address, value, .. }
+                    if unit.values[value.index()].holding == Holding::Owned =>
+                {
+                    (
+                        Kind::Move,
+                        Location::Value(value),
+                        Location::Address(address),
+                        unit.tables.source_anchors[info.anchor.index()].site,
+                        Moment::After,
+                    )
+                }
+                Inst::Drop {
+                    address,
+                    anchor,
+                    if_live: false,
+                    ..
+                } => (
+                    Kind::Drop,
+                    Location::Address(address),
+                    Location::Address(address),
+                    unit.tables.cleanup_anchors[anchor.index()].site,
+                    Moment::Before,
+                ),
+                _ => continue,
+            };
+            observations.push(Observation {
+                point: Point::Instruction {
+                    block: BlockId(block as u32),
+                    index: index as u32,
+                    moment,
+                },
+                marker: ObserveOwnership {
+                    id: MarkerId(100 + observations.len() as u32),
+                    site,
+                    kind,
+                    token,
+                    owner,
+                },
+            });
+        }
+    }
+    Plan::new(unit, observations)
+}
+
+fn checked_native_fixture(
+    unit: LirUnit<hirsel_lir::stage::Ready>,
+    table: &hirsel_lir::layout_types::LayoutTable,
+) -> hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready> {
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
+        "hirsel_rt_op".into(),
+    ));
+    hirsel_lir::validate::validate(
+        unit,
+        &hirsel_lir::validate::Inputs {
+            memo: Default::default(),
+            discharge: None,
+            operations: &operations,
+            target: &target,
+            layouts: table,
+            manifest: &manifest,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn ownership_trace_relocated_native_plan_keeps_original_ids_across_finalizer_exits() {
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let input = native_semantic_plan(&before);
+    assert_eq!(input.observations.len(), 3);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &input).unwrap();
+    let after = checked_native_fixture(after, &table);
+    let plan = native::LeafPlan::from_relocated(&after, &table, &output).unwrap();
+    assert_eq!(plan.plan(), &output);
+    let mut drop_ids = vec![];
+    for (block, code) in after.unit().blocks.iter().enumerate() {
+        for i in 0..code.instructions.len {
+            for marker in plan.at(BlockId(block as u32), i, Moment::After) {
+                if marker.kind == 2 {
+                    drop_ids.push(marker.id);
+                }
+            }
+        }
+    }
+    assert_eq!(drop_ids, vec![MarkerId(102); 3]);
+}
+
+#[test]
+fn ownership_trace_relocated_native_plan_refuses_missing_and_duplicate_coverage() {
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let input = native_semantic_plan(&before);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &input).unwrap();
+    let after = checked_native_fixture(after, &table);
+    let mut missing = output.clone();
+    missing.observations.remove(0);
+    check(after.unit(), &missing).unwrap();
+    let error = native::LeafPlan::from_relocated(&after, &table, &missing).unwrap_err();
+    assert!(error.contains("omits a Ready transition"), "{error}");
+    let mut duplicate = output.clone();
+    let mut extra = output.observations[2].clone();
+    extra.marker.id = MarkerId(999);
+    extra.point = check(after.unit(), &output)
+        .unwrap()
+        .commits(after.unit(), MarkerId(102))
+        .unwrap()[0];
+    duplicate.observations.push(extra);
+    check(after.unit(), &duplicate).unwrap();
+    let error = native::LeafPlan::from_relocated(&after, &table, &duplicate).unwrap_err();
+    assert!(error.contains("twice"), "{error}");
+}
+
+#[test]
+fn ownership_trace_relocated_native_release_does_not_invent_a_temporary_move() {
+    let mut t = Lir::<Rc>::new(&[], None);
+    let slot = t.slot(l::BLK, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let value = t.new_block(ENTRY, &[]);
+    t.store(ENTRY, address, value, slot);
+    let cleanup = t.cleanup(&[]);
+    let failure = t.failure(cleanup);
+    let anchor = t.cleanup_anchor();
+    t.builder.push(
+        ENTRY,
+        Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+    );
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let (before, table, _) = t.finish();
+    let input = native_semantic_plan(&before);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &Default::default(), &index, &input).unwrap();
+    let after = checked_native_fixture(after, &table);
+    let plan = native::LeafPlan::from_relocated(&after, &table, &output).unwrap();
+    let observation = output
+        .observations
+        .iter()
+        .find(|o| matches!(o.point, Point::ReleaseDrop { .. }))
+        .unwrap();
+    let Point::ReleaseDrop { block, index } = observation.point else {
+        unreachable!()
+    };
+    assert_eq!(plan.at(block, index - 1, Moment::After).count(), 0);
+    let markers: Vec<_> = plan.at(block, index, Moment::Before).collect();
+    assert_eq!(markers.len(), 1);
+    assert_eq!(markers[0].id, observation.marker.id);
+    assert_eq!(markers[0].kind, 2);
+    assert_eq!(
+        markers[0].token,
+        native::NativeLocation {
+            kind: 1,
+            index: slot.0
+        }
+    );
+}

@@ -39,6 +39,7 @@ pub struct NativeMarker {
 pub struct LeafPlan {
     plan: Plan,
     markers: BTreeMap<MarkerId, NativeMarker>,
+    commits: Vec<(Point, MarkerId)>,
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
@@ -289,7 +290,132 @@ impl LeafPlan {
         }
         let plan = Plan::new(unit, observations);
         check(unit, &plan).map_err(|error| error.to_string())?;
-        Ok(Self { plan, markers })
+        let commits = plan
+            .observations
+            .iter()
+            .map(|o| (o.point, o.marker.id))
+            .collect();
+        Ok(Self {
+            plan,
+            markers,
+            commits,
+        })
+    }
+
+    /// Consume a plan transported from an earlier stage. Independent Ready
+    /// coverage checks every physical transition, but its newly enumerated ids
+    /// never replace the source plan's identities, sites or semantic drops.
+    pub fn from_relocated(
+        unit: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+        plan: &Plan,
+    ) -> Result<Self, String> {
+        let body = unit.unit();
+        let checked = check(body, plan).map_err(|error| error.to_string())?;
+        let expected = Self::prepare(unit, layouts)?;
+        let mut covered = std::collections::BTreeSet::new();
+        let mut markers = BTreeMap::new();
+        let mut commits = vec![];
+        for observation in &plan.observations {
+            let marker = &observation.marker;
+            let points = checked
+                .commits(body, marker.id)
+                .map_err(|error| error.to_string())?;
+            let mut obligations = vec![];
+            if let Point::ReleaseDrop { block, index } = observation.point {
+                let code = body.blocks[block.index()]
+                    .instructions
+                    .get(&body.instructions)
+                    .ok_or("ownership release has no code")?;
+                let Inst::Read { result, .. } = code[index as usize - 1] else {
+                    return Err("ownership release has no checked read".into());
+                };
+                obligations.push((
+                    Point::Instruction {
+                        block,
+                        index: index - 1,
+                        moment: Moment::After,
+                    },
+                    Kind::Move,
+                    marker.token,
+                    Location::Value(result),
+                    None,
+                ));
+                obligations.push((
+                    Point::Instruction {
+                        block,
+                        index,
+                        moment: Moment::Before,
+                    },
+                    Kind::Drop,
+                    Location::Value(result),
+                    Location::Value(result),
+                    Some(marker.site),
+                ));
+            } else {
+                obligations.extend(points.iter().map(|&point| {
+                    (
+                        point,
+                        marker.kind,
+                        marker.token,
+                        marker.owner,
+                        Some(marker.site),
+                    )
+                }));
+            }
+            let mut layout = None;
+            for (point, kind, token, owner, site) in obligations {
+                let expected_observation = expected
+                    .plan
+                    .observations
+                    .iter()
+                    .find(|o| {
+                        o.point == point
+                            && o.marker.kind == kind
+                            && o.marker.token == token
+                            && o.marker.owner == owner
+                            && site.is_none_or(|site| site == o.marker.site)
+                    })
+                    .ok_or_else(|| {
+                        format!(
+                            "ownership marker {:?} has no matching Ready transition",
+                            marker.id
+                        )
+                    })?;
+                if !covered.insert(expected_observation.marker.id) {
+                    return Err("ownership plans cover a Ready transition twice".into());
+                }
+                let at = expected.markers[&expected_observation.marker.id].layout;
+                if layout.replace(at).is_some_and(|old| old != at) {
+                    return Err("ownership transport changes layout between commits".into());
+                }
+            }
+            let layout = layout.ok_or("ownership marker has no committed transition")?;
+            markers.insert(
+                marker.id,
+                NativeMarker {
+                    id: marker.id,
+                    kind: match marker.kind {
+                        Kind::Create => 0,
+                        Kind::Move => 1,
+                        Kind::Drop => 2,
+                    },
+                    token: location(body, marker.token)?,
+                    owner: location(body, marker.owner)?,
+                    site: marker.site,
+                    layout,
+                },
+            );
+            commits.extend(points.into_iter().map(|point| (point, marker.id)));
+        }
+        if covered.len() != expected.plan.observations.len() {
+            return Err("ownership plan omits a Ready transition".into());
+        }
+        Ok(Self {
+            plan: plan.clone(),
+            markers,
+            commits,
+        })
     }
 
     pub fn plan(&self) -> &Plan {
@@ -307,11 +433,10 @@ impl LeafPlan {
             index,
             moment,
         };
-        self.plan
-            .observations
+        self.commits
             .iter()
-            .filter(move |o| o.point == point)
-            .map(|o| self.markers[&o.marker.id])
+            .filter(move |(at, _)| *at == point)
+            .map(|(_, id)| self.markers[id])
     }
 }
 
