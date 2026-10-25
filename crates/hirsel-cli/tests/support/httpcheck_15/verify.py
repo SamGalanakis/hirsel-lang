@@ -155,7 +155,7 @@ def rendered(rows, passed=0, failed=0, errors=0, skipped=0):
     return b''.join((json.dumps(v, separators=(',', ':')) + '\n').encode() for v in values)
 
 
-def verify(hirsel, root, output):
+def verify(hirsel, root, output, case=None):
     output.mkdir(parents=True, exist_ok=False)
     commands, tapes = [], []
     counts = {'h': 0, 'llvm': 0, 'cranelift': 0}
@@ -247,11 +247,11 @@ def verify(hirsel, root, output):
     transport = (2, rendered([('transport_error', [])], errors=1), b'')
     invalid = (2, b'{"result":"scenario_error"}\n{"summary":{"passed":0,"failed":0,"errors":1,"skipped":0}}\n', b'')
     try:
-        for backend, binary in binaries.items():
+        for backend, binary in (binaries.items() if case is None else []):
             actual = run('build-' + backend, [hirsel, 'build', manifest, '--backend', backend, '-o', binary])
             assert actual[0] == 0, ('build', backend, actual, str(output))
             builds[backend] += 1
-        result['binary_hashes'] = {b: hashlib.sha256(p.read_bytes()).hexdigest() for b, p in binaries.items()}
+        result['binary_hashes'] = {b: hashlib.sha256(p.read_bytes()).hexdigest() for b, p in binaries.items()} if case is None else {}
         frozen_binaries = dict(result['binary_hashes'])
         result['state'] = 'running'
         good = [step(base, contains='User-agent:'),
@@ -331,6 +331,16 @@ def verify(hirsel, root, output):
             del missing_policy['io'][capability]
             missing[capability] = output / ('missing-' + capability + '.json')
             missing[capability].write_text(json.dumps(missing_policy))
+        if case == 'h-body-cap':
+            # Select the original vector and its complete request/output oracle.
+            _, scenario, triple, requests = next(c for c in cases if c[0] == 'body-cap')
+            expect('h-body-cap', 'h', scenario, triple, requests)
+            assert counts == {'h': 1, 'llvm': 0, 'cranelift': 0}, result
+            assert result['observations'] == 1, result
+            result.update(state='passed', requests=len(server.requests), engines={'h': 1})
+            save()
+            print("case=h-body-cap engines={'h': 1} observations=1", flush=True)
+            return
         for engine in counts:
             for label, scenario, triple, requests in cases:
                 expect(engine + '-' + label, engine, scenario, triple, requests)
@@ -395,5 +405,6 @@ if __name__ == '__main__':
     parser.add_argument('--hirsel', required=True, type=Path)
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--case', choices=['h-body-cap'])
     args = parser.parse_args()
-    verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve())
+    verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve(), args.case)
