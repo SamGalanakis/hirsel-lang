@@ -81,6 +81,11 @@ pub(crate) struct DefInputs {
     names: ContentHash,
 }
 impl DefInputs {
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.anchors
+            .capacity()
+            .saturating_mul(size_of::<hirsel_span::Anchor>())
+    }
     pub fn header(&self) -> ContentHash {
         self.header
     }

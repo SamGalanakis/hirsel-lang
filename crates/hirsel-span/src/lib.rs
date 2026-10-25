@@ -263,6 +263,48 @@ impl Anchor {
     }
 }
 impl SourceMap {
+    /// All source backing, including Arc headers and reserved file slots.
+    /// Existing attached owner tokens retain their separately admitted data;
+    /// this counts the source allocations, not the tokens' opaque payloads.
+    /// Inspection neither clones a file table nor initializes source metadata.
+    pub fn retained_payload_bytes(&self) -> u64 {
+        fn arc<T: ?Sized>(value: &T) -> usize {
+            std::alloc::Layout::new::<[usize; 2]>()
+                .extend(std::alloc::Layout::for_value(value))
+                .expect("existing Arc layout")
+                .0
+                .pad_to_align()
+                .size()
+        }
+        let mut bytes = arc(&*self.files)
+            .saturating_add(arc(&*self.anchors))
+            .saturating_add(
+                self.files
+                    .capacity()
+                    .saturating_mul(size_of::<SourceFile>()),
+            );
+        for file in &*self.files {
+            bytes = bytes
+                .saturating_add(file.path.capacity())
+                .saturating_add(file.logical_path.capacity())
+                .saturating_add(arc(&*file.text))
+                .saturating_add(arc(&*file.line_starts));
+        }
+        let parts = [
+            std::alloc::Layout::new::<usize>(),
+            std::alloc::Layout::new::<u16>(),
+            std::alloc::Layout::new::<u16>(),
+            std::alloc::Layout::new::<[Anchor; 11]>(),
+            std::alloc::Layout::new::<[(FileId, u32); 11]>(),
+            std::alloc::Layout::new::<[usize; 12]>(),
+        ];
+        let align = parts.iter().map(std::alloc::Layout::align).max().unwrap();
+        let node = parts.iter().fold(align - 1, |n, part| {
+            n.saturating_add(part.size())
+                .saturating_add(part.align() - 1)
+        });
+        bytes.saturating_add((self.anchors.len() / 5 + 1).saturating_mul(node)) as u64
+    }
     /// Bound copied file-table storage before decorating a cloned snapshot, or
     /// measure an already decorated snapshot. Includes one latest/next owner
     /// envelope even when this map is undecorated. Text, line indices and
@@ -300,6 +342,16 @@ impl SourceMap {
             file.owner = Some(owner.clone());
         }
         self.owner = Some(owner);
+        self
+    }
+    /// Transfer this view to a complete replacement reservation. Existing
+    /// detached maps/files keep their old owners. The new owner must cover all
+    /// source backing this view retains, including shared text and line indexes.
+    pub fn replace_owner(mut self, owner: std::sync::Arc<dyn Send + Sync>) -> Self {
+        for file in std::sync::Arc::make_mut(&mut self.files) {
+            file.owner = Some(RetainedSourceOwner(owner.clone()));
+        }
+        self.owner = Some(RetainedSourceOwner(owner));
         self
     }
 

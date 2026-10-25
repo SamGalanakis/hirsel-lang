@@ -7,6 +7,8 @@ pub(crate) mod catalog;
 pub use candidate_products::{CheckedProductEncoder, CheckedProducts};
 mod arm_fixes;
 mod frontier;
+mod source_index;
+pub use source_index::SourceIndexState;
 pub(crate) mod recipes;
 pub use frontier::FrontChanges;
 mod parallel;
