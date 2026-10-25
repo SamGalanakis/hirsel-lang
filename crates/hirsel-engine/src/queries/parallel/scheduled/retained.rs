@@ -144,6 +144,7 @@ mod tests {
                 .unwrap(),
             short.clone(),
             selected,
+            None,
         );
         assert_eq!(row.definition.path(), &short.definition);
     }
