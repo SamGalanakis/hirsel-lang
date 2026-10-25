@@ -160,6 +160,19 @@ pub(crate) fn agree(source: &str, fixture: &Fixture, label: &str) {
 }
 
 pub(crate) fn agree_replayed(source: &str, fixture: &Fixture, label: &str, replay: bool) {
+    agree_on(source, fixture, label, replay, &[]);
+}
+
+/// As [`agree_replayed`], with the heap executor (checked H) once per entry
+/// of `heap`, with fault injection where it is true, beside the native cells;
+/// the reference's observation.
+pub(crate) fn agree_on(
+    source: &str,
+    fixture: &Fixture,
+    label: &str,
+    replay: bool,
+    heap: &[bool],
+) -> Observation {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -179,7 +192,7 @@ pub(crate) fn agree_replayed(source: &str, fixture: &Fixture, label: &str, repla
     let input = engine.export_native_input().unwrap();
     let validated = engine.import_native_input(input).unwrap();
     let options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
-    let configurations = [
+    let mut configurations = vec![
         Configuration {
             options: options.clone(),
             engine: Engine::Native {
@@ -203,6 +216,10 @@ pub(crate) fn agree_replayed(source: &str, fixture: &Fixture, label: &str, repla
             },
         },
     ];
+    configurations.extend(heap.iter().map(|&campaign| Configuration {
+        options: Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        engine: Engine::Heap { campaign },
+    }));
     let scratch = tempfile::Builder::new()
         .prefix("runtime50-resume-")
         .tempdir()
@@ -236,6 +253,7 @@ pub(crate) fn agree_replayed(source: &str, fixture: &Fixture, label: &str, repla
         );
         assert_eq!(outcome, Outcome::Agree, "{label} replay: {outcome:?}");
     }
+    expected
 }
 
 #[test]
