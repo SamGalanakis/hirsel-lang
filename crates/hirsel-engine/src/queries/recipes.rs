@@ -21,10 +21,13 @@ pub(crate) fn offer(
     lowering: LoweringPolicy,
     diagnostics: &mut [Diagnostic],
 ) {
-    if !diagnostics
-        .iter()
-        .any(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5"))
-    {
+    // A dependency failure can propagate through every file in a check. A
+    // successful edit of an unrelated file proves nothing about that failure,
+    // and distinct header notes would keep its copies from being deduplicated.
+    if !diagnostics.iter().any(|d| {
+        engine.sources.resolve(d.primary).file == file
+            && matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5")
+    }) {
         return;
     }
     let Ok(parsed) = engine.parse_file(file, context) else {
@@ -251,10 +254,10 @@ pub(crate) fn offer(
     }
     for candidate in candidates {
         if checks(engine, file, context, lowering, &candidate.edits) {
-            for diagnostic in diagnostics
-                .iter_mut()
-                .filter(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5"))
-            {
+            for diagnostic in diagnostics.iter_mut().filter(|d| {
+                engine.sources.resolve(d.primary).file == file
+                    && matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5")
+            }) {
                 diagnostic.secondary.push(hirsel_diag::Label {
                     span: candidate.site,
                     message: "checked declaration repair".into(),
