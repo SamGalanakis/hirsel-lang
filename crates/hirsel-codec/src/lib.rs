@@ -37,7 +37,7 @@ pub trait Snapshot<C = ()>: Sized {
 pub fn to_text<T: Snapshot>(value: &T) -> String {
     let mut w = Writer::default();
     value.write(&mut w);
-    w.out
+    w.finish().0
 }
 
 /// Canonical text of a raw artifact under `context`; returns the context.
@@ -85,8 +85,87 @@ pub fn line_column(text: &str, offset: usize) -> (u32, u32) {
 }
 
 #[derive(Default)]
+enum TextOutput {
+    #[default]
+    Empty,
+    Text(String),
+    Count {
+        bytes: Option<usize>,
+        last: Option<char>,
+    },
+}
+impl TextOutput {
+    fn is_empty(&self) -> bool {
+        match self {
+            Self::Empty => true,
+            Self::Text(s) => s.is_empty(),
+            Self::Count { bytes, .. } => *bytes == Some(0),
+        }
+    }
+    fn ends_with(&self, c: char) -> bool {
+        match self {
+            Self::Empty => false,
+            Self::Text(s) => s.ends_with(c),
+            Self::Count { last, .. } => *last == Some(c),
+        }
+    }
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        match self {
+            Self::Text(s) => s.capacity(),
+            _ => 0,
+        }
+    }
+    fn hex(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Empty => {
+                let mut s = String::new();
+                push_hex(&mut s, bytes);
+                *self = Self::Text(s);
+            }
+            Self::Text(s) => push_hex(s, bytes),
+            Self::Count { bytes: count, last } => {
+                *count = count.and_then(|n| {
+                    bytes
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|bytes| n.checked_add(bytes))
+                });
+                if let Some(byte) = bytes.last() {
+                    *last = Some("0123456789abcdef".as_bytes()[usize::from(byte & 15)] as char);
+                }
+            }
+        }
+    }
+    fn push(&mut self, c: char) {
+        let mut utf8 = [0; 4];
+        self.push_str(c.encode_utf8(&mut utf8));
+    }
+    fn push_str(&mut self, text: &str) {
+        match self {
+            Self::Empty => {
+                *self = Self::Text(text.into());
+            }
+            Self::Text(s) => s.push_str(text),
+            Self::Count { bytes, last } => {
+                *bytes = bytes.and_then(|n| n.checked_add(text.len()));
+                if let Some(c) = text.chars().last() {
+                    *last = Some(c);
+                }
+            }
+        }
+    }
+}
+impl std::fmt::Write for TextOutput {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.push_str(text);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
 pub struct Writer<C = ()> {
-    out: String,
+    out: TextOutput,
     depth: usize,
     discard: bool,
     pub context: C,
@@ -96,7 +175,7 @@ impl<C> Writer<C> {
     /// An empty writer carrying `context`.
     pub fn with_context(context: C) -> Self {
         Self {
-            out: String::new(),
+            out: TextOutput::Empty,
             depth: 0,
             discard: false,
             context,
@@ -111,9 +190,34 @@ impl<C> Writer<C> {
             ..Self::with_context(context)
         }
     }
+    /// Use the same canonical emitter while counting its exact UTF-8 byte
+    /// length, without allocating output text. Context/table observations run
+    /// normally. Overflow returns None from output_bytes().
+    pub fn counting(context: C) -> Self {
+        Self {
+            out: TextOutput::Count {
+                bytes: Some(0),
+                last: None,
+            },
+            ..Self::with_context(context)
+        }
+    }
+    pub fn output_bytes(&self) -> Option<usize> {
+        match &self.out {
+            TextOutput::Empty => Some(0),
+            TextOutput::Text(s) => Some(s.len()),
+            TextOutput::Count { bytes, .. } => *bytes,
+        }
+    }
     /// The written text (empty for a discard writer) and the context.
     pub fn finish(self) -> (String, C) {
-        (self.out, self.context)
+        (
+            match self.out {
+                TextOutput::Text(s) => s,
+                _ => String::new(),
+            },
+            self.context,
+        )
     }
     fn separate(&mut self) {
         if !self.out.is_empty() && !self.out.ends_with('(') {
@@ -185,7 +289,7 @@ impl<C> Writer<C> {
         }
         self.separate();
         self.out.push('#');
-        push_hex(&mut self.out, b);
+        self.out.hex(b);
     }
 }
 
@@ -193,7 +297,7 @@ impl<C> Writer<C> {
 const INDENT: &str = "                                                                ";
 
 /// Append `n` in decimal, as `{n}` formats it, without `core::fmt`.
-fn push_decimal(out: &mut String, n: u128) {
+fn push_decimal(out: &mut TextOutput, n: u128) {
     let mut digits = [0u8; 39];
     let mut at = digits.len();
     if let Ok(mut small) = u64::try_from(n) {
@@ -1253,5 +1357,41 @@ mod tests {
         assert_eq!(digest("dom", "label", &value), expected);
         assert_ne!(digest("dom", "other", &value), expected);
         assert_ne!(digest("other", "label", &value), expected);
+    }
+    #[test]
+    fn counting_writer_matches_every_canonical_scalar_escape_and_nested_separator() {
+        fn write(w: &mut Writer) {
+            w.open("Root");
+            w.text("");
+            w.text("quoted \" \\ \n λ 🐑");
+            for n in [0, 1, 9, 10, u64::MAX as u128, u128::MAX] {
+                w.uint(n);
+            }
+            for n in [0, -1, i128::MIN, i128::MAX] {
+                w.int(n);
+            }
+            w.bytes(&[]);
+            w.bytes(&(0..=255).collect::<Vec<u8>>());
+            for _ in 0..80 {
+                w.open("Nested");
+            }
+            w.text("last");
+            for _ in 0..80 {
+                w.close();
+            }
+            w.close();
+        }
+        let mut actual = Writer::default();
+        write(&mut actual);
+        let text = actual.finish().0;
+        let mut measured = Writer::counting(());
+        write(&mut measured);
+        assert_eq!(measured.output_bytes(), Some(text.len()));
+        assert_eq!(
+            measured.out.capacity(),
+            0,
+            "measurement retains no output text"
+        );
+        assert!(measured.finish().0.is_empty());
     }
 }
