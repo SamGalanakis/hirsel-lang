@@ -195,7 +195,7 @@ impl ReadyQueries {
         let current = self
             .lookup_inner(key, product.product.action, environment)
             .ok_or("Ready assembly lost current C admission")?;
-        if current.product != product.product {
+        if current.product != product.product || record(&current) != record(product) {
             return Err("Ready assembly descriptor differs".into());
         }
         let bytes = self
@@ -226,7 +226,7 @@ impl ReadyQueries {
         let current = self
             .lookup_inner(key, product.product.action, environment)
             .ok_or("Ready materialization lost current C admission")?;
-        if current.product != product.product {
+        if current.product != product.product || record(&current) != record(product) {
             return Err("Ready materialization descriptor differs".into());
         }
         let accepted = self
