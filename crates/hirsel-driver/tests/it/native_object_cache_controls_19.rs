@@ -71,6 +71,12 @@ fn compile(
     backend: native::Backend,
     verification: VerifyStore,
 ) -> crate::native_object_products_19::Objects {
+    // Production owns one physical publication epoch through worker shutdown.
+    // Without it, each concurrent native receipt performs an independent
+    // best-effort index write and may legitimately lose persistence on lock
+    // contention, which is not the no-fault warm-cache vector being tested.
+    let physical = store.inner.local_product_store().unwrap();
+    let request = physical.request();
     let transport_budget = runtime::ProcessBudget::new(24 << 20);
     let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
         store,
@@ -92,7 +98,7 @@ fn compile(
     } else {
         native::Validation::Ready
     };
-    crate::native_object_products_19::compile_with_context(
+    let objects = crate::native_object_products_19::compile_with_context(
         &mut engine,
         store,
         &entry_path(&default_context()),
@@ -104,7 +110,9 @@ fn compile(
         verification,
         |_, _| (),
     )
-    .0
+    .0;
+    request.finish().unwrap();
+    objects
 }
 fn calls() -> ([u64; 6], u64) {
     let report = timings::report();
