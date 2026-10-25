@@ -57,7 +57,7 @@ impl EmissionOptions {
             fuel,
         }
     }
-    fn encode(&self) -> Result<Vec<u8>, String> {
+    pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&(
             1u32,
             self.input.interface_version,

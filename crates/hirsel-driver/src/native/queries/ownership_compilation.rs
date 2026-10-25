@@ -1,0 +1,314 @@
+//! Source-selected diagnostic compilation. Instance discovery and arena
+//! settlement precede each explicit observed Ready dependency. No ordinary
+//! object or Link task is needed to obtain a checked ownership plan.
+use super::{
+    arena_tasks::ArenaTasks,
+    instance_tasks::InstanceTasks,
+    ownership_tasks::{OWNERSHIP_READY_KIND, OWNERSHIP_ROOT_KIND, OwnershipTasks},
+    products::{EmissionOptions, NativeSnapshot},
+    tasks::NativeTasks,
+    *,
+};
+use hirsel_engine::{
+    runtime::*,
+    store::{Action, Address, Domain},
+};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+    task::Poll,
+};
+
+pub const OWNERSHIP_COMPILATION_KIND: u32 = 0x4e00_002d;
+struct Dispatch {
+    discovery: ProductRef,
+    arena: ProductRef,
+    ownership: Arc<OwnershipTasks>,
+    factories: BTreeMap<u32, Arc<dyn QueryFactory>>,
+}
+pub struct OwnershipCompilation {
+    instances: Arc<InstanceTasks>,
+    arena: Arc<ArenaTasks>,
+    emission: EmissionOptions,
+    query: QueryId,
+    weight: MemoryWeight,
+    allowance: Arc<MemoryReservation>,
+    diagnostic_allowance: Mutex<Option<MemoryReservation>>,
+    verify_store: hirsel_engine::store::VerifyStore,
+    dispatch: OnceLock<Dispatch>,
+    completed: OnceLock<(ProductRef, ProductRef)>,
+}
+impl OwnershipCompilation {
+    pub fn new(
+        instances: Arc<InstanceTasks>,
+        arena: Arc<ArenaTasks>,
+        emission: EmissionOptions,
+        weight: MemoryWeight,
+        mut allowance: MemoryReservation,
+        verify_store: hirsel_engine::store::VerifyStore,
+    ) -> Result<Arc<Self>, String> {
+        let query = QueryId {
+            kind: OWNERSHIP_COMPILATION_KIND,
+            address: Address(ContentHash::of_parts(
+                "hirsel.native.ownership-compilation.v1",
+                [
+                    instances.discovery_id().address.0.0.as_slice(),
+                    arena.query_id().address.0.0.as_slice(),
+                    emission.encode()?.as_slice(),
+                ],
+            )),
+        };
+        if weight.retained < std::mem::size_of::<Task>() as u64 {
+            return Err("ownership compilation continuation exceeds admission".into());
+        }
+        let diagnostic_allowance = allowance.split(allowance.bytes() / 2).unwrap();
+        Ok(Arc::new(Self {
+            diagnostic_allowance: Mutex::new(Some(diagnostic_allowance)),
+            verify_store,
+            instances,
+            arena,
+            emission,
+            query,
+            weight,
+            allowance: Arc::new(allowance),
+            dispatch: OnceLock::new(),
+            completed: OnceLock::new(),
+        }))
+    }
+    pub fn query_id(&self) -> QueryId {
+        self.query
+    }
+    pub fn factories(self: &Arc<Self>) -> Vec<(u32, Arc<dyn QueryFactory>)> {
+        let instances: Arc<dyn QueryFactory> = Arc::new(
+            super::instance_tasks::InstanceTaskFactory::new(self.instances.clone()),
+        );
+        let arena: Arc<dyn QueryFactory> = Arc::new(super::arena_tasks::ArenaTaskFactory::new(
+            self.arena.clone(),
+        ));
+        let own: Arc<dyn QueryFactory> = Arc::new(Factory(self.clone()));
+        let mut factories = Vec::new();
+        for kind in [
+            INSTANCE_KIND,
+            super::instance_tasks::INSTANCE_INPUT_KIND,
+            super::instance_tasks::DISCOVERY_KIND,
+        ] {
+            factories.push((kind, instances.clone()));
+        }
+        for kind in [
+            ARENA_CANDIDATES_KIND,
+            ARENA_CHOSEN_KIND,
+            super::arena_tasks::ARENA_GRAPH_KIND,
+        ] {
+            factories.push((kind, arena.clone()));
+        }
+        for kind in [
+            OWNERSHIP_COMPILATION_KIND,
+            OWNERSHIP_READY_KIND,
+            OWNERSHIP_ROOT_KIND,
+        ] {
+            factories.push((kind, own.clone()));
+        }
+        factories
+    }
+    fn initialize(&self, discovery: ProductRef, arena: ProductRef) -> Result<&Dispatch, String> {
+        if let Some(dispatch) = self.dispatch.get() {
+            return if dispatch.discovery == discovery && dispatch.arena == arena {
+                Ok(dispatch)
+            } else {
+                Err("ownership compilation dependencies changed".into())
+            };
+        }
+        let completed = self.instances.completed_instances(discovery)?;
+        let bytes = completed
+            .iter()
+            .try_fold(16384u64, |total, (key, output)| {
+                serde_json::to_vec(&(&output.templates, &output.emission))
+                    .map(|data| {
+                        total
+                            .saturating_add(data.len() as u64 * 4)
+                            .saturating_add((key.instance.encoding().len() as u64 + 4096) * 8)
+                    })
+                    .map_err(|e| e.to_string())
+            })?;
+        if bytes > self.allowance.bytes() {
+            return Err("ownership compilation dispatch allowance exhausted".into());
+        }
+        let mut snapshot = NativeSnapshot::new(
+            self.instances.selected_store().clone(),
+            self.instances.products(discovery)?,
+            self.arena.graph(arena)?,
+            self.instances.options().clone(),
+            self.emission.clone(),
+            self.instances.source_inputs().declarations.manifest()?,
+            Arc::new(self.instances.source_operations(discovery)?),
+        )?
+        .with_store_verification(self.verify_store)?;
+        Arc::get_mut(&mut snapshot)
+            .ok_or("ownership snapshot shared before admission")?
+            .retained_allowances = vec![
+            self.allowance.clone(),
+            self.instances.retained_allowance(),
+            self.instances.retained_source_allowance(),
+            self.arena.retained_allowance(),
+        ];
+        let native = NativeTasks::new(snapshot, self.weight)?;
+        let allowance = self
+            .diagnostic_allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or("ownership dispatch admission consumed twice")?;
+        let ownership = OwnershipTasks::new(native, self.weight, allowance)?;
+        let factory = ownership.factory();
+        let factories = BTreeMap::from([
+            (OWNERSHIP_READY_KIND, factory.clone()),
+            (OWNERSHIP_ROOT_KIND, factory),
+        ]);
+        self.dispatch
+            .set(Dispatch {
+                discovery,
+                arena,
+                ownership,
+                factories,
+            })
+            .map_err(|_| "duplicate ownership compilation dispatch")?;
+        Ok(self.dispatch.get().unwrap())
+    }
+    pub fn outcome(
+        &self,
+        selected: ProductRef,
+    ) -> Result<(Arc<OwnershipTasks>, ProductRef), String> {
+        let (completion, root) = self
+            .completed
+            .get()
+            .ok_or("ownership compilation is incomplete")?;
+        if *completion != selected {
+            return Err("ownership compilation completion differs".into());
+        }
+        let ownership = self
+            .dispatch
+            .get()
+            .ok_or("ownership dispatch is unavailable")?
+            .ownership
+            .clone();
+        ownership.outputs(*root)?;
+        Ok((ownership, *root))
+    }
+    fn publish(&self, root: ProductRef) -> Result<ProductRef, String> {
+        let dispatch = self
+            .dispatch
+            .get()
+            .ok_or("ownership dispatch is unavailable")?;
+        dispatch.ownership.outputs(root)?;
+        let bytes = serde_json::to_vec(&(root.address.0, root.action.0, root.record))
+            .map_err(|e| e.to_string())?;
+        let domain = Domain {
+            kind: OWNERSHIP_COMPILATION_KIND,
+            schema: 1,
+        };
+        let store = self.instances.selected_store();
+        let record = store
+            .put_content(domain, &bytes)
+            .ok_or("ownership compilation transport exhausted")?;
+        if domain.reference(&bytes) != Some(record) {
+            return Err("ownership compilation content differs".into());
+        }
+        let action = Action(ContentHash::of_parts(
+            "hirsel.native.ownership-compilation-action.v1",
+            [
+                self.query.address.0.0.as_slice(),
+                record.output.0.0.as_slice(),
+            ],
+        ));
+        let product = ProductRef {
+            address: self.query.address,
+            action,
+            record,
+        };
+        store.associate_product(product.address, action, record);
+        self.completed
+            .set((product, root))
+            .map_err(|_| "ownership compilation completed twice")?;
+        Ok(product)
+    }
+}
+struct Factory(Arc<OwnershipCompilation>);
+impl QueryFactory for Factory {
+    fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if query == self.0.query {
+            return Ok(Box::new(Task {
+                owner: self.0.clone(),
+                terminal: None,
+            }));
+        }
+        self.0
+            .dispatch
+            .get()
+            .and_then(|dispatch| dispatch.factories.get(&query.kind))
+            .ok_or_else(|| {
+                self.0
+                    .instances
+                    .failure("unregistered ownership compilation task")
+            })?
+            .create(query)
+    }
+}
+struct Task {
+    owner: Arc<OwnershipCompilation>,
+    terminal: Option<Result<ProductRef, Reference>>,
+}
+impl QueryTask for Task {
+    fn id(&self) -> QueryId {
+        self.owner.query
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.owner.weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if self.terminal.is_none() {
+            let fail = |error: String| self.owner.instances.failure(&error);
+            let mut selected = Vec::new();
+            let mut waiting = Vec::new();
+            for query in [
+                self.owner.instances.discovery_id(),
+                self.owner.arena.query_id(),
+            ] {
+                match cx.read(query) {
+                    Poll::Pending => waiting.push(query),
+                    Poll::Ready(Ok(product)) if product.address == query.address => {
+                        selected.push(product)
+                    }
+                    Poll::Ready(Err(error)) => {
+                        self.terminal = Some(Err(error));
+                        break;
+                    }
+                    _ => {
+                        self.terminal = Some(Err(fail(
+                            "ownership dependency returned another address".into(),
+                        )));
+                        break;
+                    }
+                }
+            }
+            if self.terminal.is_none() {
+                if !waiting.is_empty() {
+                    return QueryPoll::Waiting(waiting);
+                }
+                self.terminal = match self.owner.initialize(selected[0], selected[1]) {
+                    Err(error) => Some(Err(fail(error))),
+                    Ok(dispatch) => match cx.read(dispatch.ownership.query_id()) {
+                        Poll::Pending => {
+                            return QueryPoll::Waiting(vec![dispatch.ownership.query_id()]);
+                        }
+                        Poll::Ready(Err(error)) => Some(Err(error)),
+                        Poll::Ready(Ok(root)) => Some(self.owner.publish(root).map_err(fail)),
+                    },
+                };
+            }
+        }
+        match self.terminal.unwrap() {
+            Ok(product) => QueryPoll::Complete(product),
+            Err(error) => QueryPoll::Failed(error),
+        }
+    }
+}

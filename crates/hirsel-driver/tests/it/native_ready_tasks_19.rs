@@ -132,6 +132,19 @@ fn ownership_query_root_waits_for_dependencies_and_revalidates_selected_outputs(
     );
 }
 
+#[test]
+fn ownership_compilation_root_discovers_source_and_arena_before_diagnostics() {
+    ready_case_inner(
+        "resource type Token { value:u64 }\ndrop(x) {}\nfn other()->u64{9u64}\npub fn main()->u64{let first=Token(value:7u64)\nlet second=take first\n7u64}",
+        false,
+        false,
+        false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        3,
+    );
+}
+
 fn ready_case_policy(
     source: &str,
     adapter: bool,
@@ -303,6 +316,68 @@ fn ready_case_inner(
             ));
             for kind in [ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, ARENA_GRAPH_KIND] {
                 runtime.register(kind, arena_factory.clone()).unwrap();
+            }
+            if ownership == 3 {
+                use native::queries::ownership_compilation::OwnershipCompilation;
+                use native::queries::ownership_tasks::{OWNERSHIP_READY_KIND, OWNERSHIP_ROOT_KIND};
+                let compilation = OwnershipCompilation::new(
+                    tasks.clone(),
+                    arenas.clone(),
+                    EmissionOptions::request(
+                        input.clone(),
+                        hirsel_lir::emission::OptLevel::None,
+                        false,
+                        Default::default(),
+                        true,
+                        false,
+                        false,
+                    ),
+                    MemoryWeight {
+                        scratch: 16 << 20,
+                        retained: 1 << 20,
+                        stack: 0,
+                    },
+                    diagnostic_allowance.take().unwrap(),
+                    verify_store,
+                )
+                .unwrap();
+                let factories = compilation.factories();
+                assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                for (kind, factory) in factories {
+                    if kind == native::queries::ownership_compilation::OWNERSHIP_COMPILATION_KIND
+                        || kind == OWNERSHIP_READY_KIND
+                        || kind == OWNERSHIP_ROOT_KIND
+                    {
+                        runtime.register(kind, factory).unwrap();
+                    }
+                }
+                let selected = runtime.request(&[compilation.query_id()]);
+                let completed = runtime.wait(selected).unwrap_or_else(|error| {
+                    panic!(
+                        "ownership compilation: {}",
+                        String::from_utf8_lossy(&store.get_content(error).unwrap())
+                    )
+                })[0];
+                let (roots, root) = compilation.outcome(completed).unwrap();
+                let outputs = roots.outputs(root).unwrap();
+                assert!(outputs.len() >= 3);
+                let mut resources = 0;
+                for output in outputs {
+                    let observed = roots.materialize(output).unwrap();
+                    resources += observed
+                        .initial
+                        .observations
+                        .iter()
+                        .filter(|row| row.marker.kind == hirsel_lir::ownership_trace::Kind::Drop)
+                        .count();
+                }
+                assert!(resources > 0, "actual source resource cleanup");
+                let mut wrong = completed;
+                wrong.action = store::Action(hirsel_syntax::ContentHash::of_bytes(
+                    b"another ownership compilation",
+                ));
+                assert!(compilation.outcome(wrong).is_err());
+                continue;
             }
             let request = runtime.request(&[tasks.discovery_id()]);
             let result = runtime.wait(request).unwrap_or_else(|error| {
