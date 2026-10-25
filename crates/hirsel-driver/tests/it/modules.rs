@@ -185,3 +185,4 @@ mod scheduled_check_cases;
 mod native_instance_products_19;
 mod scheduled_check_scope;
 mod checked_signatures;
+mod scheduled_proof_export;

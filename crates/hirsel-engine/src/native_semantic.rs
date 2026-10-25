@@ -16,6 +16,10 @@ pub struct NativeSemanticProgram {
     foreign_unreplayable: bool,
 }
 impl NativeSemanticProgram {
+    pub(crate) fn definitions(&self) -> &std::collections::BTreeSet<DefPath> {
+        &self.program.definitions
+    }
+
     pub(crate) fn new(
         program: crate::queries::SemanticProgram,
         escapes: BTreeMap<DefPath, Escape>,
