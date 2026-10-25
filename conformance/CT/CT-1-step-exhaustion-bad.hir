@@ -2,7 +2,7 @@
 // expect: reject CT-1 at line 11
 // twin: CT/CT-2-dependent-constant.hir
 // spec: #7
-// "exhausted step limit ... during comptime is a compile error".
+// Each recursive call, a self-tail restart included, charges one budget unit (CT-4); the call past the budget is CT-1.
 @noalloc
 fn forever() -> u32 {
   forever()

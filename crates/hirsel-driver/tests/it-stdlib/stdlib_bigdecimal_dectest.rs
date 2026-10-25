@@ -136,6 +136,7 @@ fn suite(text: &str, expected_counts: [usize; 5]) {
                 Limits {
                     steps: Some(100_000_000),
                     call_depth: 256,
+                    source: None,
                 },
                 &mut library,
                 &runtime,

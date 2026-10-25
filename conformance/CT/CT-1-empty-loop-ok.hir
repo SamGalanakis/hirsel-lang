@@ -1,0 +1,12 @@
+// rule: CT-1
+// expect: accept
+// A finite empty loop spends its iterations and the call, well within the budget (CT-4).
+fn spin(n: u64) -> u64 {
+  let mut i: u64 = 0
+  while i < n {
+    i = i + 1
+  }
+  i
+}
+
+pub const VALUE: u64 = comptime spin(1000)

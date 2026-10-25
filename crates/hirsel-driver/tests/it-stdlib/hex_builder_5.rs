@@ -30,6 +30,7 @@ fn check(name: &str, campaign: bool) {
                 limits: hirsel_interp::Limits {
                     steps: Some(steps),
                     call_depth: 256,
+                    source: None,
                 },
                 ..Default::default()
             }));

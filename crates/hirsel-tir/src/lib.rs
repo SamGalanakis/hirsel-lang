@@ -22,7 +22,8 @@ use hirsel_types::{
 /// v10 adds independently checked fixed-origin borrow cursor claims.
 /// v11 adds contextual consumable arena scope entries (MEM-4).
 /// v12 binds the combined grant and logical invocation semantics.
-pub const TIR_VERSION: u32 = 12;
+/// v13 adds compile-time source-event charges (CT-4).
+pub const TIR_VERSION: u32 = 13;
 
 pub mod representation;
 
@@ -255,7 +256,28 @@ pub enum InstructionKind {
         destination: PlaceId,
         value: Operand,
     },
+    /// One unit of a compile-time evaluation's source budget (CT-4): the last
+    /// instruction before a source call's transfer, or the first of a loop
+    /// body iteration. It has no run-time effect and is not an execution step.
+    Charge(SourceEvent),
 }
+/// The stable identity of a charged source event within its definition: the
+/// call or loop as written, independent of lowering and optimization (CT-4).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct SourceEvent {
+    pub kind: SourceEventKind,
+    /// The call or `?` mapper expression, or the `while`/`for` statement.
+    pub source: u32,
+}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SourceEventKind {
+    /// Before a source call enters its callee, after its arguments.
+    Call,
+    /// On an entered loop body iteration, before body work.
+    Iteration,
+}
+/// The charging rules' version: a cache keys evaluations by it (CT-4).
+pub const CHARGING_VERSION: u32 = 1;
 /// Failure edge is explicit even for checked arithmetic/constructors (FAIL-1/3, DET-2).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct Instruction {

@@ -195,6 +195,7 @@ fn interp_list_cost_5_every_step_cut_preserves_the_mutation_trace_and_failure_si
             Limits {
                 steps,
                 call_depth: 8,
+                source: None,
             },
             &mut Library::new(&configuration, Default::default()).unwrap(),
             &runtime,

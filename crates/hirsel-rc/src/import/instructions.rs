@@ -459,6 +459,8 @@ impl Importer<'_> {
                 let place = self.origin_address(&p)?;
                 self.push(Inst::EndOrigin { place });
             }
+            // Native code runs no compile-time evaluation (CT-4).
+            K::Charge(_) => {}
         }
         Ok(())
     }

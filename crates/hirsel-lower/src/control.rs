@@ -1013,6 +1013,7 @@ impl Builder<'_, '_> {
         self.loops.last_mut().unwrap().exits.push(condition_exit);
         self.current = Some(run);
         self.state = incoming;
+        self.charge(hirsel_tir::SourceEventKind::Iteration, statement.0, span);
         self.expression(body, bodies)?;
         if self.current.is_some() {
             self.exit_scope(scope, span);
@@ -1361,6 +1362,8 @@ impl Builder<'_, '_> {
                             .find(|i| i.expression == id && &i.callee == path)
                             .map(|i| i.arguments.clone())
                             .unwrap_or_default();
+                        // The written mapper is a source call (CT-4).
+                        self.charge(hirsel_tir::SourceEventKind::Call, id.0, span);
                         self.terminate(
                             Terminator::Call {
                                 callee: Callee::Definition {

@@ -426,6 +426,7 @@ fn native_cases(cases: Vec<(&str, String)>, large: bool) {
                     limits: hirsel_interp::Limits {
                         steps: Some(100_000_000),
                         call_depth: 256,
+                        source: None,
                     },
                     ..Default::default()
                 }));

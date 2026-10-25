@@ -111,6 +111,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         Limits {
             steps: Some(10000),
             call_depth: 21,
+            source: None,
         },
     );
     returned(&e, int(P::U32, 21));
@@ -120,6 +121,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         Limits {
             steps: Some(10000),
             call_depth: 20,
+            source: None,
         },
     );
     tooling_limit(&e, ToolingLimitKind::CallDepth, 1);
@@ -129,6 +131,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         Limits {
             steps: Some(100000),
             call_depth: 3000,
+            source: None,
         },
     );
     returned(&e, int(P::U32, 1024));
@@ -138,6 +141,7 @@ fn recursion_has_an_explicit_depth_limit_and_no_host_call_recursion() {
         Limits {
             steps: Some(100000),
             call_depth: 3000,
+            source: None,
         },
     );
     fail(&e, "LANG-10", 7);
@@ -203,6 +207,109 @@ fn loop_program() -> Vec<Definition> {
     let add = c.finish("add", answer);
     vec![main, add]
 }
+/// `loop_program` with the charges lowering emits (CT-4): each entered iteration
+/// (line 4) and each call to `add` (line 5), five of each.
+fn charged_loop_program() -> Vec<Definition> {
+    let mut definitions = loop_program();
+    let charge = |kind, line| Instruction {
+        kind: InstructionKind::Charge(SourceEvent { kind, source: line }),
+        span: site(line),
+        on_failure: CleanupId(0),
+    };
+    let body = &mut definitions[0].bodies[0].blocks[2];
+    assert!(matches!(body.terminator, Terminator::Call { .. }));
+    body.instructions
+        .insert(0, charge(SourceEventKind::Iteration, 4));
+    body.instructions.push(charge(SourceEventKind::Call, 5));
+    definitions
+}
+fn charged(budget: Option<u64>, checked: bool) -> hirsel_interp::Execution {
+    let definitions = charged_loop_program();
+    let runtime = hirsel_interp::aggregate::RuntimeTypes {
+        checked: checked.then(hirsel_interp::checked::CheckedRuntime::default),
+        ..runtime()
+    };
+    assert_fixtures(&definitions, &runtime);
+    hirsel_interp::run_with_runtime(
+        &mut Provider {
+            definitions,
+            queries: vec![],
+        },
+        &sources(),
+        &RunConfiguration {
+            entry: path("main"),
+            hash_seed: 42,
+            inputs: vec![],
+        },
+        vec![],
+        Limits {
+            steps: None,
+            call_depth: 8,
+            source: budget,
+        },
+        &mut hirsel_interp::NoOperations,
+        &runtime,
+    )
+    .unwrap()
+}
+
+// Clang checks a step before it spends one (ExprConstant.cpp:969-980) and rustc
+// counts at calls and loop back edges (ctfe_limit.rs:22-38). Here exactly B units
+// succeed, the next event is denied before it executes at its own site, and the
+// specialized dispatch form and checked (general) stepping agree on every budget.
+#[test]
+fn a_source_budget_admits_exactly_its_units_on_both_dispatch_paths() {
+    for checked in [false, true] {
+        for budget in 0..=12 {
+            let e = charged(Some(budget), checked);
+            if budget >= 10 {
+                returned(&e, int(P::U32, 15));
+                assert_eq!(e.charged, 10, "budget {budget}");
+                continue;
+            }
+            let Outcome::Exhausted(denied) = &e.outcome else {
+                panic!("budget {budget}: {:?}", e.outcome)
+            };
+            assert_eq!((denied.budget, e.charged), (budget, budget));
+            let (kind, line) = if budget % 2 == 0 {
+                (SourceEventKind::Iteration, 4)
+            } else {
+                (SourceEventKind::Call, 5)
+            };
+            assert_eq!(denied.event, SourceEvent { kind, source: line });
+            assert_eq!(denied.site, site(line));
+            assert_eq!(denied.definition, path("main"));
+            // Denied before it executes: an exhausted call never entered `add`.
+            assert_eq!(
+                e.trace
+                    .iter()
+                    .filter(|t| matches!(t, TraceEvent::Enter { path: entered, .. } if *entered == path("add")))
+                    .count() as u64,
+                budget / 2,
+                "budget {budget}"
+            );
+        }
+    }
+}
+
+// Charges are not steps (PROG-3): without a source budget they cost nothing, and the
+// charged program steps and traces exactly as the uncharged one.
+#[test]
+fn charges_leave_interpreter_steps_and_traces_unchanged() {
+    let plain = execute(loop_program(), vec![], Limits::default());
+    for checked in [false, true] {
+        for budget in [None, Some(10)] {
+            let e = charged(budget, checked);
+            assert_eq!(e.outcome, plain.outcome);
+            assert_eq!(e.steps, plain.steps);
+            assert_eq!(e.charged, budget.unwrap_or(0));
+            if !checked {
+                assert_eq!(e.trace, plain.trace);
+            }
+        }
+    }
+}
+
 #[test]
 fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
     let mut b = Builder::new();
@@ -222,6 +329,7 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         Limits {
             steps: Some(1),
             call_depth: 1,
+            source: None,
         },
     );
     tooling_limit(&e, ToolingLimitKind::Steps, 9);
@@ -233,6 +341,7 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         Limits {
             steps: None,
             call_depth: 1,
+            source: None,
         },
     );
     returned(&unbounded, Value::Unit);
@@ -243,6 +352,7 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         Limits {
             steps: Some(2),
             call_depth: 1,
+            source: None,
         },
     );
     returned(&e, Value::Unit);
@@ -255,6 +365,7 @@ fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
         Limits {
             steps: Some(100),
             call_depth: 1,
+            source: None,
         },
     );
     tooling_limit(&e, ToolingLimitKind::Steps, 7);
@@ -281,6 +392,7 @@ fn a_step_budget_stops_after_exactly_its_steps_with_the_unbounded_trace_so_far()
     let limits = |steps| Limits {
         steps,
         call_depth: 8,
+        source: None,
     };
     let unbounded = execute(loop_program(), vec![], limits(None));
     returned(&unbounded, int(P::U32, 15));
@@ -361,6 +473,7 @@ fn depth_failure_occurs_after_entry_and_cleans_transferred_arguments() {
         Limits {
             steps: Some(100),
             call_depth: 1,
+            source: None,
         },
     );
     tooling_limit(&e, ToolingLimitKind::CallDepth, 22);
@@ -397,6 +510,7 @@ fn cleanup_zero_can_hold_actions_and_control_edges_have_no_failure_list() {
         Limits {
             steps: Some(5),
             call_depth: 1,
+            source: None,
         },
     );
     tooling_limit(&e, ToolingLimitKind::Steps, 7);
@@ -441,6 +555,7 @@ fn effect_only_tracing_retains_no_events_for_a_long_pure_loop() {
     let limits = Limits {
         steps: Some(16_384),
         call_depth: 1,
+        source: None,
     };
     let execute_mode = |trace_mode| {
         hirsel_interp::run_with_runtime(

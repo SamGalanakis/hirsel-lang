@@ -83,6 +83,7 @@ fn independent_bits_and_strict_grammar_on_h_llvm_and_cranelift() {
             limits: hirsel_interp::Limits {
                 steps: None,
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

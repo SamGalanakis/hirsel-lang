@@ -209,11 +209,11 @@ fn ordinary_products_reject_changed_execution_limits() {
             modules: vec!["lib".into()],
             name: "value".into(),
         });
-        for (steps, depth) in [(999_999, 256), (999_999, 128)] {
+        for (budget, depth) in [(999_999, 256), (999_999, 128)] {
             let mut p = COMPILER
                 .clone()
-                .with_comptime_limits(hirsel_interp::Limits {
-                    steps: Some(steps),
+                .with_comptime_limits(hirsel_engine::ComptimeLimits {
+                    budget,
                     call_depth: depth,
                 })
                 .with_config(CompileConfig {

@@ -349,7 +349,7 @@ fn admitted_lower_depth_matches_scalar_after_warm_constant_dependencies() {
                             jobs: hirsel_intern::jobs::Jobs::new(jobs),
                             ..Default::default()
                         })
-                        .with_comptime_limits(hirsel_interp::Limits {
+                        .with_comptime_limits(hirsel_engine::ComptimeLimits {
                             call_depth: limit,
                             ..Default::default()
                         })

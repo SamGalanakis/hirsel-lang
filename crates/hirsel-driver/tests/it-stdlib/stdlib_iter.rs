@@ -83,6 +83,7 @@ fn byte_stream_tokio_short_read_then_error_vector() {
             limits: hirsel_interp::Limits {
                 steps: Some(16_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

@@ -1,0 +1,10 @@
+// rule: CT-1
+// expect: reject CT-1 at line 10
+// twin: CT/CT-1-empty-loop-ok.hir
+// Each entered iteration charges one unit of the evaluation's budget (CT-4), so an empty infinite loop stops.
+fn spin() -> u64 {
+  while true {}
+  0
+}
+
+pub const VALUE: u64 = comptime spin()

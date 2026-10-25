@@ -81,6 +81,7 @@ impl Builder<'_, '_> {
         });
         self.current = Some(run);
         self.state = incoming.clone();
+        self.charge(hirsel_tir::SourceEventKind::Iteration, statement.0, span);
         let item = self.transport(
             Value {
                 checked_ty: None,
@@ -457,6 +458,7 @@ impl Builder<'_, '_> {
             self.terminate(Terminator::Goto(exit), span);
             self.current = Some(run);
             self.state = incoming.clone();
+            self.charge(hirsel_tir::SourceEventKind::Iteration, statement.0, span);
             self.project(
                 source.place,
                 Projection::Index(self.root(counter.place)),
@@ -514,6 +516,7 @@ impl Builder<'_, '_> {
             self.end_loan(loan, span);
             self.terminate(Terminator::Goto(run), span);
             self.current = Some(run);
+            self.charge(hirsel_tir::SourceEventKind::Iteration, statement.0, span);
             self.project(
                 next.place,
                 Projection::VariantField {

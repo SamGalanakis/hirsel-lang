@@ -363,7 +363,8 @@ impl QueryEngine {
     }
     /// The hash of the session's environment: everything every query keys on
     /// besides source and its package's closure manifest (which is part of
-    /// each memo's own text), with the comptime limits. One value per session,
+    /// each memo's own text), with the comptime limits and charging version
+    /// (CT-4): a budget or charging change re-evaluates every evaluation. One value per session,
     /// so the reads of different packages' memos merge without conflict.
     pub(crate) fn environment_value(&self) -> ContentHash {
         let e = &self.environment;
@@ -374,7 +375,8 @@ impl QueryEngine {
                 e.compiler_version.as_bytes(),
                 &e.spec_hash.0,
                 &e.builtin_signatures_hash.0,
-                &self.comptime_limits.steps.unwrap_or(u64::MAX).to_le_bytes(),
+                &hirsel_tir::CHARGING_VERSION.to_le_bytes(),
+                &self.comptime_limits.budget.to_le_bytes(),
                 &(self.comptime_limits.call_depth as u64).to_le_bytes(),
                 &optional(self.build_inputs_revision()).0,
             ],

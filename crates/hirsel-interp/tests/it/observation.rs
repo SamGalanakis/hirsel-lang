@@ -42,6 +42,7 @@ fn fixture() -> (SourceMap, Execution) {
                 },
             })],
             steps: 19,
+            charged: 0,
         },
     )
 }

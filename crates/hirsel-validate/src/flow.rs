@@ -5720,6 +5720,8 @@ impl Checker<'_> {
                     self.read(model, state, condition, report);
                     self.failure_cleanup(model, state, instruction.on_failure, report, true);
                 }
+                // An exhausted charge stops the evaluation without cleanup (CT-4).
+                InstructionKind::Charge(_) => {}
             }
         }
         self.site.instruction = None;

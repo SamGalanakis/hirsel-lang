@@ -15,6 +15,7 @@ fn execute(source: &str) {
         limits: hirsel_interp::Limits {
             steps: Some(100_000_000),
             call_depth: 256,
+            source: None,
         },
         ..Default::default()
     }));
@@ -286,6 +287,7 @@ fn parse_steps(texts: &[&str]) -> Vec<u64> {
                     hirsel_interp::Limits {
                         steps: Some(100_000_000),
                         call_depth: 256,
+                        source: None,
                     },
                     &mut library,
                     &runtime,

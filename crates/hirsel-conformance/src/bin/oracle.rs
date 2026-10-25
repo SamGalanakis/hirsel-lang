@@ -21,7 +21,7 @@ const USAGE: &str = "usage: oracle o1 [--path PREFIX]... [--limit N] [--jobs 1,2
        oracle o3 [--scenario NAME]... [COMMON]
        oracle o4 [--path PREFIX]... [--limit N] [COMMON]
        oracle o5 [--path PREFIX]... [--limit N] [--native-programs N] [COMMON]
-       oracle produce [--jobs N] [--salt S] [--store dir:PATH] [--verify-store] [--verify on|off] [--limits steps=N,depth=N] [--native] --out DIR PROGRAM
+       oracle produce [--jobs N] [--salt S] [--store dir:PATH] [--verify-store] [--verify on|off] [--limits budget=N,depth=N] [--native] --out DIR PROGRAM
 COMMON: [--root REPO] [--shard I/N] [--work DIR] [--json] [--allow-todo]";
 
 /// Exit status of `produce` when the configuration needs a missing switch.

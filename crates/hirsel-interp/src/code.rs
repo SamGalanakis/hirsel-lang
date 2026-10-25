@@ -74,6 +74,8 @@ pub(crate) enum OpKind {
         yes: BlockId,
         no: BlockId,
     },
+    /// A source-budget charge (CT-4): no step, and nothing without a budget.
+    Charge,
     /// Executed from the TIR instruction or terminator.
     General,
 }
@@ -304,6 +306,7 @@ impl Lowering<'_> {
             | InstructionKind::EndLoan { .. }
             | InstructionKind::BindFields { .. }
             | InstructionKind::EndOrigin(_) => OpKind::Nop,
+            InstructionKind::Charge(_) => OpKind::Charge,
             // A whole local always resolves, so its binding records no failure site.
             InstructionKind::BindOrigin { source, place, .. } => {
                 self.slot(source)?;

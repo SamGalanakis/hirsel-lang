@@ -22,7 +22,7 @@ fn scaled(n: u64) -> u64 {
 `comptime e` evaluates `e` while compiling, to initialize a constant or to produce an
 ordinary expression value. Evaluation uses validated ordinary declared calls and
 materializes scalar, aggregate, `Map` and `Set` data; dependents check declared signatures.
-A failure, an exhausted step limit or a missing capability is a compile error: a well-typed
+A failure, an exhausted budget ([CT-4](#ct-4-order)) or a missing capability is a compile error: a well-typed
 comptime operation that fails during evaluation is CT-1 at the comptime expression, with the
 underlying failure as a note. Static errors inside comptime keep their ordinary owners.
 Static checking reads only declared signatures; evaluation executes the selected
@@ -55,7 +55,7 @@ calls and the enclosing instantiation's size parameters. A size-dependent expres
 is staged as a private size-generic constant: its signature is published before
 selection, and evaluation occurs for each selected size instantiation. Materialized
 results are cached by the constant's size actuals and executed dependencies; changing
-an executed implementation or the CT-1 budget invalidates the result. Unselected
+an executed implementation, the CT-4 budget or its charging version invalidates the result. Unselected
 instantiations do not evaluate. The evaluator, interpreter and native programs use
 the same materialized data.
 
@@ -152,12 +152,52 @@ does not replace or exclude in-language generation.
 ### CT-4: Order
 
 Compile-time evaluations depend on each other acyclically; a dependency cycle cites its
-earliest dependency reference. Step exhaustion reports CT-1 at the enclosing comptime
-expression, with the stopping site and budget as notes. The configured default is
-1,000,000 TIR steps. **Unspecified:** the optimizer-independent source budget and its
-charges. Runtime guards and compile-time call and dependency depth safeguards are
-operational tooling outcomes, not comparable language results. Editing the budget
-invalidates evaluated caches, so diagnostics retry.
+earliest dependency reference.
+
+Each evaluation (a constant initializer, a selected staged expression or a generator
+evaluation) has its own budget B of charged source events, 1,000,000 by default. Charges
+are defined on source, before lowering:
+
+- **Calls.** One unit before each executed source call enters its callee: after its
+  arguments are evaluated, before transfer, contracts or effects. Calls written in
+  contracts and callbacks count, a `?` error mapper counts, a call to a core primitive costs
+  one whatever its implementation, and every tail or constructor-tail restart charges
+  its call.
+- **Iterations.** One unit on each entered body iteration of a `while` or `for` loop,
+  after its condition or `next` succeeds and before body work.
+- **Nothing else.** Literals, reads, scalar operators, constructors, branches, matches
+  and mechanical cleanup cost zero; source calls and loops they execute still charge.
+  Compiler-created calls (contract and fact checks, iterator scaffolding, forwarding
+  wrappers) and optimizer copies add none, while the source bodies they run charge their
+  own calls and iterations.
+
+Exactly B units succeed. The next event is denied before it executes and nothing further
+runs: CT-1 at the enclosing comptime expression or initializer, with the denied call or
+iteration as a secondary site and B as a note. An empty infinite loop therefore stops.
+A named constant read does not rerun its initializer, which passed its own budget; a
+nested staged evaluation has its own budget and keeps dependency order; no callee raises
+its caller's allowance.
+
+```hirsel
+fn square(x: u64) -> u64 { x * x }
+const N: u64 = comptime square(16)   // one unit: B = 1 succeeds, B = 0 is CT-1
+
+fn count(n: u64) -> u64 {
+  let mut i: u64 = 0
+  while i < n { i = i + 1 }
+  i
+}
+const C: u64 = comptime count(3)     // four units: the call and three iterations
+```
+
+Whether a program compiles is the same at every optimization level, worker count and
+cache state: inlining, unrolling, tail restarts and cached results keep the ordered
+charges of the source they stand for. Compile-time evaluation runs only on the reference
+interpreter; native programs read its materialized results. Evaluated caches are keyed
+by the charging version, B and the executed dependencies, so editing the budget
+invalidates them and diagnostics retry. Host CPU, memory, call-depth and
+dependency-depth safeguards are operational tooling outcomes, not comparable language
+results, and PROG-3's interpreter fixture steps are a separate measure.
 
 ### CT-5: Generation
 

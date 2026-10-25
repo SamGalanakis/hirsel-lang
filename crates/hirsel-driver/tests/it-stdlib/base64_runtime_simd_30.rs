@@ -18,6 +18,7 @@ fn fixture(name: &str, steps: Option<u64>) {
             limits: hirsel_interp::Limits {
                 steps,
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

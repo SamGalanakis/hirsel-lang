@@ -151,7 +151,7 @@ impl ValidatedEvaluation {
     pub(crate) fn run(
         self,
         sources: &SourceMap,
-        limits: hirsel_interp::Limits,
+        limits: crate::ComptimeLimits,
         runtime: &hirsel_interp::aggregate::RuntimeTypes,
         source: &mut impl DependencySource,
     ) -> EvaluationOutcome {
@@ -172,7 +172,7 @@ impl ValidatedEvaluation {
     pub(crate) async fn run_async(
         self,
         sources: &SourceMap,
-        limits: hirsel_interp::Limits,
+        limits: crate::ComptimeLimits,
         runtime: &hirsel_interp::aggregate::RuntimeTypes,
         source: &mut impl AsyncDependencySource,
     ) -> EvaluationOutcome {

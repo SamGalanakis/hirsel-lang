@@ -782,6 +782,13 @@ impl<'a, 'b> Builder<'a, 'b> {
         }
         self.cleanup_root(head)
     }
+    /// One compile-time budget unit for this source call or loop iteration (CT-4).
+    pub fn charge(&mut self, kind: hirsel_tir::SourceEventKind, source: u32, span: Span) {
+        self.emit(
+            InstructionKind::Charge(hirsel_tir::SourceEvent { kind, source }),
+            span,
+        );
+    }
     pub fn emit(&mut self, kind: InstructionKind, span: Span) {
         let on_failure = self.cleanup();
         self.emit_with(kind, span, on_failure);

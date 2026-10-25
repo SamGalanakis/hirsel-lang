@@ -105,7 +105,7 @@ fn main() {
         .with_owned_engines();
     let workspace = CandidateWorkspace::new(
         config.clone(),
-        hirsel_interp::Limits::default(),
+        hirsel_engine::ComptimeLimits::default(),
         Limits::default(),
     )
     .unwrap();

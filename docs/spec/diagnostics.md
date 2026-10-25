@@ -258,7 +258,8 @@ same source ordering ([GEN-5](generics.md#gen-5-polymorphic-recursion)); a compt
 dependency cycle cites its earliest dependency reference
 ([CT-4](compile-time.md#ct-4-order)). A well-typed comptime operation that fails during
 evaluation cites CT-1 at the comptime expression, with the underlying failure as a note;
-step exhaustion cites CT-1 at the comptime expression too. Static errors inside comptime keep
+budget exhaustion cites CT-1 at the comptime expression too, with the denied call or iteration
+as a secondary site and the budget as a note. Static errors inside comptime keep
 their ordinary owners. Run-time failures keep their operative rule. Their primary location follows
 [`@track_caller`](failure.md#fail-1-kinds); the original operation remains available
 independently. A false `ensures` has the declared clause as its operation site. Run-time order is

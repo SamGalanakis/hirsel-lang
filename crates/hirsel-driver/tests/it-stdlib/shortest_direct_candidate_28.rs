@@ -240,6 +240,7 @@ for (bits, expected_digits, expected_exponent, expected) in rows {
             limits: hirsel_interp::Limits {
                 steps: Some(100_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

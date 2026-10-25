@@ -1,6 +1,6 @@
-// o2: the comptime step limit drops below what a constant needs, then nothing else changes
-// before: limits=steps=1000000,depth=64
-// after: limits=steps=50,depth=64
+// o2: the comptime budget drops below what a constant needs (41 units), then nothing else changes
+// before: limits=budget=1000000,depth=64
+// after: limits=budget=40,depth=64
 === main.hir
 fn spin(n: u64) -> u64 {
   if n == 0 {

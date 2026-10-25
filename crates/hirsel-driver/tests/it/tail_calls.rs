@@ -84,6 +84,7 @@ fn execute_recorded(engine: &mut QueryEngine, depth: usize) -> (Execution, Vec<u
         Limits {
             steps: Some(5_000_000),
             call_depth: depth,
+            source: None,
         },
         &mut library,
         &runtime,
@@ -434,6 +435,7 @@ fn primitive_completion_matches_scheduled_completion_with_steps_traces_and_budge
                     let limits = Limits {
                         steps,
                         call_depth: 256,
+                        source: None,
                     };
                     let mut fast =
                         hirsel_interp::library::Library::new(&config, Default::default()).unwrap();

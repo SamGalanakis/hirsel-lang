@@ -51,6 +51,7 @@ fn run(
         Limits {
             steps,
             call_depth: 256,
+            source: None,
         },
         &mut library,
         &runtime,
@@ -125,6 +126,7 @@ fn clinger_exact_bits_and_fallback_twins_on_four_engines() {
             limits: hirsel_interp::Limits {
                 steps: None,
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

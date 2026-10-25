@@ -193,6 +193,7 @@ fn strict_vectors_on_h_llvm_and_cranelift() {
             limits: hirsel_interp::Limits {
                 steps: Some(5_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

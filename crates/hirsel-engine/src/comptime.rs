@@ -40,6 +40,35 @@ pub(crate) struct EvaluatedConstant {
     #[serde(skip)]
     pub acceptance: Option<hirsel_validate::ExecutionReceipt>,
 }
+/// The default source budget of one compile-time evaluation, in charged units (CT-4).
+pub const DEFAULT_COMPTIME_BUDGET: u64 = 1_000_000;
+/// Compile-time evaluation limits: each evaluation's source budget (CT-4) and
+/// the call-depth tooling safeguard. Both are explicit query inputs.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ComptimeLimits {
+    /// Charged source units each evaluation may spend.
+    pub budget: u64,
+    pub call_depth: usize,
+}
+impl Default for ComptimeLimits {
+    fn default() -> Self {
+        Self {
+            budget: DEFAULT_COMPTIME_BUDGET,
+            call_depth: usize::MAX,
+        }
+    }
+}
+impl ComptimeLimits {
+    /// The interpreter limits of one evaluation: its source budget, and no
+    /// execution-step bound (PROG-3 steps are not compile-time accounting).
+    pub(crate) fn interpreter(self) -> hirsel_interp::Limits {
+        hirsel_interp::Limits {
+            steps: None,
+            call_depth: self.call_depth,
+            source: Some(self.budget),
+        }
+    }
+}
 fn operational(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "compile-time evaluation".into(),
@@ -243,7 +272,7 @@ pub(crate) fn validate_evaluation(
 pub(crate) struct EvaluationTask<'a> {
     pub(crate) sources: &'a hirsel_span::SourceMap,
     pub(crate) configuration: RunConfiguration,
-    pub(crate) limits: hirsel_interp::Limits,
+    pub(crate) limits: crate::ComptimeLimits,
     pub(crate) runtime: &'a hirsel_interp::aggregate::RuntimeTypes,
     pub(crate) site: Span,
     pub(crate) ty: TypeId,
@@ -324,7 +353,7 @@ impl EvaluationTask<'_> {
             self.sources,
             &self.configuration,
             vec![],
-            self.limits,
+            self.limits.interpreter(),
             &mut library,
             self.runtime,
         )
@@ -354,26 +383,28 @@ impl EvaluationTask<'_> {
                     ));
                     Err(QueryError::Diagnostics(vec![diagnostic]))
                 }
-                // CT-1 and docs/spec/diagnostics.md own exhausted evaluation steps, including the
-                // configured budget until #7 specifies source-event accounting.
-                Outcome::ToolingLimit(limit)
-                    if limit.kind == hirsel_tir::ToolingLimitKind::Steps =>
-                {
+                // CT-4: the source event past the budget was denied before it
+                // executed; CT-1 reports it at the enclosing evaluation.
+                Outcome::Exhausted(exhaustion) => {
                     let mut diagnostic = Diagnostic::error(
                         const { hirsel_diag::RuleId::of("CT-1") },
                         self.site,
-                        "compile-time evaluation exhausted its step limit",
+                        "compile-time evaluation exhausted its budget",
                     );
-                    if let Some(site) = limit.site {
-                        diagnostic.secondary.push(hirsel_diag::Label {
-                            span: site,
-                            message: "evaluation stopped here".into(),
-                        });
-                    }
-                    diagnostic
-                        .notes
-                        .push(format!("evaluation step limit: {} (spec #7)", limit.limit));
-                    limit_reached = Some(limit);
+                    diagnostic.secondary.push(hirsel_diag::Label {
+                        span: exhaustion.site,
+                        message: match exhaustion.event.kind {
+                            hirsel_tir::SourceEventKind::Call => "this call exceeds the budget",
+                            hirsel_tir::SourceEventKind::Iteration => {
+                                "this loop iteration exceeds the budget"
+                            }
+                        }
+                        .into(),
+                    });
+                    diagnostic.notes.push(format!(
+                        "compile-time budget: {} units, one per source call and loop iteration",
+                        exhaustion.budget
+                    ));
                     Err(QueryError::Diagnostics(vec![diagnostic]))
                 }
                 Outcome::Blocked(_) => Err(operational("compile-time evaluation is Blocked")),

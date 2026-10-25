@@ -187,6 +187,7 @@ fn execute(
         Limits {
             steps,
             call_depth: 8,
+            source: None,
         },
         &mut lists,
         &runtime,

@@ -50,6 +50,7 @@ fn recipe(name: &str) {
             limits: hirsel_interp::Limits {
                 steps: Some(1_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

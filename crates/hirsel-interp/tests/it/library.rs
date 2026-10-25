@@ -986,6 +986,7 @@ fn unchecked_add_detects_overflow_without_inventing_a_language_failure() {
         stdout: b"prior".to_vec(),
         trace: vec![],
         steps: 0,
+        charged: 0,
     };
     assert!(execution.observable(&h.sources).is_none());
     assert_eq!(

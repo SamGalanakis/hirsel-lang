@@ -238,6 +238,7 @@ fn all_engines(name: &str, source: &str, success: bool) {
             limits: hirsel_interp::Limits {
                 steps: Some(10_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

@@ -160,6 +160,10 @@ async fn run_observed_async<O: crate::ownership_trace::Observer>(
             execution.outcome = Outcome::BudgetExceeded(kind);
             Ok(())
         }
+        (Err(Error::Exhausted(exhaustion)), _) => {
+            execution.outcome = Outcome::Exhausted(*exhaustion);
+            Ok(())
+        }
         (Err(Error::Signaled(kind)), _) => {
             execution.outcome = Outcome::Signaled(kind);
             Ok(())
@@ -2376,6 +2380,28 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
         let site = instruction.map_or(block.span, |i| i.span);
         let cleanup =
             instruction.map_or_else(|| terminator_cleanup(terminator), |i| Some(i.on_failure));
+        // A source-budget charge is not an execution step (CT-4). The event past
+        // the budget is denied before it executes, and nothing further runs.
+        if let Some(Instruction {
+            kind: InstructionKind::Charge(event),
+            span,
+            ..
+        }) = instruction
+        {
+            if let Some(budget) = limits.source {
+                if execution.charged == budget {
+                    return Err(Error::Exhausted(Box::new(crate::Exhaustion {
+                        budget,
+                        event: *event,
+                        definition: frame.definition.path.path().clone(),
+                        site: *span,
+                    })));
+                }
+                execution.charged += 1;
+            }
+            frame.instruction += 1;
+            continue;
+        }
         // Issue #34: failure occurs at the next scheduled site after entry.
         // Control-only edges have no current-frame failure list in frozen TIR.
         if frame.depth_failure || limits.steps == Some(execution.steps) {
@@ -3232,6 +3258,17 @@ fn dispatch(
         };
         match &op.kind {
             OpKind::General => return true,
+            OpKind::Charge => {
+                // The general step denies the charge past the budget.
+                if limits.source == Some(execution.charged) {
+                    return true;
+                }
+                if limits.source.is_some() {
+                    execution.charged += 1;
+                }
+                frame.instruction += 1;
+                continue;
+            }
             OpKind::Nop => step(frame, execution, false),
             &OpKind::Live(slot) => {
                 if frame.slots[slot as usize].is_some() {
@@ -4730,7 +4767,10 @@ async fn execute_instruction(
             let (value, shadow) = frame.operand_shadow(value)?;
             frame.assign_shadow(destination, value, shadow)?;
         }
-        InstructionKind::Drop { .. } | InstructionKind::RunCleanup(_) => unreachable!(),
+        // The scheduler charges before it steps an instruction.
+        InstructionKind::Drop { .. }
+        | InstructionKind::RunCleanup(_)
+        | InstructionKind::Charge(_) => unreachable!(),
         // Binding an origin computes both places. An index outside its
         // sequence or a field of an inactive variant still fails where the
         // place is accessed, with that access's cleanup, but at the site of

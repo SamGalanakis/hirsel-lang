@@ -17,6 +17,7 @@ fn check(path: &Path, source: Option<&str>, stdout: &[u8], failure: Option<&str>
         limits: hirsel_interp::Limits {
             steps: Some(20_000_000),
             call_depth: 256,
+            source: None,
         },
         ..Default::default()
     }));

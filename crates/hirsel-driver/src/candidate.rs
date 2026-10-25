@@ -457,7 +457,7 @@ impl CandidateWorkspace {
     /// Explicit compiler policy and CT limits over immutable observed source inputs.
     pub fn new(
         config: CompileConfig,
-        comptime: hirsel_interp::Limits,
+        comptime: hirsel_engine::ComptimeLimits,
         limits: Limits,
     ) -> Result<Self, RequestError> {
         if config.verify != Verify::On || config.lowering != LoweringPolicy::Comptime {
@@ -465,14 +465,12 @@ impl CandidateWorkspace {
         }
         let parts = vec![
             crate::COMPILER_IDENTITY.to_vec(),
-            comptime
-                .steps
-                .map(|v| v.to_le_bytes().to_vec())
-                .unwrap_or_default(),
+            hirsel_tir::CHARGING_VERSION.to_le_bytes().to_vec(),
+            comptime.budget.to_le_bytes().to_vec(),
             (comptime.call_depth as u64).to_le_bytes().to_vec(),
         ];
         let environment = ContentHash::of_parts(
-            "hirsel.candidate-environment.v2",
+            "hirsel.candidate-environment.v3",
             parts.iter().map(Vec::as_slice),
         );
         let compiler = crate::COMPILER
@@ -1763,7 +1761,7 @@ mod tests {
     fn workspace() -> CandidateWorkspace {
         CandidateWorkspace::new(
             CompileConfig::for_memory_cap(None),
-            hirsel_interp::Limits::default(),
+            hirsel_engine::ComptimeLimits::default(),
             Limits::default(),
         )
         .unwrap()

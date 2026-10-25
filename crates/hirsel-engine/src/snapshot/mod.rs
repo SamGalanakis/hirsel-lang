@@ -638,7 +638,7 @@ pub(crate) struct SnapshotStamp {
     declarations: u64,
     revision: u64,
     environment: QueryEnvironment,
-    limits: hirsel_interp::Limits,
+    limits: crate::ComptimeLimits,
     manifest: Option<ContentHash>,
     unavailable: Option<QueryKind>,
 }

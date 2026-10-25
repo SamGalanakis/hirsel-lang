@@ -20,6 +20,7 @@ fn ordered_vector_traces_interpreted_and_checked_heap() {
             limits: hirsel_interp::Limits {
                 steps: Some(10_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));

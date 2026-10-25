@@ -50,14 +50,28 @@ pub struct Limits {
     /// None leaves execution steps unbounded; call depth is still checked.
     pub steps: Option<u64>,
     pub call_depth: usize,
+    /// A compile-time evaluation's source budget (CT-4): the `Charge` units it
+    /// may spend. None charges nothing; run time has no source budget.
+    pub source: Option<u64>,
 }
 impl Default for Limits {
     fn default() -> Self {
         Self {
             steps: Some(DEFAULT_STEP_LIMIT),
             call_depth: usize::MAX,
+            source: None,
         }
     }
+}
+/// A compile-time evaluation spent its source budget: the next charged event
+/// was denied before it executed, and nothing further ran (CT-4).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Exhaustion {
+    pub budget: u64,
+    pub event: hirsel_tir::SourceEvent,
+    /// The definition the denied event belongs to.
+    pub definition: DefPath,
+    pub site: Span,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Failure {
@@ -103,6 +117,8 @@ pub enum Outcome {
     /// Blocked run does: no cleanup, finalizer or further effect ran.
     BudgetExceeded(BudgetKind),
     ToolingLimit(hirsel_tir::ToolingLimit),
+    /// A compile-time evaluation spent its source budget; nothing further ran.
+    Exhausted(Exhaustion),
     UndefinedBehavior(UndefinedBehavior),
     Returned {
         value: Value,
@@ -181,6 +197,8 @@ pub struct Execution {
     pub stdout: Vec<u8>,
     pub trace: Vec<TraceEvent>,
     pub steps: u64,
+    /// Source-budget units charged (CT-4); zero without a source budget.
+    pub charged: u64,
 }
 /// An execution API error retains all output produced before it stopped.
 #[derive(Clone, Debug)]
@@ -203,6 +221,8 @@ pub enum Error {
     Blocked(Vec<BlockedWait>),
     /// Internal stop signal, converted to Outcome::BudgetExceeded before returning.
     BudgetExceeded(BudgetKind),
+    /// Internal stop signal, converted to Outcome::Exhausted before returning.
+    Exhausted(Box<Exhaustion>),
     /// Internal stop signal, converted to Outcome::Signaled before returning.
     Signaled(hirsel_run_schema::SignalKind),
     InvalidTir(String),

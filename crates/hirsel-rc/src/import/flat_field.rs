@@ -85,7 +85,11 @@ fn instruction_places(body: &tir::Body, kind: &tir::InstructionKind) -> Vec<tir:
         K::BeginLoan { place, .. } => out.push(*place),
         K::Check { condition, .. } => out.push(condition.place),
         K::Snapshot { destination, value } => out.extend([*destination, value.place]),
-        K::StorageLive(_) | K::EndScope(_) | K::EndLoan { .. } | K::RunCleanup(_) => {}
+        K::StorageLive(_)
+        | K::EndScope(_)
+        | K::EndLoan { .. }
+        | K::RunCleanup(_)
+        | K::Charge(_) => {}
     }
     out
 }

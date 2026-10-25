@@ -1097,6 +1097,9 @@ impl Builder<'_, '_> {
             Fields(Constructor),
             SortedMap,
         }
+        // A source call to a definition or callable value charges one unit
+        // before transfer (CT-4), also where lowering builds its result in place.
+        let charge = !matches!(plan.target, CallTarget::Constructor(_));
         let (callee, constructor) = match plan.target {
             // `map.empty()`, `set.empty()` and `sorted_map.empty(by)` construct an empty keyed collection
             // in the arena their relation names, as a literal does (PROV-4).
@@ -1459,6 +1462,9 @@ impl Builder<'_, '_> {
         }
         let prepared = entered;
         if let Some(constructor) = constructor {
+            if charge {
+                self.charge(hirsel_tir::SourceEventKind::Call, id.0, span);
+            }
             if let Some(fact) = self
                 .decisions
                 .facts
@@ -1532,6 +1538,7 @@ impl Builder<'_, '_> {
                         {
                             return self.error(span, "invalid replace operand conventions");
                         }
+                        self.charge(hirsel_tir::SourceEventKind::Call, id.0, span);
                         let result = self.exchange(place.place, *new, ty, false, span);
                         self.end_unheld_loans(span);
                         return Ok(Some(result));
@@ -1602,6 +1609,7 @@ impl Builder<'_, '_> {
             for argument in &arguments {
                 self.retire_operand_content(&argument.value);
             }
+            self.charge(hirsel_tir::SourceEventKind::Call, id.0, span);
             self.terminate(
                 Terminator::Call {
                     callee,
@@ -1657,6 +1665,7 @@ impl Builder<'_, '_> {
         for argument in &arguments {
             self.retire_operand_content(&argument.value);
         }
+        self.charge(hirsel_tir::SourceEventKind::Call, id.0, span);
         self.terminate(
             Terminator::Call {
                 callee,

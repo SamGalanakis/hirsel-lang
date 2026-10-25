@@ -55,6 +55,7 @@ impl Run {
                 vec![]
             },
             steps: 0,
+            charged: 0,
         };
         Ok(Self {
             configuration,

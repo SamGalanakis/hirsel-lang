@@ -147,6 +147,7 @@ fn json_skip_small_keys_32_four_engines() {
             limits: hirsel_interp::Limits {
                 steps: Some(5_000_000),
                 call_depth: 1024,
+                source: None,
             },
             ..Default::default()
         }));

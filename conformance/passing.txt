@@ -823,6 +823,8 @@ conformance/CT/CT-1-contract-failure-bad.hir
 conformance/CT/CT-1-contract-failure-ok.hir
 conformance/CT/CT-1-division-by-zero-bad.hir
 conformance/CT/CT-1-division-by-zero-ok.hir
+conformance/CT/CT-1-empty-loop-bad.hir
+conformance/CT/CT-1-empty-loop-ok.hir
 conformance/CT/CT-1-fact-failure-bad.hir
 conformance/CT/CT-1-fact-failure-ok.hir
 conformance/CT/CT-1-overflow-bad.hir

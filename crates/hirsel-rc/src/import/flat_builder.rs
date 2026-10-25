@@ -274,7 +274,8 @@ impl Importer<'_> {
                     | K::EndScope(_)
                     | K::EndLoan { .. }
                     | K::Drop { .. }
-                    | K::RunCleanup(_) => {}
+                    | K::RunCleanup(_)
+                    | K::Charge(_) => {}
                 }
             }
             let b = tir::BlockId(b as u32);

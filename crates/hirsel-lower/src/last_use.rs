@@ -590,7 +590,8 @@ impl Builder<'_, '_> {
             InstructionKind::EndOrigin(_)
             | InstructionKind::StorageDead { .. }
             | InstructionKind::EndScope(_)
-            | InstructionKind::EndLoan { .. } => {}
+            | InstructionKind::EndLoan { .. }
+            | InstructionKind::Charge(_) => {}
         }
         step
     }

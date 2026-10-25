@@ -131,6 +131,7 @@ fn full_gate_every_unicode16_grapheme_break_case_over_full_and_nonzero_origin_sl
                     Limits {
                         steps: Some(10_000_000),
                         call_depth: 256,
+                        source: None,
                     },
                     &mut library,
                     &runtime,

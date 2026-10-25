@@ -881,6 +881,7 @@ fn run_loaded_on_host_traced(
     let limits = hirsel_interp::Limits {
         steps: max_steps,
         call_depth: 256,
+        source: None,
     };
     let execution = if let Some(capture) = ownership {
         capture.program = Some(run.program());

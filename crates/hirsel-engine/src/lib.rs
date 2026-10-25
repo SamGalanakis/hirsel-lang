@@ -26,6 +26,7 @@ mod representation;
 pub use representation::RepresentationRecord;
 mod compiler;
 mod comptime;
+pub use comptime::{ComptimeLimits, DEFAULT_COMPTIME_BUDGET};
 mod config;
 pub use compiler::{Compiler, FormattedSource};
 pub use config::CompileConfig;

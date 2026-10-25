@@ -98,13 +98,8 @@ fn compile_config(config: &Config) -> CompileConfig {
         ..CompileConfig::for_memory_cap(None)
     }
 }
-fn limits(config: &Config) -> hirsel_interp::Limits {
-    config
-        .limits
-        .map_or_else(hirsel_interp::Limits::default, |l| hirsel_interp::Limits {
-            steps: l.steps,
-            call_depth: l.call_depth,
-        })
+fn limits(config: &Config) -> hirsel_engine::ComptimeLimits {
+    config.limits.map(Into::into).unwrap_or_default()
 }
 fn compiler(config: &Config) -> hirsel_engine::Compiler {
     hirsel_driver::COMPILER

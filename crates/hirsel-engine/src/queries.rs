@@ -198,14 +198,14 @@ pub struct QueryEngine {
     pub(crate) session: bool,
     /// Image construction requires closure-local evidence. Until worker V
     /// receipts are closure-qualified, its source materializations stay scalar.
-    pub comptime_limits: hirsel_interp::Limits,
+    pub comptime_limits: crate::ComptimeLimits,
     pub last_comptime_limit: Option<hirsel_tir::ToolingLimit>,
     /// This engine's S1 stack: the open evaluations, generators and staged
     /// instances with their requests' depth evidence, claimed through the
     /// session's coordinator (design §1c).
     pub(crate) s1: crate::memo::S1Worker<DefPath, Span>,
     pub(crate) constant_values: BTreeMap<DefPath, crate::comptime::EvaluatedConstant>,
-    materialization_environment: Option<(QueryEnvironment, hirsel_interp::Limits, Verify)>,
+    materialization_environment: Option<(QueryEnvironment, crate::ComptimeLimits, Verify)>,
     pub(crate) staged_constants: BTreeMap<DefPath, crate::comptime::StagedConstant>,
     pub(crate) staged_values: BTreeMap<(DefPath, Vec<u64>), crate::comptime::EvaluatedConstant>,
     /// Generated function bodies (CT-5), by declaration.
@@ -245,7 +245,7 @@ pub struct QueryEngine {
     /// Each indexed definition's inputs as last indexed (S0's diff).
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
     /// The environment and limits the memos were last checked under.
-    environment_seen: Option<(QueryEnvironment, hirsel_interp::Limits, Option<ContentHash>)>,
+    environment_seen: Option<(QueryEnvironment, crate::ComptimeLimits, Option<ContentHash>)>,
     /// The manifest revision indexing last published; any other value was
     /// set explicitly by the caller (its build inputs changed).
     published_manifest: Option<ContentHash>,
@@ -565,7 +565,7 @@ impl QueryEngine {
             configured_jobs: None,
             configured_lowering: LoweringPolicy::Comptime,
             session: false,
-            comptime_limits: hirsel_interp::Limits::default(),
+            comptime_limits: crate::ComptimeLimits::default(),
             last_comptime_limit: None,
             s1: crate::memo::S1Coordinator::new().worker(),
             constant_values: BTreeMap::new(),

@@ -180,6 +180,7 @@ fn operation_callbacks_use_frames_and_resume_a_thousand_times_with_mut_results()
             Limits {
                 steps: Some(20_000),
                 call_depth: 2,
+                source: None,
             },
         );
         assert!(matches!(e.outcome, Outcome::Returned { .. }));
@@ -207,14 +208,17 @@ fn callback_step_and_depth_limits_remain_tooling_outcomes() {
         Limits {
             steps: None,
             call_depth: 1,
+            source: None,
         },
         Limits {
             steps: Some(2),
             call_depth: 20,
+            source: None,
         },
         Limits {
             steps: Some(100),
             call_depth: 1,
+            source: None,
         },
     ] {
         let (e, _) = run_repeat(false, false, limits);
@@ -520,6 +524,7 @@ fn callback_owned_temporaries_finalize_before_resume_on_success_failure_and_aban
                 Limits {
                     steps: Some(100),
                     call_depth: if tooling { 1 } else { 10 },
+                    source: None,
                 },
                 &mut ops,
                 &RuntimeTypes {
@@ -785,6 +790,7 @@ fn pre_callback_updates_remove_transferred_items_before_failure_or_abandonment_r
             Limits {
                 steps: Some(100),
                 call_depth: if abandoned { 1 } else { 10 },
+                source: None,
             },
             &mut ops,
             &runtime,

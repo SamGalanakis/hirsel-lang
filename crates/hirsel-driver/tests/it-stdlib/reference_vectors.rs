@@ -115,6 +115,7 @@ fn run_selected(
                 limits: hirsel_interp::Limits {
                     steps: None,
                     call_depth: 256,
+                    source: None,
                 },
                 ..Default::default()
             }));

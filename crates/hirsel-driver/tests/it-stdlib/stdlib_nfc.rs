@@ -278,6 +278,7 @@ fn run_vectors(vectors: &[OracleVector], worker: usize, jobs: usize, entry_name:
             Limits {
                 steps: Some(10_000_000),
                 call_depth: 256,
+                source: None,
             },
             &mut library,
             &runtime,
@@ -497,6 +498,7 @@ fn case_insensitive_search_and_equality_match_full_casefold_composition() {
             limits: Limits {
                 steps: Some(100_000_000),
                 call_depth: 256,
+                source: None,
             },
             ..Default::default()
         }));
@@ -632,6 +634,7 @@ fn check_properties(first: u32, last: u32) -> usize {
             Limits {
                 steps: Some(10_000_000),
                 call_depth: 256,
+                source: None,
             },
             &mut library,
             &runtime,
@@ -1195,6 +1198,7 @@ fn rust_flt2dec_all_97_exact_rows_and_their_precision_sweeps() {
                     Limits {
                         steps: Some(10_000_000),
                         call_depth: 256,
+                        source: None,
                     },
                     &mut library,
                     &runtime,

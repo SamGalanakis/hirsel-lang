@@ -12,7 +12,7 @@
 //! Directives: `// o2: <what>` or `// o3: <what>` (first line), `// entry:
 //! <path>` (default `main.hir`), `// with: std` (a copy of `stdlib/std@1` at
 //! `std@1/`, so edits can touch std), `// before:` and `// after:` with
-//! `limits=steps=<n|unbounded>,depth=<n>` and `verify=on|off`, and for O3
+//! `limits=budget=<n>,depth=<n>` and `verify=on|off`, and for O3
 //! `// unchanged: <names>` and `// recomputed: <names>`.
 use super::{Config, Limits};
 use std::{

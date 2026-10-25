@@ -205,7 +205,7 @@ pub struct FrontLowerQueries {
     runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
     instances: Arc<hirsel_tir::InstanceBodies>,
     sources: SourceMap,
-    limits: hirsel_interp::Limits,
+    limits: crate::ComptimeLimits,
     verify: Verify,
     anchors: crate::NativeRecordContext,
     records: crate::NativeRecords,

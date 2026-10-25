@@ -519,7 +519,8 @@ fn instruction_places(body: &Body, instruction: &Instruction) -> Vec<PlaceId> {
         InstructionKind::StorageLive(_)
         | InstructionKind::EndScope(_)
         | InstructionKind::EndLoan { .. }
-        | InstructionKind::RunCleanup(_) => vec![],
+        | InstructionKind::RunCleanup(_)
+        | InstructionKind::Charge(_) => vec![],
     }
 }
 

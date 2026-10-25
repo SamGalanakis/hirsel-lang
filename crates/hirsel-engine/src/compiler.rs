@@ -31,7 +31,7 @@ pub struct Compiler {
     lowering: LoweringPolicy,
     result_store: Option<Arc<dyn crate::store::ResultStore>>,
     verify_store: crate::store::VerifyStore,
-    comptime_limits: Option<hirsel_interp::Limits>,
+    comptime_limits: Option<crate::ComptimeLimits>,
 }
 impl Compiler {
     /// A compiler whose sessions run V.
@@ -113,11 +113,11 @@ impl Compiler {
         self.verify
     }
     /// Compile-time limits are explicit query inputs.
-    pub const fn with_comptime_limits(mut self, limits: hirsel_interp::Limits) -> Self {
+    pub const fn with_comptime_limits(mut self, limits: crate::ComptimeLimits) -> Self {
         self.comptime_limits = Some(limits);
         self
     }
-    pub(crate) fn comptime_limits(&self) -> hirsel_interp::Limits {
+    pub(crate) fn comptime_limits(&self) -> crate::ComptimeLimits {
         self.comptime_limits.unwrap_or_default()
     }
     /// A fresh session engine of this compiler.
@@ -757,8 +757,8 @@ pub(crate) mod tests {
     fn declaration_loading_preserves_all_configured_session_policies() {
         let fixture = Fixture::new();
         let store = Arc::new(crate::store::SimStore::default());
-        let limits = hirsel_interp::Limits {
-            steps: Some(0),
+        let limits = crate::ComptimeLimits {
+            budget: 0,
             call_depth: 1,
         };
         for owned in [false, true] {

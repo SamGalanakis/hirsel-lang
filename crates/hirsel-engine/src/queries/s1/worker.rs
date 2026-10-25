@@ -43,7 +43,7 @@ pub(crate) struct TaskInputs {
     pub(crate) lowering: Arc<dyn LoweringPhase>,
     pub(crate) runtime: Arc<RuntimeTypes>,
     pub(crate) sources: SourceMap,
-    pub(crate) limits: hirsel_interp::Limits,
+    pub(crate) limits: crate::ComptimeLimits,
     pub(crate) verify: Verify,
     /// This worker's share of the frontier's retained lower-body budget.
     pub(crate) lower_budget: u64,
@@ -1618,7 +1618,7 @@ mod tests {
             [],
             None,
         ));
-        let mut limits = hirsel_interp::Limits::default();
+        let mut limits = crate::ComptimeLimits::default();
         limits.call_depth = limit;
         Source {
             inputs: TaskInputs {

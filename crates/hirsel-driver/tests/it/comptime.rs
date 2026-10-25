@@ -78,23 +78,21 @@ fn dependent_constants_materialize_before_their_readers_and_refresh_after_edits_
     );
 }
 #[test]
-fn evaluation_step_diagnostics_retry_after_budget_changes() {
+fn evaluation_budget_diagnostics_retry_after_budget_changes() {
     hirsel_engine::with_compiler_stack(
-        evaluation_step_diagnostics_retry_after_budget_changes_on_compiler_thread,
+        evaluation_budget_diagnostics_retry_after_budget_changes_on_compiler_thread,
     );
 }
-fn evaluation_step_diagnostics_retry_after_budget_changes_on_compiler_thread() {
-    let mut engine = engine("const VALUE: u32 = comptime (2 + 3)\n");
-    engine.comptime_limits.steps = Some(1);
+fn evaluation_budget_diagnostics_retry_after_budget_changes_on_compiler_thread() {
+    let mut engine = engine("fn five() -> u32 { 2 + 3 }\nconst VALUE: u32 = comptime five()\n");
+    engine.comptime_limits.budget = 0;
     let Err(QueryError::Diagnostics(ds)) = engine.lower_to_tir(&path("VALUE")) else {
-        panic!("expected step exhaustion")
+        panic!("expected budget exhaustion")
     };
     assert_eq!(ds[0].rule.as_str(), "CT-1");
-    assert_eq!(
-        engine.last_comptime_limit.as_ref().unwrap().kind,
-        hirsel_tir::ToolingLimitKind::Steps
-    );
-    engine.comptime_limits.steps = Some(100);
+    // Exhaustion is a language result, not a tooling limit.
+    assert!(engine.last_comptime_limit.is_none());
+    engine.comptime_limits.budget = 1;
     assert!(engine.lower_to_tir(&path("VALUE")).is_ok());
     assert_eq!(
         engine.materialize_constant(&path("VALUE")).unwrap(),
@@ -369,12 +367,13 @@ fn size_constant_instances_cache_separately_and_refresh_executed_dependencies() 
             engine.constant_instance(&constant, &[4]).unwrap().root.kind,
             ValueKind::Constant(Constant::Integer(32))
         );
-        engine.comptime_limits.steps = Some(1);
+        // Each size instance's evaluation charges its one call.
+        engine.comptime_limits.budget = 0;
         let Err(QueryError::Diagnostics(ds)) = engine.constant_instance(&constant, &[2]) else {
             panic!("expected CT-1 after budget change")
         };
         assert_eq!(ds[0].rule.as_str(), "CT-1");
-        engine.comptime_limits.steps = Some(1000);
+        engine.comptime_limits.budget = 1;
         assert_eq!(
             engine.constant_instance(&constant, &[2]).unwrap().root.kind,
             ValueKind::Constant(Constant::Integer(8))

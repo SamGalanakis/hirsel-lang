@@ -189,6 +189,7 @@ fn sha_primitive_38_reference_and_checked_charges_are_exact() {
                 limits: hirsel_interp::Limits {
                     steps: Some(32),
                     call_depth: 256,
+                    source: None,
                 },
                 ..Default::default()
             }));

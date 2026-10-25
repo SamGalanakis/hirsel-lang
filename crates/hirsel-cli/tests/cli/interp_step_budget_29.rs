@@ -124,6 +124,7 @@ fn sha256_kilobyte_reference_witness() {
                 limits: hirsel_interp::Limits {
                     steps: Some(bound),
                     call_depth: 256,
+                    source: None,
                 },
                 ..Default::default()
             }));

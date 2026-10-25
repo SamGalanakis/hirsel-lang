@@ -689,7 +689,8 @@ impl Weight {
             | InstructionKind::Drop { .. }
             | InstructionKind::RunCleanup(_)
             | InstructionKind::Check { .. }
-            | InstructionKind::Snapshot { .. } => (),
+            | InstructionKind::Snapshot { .. }
+            | InstructionKind::Charge(_) => (),
         }
     }
     fn terminator(&mut self, value: &Terminator) {

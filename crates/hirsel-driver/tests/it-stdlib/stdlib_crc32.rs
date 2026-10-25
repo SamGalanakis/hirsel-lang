@@ -12,6 +12,7 @@ fn execute(source: &str) {
         limits: hirsel_interp::Limits {
             steps: Some(100_000_000),
             call_depth: 256,
+            source: None,
         },
         ..Default::default()
     }));

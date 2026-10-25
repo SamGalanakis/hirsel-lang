@@ -147,6 +147,7 @@ pub(crate) fn run_tir_on_host(
         hirsel_interp::Limits {
             steps: max_steps,
             call_depth: 256,
+            source: None,
         },
         &mut operations,
         &runtime,

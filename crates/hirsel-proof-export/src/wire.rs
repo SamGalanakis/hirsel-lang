@@ -20,8 +20,8 @@ use hirsel_tir::{
     Constructor, Definition, Instruction, InstructionKind, LoanId, Local, LocalId, MatchArm,
     MatchPattern, MatchPatternId, MatchPatternKind, MatchTable, MatchTableId, Materialized,
     Operand, OriginBindingKind, Place, PlaceId, Projection, ProtocolAssociationReceipt, Rvalue,
-    RvalueId, Scope, ScopeId, ScopedParameter, Storage, TailKind, TailSite, Terminator, ValueKind,
-    ValueNode,
+    RvalueId, Scope, ScopeId, ScopedParameter, SourceEvent, SourceEventKind, Storage, TailKind,
+    TailSite, Terminator, ValueKind, ValueNode,
 };
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,
@@ -1023,8 +1023,11 @@ snapshot_enum!(InstructionKind {
     Drop { place, if_live },
     RunCleanup(c),
     Check { condition, rule },
-    Snapshot { destination, value }
+    Snapshot { destination, value },
+    Charge(e)
 } in Cx);
+snapshot_enum!(SourceEventKind { Call, Iteration } in Cx);
+snapshot_struct!(SourceEvent { kind, source } in Cx);
 snapshot_struct!(Instruction {
     kind,
     span,

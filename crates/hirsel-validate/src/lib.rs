@@ -1137,6 +1137,42 @@ pub fn validate_structure(definition: &Definition, t: &TypeInterner) -> Vec<Viol
                 let ins = Some(i as u32);
                 refs.push((block_id, ins, "cleanup", inst.on_failure.0));
                 match &inst.kind {
+                    // CT-4 placement: a call charge ending its block precedes a
+                    // source call (never a compiler contract call), and an
+                    // iteration charge opens a loop body block. One event may
+                    // have several sites (an or-pattern arm lowers per alternative).
+                    InstructionKind::Charge(event) => {
+                        let misplaced = match event.kind {
+                            hirsel_tir::SourceEventKind::Call => {
+                                i + 1 == block.instructions.len()
+                                    && !matches!(
+                                        block.terminator,
+                                        Terminator::Call {
+                                            callee: Callee::Definition { .. }
+                                                | Callee::Indirect {
+                                                    forward_caller: false,
+                                                    ..
+                                                },
+                                            ..
+                                        }
+                                    )
+                            }
+                            hirsel_tir::SourceEventKind::Iteration => {
+                                i != 0 || b == body.entry.0 as usize
+                            }
+                        };
+                        if misplaced {
+                            add(
+                                bid,
+                                block_id,
+                                ins,
+                                ViolationKind::WrongKind {
+                                    entity: "charge placement",
+                                    index: event.source,
+                                },
+                            );
+                        }
+                    }
                     InstructionKind::Defuse { place } => {
                         refs.push((block_id, ins, "place", place.0))
                     }

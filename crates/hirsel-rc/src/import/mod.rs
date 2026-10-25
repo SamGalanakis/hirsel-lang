@@ -1751,7 +1751,8 @@ fn discarded_callable_reads(body: &tir::Body, types: &TypeInterner) -> Vec<bool>
                 | K::StorageDead { .. }
                 | K::EndScope(_)
                 | K::EndLoan { .. }
-                | K::RunCleanup(_) => {}
+                | K::RunCleanup(_)
+                | K::Charge(_) => {}
             }
         }
         match &block.terminator {

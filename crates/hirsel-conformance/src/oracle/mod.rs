@@ -40,7 +40,7 @@ pub struct Config {
     pub store: Option<PathBuf>,
     pub verify_store: bool,
     pub verify: bool,
-    /// Comptime limits (`steps`, `call_depth`), else the engine's defaults.
+    /// Comptime limits (source `budget`, `call_depth`), else the engine's defaults.
     pub limits: Option<Limits>,
     /// Also build at Ready and emit unoptimized objects with both backends.
     pub native: bool,
@@ -48,8 +48,16 @@ pub struct Config {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limits {
-    pub steps: Option<u64>,
+    pub budget: u64,
     pub call_depth: usize,
+}
+impl From<Limits> for hirsel_engine::ComptimeLimits {
+    fn from(limits: Limits) -> Self {
+        Self {
+            budget: limits.budget,
+            call_depth: limits.call_depth,
+        }
+    }
 }
 
 impl Default for Config {
@@ -142,34 +150,24 @@ impl Config {
 
 impl std::fmt::Display for Limits {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.steps {
-            Some(steps) => write!(f, "steps={steps},depth={}", self.call_depth),
-            None => write!(f, "steps=unbounded,depth={}", self.call_depth),
-        }
+        write!(f, "budget={},depth={}", self.budget, self.call_depth)
     }
 }
 
 impl std::str::FromStr for Limits {
     type Err = String;
     fn from_str(text: &str) -> Result<Self, String> {
-        let (mut steps, mut depth) = (None, None);
+        let (mut budget, mut depth) = (None, None);
         for part in text.split(',') {
             match part.split_once('=') {
-                Some(("steps", "unbounded")) => steps = Some(None),
-                Some(("steps", n)) => steps = Some(Some(n.parse().map_err(|_| part.to_string())?)),
+                Some(("budget", n)) => budget = Some(n.parse().map_err(|_| part.to_string())?),
                 Some(("depth", n)) => depth = Some(n.parse().map_err(|_| part.to_string())?),
-                _ => {
-                    return Err(format!(
-                        "limits: expected steps=<n|unbounded>,depth=<n>: {text}"
-                    ));
-                }
+                _ => return Err(format!("limits: expected budget=<n>,depth=<n>: {text}")),
             }
         }
-        match (steps, depth) {
-            (Some(steps), Some(call_depth)) => Ok(Limits { steps, call_depth }),
-            _ => Err(format!(
-                "limits: expected steps=<n|unbounded>,depth=<n>: {text}"
-            )),
+        match (budget, depth) {
+            (Some(budget), Some(call_depth)) => Ok(Limits { budget, call_depth }),
+            _ => Err(format!("limits: expected budget=<n>,depth=<n>: {text}")),
         }
     }
 }
@@ -213,8 +211,7 @@ fn program_artifacts(program: &mut hirsel_engine::LoadedProgram, config: &Config
         hirsel_engine::Verify::Off
     };
     if let Some(limits) = config.limits {
-        program.engine.comptime_limits.steps = limits.steps;
-        program.engine.comptime_limits.call_depth = limits.call_depth;
+        program.engine.comptime_limits = limits.into();
     }
     let output = match program.check(hirsel_engine::LoweringPolicy::Reachable) {
         Ok(output) => output,

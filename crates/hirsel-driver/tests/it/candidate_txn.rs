@@ -36,7 +36,7 @@ fn workspace() -> CandidateWorkspace {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         },
-        hirsel_interp::Limits::default(),
+        hirsel_engine::ComptimeLimits::default(),
         Limits {
             retain_canonical_export: true,
             ..Limits::default()
@@ -315,9 +315,11 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     };
     let w = CandidateWorkspace::new(
         config.clone(),
-        hirsel_interp::Limits {
-            steps: Some(1),
-            call_depth: 64,
+        // The call-depth safeguard is operational; source-budget exhaustion
+        // is a cacheable CT-1 rejection instead.
+        hirsel_engine::ComptimeLimits {
+            call_depth: 1,
+            ..Default::default()
         },
         Limits::default(),
     )
@@ -343,7 +345,7 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     );
     let tiny = CandidateWorkspace::new(
         config.clone(),
-        hirsel_interp::Limits::default(),
+        hirsel_engine::ComptimeLimits::default(),
         Limits {
             bytes: 0,
             ..Limits::default()
@@ -356,7 +358,7 @@ fn candidate_exhaustion_and_quota_never_become_success_or_cached_verdicts() {
     ));
     let limited = CandidateWorkspace::new(
         config,
-        hirsel_interp::Limits::default(),
+        hirsel_engine::ComptimeLimits::default(),
         Limits {
             leases: 1,
             ..Limits::default()
@@ -635,7 +637,7 @@ fn store_fault_checks(candidate: bool) -> String {
                     let (output, actual, adoptions) = if candidate {
                         let w = CandidateWorkspace::new(
                             config,
-                            hirsel_interp::Limits::default(),
+                            hirsel_engine::ComptimeLimits::default(),
                             Limits {
                                 retain_canonical_export: true,
                                 ..Limits::default()
@@ -776,7 +778,7 @@ fn candidate_ordinary_products_keep_snapshots_frozen_and_allow_library_edits() {
         };
         let w = CandidateWorkspace::new(
             config.clone(),
-            hirsel_interp::Limits::default(),
+            hirsel_engine::ComptimeLimits::default(),
             Limits::default(),
         )
         .unwrap();
@@ -875,7 +877,7 @@ fn candidate_digest_only_receipt_commits_to_the_same_optional_full_export() {
     assert!(full.checked_products.as_ref().unwrap().canonical.is_some());
     let compact = CandidateWorkspace::new(
         CompileConfig::for_memory_cap(None),
-        hirsel_interp::Limits::default(),
+        hirsel_engine::ComptimeLimits::default(),
         Limits::default(),
     )
     .unwrap();
@@ -1114,7 +1116,7 @@ fn candidate_checked_read_delta_exact_jobs_salts_and_cold_reads() {
                             jobs: hirsel_intern::jobs::Jobs::new(jobs),
                             ..CompileConfig::for_memory_cap(None)
                         },
-                        hirsel_interp::Limits::default(),
+                        hirsel_engine::ComptimeLimits::default(),
                         Limits::default(),
                     )
                     .unwrap();
