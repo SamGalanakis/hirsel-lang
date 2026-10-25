@@ -5,6 +5,56 @@ use hirsel_run_schema::ownership_trace::Trace;
 use std::io::Write;
 use std::path::Path;
 
+/// Engine events are bounded so a looping program cannot grow the trace
+/// without limit; an exhausted bound refuses the trace, never truncates it.
+const EVENT_LIMIT: usize = 1 << 20;
+
+/// `hirsel run --trace-ownership`: the reference interpreter runs the admitted
+/// source as an ordinary run would, and the run's own outcome decides the exit
+/// code. A trace that cannot be completed is a tool failure, reported after
+/// that outcome, so a run is never mistaken for a fully traced one.
+pub(super) fn run(
+    path: &Path,
+    launch: hirsel_driver::HostLaunch<'_>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    sidecar: &Path,
+    json: bool,
+) -> u8 {
+    let run = match hirsel_driver::ownership_trace::run_resources_on_host(
+        path,
+        launch,
+        max_steps,
+        verify,
+        false,
+        EVENT_LIMIT,
+    ) {
+        Ok(run) => run,
+        Err(error) => return super::run_result_for_path(Err(error), path, json),
+    };
+    let code = super::run_result_for_path(Ok(run.outcome), path, json);
+    let written = run
+        .trace
+        .map_err(|error| error.to_string())
+        .and_then(|trace| {
+            write(
+                &trace,
+                run.program,
+                EVENT_LIMIT,
+                sidecar,
+                &mut std::io::stderr().lock(),
+            )
+            .map_err(|error| error.to_string())
+        });
+    match written {
+        Ok(()) => code,
+        Err(error) => {
+            eprintln!("hirsel: ownership trace: {error}");
+            hirsel_engine::RunOutcome::Tooling(error).exit_code() as u8
+        }
+    }
+}
+
 pub(super) fn write(
     trace: &Trace,
     program: [u8; 32],
