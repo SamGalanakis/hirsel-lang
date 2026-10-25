@@ -41,6 +41,40 @@ impl CheckedProducts {
     }
 }
 impl QueryEngine {
+    /// Existing accepted namespace records, in the same order used by the
+    /// checked-product digest. This formats settled registrations only.
+    pub(crate) fn checked_registration_records(&self) -> Vec<Vec<u8>> {
+        let mut registrations = Vec::new();
+        for (path, generated) in &self.generated {
+            let mut key = vec![];
+            crate::memo::encode_def_path(&mut key, path);
+            registrations.push(key);
+            registrations.push(generated.text.as_bytes().to_vec());
+        }
+        for declaration in &self.instance_bodies.declarations {
+            let mut key = vec![];
+            crate::memo::encode_def_path(&mut key, declaration.path());
+            registrations.push(key);
+        }
+        for (declaration, instances) in &self.instance_bodies.instances {
+            let mut records: Vec<_> = instances
+                .iter()
+                .map(|(actual, body)| {
+                    let mut record = vec![];
+                    crate::memo::encode_def_path(&mut record, declaration.path());
+                    for spelling in actual.spellings() {
+                        record.extend_from_slice(&(spelling.len() as u64).to_le_bytes());
+                        record.extend_from_slice(spelling.as_bytes());
+                    }
+                    crate::memo::encode_def_path(&mut record, body.definition.path());
+                    record
+                })
+                .collect();
+            records.sort();
+            registrations.extend(records);
+        }
+        registrations
+    }
     /// Does not lower additional runtime definitions. Compacted artifacts
     /// already required by this check may be reconstructed through the normal
     /// eligible store path; this cost belongs to receipt production.
@@ -227,35 +261,7 @@ impl QueryEngine {
                 })?);
             }
         }
-        let mut registrations = Vec::new();
-        for (path, generated) in &self.generated {
-            let mut key = vec![];
-            crate::memo::encode_def_path(&mut key, path);
-            registrations.push(key);
-            registrations.push(generated.text.as_bytes().to_vec());
-        }
-        for declaration in &self.instance_bodies.declarations {
-            let mut key = vec![];
-            crate::memo::encode_def_path(&mut key, declaration.path());
-            registrations.push(key);
-        }
-        for (declaration, instances) in &self.instance_bodies.instances {
-            let mut records: Vec<_> = instances
-                .iter()
-                .map(|(actual, body)| {
-                    let mut record = vec![];
-                    crate::memo::encode_def_path(&mut record, declaration.path());
-                    for spelling in actual.spellings() {
-                        record.extend_from_slice(&(spelling.len() as u64).to_le_bytes());
-                        record.extend_from_slice(spelling.as_bytes());
-                    }
-                    crate::memo::encode_def_path(&mut record, body.definition.path());
-                    record
-                })
-                .collect();
-            records.sort();
-            registrations.extend(records);
-        }
+        let registrations = self.checked_registration_records();
         Ok(encoder.finish(required_reads, registrations))
     }
 }
@@ -321,5 +327,78 @@ impl CheckedProductEncoder {
             type_rows: stats.rows,
             type_bytes: stats.row_bytes,
         }
+    }
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+
+    #[test]
+    fn registration_records_keep_generated_text_and_sorted_instance_actuals() {
+        let mut engine = QueryEngine::new(crate::default_environment(), PhaseAdapters::default());
+        let generated = DefPath::core("generated");
+        let declaration = DefId::intern(&DefPath::core("factory"));
+        let file = engine.sources.add("generated.hir", String::new()).unwrap();
+        engine.generated.insert(
+            generated.clone(),
+            GeneratedSource {
+                file,
+                text: "fn generated(){}".into(),
+                site: Span::default(),
+            },
+        );
+        engine.instance_bodies.declarations.insert(declaration);
+        let mut instances = std::collections::HashMap::new();
+        for n in [2, 1] {
+            let arguments = vec![hirsel_types::GenericArgument::Size(
+                hirsel_types::Size::Constant(n),
+            )];
+            let key = hirsel_tir::InstanceBodies::key(&engine.types, &arguments).unwrap();
+            instances.insert(
+                key,
+                hirsel_tir::InstanceBody {
+                    arguments,
+                    definition: DefId::intern(&DefPath::core(&format!("factory_{n}"))),
+                },
+            );
+        }
+        engine
+            .instance_bodies
+            .instances
+            .insert(declaration, instances);
+        let records = engine.checked_registration_records();
+        let encode = |path: &DefPath| {
+            let mut bytes = Vec::new();
+            crate::memo::encode_def_path(&mut bytes, path);
+            bytes
+        };
+        assert_eq!(records.len(), 5);
+        assert_eq!(records[0], encode(&generated));
+        assert_eq!(records[1], b"fn generated(){}");
+        assert_eq!(records[2], encode(declaration.path()));
+        assert!(records[3] < records[4]);
+        for record in &records[3..] {
+            assert!(record.starts_with(&encode(declaration.path())));
+        }
+        let entries = engine
+            .instance_bodies
+            .instances
+            .remove(&declaration)
+            .unwrap();
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        entries.reverse();
+        engine
+            .instance_bodies
+            .instances
+            .insert(declaration, entries.into_iter().collect());
+        assert_eq!(engine.checked_registration_records(), records);
+        engine.generated.get_mut(&generated).unwrap().text.push(' ');
+        let changed = engine.checked_registration_records();
+        assert_ne!(
+            changed, records,
+            "accepted generated text participates verbatim"
+        );
+        assert_eq!(&changed[2..], &records[2..]);
     }
 }

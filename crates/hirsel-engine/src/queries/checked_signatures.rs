@@ -16,9 +16,15 @@ pub struct FrontCheckedSignatures {
     inputs: BTreeMap<DefPath, Input>,
     front: Arc<FrontBodyQueries>,
     environment: hirsel_proof_export::Environment,
+    registrations: Vec<Vec<u8>>,
     _allowance: MemoryReservation,
 }
 impl FrontCheckedSignatures {
+    /// Canonical records of the accepted S0 namespace bound to this producer.
+    /// Later registration transactions require a new producer and inventory.
+    pub fn registrations(&self) -> &[Vec<u8>] {
+        &self.registrations
+    }
     pub fn environment(&self) -> &hirsel_proof_export::Environment {
         &self.environment
     }
@@ -92,6 +98,8 @@ impl QueryEngine {
         weight.add(size_of::<FrontCheckedSignatures>() + 2 * size_of::<usize>());
         weight.tree::<DefPath, Input>(paths.len());
         let environment = self.proof_environment();
+        let registrations = self.checked_registration_records();
+        weight.vec(&registrations, |w, record| w.add(record.capacity()));
         weight.add(environment.compiler_version.capacity());
         if weight.bytes() > allowance.bytes() {
             return Err(invalid());
@@ -143,6 +151,7 @@ impl QueryEngine {
             inputs,
             front,
             environment,
+            registrations,
             _allowance: allowance,
         }))
     }
