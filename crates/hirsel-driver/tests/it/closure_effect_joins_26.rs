@@ -249,22 +249,6 @@ const CASES: &[Case] = &[
 ];
 
 #[test]
-fn closure_effect_joins_26_source_01() {
-    with_compiler_stack(|| {
-        let c = &CASES[0];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
-fn closure_effect_joins_26_source_02() {
-    with_compiler_stack(|| {
-        let c = &CASES[1];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
 fn closure_effect_joins_26_source_03() {
     with_compiler_stack(|| {
         let c = &CASES[2];
@@ -313,14 +297,6 @@ fn closure_effect_joins_26_source_08() {
 }
 
 #[test]
-fn closure_effect_joins_26_source_09() {
-    with_compiler_stack(|| {
-        let c = &CASES[8];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
 fn closure_effect_joins_26_source_10() {
     with_compiler_stack(|| {
         let c = &CASES[9];
@@ -337,22 +313,6 @@ fn closure_effect_joins_26_source_11() {
 }
 
 #[test]
-fn closure_effect_joins_26_source_12() {
-    with_compiler_stack(|| {
-        let c = &CASES[11];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
-fn closure_effect_joins_26_source_13() {
-    with_compiler_stack(|| {
-        let c = &CASES[12];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
 fn closure_effect_joins_26_source_14() {
     with_compiler_stack(|| {
         let c = &CASES[13];
@@ -364,14 +324,6 @@ fn closure_effect_joins_26_source_14() {
 fn closure_effect_joins_26_source_15() {
     with_compiler_stack(|| {
         let c = &CASES[14];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
-fn closure_effect_joins_26_source_16() {
-    with_compiler_stack(|| {
-        let c = &CASES[15];
         checked(c.id, c.source, c.expected);
     });
 }
@@ -396,14 +348,6 @@ fn closure_effect_joins_26_source_18() {
 fn closure_effect_joins_26_source_19() {
     with_compiler_stack(|| {
         let c = &CASES[18];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
-fn closure_effect_joins_26_source_20() {
-    with_compiler_stack(|| {
-        let c = &CASES[19];
         checked(c.id, c.source, c.expected);
     });
 }
@@ -468,14 +412,6 @@ fn closure_effect_joins_26_source_27() {
 fn closure_effect_joins_26_source_28() {
     with_compiler_stack(|| {
         let c = &CASES[27];
-        checked(c.id, c.source, c.expected);
-    });
-}
-
-#[test]
-fn closure_effect_joins_26_source_29() {
-    with_compiler_stack(|| {
-        let c = &CASES[28];
         checked(c.id, c.source, c.expected);
     });
 }

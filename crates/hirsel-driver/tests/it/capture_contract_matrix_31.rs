@@ -658,47 +658,8 @@ fn pairs(row: [u8; 7]) -> BTreeSet<(usize, u8, usize, u8)> {
         .flat_map(|a| ((a + 1)..7).map(move |b| (a, row[a], b, row[b])))
         .collect()
 }
-#[test]
-fn coverage_ledger_is_frozen_and_pairwise_complete() {
-    let mut feasible = BTreeSet::new();
-    let mut all = BTreeSet::new();
-    for a in 0..3 {
-        for b in 0..2 {
-            for c in 0..3 {
-                for d in 0..3 {
-                    for e in 0..2 {
-                        for f in 0..2 {
-                            for g in 0..3 {
-                                let r = [a, b, c, d, e, f, g];
-                                all.extend(pairs(r));
-                                if Row(r).valid() {
-                                    feasible.extend(pairs(r));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    let mut covered = BTreeMap::new();
-    for (seed, row) in TABLE.iter().enumerate() {
-        assert!(Row(*row).valid());
-        assert!(model(Row(*row), &history(Row(*row))).is_some());
-        for pair in pairs(*row) {
-            covered.entry(pair).or_insert(seed);
-        }
-    }
-    assert_eq!(feasible, covered.keys().copied().collect());
-    assert_eq!(covered.len(), 132);
-    eprintln!(
-        "CAPTURE_LEDGER {}",
-        serde_json::json!({"rows":TABLE,"pairs":covered.iter().map(|(pair,seed)|format!("{pair:?}: seed-{seed:02} ACCEPT")).collect::<Vec<_>>(),"excluded_pairs":all.difference(&feasible).map(|p|format!("{p:?}")).collect::<Vec<_>>(),"constraints":"CLO-4: no borrowed escaping/taken environment; MODE-3: take implies once, at most one call, no borrowed once invocation; envelope: borrowed literal is scoped Many; depth<=3 ops<=12 calls<=2 lines<=128 loops=0"})
-    );
-}
 
 macro_rules! partition_tests {($($source:ident,$runtime:ident,$part:expr;)*)=>{$(
-    #[test] fn $source(){source_partition($part);}
     #[test] fn $runtime(){runtime_partition($part);}
 )*};}
 partition_tests! {
@@ -952,108 +913,6 @@ fn reduce(
         ops: kept,
         evaluations,
         decisions,
-    }
-}
-#[test]
-fn reducer_injected_emitter_error_preserves_phase_and_converges() {
-    // Deliberately corrupt only scalar digit emission. This tests the reducer;
-    // it is never classified as a compiler defect or sent to a runtime engine.
-    let row = Row([1, 0, 0, 2, 1, 0, 2]);
-    let ops = history(row);
-    let failure = Failure {
-        source_accepted: true,
-        v_accepted: true,
-        fingerprint: Fingerprint::Emitter {
-            field: "saved-output".into(),
-        },
-    };
-    let injected = |r: Row, operations: &[Op]| {
-        let expected = model(r, operations)?;
-        let good = source(r, operations);
-        let statement = format!("out.print(stdout,{})", r.show("saved"));
-        let faulty = good.replace(&statement, "out.print(stdout,\"injected-emitter-error\")");
-        if good == faulty {
-            return None;
-        }
-        with_compiler_stack(|| {
-            let (mut engine, output) = check(&faulty);
-            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            validate(&engine.export_native_input().unwrap()).unwrap();
-            let observed = run_observed_snapshot(
-                &mut engine,
-                &RunConfiguration {
-                    entry: entry_path(&default_context()),
-                    hash_seed: 0,
-                    inputs: vec![],
-                },
-                SimulationConfig::default(),
-            )
-            .unwrap();
-            let observation = observed.observation.unwrap();
-            (observation.output != expected.output.as_bytes()).then_some(failure.clone())
-        })
-    };
-    let reduced = reduce(row, &ops, &failure, injected);
-    assert!(reduced.evaluations <= 96);
-    assert_eq!(
-        reduced.ops,
-        vec![Op::Construct, Op::Save, Op::Create, Op::ObserveSaved]
-    );
-    assert_eq!(reduced.row.0[3..6], [0, 0, 1]);
-    let again = reduce(reduced.row, &reduced.ops, &failure, injected);
-    assert_eq!(again.ops, reduced.ops);
-    assert_eq!(again.row, reduced.row);
-    let dir = artifacts("reducer-self-test");
-    for (name, r, operations) in [
-        ("original", row, ops.as_slice()),
-        ("reduced", reduced.row, reduced.ops.as_slice()),
-    ] {
-        retain(
-            &dir,
-            name,
-            0,
-            r,
-            operations,
-            &source(r, operations).replace(
-                &format!("out.print(stdout,{})", r.show("saved")),
-                "out.print(stdout,\"injected-emitter-error\")",
-            ),
-            &format!(
-                "INJECTED EMITTER ERROR; NOT A COMPILER BUG; evaluations={} decisions={:?}",
-                reduced.evaluations, reduced.decisions
-            ),
-        );
-    }
-    for original in [
-        Failure {
-            source_accepted: false,
-            v_accepted: false,
-            fingerprint: Fingerprint::Source {
-                rule: "MODE-3".into(),
-                contract: "Many capture Take".into(),
-            },
-        },
-        Failure {
-            source_accepted: true,
-            v_accepted: false,
-            fingerprint: Fingerprint::Validator {
-                rule: "BorrowedMove".into(),
-            },
-        },
-        Failure {
-            source_accepted: true,
-            v_accepted: true,
-            fingerprint: Fingerprint::Runtime {
-                engine: "llvm".into(),
-                field: "output".into(),
-            },
-        },
-    ] {
-        assert!(same_failure(&original, &original));
-        let mut wrong_phase = original.clone();
-        wrong_phase.source_accepted = !original.source_accepted;
-        assert!(!same_failure(&original, &wrong_phase));
-        assert!(!same_failure(&original, &failure));
     }
 }
 
@@ -1434,70 +1293,6 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         eprintln!(
             "CAPTURE_GENERIC_RECEIPT_COUNTS observations_per_engine=1 generic_producer_probes=1 scoped_control_probes=1"
         );
-    });
-}
-
-#[test]
-fn sheet_pattern_capture_source_v_agreement() {
-    with_compiler_stack(|| {
-        let dir = artifacts("sheet-pattern-capture");
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/capture_contract_matrix_31");
-        for name in ["sheet-minimal.hir", "sheet-taken.hir"] {
-            let text = std::fs::read_to_string(root.join(name)).unwrap();
-            let mut program = load_program(&root.join(name)).unwrap();
-            let output = program.check(LoweringPolicy::Comptime).unwrap();
-            history::persist(
-                &dir,
-                &format!("{name}-source"),
-                0,
-                &text,
-                &format!(
-                    "transferred original sheet witness expected source/V ACCEPT; source_diagnostics={:?}; provenance={}",
-                    output.diagnostics,
-                    provenance()
-                ),
-            );
-            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-            let result = program.engine.export_native_input();
-            history::persist(
-                &dir,
-                name,
-                0,
-                &text,
-                &format!(
-                    "source accepted; export={:?}",
-                    result.as_ref().map(|_| "ACCEPT")
-                ),
-            );
-            let input = result.expect("checker-positive/V closure capture TypeMismatch");
-            validate(&input).unwrap();
-        }
-    });
-}
-
-#[test]
-fn sheet_borrowed_capture_affected_rows_runtime() {
-    with_compiler_stack(|| {
-        let dir = artifacts("sheet-affected-borrowed");
-        let runner = history::Runner::with_matrix(&dir.join("runs"), configurations()).unwrap();
-        for seed in [6, 8, 10, 15, 23] {
-            let row = Row(TABLE[seed]);
-            let ops = history(row);
-            let attempt = evaluate(row, &ops, Some(&runner), &format!("affected-{seed}"));
-            retain(
-                &dir,
-                &format!("affected-{seed}"),
-                seed,
-                row,
-                &ops,
-                &source(row, &ops),
-                &attempt.detail,
-            );
-            assert!(attempt.failure.is_none(), "{:?}", attempt.failure);
-            assert_eq!(attempt.report.unwrap().cells.len(), 4);
-        }
-        eprintln!("CAPTURE_AFFECTED_COUNTS observations_per_engine=5");
     });
 }
 

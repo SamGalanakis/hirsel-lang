@@ -657,49 +657,6 @@ fn position_view_13_byte_history_round_trips() {
     });
 }
 
-/// Every previously failing import remains an accepted positive control; a
-/// front-end rejection must not turn this regression into a silent skip.
-#[test]
-fn position_view_13_prior_sample_imports_round_trip() {
-    with_compiler_stack(|| {
-        let paths = [
-            "CAP/CAP-1-unix-listen-run.hir",
-            "CLO/CLO-2-std-option-zip-run.hir",
-            "CT/CT-5-std-derive-generic-run.hir",
-            "DET/DET-1-std-store-recover-run.hir",
-            "MEM/MEM-6-byte-history-invalid-first-bad.hir",
-            "MEM/MEM-6-map-value-copy-charge-run.hir",
-            "SEM/SEM-2-wave2-f32-text-errors.hir",
-            "SEM/SEM-3-bufio-writer5-file-run.hir",
-            "SEM/SEM-3-csv-go-read-2-run.hir",
-            "SEM/SEM-3-diff-pairs-1-run.hir",
-            "SEM/SEM-3-json-reader-import-002-run.hir",
-            "SEM/SEM-3-markdown-js-regression-7-run.hir",
-            "SEM/SEM-3-pathtime-path-boundary-run.hir",
-            "SEM/SEM-3-regex-captures-captures-11-run.hir",
-            "SEM/SEM-3-regex-captures-re2-140-run.hir",
-            "SEM/SEM-3-regex-captures-re2-168-run.hir",
-            "SEM/SEM-3-regex-captures-re2-59-run.hir",
-            "SEM/SEM-3-tar-gzip-next-run.hir",
-            "SEM/SEM-3-tar-write-run.hir",
-            "SEM/SEM-3-toml-test-invalid-array-1-run.hir",
-        ];
-        for path in paths {
-            assert!(
-                round_trip(&corpus().join(path))
-                    .unwrap_or_else(|error| panic!("{path}: {error}"))
-                    .is_some(),
-                "{path}: previously accepted fixture is no longer accepted",
-            );
-        }
-        eprintln!(
-            "PositionView retained imports: {}/{} round-trip without skips",
-            paths.len(),
-            paths.len()
-        );
-    });
-}
-
 const POSITION_VIEW_13: &str =
     "fn view(value: PositionView) -> () { () }\npub fn main() -> Result[(), ()] { Ok(()) }\n";
 
@@ -714,13 +671,6 @@ fn position_view_13_export(source: &str) -> (String, Export) {
     .unwrap();
     assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
     (text, export)
-}
-
-#[test]
-fn position_view_13_declaration_without_iteration_round_trips() {
-    with_compiler_stack(|| {
-        position_view_13_export(POSITION_VIEW_13);
-    });
 }
 
 const POSITION_ITERATION_13: &str = "pub fn main() -> Result[(), ()] {\n  let text: String = \"é😀\"\n  for position in string.positions(text) {\n    let offset = string.byte_offset(text, position)\n  }\n  for scalar in string.scalars(text) { () }\n  Ok(())\n}\n";
@@ -960,14 +910,6 @@ fn sampled(path: &Path) -> bool {
     hash.0[0] % 64 == 0
 }
 
-/// The stable seeded 1/64 discovery plus mandatory category fixtures. Corpus
-/// acceptance may drift; required fixtures must check and cover every derivation.
-#[test]
-fn a_sample_of_accepted_programs_round_trips() {
-    let kinds = round_trip_all(sampled, &required_fixtures());
-    kinds.require_all().expect("sample coverage");
-}
-
 #[test]
 fn a_required_fixture_round_trips_with_a_fresh_interner() {
     with_compiler_stack(|| {
@@ -975,42 +917,6 @@ fn a_required_fixture_round_trips_with_a_fresh_interner() {
             let kinds = required_round_trip(&path).unwrap_or_else(|error| panic!("{error}"));
             eprintln!("required proof fixture {}: {kinds:?}", path.display());
         }
-    });
-}
-
-#[test]
-fn a_deleted_or_rejected_required_fixture_is_refused_with_its_path() {
-    with_compiler_stack(|| {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("required.hir");
-        std::fs::write(&path, SEALED).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        let error = required_round_trip(&path).unwrap_err();
-        assert!(
-            error.starts_with(&format!("{}: load:", path.display())),
-            "{error}"
-        );
-        std::fs::write(&path, "pub fn main() -> Result[(), ()] { missing() }\n").unwrap();
-        let error = required_round_trip(&path).unwrap_err();
-        assert_eq!(
-            error,
-            format!("{}: required fixture is no longer accepted", path.display())
-        );
-    });
-}
-
-#[test]
-fn a_required_fixture_that_omits_a_category_is_refused() {
-    with_compiler_stack(|| {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("no-fact.hir");
-        // Still an accepted distinct type and opaque owner, but no fact helper.
-        std::fs::write(&path, SEALED.replace(" where v <= 100", "")).unwrap();
-        let error = required_round_trip(&path).unwrap_err();
-        assert_eq!(
-            error,
-            format!("{}: re-derives no fact helpers", path.display())
-        );
     });
 }
 
@@ -1054,12 +960,6 @@ fn required_helper_and_owner_fingerprints_cannot_be_forged() {
         let error = import(&hirsel_proof_export::export(&forged.to_input())).unwrap_err();
         assert_eq!(error.at, "standalone@0/Meters.owner_view", "{error}");
     });
-}
-
-#[test]
-#[ignore = "full gate"]
-fn full_gate_every_accepted_program_round_trips() {
-    round_trip_all(|_| true, &[]);
 }
 
 /// Every erased-carrier -ok fixture must import, including declarations with

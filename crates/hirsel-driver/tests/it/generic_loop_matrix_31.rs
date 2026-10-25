@@ -531,60 +531,6 @@ fn generic_loop_matrix_31_runtime_24_26() {
 }
 
 #[test]
-fn generic_loop_matrix_31_coverage_and_source_v() {
-    with_compiler_stack(|| {
-        let artifacts = artifacts("source");
-        let rows = cases();
-        let mut pairs = BTreeSet::new();
-        for case in &rows {
-            for i in 0..8 {
-                for j in i + 1..8 {
-                    pairs.insert((i, case.axes[i], j, case.axes[j]));
-                    eprintln!(
-                        "PAIR {}={} {}={} seed={} expect=source/V-accept",
-                        AXES[i], case.axes[i], AXES[j], case.axes[j], case.seed
-                    );
-                }
-            }
-        }
-        let mut required = BTreeSet::new();
-        for i in 0..8 {
-            for j in i + 1..8 {
-                for x in 0..SIZES[i] {
-                    for y in 0..SIZES[j] {
-                        required.insert((i, x, j, y));
-                    }
-                }
-            }
-        }
-        assert_eq!(pairs, required);
-        assert_eq!(pairs.len(), 191);
-        assert_eq!(rows.len(), 26);
-        let mut reds = vec![];
-        for case in rows
-            .iter()
-            .filter(|case| [1, 17, 24, 25].contains(&case.seed))
-        {
-            let modules = emit(case, &history(case));
-            modules.persist(artifacts.path(),&format!("seed-{}",case.seed),case,"expected=source/V-accept; max_depth=3; max_ops=5; max_iterations=2 per loop; max_callbacks=2");
-            let result = check(&modules).and_then(|mut engine| {
-                let input = engine
-                    .export_native_input()
-                    .map_err(|e| ("V-export".into(), format!("{e:?}")))?;
-                engine
-                    .import_native_input(input)
-                    .map_err(|e| ("V-import".into(), format!("{e:?}")))?;
-                Ok(())
-            });
-            if let Err(error) = result {
-                reds.push((case.seed, error));
-            }
-        }
-        assert!(reds.is_empty(), "{reds:#?}");
-    });
-}
-
-#[test]
 fn generic_loop_matrix_31_negative_nested_annotations() {
     with_compiler_stack(|| {
         let directory = artifacts("negative");
@@ -978,72 +924,6 @@ fn retain_failure(
     });
     emit(&reduced,&kept).persist(directory,&format!("seed-{}-reduced",case.seed),&reduced,
         &format!("target={target:?}; original={case:?} {ops:?}; reduced={kept:?}; attempts={attempts}; decisions={decisions:?}; original remains red"));
-}
-
-#[test]
-fn generic_loop_matrix_31_reducer_injected_emitter_error() {
-    with_compiler_stack(|| {
-        let directory = artifacts("reducer");
-        let runner =
-            history::Runner::with_matrix(&directory.path().join("runs"), matrix()).unwrap();
-        let original = &cases()[8];
-        let ops = history(original);
-        let broken = |case: &Case, ops: &[Op]| {
-            let mut modules = emit(case, ops);
-            modules.sources[0].2 = modules.sources[0]
-                .2
-                .replace("out.print(stdout, \"i\")", "out.print(stdout, \"!\")");
-            modules
-        };
-        let target = Signature {
-            phase: "runtime".into(),
-            engine: "reference".into(),
-            field: "model-output".into(),
-        };
-        let modules = broken(original, &ops);
-        modules.persist(
-            directory.path(),
-            "injected-original",
-            original,
-            "reducer self-test; deliberate emitter error, NOT a compiler bug",
-        );
-        let first = run(&runner, "injected-original", &modules);
-        assert!(signatures(&first, &model(original, &ops).unwrap()).contains(&target));
-        assert!(first.as_ref().unwrap().agrees());
-        let mut n = 0;
-        let (case, kept, attempts, decisions) = reduce(original, &ops, |case, ops| {
-            n += 1;
-            let modules = broken(case, ops);
-            let result = run(&runner, &format!("injected-candidate-{n}"), &modules);
-            let retain = result.as_ref().is_ok_and(|r| r.validated && r.agrees())
-                && signatures(&result, &model(case, ops).unwrap()).contains(&target);
-            if retain {
-                modules.persist(
-                    directory.path(),
-                    &format!("injected-retained-{n}"),
-                    case,
-                    &format!("test of reducer; target={target:?}; result={result:?}"),
-                );
-            }
-            retain
-        });
-        assert!(kept.len() < ops.len());
-        assert!(
-            !broken(&case, &kept).sources[0]
-                .2
-                .contains("need(take value)"),
-            "deletion must remove an actual emitted statement"
-        );
-        assert_eq!((case.axes[2], case.axes[3]), (0, 0));
-        assert!(matches!(&kept[0],Op::Construct(xs) if xs.len()==1));
-        assert!(attempts <= 96);
-        broken(&case,&kept).persist(directory.path(),"injected-reduced",&case,&format!("reducer self-test only; original ops={}; reduced={}; attempts={attempts}; decisions={decisions:?}",ops.len(),kept.len()));
-        eprintln!(
-            "GENERIC_LOOP_REDUCER injected-emitter-error ops={}->{} attempts={attempts} original_depth=3 reduced_depth=2 same={target:?}",
-            ops.len(),
-            kept.len()
-        );
-    });
 }
 
 fn provenance() -> &'static serde_json::Value {

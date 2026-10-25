@@ -196,8 +196,17 @@ fn nominal_root_and_result_checks_refuse_lookalikes() {
 
 #[test]
 fn record_path_must_be_absolute() {
+    let file = tempfile::NamedTempFile::new_in(".").unwrap();
+    let record = RunConfig::empty([0; 32], "probe@1/main".into(), LaunchKind::Main)
+        .validated()
+        .unwrap();
+    std::fs::write(file.path(), record.canonical()).unwrap();
+    let absolute = std::fs::canonicalize(file.path()).unwrap();
+    assert_eq!(read_run_record(&absolute).unwrap(), record);
+    let relative = std::path::Path::new(file.path().file_name().unwrap());
+    assert!(relative.is_file());
     assert!(
-        matches!(read_run_record(std::path::Path::new("run.json")), Err(RunRefusal::Invalid { field, .. }) if field == "--hirsel-run")
+        matches!(read_run_record(relative), Err(RunRefusal::Invalid { field, .. }) if field == "--hirsel-run")
     );
 }
 

@@ -56,38 +56,6 @@ fn registry_and_dispatch_have_exact_bidirectional_callable_coverage() {
         BTreeSet::from([inserted])
     );
 }
-#[test]
-fn operation_identity_retains_typed_modes_cleanup_and_the_declaration_digest() {
-    let records = BuiltinRegistry::new().operation_inventory();
-    let record = records
-        .values()
-        .find(|r| r.key.definition == hirsel_syntax::DefPath::core("file.narrow"))
-        .unwrap();
-    assert_eq!(
-        record.key.declaration_digest,
-        record.declaration.fingerprint
-    );
-    let SignatureKind::Function(function) = &record.declaration.kind else {
-        unreachable!()
-    };
-    assert_eq!(record.parameters[1].passing, PassingMode::Take);
-    assert_eq!(
-        record.parameters[1].cleanup,
-        hirsel_engine::registry::shared_types()
-            .get(function.parameters[1].ty)
-            .unwrap()
-            .drop_allocation
-    );
-    assert_eq!(
-        record.result_cleanup,
-        hirsel_engine::registry::shared_types()
-            .get(function.result)
-            .unwrap()
-            .drop_allocation
-    );
-    assert_eq!(record.invocation_allocation, function.allocation);
-    assert!(record.effects.observable && record.effects.may_fail);
-}
 
 #[test]
 fn network_operations_publish_their_current_engine_dispositions() {

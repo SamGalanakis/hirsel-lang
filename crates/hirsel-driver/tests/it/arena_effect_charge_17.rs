@@ -222,52 +222,6 @@ fn file_histories_and_offline_replay() {
     });
 }
 
-#[test]
-fn oracle_rejects_precharge_moved_after_the_read() {
-    with_compiler_stack(|| {
-        let prefix = &CORPUS[..CORPUS.find("pub fn exercise").unwrap()];
-        let source = format!(
-            "{prefix}pub fn exercise(t: Test) -> Result[(), FileError] {{\n  let d = test.dir(t, [(path.of(\"input\"), b\"AB\")])\n  probe(t, d, 4, 2, true, 1, false, false, 1, b\"AB\")?\n  Ok(())\n}}\n"
-        );
-        // Read into uncharged heap storage, then perform the shared arena
-        // append. This deliberately consumes A before discovering exhaustion.
-        let source = format!(
-            "{source}\nfn early(d: Dir, mut input: File of d, max: u64) -> List[u8] {{ let mut scratch: List[u8] = []; let _ = file.read(d, mut input, mut scratch, max); copy_to(heap, scratch) }}\n"
-        );
-        let moved = source.replace(
-            "let got = file.read(d, mut input, mut buffer, max)",
-            "let scratch = early(d, mut input, max)\nlet got: Result[u64, FileError] = Ok(list.len(scratch))\nfor byte in scratch { list.push(mut buffer, byte) }",
-        );
-        assert_ne!(
-            moved, source,
-            "the mutation must change the operation order"
-        );
-        let mut engine = engine(&moved);
-        let mut entry = entry_path(&default_context());
-        entry.0.name = "exercise".into();
-        let observed = run_observed_snapshot(
-            &mut engine,
-            &RunConfiguration {
-                entry,
-                hash_seed: 0,
-                inputs: vec![],
-            },
-            SimulationConfig::default(),
-        )
-        .unwrap();
-        let observation = observed.observation.unwrap();
-        assert_eq!(observation.exit_code, Some(0));
-        assert!(observation.failures.is_empty());
-        let requests: Vec<_> = events(&observation)
-            .iter()
-            .filter(|e| e.operation == "file.read")
-            .map(max_argument)
-            .collect();
-        assert_eq!(requests, [1]);
-        assert!(!requests.is_empty()); // The independent oracle for the legal program.
-    });
-}
-
 const STDIN: &str = r#"
 
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {

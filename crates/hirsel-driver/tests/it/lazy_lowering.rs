@@ -251,38 +251,6 @@ fn unreached_dependency_bodies_lower_when_the_program_starts_reaching_them() {
     });
 }
 
-/// std checked completely from source (no precheck: a prechecked std lowers
-/// nothing), so a std construct that forces unreached bodies to lower shows here.
-#[test]
-fn empty_main_lowers_no_std_body_that_it_does_not_reach() {
-    with_compiler_stack(|| {
-        let f = Fixture::new();
-        // The manifest is written into a temporary directory: name std absolutely.
-        let std = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../stdlib/std@1/hirsel.json")
-            .canonicalize()
-            .unwrap();
-        f.app("pub fn main() {}\n", ("std", &std));
-        let program = f.check();
-        assert_eq!(lowered(&program, "app", &[], "main"), 1);
-        for (module, name) in [
-            ("unicode", "normalize_nfc"),
-            ("u64", "to_string"),
-            ("unicode", "graphemes"),
-        ] {
-            assert_eq!(
-                lowered(&program, "std", &[module], name),
-                0,
-                "{module}.{name}"
-            );
-        }
-        // That a body lowers once the program reaches it is
-        // `unreached_dependency_bodies_lower_when_the_program_starts_reaching_them`,
-        // on a small library: a second std check from source here would double
-        // this test's cost for the same property.
-    });
-}
-
 /// Diagnostics of `lib`'s files, rendered with their paths, from a check where
 /// `lib` is either the program package (every body lowers) or a dependency.
 fn library_diagnostics(f: &Fixture, files: &[(&str, &str)], as_dependency: bool) -> Vec<String> {

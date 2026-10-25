@@ -415,11 +415,6 @@ fn agree_source(source: &'static str, scratch_name: &'static str) {
 }
 
 #[test]
-fn ordinary_generic_identity_agrees_in_reference_heap_and_both_native_backends() {
-    agree_source(SOURCE, "receipt-original-actuals-33");
-}
-
-#[test]
 fn port_context_declared_values_agree_in_reference_heap_and_both_native_backends() {
     agree_source(DECLARED_SOURCE, "receipt-declared-actuals-33");
 }

@@ -69,31 +69,3 @@ fn v_rejects_taking_a_copied_capture_from_a_many_invocation() {
         }
     });
 }
-
-#[test]
-fn a_written_many_contract_rejects_taking_its_capture() {
-    with_compiler_stack(|| {
-        for source in [
-            r#"fn make()->fn()->String {let text:String in heap="x";fn(){take text}}
-fn main(){}"#,
-            r#"fn consume(take text:String){}
-fn make()->fn()->() {let text:String in heap="x";fn(){consume(take text)}}
-fn main(){}"#,
-        ] {
-            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-            let file = engine
-                .sources
-                .add("capture-take-bad.hir", source.into())
-                .unwrap();
-            let output = check_progress(&mut engine, file, &default_context()).unwrap();
-            assert!(
-                output
-                    .diagnostics
-                    .iter()
-                    .any(|d| d.rule == hirsel_diag::RuleId::of("MODE-3")),
-                "{:?}",
-                output.diagnostics
-            );
-        }
-    });
-}

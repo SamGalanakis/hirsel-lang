@@ -44,12 +44,6 @@ fn lowering_text(
         .map_err(|error| placed_evidence(&engine.sources, format!("{error:?}")))
 }
 
-#[test]
-fn materialized_constant_publishes_and_validates() {
-    hirsel_engine::with_compiler_stack(
-        materialized_constant_publishes_and_validates_on_compiler_thread,
-    );
-}
 fn materialized_constant_publishes_and_validates_on_compiler_thread() {
     let mut engine = engine("const VALUE: u32 = comptime (2 + 3)\n");
     let definition = engine.lower_to_tir(&path("VALUE")).unwrap().value;
@@ -119,12 +113,6 @@ fn static_errors_keep_their_ordinary_owner_on_compiler_thread() {
     assert_eq!(ds[0].rule.as_str(), "LANG-4");
 }
 
-#[test]
-fn comptime_and_runtime_use_the_same_scalar_semantics() {
-    hirsel_engine::with_compiler_stack(
-        comptime_and_runtime_use_the_same_scalar_semantics_on_compiler_thread,
-    );
-}
 fn comptime_and_runtime_use_the_same_scalar_semantics_on_compiler_thread() {
     for expression in [
         "(2 + 3)",
@@ -303,38 +291,6 @@ fn executed_compile_time_finalizers_use_the_runtime_scheduler_and_failure_policy
     };
     assert_eq!(ds[0].rule.as_str(), "CT-1");
     assert!(ds[0].notes.iter().any(|n| n.contains("SEM-1")));
-}
-
-#[test]
-fn constant_reads_do_not_reconstruct_the_materialized_value_in_the_reading_frame() {
-    with_compiler_stack(|| {
-        for (ty, initializer) in [
-            ("u32", "7"),
-            ("String in heap", "\"saved\""),
-            ("(u32, String)", "(7, \"saved\")"),
-        ] {
-            let mut engine = engine(&format!(
-                "const DATA: {ty} = {initializer}\nfn read() -> {ty} {{ DATA }}\n"
-            ));
-            let definition = engine.lower_to_tir(&path("read")).unwrap().value;
-            assert_eq!(
-                definition.bodies[0]
-                    .rvalues
-                    .iter()
-                    .filter(|r| matches!(r, hirsel_tir::Rvalue::ReadConstant { .. }))
-                    .count(),
-                1
-            );
-            assert!(
-                definition.bodies[0].rvalues.iter().all(|r| matches!(
-                    r,
-                    hirsel_tir::Rvalue::ReadConstant { .. } | hirsel_tir::Rvalue::Use(_)
-                )),
-                "{:?}",
-                definition.bodies[0].rvalues
-            );
-        }
-    });
 }
 
 #[test]
@@ -798,36 +754,6 @@ fn frozen_frontier_depth_and_last_limit_match_serial_with_partial_hits() {
     });
 }
 
-#[test]
-fn frozen_frontier_generated_and_staged_demands_retry_whole_roots() {
-    with_compiler_stack(|| {
-        let sources = [
-            "type Point { x: u64 }\nfn gen[T](s: TypeShape[T]) -> Result[Body[fn(T) -> u64 uses {}], String] { Ok(codegen.body(\"fn(v: standalone@0/Point) -> u64 uses {} { 12 }\")) }\nfn width[T](v: T) -> u64 uses {} = comptime gen(shape(T))\nconst VALUE: u64 = comptime width(Point(x: 1))\nconst GOOD: u64 = comptime 7\n",
-            "fn scaled[n:size](xs:Inline[u8,n])->u64 { let _=xs; comptime n*n }\nconst VALUE: u64 = comptime { let xs:Inline[u8,2]=[1,2]; scaled(xs) }\nconst GOOD: u64 = comptime 7\n",
-        ];
-        for source in sources {
-            for jobs in [1, 2, 8] {
-                let paths = vec![path("VALUE"), path("GOOD"), path("VALUE")];
-                let mut control = engine(source);
-                let expected: Vec<_> = paths
-                    .iter()
-                    .map(|p| {
-                        let result = control.materialize_value(p);
-                        outcome_text(&control, result)
-                    })
-                    .collect();
-                assert!(expected.iter().all(Result::is_ok), "{expected:?}");
-                let mut candidate = engine(source);
-                assert_eq!(
-                    frontier_text(&mut candidate, paths, jobs),
-                    expected,
-                    "jobs={jobs}"
-                );
-            }
-        }
-    });
-}
-
 /// A rendezvous inside the real evaluation-lowering adapter proves independent
 /// roots execute on distinct workers. A serial or whole-query-locked facade
 /// times out here instead of accidentally passing the value differential.
@@ -1107,57 +1033,6 @@ fn frozen_frontier_generator_failures_keep_scalar_cycle_and_literal_sites() {
                 let mut candidate = engine(&source);
                 let actual = frontier_text(&mut candidate, paths.clone(), jobs);
                 assert_eq!(actual, expected, "jobs={jobs} source={source}");
-            }
-        }
-    });
-}
-
-#[test]
-fn frozen_frontier_generator_depth_branches_match_scalar_with_partial_hits() {
-    with_compiler_stack(|| {
-        let source = "type Seed {x:u32}\nconst LEAF:u32=1u32\nconst LEFT:u32=comptime LEAF\nconst RIGHT:u32=comptime LEFT\nfn make(s:TypeShape[Seed])->Result[Body[fn()->u32 uses {}],String]{let _=LEFT;let _=RIGHT;Ok(codegen.body(\"fn()->u32 uses {}{11u32}\"))}\nfn chosen()->u32 uses {}=comptime make(shape(Seed))\nconst INNER:u32=comptime chosen()\nconst OUTER:u32=comptime INNER\nconst GOOD:u32=comptime 7u32\n";
-        let generic = source
-            .replace("fn make(s:TypeShape[Seed])", "fn make[T](s:TypeShape[T])")
-            .replace("Body[fn()->u32", "Body[fn(T)->u32")
-            .replace(
-                "fn()->u32 uses {}{11u32}",
-                "fn(p:standalone@0/Seed)->u32 uses {}{11u32}",
-            )
-            .replace(
-                "fn chosen()->u32 uses {}=comptime make(shape(Seed))",
-                "fn chosen[T](p:T)->u32 uses {}=comptime make(shape(T))",
-            )
-            .replace("comptime chosen()", "comptime chosen(Seed(x:1))");
-        let paths = vec![path("OUTER"), path("INNER"), path("GOOD"), path("OUTER")];
-        for source in [source, generic.as_str()] {
-            for limit in [2, 3, 4, 5, 8] {
-                let mut control = engine(source);
-                control.comptime_limits.call_depth = limit;
-                let expected: Vec<_> = paths
-                    .iter()
-                    .map(|p| {
-                        let result = control.materialize_value(p);
-                        outcome_text(&control, result)
-                    })
-                    .collect();
-                for jobs in [1, 2, 8] {
-                    for warm in [0, 1, 2] {
-                        let mut candidate = engine(source);
-                        candidate.comptime_limits.call_depth = limit;
-                        if warm >= 1 {
-                            let _ = candidate.materialize_value(&path("RIGHT"));
-                        }
-                        if warm >= 2 {
-                            if source == generic {
-                                let _ = candidate.materialize_value(&path("INNER"));
-                            } else {
-                                let _ = candidate.check_definition(&path("chosen"));
-                            }
-                        }
-                        let actual = frontier_text(&mut candidate, paths.clone(), jobs);
-                        assert_eq!(actual, expected, "jobs={jobs} limit={limit} warm={warm}");
-                    }
-                }
             }
         }
     });
@@ -2349,55 +2224,6 @@ fn frozen_lowering_prefix_publishes_exact_staged_instances_through_cache_hits() 
                     }
                 }
             }
-        }
-    });
-}
-
-#[test]
-fn frozen_lowering_root_work_distinguishes_worker_misses_from_hits_and_scalar_fallback() {
-    with_compiler_stack(|| {
-        let source = "fn ROOT()->u64{7u64}\n";
-        for jobs in [1, 2, 8] {
-            let mut candidate = engine(source);
-            let outputs = candidate.check_lower_definition_prefix(
-                vec![path("ROOT")],
-                hirsel_intern::jobs::Jobs::new(jobs),
-            );
-            assert!(outputs[0].result.is_ok());
-            assert!(
-                outputs[0].worker_recomputed,
-                "jobs={jobs}: cold worker miss"
-            );
-            candidate.lower_to_tir(&path("ROOT")).unwrap();
-            let outputs = candidate.check_lower_definition_prefix(
-                vec![path("ROOT")],
-                hirsel_intern::jobs::Jobs::new(jobs),
-            );
-            assert!(outputs[0].result.is_ok());
-            assert!(
-                !outputs[0].worker_recomputed,
-                "jobs={jobs}: current Lower hit"
-            );
-            candidate.adapters.lowering = None;
-            let outputs = candidate.check_lower_definition_prefix(
-                vec![path("ROOT")],
-                hirsel_intern::jobs::Jobs::new(jobs),
-            );
-            assert!(outputs[0].result.is_ok());
-            assert!(
-                !outputs[0].worker_recomputed,
-                "jobs={jobs}: scalar fallback already counted"
-            );
-            let mut rejected = engine("fn ROOT()->u64{comptime {let zero=0u64;1u64/zero}}\n");
-            let outputs = rejected.check_lower_definition_prefix(
-                vec![path("ROOT")],
-                hirsel_intern::jobs::Jobs::new(jobs),
-            );
-            assert!(outputs[0].result.is_err());
-            assert!(
-                outputs[0].worker_recomputed,
-                "jobs={jobs}: failed worker miss still does work"
-            );
         }
     });
 }

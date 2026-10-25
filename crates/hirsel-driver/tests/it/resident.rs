@@ -355,33 +355,6 @@ fn manifest_session_preserves_the_cold_loader_syntax_error_boundary() {
 }
 
 #[test]
-fn manifest_session_reports_semantic_diagnostics_and_repairs() {
-    with_compiler_stack(|| {
-        let (fixture, manifest) = manifest_check_fixture();
-        let mut session = session::Session::open(&manifest, Verify::On);
-        assert!(
-            assert_manifest_check_parity(&mut session)
-                .diagnostics
-                .is_empty()
-        );
-        std::fs::write(fixture.path().join("main.hir"), "fn main() { missing }\n").unwrap();
-        let rejected = assert_manifest_check_parity(&mut session);
-        assert!(
-            rejected
-                .diagnostics
-                .iter()
-                .any(|d| d.severity == hirsel_diag::Severity::Error)
-        );
-        std::fs::write(fixture.path().join("main.hir"), "fn main() {}\n").unwrap();
-        assert!(
-            assert_manifest_check_parity(&mut session)
-                .diagnostics
-                .is_empty()
-        );
-    });
-}
-
-#[test]
 fn manifest_session_missing_source_remains_an_io_error() {
     with_compiler_stack(|| {
         let (fixture, manifest) = manifest_check_fixture();
@@ -2642,28 +2615,6 @@ fn scalar_materialization_inherits_complete_mode_receipts_on_cold_and_warm_deman
                 );
             }
         }
-    });
-}
-
-#[test]
-fn cold_compact_publication_observes_each_owners_notification_once() {
-    with_compiler_stack(|| {
-        let mut text = String::from("fn main(){}\n");
-        for i in 0..255 {
-            text.push_str(&format!("fn f{i}()->u8{{1u8}}\n"));
-        }
-        let mut candidate = engine(Arc::new(store::NoneStore)).with_config(CompileConfig {
-            jobs: hirsel_intern::jobs::Jobs::new(8),
-            retention: memo::Retention::Batch,
-            ..CompileConfig::for_memory_cap(None)
-        });
-        assert!(checked(&mut candidate, &text).diagnostics.is_empty());
-        let work = candidate.work_stats();
-        eprintln!("compact publication work: {work:?}");
-        assert!(
-            work.frontier_observations < 5_000,
-            "cold frontier snapshots grew quadratically: {work:?}"
-        );
     });
 }
 

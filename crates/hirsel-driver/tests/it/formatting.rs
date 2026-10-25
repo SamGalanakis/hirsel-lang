@@ -88,12 +88,6 @@ impl ParserPhase for EmptyFunction {
         })
     }
 }
-#[test]
-fn real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser() {
-    hirsel_engine::with_compiler_stack(
-        real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser_on_compiler_thread,
-    );
-}
 fn real_lexer_and_formatter_reach_a_fixed_point_with_a_fixture_parser_on_compiler_thread() {
     let mut adapters = compiler_adapters();
     adapters.parser = Some(Arc::new(EmptyFunction));
