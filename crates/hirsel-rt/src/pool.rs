@@ -304,6 +304,11 @@ impl Permits {
         }
     }
     /// Whether this thread took a permit (nested callbacks keep the existing one).
+    /// A newcomer leaves a free permit to each thread already waiting, so a
+    /// worker that releases its permit cannot take it straight back past the
+    /// waiter its release woke: a barging semaphore starves that waiter
+    /// whenever the releaser asks again first (Go's `semrelease1` hands its
+    /// count to a waiter for the same reason when `handoff` is set).
     fn acquire(
         &self,
         exec: &Exec,
@@ -315,18 +320,25 @@ impl Permits {
         }
         let started = metrics.map(|_| Instant::now());
         let mut state = self.state.lock().unwrap();
+        let mut waited = false;
         loop {
             if let Some(stop) = control.and_then(|c| c.stopped()) {
                 return Err(stop);
             }
-            if state.held < state.limit {
+            let reserved = if waited { 0 } else { state.waiting };
+            if state.held + reserved < state.limit {
                 break;
             }
             state.waiting += 1;
             state = self.freed.wait(state).unwrap();
             state.waiting -= 1;
+            waited = true;
         }
         state.held += 1;
+        if waited && state.held < state.limit && state.waiting > 0 {
+            // A free permit a deferred newcomer left stays reachable.
+            self.freed.notify_one();
+        }
         exec.held.store(true, Ordering::Release);
         if let (Some(metrics), Some(started)) = (metrics, started) {
             metrics
@@ -2152,6 +2164,36 @@ mod tests {
         assert_eq!(permits.available(), 0);
         permits.release(&exec);
         permits.release(&exec);
+        assert_eq!(permits.available(), 1);
+    }
+
+    /// The 128-op quantum's hand-off (`free::quantum_tests`): a worker that
+    /// releases its only permit and asks again at once queues behind the
+    /// worker its release woke, whatever the threads' timing.
+    #[test]
+    fn a_released_permit_goes_to_its_waiter_before_its_releaser_takes_it_back() {
+        let permits = Arc::new(Permits::new(1));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let root = Exec::new(Kind::Compute(0), std::ptr::null_mut(), false);
+        assert!(permits.acquire(&root, None, None).unwrap());
+        let waiter = {
+            let (permits, order) = (permits.clone(), order.clone());
+            std::thread::spawn(move || {
+                let exec = Exec::new(Kind::Compute(1), std::ptr::null_mut(), false);
+                assert!(permits.acquire(&exec, None, None).unwrap());
+                order.lock().unwrap().push("waiter");
+                permits.release(&exec);
+            })
+        };
+        while permits.state.lock().unwrap().waiting == 0 {
+            std::thread::yield_now();
+        }
+        permits.release(&root);
+        assert!(permits.acquire(&root, None, None).unwrap());
+        order.lock().unwrap().push("releaser");
+        permits.release(&root);
+        waiter.join().unwrap();
+        assert_eq!(*order.lock().unwrap(), ["waiter", "releaser"]);
         assert_eq!(permits.available(), 1);
     }
 
