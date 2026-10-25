@@ -13,7 +13,7 @@ pub struct SourceIndexState {
     graph: MemoGraph,
     front_changes: frontier::FrontTracker,
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
-    environment_seen: Option<(QueryEnvironment, hirsel_interp::Limits, Option<ContentHash>)>,
+    environment_seen: Option<(QueryEnvironment, crate::ComptimeLimits, Option<ContentHash>)>,
     published_manifest: Option<ContentHash>,
     vanished: BTreeSet<DefId>,
     declarations: crate::DeclarationIndex,
