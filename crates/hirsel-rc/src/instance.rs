@@ -1247,9 +1247,20 @@ impl Expander<'_, '_, '_> {
     /// A nominal instance: its finalizer, if it declares one, and the
     /// requirements of its representation.
     fn nominal(&mut self, path: &DefPath, actuals: Actuals) -> Result<(), InstanceError> {
-        let signature = self.signature(path)?.clone();
-        let SignatureKind::Type(t) = &signature.kind else {
-            return Ok(());
+        let signature = self.program.signatures.get(path).cloned();
+        let declaration = match signature.as_deref().map(|signature| &signature.kind) {
+            Some(SignatureKind::Type(declaration)) => Some(declaration),
+            Some(_) => return Ok(()),
+            // Private native nominals such as MapEntry have an independent
+            // representation contract, but no source declaration signature.
+            None if matches!(
+                self.layouts.owners().nominals.get(&DefId::intern(path)),
+                Some(hirsel_layout::layout::OwnerRepresentation::Defined(_))
+            ) =>
+            {
+                None
+            }
+            None => return Err(InstanceError::MissingSignature(path.clone())),
         };
         let program = self.program;
         let visited = key_of(&program.types, path, BodyId(0), &actuals, None, None)?;
@@ -1269,7 +1280,7 @@ impl Expander<'_, '_, '_> {
             crate::library::instantiate(self.layouts, &mut self.out, request)?;
             return Ok(());
         }
-        let Some(finalizer) = &t.drop else {
+        let Some(finalizer) = declaration.and_then(|declaration| declaration.drop.as_ref()) else {
             return Ok(());
         };
         // A library finalizer is runtime code, not a TIR body.

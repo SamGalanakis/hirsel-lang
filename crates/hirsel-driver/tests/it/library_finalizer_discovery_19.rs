@@ -14,10 +14,23 @@ use std::sync::Arc;
 
 #[test]
 fn library_channel_message_discovers_resource_finalizer_without_a_source_body() {
+    compile_objects(
+        "resource type Message { n:u64 }\n@noalloc drop(value) {}\npub fn main(rt:Io)->Result[(),GrantError] { let tasks=io.tasks(rt)?; let (sender,receiver):(Sender[Message],Receiver[Message])=channel.open(tasks); Ok(()) }\n",
+    );
+}
+
+#[test]
+fn library_private_map_entry_discovers_its_representation_without_a_public_signature() {
+    compile_objects(
+        "pub fn main()->u64 {let mut values:Map[u64,u64]=map.empty();map.insert(mut values,1u64,2u64);map.len(values)}",
+    );
+}
+
+fn compile_objects(source: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
-        std::fs::write(directory.path().join("main.hir"), "resource type Message { n:u64 }\n@noalloc drop(value) {}\npub fn main(rt:Io)->Result[(),GrantError] { let tasks=io.tasks(rt)?; let (sender,receiver):(Sender[Message],Receiver[Message])=channel.open(tasks); Ok(()) }\n").unwrap();
+        std::fs::write(directory.path().join("main.hir"), source).unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"channel_message","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let compiler = hirsel_driver::COMPILER.with_owned_engines();
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();

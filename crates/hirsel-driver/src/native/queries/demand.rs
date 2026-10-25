@@ -517,7 +517,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v10",
+            "hirsel.native.demand-import-action.v11",
             [bytes.as_slice()],
         )))
     }
