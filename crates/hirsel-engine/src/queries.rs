@@ -746,7 +746,7 @@ impl QueryEngine {
     /// The own content a query of `kind` keys on: the definition's headers
     /// (signatures) or its first item's text (every body query), with the
     /// package's closure manifest. Header hashes are taken once per index.
-    fn key_text(
+    pub(crate) fn key_text(
         &mut self,
         definition: &DefPath,
         kind: QueryKind,
