@@ -239,22 +239,33 @@ fn immutable_native_compilation_at_width_one() {
 }
 #[test]
 fn immutable_root_observation_uses_only_admitted_portable_summaries() {
-    with_compiler_stack(|| run_case(1, true, false, false));
+    with_compiler_stack(|| run_case(1, true, false, false, false));
 }
 #[test]
 #[ignore = "requires root-plan-proof frozen linker package"]
 fn frozen_root_plans_run_both_backends_without_live_linker_inputs() {
-    with_compiler_stack(|| run_case(1, false, true, false));
+    with_compiler_stack(|| run_case(1, false, true, false, false));
 }
 #[test]
 #[ignore = "requires root-frozen-kit-proof selected linker inputs"]
 fn admitted_root_plans_bind_the_kit_before_codegen() {
-    with_compiler_stack(|| run_case(1, false, true, true));
+    with_compiler_stack(|| run_case(1, false, true, true, false));
+
 }
 fn run(jobs: usize) {
-    run_case(jobs, false, false, false);
+    run_case(jobs, false, false, false, false);
 }
-fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_kit: bool) {
+#[test]
+fn selected_object_and_link_verification_recomputes_fresh_hits_without_source_work() {
+    with_compiler_stack(|| run_case(1, false, false, false, true));
+}
+fn run_case(
+    jobs: usize,
+    observation_only: bool,
+    frozen_plan: bool,
+    use_frozen_kit: bool,
+    verify_objects: bool,
+) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
@@ -317,7 +328,11 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
     let mut addresses = None;
     for (literal, fresh) in [(7, false), (7, true), (8, false), (8, true)]
         .into_iter()
-        .take(if observation_only { 2 } else { 4 })
+        .take(if observation_only || verify_objects {
+            2
+        } else {
+            4
+        })
     {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
@@ -417,10 +432,12 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
             retained: 1 << 20,
             stack: 0,
         };
+        let mut options = native::Options::new(target.clone());
+        options.validation = native::Validation::Ready;
         let instances = InstanceTasks::new(
             inputs,
             store.clone(),
-            native::Options::new(target.clone()),
+            options,
             policy,
             weight,
             budget.reserve(24 << 20).unwrap(),
@@ -472,7 +489,7 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
                 }),
             })
             .collect();
-        let compilation = CompilationTasks::new(
+        let compilation = CompilationTasks::new_with_store_verification(
             instances.clone(),
             arena.clone(),
             source.clone(),
@@ -485,6 +502,11 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
             backends,
             weight,
             budget.reserve(24 << 20).unwrap(),
+            if verify_objects {
+                store::VerifyStore::Recompute
+            } else {
+                store::VerifyStore::Off
+            },
         )
         .unwrap();
         let factory = CompilationFactory::new(compilation.clone());
@@ -547,15 +569,28 @@ fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, use_frozen_k
         addresses = Some(current_addresses);
         assert_eq!(
             calls.load(Ordering::Relaxed),
-            if fresh { 0 } else { backend_count as u64 }
+            if fresh && !verify_objects {
+                0
+            } else {
+                backend_count as u64
+            }
         );
         let native = compilation.native(selected).unwrap();
         if fresh {
             assert_eq!(instances.imports.load(Ordering::Relaxed), 0);
             assert_eq!(instances.source_body_demands.load(Ordering::Relaxed), 0);
-            assert_eq!(native.ready_transformations.load(Ordering::Relaxed), 0);
-            assert_eq!(native.snapshot.ready_materializations(), 0);
-            assert_eq!(trace.totals(), Default::default());
+            if verify_objects {
+                assert!(native.ready_transformations.load(Ordering::Relaxed) > 0);
+                assert_ne!(trace.totals(), Default::default());
+                assert!(
+                    native.snapshot.ready_materializations() > 0,
+                    "selected object verification must enter the actual backend on hits"
+                );
+            } else {
+                assert_eq!(native.ready_transformations.load(Ordering::Relaxed), 0);
+                assert_eq!(native.snapshot.ready_materializations(), 0);
+                assert_eq!(trace.totals(), Default::default());
+            }
         }
         let roots = compilation.roots(selected).unwrap();
         let request = runtime.request(&[instances.discovery_id()]);
