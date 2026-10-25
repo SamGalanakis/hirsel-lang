@@ -26,7 +26,7 @@ const FAILURE: Domain = Domain {
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 3,
+    schema: 4,
 };
 const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
@@ -58,6 +58,7 @@ struct LowerProduct {
     dependencies: Vec<SignatureDependency>,
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
+    materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -92,6 +93,7 @@ pub struct FrontLowerOutput {
     pub implementation_revision: ContentHash,
     pub signature: ContentHash,
     pub verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
+    pub materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
     owner: Arc<FrontLowerQueries>,
 }
 impl FrontLowerOutput {
@@ -340,6 +342,7 @@ impl FrontLowerQueries {
             implementation_revision: input.implementation,
             signature,
             verified: lower.verified,
+            materialized: lower.materialized,
             owner: self.clone(),
         })
     }
@@ -446,6 +449,7 @@ impl FrontLowerQueries {
                     lower.body,
                     &lower.diagnostics,
                     &lower.dependencies,
+                    &lower.materialized,
                     &observed,
                     &depth,
                     executed,
@@ -623,7 +627,7 @@ impl FrontLowerQueries {
             &self.memo,
             &analyzed.value,
             &Comptime {
-                materialized: constants,
+                materialized: constants.clone(),
                 staged,
             },
             &signature,
@@ -695,6 +699,7 @@ impl FrontLowerQueries {
             dependencies,
             verified,
             acceptance,
+            materialized: constants,
         }))
     }
 }
