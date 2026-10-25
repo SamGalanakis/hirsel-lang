@@ -13,6 +13,13 @@ pub struct RequestSchemas {
     definitions: Vec<u8>,
 }
 impl RequestSchemas {
+    /// Retained buffers of the copied, body-free request schema descriptors.
+    pub fn retained_metadata_bytes(&self) -> u64 {
+        self.grants
+            .capacity()
+            .saturating_add(self.definitions.capacity()) as u64
+    }
+
     pub fn new(grants: Vec<u8>, definitions: Vec<u8>) -> Result<Self, String> {
         if [&grants, &definitions]
             .iter()
