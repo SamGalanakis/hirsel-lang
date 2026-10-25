@@ -465,3 +465,210 @@ fn native_extra_namespace_domain_refuses_before_prepare_or_effect() {
     assert!(sweep.withdrawn.is_empty());
     assert!(sweep.in_doubt.is_empty());
 }
+
+/// Tokio's file write vectors (tokio/tests/fs_file.rs:41-100 at ce685ee:
+/// basic_write, basic_write_and_shutdown, write_vectored as two writes, and
+/// rewind_seek_position) through the recording-off native entry. Each write
+/// is a blocking job handed off and delivered to its parked owner once.
+unsafe fn live_vectors(ctx: *mut TaskCtx) {
+    const HELLO: &[u8] = b"hello world...";
+    let names = {
+        let _role = unsafe { role::Guard::new(ctx) };
+        let binding = unsafe { crate::io::Binding::get(ctx) };
+        ["", "basic", "twice", "rewind"].map(|name| binding.intern_path(name))
+    };
+    let mut out = HandleResult {
+        tag: 99,
+        padding: 99,
+        value: 99,
+    };
+    assert_eq!(
+        unsafe {
+            crate::io::hirsel_rt_v2_io_dir(ctx, std::ptr::null_mut(), &mut out, &1, &names[0])
+        },
+        STATUS_OK
+    );
+    assert_eq!(out.tag, 0);
+    let directory = out.value;
+    let create = |path: &u64| {
+        let mut out = HandleResult {
+            tag: 99,
+            padding: 99,
+            value: 99,
+        };
+        assert_eq!(
+            unsafe {
+                crate::io::hirsel_rt_v2_file_create(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut out,
+                    &directory,
+                    path,
+                )
+            },
+            STATUS_OK
+        );
+        assert_eq!(out.tag, 0);
+        out.value
+    };
+    let write = |file: &mut u64, expected: &[u8]| {
+        let bytes = unsafe { crate::text::allocate_bytes(ctx, expected) };
+        let mut out = HandleResult {
+            tag: 99,
+            padding: 99,
+            value: 99,
+        };
+        assert_eq!(
+            unsafe {
+                crate::io::hirsel_rt_v2_file_write(
+                    ctx,
+                    std::ptr::null_mut(),
+                    &mut out,
+                    &directory,
+                    file,
+                    bytes.owner,
+                    bytes.start,
+                    bytes.length,
+                )
+            },
+            STATUS_OK
+        );
+        assert_eq!(
+            out,
+            HandleResult {
+                tag: 0,
+                padding: 0,
+                value: expected.len() as u64
+            }
+        );
+        unsafe { release_bytes(ctx, bytes) };
+    };
+    let close = |file: u64| {
+        assert_eq!(
+            unsafe { crate::io::hirsel_rt_v2_io_close(ctx, file, 0, 0) },
+            STATUS_OK
+        );
+    };
+    let read = |path: &u64| {
+        let mut read = std::mem::MaybeUninit::<BytesResult>::uninit();
+        assert_eq!(
+            unsafe {
+                crate::io::hirsel_rt_v2_file_read_bytes(
+                    ctx,
+                    std::ptr::null_mut(),
+                    read.as_mut_ptr(),
+                    &directory,
+                    path,
+                )
+            },
+            STATUS_OK
+        );
+        let read = unsafe { read.assume_init() };
+        assert_eq!(read.tag, 0);
+        let bytes = unsafe {
+            crate::io::slice_bytes(read.value.owner, read.value.start, read.value.length)
+        }
+        .to_vec();
+        unsafe { release_bytes(ctx, read.value) };
+        bytes
+    };
+    // basic_write / basic_write_and_shutdown: the closed file holds the write.
+    let mut basic = create(&names[1]);
+    write(&mut basic, HELLO);
+    close(basic);
+    assert_eq!(read(&names[1]), HELLO);
+    // write_vectored: consecutive writes advance one cursor.
+    let mut twice = create(&names[2]);
+    write(&mut twice, HELLO);
+    write(&mut twice, HELLO);
+    close(twice);
+    assert_eq!(read(&names[2]), [HELLO, HELLO].concat());
+    // rewind_seek_position. Deviation from Tokio: Hirsel writes always append
+    // regardless of the seek position (docs/spec/core-library.md, file I/O).
+    let mut rewind = create(&names[3]);
+    write(&mut rewind, HELLO);
+    let mut unit = UnitResult {
+        tag: 99,
+        error: 99,
+        code: 99,
+    };
+    assert_eq!(
+        unsafe {
+            crate::io::hirsel_rt_v2_file_seek(
+                ctx,
+                std::ptr::null_mut(),
+                &mut unit,
+                &directory,
+                &mut rewind,
+                0,
+            )
+        },
+        STATUS_OK
+    );
+    assert_eq!(unit.tag, 0);
+    write(&mut rewind, b"J");
+    close(rewind);
+    assert_eq!(read(&names[3]), b"hello world...J");
+}
+
+#[test]
+fn native_live_file_writes_follow_tokio_vectors_and_deliver_each_job_once() {
+    for width in [1, 8] {
+        let path = std::env::temp_dir().join(format!(
+            "hirsel-live-file-vectors-{}-{width}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        let mut real = crate::io_real::RealIo::grant(&path).unwrap();
+        real.discard_history();
+        let adapter = Arc::new(
+            real.into_concurrent()
+                .unwrap_or_else(|_| panic!("Send file adapter")),
+        );
+        let mut admitted = Some(adapter.clone());
+        let jobs = Arc::new(std::sync::Mutex::new(None));
+        let probe = jobs.clone();
+        let mut run = crate::host::BodyRun::new(width, false);
+        run.free = true;
+        run.adapter = Some(Box::new(NamesOnly));
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe { super::super::enable(ctx) },
+            move |ctx| unsafe {
+                {
+                    let _role = role::Guard::new(ctx);
+                    let _segment = role::Segment::new(ctx);
+                    concurrent::Service::install(ctx, admitted.take().unwrap()).unwrap();
+                    native::enable(ctx);
+                    let io = (*ctx).run_ref().free_io.get().unwrap();
+                    *probe.lock().unwrap() = Some(io.jobs.probe());
+                }
+                live_vectors(ctx);
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+        // The run released its one adapter owner; every job returned, was
+        // delivered exactly once and gave its credit back.
+        assert_eq!(Arc::strong_count(&adapter), 1);
+        let jobs = jobs.lock().unwrap().take().unwrap();
+        let stats = jobs.stats();
+        let submitted = stats.submitted.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(submitted >= 4, "{submitted} jobs");
+        assert_eq!(
+            stats.returned.load(std::sync::atomic::Ordering::Relaxed),
+            submitted
+        );
+        assert_eq!(
+            stats.delivered.load(std::sync::atomic::Ordering::Relaxed),
+            submitted
+        );
+        assert_eq!(
+            stats.quarantined.load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(jobs.held(), 0);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
