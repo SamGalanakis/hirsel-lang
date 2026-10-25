@@ -406,17 +406,23 @@ fn fragment_checked(
             bytes: bytes.into(),
         },
     )?;
-    let record = put_record(
-        store,
-        FRAGMENT,
-        &FragmentRecord {
-            owner,
-            object: object.into(),
-            summary: summary.into(),
-        },
-    )?;
-    if cached.is_some_and(|old| old.product.record != record) {
+    let fragment = FragmentRecord {
+        owner,
+        object: object.into(),
+        summary: summary.into(),
+    };
+    let bytes = hirsel_codec::to_text(&fragment);
+    let expected = FRAGMENT
+        .reference(bytes.as_bytes())
+        .ok_or("native fragment exceeds record limit")?;
+    if cached.is_some_and(|old| old.product.record != expected) {
         return Err("recomputed object fragment differs from cached output".into());
+    }
+    let record = store
+        .put_content(FRAGMENT, bytes.as_bytes())
+        .ok_or("native product publication failed")?;
+    if record != expected {
+        return Err("native fragment publication identity differs".into());
     }
     store.associate_product(address, action, record);
     Ok(FragmentProduct {

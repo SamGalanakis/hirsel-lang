@@ -9,12 +9,16 @@ use hirsel_intern::{
     jobs::Jobs,
     timings::{self, Count, Phase},
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 const SOURCE: &str = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}";
 struct Store {
     inner: store::DirStore,
     substituted: Mutex<Option<(Address, Association)>>,
+    fragment_puts: AtomicUsize,
 }
 impl ResultStore for Store {
     fn get(&self, key: &EntryKey) -> Option<Bytes> {
@@ -30,6 +34,9 @@ impl ResultStore for Store {
         self.inner.get_content(reference)
     }
     fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+        if domain.kind == 0x4f00_0001 {
+            self.fragment_puts.fetch_add(1, Ordering::Relaxed);
+        }
         self.inner.put_content(domain, bytes)
     }
     fn associate_product(
@@ -133,6 +140,7 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 let store = Arc::new(Store {
                     inner: store::DirStore::new(directory.path().join("products")),
                     substituted: Mutex::new(None),
+                    fragment_puts: AtomicUsize::new(0),
                 });
                 let before = calls();
                 let cold = compile(
@@ -149,6 +157,8 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 assert!(!cold.objects.is_empty());
                 assert_eq!(cold.hits, 0);
                 assert!(cold.ready_transformations > 0);
+                let puts = store.fragment_puts.load(Ordering::Relaxed);
+                assert!(puts > 0);
                 let warm = compile(
                     store.clone(),
                     workers,
@@ -159,6 +169,7 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 assert_eq!(warm.hits, cold.objects.len());
                 assert_eq!(warm.objects, cold.objects);
                 assert_eq!(warm.ready_transformations, 0);
+                assert_eq!(store.fragment_puts.load(Ordering::Relaxed), puts);
                 assert_eq!(after_warm.1, after.1, "Ready hit lowered a unit");
                 assert_eq!(
                     &after_warm.0[..5],
@@ -175,6 +186,7 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 assert_eq!(verified.objects, cold.objects);
                 assert_eq!(verified.hits, cold.objects.len());
                 assert_eq!(verified.ready_transformations, cold.ready_transformations);
+                assert_eq!(store.fragment_puts.load(Ordering::Relaxed), 2 * puts);
                 let checked_calls: [_; 6] =
                     std::array::from_fn(|i| after_verified.0[i] - after_warm.0[i]);
                 assert_eq!(after_verified.1 - after_warm.1, units);
@@ -210,9 +222,10 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                         reference: replacement.record,
                     },
                 ));
+                let before_refusal = store.fragment_puts.load(Ordering::Relaxed);
                 let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     compile(
-                        store,
+                        store.clone(),
                         workers,
                         native::Backend::Cranelift,
                         VerifyStore::Recompute,
@@ -230,6 +243,7 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                     text.contains("recomputed object fragment differs from cached output"),
                     "{text}"
                 );
+                assert_eq!(store.fragment_puts.load(Ordering::Relaxed), before_refusal);
             }
             "checked".to_owned()
         })
