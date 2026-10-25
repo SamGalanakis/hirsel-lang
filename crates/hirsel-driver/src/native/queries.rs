@@ -365,7 +365,7 @@ pub fn ready_product(
         if !seen.insert(address) || record.domain != READY_RECORD_DOMAIN {
             return Err("duplicate or foreign optimizer descriptor".into());
         }
-        let address = hirsel_artifact_store::Address(address);
+        let address = hirsel_engine::store::Address(address);
         let current = store
             .lookup_product(address)
             .ok_or("missing optimizer association")?;
@@ -389,7 +389,7 @@ pub fn ready_product(
     })
 }
 
-pub const READY_RECORD_DOMAIN: hirsel_artifact_store::Domain = hirsel_artifact_store::Domain {
+pub const READY_RECORD_DOMAIN: hirsel_engine::store::Domain = hirsel_engine::store::Domain {
     kind: READY_KIND,
     schema: 1,
 };
@@ -401,84 +401,8 @@ type ReadyRecord = (
     Reference,
     Vec<(ContentHash, Reference)>,
 );
+
 pub mod source_inputs;
-/// Select once for an admitted native request and share this same provider
-/// with native, object and runtime producers. Cache write failures retain only
-/// bounded transient transport; verifier capabilities come from the selected
-/// backend exactly. The admitted allowance outlives every external byte view.
-pub fn request_store(
-    engine: &hirsel_engine::QueryEngine,
-    allowance: hirsel_engine::runtime::MemoryReservation,
-) -> Arc<hirsel_engine::store::RequestStore> {
-    let backend = engine
-        .product_store()
-        .unwrap_or_else(|| Arc::new(hirsel_engine::store::NoneStore));
-    Arc::new(hirsel_engine::store::RequestStore::new(backend, allowance))
-}
-
-/// Resolve settled descriptor bytes only. This is not a proof capability: the
-/// admitted Ready producer owns independent validation before settling the read.
-pub fn ready_product(
-    store: &dyn hirsel_engine::store::ResultStore,
-    product: ProductRef,
-) -> Result<ReadyProduct, String> {
-    if product.record.domain != READY_RECORD_DOMAIN {
-        return Err("wrong Ready descriptor domain".into());
-    }
-    let current = store
-        .lookup_product(product.address)
-        .ok_or("missing Ready association")?;
-    if current.action != product.action || current.reference != product.record {
-        return Err("Ready descriptor is no longer settled at this action".into());
-    }
-    let bytes = store
-        .get_content(product.record)
-        .ok_or("missing Ready descriptor")?;
-    let (debug, ready, layout_closure, emission_context, unit_summary, optimizer): ReadyRecord =
-        serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    let mut optimizer_reads = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-    for (address, record) in optimizer {
-        if !seen.insert(address) || record.domain != READY_RECORD_DOMAIN {
-            return Err("duplicate or foreign optimizer descriptor".into());
-        }
-        let address = hirsel_artifact_store::Address(address);
-        let current = store
-            .lookup_product(address)
-            .ok_or("missing optimizer association")?;
-        if current.reference != record {
-            return Err("optimizer dependency output changed".into());
-        }
-        optimizer_reads.push(ProductRef {
-            address,
-            action: current.action,
-            record,
-        });
-    }
-    Ok(ReadyProduct {
-        product,
-        debug,
-        ready,
-        layout_closure,
-        emission_context,
-        unit_summary,
-        optimizer_reads,
-    })
-}
-
-pub const READY_RECORD_DOMAIN: hirsel_artifact_store::Domain = hirsel_artifact_store::Domain {
-    kind: READY_KIND,
-    schema: 1,
-};
-type ReadyRecord = (
-    bool,
-    Reference,
-    Reference,
-    Reference,
-    Reference,
-    Vec<(ContentHash, Reference)>,
-);
-
 pub mod instance;
 
 pub mod demand;
