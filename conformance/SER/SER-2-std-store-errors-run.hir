@@ -1,35 +1,118 @@
 // rule: SER-2
 // expect: run
 // std@1/store's transaction outcomes, errors and call requests round-trip
-// through the canonical codec.
-fn round[T: serializable](t: Test, x: T) -> Result[(), DecodeError] {
+// through the canonical codec. Inspect decoded payloads independently, after
+// serde_json src/de.rs:2047-2084 and tests/test.rs:1332-1397: selecting a
+// variant must delegate to its typed payload, including nested variants.
+// HSC1 uses binary frames rather than JSON objects; malformed twins exercise
+// truncated frames and trailing bytes without changing the wire format.
+fn round[T: serializable](t: Test, x: T) -> Result[T, DecodeError] {
   let encoded = codec.encode(x)
   let read = fn() -> Result[T, DecodeError] {
     codec.decode(encoded)
   }
   let decoded: T = read()?
   test.check(t, codec.encode(decoded) == encoded)
-  Ok(())
+  let truncated = fn() -> Result[T, DecodeError] {
+    codec.decode(bytes.slice(encoded, 0, bytes.len(encoded) - 1))
+  }
+  test.check(
+    t,
+    match truncated() {
+      Error(Truncated()) => true,
+      _ => false,
+    }
+  )
+  let malformed = fn() -> Result[T, DecodeError] {
+    let mut extra: List[u8] = []
+    bytes.append(mut extra, encoded)
+    list.push(mut extra, 0)
+    codec.decode(bytes.from_list(take extra))
+  }
+  test.check(
+    t,
+    match malformed() {
+      Error(Trailing()) => true,
+      _ => false,
+    }
+  )
+  Ok(decoded)
 }
 
 pub fn main(t: Test) -> Result[(), DecodeError] {
   let aborted: store.TxFailure[FileError] = Aborted(NotFound())
-  round(t, aborted)?
+  test.check(
+    t,
+    match round(t, aborted)? {
+      Aborted(NotFound()) => true,
+      _ => false,
+    }
+  )
+  let aborted_byte: store.TxFailure[u8] = Aborted(3)
+  test.check(
+    t,
+    match round(t, aborted_byte)? {
+      Aborted(payload) => payload == 3,
+      _ => false,
+    }
+  )
   let tx_canceled: store.TxFailure[String] = Canceled(Parent())
-  round(t, tx_canceled)?
+  test.check(
+    t,
+    match round(t, tx_canceled)? {
+      Canceled(Parent()) => true,
+      _ => false,
+    }
+  )
   let storage: store.TxFailure[u8] = Storage(Corrupt("log/00000000000000000001"))
-  round(t, storage)?
+  test.check(
+    t,
+    match round(t, storage)? {
+      Storage(Corrupt(name)) => name == "log/00000000000000000001",
+      _ => false,
+    }
+  )
   let limit: store.TxFailure[u8] = Limit(TransactionBytes())
-  round(t, limit)?
+  test.check(
+    t,
+    match round(t, limit)? {
+      Limit(TransactionBytes()) => true,
+      _ => false,
+    }
+  )
   let unknown: store.TxFailure[u8] = Unknown(Storage(FileFault(5)))
-  round(t, unknown)?
+  test.check(
+    t,
+    match round(t, unknown)? {
+      Unknown(Storage(FileFault(code))) => code == 5,
+      _ => false,
+    }
+  )
   let fenced: store.StoreError = Fenced()
-  round(t, fenced)?
+  test.check(
+    t,
+    match round(t, fenced)? {
+      Fenced() => true,
+      _ => false,
+    }
+  )
   let denied: store.CallFailure[u8] = Denied()
-  round(t, denied)?
+  test.check(
+    t,
+    match round(t, denied)? {
+      Denied() => true,
+      _ => false,
+    }
+  )
   let failed: store.CallFailure[u8] = Tx(Aborted(3))
-  round(t, failed)?
-  round(
+  test.check(
+    t,
+    match round(t, failed)? {
+      Tx(Aborted(payload)) => payload == 3,
+      _ => false,
+    }
+  )
+  let request = round(
     t,
     store.CallRequest(
       stream: b"s1",
@@ -39,5 +122,10 @@ pub fn main(t: Test) -> Result[(), DecodeError] {
       acknowledged: 6
     )
   )?
+  test.check(t, request.stream == b"s1")
+  test.check(t, request.epoch == 2)
+  test.check(t, request.position == 7)
+  test.check(t, request.digest == b"d")
+  test.check(t, request.acknowledged == 6)
   Ok(())
 }
