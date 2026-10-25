@@ -126,6 +126,7 @@ pub enum CompileResult {
     RecomputeCounts(Vec<(DefPath, hirsel_engine::QueryKind, u64)>),
     Tir(Arc<TirExecution>),
     Native(Arc<NativeExecution>),
+    Ownership(Arc<super::OwnershipExecution>),
 }
 /// Materialize only already settled, checked execution products. These reads
 /// may decode an owned product but never run a compiler query, evaluate a

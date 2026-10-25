@@ -33,10 +33,17 @@ const FAILURE: Domain = Domain {
     kind: 0x4600_0012,
     schema: 1,
 };
+// Canonical source bytes use the request's existing bounded transport. The
+// immutable catalogue retains descriptors; a demanded node decodes its bytes
+// under its scratch grant, just like archived ordinary front syntax.
+const INPUT_CONTENT: Domain = Domain {
+    kind: 0x4600_001d,
+    schema: 1,
+};
 struct Input {
     signature: SignatureRef,
     owner_signature: SignatureRef,
-    content: Vec<Vec<u8>>,
+    content: Reference,
     dependencies: BTreeSet<DefPath>,
     source: bool,
     executable: bool,
@@ -50,6 +57,7 @@ pub struct FrontRunInputs {
     source_paths: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
     views: Vec<(SignatureRef, ContentHash)>,
+    store: Arc<dyn ResultStore>,
     required: u64,
 }
 impl FrontRunInputs {
@@ -483,6 +491,31 @@ impl Task {
                 }
             }
         }
+        let source_content = (|| -> Result<Vec<Vec<u8>>, QueryError> {
+            use bincode::Options;
+            if input.content.len > queries.weight.scratch {
+                return Err(operational("Run input content exceeds scratch admission"));
+            }
+            let bytes = queries
+                .store
+                .get_content(input.content)
+                .ok_or_else(|| operational("missing Run input content"))?;
+            if INPUT_CONTENT.reference(&bytes) != Some(input.content) {
+                return Err(operational(
+                    "Run input content differs from captured descriptor",
+                ));
+            }
+            bincode::DefaultOptions::new()
+                .with_fixint_encoding()
+                .with_limit(input.content.len)
+                .reject_trailing_bytes()
+                .deserialize(&bytes)
+                .map_err(|_| operational("invalid Run input content"))
+        })();
+        let source_content = match source_content {
+            Ok(content) => content,
+            Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
+        };
         let content = if matches!(input.signature.kind, SignatureKind::Type(_)) {
             DefinitionContent::Body {
                 signature: input.owner_signature.clone(),
@@ -497,7 +530,7 @@ impl Task {
             DefinitionContent::Named {
                 signature: input.signature.clone(),
                 source: if input.source {
-                    input.content.clone()
+                    source_content.clone()
                 } else {
                     vec![]
                 },
@@ -519,7 +552,7 @@ impl Task {
         Poll::Ready(Ok((
             hirsel_run_schema::ProgramNode {
                 identity: path.to_string(),
-                content: input.content.clone(),
+                content: source_content,
                 dependencies: spelled,
             },
             content,
@@ -810,13 +843,18 @@ impl QueryEngine {
     /// the planner and producer consume this one catalog's exact byte count.
     pub fn front_run_inputs(&mut self, limit: u64) -> Result<FrontRunInputs, QueryError> {
         let signatures = self.signature_inputs();
+        let store = self
+            .result_store
+            .clone()
+            .filter(|store| store.enabled())
+            .ok_or(QueryError::NotImplemented)?;
         let declarations = self.frozen_declarations();
         let source_paths = self.source_paths();
         let mut paths: BTreeSet<_> = source_paths.iter().cloned().collect();
         paths.extend(self.native_builtin_signatures().into_keys());
         let mut inputs = BTreeMap::new();
         let mut views = Vec::new();
-        let mut required = FrontRunQueries::input_bytes(&paths.iter().cloned().collect::<Vec<_>>())
+        let required = FrontRunQueries::input_bytes(&paths.iter().cloned().collect::<Vec<_>>())
             .ok_or_else(|| operational("Run input inventory overflow"))?;
         for path in paths {
             let source = source_paths.binary_search(&path).is_ok();
@@ -889,12 +927,15 @@ impl QueryEngine {
                     dependencies.insert(check.function.clone());
                 }
             }
-            required = required
-                .checked_add(content.iter().map(|c| c.len() as u64).sum::<u64>())
-                .ok_or_else(|| operational("Run input content overflow"))?;
             if required > limit {
                 return Err(operational("Run inputs exceed admission"));
             }
+            let bytes = bincode::serialize(&content)
+                .map_err(|_| operational("Run input content encoding"))?;
+            let content = store
+                .put_content(INPUT_CONTENT, &bytes)
+                .filter(|reference| INPUT_CONTENT.reference(&bytes) == Some(*reference))
+                .ok_or_else(|| operational("Run input content exceeds transport admission"))?;
             inputs.insert(
                 path,
                 Input {
@@ -913,6 +954,7 @@ impl QueryEngine {
             source_paths,
             inputs,
             views,
+            store,
             required,
         })
     }
@@ -942,6 +984,7 @@ impl QueryEngine {
             source_paths,
             inputs,
             views,
+            store,
             required,
         } = inputs;
         // Zero representation digests match ordinary execution. Compile-time
@@ -963,11 +1006,6 @@ impl QueryEngine {
                 (path, id)
             })
             .collect();
-        let store = self
-            .result_store
-            .clone()
-            .filter(|s| s.enabled())
-            .ok_or(QueryError::NotImplemented)?;
         Ok(Arc::new(FrontRunQueries {
             native_roots: Vec::new(),
             inputs,

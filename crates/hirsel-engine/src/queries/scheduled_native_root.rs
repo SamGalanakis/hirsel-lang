@@ -65,17 +65,76 @@ struct Ownership {
     _definitions: Arc<FrontNativeDefinitionQueries>,
     _allowance: MemoryReservation,
 }
+fn constant_bytes<'a>(mut paths: impl Iterator<Item = &'a DefPath>) -> Option<u64> {
+    paths.try_fold(0u64, |total, path| {
+        total.checked_add(
+            bincode::serialized_size(path)
+                .ok()?
+                .checked_add(std::mem::size_of::<DefPath>() as u64)?,
+        )
+    })
+}
+fn metadata_bytes<'a>(
+    operations: &BTreeMap<OperationKey, OperationRecord>,
+    mut builtin_paths: impl Iterator<Item = &'a DefPath>,
+    constant_paths: impl Iterator<Item = &'a DefPath>,
+) -> Option<u64> {
+    let operations = operations
+        .iter()
+        .try_fold(0u64, |total, (key, operation)| {
+            total
+                .checked_add(
+                    bincode::serialized_size(&key.definition)
+                        .ok()?
+                        .checked_mul(2)?,
+                )?
+                .checked_add(
+                    (std::mem::size_of::<(OperationKey, OperationRecord)>()
+                        + operation.parameters.len() * std::mem::size_of::<OperationParameter>()
+                        + 128) as u64,
+                )
+        })?;
+    builtin_paths
+        .try_fold(operations, |total, path| {
+            total.checked_add(bincode::serialized_size(path).ok()?.checked_add(128)?)
+        })?
+        .checked_add(constant_bytes(constant_paths)?)
+}
+
 impl FrontNativeQueries {
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
+        // Core operation/builtin inputs are mandatory even for a source with
+        // no calls. Cache their immutable inventory cost, then bound source
+        // constants by the supplied complete definition namespace. The actual
+        // constructor still charges only its selected constant paths.
+        static CORE_BYTES: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+        let core = *CORE_BYTES.get_or_init(|| {
+            let registry = crate::registry::BuiltinRegistry::shared();
+            let operations = registry.operation_inventory();
+            metadata_bytes(
+                &operations,
+                registry.signatures().map(|s| s.definition.path()),
+                registry
+                    .signatures()
+                    .filter(|s| matches!(s.kind, SignatureKind::Const { .. }))
+                    .map(|s| s.definition.path()),
+            )
+        });
+        Self::header_bytes(definitions)?
+            .checked_add(core?)?
+            .checked_add(constant_bytes(definitions.iter())?)
+    }
+    fn header_bytes(definitions: &[DefPath]) -> Option<u64> {
         definitions
             .iter()
             .try_fold(std::mem::size_of::<Self>() as u64, |total, path| {
                 total
                     .checked_add(bincode::serialized_size(path).ok()?.checked_mul(4)?)?
                     .checked_add(
-                        (4 * std::mem::size_of::<DefPath>()
-                            + std::mem::size_of::<FrontNativeDefinitionOutput>()
-                            + 256) as u64,
+                        // Only immutable source/header slots live here.
+                        // Demanded catalogue outputs are charged to the root
+                        // continuation when it actually reads them below.
+                        (4 * std::mem::size_of::<DefPath>() + 256) as u64,
                     )
             })
     }
@@ -264,7 +323,13 @@ impl Task {
             };
             // Canonical source metadata bounds these cloned handoff rows. The
             // actual source body/receipt owners remain admitted independently.
-            let Some(used) = self.used.checked_add(product.record.len.saturating_mul(2)) else {
+            let Some(used) = self
+                .used
+                .checked_add(product.record.len.saturating_mul(2))
+                .and_then(|bytes| {
+                    bytes.checked_add(2 * std::mem::size_of::<FrontNativeDefinitionOutput>() as u64)
+                })
+            else {
                 return Poll::Ready(Err(owner.errors.resource));
             };
             if used > owner.output_budget || used > owner.weight.retained {
@@ -546,7 +611,7 @@ impl QueryEngine {
         if seeds.is_empty() {
             return Err(invalid("native source root set is empty"));
         }
-        let mut required = FrontNativeQueries::input_bytes(&all)
+        let required = FrontNativeQueries::header_bytes(&all)
             .ok_or_else(|| invalid("native root input overflow"))?;
         let run = plan.run.with_source_roots(seeds.clone())?;
         let definitions = plan
@@ -570,32 +635,6 @@ impl QueryEngine {
             foreign_unreplayable: self.foreign_unreplayable,
             foreign_threads: self.foreign_threads.clone(),
         };
-        for (key, operation) in &template.operations {
-            required = required
-                .checked_add(
-                    bincode::serialized_size(&key.definition)
-                        .map_err(|_| invalid("operation path overflow"))?
-                        .saturating_mul(2),
-                )
-                .and_then(|n| {
-                    n.checked_add(
-                        (std::mem::size_of::<(OperationKey, OperationRecord)>()
-                            + operation.parameters.len()
-                                * std::mem::size_of::<OperationParameter>()
-                            + 128) as u64,
-                    )
-                })
-                .ok_or_else(|| invalid("operation inventory overflow"))?;
-        }
-        for path in template.builtins.keys() {
-            required = required
-                .checked_add(
-                    bincode::serialized_size(path)
-                        .map_err(|_| invalid("builtin input overflow"))?
-                        + 128,
-                )
-                .ok_or_else(|| invalid("builtin inventory overflow"))?;
-        }
         let mut declarations = Vec::new();
         for path in &all {
             let signature = definitions
@@ -623,15 +662,16 @@ impl QueryEngine {
             .map(|s| s.definition.path().clone())
             .collect::<Vec<_>>();
         constants.extend(declarations.into_iter().map(|(_, _, path)| path));
-        for path in &constants {
-            required = required
-                .checked_add(
-                    bincode::serialized_size(path)
-                        .map_err(|_| invalid("constant path overflow"))?
-                        + std::mem::size_of::<DefPath>() as u64,
+        let required = required
+            .checked_add(
+                metadata_bytes(
+                    &template.operations,
+                    template.builtins.keys(),
+                    constants.iter(),
                 )
-                .ok_or_else(|| invalid("constant inventory overflow"))?;
-        }
+                .ok_or_else(|| invalid("native root metadata overflow"))?,
+            )
+            .ok_or_else(|| invalid("native root input overflow"))?;
         if required > allowance.bytes() {
             return Err(invalid("native root inputs exceed admission"));
         }

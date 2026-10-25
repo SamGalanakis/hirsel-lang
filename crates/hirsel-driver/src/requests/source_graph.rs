@@ -27,6 +27,7 @@ struct SourceProducts {
     foreign_unreplayable: bool,
     run: Option<Arc<FrontRunQueries>>,
     native: Option<Arc<super::native_selection::NativeSelection>>,
+    ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
@@ -45,6 +46,10 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some(),
+            CompileOperation::NativeOwnership(request) => self
+                .ownership
+                .as_ref()
+                .is_some_and(|selected| selected.accepts(request)),
             CompileOperation::NativeBuild(request) => self.native.as_ref().is_some_and(|native| {
                 native.accepts(request, super::native_platform::NativePurpose::Build)
             }),
@@ -59,6 +64,9 @@ impl GraphProducts for SourceProducts {
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
         let roots = match operation {
+            CompileOperation::NativeOwnership(_) => {
+                vec![self.ownership.as_ref().ok_or_else(uninstalled)?.query()]
+            }
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
                 vec![self.native.as_ref().ok_or_else(uninstalled)?.query()]
             }
@@ -91,12 +99,19 @@ impl GraphProducts for SourceProducts {
         let operation = operation.clone();
         let run = self.run.clone();
         let native = self.native.clone();
+        let ownership = self.ownership.clone();
         let safe = self.safe.clone();
         let lower = self.lower.clone();
         let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
         let expected = check.query();
         let entry = match &operation {
+            CompileOperation::NativeOwnership(request) => request
+                .definition
+                .as_ref()
+                .or(self.launch_entry.as_ref())
+                .cloned()
+                .ok_or_else(uninstalled)?,
             CompileOperation::NativeBuild(request) | CompileOperation::NativeRun(request) => {
                 request
                     .definition
@@ -127,6 +142,20 @@ impl GraphProducts for SourceProducts {
                     }
                     let work = meter.flush()?;
                     let result = match &operation {
+                        CompileOperation::NativeOwnership(_) => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|query| query.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            CompileResult::Ownership(
+                                ownership
+                                    .as_ref()
+                                    .ok_or_else(uninstalled)?
+                                    .materialize(*product)?,
+                            )
+                        }
                         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
                             let [product] = products else {
                                 return Err(uninstalled());
@@ -228,7 +257,14 @@ impl SourceProducts {
         let growth = self._growth.clone();
         let run = self.run.clone();
         let native = self.native.clone();
+        let ownership = self.ownership.clone();
         Arc::new(move |reference| {
+            if let Some(error) = ownership
+                .as_ref()
+                .and_then(|selected| selected.failure(reference))
+            {
+                return error;
+            }
             if let Some(error) = native
                 .as_ref()
                 .and_then(|native| native.assembly.failure(reference))
@@ -299,6 +335,7 @@ struct Plan {
     run: MemoryWeight,
     native: Option<super::native_selection::Footprint>,
     native_root: MemoryWeight,
+    ownership: Option<super::ownership_admission::Footprint>,
 }
 impl Plan {
     fn new(
@@ -310,8 +347,11 @@ impl Plan {
         needs_run: bool,
         needs_native: bool,
         needs_proofs: bool,
+        needs_ownership: bool,
         needs_safe: bool,
         footprint: FrontInputFootprint,
+        run_input_bytes: u64,
+        native_catalogue_bytes: u64,
         inspection_bytes: u64,
     ) -> Result<Self, ToolError> {
         let source = u64::try_from(inputs.retained_bytes())
@@ -326,13 +366,19 @@ impl Plan {
             FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(uninstalled)?;
         let check_inventory =
             FrontCheckQueries::input_bytes(definitions, files, metadata).ok_or_else(uninstalled)?;
-        let run_inventory = if needs_run {
-            FrontRunQueries::input_bytes(definitions).ok_or_else(uninstalled)?
+        let run_inventory = if needs_run { run_input_bytes } else { 0 };
+        let native_inventory = if needs_native {
+            super::native_selection::Footprint::minimum(definitions).ok_or_else(uninstalled)?
         } else {
             0
         };
-        let native_inventory = if needs_native {
-            super::native_selection::Footprint::minimum(definitions).ok_or_else(uninstalled)?
+        let ownership_inventory = if needs_ownership {
+            super::ownership_admission::Footprint::new(definitions, 0)
+                .and_then(|footprint| {
+                    footprint.with_catalogue_bytes(definitions, native_catalogue_bytes)
+                })
+                .and_then(|footprint| footprint.bytes())
+                .ok_or_else(uninstalled)?
         } else {
             0
         };
@@ -344,6 +390,7 @@ impl Plan {
             check_inventory,
             run_inventory,
             native_inventory,
+            ownership_inventory,
         ]
         .into_iter()
         .try_fold(0u64, u64::checked_add)
@@ -353,7 +400,13 @@ impl Plan {
                 "compiler immutable input inventory exceeds snapshot admission".into(),
             )
         })?;
-        let native_slack = if needs_native { slack / 2 } else { 0 };
+        let native_slack = if needs_native {
+            slack / 2
+        } else if needs_ownership {
+            slack / 8
+        } else {
+            0
+        };
         let slack = slack - native_slack;
         let native = if needs_native {
             Some(
@@ -363,10 +416,37 @@ impl Plan {
         } else {
             None
         };
-        let front_slack = slack / 4;
-        let lower_slack = if needs_run { slack / 3 } else { slack / 2 };
-        let growth_slack = slack / 8;
-        let check_slack = if needs_run {
+        let ownership = if needs_ownership {
+            Some(
+                super::ownership_admission::Footprint::new(definitions, native_slack)
+                    .and_then(|footprint| {
+                        footprint.with_catalogue_bytes(definitions, native_catalogue_bytes)
+                    })
+                    .ok_or_else(uninstalled)?,
+            )
+        } else {
+            None
+        };
+        let front_slack = if needs_ownership {
+            slack * 2 / 3
+        } else {
+            slack / 4
+        };
+        let lower_slack = if needs_ownership {
+            slack / 12
+        } else if needs_run {
+            slack / 3
+        } else {
+            slack / 2
+        };
+        let growth_slack = if needs_ownership {
+            slack / 10
+        } else {
+            slack / 8
+        };
+        let check_slack = if needs_ownership {
+            slack / 48
+        } else if needs_run {
             slack / 8
         } else {
             slack - front_slack - lower_slack - growth_slack
@@ -376,7 +456,12 @@ impl Plan {
         let lower = lower_inventory + lower_slack;
         let growth = growth_inventory + growth_slack;
         let check = check_inventory + check_slack;
-        let run = run_inventory
+        let run = ownership
+            .as_ref()
+            .map(|ownership| ownership.bytes().ok_or_else(uninstalled))
+            .transpose()?
+            .unwrap_or(0)
+            + run_inventory
             + run_slack
             + native
                 .as_ref()
@@ -392,8 +477,11 @@ impl Plan {
         // source roots have separate slots.
         // Reserve the same row bound here and in the runtime constructor so
         // task grants cannot spend the scheduler's bookkeeping allocation.
-        let per_definition = 3 + usize::from(needs_run) + 2 * usize::from(needs_native);
-        let roots = 2 + usize::from(needs_safe) + 2 * usize::from(needs_native);
+        let per_definition = 3
+            + usize::from(needs_run)
+            + 2 * usize::from(needs_native)
+            + usize::from(needs_ownership);
+        let roots = 2 + usize::from(needs_safe) + 2 * usize::from(needs_native || needs_ownership);
         let inventory = definitions
             .len()
             .checked_mul(per_definition)
@@ -426,7 +514,7 @@ impl Plan {
         let suspended = working - jobs * scratch;
         // A native request adds its source root to the root continuations and
         // its bootstrap controller to the nested bodies.
-        let native_frames = u64::from(needs_native);
+        let native_frames = u64::from(needs_native || needs_ownership);
         let root_bound = suspended / (2 * (ROOT_CONTINUATIONS + native_frames));
         let body_bound = suspended / (2 * (BODY_CONTINUATIONS + native_frames));
         // Only demanded Lower outputs consume producer retention. Potential
@@ -474,6 +562,7 @@ impl Plan {
                 stack: 0,
             },
             native,
+            ownership,
             run: MemoryWeight {
                 retained: (run_slack / 4).min(retained),
                 scratch,
@@ -495,7 +584,9 @@ pub(super) fn install(
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
-        CompileOperation::Tir { .. } => (LoweringPolicy::Reachable, true),
+        CompileOperation::Tir { .. } | CompileOperation::NativeOwnership(_) => {
+            (LoweringPolicy::Reachable, true)
+        }
         CompileOperation::SafeCheck => (config.lowering, true),
         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
             (LoweringPolicy::Reachable, true)
@@ -553,6 +644,26 @@ pub(super) fn install(
         Ok(footprint) => footprint,
         Err(error) => return Err(loading.failed(program.error(error))),
     };
+    let mut run_inputs = if needs_run {
+        match program.engine.front_run_inputs(limits.snapshot_bytes) {
+            Ok(inputs) => Some(inputs),
+            Err(error) => return Err(loading.failed(program.error(error))),
+        }
+    } else {
+        None
+    };
+    let mut native_catalogue = if matches!(request.operation, CompileOperation::NativeOwnership(_))
+    {
+        match program
+            .engine
+            .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
+        {
+            Ok(inputs) => Some(inputs),
+            Err(error) => return Err(loading.failed(program.error(error))),
+        }
+    } else {
+        None
+    };
     let plan = Plan::new(
         limits,
         config,
@@ -569,8 +680,13 @@ pub(super) fn install(
             CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native)
                 if native.evidence.is_some()
         ),
+        matches!(request.operation, CompileOperation::NativeOwnership(_)),
         matches!(request.operation, CompileOperation::SafeCheck),
         footprint,
+        run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
+        native_catalogue
+            .as_ref()
+            .map_or(0, |inputs| inputs.input_bytes()),
         GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
             .ok_or_else(uninstalled)?,
     )?;
@@ -661,14 +777,23 @@ pub(super) fn install(
                 .ok_or_else(uninstalled)
         })
         .transpose()?;
+    let mut ownership_allowance = plan
+        .ownership
+        .as_ref()
+        .map(|ownership| {
+            run.split(ownership.bytes().ok_or_else(uninstalled)?)
+                .ok_or_else(uninstalled)
+        })
+        .transpose()?;
     let mut run = if needs_run {
         Some(
             program
                 .engine
-                .front_run_queries(
+                .front_run_queries_with_inputs(
                     check.clone(),
                     front.clone(),
                     lower.clone(),
+                    run_inputs.take().ok_or_else(uninstalled)?,
                     plan.run,
                     run,
                     errors,
@@ -736,6 +861,37 @@ pub(super) fn install(
     } else {
         None
     };
+    let ownership = if let CompileOperation::NativeOwnership(selected) = &request.operation {
+        let entry = selected
+            .definition
+            .as_ref()
+            .or(launch_entry.as_ref())
+            .cloned()
+            .ok_or_else(uninstalled)?;
+        Some(
+            super::ownership_selection::OwnershipSelection::new(
+                &mut program,
+                super::ownership_admission::SourceInputs {
+                    definitions: definitions.clone(),
+                    catalogue: native_catalogue.take().ok_or_else(uninstalled)?,
+                    entry,
+                    front: front.clone(),
+                    lower: lower.clone(),
+                    run: run.take().ok_or_else(uninstalled)?,
+                    store: store.clone(),
+                },
+                selected,
+                config.verify_store,
+                plan.ownership.as_ref().ok_or_else(uninstalled)?,
+                &mut ownership_allowance.take().ok_or_else(uninstalled)?,
+                plan.body,
+                errors,
+            )
+            .map_err(|error| super::host_selector::retain_error(error, source.clone()))?,
+        )
+    } else {
+        None
+    };
     // The ordinary source namespace is immutable before the first request.
     // Preserve the original small-graph subscription/factory headroom while
     // admitting every actual P/Lower/Evaluate/Run address of larger packages.
@@ -768,6 +924,11 @@ pub(super) fn install(
             inventory.insert((query.kind, query.address.0));
         }
     }
+    if let Some(ownership) = &ownership {
+        for query in ownership.queries(&definitions) {
+            inventory.insert((query.kind, query.address.0));
+        }
+    }
     if inventory.len() > plan.query_capacity {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
@@ -793,6 +954,10 @@ pub(super) fn install(
         .map_err(registration)?;
     if let Some(native) = &native {
         for (kind, factory) in native.assembly.factories() {
+            runtime.register(kind, factory).map_err(registration)?;
+        }
+    } else if let Some(ownership) = &ownership {
+        for (kind, factory) in ownership.factories() {
             runtime.register(kind, factory).map_err(registration)?;
         }
     } else if let Some(run) = &run {
@@ -851,6 +1016,7 @@ pub(super) fn install(
         foreign_unreplayable,
         run,
         native,
+        ownership,
         safe,
         front,
         lower,

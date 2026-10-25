@@ -17,6 +17,9 @@ mod native_routing;
 mod native_selection;
 mod native_sources;
 mod output;
+mod ownership_admission;
+mod ownership_bootstrap;
+mod ownership_selection;
 mod safe_check;
 mod selector;
 mod source_graph;
@@ -25,6 +28,7 @@ pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
 };
+pub use ownership_selection::OwnershipExecution;
 pub use selector::{CompilerRequests, RequestLimits};
 
 /// Already observed inputs, including missing files, manifests, aliases and
@@ -66,6 +70,8 @@ pub enum CompileOperation {
     },
     NativeBuild(NativeRequest),
     NativeRun(NativeRequest),
+    /// Explicit source-selected Value-to-Ready ownership diagnostics.
+    NativeOwnership(OwnershipRequest),
 }
 /// Backend and launch policy, independent of destination paths or host output
 /// writers. Build and run select the same compilation products; execution and
@@ -100,4 +106,13 @@ pub struct NativeSourceText {
     pub name: String,
     pub context: hirsel_syntax::FileContext,
     pub text: std::sync::Arc<str>,
+}
+
+/// Diagnostic compiler policy; execution consumes only its checked products.
+#[derive(Clone, Debug)]
+pub struct OwnershipRequest {
+    pub definition: Option<DefPath>,
+    pub target: TargetSpec,
+    pub validation: Validation,
+    pub launch: LaunchInputs,
 }
