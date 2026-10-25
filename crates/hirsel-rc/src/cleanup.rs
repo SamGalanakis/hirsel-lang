@@ -1434,6 +1434,7 @@ enum Action {
         layout: LayoutId,
     },
     EmptyVariant {
+        path: Vec<Step>,
         layout: LayoutId,
     },
     Inline {
@@ -1928,8 +1929,8 @@ impl Lowering<'_, '_> {
                 });
                 Ok(joined)
             }
-            Action::EmptyVariant { layout } => {
-                let whole = self.whole(site.slot);
+            Action::EmptyVariant { path, layout } => {
+                let whole = self.address(site.slot, path, *layout)?;
                 let ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, *layout);
                 let value = self.ed.value(ty, Holding::Owned);
                 self.ed.code[at.index()].extend([
@@ -2147,7 +2148,10 @@ impl Lowering<'_, '_> {
         let record = self.lay.get(layout).unwrap().clone();
         // A resource's own finalizer participates in its original slot's
         // cleanup order. Keep that slot and its phase through arm selection.
-        let held = record.finalizer.is_none();
+        // Projected payload remains an owned descendant of its original
+        // slot while a containing source finalizer is live. Moving it into a
+        // new temporary would break that cleanup invocation's custody.
+        let held = path.is_empty() && record.finalizer.is_none();
         let kind = self.ed.unit.blocks[at.index()].kind;
         let anchor = self.ed.unit.blocks[at.index()].anchor;
         let (local, whole, joined, retry) = if held {
@@ -2242,7 +2246,10 @@ impl Lowering<'_, '_> {
                 // A nullary active arm owns no payload; taking and releasing it
                 // empties the storage without reading a nonexistent field.
                 if actions.is_empty() {
-                    actions.push(Action::EmptyVariant { layout });
+                    actions.push(Action::EmptyVariant {
+                        path: base_path.clone(),
+                        layout,
+                    });
                 }
                 let base = self.prepare_actions(arm, &actions, &local, retry)?;
                 let dead = self.ed.block(BlockKind::FailureCleanup, &[], anchor);

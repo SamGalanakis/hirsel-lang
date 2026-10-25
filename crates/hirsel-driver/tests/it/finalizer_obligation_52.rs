@@ -410,3 +410,39 @@ fn finalizer_obligation_52_false_guard_cannot_hide_an_entered_cleanup() {
         assert!(violations.iter().any(|v| matches!(&v.kind, validate::ViolationKind::Schema(message) if message.contains("guard") || message.contains("invocation"))), "{violations:?}");
     });
 }
+
+#[test]
+fn finalizer_obligation_52_parent_stays_live_for_variant_owned_children() {
+    with_compiler_stack(|| {
+        source_program(
+            r#"
+resource type Leaf {n:u64}
+drop(x) {()}
+resource type Outer {child:Option[Leaf]}
+drop(x) {()}
+pub fn main()->Result[(),()] {
+  let root=Outer(child:Some(Leaf(n:7u64)))
+  Ok(())
+}
+"#,
+        );
+    });
+}
+
+#[test]
+fn finalizer_obligation_52_empty_variant_child_does_not_consume_its_parent() {
+    with_compiler_stack(|| {
+        source_program(
+            r#"
+resource type Leaf {n:u64}
+drop(x) {()}
+resource type Outer {child:Option[Leaf], sibling:Leaf}
+drop(x) {()}
+pub fn main()->Result[(),()] {
+  let root=Outer(child:None(),sibling:Leaf(n:11u64))
+  Ok(())
+}
+"#,
+        );
+    });
+}
