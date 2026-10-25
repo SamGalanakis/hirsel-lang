@@ -38,6 +38,9 @@ pub(crate) struct Driver {
     pub(super) submitted: BTreeMap<TaskId, u64>,
     pub(super) recorded: BTreeMap<TaskId, u64>,
     pub(super) events: Option<super::events::Log>,
+    /// Bounded observation only: called under IdleGuard, before selection.
+    #[cfg(test)]
+    pub(super) after_save: Option<SaveHook>,
     pub(super) waiting: BTreeMap<TaskId, u64>,
     pub(super) returned: BTreeMap<TaskId, super::Returned>,
     pub(super) host_poll: bool,
@@ -62,6 +65,9 @@ pub(crate) struct Driver {
     pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
 
+#[cfg(test)]
+type SaveHook = Box<dyn Fn(&super::super::Scheduler, u32, bool) + Send + Sync>;
+
 impl Driver {
     pub(crate) fn new(root: TaskId, policy: Policy, settled: Settled, objects: Registry) -> Self {
         let mut frontier = Frontier::new(root, policy, settled);
@@ -78,6 +84,8 @@ impl Driver {
             submitted: BTreeMap::new(),
             recorded: BTreeMap::new(),
             events: None,
+            #[cfg(test)]
+            after_save: None,
             waiting: BTreeMap::new(),
             returned: BTreeMap::new(),
             host_poll: false,
@@ -329,6 +337,15 @@ pub(crate) fn after_save(
     }
     if completed {
         super::lifecycle::retire_detached(s, task);
+    }
+    #[cfg(test)]
+    {
+        let super::super::Logical::Ordered(driver) = &s.logical else {
+            unreachable!()
+        };
+        if let Some(hook) = &driver.after_save {
+            hook(s, task, completed);
+        }
     }
     let super::super::Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()

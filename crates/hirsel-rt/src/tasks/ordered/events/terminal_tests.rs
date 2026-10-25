@@ -1,54 +1,94 @@
 use super::*;
 use crate::tasks::*;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Delay {
+    Save,
+    Receive,
+    Cut,
+}
+
+struct Handshake {
+    saved: Mutex<mpsc::Receiver<()>>,
+    delay: Delay,
+}
+
+fn prefix(s: &Scheduler, parked: bool) -> bool {
+    let Logical::Ordered(driver) = &s.logical else {
+        unreachable!()
+    };
+    let row = s.tasks[0].as_ref().unwrap();
+    driver
+        .events
+        .as_ref()
+        .unwrap()
+        .awaiting
+        .contains_key(&Vec::new())
+        && if parked {
+            matches!(row.wait, Some(Wait::Any { .. }))
+        } else {
+            row.wait.is_none() && row.state == State::Ready
+        }
+}
+
+fn delay(at: Delay, selected: Delay) {
+    if at == selected {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 unsafe extern "C" fn fail_budget_after_parent_await(
     ctx: *mut TaskCtx,
-    _: *mut crate::Header,
+    environment: *mut crate::Header,
     _: u64,
     _: u64,
 ) -> u8 {
-    unsafe { fail_budget(ctx, true) }
+    unsafe { fail_budget(ctx, environment, true) }
 }
 
 unsafe extern "C" fn fail_budget_after_parent_yield(
     ctx: *mut TaskCtx,
-    _: *mut crate::Header,
+    environment: *mut crate::Header,
     _: u64,
     _: u64,
 ) -> u8 {
-    unsafe { fail_budget(ctx, false) }
+    unsafe { fail_budget(ctx, environment, false) }
 }
 
-unsafe fn fail_budget(ctx: *mut TaskCtx, parked: bool) -> u8 {
+unsafe fn fail_budget(ctx: *mut TaskCtx, environment: *mut crate::Header, parked: bool) -> u8 {
     unsafe {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            let waiting = {
-                let _role = role::Guard::new(ctx);
-                let s = scheduler(ctx);
-                let Logical::Ordered(driver) = &s.logical else {
-                    unreachable!()
-                };
-                let entered = driver
-                    .events
-                    .as_ref()
-                    .unwrap()
-                    .awaiting
-                    .contains_key(&Vec::new());
-                entered
-                    && readiness::saved(s, 0)
-                    && if parked {
-                        matches!(s.task(0).wait, Some(Wait::Any { .. }))
-                    } else {
-                        s.task(0).wait.is_none() && s.task(0).state == State::Ready
-                    }
-            };
-            if waiting {
-                if !parked {
-                    break;
-                }
-                let _role = role::Guard::new(ctx);
-                let s = scheduler(ctx);
+        // The root retains this per-run state until every stopped worker leaves.
+        let handshake = &*crate::alloc::payload(environment)
+            .cast::<*const Handshake>()
+            .read();
+        // Exact serial handoffs: spawn -> add -> Awaiting Yield -> optional
+        // Any Park. These are protocol turns, not retries of a transient state.
+        for _ in 0..if parked { 3 } else { 2 } {
+            let mut cause = 0;
+            assert_eq!(
+                hirsel_rt_v2_task_canceled(ctx, &mut cause, &0),
+                crate::STATUS_OK
+            );
+            assert_eq!(cause, 0);
+        }
+        delay(Delay::Receive, handshake.delay);
+        // Like Tokio loom_notify.rs:12-48, publication may precede the receive;
+        // the channel retains the event. No scheduler operation advances the
+        // parent's continuation between this handshake and the memory cut.
+        handshake
+            .saved
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .expect("parent did not save its await_any prefix");
+        {
+            let _role = role::Guard::new(ctx);
+            let s = scheduler(ctx);
+            assert!(prefix(s, parked));
+            assert!(readiness::saved(s, 0));
+            if parked {
                 let Logical::Ordered(driver) = &s.logical else {
                     unreachable!()
                 };
@@ -92,18 +132,9 @@ unsafe fn fail_budget(ctx: *mut TaskCtx, parked: bool) -> u8 {
                     unreachable!()
                 };
                 driver.events.as_mut().unwrap().canonical[prefix].outcome = original;
-                break;
             }
-            assert!(
-                std::time::Instant::now() < until,
-                "parent did not save its await_any prefix"
-            );
-            let mut cause = 0;
-            assert_eq!(
-                hirsel_rt_v2_task_canceled(ctx, &mut cause, &0),
-                crate::STATUS_OK
-            );
         }
+        delay(Delay::Cut, handshake.delay);
         // This original allocator entry selects the global Memory cut while
         // the parent's already-published Awaiting prefix still owns its set.
         crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16384, 8, crate::alloc::DOMAIN_HEAP, 0);
@@ -113,16 +144,25 @@ unsafe fn fail_budget(ctx: *mut TaskCtx, parked: bool) -> u8 {
 
 #[test]
 fn global_budget_cut_closes_a_saved_parent_await_without_fabricating_a_result() {
-    check_budget_cut(fail_budget_after_parent_await);
+    check_budget_cut(fail_budget_after_parent_await, true);
 }
 
 #[test]
 fn global_budget_cut_closes_a_yielded_await_before_its_native_park() {
-    check_budget_cut(fail_budget_after_parent_yield);
+    check_budget_cut(fail_budget_after_parent_yield, false);
 }
 
-fn check_budget_cut(entry: TaskCode) {
-    for width in [1, 4] {
+fn check_budget_cut(entry: TaskCode, parked: bool) {
+    for (width, delay_at) in [1, 4]
+        .into_iter()
+        .flat_map(|width| [Delay::Save, Delay::Receive, Delay::Cut].map(|delay| (width, delay)))
+    {
+        let (notify, saved) = mpsc::channel();
+        let handshake = Arc::new(Handshake {
+            saved: Mutex::new(saved),
+            delay: delay_at,
+        });
+        let child_handshake = handshake.clone();
         let environment = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,
@@ -143,6 +183,18 @@ fn check_budget_cut(entry: TaskCode) {
         run.config.layouts = layouts.as_ptr();
         run.config.layout_count = 1;
         unsafe { run.use_physical_dispatch() };
+        // Go exec_test.go:470-521: a bounded request/response handshake and
+        // exact completion assertions. The watchdog covers scheduler handoffs
+        // too, including failure to reach the child's receive.
+        let control = run.control();
+        let (done, finished) = mpsc::channel();
+        let watchdog = std::thread::spawn(move || {
+            if finished.recv_timeout(Duration::from_secs(5)).is_err() {
+                control.stop();
+                return false;
+            }
+            true
+        });
         let (outcome, trace) = run.run_traced_after_bounded_stop(
             |ctx| unsafe {
                 (*ctx).set_budgets(None, Some(4096));
@@ -153,6 +205,30 @@ fn check_budget_cut(entry: TaskCode) {
                 enable(ctx);
             },
             move |ctx| unsafe {
+                let run_address = (*ctx).run_ptr() as usize;
+                crate::pool::free::test_before_save(ctx, move |task, completed| {
+                    if task != 0 || completed {
+                        return;
+                    }
+                    let run = run_address as *mut crate::context::RunShared;
+                    let target = {
+                        let _role = role::IdleGuard::new(run);
+                        prefix((*(*run).tasks.get()).as_deref().unwrap(), parked)
+                    };
+                    if target {
+                        delay(Delay::Save, delay_at);
+                    }
+                });
+                let sent = std::sync::atomic::AtomicBool::new(false);
+                let notify = notify.clone();
+                super::super::engine::with_driver(ctx, |driver| {
+                    driver.after_save = Some(Box::new(move |s, task, completed| {
+                        if task == 0 && !completed && prefix(s, parked) && readiness::saved(s, 0) {
+                            assert!(!sent.swap(true, std::sync::atomic::Ordering::SeqCst));
+                            notify.send(()).unwrap();
+                        }
+                    }));
+                });
                 let mut scope = 0;
                 let mut set = 0;
                 let mut child = 0;
@@ -166,6 +242,9 @@ fn check_budget_cut(entry: TaskCode) {
                 );
                 let env =
                     crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(env)
+                    .cast::<*const Handshake>()
+                    .write(Arc::as_ptr(&child_handshake));
                 assert_eq!(
                     hirsel_rt_v2_task_spawn(
                         ctx,
@@ -200,13 +279,26 @@ fn check_budget_cut(entry: TaskCode) {
                 )
             },
         );
+        let _ = done.send(());
+        assert!(
+            watchdog.join().unwrap(),
+            "terminal cut watchdog: {width}/{delay_at:?}"
+        );
         assert_eq!(
             outcome.ended,
             Err(crate::stop::Stop::BudgetExceeded(
                 hirsel_run_schema::BudgetKind::Memory
-            ))
+            )),
+            "{width}/{delay_at:?}"
         );
         assert_eq!(outcome.pending, 0);
+        assert!(
+            matches!(
+                handshake.saved.lock().unwrap().try_recv(),
+                Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected)
+            ),
+            "the child consumed exactly one saved-prefix notification"
+        );
         let trace =
             trace.expect("saved known wait prefix and selected budget cut must export completely");
         let rows: Vec<serde_json::Value> = std::str::from_utf8(trace.bytes())
