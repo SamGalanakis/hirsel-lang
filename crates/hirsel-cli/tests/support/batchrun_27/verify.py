@@ -59,13 +59,18 @@ def verify(args):
         fd = libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
         assert fd >= 0
         assert libc.inotify_add_watch(fd, os.fsencode(state), 0x100 | 0x8) >= 0
-        def wait_file(path):
-            until = time.monotonic() + 10
+        def wait_file(path, app, seconds):
+            # Go TestPipes reads only after Start and a read ends at child EOF:
+            # each wait ends at its marker or at the app's exit (pidfd).
+            until = time.monotonic() + seconds
             while not path.exists():
                 remaining = until - time.monotonic()
                 assert remaining > 0, ('handshake timeout', path)
-                assert select.select([fd], [], [], remaining)[0], path
-                os.read(fd, 65536)
+                ready = select.select([fd, app], [], [], remaining)[0]
+                assert ready, ('handshake timeout', path)
+                if fd in ready:
+                    os.read(fd, 65536)
+                assert app not in ready or path.exists(), ('app exited before handshake', path)
         manifest = case['manifest']
         for i, command in enumerate(manifest['commands']):
             mode = case['modes'][i]
@@ -106,11 +111,14 @@ def verify(args):
         with stdout.open('wb') as stdout_file, stderr.open('wb') as stderr_file:
             child = subprocess.Popen(wrapper, stdin=subprocess.DEVNULL, stdout=stdout_file, stderr=stderr_file, env=env)
             if identity == 'mixed':
-                # First job is held until the later three have completed.
-                wait_file(state/'0.started')
+                # First job is held until the later three have completed. An
+                # app that exits early fails at once, not at the 10s bound.
+                app = os.pidfd_open(child.pid)
+                wait_file(state/'0.started', app, 10)
                 for i in [1,3]:
-                    wait_file(state/(str(i)+'.done'))
-                wait_file(state/'2.started')
+                    wait_file(state/(str(i)+'.done'), app, 10)
+                wait_file(state/'2.started', app, 10)
+                os.close(app)
                 with (state/'0.release').open('wb') as release:
                     release.write(b'x')
             code = child.wait(timeout=75)
