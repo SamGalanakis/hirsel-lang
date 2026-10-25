@@ -52,14 +52,14 @@ impl<'q> Signatures<'q> {
     pub fn read(
         &mut self,
         definition: DefId,
-        reads: &mut Vec<DependencyRead>,
+        reads: &mut SharedPath<DependencyRead>,
     ) -> Result<SignatureRef, QueryError> {
         let result = self.reader.borrow_mut().read(definition);
         self.record(reads);
         result
     }
     /// Record the first reads made since the last call, the memo's included.
-    pub fn record(&mut self, reads: &mut Vec<DependencyRead>) {
+    pub fn record(&mut self, reads: &mut SharedPath<DependencyRead>) {
         reads.extend(self.diagnostic_lookups.borrow_mut().drain(..));
         for (definition, result) in self.reader.borrow_mut().take_pending() {
             reads.push(DependencyRead::Signature {
@@ -71,7 +71,7 @@ impl<'q> Signatures<'q> {
     /// A proof or comparison through the query's memo, its reads recorded.
     pub fn prove<T>(
         &mut self,
-        reads: &mut Vec<DependencyRead>,
+        reads: &mut SharedPath<DependencyRead>,
         proof: impl FnOnce(&mut ContextMemo<'q>) -> Result<T, QueryError>,
     ) -> Result<T, QueryError> {
         let hits = self.memo.hits();
@@ -475,7 +475,7 @@ fn physical_layout(
     layouts: &mut Layouts,
     t: &TypeInterner,
     ty: TypeId,
-    reads: &mut Vec<DependencyRead>,
+    reads: &mut SharedPath<DependencyRead>,
     signatures: &mut Signatures,
 ) -> Result<TypeKind, QueryError> {
     if let Some(kind) = layouts.get(&ty) {

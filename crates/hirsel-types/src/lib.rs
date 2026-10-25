@@ -793,8 +793,8 @@ pub enum ResolvedName {
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct Resolution {
     /// Phase snapshots and memo evidence share the completed read log.
-    /// A later phase appends through `Arc::make_mut`, preserving earlier evidence.
-    pub reads: std::sync::Arc<Vec<DependencyRead>>,
+    /// A later phase shares the immutable prefix and appends its own read nodes.
+    pub reads: std::sync::Arc<SharedPath<DependencyRead>>,
     pub contextual: Vec<(NameSite, ContextualName)>,
     pub paths: Vec<(NameSite, ResolvedName)>,
     pub local_functions: Vec<(hirsel_syntax::StmtId, LocalId)>,

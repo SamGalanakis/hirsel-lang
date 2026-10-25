@@ -316,6 +316,21 @@ impl Weight {
             DependencyRead::Signature { .. } => (),
         }
     }
+    fn read_log(&mut self, value: &std::sync::Arc<SharedPath<hirsel_types::DependencyRead>>) {
+        if !self.shared.insert(std::sync::Arc::as_ptr(value) as usize) {
+            return;
+        }
+        self.add(arc_bytes(&**value));
+        let mut path = &**value;
+        while let Some(identity) = path.node_identity() {
+            if !self.shared.insert(identity) {
+                break;
+            }
+            self.add(path.node_allocation_bytes());
+            self.dependency(path.last().unwrap());
+            path = path.prefix().unwrap();
+        }
+    }
     fn detail(&mut self, detail: &crate::DependencyReads) {
         let crate::DependencyReads {
             operational_failure,
@@ -335,13 +350,7 @@ impl Weight {
         self.vec(failed_signature_keys, |w, (path, _)| w.def_path(path));
         self.vec(lookups, |w, (path, _)| w.def_path(path));
         self.vec(manifest_lookups, Weight::dependency);
-        if self
-            .shared
-            .insert(std::sync::Arc::as_ptr(resolver) as usize)
-        {
-            self.add(arc_bytes(&**resolver));
-            self.vec(resolver, Weight::dependency);
-        }
+        self.read_log(resolver);
         self.vec(citations, |w, (path, _)| w.def_path(path));
     }
     pub(crate) fn add(&mut self, bytes: usize) {
@@ -879,7 +888,12 @@ mod tests {
             failed > base + 50_000,
             "negative lookup owns both request and failure text"
         );
-        std::sync::Arc::make_mut(&mut entry.detail.resolver).reserve(256);
+        std::sync::Arc::make_mut(&mut entry.detail.resolver).extend((0..256).map(|_| {
+            hirsel_types::DependencyRead::Signature {
+                definition: hirsel_syntax::DefId::intern(&DefPath::core("dependency")),
+                fingerprint: None,
+            }
+        }));
         assert!(retained_lower_entry_bytes(&entry, None) > failed);
         let no_depth = retained_lower_entry_bytes(&entry, None);
         entry.depth = Some(DepthEvidence::leaf(32));
@@ -888,6 +902,45 @@ mod tests {
         assert!(
             retained_lower_entry_bytes(&entry, Some(&verdict))
                 > retained_lower_entry_bytes(&entry, None)
+        );
+    }
+
+    #[test]
+    fn read_log_weight_counts_shared_prefix_payloads_once_and_new_nodes_in_full() {
+        use hirsel_types::DependencyRead;
+        use std::sync::Arc;
+        let original: SharedPath<_> = vec![DependencyRead::ProviderLookup {
+            context: crate::default_context(),
+            package: None,
+            segments: vec!["missing".repeat(4096)],
+            output: hirsel_types::LookupOutput {
+                manifest: Default::default(),
+                result: Err(hirsel_types::QueryError::NotImplemented),
+            },
+        }]
+        .into();
+        let original = Arc::new(original);
+        let mut branch = (*original).clone();
+        branch.push(DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("callee")),
+            fingerprint: None,
+        });
+        let branch = Arc::new(branch);
+        let mut weight = Weight::default();
+        weight.read_log(&original);
+        let first = weight.bytes;
+        assert!(first > 28_000);
+        weight.read_log(&branch);
+        let expected_delta = arc_bytes(&*branch) + branch.node_allocation_bytes();
+        assert_eq!(weight.bytes, first + expected_delta as u64);
+        weight.read_log(&original);
+        weight.read_log(&branch);
+        assert_eq!(weight.bytes, first + expected_delta as u64);
+        let mut independent = Weight::default();
+        independent.read_log(&branch);
+        assert_eq!(
+            independent.bytes,
+            first + branch.node_allocation_bytes() as u64
         );
     }
 
