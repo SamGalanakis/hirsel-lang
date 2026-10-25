@@ -1,0 +1,24 @@
+// rule: CLO-4
+// expect: run
+// stdout: 3
+// "An owning once scope-body parameter may take captures without becoming global."
+// A task.scope body takes a captured Sender and releases it once, at the
+// body's end; the enclosing scope releases nothing.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let total = task.scope(
+    tasks,
+    fn(s: Scope) -> u64 {
+      let mut tx = take sender
+      let _ = channel.send(tasks, mut tx, 5u64)
+      3u64
+    }
+  )
+  let mut rx = take receiver
+  failure.check(channel.receive(tasks, mut rx) == Ok(5u64), Arithmetic())
+  failure.check(channel.receive(tasks, mut rx) == Error(Closed()), Arithmetic())
+  let _ = out.print(output, f"{total}\n")
+  Ok(())
+}

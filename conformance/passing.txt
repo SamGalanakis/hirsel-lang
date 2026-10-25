@@ -389,8 +389,10 @@ conformance/CLO/CLO-1-iterator-literal-from.hir
 conformance/CLO/CLO-1-lexical-generic-environment-bad.hir
 conformance/CLO/CLO-1-lexical-generic-environment-ok.hir
 conformance/CLO/CLO-1-library-callback-forms.hir
+conformance/CLO/CLO-1-list-map-callback-takes-capture-bad.hir
 conformance/CLO/CLO-1-local-result-still-scoped-bad.hir
 conformance/CLO/CLO-1-local-result-still-scoped-ok.hir
+conformance/CLO/CLO-1-mutex-body-takes-capture-bad.hir
 conformance/CLO/CLO-1-nested-local-call-result-bad.hir
 conformance/CLO/CLO-1-nested-local-call-result-ok.hir
 conformance/CLO/CLO-1-nested-local-call-result-run.hir
@@ -495,6 +497,7 @@ conformance/CLO/CLO-2-std-result-unwrap-or-else-run.hir
 conformance/CLO/CLO-2-std-result-unwrap-or-run.hir
 conformance/CLO/CLO-2-unknown-authority-bad.hir
 conformance/CLO/CLO-2-unknown-authority-ok.hir
+conformance/CLO/CLO-3-async-takes-sender-run.hir
 conformance/CLO/CLO-3-child-atomic-capture-run.hir
 conformance/CLO/CLO-3-child-counted-capture-bad.hir
 conformance/CLO/CLO-3-child-mutex-capture-run.hir
@@ -505,6 +508,7 @@ conformance/CLO/CLO-3-counted-child-borrow-ok.hir
 conformance/CLO/CLO-3-inferred-task-result-error.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-bad.hir
 conformance/CLO/CLO-3-isolate-counted-borrow-ok.hir
+conformance/CLO/CLO-3-isolate-takes-sender-run.hir
 conformance/CLO/CLO-3-isolate-unique-bytes-borrow-bad.hir
 conformance/CLO/CLO-3-json-document-task-bad.hir
 conformance/CLO/CLO-3-json-document-task-ok.hir
@@ -517,6 +521,8 @@ conformance/CLO/CLO-3-spec-shared-readers.hir
 conformance/CLO/CLO-3-spec-sizes.hir
 conformance/CLO/CLO-4-annotated-tuple-callable-return-bad.hir
 conformance/CLO/CLO-4-annotated-tuple-callable-return-run.hir
+conformance/CLO/CLO-4-arena-bounded-callback-takes-sender-run.hir
+conformance/CLO/CLO-4-arena-callback-takes-sender-run.hir
 conformance/CLO/CLO-4-borrowed-counted-capture-bad.hir
 conformance/CLO/CLO-4-borrowed-counted-capture-ok.hir
 conformance/CLO/CLO-4-borrowed-resource-global-bad.hir
@@ -592,6 +598,7 @@ conformance/CLO/CLO-4-scope-body-takes-let-mut-list-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-reassigned-run.hir
 conformance/CLO/CLO-4-scope-body-takes-let-mut-stream-run.hir
 conformance/CLO/CLO-4-scope-body-takes-outer-brand-stream-run.hir
+conformance/CLO/CLO-4-scope-body-takes-sender-run.hir
 conformance/CLO/CLO-4-selected-callback-bad.hir
 conformance/CLO/CLO-4-selected-callback-forward-bad.hir
 conformance/CLO/CLO-4-selected-callback-forward-ok.hir

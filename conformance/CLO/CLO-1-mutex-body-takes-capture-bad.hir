@@ -1,0 +1,19 @@
+// rule: CLO-1
+// expect: reject OWN-1 at line 13
+// twin: CLO/CLO-4-arena-callback-takes-sender-run.hir
+// A mutex.with body is a many callable that borrows its captures, so it cannot take a captured Sender; the twin takes it in a once callback.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let m: Mutex[u64] = mutex.create(tasks, 1u64)
+  let total = mutex.with(
+    tasks,
+    m,
+    fn(mut v: unique u64) -> u64 {
+      let mut tx = take sender
+      let _ = channel.send(tasks, mut tx, 5u64)
+      v
+    }
+  )
+  Ok(())
+}

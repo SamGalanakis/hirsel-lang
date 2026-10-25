@@ -129,3 +129,132 @@ fn an_actual_store_over_initialized_storage_is_still_rejected() {
         "the real overwrite, not the live word: {error}"
     );
 }
+
+/// A once callback that takes its boxed capture (`let mut tx = take sender`
+/// inside `arena.with`) and releases it; the caller then releases the
+/// callable. With `clear`, the body clears the capture's live bit as the RC
+/// import's capture take does; without it the environment still claims the
+/// moved capture, so its release would free the box a second time.
+fn taken_capture(clear: bool) -> Program<Ready> {
+    let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+    let common = common(&mut layouts);
+    let boxed = common.boxed;
+    let environment = layouts.record(&[boxed, common.u64]);
+    let word_offset = layouts.get(environment).fields[1].offset;
+    let record = layouts.get_mut(environment);
+    record.kind = LayoutKind::Environment { movable: vec![0] };
+    record.drop = vec![DropStep::ActiveVariant {
+        tag_offset: word_offset,
+        form: TagForm::LiveBit { bit: 0 },
+        variants: vec![(1, vec![DropStep::Release { offset: 0 }])],
+    }];
+    let callable = layouts.callable(Some(environment));
+    let (target, table) = layouts.finish();
+
+    let mut body = F::<Ready>::new("body", common);
+    let capture = body.b.slot(BLOCK, boxed, SlotKind::Capture(0));
+    let word = body.b.slot(U64, common.u64, SlotKind::Capture(1));
+    let (held, live) = (body.b.unit.captures[0], body.b.unit.captures[1]);
+    let at = body.b.address(AddressBase::Slot(capture), &[], BLOCK, boxed);
+    let failure = body.propagates();
+    body.inst(Inst::Address {
+        address: at,
+        failure,
+    });
+    let taken = body.b.owned(BLOCK, boxed);
+    body.inst(Inst::Read {
+        result: taken,
+        address: at,
+        reaching: held,
+        mode: ReadMode::Take,
+    });
+    if clear {
+        let at = body.b.address(AddressBase::Slot(word), &[], U64, common.u64);
+        let failure = body.propagates();
+        body.inst(Inst::Address {
+            address: at,
+            failure,
+        });
+        let old = body.b.plain(U64, common.u64);
+        body.inst(Inst::Read {
+            result: old,
+            address: at,
+            reaching: live,
+            mode: ReadMode::Bits,
+        });
+        let new = body.b.plain(U64, common.u64);
+        body.inst(Inst::UpdateMask {
+            result: new,
+            mask: old,
+            field: 0,
+            initialized: false,
+        });
+        let version = body.b.plain(U64, common.u64);
+        body.inst(Inst::Store {
+            address: at,
+            value: new,
+            version,
+        });
+    }
+    let n = body.unbox(taken);
+    body.print(n);
+    body.release(taken, boxed);
+    body.ret(None);
+
+    let mut main = F::<Ready>::new("main", common);
+    let five = main.int(5);
+    let sender = main.boxed(five);
+    let closure = main.b.closure(
+        path("body"),
+        environment,
+        &[(sender, CaptureUse::Take)],
+        HEAP,
+    );
+    let value = main.b.owned(ValueRepr::Callable, callable);
+    let failure = main.propagates();
+    main.inst(Inst::Closure {
+        result: value,
+        closure,
+        failure,
+    });
+    main.call(Callee::Indirect(value), &[], None);
+    main.release(value, callable);
+    main.ret(None);
+    Program {
+        invocations: Default::default(),
+        invocation_bodies: Vec::new(),
+        pretransfer_adapters: Vec::new(),
+        target,
+        layouts: table.clone(),
+        units: vec![main.finish(&table), body.finish(&table)],
+        statics: vec![],
+    }
+}
+
+#[test]
+fn a_taken_capture_is_released_once_and_a_stale_live_bit_is_refused() {
+    let run = |clear| {
+        run(
+            &taken_capture(clear),
+            &path("main"),
+            &[],
+            &mut Printer,
+            &Config::default(),
+        )
+    };
+    let once = run(true);
+    let audit = once
+        .result
+        .as_ref()
+        .unwrap_or_else(|error| panic!("the cleared take is clean: {error}"));
+    assert_eq!(audit.observation.output, b"5\n");
+    assert_eq!((once.counters.allocations, once.counters.frees), (2, 2));
+    let error = run(false)
+        .result
+        .expect_err("the environment still owns the taken box");
+    assert_eq!(error.kind, ViolationKind::UninitializedScan, "{error}");
+    assert!(
+        error.message.contains("capture live bit disagrees"),
+        "{error}"
+    );
+}

@@ -1,0 +1,26 @@
+// rule: CLO-4
+// expect: run
+// stdout: 3
+// An arena.bounded callback takes a captured Sender and releases it once, at
+// the callback's end; the enclosing scope releases nothing.
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let (sender, receiver): (Sender[u64], Receiver[u64]) = channel.open(tasks)
+  let total = match arena.bounded(
+    4096u64,
+    fn(a: Arena) -> u64 {
+      let mut tx = take sender
+      let _ = channel.send(tasks, mut tx, 5u64)
+      3u64
+    }
+  ) {
+    Ok(n) => n,
+    Error(_) => 0u64,
+  }
+  let mut rx = take receiver
+  failure.check(channel.receive(tasks, mut rx) == Ok(5u64), Arithmetic())
+  failure.check(channel.receive(tasks, mut rx) == Error(Closed()), Arithmetic())
+  let _ = out.print(output, f"{total}\n")
+  Ok(())
+}

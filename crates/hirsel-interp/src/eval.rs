@@ -4950,8 +4950,13 @@ type Callback = (
     crate::value::SizeBindings,
     crate::type_arguments::Bindings,
 );
-/// The one closure argument of `arena.with`.
+/// The one closure argument of `arena.with`. Calling it invokes the once
+/// closure, so its owned captures move to the call and the caller's drop of
+/// the closure discards them (OWN-2, MODE-3).
 fn arena_callback(arguments: &mut Vec<Value>) -> Result<Callback, Error> {
+    if let [callee] = arguments.as_slice() {
+        callee.begin_call();
+    }
     let [
         Value::Closure {
             definition,
