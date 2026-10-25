@@ -622,19 +622,13 @@ fn insert_at(u: &mut LirUnit<Ready>, block: usize, index: usize, inst: Inst) {
     edit_block(u, block, |row| row.insert(index, inst));
 }
 
-fn remove_at(u: &mut LirUnit<Ready>, block: usize, index: usize) {
-    edit_block(u, block, |row| {
-        row.remove(index);
-    });
-}
-
 /// The explicit finalization of a counted-field resource, and three
 /// mutants of it that C rejects as `FinalizeState` and H rejects as it
 /// executes them: a second `FinalizeBegin`, a `FinalizeEnd` without its
 /// begin, and the slot's `StorageDead` while the finalizer runs.
 #[test]
 fn c_and_h_agree_on_each_finalization_state_mutant() {
-    let (mut b, _) = ready(&format!(
+    let (b, _) = ready(&format!(
         "{T}pub fn main() -> u64 {{\n  let t = T(n: 1, xs: box P(a: 2))\n  7\n}}\n"
     ));
     let main = b
@@ -642,203 +636,31 @@ fn c_and_h_agree_on_each_finalization_state_mutant() {
         .iter()
         .position(|u| u.header.definition.0.name == "main")
         .unwrap();
-    // Intact owning resources now use the runtime continuation. Keep that
-    // source positive above, then model an explicit lifecycle component at its
-    // last owning read so the same three state mutants remain load-bearing.
+    // Target the compiler's actual in-place lifecycle. Its normal cleanup
+    // already drains the counted field and closes the finalized shell.
     let unit = &b.ready[main];
-    let value = unit
-        .instructions
-        .iter()
-        .find_map(|inst| match *inst {
-            Inst::Release { value, layout, .. }
-                if b.table.layout(layout).unwrap().finalizer.is_some() =>
-            {
-                Some(value)
-            }
-            _ => None,
-        })
-        .expect("owning resource release");
-    let (bb, read_at, address) = unit
+    let (bb, bi, address, anchor) = unit
         .blocks
         .iter()
         .enumerate()
-        .find_map(|(block, row)| {
-            row.instructions
+        .filter(|(_, block)| block.kind != BlockKind::FailureCleanup)
+        .find_map(|(bb, block)| {
+            block
+                .instructions
                 .get(&unit.instructions)
                 .unwrap()
                 .iter()
                 .enumerate()
-                .find_map(|(index, inst)| match *inst {
-                    Inst::Read {
-                        result,
-                        address,
-                        mode: hirsel_lir::ir::ReadMode::Take,
-                        ..
-                    } if result == value => Some((block, index, address)),
+                .find_map(|(bi, inst)| match *inst {
+                    Inst::FinalizeBegin { address, anchor } => Some((bb, bi, address, anchor)),
                     _ => None,
                 })
         })
-        .expect("release's intact owning read");
-    let release_anchor = unit
-        .instructions
-        .iter()
-        .find_map(|inst| match *inst {
-            Inst::Release {
-                value: released,
-                anchor,
-                ..
-            } if released == value => Some(anchor),
-            _ => None,
-        })
-        .unwrap();
-    // The explicit lifecycle ends a shell: drain its counted field, then
-    // StorageDead closes the pending root. Taking the root whole would violate
-    // C's existing FieldsPending ownership rule.
-    let (field_layout, release_failure) = unit
-        .instructions
-        .iter()
-        .find_map(|inst| match *inst {
-            Inst::Release {
-                value: released,
-                layout,
-                failure,
-                ..
-            } if released == value => {
-                let field = b
-                    .table
-                    .layout(layout)
-                    .unwrap()
-                    .fields
-                    .iter()
-                    .find(|field| field.ordinal == 1)
-                    .unwrap();
-                Some((field.layout, failure))
-            }
-            _ => None,
-        })
-        .unwrap();
-    let field_ty = hirsel_lir::ir::LirTypeId(
-        unit.types
-            .iter()
-            .position(|ty| ty.layout == field_layout && ty.repr == hirsel_lir::ir::ValueRepr::Block)
-            .expect("counted field type") as u32,
-    );
-    let field_payload = match &b.table.layout(field_layout).unwrap().kind {
-        hirsel_lir::layout_types::LayoutKind::Box { payload }
-        | hirsel_lir::layout_types::LayoutKind::Block { payload } => *payload,
-        other => panic!("counted field: {other:?}"),
-    };
-    let u = &mut b.ready[main];
-    let field_address = hirsel_lir::ir::AddressId(u.addresses.len() as u32);
-    let projection = PoolRange::new(u.pools.projections.len() as u32, 1);
-    u.pools
-        .projections
-        .push(hirsel_lir::ir::ProjectionStep::Field(1));
-    u.addresses.push(hirsel_lir::ir::AddressInfo {
-        source_place: None,
-        unchecked: Vec::new(),
-        base: u.addresses[address.index()].base,
-        projection,
-        ty: field_ty,
-    });
-    u.values[value.index()].ty = field_ty;
-    let read_index = u.blocks[bb].instructions.start as usize + read_at;
-    if let Inst::Read {
-        address: read_address,
-        ..
-    } = &mut u.instructions[read_index]
-    {
-        *read_address = field_address;
-    }
-    for inst in &mut u.instructions {
-        if let Inst::Release {
-            value: released,
-            layout,
-            ..
-        } = inst
-            && *released == value
-        {
-            *layout = field_payload;
-        }
-    }
-    let mut preparation = u.tables.failures[release_failure.index()].clone();
-    let cleanup = hirsel_lir::ir::EdgeId(u.tables.edges.len() as u32);
-    u.tables
-        .edges
-        .push(u.tables.edges[preparation.cleanup.index()].clone());
-    preparation.cleanup = cleanup;
-    let preparation_failure = FailureId(u.tables.failures.len() as u32);
-    u.tables.failures.push(preparation);
-    let entry = u.entry.index();
-    insert_at(
-        u,
-        entry,
-        0,
-        Inst::Address {
-            address: field_address,
-            failure: preparation_failure,
-        },
-    );
-    let bi = read_at;
-    insert_at(
-        &mut b.ready[main],
-        bb,
-        bi,
-        Inst::FinalizeBegin {
-            address,
-            anchor: release_anchor,
-        },
-    );
-    insert_at(
-        &mut b.ready[main],
-        bb,
-        bi + 1,
-        Inst::FinalizeEnd {
-            address,
-            anchor: release_anchor,
-        },
-    );
-    let slot = match b.ready[main].addresses[address.index()].base {
-        hirsel_lir::ir::AddressBase::Slot(s) => s,
+        .expect("normal cleanup begins the source resource finalizer");
+    let slot = match unit.addresses[address.index()].base {
+        hirsel_lir::ir::AddressBase::Slot(slot) => slot,
         other => panic!("{other:?}"),
     };
-    insert_at(
-        &mut b.ready[main],
-        bb,
-        read_at + 4,
-        Inst::StorageDead {
-            slot,
-            if_live: false,
-        },
-    );
-    // A failing field release has consumed the child but still owes the
-    // finalized shell's storage. The intact whole-resource release consumed
-    // that shell before reaching this edge.
-    let failure_block = b.ready[main].tables.edges[cleanup.index()].target.index();
-    insert_at(
-        &mut b.ready[main],
-        failure_block,
-        0,
-        Inst::StorageDead {
-            slot,
-            if_live: true,
-        },
-    );
-    let release_cleanup = b.ready[main].tables.failures[release_failure.index()].cleanup;
-    let release_block = b.ready[main].tables.edges[release_cleanup.index()]
-        .target
-        .index();
-    if release_block != failure_block {
-        insert_at(
-            &mut b.ready[main],
-            release_block,
-            0,
-            Inst::StorageDead {
-                slot,
-                if_live: true,
-            },
-        );
-    }
     let accepted = check(&b, &b.ready);
     assert!(
         accepted.is_empty(),
@@ -855,7 +677,9 @@ fn c_and_h_agree_on_each_finalization_state_mutant() {
     };
     let end_only = {
         let mut u = b.ready[main].clone();
-        remove_at(&mut u, bb, bi);
+        // Keep the original Begin for independent source-call coverage;
+        // the extra End runs first, without any active finalization.
+        insert_at(&mut u, bb, bi, Inst::FinalizeEnd { address, anchor });
         u
     };
     let dead_while_finalizing = {
