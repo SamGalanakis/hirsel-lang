@@ -412,7 +412,7 @@ fn recursive_header_retains_other_declarations_failed_signature_reads() {
     );
     clean(&output);
     assert_eq!(fake.reads, vec![own("Other")]);
-    assert!(output.reads.contains(&DependencyRead::Signature {
+    assert!(output.reads.iter().any(|read| read == &DependencyRead::Signature {
         definition: DefId::intern(&own("Other")),
         fingerprint: None,
     }));
@@ -698,7 +698,7 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
         output.query.value.dependencies,
         vec![own("good"), own("unavailable")]
     );
-    assert!(output.reads.contains(&DependencyRead::Signature {
+    assert!(output.reads.iter().any(|read| read == &DependencyRead::Signature {
         definition: hirsel_syntax::DefId::intern(&own("unavailable")),
         fingerprint: None
     }));
