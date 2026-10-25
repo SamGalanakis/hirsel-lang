@@ -1813,8 +1813,8 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
     );
 }
 
-#[test]
-fn f1_child_streaming_and_narrowing_replay_without_spawning() {
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_child_streaming_and_narrowing_replay_without_spawning_in(cells: Cells) {
     let executable = Scratch::new("recorded-cat");
     let host = executable.path("data");
     std::fs::create_dir(&host).unwrap();
@@ -1848,15 +1848,27 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
         child.display(),
         child.display()
     );
-    f1_corpus_matrix_with_io(
+    f1_corpus_matrix_with_exit_cells(
         "child-streaming",
         &source,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read"}]}),
+        0,
+        cells,
     );
 }
 
 #[test]
-fn f1_pipeline_and_group_replay_without_spawning() {
+fn f1_child_streaming_and_narrowing_replay_without_spawning_record() {
+    f1_child_streaming_and_narrowing_replay_without_spawning_in(Cells::level(false));
+}
+
+#[test]
+fn f1_child_streaming_and_narrowing_replay_without_spawning_durable() {
+    f1_child_streaming_and_narrowing_replay_without_spawning_in(Cells::level(true));
+}
+
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_pipeline_and_group_replay_without_spawning_in(cells: Cells) {
     let executable = Scratch::new("recorded-pipeline");
     let host = executable.path("data");
     std::fs::create_dir(&host).unwrap();
@@ -1892,15 +1904,27 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
 "#,
         child.display()
     );
-    f1_corpus_matrix_with_io(
+    f1_corpus_matrix_with_exit_cells(
         "pipeline-group",
         &source,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read"}]}),
+        0,
+        cells,
     );
 }
 
 #[test]
-fn f1_owned_file_and_child_drops_replay_through_host_phases() {
+fn f1_pipeline_and_group_replay_without_spawning_record() {
+    f1_pipeline_and_group_replay_without_spawning_in(Cells::level(false));
+}
+
+#[test]
+fn f1_pipeline_and_group_replay_without_spawning_durable() {
+    f1_pipeline_and_group_replay_without_spawning_in(Cells::level(true));
+}
+
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_owned_file_and_child_drops_replay_through_host_phases_in(cells: Cells) {
     let executable = Scratch::new("recorded-drops");
     let host = executable.path("data");
     std::fs::create_dir(&host).unwrap();
@@ -1928,11 +1952,23 @@ pub fn main(rt: Io) -> Result[(), AppError] {{
 "#,
         child.display()
     );
-    f1_corpus_matrix_with_io(
+    f1_corpus_matrix_with_exit_cells(
         "owned-drops",
         &source,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "process":{"provider":"process.spawn@1","rules":[{"program":child,"env":[]}]}, "dirs":[{"path":"data","host":host,"access":"read_write"}]}),
+        0,
+        cells,
     );
+}
+
+#[test]
+fn f1_owned_file_and_child_drops_replay_through_host_phases_record() {
+    f1_owned_file_and_child_drops_replay_through_host_phases_in(Cells::level(false));
+}
+
+#[test]
+fn f1_owned_file_and_child_drops_replay_through_host_phases_durable() {
+    f1_owned_file_and_child_drops_replay_through_host_phases_in(Cells::level(true));
 }
 
 #[test]
@@ -2000,9 +2036,9 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     );
 }
 
-#[test]
-fn f1_signal_waits_replay_checked_arrivals_without_a_signal_source() {
-    f1_corpus_matrix_with_io(
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_signal_waits_replay_checked_arrivals_without_a_signal_source_in(cells: Cells) {
+    f1_corpus_matrix_with_exit_cells(
         "signal-waits",
         r#"
 pub type AppError = Grant(GrantError) | Signal(SignalError) | Output(OutputError)
@@ -2019,7 +2055,19 @@ pub fn main(rt: Io) -> Result[(), AppError] {
 }
 "#,
         |_| serde_json::json!({"stdout":"stdout.bytes@1", "signals":{"provider":"signals.script@1","kinds":["interrupt","terminate"],"script":["interrupt","terminate"]}, "tasks":"tasks.free@1", "dirs":[]}),
+        0,
+        cells,
     );
+}
+
+#[test]
+fn f1_signal_waits_replay_checked_arrivals_without_a_signal_source_record() {
+    f1_signal_waits_replay_checked_arrivals_without_a_signal_source_in(Cells::level(false));
+}
+
+#[test]
+fn f1_signal_waits_replay_checked_arrivals_without_a_signal_source_durable() {
+    f1_signal_waits_replay_checked_arrivals_without_a_signal_source_in(Cells::level(true));
 }
 
 #[test]
@@ -2056,8 +2104,8 @@ pub fn main(rt: Io) -> Result[(), AppError] {
     );
 }
 
-#[test]
-fn f1_network_aliases_replay_without_a_tcp_peer() {
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_network_aliases_replay_without_a_tcp_peer_in(cells: Cells) {
     use std::io::{Read, Write};
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Duration;
@@ -2140,8 +2188,18 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
                 server.join().unwrap();
             })
         },
-        Cells::ALL,
+        cells,
     );
+}
+
+#[test]
+fn f1_network_aliases_replay_without_a_tcp_peer_record() {
+    f1_network_aliases_replay_without_a_tcp_peer_in(Cells::level(false));
+}
+
+#[test]
+fn f1_network_aliases_replay_without_a_tcp_peer_durable() {
+    f1_network_aliases_replay_without_a_tcp_peer_in(Cells::level(true));
 }
 
 #[test]
@@ -2702,9 +2760,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
     );
 }
 
-#[test]
-fn f1_canceled_watcher_completions_replay_without_notifications() {
-    f1_corpus_matrix_with_io(
+/// The matrix in `cells`; each recording level is its own case.
+fn f1_canceled_watcher_completions_replay_without_notifications_in(cells: Cells) {
+    f1_corpus_matrix_with_exit_cells(
         "canceled-watcher",
         r#"pub type E = Grant(GrantError) | Files(FileError)
 pub fn main(rt: Io, args: Args) -> Result[(), E] {
@@ -2740,7 +2798,19 @@ pub fn main(rt: Io, args: Args) -> Result[(), E] {
             std::fs::create_dir(&host).unwrap();
             serde_json::json!({"tasks":"tasks.free@1","dirs":[{"path":"data","host":host,"access":"read_write"}]})
         },
+        0,
+        cells,
     );
+}
+
+#[test]
+fn f1_canceled_watcher_completions_replay_without_notifications_record() {
+    f1_canceled_watcher_completions_replay_without_notifications_in(Cells::level(false));
+}
+
+#[test]
+fn f1_canceled_watcher_completions_replay_without_notifications_durable() {
+    f1_canceled_watcher_completions_replay_without_notifications_in(Cells::level(true));
 }
 
 #[test]
