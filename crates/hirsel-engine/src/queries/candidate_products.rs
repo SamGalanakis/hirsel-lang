@@ -43,6 +43,48 @@ impl CheckedProducts {
         self.owner = Arc::new((self.owner, owner));
         self
     }
+    /// The same receipt without canonical text. Its copied read maps are
+    /// split from `grant` before the copy and stay charged while any clone
+    /// of the view is held; None leaves `grant` unchanged.
+    pub fn digest_view(&self, grant: &mut crate::runtime::MemoryReservation) -> Option<Arc<Self>> {
+        let charge = grant.split(self.digest_view_bytes()?)?;
+        let view = Self {
+            digest: self.digest,
+            canonical: None,
+            reads: self.reads.clone(),
+            type_rows: self.type_rows,
+            type_bytes: self.type_bytes,
+            owner: self.owner.clone(),
+        };
+        Some(Arc::new(view.retain_owner(Arc::new(charge))))
+    }
+    /// The view's own allocations: its Arc, the owner pair and charge Arc
+    /// binding its grant, and the copied read maps with their paths and keys.
+    fn digest_view_bytes(&self) -> Option<u64> {
+        fn arc<T>() -> Option<usize> {
+            Some(
+                std::alloc::Layout::new::<[usize; 2]>()
+                    .extend(std::alloc::Layout::new::<T>())
+                    .ok()?
+                    .0
+                    .pad_to_align()
+                    .size(),
+            )
+        }
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(arc::<Self>()?);
+        weight.add(arc::<(Arc<dyn Send + Sync>, Arc<dyn Send + Sync>)>()?);
+        weight.add(arc::<crate::runtime::MemoryReservation>()?);
+        weight.tree::<DefPath, BTreeMap<Vec<u8>, ContentHash>>(self.reads.len());
+        for (path, reads) in &self.reads {
+            weight.path(path);
+            weight.tree::<Vec<u8>, ContentHash>(reads.len());
+            for key in reads.keys() {
+                weight.add(key.len());
+            }
+        }
+        Some(weight.bytes())
+    }
     /// Exact owner/read keys ordered by persisted bytes, independent of intern
     /// assignment and scheduling. Includes private views and negative reads.
     pub fn canonical_reads(&self) -> BTreeMap<(Vec<u8>, Vec<u8>), ContentHash> {
@@ -382,6 +424,42 @@ mod registration_tests {
         assert_eq!(budget.reserved(), 96);
         assert_eq!(detached.canonical.as_deref(), Some("canonical receipt"));
         drop(detached);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn digest_views_charge_their_copied_read_maps_until_the_last_clone_drops() {
+        let budget = crate::runtime::ProcessBudget::new(1 << 20);
+        let mut reads = BTreeMap::new();
+        reads.insert(
+            DefPath::core("main"),
+            BTreeMap::from([(b"key".to_vec(), ContentHash::of_bytes(b"value"))]),
+        );
+        let products = CheckedProducts {
+            digest: ContentHash::of_bytes(b"receipt"),
+            canonical: Some("canonical receipt".into()),
+            reads,
+            type_rows: 1,
+            type_bytes: 2,
+            owner: Arc::new(()),
+        };
+        let needed = products.digest_view_bytes().unwrap();
+        let mut short = budget.reserve(needed - 1).unwrap();
+        assert!(products.digest_view(&mut short).is_none());
+        assert_eq!(short.bytes(), needed - 1);
+        drop(short);
+        let mut grant = budget.reserve(needed + 7).unwrap();
+        let view = products.digest_view(&mut grant).unwrap();
+        assert_eq!(grant.bytes(), 7);
+        drop(grant);
+        assert_eq!(view.canonical, None);
+        assert_eq!(view.digest, products.digest);
+        assert_eq!(view.reads, products.reads);
+        assert_eq!((view.type_rows, view.type_bytes), (1, 2));
+        let held = view.clone();
+        drop(view);
+        assert_eq!(budget.reserved(), needed);
+        drop(held);
         assert_eq!(budget.reserved(), 0);
     }
 
