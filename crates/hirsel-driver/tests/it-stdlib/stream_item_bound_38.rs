@@ -683,10 +683,23 @@ fn unique_receipt_shared_intermediate_and_unqualified_payload_refused() {
                 "    },\n    None",
                 "    }; let _ = take snapshot },\n    None",
             );
-        let unqualified = original.replace("Result[unique Bytes, ()]", "Result[Bytes, ()]");
+        let unqualified = original.replace("unique Result[unique Bytes, ()]", "Result[Bytes, ()]");
+        // An unqualified wrapper may share its declared unique payload with a
+        // counted copy made before the receipt, so the receipt's root evidence
+        // stops there: through an Option, and through a stream item.
+        let wrapper = original.replace(
+            "unique Result[unique Bytes, ()]",
+            "Result[unique Bytes, ()]",
+        );
+        let stream = include_str!("../fixtures/stream-item-bound-38/unique-flow.hir").replace(
+            "require_unique(unique payload",
+            "require_unique(take payload",
+        );
         for (id, source) in [
             ("shared-intermediate", intermediate),
             ("unqualified-payload", unqualified),
+            ("unqualified-intermediate", wrapper),
+            ("unqualified-stream-item", stream),
         ] {
             let mut loaded = load_program_source(&path(), Some(&source)).unwrap_or_else(report);
             let run = RunConfiguration {

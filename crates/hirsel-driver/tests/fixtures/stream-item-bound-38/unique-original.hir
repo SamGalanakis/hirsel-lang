@@ -1,4 +1,4 @@
-fn fresh(mut n: u64) -> Option[Result[unique Bytes, ()]] {
+fn fresh(mut n: u64) -> Option[unique Result[unique Bytes, ()]] {
   n += 1
   if n == 1 {
     Some(Ok(unique b"x"))

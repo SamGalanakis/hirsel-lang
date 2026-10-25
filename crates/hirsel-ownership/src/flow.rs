@@ -6103,11 +6103,11 @@ impl Checker<'_, '_> {
                         part.set_alias(None);
                         part.content = Content::default();
                     }
-                    // Moving an owned receipt through an unqualified wrapper
-                    // retains its declared unique descendants, without proving
-                    // the wrapper itself deeply unique. A counted share or a
-                    // Shared boundary ends that evidence.
-                    if part.aliased().is_some() || ty.is_some_and(|ty| self.properties[ty].shared) {
+                    // An unqualified part can have aliases outside this receipt
+                    // (a counted copy of it shares its declared unique
+                    // descendants), so only independently unique payloads carry
+                    // the unshared-root proof into their new owned root.
+                    if !path.is_empty() && part.modes.uniqueness != Uniqueness::Unique {
                         part.fresh_receipt = false;
                     }
                     if let Some(row) = self.body.patterns.iter().find(|p| p.pattern == pattern) {

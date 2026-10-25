@@ -353,6 +353,10 @@ impl<'a> Checker<'a> {
                 self.error(ViolationKind::InvalidProjection(PlaceId(i as u32)));
             }
         }
+        let receipt_paths = (0..self.body.places.len())
+            .map(|i| self.receipt_path(PlaceId(i as u32)))
+            .collect();
+        let _ = self.scratch.receipt_paths[self.site.body.0 as usize].set(receipt_paths);
         for (b, block) in self.body.blocks.iter().enumerate() {
             self.site.block = Some(BlockId(b as u32));
             for (i, instruction) in block.instructions.iter().enumerate() {
@@ -3632,6 +3636,20 @@ impl<'a> Checker<'a> {
             Ok(())
         });
         found
+    }
+    /// Every proper projected prefix of the place is declared unique. An
+    /// unqualified intermediate part may share its declared unique parts with
+    /// a counted copy made before an owned call receipt (MODE-2).
+    fn receipt_path(&mut self, place: PlaceId) -> bool {
+        let place = &self.body.places[place.0 as usize];
+        let store = self.t;
+        (1..place.projection.len()).all(|depth| {
+            let mut prefix = place.clone();
+            prefix.projection.truncate(depth);
+            prefix.binding = None;
+            self.projection_type(store, &prefix, |_, _| None)
+                .is_some_and(|ty| store.get(ty).unwrap().modes.uniqueness == Uniqueness::Unique)
+        })
     }
     /// CLO-4: the known authority of an erased carrier the place projects
     /// through; a write or `mut` hand-back there must stay within it.

@@ -816,14 +816,23 @@ fn a_scoped_constructor_part_keeps_its_unplaced_holders_frame_bound() {
 
 // A call receipt owns its root without promising that every child is unique.
 // Its declared unique child can move; copying the receipt invalidates that proof.
-fn fresh_call_payload(shared: bool, parameter: bool) -> Fixture {
+// A unique child under an unqualified wrapper may be shared with a copy of that
+// wrapper made before the receipt, so it cannot move.
+fn fresh_call_payload(shared: bool, parameter: bool, nested: bool) -> Fixture {
     let mut f = Fixture::unit();
     let mut unique = ty(TypeKind::Primitive(Primitive::Bytes));
     unique.modes.uniqueness = Uniqueness::Unique;
     unique.modes.sendability = Sendability::NotSendable;
     let payload_ty = f.definition.types.push(unique.clone());
+    let child_ty = if nested {
+        f.definition
+            .types
+            .push(ty(TypeKind::Tuple(vec![payload_ty].into())))
+    } else {
+        payload_ty
+    };
     let root = f.slot(
-        TypeKind::Tuple(vec![payload_ty].into()),
+        TypeKind::Tuple(vec![child_ty].into()),
         if parameter {
             Storage::Parameter
         } else {
@@ -834,11 +843,16 @@ fn fresh_call_payload(shared: bool, parameter: bool) -> Fixture {
     unique.modes.sendability = Sendability::Sendable;
     let destination = f.slot(TypeKind::Primitive(Primitive::Bytes), Storage::Temporary);
     row(&mut f, destination, |t| *t = unique.clone());
-    let alias = shared.then(|| f.slot(TypeKind::Tuple(vec![payload_ty].into()), Storage::Local));
+    let alias = shared.then(|| f.slot(TypeKind::Tuple(vec![child_ty].into()), Storage::Local));
     let payload = f.body().places.len() as u32;
+    let projection = if nested {
+        vec![Projection::Field(0), Projection::Field(0)]
+    } else {
+        vec![Projection::Field(0)]
+    };
     f.body().places.push(Place {
         root: LocalId(root),
-        projection: vec![Projection::Field(0)].into(),
+        projection: projection.into(),
         ty: payload_ty,
         loan: None,
         binding: None,
@@ -901,10 +915,11 @@ fn fresh_call_payload(shared: bool, parameter: bool) -> Fixture {
 
 #[test]
 fn declared_unique_payload_requires_an_unshared_owned_call_receipt() {
-    fresh_call_payload(false, false).valid();
+    fresh_call_payload(false, false, false).valid();
     for f in [
-        fresh_call_payload(true, false),
-        fresh_call_payload(false, true),
+        fresh_call_payload(true, false, false),
+        fresh_call_payload(false, true, false),
+        fresh_call_payload(false, false, true),
     ] {
         assert!(
             f.kinds().contains(&ViolationKind::TypeMismatch {

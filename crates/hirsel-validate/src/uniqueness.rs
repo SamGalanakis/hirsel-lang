@@ -957,16 +957,12 @@ impl Checker<'_> {
         value.usage == UseKind::Take
             && !state.shared[place.root.0 as usize]
             && state.must[place.root.0 as usize].has(MustFacts::OWNED)
-            // Taking a part transfers its owned receipt, including declared
-            // unique descendants through unqualified wrappers. This does not
-            // make an unqualified part itself unique (operand_unique remains
-            // independent). Counted copies end FRESH_RECEIPT or mark the root shared; a
-            // Shared handle is an ownership boundary.
-            && !matches!(self.t.get(place.ty).unwrap().kind,
-                TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. })
-            && !matches!(self.t.get(self.body.locals[place.root.0 as usize].ty).unwrap().kind,
-                TypeKind::Builtin { kind: hirsel_types::BuiltinType::Shared, .. })
-            && (state.must[place.root.0 as usize].has(MustFacts::FRESH_RECEIPT)
+            // Only the whole receipt is fresh. A part reached through an
+            // unqualified wrapper may share its declared unique descendants
+            // with a counted copy made before the receipt, so a part must
+            // prove its own uniqueness.
+            && ((place.projection.is_empty()
+                && state.must[place.root.0 as usize].has(MustFacts::FRESH_RECEIPT))
                 || self.operand_unique(state, value))
     }
     pub(super) fn rvalue_fresh_receipt(&self, state: &State, value: &Rvalue) -> bool {
@@ -1000,15 +996,19 @@ impl Checker<'_> {
         let root = place.root.0 as usize;
         if !place.projection.is_empty() {
             // A declared unique payload may move from an unshared owned
-            // receipt. Otherwise the parent must prove deep uniqueness;
-            // neither proof survives a counted share or a Shared boundary.
-            // Exclusive access to such a part is unique access too (MODE-2).
+            // receipt when every part above it is declared unique too.
+            // Otherwise the parent must prove deep uniqueness; neither proof
+            // survives a counted share or a Shared boundary. Exclusive access
+            // to such a part is unique access too (MODE-2).
             return matches!(value.usage, UseKind::Take | UseKind::Mut)
                 && !state.shared[root]
                 && (state.current_unique[root]
                     || state.must[root].has(MustFacts::OWNED)
                         && state.must[root].has(MustFacts::FRESH_RECEIPT)
-                        && self.t.get(place.ty).unwrap().modes.uniqueness == Uniqueness::Unique)
+                        && self.t.get(place.ty).unwrap().modes.uniqueness == Uniqueness::Unique
+                        && self.scratch.receipt_paths[self.site.body.0 as usize]
+                            .get()
+                            .is_some_and(|paths| paths[value.place.0 as usize]))
                 && !matches!(
                     self.t.get(place.ty).unwrap().kind,
                     TypeKind::Builtin {

@@ -22,12 +22,12 @@ pub fn main(t: Test) -> Result[(), ()] {
   let mut flow = bounded(take source)
   let first = stream.next(mut flow)
   match take first {
-    Some(Ok(payload)) => require_unique(take payload, b"item"),
+    Some(Ok(payload)) => require_unique(unique payload, b"item"),
     _ => failure.check(false, Bounds()),
   }
   let second = stream.next(mut flow)
   match take second {
-    Some(Error(Source(payload))) => require_unique(take payload, b"error"),
+    Some(Error(Source(payload))) => require_unique(unique payload, b"error"),
     _ => failure.check(false, Bounds()),
   }
   failure.check(stream.next(mut flow) == None, Bounds())

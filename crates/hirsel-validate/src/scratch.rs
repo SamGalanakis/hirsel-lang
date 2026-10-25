@@ -41,6 +41,9 @@ pub(super) struct Scratch {
     /// Per body: the layouts `Checker::layout` found.
     pub(super) layouts:
         Vec<RefCell<crate::hashed::HashMap<hirsel_types::TypeId, hirsel_types::TypeKind>>>,
+    /// Per body, per place: every proper projected prefix is declared unique,
+    /// so an owned call receipt's root evidence reaches the place (MODE-2).
+    pub(super) receipt_paths: Vec<std::cell::OnceCell<Vec<bool>>>,
 }
 impl Scratch {
     pub(super) fn new(bodies: usize) -> Self {
@@ -62,6 +65,7 @@ impl Scratch {
             proofs: (0..bodies).map(|_| RefCell::default()).collect(),
             layouts: (0..bodies).map(|_| RefCell::default()).collect(),
             relations: (0..bodies).map(|_| RefCell::default()).collect(),
+            receipt_paths: (0..bodies).map(|_| std::cell::OnceCell::new()).collect(),
             canonical: RefCell::default(),
         }
     }
