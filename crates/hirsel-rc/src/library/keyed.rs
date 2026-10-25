@@ -155,7 +155,10 @@ fn build(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
                 ArgumentValue::Value(value)
             }
             Passing::Mut => {
-                let address = b.place(AddressBase::Slot(p.slot), &[], p.layout, None)?;
+                // The whole formal was prepared at entry. Re-preparing it here
+                // creates a latent failure cleanup while later take actuals
+                // are still pending, adding destruction to this gate adapter.
+                let address = p.address;
                 let version = b.version(p.slot);
                 b.set_reaching(p.slot, version);
                 ArgumentValue::Address { address, version }

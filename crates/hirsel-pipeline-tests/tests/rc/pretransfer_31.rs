@@ -465,3 +465,31 @@ fn cached_pretransfer_inventory_rederives_canonical_abis_from_independent_plans(
         );
     });
 }
+
+#[test]
+fn keyed_map_resource_actual_keeps_gate_custody_through_ready_cleanup() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = r#"
+resource type Payload {}
+drop(x) {}
+pub fn main()->Result[(),()] {
+ let mut target:Map[(u64,),Payload]=map.empty()
+ let insert:fn(mut Map[(u64,),Payload],take (u64,),take Payload)->()=map.insert
+ insert(mut target,take (1u64,),take Payload())
+ Ok(())
+}"#;
+        let program = support::compile(source);
+        let ready = hirsel_driver::native::build_program(
+            &program,
+            support::manifest(&program),
+            &hirsel_driver::native::Options::new(support::target()),
+        )
+        .unwrap();
+        assert!(
+            ready
+                .raw_units()
+                .iter()
+                .any(|unit| unit.header.definition.is_core("$native.keyed_map_insert"))
+        );
+    });
+}
