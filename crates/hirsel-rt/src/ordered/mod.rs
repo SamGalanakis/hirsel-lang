@@ -397,9 +397,13 @@ impl<P, R> Frontier<P, R> {
             return false;
         };
         let holds_nothing = |task: &TaskId| {
-            self.held
-                .get(task)
-                .is_some_and(|h| !h.unknown && h.objects.is_empty() && h.obtains.is_empty() && h.holding.is_empty() && h.caller.is_none())
+            self.held.get(task).is_some_and(|h| {
+                !h.unknown
+                    && h.objects.is_empty()
+                    && h.obtains.is_empty()
+                    && h.holding.is_empty()
+                    && h.caller.is_none()
+            })
         };
         holds_nothing(&head)
             && self

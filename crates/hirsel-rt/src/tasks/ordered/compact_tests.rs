@@ -61,9 +61,7 @@ fn sample(ctx: *mut crate::TaskCtx, log: &Mutex<Log>) {
         let log = log.lock().unwrap();
         log.rows
             .iter()
-            .filter(|(identity, _)| {
-                !log.running.contains(identity) && !log.done.contains(identity)
-            })
+            .filter(|(identity, _)| !log.running.contains(identity) && !log.done.contains(identity))
             .map(|(_, &row)| row)
             .collect()
     };

@@ -57,7 +57,11 @@ pub(crate) fn activated(task: u32, state: u32) {
 
 /// A resume point's decision: whether the task's frame saves there.
 pub(crate) fn point(task: u32, state: u32, saves: bool) {
-    line(format_args!("point {task} {state} {} {}", worker(), u8::from(saves)));
+    line(format_args!(
+        "point {task} {state} {} {}",
+        worker(),
+        u8::from(saves)
+    ));
 }
 
 /// A task suspended on its own stack, which it keeps.

@@ -739,13 +739,13 @@ fn runtime52_default_routing_fanout_agrees_live_and_replayed() {
         for children in [8u64, 32] {
             let source = DEFAULT_FANOUT.replace("CHILDREN", &format!("{}u64", children + 1));
             let label = format!("default fanout {children}");
-            for (index, trace) in compact_runs_with(&source, &label, false)
-                .iter()
-                .enumerate()
-            {
+            for (index, trace) in compact_runs_with(&source, &label, false).iter().enumerate() {
                 let cell = format!("{label} run {index}");
                 let points = trace.iter().filter(|line| line.0 == "point").count();
-                assert!(points as u64 >= 2 * children, "{cell}: {points} resume points");
+                assert!(
+                    points as u64 >= 2 * children,
+                    "{cell}: {points} resume points"
+                );
                 let mut saved = std::collections::BTreeMap::new();
                 for (kind, task, state, _, flag) in trace {
                     match kind.as_str() {
@@ -759,7 +759,10 @@ fn runtime52_default_routing_fanout_agrees_live_and_replayed() {
                         _ => {}
                     }
                 }
-                assert!(saved.is_empty(), "{cell}: frames never activated: {saved:?}");
+                assert!(
+                    saved.is_empty(),
+                    "{cell}: frames never activated: {saved:?}"
+                );
             }
         }
     });
