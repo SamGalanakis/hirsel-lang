@@ -112,6 +112,8 @@ pub enum Point {
     /// One semantic drop whose inline finalizer has mutually exclusive normal,
     /// failed and (for source finalizers) frame-rejection exits. The marker is
     /// committed after FinalizeEnd on the exit actually taken, never at entry.
+    /// A Move at this bundle describes the original Drop's failure-edge join;
+    /// it commits on body failure/rejected admission only, after cleanup.
     FinalizerDrop {
         block: BlockId,
     },
@@ -231,6 +233,14 @@ impl<'a> CheckedPlan<'a> {
         }
         let observation = self.observation(id).ok_or(Error::MissingMarker(id))?;
         match observation.point {
+            Point::FinalizerDrop { block } if observation.marker.kind == Kind::Move => {
+                let Location::Value(parameter) = observation.marker.owner else {
+                    return Err(Error::InvalidBinding(id));
+                };
+                finalizer::failure_edges(unit, block, parameter)
+                    .map(|edges| edges.into_iter().map(Point::Edge).collect())
+                    .ok_or(Error::InvalidBinding(id))
+            }
             Point::FinalizerDrop { block } => {
                 let Location::Address(address) = observation.marker.token else {
                     return Err(Error::InvalidBinding(id));

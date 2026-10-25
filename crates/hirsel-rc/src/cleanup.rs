@@ -1600,6 +1600,9 @@ impl Lowering<'_, '_> {
             replacement: release,
             insertions: &self.inserted,
         })?;
+        if whole_finalizer {
+            report.finalizer_edge(site.failure.cleanup, b)?;
+        }
         self.ed.code[at.index()].extend(tail);
         self.ed.unit.terminators[at.index()] = terminator;
         Ok(())

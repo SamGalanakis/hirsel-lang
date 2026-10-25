@@ -21,7 +21,25 @@ pub fn check<'a, S: Stage>(unit: &'a LirUnit<S>, plan: &'a Plan) -> Result<Check
         if !binding(unit, observation)? {
             return Err(Error::InvalidBinding(marker.id));
         }
-        if site(unit, observation.point) != Some(marker.site) {
+        let source = if marker.kind == Kind::Move
+            && let Point::FinalizerDrop { block } = observation.point
+        {
+            let sites = match marker.owner {
+                Location::Value(parameter) => {
+                    super::finalizer::failure_edges(unit, block, parameter)
+                }
+                _ => None,
+            }
+            .and_then(|edges| {
+                let mut sites = edges.into_iter().map(|edge| site(unit, Point::Edge(edge)));
+                let first = sites.next()??;
+                sites.all(|next| next == Some(first)).then_some(first)
+            });
+            sites
+        } else {
+            site(unit, observation.point)
+        };
+        if source != Some(marker.site) {
             return Err(Error::InvalidSite(marker.id));
         }
         if !placements.insert((observation.point, marker.kind, marker.token, marker.owner)) {
@@ -79,13 +97,24 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 return Err(Error::IdentityRewrite(id));
             }
         }
-        let form = drop_form(before, old.point);
-        let replacement = drop_form(after, new.point);
+        let form = (old.marker.kind == Kind::Drop)
+            .then(|| drop_form(before, old.point))
+            .flatten();
+        let replacement = (new.marker.kind == Kind::Drop)
+            .then(|| drop_form(after, new.point))
+            .flatten();
         if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2))) {
             return Err(Error::InvalidTransport(id));
         }
-        let old_anchor = drop_anchor(before, old.point);
-        let new_anchor = drop_anchor(after, new.point);
+        if old.marker.kind == Kind::Move && !edge_transport(before, old.point, after, new.point) {
+            return Err(Error::InvalidTransport(id));
+        }
+        let old_anchor = (old.marker.kind == Kind::Drop)
+            .then(|| drop_anchor(before, old.point))
+            .flatten();
+        let new_anchor = (new.marker.kind == Kind::Drop)
+            .then(|| drop_anchor(after, new.point))
+            .flatten();
         if old_anchor.is_some() || new_anchor.is_some() {
             // This typed expansion is not an arbitrary relocation permit. Its
             // source must be the same semantic cleanup action and address.
@@ -311,6 +340,16 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 Inst::Release { value, live: MaskRef::All, .. },
             ]) if result == value && same(Drop, Address(*address)))
         }
+        Point::FinalizerDrop { block } if m.kind == Move => {
+            let Location::Value(parameter) = m.owner else { return Ok(false) };
+            let Some(edges) = super::finalizer::failure_edges(unit, block, parameter) else { return Ok(false) };
+            edges.into_iter().all(|id| {
+                let edge = &unit.tables.edges[id.index()];
+                let Some(parameters) = unit.blocks[edge.target.index()].parameters.get(&unit.pools.values) else { return false };
+                let Some(arguments) = edge.arguments.get(&unit.pools.values) else { return false };
+                parameters.iter().zip(arguments).any(|(&to, &from)| moved(Value(from), Value(to)))
+            })
+        }
         Point::FinalizerDrop { block } => {
             let Some((address, _)) = super::finalizer::begin(unit, block) else {
                 return Err(Error::InvalidPoint(m.id));
@@ -368,7 +407,11 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
     match point {
         Point::Entry => block_site(unit.entry),
-        Point::FinalizerDrop { block } => cleanup(super::finalizer::begin(unit, block)?.1),
+        Point::FinalizerDrop { block } => {
+            // Drop markers use the cleanup action. Failure-join Move markers
+            // retain the recipient block's source, as their original edge did.
+            cleanup(super::finalizer::begin(unit, block)?.1)
+        }
         Point::Instruction { block, index, .. } | Point::ReleaseDrop { block, index } => {
             let inst = unit
                 .blocks
@@ -477,5 +520,41 @@ fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
             Some(0)
         }
         _ => None,
+    }
+}
+
+// Only the exact semantic Drop that named this failure edge can bundle it
+// with a finalizer's independently checked body-failure/rejection exits.
+fn edge_transport<A: Stage, B: Stage>(
+    before: &LirUnit<A>,
+    from: Point,
+    after: &LirUnit<B>,
+    to: Point,
+) -> bool {
+    match (from, to) {
+        (Point::Edge(edge), Point::FinalizerDrop { block }) => {
+            let Some((address, anchor)) = super::finalizer::begin(after, block) else {
+                return false;
+            };
+            before.instructions.iter().any(|inst| matches!(*inst,
+                Inst::Drop { address: old, anchor: action, failure, .. }
+                if old == address && before.tables.cleanup_anchors.get(action.index()) == after.tables.cleanup_anchors.get(anchor.index())
+                    && before.tables.failures.get(failure.index()).is_some_and(|f| f.cleanup == edge)))
+        }
+        (Point::FinalizerDrop { block: old }, Point::FinalizerDrop { block: new }) => {
+            match (
+                super::finalizer::begin(before, old),
+                super::finalizer::begin(after, new),
+            ) {
+                (Some((a, x)), Some((b, y))) => {
+                    a == b
+                        && before.tables.cleanup_anchors.get(x.index())
+                            == after.tables.cleanup_anchors.get(y.index())
+                }
+                _ => false,
+            }
+        }
+        (Point::FinalizerDrop { .. }, _) => false,
+        _ => true,
     }
 }

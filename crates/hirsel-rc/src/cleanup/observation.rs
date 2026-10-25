@@ -5,6 +5,9 @@ use hirsel_lir::ownership_trace::{self as trace, Plan, Point};
 
 pub(super) trait Reporter {
     type Output;
+    fn finalizer_edge(&mut self, _old: EdgeId, _block: BlockId) -> Result<(), PassError> {
+        Ok(())
+    }
     fn prelude(&mut self, _ed: &Editor<Ready>) -> Result<(), PassError> {
         Ok(())
     }
@@ -60,6 +63,14 @@ fn refused(message: impl std::fmt::Display) -> PassError {
 }
 impl Reporter for Observations {
     type Output = Plan;
+    fn finalizer_edge(&mut self, old: EdgeId, block: BlockId) -> Result<(), PassError> {
+        for row in &mut self.plan.observations {
+            if row.point == Point::Edge(old) {
+                row.point = Point::FinalizerDrop { block };
+            }
+        }
+        Ok(())
+    }
     fn prelude(&mut self, ed: &Editor<Ready>) -> Result<(), PassError> {
         let unit = snapshot(ed);
         self.plan.unit = unit.digest();

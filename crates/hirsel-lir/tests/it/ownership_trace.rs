@@ -2465,3 +2465,73 @@ fn ownership_trace_conditional_drop_requires_its_explicit_moment_and_current_sch
         Error::InvalidBinding(MarkerId(0))
     );
 }
+
+#[test]
+fn ownership_trace_finalizer_failure_join_keeps_one_id_and_checks_both_exit_arguments() {
+    let (mut before, mut plan, table, finalizers) = finalizer_transport_fixture();
+    let source = before
+        .values
+        .iter()
+        .enumerate()
+        .find_map(|(index, info)| (info.holding == Holding::Plain).then_some(ValueId(index as u32)))
+        .unwrap();
+    let parameter = ValueId(before.values.len() as u32);
+    before.values.push(before.values[source.index()].clone());
+    let Point::Instruction { block, index, .. } = plan.observations[0].point else {
+        unreachable!()
+    };
+    let at = before.blocks[block.index()].instructions.start as usize + index as usize;
+    let Inst::Drop { failure, .. } = before.instructions[at] else {
+        unreachable!()
+    };
+    let edge = before.tables.failures[failure.index()].cleanup;
+    let target = before.tables.edges[edge.index()].target;
+    before.blocks[target.index()].parameters =
+        PoolRange::push(&mut before.pools.values, [parameter]);
+    before.tables.edges[edge.index()].arguments =
+        PoolRange::push(&mut before.pools.values, [source]);
+    plan.observations.push(Observation {
+        point: Point::Edge(edge),
+        marker: ObserveOwnership {
+            id: MarkerId(99),
+            site: before.tables.source_anchors[before.blocks[target.index()].anchor.index()].site,
+            kind: Kind::Move,
+            token: Location::Value(source),
+            owner: Location::Value(parameter),
+        },
+    });
+    plan.unit = before.digest();
+    check(&before, &plan).unwrap();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, recipe) =
+        hirsel_rc::cleanup::lower_observed(before.clone(), &finalizers, &index, &plan).unwrap();
+    check_transform(&before, &plan, &after, &output, Some(&recipe)).unwrap();
+    let row = output
+        .observations
+        .iter()
+        .find(|row| row.marker.id == MarkerId(99))
+        .unwrap();
+    assert!(matches!(row.point, Point::FinalizerDrop { .. }));
+    assert_eq!(row.marker, plan.observations[1].marker);
+    let points = check(&after, &output)
+        .unwrap()
+        .commits(&after, MarkerId(99))
+        .unwrap();
+    assert_eq!(
+        points.len(),
+        1,
+        "both failure exits converge before the original join"
+    );
+    for point in points {
+        let Point::Edge(edge) = point else {
+            panic!("failure transfer must commit on an edge")
+        };
+        let mut wrong = after.clone();
+        wrong.tables.edges[edge.index()].arguments = PoolRange::EMPTY;
+        let forged = Plan::new(&wrong, output.observations.clone());
+        assert_eq!(
+            check(&wrong, &forged).unwrap_err(),
+            Error::InvalidBinding(MarkerId(99))
+        );
+    }
+}

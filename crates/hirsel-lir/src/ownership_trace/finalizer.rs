@@ -142,3 +142,74 @@ pub(super) fn exits<S: crate::stage::Stage>(
     }
     Some(exits)
 }
+
+/// The original semantic Drop failure edge becomes these exclusive jumps,
+/// after body failure or rejected finalizer admission has completed cleanup.
+pub(super) fn failure_edges<S: crate::stage::Stage>(
+    unit: &LirUnit<S>,
+    block: BlockId,
+    parameter: ValueId,
+) -> Option<Vec<EdgeId>> {
+    let (address, _) = begin(unit, block)?;
+    let commits = exits(unit, block, address)?;
+    let mut found = std::collections::BTreeSet::new();
+    let mut states = vec![0u8; unit.blocks.len()];
+    fn visit<S>(
+        unit: &LirUnit<S>,
+        edge: EdgeId,
+        parameter: ValueId,
+        states: &mut [u8],
+        found: &mut std::collections::BTreeSet<EdgeId>,
+    ) -> Option<()> {
+        let row = unit.tables.edges.get(edge.index())?;
+        let block = unit.blocks.get(row.target.index())?;
+        if block
+            .parameters
+            .get(&unit.pools.values)?
+            .contains(&parameter)
+        {
+            found.insert(edge);
+            return Some(());
+        }
+        let at = row.target.index();
+        match states[at] {
+            1 => return None, // a cleanup cycle cannot prove completion
+            2 => return Some(()),
+            _ => (),
+        }
+        if !matches!(block.kind, BlockKind::Cleanup | BlockKind::FailureCleanup) {
+            return None;
+        }
+        states[at] = 1;
+        let term = unit.terminators.get(at)?;
+        let mut successors = term.normal_edges(&unit.pools);
+        for failure in term.failure_edges(&unit.tables) {
+            successors.push(unit.tables.failures.get(failure.index())?.cleanup);
+        }
+        for inst in block.instructions.get(&unit.instructions)? {
+            if let Some(failure) = inst.failure() {
+                successors.push(unit.tables.failures.get(failure.index())?.cleanup);
+            }
+        }
+        if successors.is_empty() {
+            return None;
+        }
+        successors.sort();
+        successors.dedup();
+        for next in successors {
+            visit(unit, next, parameter, states, found)?;
+        }
+        states[at] = 2;
+        Some(())
+    }
+    for point in commits.into_iter().skip(1) {
+        let Point::Instruction { block, .. } = point else {
+            return None;
+        };
+        let Terminator::Jump(edge) = *unit.terminators.get(block.index())? else {
+            return None;
+        };
+        visit(unit, edge, parameter, &mut states, &mut found)?;
+    }
+    (!found.is_empty()).then(|| found.into_iter().collect())
+}
