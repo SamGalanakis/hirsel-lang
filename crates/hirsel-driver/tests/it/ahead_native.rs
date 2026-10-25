@@ -45,9 +45,10 @@ fn metadata(
     bounds: &std::collections::BTreeMap<ContentHash, u64>,
 ) -> hirsel_lir::stage::ObjectArtifact {
     let empty = BTreeSet::new();
+    let continuations = native::continuation::plans(program);
     let inputs = EmitInputs {
         ahead: Some(plan),
-        continuation: None,
+        continuation: Some(&continuations),
         alternate: true,
         index: None,
         input: &program.input,
