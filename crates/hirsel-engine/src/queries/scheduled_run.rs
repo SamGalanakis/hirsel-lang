@@ -2,7 +2,9 @@
 use super::*;
 mod proof_export;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
-pub use proof_export::{FrontBuiltProof, FrontProofExport, FrontProofInput, FrontProofText};
+pub use proof_export::{
+    FrontBuiltProof, FrontPreparedProof, FrontProofExport, FrontProofInput, FrontProofText,
+};
 /// Metadata consumed by interpreter/H/native hosts. No mutable query engine,
 /// body cache or native Value reconstruction is available through this output.
 pub struct FrontRunOutput {

@@ -30,11 +30,18 @@ pub struct FrontProofInput {
     _owner: Arc<FrontProofExport>,
     _allowance: MemoryReservation,
 }
+/// The exact selected type closure and its admitted inspection workspace.
+/// This owns no decoded output beyond the ordinary complete input.
+pub struct FrontPreparedProof {
+    input: Rc<FrontProofInput>,
+    types: hirsel_proof_export::CapturedTypes,
+    _allowance: MemoryReservation,
+}
 /// A complete canonical export with construction working admission retained.
 /// It borrows no mutable compiler and cannot request another source product.
 pub struct FrontBuiltProof {
     export: hirsel_proof_export::Export,
-    input: Rc<FrontProofInput>,
+    input: Rc<FrontPreparedProof>,
     _allowance: MemoryReservation,
 }
 /// Portable canonical bytes keep only their actual output allocation charged,
@@ -70,22 +77,55 @@ impl FrontProofInput {
     pub fn input(&self) -> &ExportInput {
         &self.input
     }
+    /// Metadata-only workspace size for the selected type closure. Unrelated
+    /// lazy interner rows never become export obligations.
+    pub fn type_capture_bytes(&self) -> Result<u64, QueryError> {
+        hirsel_proof_export::capture_types_bytes(&self.input)
+            .and_then(|n| {
+                n.checked_add(
+                    size_of::<FrontPreparedProof>() as u64 + 2 * size_of::<usize>() as u64,
+                )
+            })
+            .ok_or(QueryError::NotImplemented)
+    }
+    pub fn capture_types_with_allowance(
+        self: Rc<Self>,
+        allowance: MemoryReservation,
+    ) -> Result<FrontPreparedProof, QueryError> {
+        if self.type_capture_bytes()? > allowance.bytes() {
+            return Err(operational("PS9 type closure workspace exceeds admission"));
+        }
+        let types = hirsel_proof_export::capture_types(&self.input, allowance.bytes())
+            .ok_or(QueryError::NotImplemented)?;
+        Ok(FrontPreparedProof {
+            input: self,
+            types,
+            _allowance: allowance,
+        })
+    }
+}
+impl FrontPreparedProof {
     /// Table-free inspection of the actual canonical fields. Source producers
     /// have already materialized every type their headers/originals name.
     pub fn build_bytes(&self) -> Result<u64, QueryError> {
         let module = self
+            .input
             ._owner
             .modules
             .values()
             .map(String::len)
             .max()
             .unwrap_or(0);
-        let tables = hirsel_proof_export::build_tables_bytes(&self.input, module)
-            .ok_or(QueryError::NotImplemented)?;
+        let tables = hirsel_proof_export::build_captured_tables_bytes(
+            &self.input.input,
+            module,
+            &self.types,
+        )
+        .ok_or(QueryError::NotImplemented)?;
         // The input reservation covers all prospective owned input payloads;
         // cloning them for Export needs one additional independently held copy.
         tables
-            .checked_add(self._allowance.bytes())
+            .checked_add(self.input._allowance.bytes())
             .and_then(|n| n.checked_add(size_of::<FrontBuiltProof>() as u64))
             .ok_or(QueryError::NotImplemented)
     }
@@ -96,7 +136,7 @@ impl FrontProofInput {
         if self.build_bytes()? > allowance.bytes() {
             return Err(operational("PS9 construction buffers exceed admission"));
         }
-        let export = hirsel_proof_export::build(&self.input);
+        let export = hirsel_proof_export::build(&self.input.input);
         if !export.skipped.is_empty() {
             return Err(operational(
                 "PS9 construction refused an incomplete definition section",
@@ -114,7 +154,7 @@ impl FrontBuiltProof {
         &self.export
     }
     pub fn encoded_bytes(&self) -> Result<usize, QueryError> {
-        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.locator)
+        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.input.locator)
             .ok_or(QueryError::NotImplemented)
     }
     /// Encoding's String and the final Arc overlap until conversion completes.
@@ -141,7 +181,7 @@ impl FrontBuiltProof {
         let length = self.encoded_bytes()?;
         let text = hirsel_proof_export::encode_with_output_limit(
             &self.export,
-            &self.input.input.locator,
+            &self.input.input.input.locator,
             length,
         )
         .ok_or(QueryError::NotImplemented)?;
