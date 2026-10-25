@@ -103,7 +103,12 @@ fn admitted_real_front_tasks_match_scalar_modes_and_complete_reads() {
                     &*actual.reads, expected,
                     "complete front reads for {definition}, jobs={jobs}"
                 );
-                assert!(actual.summary.is_some());
+                let published = actual.summary.as_ref().unwrap();
+                let checked = queries.checked(product.record).unwrap();
+                assert!(
+                    Arc::ptr_eq(published.checked.as_ref().unwrap(), &checked.summary),
+                    "the published and checked views retain the same immutable summary allocation"
+                );
                 assert!(store.get_content(product.record).is_some());
             }
             runtime.shutdown();

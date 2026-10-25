@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
+mod retained;
 mod source;
 mod storage;
 pub use source::FrontInputFootprint;
@@ -168,20 +169,10 @@ impl FrontBodyQueries {
         &self,
         outcome: &ModeResult,
         checked: &CheckedProduct,
-        table_keys: Option<&crate::table_keys::TableKeyUse>,
+        table_keys: Option<&Arc<crate::table_keys::TableKeyUse>>,
+        memos: &[(crate::memo::MemoKey, Arc<Reads>)],
     ) -> Option<()> {
-        let bytes = self.records.encode_record(
-            &(
-                &outcome.definition,
-                &outcome.reads,
-                &outcome.summary,
-                &outcome.diagnostic_phases,
-                checked,
-                table_keys,
-            ),
-            |anchor| self.citations.record_owner(anchor),
-        )?;
-        let charge = bytes.len() as u64;
+        let charge = retained::metadata(outcome, checked, table_keys, memos)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(charge)?;
         Some(())
@@ -534,10 +525,22 @@ impl BodyTask {
             &bytes,
             Arc::new(variant.reads.clone()),
         )?;
+        let definition = DefId::intern(&input.definition);
+        let mut memo_rows = vec![(
+            crate::memo::MemoKey::new(QueryKind::Modes, definition),
+            restored.outcome.reads.clone(),
+        )];
+        if let Some((_, reads)) = &restored.checked {
+            memo_rows.push((
+                crate::memo::MemoKey::new(QueryKind::Check, definition),
+                reads.clone(),
+            ));
+        }
         queries.retain(
             &restored.outcome,
             &restored.checked,
-            restored.table_keys.as_deref(),
+            restored.table_keys.as_ref(),
+            &memo_rows,
         )?;
         if let Some(table_keys) = restored.table_keys {
             queries
@@ -548,19 +551,11 @@ impl BodyTask {
         }
         let (outcome, checked) = (restored.outcome, restored.checked);
         let failed = outcome.result.is_err();
-        let definition = DefId::intern(&input.definition);
-        let mut memos = queries.memos.lock().unwrap_or_else(|e| e.into_inner());
-        memos.insert(
-            crate::memo::MemoKey::new(QueryKind::Modes, definition),
-            outcome.reads.clone(),
-        );
-        if let Some((_, reads)) = &checked {
-            memos.insert(
-                crate::memo::MemoKey::new(QueryKind::Check, definition),
-                reads.clone(),
-            );
-        }
-        drop(memos);
+        queries
+            .memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(memo_rows);
         queries
             .outcomes
             .lock()
@@ -633,20 +628,11 @@ impl BodyTask {
                 .entry((done.definition.clone(), kind))
                 .or_default() += 1;
         }
-        if let Some(checked) = done
+        let table_keys = done
             .checked
             .as_ref()
-            .and_then(|product| product.result().ok())
-        {
-            queries
-                .table_keys
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(
-                    self.query.address.0,
-                    Arc::new(crate::table_keys::TableKeyUse::capture(&checked.value)),
-                );
-        }
+            .and_then(|p| p.result().ok())
+            .map(|checked| Arc::new(crate::table_keys::TableKeyUse::capture(&checked.value)));
         let result = done.result();
         let mut source = FrozenReadSource {
             declarations: &queries.declarations,
@@ -661,11 +647,7 @@ impl BodyTask {
             &mut source,
             Some(&queries.records),
         );
-        queries
-            .memos
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .extend(completed.memo_snapshot(&mut source));
+        let memo_rows = completed.memo_snapshot(&mut source);
         let checked = completed.checked_product();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
@@ -733,6 +715,9 @@ impl BodyTask {
                     diagnostic_phases: vec![],
                 };
                 queries
+                    .retain(&output, &None, None, &[])
+                    .ok_or(queries.errors.resource)?;
+                queries
                     .outcomes
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
@@ -778,17 +763,20 @@ impl BodyTask {
             (variant.output, variant.action(&input.key))
         };
         queries
-            .retain(
-                &outcome,
-                &checked,
-                queries
-                    .table_keys
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .get(&self.query.address.0)
-                    .map(Arc::as_ref),
-            )
+            .retain(&outcome, &checked, table_keys.as_ref(), &memo_rows)
             .ok_or(queries.errors.resource)?;
+        queries
+            .memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .extend(memo_rows);
+        if let Some(keys) = table_keys {
+            queries
+                .table_keys
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(self.query.address.0, keys);
+        }
         queries
             .outcomes
             .lock()

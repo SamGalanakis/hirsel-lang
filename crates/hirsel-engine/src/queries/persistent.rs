@@ -736,7 +736,7 @@ pub(super) fn restore_frozen_mode(
             summary,
             growth,
             storage: None,
-            checked: checked.as_ref().map(|(checked, _)| (**checked).clone()),
+            checked: checked.as_ref().map(|(checked, _)| checked.clone()),
             reads: reads.clone(),
             text,
         })
@@ -3917,10 +3917,10 @@ mod malformed_tests {
                 let mut published = PublishedSummary {
                     definition: summary.owner,
                     storage: None,
-                    checked: Some(CheckedSummary {
+                    checked: Some(Arc::new(CheckedSummary {
                         summary: summary.clone(),
                         growth: Default::default(),
-                    }),
+                    })),
                     summary,
                     growth: Default::default(),
                     reads: Arc::new(Reads::empty()),
@@ -3935,7 +3935,12 @@ mod malformed_tests {
                             hirsel_types::NameSite::Expression(hirsel_syntax::ExprId(u32::MAX))
                     }
                     4 => published.text = ContentHash::default(),
-                    5 => published.checked.as_mut().unwrap().summary.frames[0].parent = Some(0),
+                    5 => {
+                        Arc::make_mut(published.checked.as_mut().unwrap())
+                            .summary
+                            .frames[0]
+                            .parent = Some(0)
+                    }
                     _ => unreachable!(),
                 }
                 let record = PublicationRecord {
