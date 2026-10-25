@@ -270,10 +270,11 @@ pub(crate) unsafe fn receive(
         } else {
             Ok(Ok(()))
         };
-        if result.is_none()
-            && let Some(token) = token.take()
-        {
-            state.keep_token(me, token);
+        if result.is_none() {
+            match token.take() {
+                Some(token) => state.keep_token(me, token),
+                None => state.keep_tokenless(me),
+            }
         }
         drop(state);
         drop(cell);
@@ -377,18 +378,42 @@ unsafe fn close_inner(
         })
     };
     unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
+    Ok(unsafe {
+        destroy(
+            ctx,
+            left,
+            inert,
+            anchor,
+            operation_site,
+            super::replay::start,
+        )
+    })
+}
+
+/// Destroy the messages a last receiver's close detached, oldest first, on
+/// its closing task at the close's cleanup anchor.
+/// # Safety
+/// As for close; no latch or cell owner remains on this frame.
+pub(super) unsafe fn destroy(
+    ctx: *mut TaskCtx,
+    left: Option<(crate::channels::Ring, u32)>,
+    inert: bool,
+    anchor: u64,
+    operation_site: u64,
+    cut: fn(*mut TaskCtx),
+) -> u8 {
     let Some((left, descriptor)) = left else {
-        return Ok(STATUS_OK);
+        return STATUS_OK;
     };
     if inert {
         // Even an inert buffer's deallocation stays outside the section.
-        return Ok(STATUS_OK);
+        return STATUS_OK;
     }
     let count = left.len();
     let image = unsafe { (*ctx).detached_images.keep(left) };
     // The close phase can be the cut. Its unadmitted user finalizer must
     // not start, and the task owns the ring if this save never returns.
-    super::replay::start(ctx);
+    cut(ctx);
     let mut status = STATUS_OK;
     for index in 0..count {
         let value = unsafe { (*ctx).detached_images.at(image, index) };
@@ -409,5 +434,5 @@ unsafe fn close_inner(
         };
     }
     unsafe { (*ctx).detached_images.release(image) };
-    Ok(status)
+    status
 }

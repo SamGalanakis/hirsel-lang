@@ -436,6 +436,8 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
     let run = unsafe { (*ctx).run_ptr() };
     let role = unsafe { &(*run).role };
     if !role.enabled.load(Ordering::Acquire) {
+        // W1's run token owns the tables.
+        unsafe { super::free::objects::retire(ctx) };
         return;
     }
     // A home foreign callback can wait for a child's R while that child
@@ -453,6 +455,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx) {
             scheduler.current = (*ctx).task_id;
             super::snapshot_shield(scheduler, ctx);
         }
+        super::free::objects::retire(ctx);
     }
 }
 

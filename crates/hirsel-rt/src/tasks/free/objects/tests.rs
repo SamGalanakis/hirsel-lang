@@ -7,16 +7,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
 /// The process-global compute grant needs a child process per test.
 fn isolated(name: &str, variable: &str) -> bool {
+    isolated_at(&format!("tasks::free::objects::tests::{name}"), variable)
+}
+
+pub(super) fn isolated_at(test: &str, variable: &str) -> bool {
     if std::env::var_os(variable).is_some() {
         crate::pool::set_compute_grant(4);
         return true;
     }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("tasks::free::objects::tests::{name}"),
-            "--nocapture",
-        ])
+        .args(["--exact", test, "--nocapture"])
         .env(variable, "1")
         .output()
         .unwrap();
@@ -29,7 +29,7 @@ fn isolated(name: &str, variable: &str) -> bool {
     false
 }
 
-fn wait_until(what: &str, done: impl Fn() -> bool) {
+pub(super) fn wait_until(what: &str, done: impl Fn() -> bool) {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while !done() {
         assert!(std::time::Instant::now() < until, "{what}");
@@ -37,7 +37,7 @@ fn wait_until(what: &str, done: impl Fn() -> bool) {
     }
 }
 
-fn plain(size: u64) -> crate::Layout {
+pub(super) fn plain(size: u64) -> crate::Layout {
     crate::Layout {
         magic: crate::LAYOUT_MAGIC,
         version: crate::LAYOUT_VERSION,
@@ -58,10 +58,10 @@ fn plain(size: u64) -> crate::Layout {
 /// Descriptors 2 (a [tag, value] image), 3 (the mutex wrapper) and 4 (a
 /// one-pointer child environment). Leaked: run tables keep the pointers, and
 /// a finalized image's scope end names its own descriptor.
-struct Layouts([&'static crate::Layout; 3]);
+pub(super) struct Layouts([&'static crate::Layout; 3]);
 
 impl Layouts {
-    fn new(image: &'static crate::Layout, wrapper: crate::Layout) -> Self {
+    pub(super) fn new(image: &'static crate::Layout, wrapper: crate::Layout) -> Self {
         Self([
             image,
             Box::leak(Box::new(wrapper)),
@@ -69,14 +69,18 @@ impl Layouts {
         ])
     }
 
-    fn install(&self, run: &mut crate::host::BodyRun, pointers: &mut Vec<*const crate::Layout>) {
+    pub(super) fn install(
+        &self,
+        run: &mut crate::host::BodyRun,
+        pointers: &mut Vec<*const crate::Layout>,
+    ) {
         pointers.extend(self.0.iter().map(|&layout| layout as *const _));
         run.config.layouts = pointers.as_ptr();
         run.config.layout_count = 3;
     }
 }
 
-fn wrapper() -> crate::Layout {
+pub(super) fn wrapper() -> crate::Layout {
     crate::Layout {
         size: 8,
         flags: crate::LAYOUT_FROZEN | crate::LAYOUT_MUTEX_ROOT,
@@ -84,7 +88,7 @@ fn wrapper() -> crate::Layout {
     }
 }
 
-unsafe fn mutex(ctx: *mut TaskCtx, value: u64) -> u64 {
+pub(super) unsafe fn mutex(ctx: *mut TaskCtx, value: u64) -> u64 {
     let mut handle = 0;
     let mut payload = [1u64, value];
     let none = [0u64; 2];
@@ -103,7 +107,7 @@ unsafe fn mutex(ctx: *mut TaskCtx, value: u64) -> u64 {
     handle
 }
 
-unsafe fn spawn(
+pub(super) unsafe fn spawn(
     ctx: *mut TaskCtx,
     scope: &u64,
     entry: unsafe extern "C" fn(*mut TaskCtx, *mut Header, u64, u64) -> u8,
@@ -127,7 +131,7 @@ unsafe fn spawn(
     }
 }
 
-unsafe fn data<'a, T>(env: *mut Header) -> &'a T {
+pub(super) unsafe fn data<'a, T>(env: *mut Header) -> &'a T {
     unsafe { &*crate::alloc::payload(env).cast::<*const T>().read() }
 }
 
@@ -535,7 +539,7 @@ struct Wake {
     send_roles: Mutex<Vec<u64>>,
 }
 
-unsafe fn parked_tokens(ctx: *mut TaskCtx, word: u64) -> usize {
+pub(super) unsafe fn parked_tokens(ctx: *mut TaskCtx, word: u64) -> usize {
     let endpoint = unsafe { (*ctx).free_ops.endpoints.get(word) }.expect("a resolved sender lease");
     endpoint.cell.lock().tokens()
 }

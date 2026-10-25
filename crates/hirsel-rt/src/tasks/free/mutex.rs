@@ -247,14 +247,16 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     let (chain, cell) = unsafe {
         role::with_held(ctx, |s| {
             let me = s.current;
-            ((*ctx).failure.chain(&s.task(me).path), s.sync.mutex(word))
+            (
+                std::sync::Arc::new((*ctx).failure.chain(&s.task(me).path)),
+                s.sync.mutex(word),
+            )
         })
     };
-    // The role also protects the failure-chain metadata through this phase.
-    // Acquire the per-object lock before opening it; no syscall or user drop
-    // runs in the action and no scheduler accessor observes a stop there.
+    // Acquire the per-object lock before opening the phase; no syscall or
+    // user drop runs in the action and no scheduler accessor observes a stop.
     let mut state = cell.lock();
-    let mut waiters = Vec::with_capacity(state.permit.waiting());
+    let mut waiters = Default::default();
     let mut tokens = Vec::new();
     touched(
         ctx,
@@ -263,9 +265,8 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
         &mut state,
         replay.as_ref(),
         |state| {
-            state.permit.kill_into(&mut waiters);
+            waiters = state.kill(chain);
             tokens = state.take_tokens();
-            unsafe { role::with_held(ctx, |s| s.sync.set_dead(word, chain)) };
             "kill"
         },
     )?;
@@ -338,11 +339,35 @@ unsafe fn close_inner(
     drop(state);
     drop(cell);
     drop(replay);
-    let Some((image, descriptor)) = publication??.into_left() else {
-        return Ok(STATUS_OK);
+    Ok(unsafe {
+        destroy(
+            ctx,
+            publication??,
+            anchor,
+            operation_site,
+            super::replay::start,
+        )
+    })
+}
+
+/// Destroy a closed cell's detached payload on its closing task, at the
+/// close's cleanup anchor. The task owns the image across the finalizer's
+/// saves; `cut` parks first when the close was this replay's cut, so an
+/// unadmitted finalizer never starts.
+/// # Safety
+/// As for close; no latch or cell owner remains on this frame.
+pub(super) unsafe fn destroy(
+    ctx: *mut TaskCtx,
+    closed: crate::sync::ClosedMutex,
+    anchor: u64,
+    operation_site: u64,
+    cut: fn(*mut TaskCtx),
+) -> u8 {
+    let Some((image, descriptor)) = closed.into_left() else {
+        return STATUS_OK;
     };
     let image = unsafe { (*ctx).detached_images.keep(image) };
-    super::replay::start(ctx);
+    cut(ctx);
     let value = unsafe { (*ctx).detached_images.at(image, 0) };
     let mut continuation = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
     let status = unsafe {
@@ -357,7 +382,7 @@ unsafe fn close_inner(
         )
     };
     unsafe { (*ctx).detached_images.release(image) };
-    Ok(status)
+    status
 }
 
 /// # Safety
@@ -366,11 +391,9 @@ pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
-    let (cell, chain) = role::with_role(ctx, |s| {
-        let chain = s.sync.dead(word).expect("a dead mutex cause").clone();
-        (s.sync.mutex(word), chain)
-    });
+    let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let mut state = cell.lock();
+    let chain = state.dead().expect("a dead mutex cause").clone();
     touched(
         ctx,
         Phase::Done,
@@ -385,7 +408,7 @@ pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     drop(state);
     drop(cell);
     drop(replay);
-    unsafe { (*ctx).failure.append_chain(chain) };
+    unsafe { (*ctx).failure.append_chain(chain.as_ref().clone()) };
     super::replay::start(ctx);
     Ok(())
 }

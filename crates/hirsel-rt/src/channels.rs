@@ -179,7 +179,7 @@ impl Drop for Ring {
     }
 }
 
-struct Channel {
+pub(crate) struct Channel {
     payload: Arc<ChannelCell>,
     /// The tasks parked receiving and their places in park order, ascending: a park appends.
     waiting: VecDeque<(u64, u32)>,
@@ -209,6 +209,9 @@ pub(crate) struct ChannelState {
     /// The wake token of each receiver parked on a not-ready receive, in park
     /// order, until its next attempt or a send that makes a message visible.
     tokens: std::collections::VecDeque<(u32, crate::pool::free::Token)>,
+    /// Receivers parked here without a token, until their next attempt: only
+    /// the role's touch reaches them.
+    tokenless: Vec<u32>,
 }
 
 impl ChannelCell {
@@ -279,6 +282,38 @@ impl ChannelCell {
 
     /// # Safety
     /// slot is a writable None carrier; the object lock is held.
+    /// Close one endpoint under the held lock, exactly once. The transition is
+    /// cell-local: counts, and the queue a last receiver leaves, detached
+    /// without freeing storage. Registry rows retire separately
+    /// ([`Channels::retire`]).
+    pub(crate) fn close_locked(&self, state: &mut ChannelState, sender: bool) -> ClosedChannel {
+        let mut detached = ClosedChannel {
+            left: None,
+            _row: None,
+            _pending: BTreeSet::new(),
+            last: false,
+            unsent: false,
+        };
+        let count = if sender {
+            &mut state.senders
+        } else {
+            &mut state.receivers
+        };
+        *count = count
+            .checked_sub(1)
+            .unwrap_or_else(|| fault("a channel endpoint closed twice"));
+        if !sender && state.receivers == 0 && state.queue.len() > 0 {
+            let empty = Ring::new(self.element.size, state.queue.align);
+            let queue = std::mem::replace(&mut state.queue, empty);
+            detached._pending = std::mem::take(&mut state.pending);
+            state.received = state.sent;
+            detached.left = Some((queue, self.element.descriptor));
+        }
+        detached.last = state.senders == 0 && state.receivers == 0;
+        detached.unsent = sender && state.senders == 0 && state.receivers != 0;
+        detached
+    }
+
     pub(crate) unsafe fn receive(
         &self,
         state: &mut ChannelState,
@@ -303,6 +338,11 @@ pub(crate) struct ClosedChannel {
     left: Option<(Ring, u32)>,
     _row: Option<Channel>,
     _pending: BTreeSet<u64>,
+    /// The channel's last endpoint closed: its row retires with this one.
+    pub(crate) last: bool,
+    /// The last sender closed while a receiver is left: parked receivers
+    /// now see Closed.
+    pub(crate) unsent: bool,
 }
 
 impl ClosedChannel {
@@ -400,6 +440,7 @@ impl Channels {
                 sent: 0,
                 received: 0,
                 tokens: Default::default(),
+                tokenless: Vec::new(),
             }),
             element,
             object: Default::default(),
@@ -718,36 +759,32 @@ impl Channels {
         cell: &ChannelCell,
         row: &mut ChannelState,
     ) -> ClosedChannel {
+        let (channel, sender) = self.endpoint_of(word);
+        let mut detached = cell.close_locked(row, sender);
+        detached._row = self.retire(word, detached.last);
+        if detached.unsent {
+            // The parked receivers now see Closed.
+            self.touch(channel);
+        }
+        detached
+    }
+
+    /// Lifecycle administration of a closed endpoint: its row recycles, and
+    /// the channel's row too after its `last` endpoint. A role-free close
+    /// retires both later, at its task's next role entry; no lookup reaches
+    /// them meanwhile, since the closed endpoint's word had a single owner.
+    pub(crate) fn retire(&mut self, word: u64, last: bool) -> Option<Channel> {
         let Some((index, endpoint)) = self.lookup(word) else {
             fault("a channel endpoint closed twice or of another run");
         };
         self.endpoints[index as usize] = None;
         self.vacant_endpoints.push(index);
-        let mut detached = ClosedChannel {
-            left: None,
-            _row: None,
-            _pending: BTreeSet::new(),
-        };
-        if endpoint.sender {
-            row.senders -= 1;
-        } else {
-            row.receivers -= 1;
-            if row.receivers == 0 && row.queue.len() > 0 {
-                let empty = Ring::new(cell.element.size, row.queue.align);
-                let queue = std::mem::replace(&mut row.queue, empty);
-                detached._pending = std::mem::take(&mut row.pending);
-                row.received = row.sent;
-                detached.left = Some((queue, cell.element.descriptor));
-            }
-        }
-        if row.senders == 0 && row.receivers == 0 {
-            detached._row = self.channels[endpoint.channel as usize].take();
+        last.then(|| {
             self.vacant_channels.push(endpoint.channel);
-        } else if row.senders == 0 && endpoint.sender {
-            // The parked receivers now see Closed.
-            self.touch(endpoint.channel);
-        }
-        detached
+            self.channels[endpoint.channel as usize]
+                .take()
+                .unwrap_or_else(|| fault("a vacant channel row"))
+        })
     }
 }
 
@@ -760,6 +797,17 @@ impl ChannelState {
     /// Drop `task`'s token: each receive attempt registers anew if it parks.
     pub(crate) fn drop_token(&mut self, task: u32) {
         self.tokens.retain(|&(waiter, _)| waiter != task);
+        self.tokenless.retain(|&waiter| waiter != task);
+    }
+
+    /// `task` parks on a ReceiveReady wait with no wake token.
+    pub(crate) fn keep_tokenless(&mut self, task: u32) {
+        self.tokenless.push(task);
+    }
+
+    /// Whether a parked receiver can be reached only by the role's touch.
+    pub(crate) fn tokenless(&self) -> bool {
+        !self.tokenless.is_empty()
     }
 
     /// Receivers parked here with a wake token, for tests.
@@ -771,6 +819,14 @@ impl ChannelState {
     /// The oldest parked receiver's token, for a send that made a message visible.
     pub(crate) fn next_token(&mut self) -> Option<crate::pool::free::Token> {
         self.tokens.pop_front().map(|(_, token)| token)
+    }
+
+    /// Every parked receiver's token in park order, moved out whole for a
+    /// last sender's close: each of them now sees Closed or a message.
+    pub(crate) fn take_tokens(
+        &mut self,
+    ) -> std::collections::VecDeque<(u32, crate::pool::free::Token)> {
+        std::mem::take(&mut self.tokens)
     }
 
     /// Visible FIFO prefix; a younger published message cannot pass a pending

@@ -8,10 +8,14 @@
 //! (cells are append-only) and endpoint words carry their generation.
 //!
 //! An operation that cannot complete at once leaves before its ordinal
-//! begins, and the role path registers its wait. A completed put or send whose
-//! successor is registered unlocks the cell, then notifies it under the role.
-//! The quantum's end, a placement correction, pending root releases, a
-//! deferred child and every creation, close or failure keep the role path.
+//! begins, and the role path registers its wait. A completed put, send, kill
+//! or close wakes its successors with the tokens they registered, after the
+//! unlock; a successor without one is notified under the role.
+//! Close, kill and cause are cell-local too. A close detaches its leftovers
+//! once under the latch and destroys them on the closing task at its cleanup
+//! anchor; its registry rows are lifecycle administration, retired at that
+//! task's next role entry. The quantum's end, a placement correction, pending
+//! root releases, a deferred child and every creation keep the role path.
 //! Replay admits an immediate op through the task's own token, captured once
 //! under the role: the cut, the op's Done and its object's version order are
 //! the task's cursor and the shared version cells, never the scheduler. A
@@ -27,6 +31,8 @@ use hirsel_free::mutex::Acquired;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+#[cfg(test)]
+mod close_tests;
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +52,16 @@ pub(crate) struct OpLocal {
     uncanceled: Option<Uncanceled>,
     /// This task's replay reservation; set once, under the role.
     replay: Option<super::replay::Token>,
+    /// This task's spawn path, for the failure chain a kill keeps.
+    path: Option<Vec<u32>>,
+    /// Registry rows a role-free close left for this task's next role entry.
+    retired: Vec<Retired>,
+}
+
+/// A closed object's registry row, retired under the role.
+enum Retired {
+    Mutex(u64),
+    Endpoint { word: u64, last: bool },
 }
 
 struct Endpoint {
@@ -84,12 +100,41 @@ impl<T> Leases<T> {
         }
         self.0.push((word, lease()));
     }
+
+    fn remove(&mut self, word: u64) {
+        self.0.retain(|(key, _)| *key != word);
+    }
 }
 
 /// Resolution under the role: remember a mutex cell for later operations.
 pub(super) fn keep_mutex(ctx: *mut TaskCtx, word: u64, cell: &Arc<crate::sync::MutexCell>) {
     keep_replay(ctx);
+    if unsafe { (*ctx).free_ops.path.is_none() } {
+        let me = unsafe { (*ctx).task_id };
+        let path = role::with_role(ctx, |s| s.task(me).path.clone());
+        unsafe { (*ctx).free_ops.path = Some(path) };
+    }
     unsafe { (*ctx).free_ops.mutexes.keep(word, || cell.clone()) };
+}
+
+/// Lifecycle administration a role-free close left: its closed rows retire
+/// at this task's next role entry, with no latch held.
+/// # Safety
+/// The caller owns the run's tables: the role, W1's run token or the end.
+pub(crate) unsafe fn retire(ctx: *mut TaskCtx) {
+    let retired = unsafe { &mut (*ctx).free_ops.retired };
+    if retired.is_empty() {
+        return;
+    }
+    let Some(s) = (unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut() }) else {
+        return;
+    };
+    for row in retired.drain(..) {
+        match row {
+            Retired::Mutex(word) => drop(s.sync.retire(word)),
+            Retired::Endpoint { word, last } => drop(s.channels.retire(word, last)),
+        }
+    }
 }
 
 pub(super) fn keep_image(ctx: *mut TaskCtx, word: u64, image: &Arc<crate::sync::AtomicImage>) {
@@ -207,6 +252,20 @@ pub(crate) unsafe fn finish(ctx: *mut TaskCtx, result: Stopped<()>) -> u8 {
         unsafe { crate::stop::check(ctx, Err::<(), _>(stop)) };
     }
     STATUS_OK
+}
+
+/// Raise a role-free close's stop as close's role path does, or return its
+/// cleanup status.
+/// # Safety
+/// As for finish.
+pub(crate) unsafe fn closed(ctx: *mut TaskCtx, result: Stopped<u8>) -> u8 {
+    match result {
+        Ok(status) => status,
+        Err(stop) => {
+            let _role = unsafe { role::Guard::new(ctx) };
+            unsafe { crate::stop::check(ctx, Err::<u8, _>(stop)) }
+        }
+    }
 }
 
 /// `None` leaves the operation unbegun for the role path.
@@ -502,4 +561,255 @@ pub(crate) unsafe fn channel_receive(
             unsafe { tail(ctx) }
         }
     }))
+}
+
+/// A role-free close's cut check: a replayed task whose cut this close
+/// reached parks under the role before any unadmitted cleanup starts.
+fn cut(ctx: *mut TaskCtx) {
+    if unsafe { (*ctx).free_ops.replay.as_ref() }.is_some_and(|token| token.at_cut()) {
+        let _role = unsafe { role::Guard::new(ctx) };
+        super::replay::start(ctx);
+    }
+}
+
+/// A failed body's kill of the resolved mutex it holds. Every registered
+/// waiter leaves the queue in FIFO order with its token, under the latch, and
+/// is woken after the unlock, as a put wakes its reserved successor.
+/// # Safety
+/// As for hirsel_rt_v2_mutex_kill.
+pub(crate) unsafe fn mutex_kill(ctx: *mut TaskCtx, word: u64) -> Option<Stopped<()>> {
+    if !admitted(ctx) {
+        return None;
+    }
+    let cell = Arc::as_ptr(unsafe { (*ctx).free_ops.mutexes.get(word) }?);
+    let cell = unsafe { &*cell };
+    let replay = replayed(ctx, Some((crate::free::MUTEX, word)))?;
+    let replay = replay.map(|token| token.bind((crate::free::MUTEX, word)));
+    // The chain's allocation precedes the section.
+    let path = unsafe { (*ctx).free_ops.path.as_deref() }?;
+    let chain = Arc::new(unsafe { (*ctx).failure.chain(path) });
+    begin(ctx, replay.as_ref().map(|object| object.token()));
+    let mut state = cell.lock();
+    let mut waiters = Default::default();
+    let mut tokens = Vec::new();
+    let publication = super::mutex::touched(
+        ctx,
+        Phase::Done,
+        cell,
+        &mut state,
+        replay.as_ref(),
+        |state| {
+            waiters = state.kill(chain);
+            tokens = state.take_tokens();
+            "kill"
+        },
+    );
+    drop(state);
+    drop(replay);
+    Some(publication.and_then(|()| {
+        let token = |task: u32| tokens.iter().find(|&&(waiter, _)| waiter == task);
+        let mut unnotified = false;
+        for &task in &waiters {
+            match token(task) {
+                Some((_, token)) => unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) },
+                None => unnotified = true,
+            }
+        }
+        if !unnotified {
+            return unsafe { tail(ctx) };
+        }
+        let _role = unsafe { role::Guard::new(ctx) };
+        for &task in waiters.iter().filter(|&&task| token(task).is_none()) {
+            super::mutex::notify(ctx, task);
+        }
+        unsafe { super::try_yield(&mut *ctx) }
+    }))
+}
+
+/// A dead resolved mutex's cause: the chain is cell state, read under the
+/// latch with the cause's version event, and continued after the unlock.
+/// # Safety
+/// As for hirsel_rt_v2_mutex_cause.
+pub(crate) unsafe fn mutex_cause(ctx: *mut TaskCtx, word: u64) -> Option<Stopped<()>> {
+    if !admitted(ctx) {
+        return None;
+    }
+    let cell = Arc::as_ptr(unsafe { (*ctx).free_ops.mutexes.get(word) }?);
+    let cell = unsafe { &*cell };
+    let replay = replayed(ctx, Some((crate::free::MUTEX, word)))?;
+    let replay = replay.map(|token| token.bind((crate::free::MUTEX, word)));
+    begin(ctx, replay.as_ref().map(|object| object.token()));
+    let mut state = cell.lock();
+    let chain = state.dead().expect("a dead mutex cause").clone();
+    let publication = super::mutex::touched(
+        ctx,
+        Phase::Done,
+        cell,
+        &mut state,
+        replay.as_ref(),
+        |state| {
+            state.permit.observe();
+            "cause"
+        },
+    );
+    drop(state);
+    drop(replay);
+    Some(publication.map(|()| {
+        unsafe { (*ctx).failure.append_chain(chain.as_ref().clone()) };
+        cut(ctx);
+    }))
+}
+
+/// The last wrapper's close of a resolved mutex. The payload detaches once
+/// under the latch; it is destroyed after the unlock, on this task at the
+/// close's anchor. The lease keeps only the closed cell's storage.
+/// # Safety
+/// As for close_mutex.
+pub(crate) unsafe fn mutex_close(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Option<Stopped<u8>> {
+    if !admitted(ctx) {
+        return None;
+    }
+    let cell = Arc::as_ptr(unsafe { (*ctx).free_ops.mutexes.get(word) }?);
+    let cell = unsafe { &*cell };
+    let replay = replayed(ctx, Some((crate::free::MUTEX, word)))?;
+    let replay = replay.map(|token| token.bind((crate::free::MUTEX, word)));
+    let empty = crate::channels::Ring::new(cell.element.size, 1);
+    unsafe { (*ctx).free_ops.retired.reserve(1) };
+    begin(ctx, replay.as_ref().map(|object| object.token()));
+    let mut state = cell.lock();
+    super::record::track(ctx, cell.object.get());
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let version = state.permit.observe();
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded mutex identity"),
+                    version,
+                    0,
+                    "close mutex",
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch("close mutex")?;
+            }
+            Ok(cell.close_locked(&mut state, empty))
+        },
+    );
+    drop(state);
+    drop(replay);
+    let closed = match publication.and_then(|closed| closed) {
+        Ok(closed) => closed,
+        Err(stop) => return Some(Err(stop)),
+    };
+    unsafe { (*ctx).free_ops.retired.push(Retired::Mutex(word)) };
+    let status = unsafe { super::mutex::destroy(ctx, closed, anchor, operation_site, cut) };
+    // No detached image or recorder owner survives a permanent cut save.
+    cut(ctx);
+    Some(Ok(status))
+}
+
+/// The close of a resolved endpoint. Counts change and a last receiver's
+/// messages detach once under the latch. A last sender's close wakes every
+/// receiver parked with a token after the unlock, in park order; only a
+/// receiver parked without one needs the role's touch. A receiver a send
+/// already woke retries and sees Closed itself. Leftover messages are
+/// destroyed on this task at the close's anchor, oldest first.
+/// # Safety
+/// As for close_endpoint.
+pub(crate) unsafe fn channel_close(
+    ctx: *mut TaskCtx,
+    word: u64,
+    anchor: u64,
+    operation_site: u64,
+) -> Option<Stopped<u8>> {
+    if !admitted(ctx) {
+        return None;
+    }
+    let endpoint = unsafe { (*ctx).free_ops.endpoints.get(word) }?;
+    let (channel, sender) = (endpoint.channel, endpoint.sender);
+    // The endpoint's lease ends with it: hold the cell past that.
+    let cell = endpoint.cell.clone();
+    let handle = (crate::free::CHANNEL, u64::from(channel));
+    let replay = replayed(ctx, Some(handle))?.map(|token| token.bind(handle));
+    unsafe { (*ctx).free_ops.retired.reserve(1) };
+    begin(ctx, replay.as_ref().map(|object| object.token()));
+    let outcome = if sender {
+        "close sender"
+    } else {
+        "close receiver"
+    };
+    let mut state = cell.lock();
+    super::record::track(ctx, cell.object.get());
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let closed = cell.close_locked(&mut state, sender);
+            let version = cell.next_event();
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded channel identity"),
+                    version,
+                    0,
+                    outcome,
+                );
+            } else if let Some(replay) = &replay {
+                replay.touch(outcome)?;
+            }
+            Ok(closed)
+        },
+    );
+    let unsent = matches!(&publication, Ok(Ok(closed)) if closed.unsent);
+    let tokens = if unsent {
+        state.take_tokens()
+    } else {
+        Default::default()
+    };
+    let touch = unsent && state.tokenless();
+    drop(state);
+    drop(replay);
+    let closed = match publication.and_then(|closed| closed) {
+        Ok(closed) => closed,
+        Err(stop) => return Some(Err(stop)),
+    };
+    unsafe { (*ctx).free_ops.endpoints.remove(word) };
+    let last = closed.last;
+    for (_, token) in &tokens {
+        unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) };
+    }
+    drop(tokens);
+    if touch {
+        // As close's role path: the tokenless receivers now see Closed.
+        let _role = unsafe { role::Guard::new(ctx) };
+        let (row, ready) = role::with_role(ctx, |s| {
+            let row = s.channels.retire(word, last);
+            s.channels.touch(channel);
+            unsafe { super::super::readiness::poll_free(s) };
+            (row, super::take_ready(s))
+        });
+        unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
+        drop(row);
+    } else {
+        unsafe {
+            (*ctx)
+                .free_ops
+                .retired
+                .push(Retired::Endpoint { word, last })
+        };
+    }
+    let inert = cell.element.inert;
+    drop(cell);
+    let status = unsafe {
+        super::channel::destroy(ctx, closed.into_left(), inert, anchor, operation_site, cut)
+    };
+    cut(ctx);
+    Some(Ok(status))
 }

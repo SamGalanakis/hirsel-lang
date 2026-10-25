@@ -26,7 +26,6 @@ enum Payload {
 struct Cell {
     generation: u32,
     payload: Payload,
-    dead: Option<Vec<Chained>>,
 }
 
 /// A row allocation with no observable object yet. Only its owning command
@@ -58,6 +57,8 @@ pub(crate) struct MutexImage {
     image: Ring,
     pub(crate) permit: Permit,
     closed: bool,
+    /// The failure chain that killed this mutex, for each later cause.
+    dead: Option<Arc<Vec<Chained>>>,
     /// The wake token of each registered waiter, until it acquires, is killed
     /// or a put reserves the permit for it and takes its token.
     tokens: Vec<(u32, crate::pool::free::Token)>,
@@ -84,10 +85,23 @@ impl MutexImage {
         Some(self.tokens.swap_remove(index).1)
     }
 
-    /// The permit's waiters were killed: none of them is woken by a put. The
-    /// caller drops the returned tokens after its section.
+    /// The permit's waiters were killed: every token moves out whole, for a
+    /// kill's wakes. The caller drops what it does not use after its section.
     pub(crate) fn take_tokens(&mut self) -> Vec<(u32, crate::pool::free::Token)> {
         std::mem::take(&mut self.tokens)
+    }
+
+    /// Kill the held permit with a chain the caller prepared: every waiter
+    /// leaves the queue in FIFO order, and each later cause reads the chain.
+    pub(crate) fn kill(&mut self, chain: Arc<Vec<Chained>>) -> std::collections::VecDeque<u32> {
+        let waiters = self.permit.kill_detach();
+        self.dead = Some(chain);
+        waiters
+    }
+
+    /// The chain a dead mutex's cause continues.
+    pub(crate) fn dead(&self) -> Option<&Arc<Vec<Chained>>> {
+        self.dead.as_ref()
     }
 }
 
@@ -97,8 +111,7 @@ pub(crate) struct ClosedMutex {
     image: Ring,
     descriptor: u32,
     inert: bool,
-    _cell: Arc<MutexCell>,
-    _dead: Option<Vec<Chained>>,
+    _dead: Option<Arc<Vec<Chained>>>,
 }
 
 impl ClosedMutex {
@@ -135,6 +148,20 @@ impl MutexCell {
             "a held mutex payload"
         );
     }
+
+    /// Detach under the held lock, exactly once. The transition is cell-local:
+    /// no registry row, allocation, lock wait, storage destruction or user
+    /// code. The registry row retires separately ([`Synchronizers::retire`]).
+    pub(crate) fn close_locked(&self, state: &mut MutexImage, empty: Ring) -> ClosedMutex {
+        assert!(!state.closed, "a mutex closed twice");
+        state.closed = true;
+        ClosedMutex {
+            image: std::mem::replace(&mut state.image, empty),
+            descriptor: self.element.descriptor,
+            inert: self.element.inert,
+            _dead: state.dead.take(),
+        }
+    }
 }
 
 impl Synchronizers {
@@ -143,7 +170,6 @@ impl Synchronizers {
         self.cells.push(Cell {
             generation: self.generation,
             payload,
-            dead: None,
         });
         u64::from(self.generation) << 32 | (self.cells.len() - 1) as u64
     }
@@ -237,6 +263,7 @@ impl Synchronizers {
                 image,
                 permit: Permit::new(),
                 closed: false,
+                dead: None,
                 tokens: Vec::new(),
             }),
         })
@@ -346,21 +373,23 @@ impl Synchronizers {
         unsafe { cell.put(&mut state, slot) };
     }
 
-    pub(crate) fn dead(&mut self, word: u64) -> Option<&Vec<Chained>> {
-        self.cell(word).dead.as_ref()
+    /// A dead mutex's chain, for its cause.
+    pub(crate) fn dead(&mut self, word: u64) -> Option<Vec<Chained>> {
+        let chain = self.mutex(word).lock().dead.clone();
+        chain.map(|chain| chain.as_ref().clone())
     }
+
+    pub(crate) fn is_dead(&mut self, word: u64) -> bool {
+        self.mutex(word).lock().dead.is_some()
+    }
+
     pub(crate) fn kill(&mut self, word: u64, chain: Vec<Chained>) {
         self.kill_waiters(word, chain);
     }
 
     pub(crate) fn kill_waiters(&mut self, word: u64, chain: Vec<Chained>) -> Vec<u32> {
-        let waiters = self.mutex(word).lock().permit.kill();
-        self.set_dead(word, chain);
-        waiters
-    }
-
-    pub(crate) fn set_dead(&mut self, word: u64, chain: Vec<Chained>) {
-        self.cell(word).dead = Some(chain);
+        let chain = Arc::new(chain);
+        self.mutex(word).lock().kill(chain).into()
     }
 
     pub(crate) fn mutex(&mut self, word: u64) -> Arc<MutexCell> {
@@ -371,7 +400,8 @@ impl Synchronizers {
     }
 
     /// Detach using an already-held object lock; no allocation, lock wait,
-    /// backing-storage destruction or user code occurs in this action.
+    /// backing-storage destruction or user code occurs in this action. The
+    /// caller's retained cell outlives the row's reference dropped here.
     pub(crate) fn close_locked(
         &mut self,
         word: u64,
@@ -379,22 +409,22 @@ impl Synchronizers {
         state: &mut MutexImage,
         empty: Ring,
     ) -> ClosedMutex {
-        let cell = self.cell(word);
-        let Payload::Mutex(owner) = std::mem::replace(&mut cell.payload, Payload::Closed) else {
-            fault("a mutex closed twice or an atomic closed as a mutex");
-        };
+        let owner = self.retire(word);
         assert!(
             Arc::ptr_eq(&owner, mutex),
             "the locked cell matches its live row"
         );
-        state.closed = true;
-        ClosedMutex {
-            image: std::mem::replace(&mut state.image, empty),
-            descriptor: mutex.element.descriptor,
-            inert: mutex.element.inert,
-            _cell: owner,
-            _dead: cell.dead.take(),
-        }
+        mutex.close_locked(state, empty)
+    }
+
+    /// Lifecycle administration of a closed cell: its row stops resolving.
+    /// Its word is never reissued, so a role-free close retires it later.
+    pub(crate) fn retire(&mut self, word: u64) -> Arc<MutexCell> {
+        let cell = self.cell(word);
+        let Payload::Mutex(owner) = std::mem::replace(&mut cell.payload, Payload::Closed) else {
+            fault("a mutex closed twice or an atomic closed as a mutex");
+        };
+        owner
     }
 
     /// Detach before running user destruction, which may create or close cells.

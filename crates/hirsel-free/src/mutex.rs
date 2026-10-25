@@ -100,6 +100,15 @@ impl Permit {
         waiters
     }
 
+    /// Kill without wake capacity: the waiters' queue moves out whole, in
+    /// FIFO order, so the section allocates nothing.
+    pub fn kill_detach(&mut self) -> VecDeque<u32> {
+        assert!(!self.available && !self.dead, "only a held mutex can die");
+        self.dead = true;
+        self.advance();
+        std::mem::take(&mut self.waiters)
+    }
+
     pub fn kill_into(&mut self, out: &mut Vec<u32>) {
         assert!(
             out.capacity() - out.len() >= self.waiters.len(),

@@ -4354,6 +4354,11 @@ pub(crate) unsafe fn close_endpoint(
         });
         return STATUS_OK;
     }
+    // SAFETY: caller contract; a resolved endpoint's close needs no role.
+    if let Some(result) = unsafe { free::objects::channel_close(ctx, word, anchor, operation_site) }
+    {
+        return unsafe { free::objects::closed(ctx, result) };
+    }
     if free::enabled(ctx) {
         return unsafe {
             crate::stop::check(ctx, free::channel::close(ctx, word, anchor, operation_site))
@@ -4495,7 +4500,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
         crate::free::touch(ctx, object, "take");
     }
     let status = role::with_role(ctx, |t| {
-        if t.sync.dead(word).is_some() {
+        if t.sync.is_dead(word) {
             1
         } else {
             // SAFETY: caller contract.
@@ -4580,6 +4585,9 @@ pub(crate) fn end_run(ctx: &mut TaskCtx) {
         ctx.home_again();
     }
     crate::pool::retire(ctx.run());
+    // Rows the root's own role-free closes left retire before the tables end.
+    // SAFETY: the run's code ran on this thread last; it owns the tables.
+    unsafe { free::objects::retire(ctx) };
     if let Some(s) = ctx.run().tasks.as_deref_mut() {
         s.sync.end();
     }
@@ -4606,6 +4614,10 @@ pub(crate) unsafe fn close_mutex(
                 ordered::drops::mutex(ctx, word, anchor, operation_site),
             )
         };
+    }
+    // SAFETY: caller contract; a resolved mutex's close needs no role.
+    if let Some(result) = unsafe { free::objects::mutex_close(ctx, word, anchor, operation_site) } {
+        return unsafe { free::objects::closed(ctx, result) };
     }
     if free::enabled(ctx) {
         return unsafe {
@@ -4663,6 +4675,10 @@ fn stack_rss(ctx: &mut TaskCtx) -> u64 {
 /// `ctx` is live, its failure active, and `m` borrows a counted Mutex wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    // SAFETY: caller contract; a resolved held mutex dies without the role.
+    if let Some(result) = unsafe { free::objects::mutex_kill(ctx, mutex_word(m)) } {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4695,6 +4711,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
 /// `ctx` is live and `m` borrows a dead Mutex's wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    // SAFETY: caller contract; a resolved dead mutex's chain is cell state.
+    if let Some(result) = unsafe { free::objects::mutex_cause(ctx, mutex_word(m)) } {
+        return unsafe { free::objects::finish(ctx, result) };
+    }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     #[cfg(feature = "measurement")]
@@ -4709,7 +4729,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u
     }
     // SAFETY: caller contract.
     let word = unsafe { mutex_word(m) };
-    let chain = role::with_role(ctx, |t| t.sync.dead(word).cloned())
+    let chain = role::with_role(ctx, |t| t.sync.dead(word))
         .unwrap_or_else(|| fault("the cause of a mutex that is not dead"));
     // SAFETY: the context is live.
     unsafe { (*ctx).failure.append_chain(chain) };

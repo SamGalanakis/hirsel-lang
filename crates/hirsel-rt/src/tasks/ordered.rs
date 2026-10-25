@@ -296,9 +296,7 @@ impl Backend<Command> for Objects<'_> {
             | Command::AtomicStore { word, .. }
             | Command::MutexPut { word, .. } => s.sync.initialized(*word),
             Command::MutexTake { word, .. } => s.sync.initialized(*word) && s.sync.available(*word),
-            Command::MutexCause { word } => {
-                s.sync.initialized(*word) && s.sync.dead(*word).is_some()
-            }
+            Command::MutexCause { word } => s.sync.initialized(*word) && s.sync.is_dead(*word),
             Command::Send { sender, .. } | Command::SenderDup { sender, .. } => {
                 s.channels.initialized(*sender, true)
             }
@@ -611,10 +609,10 @@ impl Backend<Command> for Objects<'_> {
                     (Outcome::image(0, word.to_ne_bytes().to_vec()), Next::Yield)
                 }
                 Command::MutexCause { word } => {
-                    let chain =
-                        s.sync.dead(*word).cloned().unwrap_or_else(|| {
-                            crate::fault("the cause of a mutex that is not dead")
-                        });
+                    let chain = s
+                        .sync
+                        .dead(*word)
+                        .unwrap_or_else(|| crate::fault("the cause of a mutex that is not dead"));
                     let mut outcome = Outcome::image(0, Vec::new());
                     outcome.canonical = events::mutex_failures(self.ctx, s, *word, &chain);
                     outcome.chain = chain;
@@ -664,7 +662,7 @@ impl Backend<Command> for Objects<'_> {
                 }
                 Command::MutexTake { word, none } => {
                     let mut image = none.clone();
-                    let status = if s.sync.dead(*word).is_some() {
+                    let status = if s.sync.is_dead(*word) {
                         1
                     } else {
                         s.sync.take(*word, image.as_mut_ptr());

@@ -1421,6 +1421,99 @@ fn replayed_receive_outcomes_cross_engine_replay_durable() {
     replayed_receives_at(&["durable"]);
 }
 
+/// A child resolves its own mutex, then a failing body kills it and a later
+/// acquisition reads its cause; the dead mutex, both dup'd senders and the
+/// receiver close on resolved leases at their owners' ends. Role-free close,
+/// kill and cause record the same histories every engine, width and permit
+/// count replays.
+const FREE51_CLOSE: &str = r#"
+pub type AppError = Grant(GrantError) | Output(OutputError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  let total = task.scope(tasks, fn(s: Scope) -> u32 {
+    let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let first = sender.dup(tasks, sender)
+    let second = sender.dup(tasks, sender)
+    let a = task.async(s, fn() -> () {
+      let own: Mutex[u32] = mutex.create(tasks, 0)
+      let mut i = 0u32
+      while i < 4u32 {
+        mutex.with(tasks, own, fn(mut value: unique u32) { value += 1 })
+        i += 1u32
+      }
+      let killed: Result[(), Failure] = task.isolate(tasks, fn() -> () {
+        mutex.with(tasks, own, fn(mut value: unique u32) -> () uses {} {
+          let n: u8 = 255
+          let broken = n + 1
+        })
+      })
+      let observed: Result[u32, Failure] = task.isolate(tasks, fn() -> u32 {
+        mutex.with(tasks, own, fn(mut value: unique u32) -> u32 uses {} { value })
+      })
+      let dead: u32 = match (killed, observed) {
+        (Error(_), Error(_)) => 1u32,
+        _ => 0u32,
+      }
+      let mut tx = take first
+      let _ = channel.send(tasks, mut tx, dead)
+      let _ = channel.send(tasks, mut tx, 10u32)
+    })
+    let b = task.async(s, fn() -> () {
+      let mut tx = take second
+      let _ = channel.send(tasks, mut tx, 100u32)
+      let _ = channel.send(tasks, mut tx, 1000u32)
+    })
+    let mut r = take receiver
+    let mut sum = 0u32
+    let mut n = 0u32
+    while n < 4u32 {
+      match channel.receive(tasks, mut r) {
+        Ok(v) => { sum += v },
+        Error(_) => (),
+      }
+      n += 1u32
+    }
+    task.await(s, take a)
+    task.await(s, take b)
+    sum
+  })
+  failure.check(total == 1111u32, Bounds())
+  out.print(output, "closed\n") ? Output
+  Ok(())
+}
+"#;
+
+fn free51_close_at(cells: Cells) {
+    f1_corpus_matrix_cells(
+        &format!("free51-close-{}", cells.levels[0]),
+        FREE51_CLOSE,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]},"args":[]}),
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        cells,
+    );
+}
+
+#[test]
+fn free51_close_kill_cause_cross_engine_replay() {
+    free51_close_at(Cells {
+        levels: &["record"],
+        engines: &ENGINES,
+        dimensions: Cells::DIMENSIONS,
+    });
+}
+
+#[test]
+fn free51_close_kill_cause_cross_engine_replay_durable() {
+    free51_close_at(Cells {
+        levels: &["durable"],
+        engines: &ENGINES,
+        dimensions: Cells::DIMENSIONS,
+    });
+}
+
 #[test]
 fn f1_task_set_corpus_full_projection_width_and_permit_matrix() {
     f1_corpus_matrix(
