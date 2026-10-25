@@ -480,6 +480,7 @@ impl OwnershipTasks {
                 snapshot,
                 source,
                 super::roots::LinkAssembly {
+                    operations: source.operations().clone(),
                     semantic_owners,
                     summaries,
                     functions,

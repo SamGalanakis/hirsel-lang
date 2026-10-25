@@ -792,10 +792,39 @@ impl NativeRoots for RootProducts {
                 }
             }
         }
+        // Root metadata retains the complete independently admitted inventory.
+        // Body-free assembly never reconstructs a Value or trusts unit anchors
+        // to select source identities; selectors are rebound by full ABI content.
+        let mut operations = self.source.operations().clone();
+        operations.pretransfer_adapters = super::instance_operations::bind_pretransfer(
+            environment.operations,
+            &binding.table,
+            environment.target,
+        )?;
+        operations.invocation_bodies.clear();
+        for owner in &root.instances {
+            let definition = owner.instance.definition();
+            let instance = owner.instance.digest();
+            if let Some(body) = environment.operations.invocation_body(definition, instance) {
+                operations
+                    .invocation_bodies
+                    .push(hirsel_lir::invocations::ReferenceBody {
+                        definition: definition.clone(),
+                        instance,
+                        body,
+                    });
+                if let Some(rows) = environment.operations.invocations(definition) {
+                    operations
+                        .invocations
+                        .insert(definition.clone(), rows.to_vec());
+                }
+            }
+        }
         with_link_assembly(
             snapshot,
             &self.source,
             LinkAssembly {
+                operations,
                 semantic_owners,
                 summaries,
                 functions,
@@ -812,6 +841,7 @@ impl NativeRoots for RootProducts {
 /// Shared body-free linker projection. Both ordinary and ownership consumers
 /// supply only summaries/layouts derived from their own exact current C scope.
 pub(super) struct LinkAssembly {
+    pub operations: hirsel_layout::operation::OperationRegistry,
     pub semantic_owners: BTreeMap<hirsel_syntax::DefPath, Option<hirsel_syntax::DefPath>>,
     pub summaries: Vec<UnitSummary>,
     pub functions: BTreeMap<hirsel_syntax::DefPath, ContentHash>,
@@ -827,6 +857,7 @@ pub(super) fn with_link_assembly<R>(
     use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
 ) -> Result<R, String> {
     let LinkAssembly {
+        operations,
         semantic_owners,
         summaries,
         functions,
@@ -855,7 +886,7 @@ pub(super) fn with_link_assembly<R>(
         semantic_units: None,
         production: None,
         validation: snapshot.options.validation,
-        operations: source.operations().clone(),
+        operations,
         launch: snapshot.options.launch.clone(),
         input: snapshot.emission.input.clone(),
         target: snapshot.options.target.clone(),

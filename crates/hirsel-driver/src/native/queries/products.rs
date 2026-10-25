@@ -451,6 +451,7 @@ impl NativeProducts for DemandProducts {
         let mut selected = BTreeSet::new();
         let mut captured = Vec::new();
         let mut contexts = Vec::new();
+        let mut adapters = Vec::new();
         for product in products {
             let owner = snapshot
                 .owners
@@ -479,6 +480,16 @@ impl NativeProducts for DemandProducts {
                 return Err("unit emission context differs from the request".into());
             }
             let operations = snapshot.instances.operations(&owner, &environment)?;
+            // Numeric bindings contain only these selected products. Their
+            // independently planned inventories also define the emission scope;
+            // unrelated adapters in the snapshot need no ABI in this table.
+            for adapter in
+                hirsel_lir::operation::OperationDeclarations::pretransfer_adapters(&operations)
+            {
+                if !adapters.contains(adapter) {
+                    adapters.push(adapter.clone());
+                }
+            }
             let scoped = NativeEnvironment {
                 operations: &operations,
                 ..environment
@@ -491,12 +502,18 @@ impl NativeProducts for DemandProducts {
             .map(|(closure, _)| closure)
             .collect::<Vec<_>>();
         let binding = Binding::new(environment.target, &closures)?;
+        let selected_operations = super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            source: None,
+            all_sources: true,
+            pretransfer: Some(adapters),
+        };
         let operations = super::instance_operations::InstanceOperations {
             declarations: environment.operations,
             source: None,
             all_sources: true,
             pretransfer: Some(super::instance_operations::bind_pretransfer(
-                environment.operations,
+                &selected_operations,
                 &binding.table,
                 environment.target,
             )?),
