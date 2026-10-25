@@ -532,13 +532,13 @@ impl Lock {
         if durability == Durability::Rebuildable {
             return Self::try_root(root, exclusive);
         }
-        let file = Self::root_file(root)?;
+        let guard = Self(Self::root_file(root)?);
         if exclusive {
-            file.lock()?;
+            guard.0.lock()?;
         } else {
-            file.lock_shared()?;
+            guard.0.lock_shared()?;
         }
-        Ok(Self(file))
+        Ok(guard)
     }
     fn root_file(root: &Path) -> io::Result<File> {
         fs::create_dir_all(root)?;
@@ -550,6 +550,7 @@ impl Lock {
             .open(root.join(".pack-lock"))
     }
     fn try_file(file: File, exclusive: bool) -> io::Result<Self> {
+        let guard = Self(file);
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
@@ -559,14 +560,14 @@ impl Lock {
                 libc::LOCK_SH
             };
             // SAFETY: an owned live descriptor; nonblocking advisory locking.
-            if unsafe { libc::flock(file.as_raw_fd(), mode | libc::LOCK_NB) } != 0 {
+            if unsafe { libc::flock(guard.0.as_raw_fd(), mode | libc::LOCK_NB) } != 0 {
                 return Err(io::Error::last_os_error());
             }
-            Ok(Self(file))
+            Ok(guard)
         }
         #[cfg(not(unix))]
         {
-            let _ = (file, exclusive);
+            let _ = (guard, exclusive);
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "cache ownership locks unavailable",
@@ -579,9 +580,13 @@ impl Drop for Lock {
         #[cfg(unix)]
         {
             use std::os::fd::AsRawFd;
-            // SAFETY: exactly the live fd locked in new.
+            // Unlock before close: a child may still retain a forked duplicate
+            // of this open file description. Also runs on acquisition errors.
+            // SAFETY: this guard owns the live descriptor until after drop.
             unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
         }
+        #[cfg(not(unix))]
+        let _ = self.0.unlock();
     }
 }
 
