@@ -34,6 +34,11 @@ struct Pending {
     affected: bool,
 }
 impl FrontTracker {
+    pub(super) fn retained_bytes(&self) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.tree::<DefId, Pending>(self.pending.len());
+        weight.bytes()
+    }
     pub(super) fn is_active(&self) -> bool {
         self.active
     }
