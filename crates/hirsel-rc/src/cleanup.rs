@@ -3007,16 +3007,27 @@ mod pending_tests {
             actions
                 .iter()
                 .map(|action| {
-                    let Action::Release { path, .. } = action else {
+                    let (Action::Release { path, .. } | Action::Finalize { path, .. }) = action
+                    else {
                         panic!("unexpected {action:?}")
                     };
                     path.clone()
                 })
                 .collect::<Vec<_>>()
         };
+        // Inline finalizers are explicit phases: the parent finalizes in place,
+        // then each zero-sized child keeps its own obligation in reverse order.
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
-        assert_eq!(paths(&actions), [vec![]]);
+        assert!(
+            actions
+                .iter()
+                .all(|action| matches!(action, Action::Finalize { .. }))
+        );
+        assert_eq!(
+            paths(&actions),
+            [vec![], vec![Step::Field(1)], vec![Step::Field(0)]]
+        );
         state
             .fields_pending
             .set(lowering.facts.intern(&[]), Tri::Yes);
