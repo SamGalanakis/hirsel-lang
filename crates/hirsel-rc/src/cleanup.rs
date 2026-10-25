@@ -53,6 +53,9 @@ use hirsel_lir::stage::{Ready, Stage, StageKind};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod observation;
+use observation::{NoObservations, Reporter};
+
 /// The drop body of one resource layout: its instance and `FnAbi`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Finalizer {
@@ -188,6 +191,59 @@ pub fn lower_indexed<S: Stage>(
     finalizers: &Finalizers,
     index: &hirsel_lir::LayoutIndex<'_>,
 ) -> Result<LirUnit<Ready>, PassError> {
+    lower_reporting(unit, finalizers, index, NoObservations).map(|(unit, ())| unit)
+}
+
+/// Checked cleanup lowering with pass-authored splice locations. Unsupported
+/// compound drops and version-repair changes fail rather than rebuilding plans.
+pub fn lower_observed<S: Stage>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Ready>,
+        hirsel_lir::ownership_trace::Plan,
+        hirsel_lir::ownership_trace::Recipe,
+    ),
+    String,
+> {
+    hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
+    let before = unit.clone();
+    let (after, mut output) = lower_reporting(
+        unit,
+        finalizers,
+        index,
+        observation::Observations::new(input),
+    )
+    .map_err(|error| error.to_string())?;
+    output.unit = after.digest();
+    let recipe = hirsel_lir::ownership_trace::Recipe {
+        before: input.unit,
+        after: output.unit,
+        relocations: output
+            .observations
+            .iter()
+            .map(|observation| hirsel_lir::ownership_trace::Relocation {
+                id: observation.marker.id,
+                point: observation.point,
+                token: observation.marker.token,
+                owner: observation.marker.owner,
+            })
+            .collect(),
+    };
+    hirsel_lir::ownership_trace::check_transform(&before, input, &after, &output, Some(&recipe))
+        .map_err(|error| error.to_string())?;
+    Ok((after, output, recipe))
+}
+
+fn lower_reporting<S: Stage, R: Reporter>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    mut report: R,
+) -> Result<(LirUnit<Ready>, R::Output), PassError> {
     if !matches!(S::KIND, StageKind::Rc | StageKind::Reuse) {
         return Err(PassError::Malformed(format!(
             "cleanup lowering reads Rc or Reuse LIR, not {:?}",
@@ -217,6 +273,7 @@ pub fn lower_indexed<S: Stage>(
             .collect(),
     };
     lower_copies(&mut ed, lay)?;
+    report.prelude(&ed)?;
     let mut lowering = Lowering {
         index,
         ed: &mut ed,
@@ -234,8 +291,9 @@ pub fn lower_indexed<S: Stage>(
     // an earlier drop moves it one place on.
     let mut drops = drops;
     while let Some((b, i, st, flag)) = drops.pop() {
-        lowering.drop(b, i, &st, flag)?;
+        lowering.drop(b, i, &st, flag, &mut report)?;
         for (block, at) in lowering.inserted.drain(..) {
+            report.inserted(block, at)?;
             for d in drops.iter_mut().filter(|d| d.0 == block && d.1 >= at) {
                 d.1 += 1;
             }
@@ -249,12 +307,14 @@ pub fn lower_indexed<S: Stage>(
             block.instructions = PoolRange::push(&mut snapshot.instructions, code.iter().cloned());
         }
         let mut facts = Facts::new(&snapshot, table);
+        report.versions(&ed, true)?;
         join_read_versions(&mut ed, &mut facts, lay)?;
         retie_versions(&mut ed, &facts, lay);
+        report.versions(&ed, false)?;
     }
-    let mut unit = ed.finish();
+    let (mut unit, output) = report.finish(ed)?;
     prune_unused_flags(&mut unit);
-    Ok(unit)
+    Ok((unit, output))
 }
 
 /// Whole-value releases can make a semantic drop's field flags unnecessary.
@@ -1405,7 +1465,14 @@ struct Site {
 impl Lowering<'_, '_> {
     /// Lower the drop at `b`'s instruction `i`; `flag` decides content that
     /// is there on some paths only.
-    fn drop(&mut self, b: BlockId, i: usize, st: &State, flags: Flags) -> Result<(), PassError> {
+    fn drop<R: Reporter>(
+        &mut self,
+        b: BlockId,
+        i: usize,
+        st: &State,
+        flags: Flags,
+        report: &mut R,
+    ) -> Result<(), PassError> {
         let Inst::Drop {
             address,
             if_live: _,
@@ -1463,7 +1530,7 @@ impl Lowering<'_, '_> {
                         "a drop of conditionally initialized {slot:?}"
                     )));
                 };
-                return self.flagged(b, i, st, slot, flag, flags);
+                return self.flagged(b, i, st, slot, flag, flags, report);
             }
             if path
                 .iter()
@@ -1476,6 +1543,8 @@ impl Lowering<'_, '_> {
             let layout = self.place_layout(slot, &path)?;
             self.plan(s, path, layout, &mut actions)?;
         }
+        let whole_release = matches!(actions.as_slice(), [Action::Release { path: released, moved, .. }]
+            if self.facts.slot_of(address).is_some_and(|(_, original)| released == original) && moved.is_empty());
         let version = match s.versions {
             Versions::One(v) => Some(v),
             _ if actions.is_empty() => None,
@@ -1505,6 +1574,12 @@ impl Lowering<'_, '_> {
                 if_live: false,
             });
         }
+        let release =
+            (whole_release && at == b).then(|| hirsel_lir::ownership_trace::Point::ReleaseDrop {
+                block: at,
+                index: self.ed.code[at.index()].len() as u32 - 1,
+            });
+        report.splice(b, i, at, self.ed.code[at.index()].len(), release)?;
         self.ed.code[at.index()].extend(tail);
         self.ed.unit.terminators[at.index()] = terminator;
         Ok(())
@@ -1513,7 +1588,7 @@ impl Lowering<'_, '_> {
     /// A drop of content there on some paths only: `b` branches on the slot's
     /// flag into a block of its own that drops the content, then both go on
     /// to the rest of `b`.
-    fn flagged(
+    fn flagged<R: Reporter>(
         &mut self,
         b: BlockId,
         i: usize,
@@ -1521,6 +1596,7 @@ impl Lowering<'_, '_> {
         slot: SlotId,
         flag: ValueId,
         flags: Flags,
+        report: &mut R,
     ) -> Result<(), PassError> {
         let block = &self.ed.unit.blocks[b.index()];
         let (kind, anchor) = (block.kind, block.anchor);
@@ -1548,7 +1624,8 @@ impl Lowering<'_, '_> {
         let mut there = st.clone();
         there.slots[slot.index()].live = Tri::Yes;
         there.slots[slot.index()].init = Tri::Yes;
-        self.drop(full, 0, &there, flags)
+        report.splice(b, i, after, 0, None)?;
+        self.drop(full, 0, &there, flags, report)
     }
 
     /// Emit a plan with a suffix cleanup after each potentially failing action.

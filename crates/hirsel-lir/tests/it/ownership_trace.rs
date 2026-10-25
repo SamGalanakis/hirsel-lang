@@ -1273,6 +1273,17 @@ fn ownership_trace_reuse_refuses_a_stale_input_before_rewriting() {
 }
 
 fn drop_transport_fixture() -> (LirUnit<Rc>, Plan, LirUnit<hirsel_lir::stage::Ready>, Plan) {
+    let (before, input, after, output, _) = drop_transport_fixture_with_table();
+    (before, input, after, output)
+}
+
+fn drop_transport_fixture_with_table() -> (
+    LirUnit<Rc>,
+    Plan,
+    LirUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+) {
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::BLK)], None);
     let value = t.owned(l::BLK);
     t.param(value);
@@ -1358,7 +1369,7 @@ fn drop_transport_fixture() -> (LirUnit<Rc>, Plan, LirUnit<hirsel_lir::stage::Re
             marker,
         }],
     );
-    (before, input, after, output)
+    (before, input, after, output, table)
 }
 
 #[test]
@@ -1457,4 +1468,43 @@ fn ownership_trace_drop_transport_refuses_to_certify_a_conditional_drop_as_uncon
         check(&before, &input).unwrap_err(),
         Error::InvalidBinding(MarkerId(0))
     );
+}
+
+#[test]
+fn ownership_trace_cleanup_lowering_reports_the_whole_release_it_actually_emits() {
+    let (before, input, after, expected, table) = drop_transport_fixture_with_table();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (observed, output, recipe) =
+        hirsel_rc::cleanup::lower_observed(before.clone(), &Default::default(), &index, &input)
+            .unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&observed),
+        hirsel_codec::to_text(&after)
+    );
+    assert_eq!(output, expected);
+    assert_eq!(recipe.relocations.len(), 1);
+    assert_eq!(recipe.relocations[0].point, expected.observations[0].point);
+    check_transform(&before, &input, &observed, &output, Some(&recipe)).unwrap();
+}
+
+#[test]
+fn ownership_trace_cleanup_lowering_refuses_a_stale_or_forged_input() {
+    let (before, input, _, _, table) = drop_transport_fixture_with_table();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let mut forged = input.clone();
+    let mut extra = forged.observations[0].clone();
+    extra.marker.id = MarkerId(9);
+    forged.observations.push(extra);
+    let error =
+        hirsel_rc::cleanup::lower_observed(before.clone(), &Default::default(), &index, &forged)
+            .unwrap_err();
+    assert!(
+        error.contains("DuplicateObservation") || error.contains("Forged"),
+        "{error}"
+    );
+    let mut stale = input;
+    stale.unit = support::hash("another unit");
+    let error = hirsel_rc::cleanup::lower_observed(before, &Default::default(), &index, &stale)
+        .unwrap_err();
+    assert!(error.contains("StalePlan"), "{error}");
 }
