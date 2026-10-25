@@ -93,3 +93,4 @@ fn input(original: &NativeOriginalBody) -> Result<SourceInput, SourceError> {
 }
 
 pub mod provider;
+pub mod selection;

@@ -325,6 +325,13 @@ impl NativeOriginalReader {
     pub fn signatures(&self) -> &Arc<SignatureSnapshot> {
         &self.verified.signatures
     }
+    /// Current CT-5 catalogue captured with this original source snapshot.
+    /// It contains selected declaration/actual/path data, never native code or
+    /// a substitute source/V witness for the selected monomorphic definition.
+    pub fn instance_bodies(&self) -> &hirsel_tir::InstanceBodies {
+        &self.verified.instances
+    }
+
     /// Copied reader maps and path buffers only. Shared source/signature/V,
     /// interner, CT-5 and store payloads retain their original admission owners.
     pub fn retained_metadata_bytes(&self) -> u64 {

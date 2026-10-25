@@ -77,7 +77,7 @@ impl Provider for Front<'_> {
 /// Bind the compact entry/demand observation to the current selected source
 /// before its body is released. Native keys and cached metadata cannot select
 /// an older original body, signature, or V observation.
-fn original(
+pub(super) fn original(
     provider: &dyn Provider,
     path: &DefPath,
 ) -> Result<(SignatureRef, Arc<NativeOriginalBody>), SourceError> {
@@ -121,4 +121,26 @@ pub fn closure(
 ) -> Result<ReceiptSourceObservation, SourceError> {
     let (_, original) = original(provider, base.definition())?;
     super::closure(&original, base, provider.types(), parent, block, statement)
+}
+
+/// Original generated-call selection, kept separate from body/source access.
+/// Unknown or unselected generated actuals are errors, never ordinary fallback.
+pub trait SelectionProvider: Provider {
+    fn selected_instance(
+        &self,
+        declaration: DefId,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefId>, SourceError>;
+}
+impl SelectionProvider for Front<'_> {
+    fn selected_instance(
+        &self,
+        declaration: DefId,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Option<DefId>, SourceError> {
+        self.reader
+            .instance_bodies()
+            .resolve(declaration, self.types(), arguments)
+            .map_err(|error| SourceError::Type(format!("{error:?}")))
+    }
 }
