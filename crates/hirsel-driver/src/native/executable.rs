@@ -1,5 +1,5 @@
 //! Standalone executable compilation; launch authority is supplied by its caller at runtime.
-use super::{NativeError, StageName, TargetSpec};
+use super::{NativeError, OptLevel, Options, StageName, TargetSpec};
 use hirsel_engine::ToolError;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
