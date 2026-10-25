@@ -187,7 +187,7 @@ fn mode2_recipes_52_r3_select_literal() {
 fn mode2_recipes_52_r4_inferred_nested_row() {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let source = "type Sample { name: String }\ntype Strategy[T] { draw: fn() -> T }\nfn make[T](take draw: fn() -> T) -> Strategy[T] { Strategy(draw: take draw) }\nfn need(take s: Strategy[Sample]) {}\npub fn main() { let strategy = make(fn() -> unique Sample { Sample(name: \"x\") }); need(take strategy) }";
+        let source = "type Sample { name: String }\ntype Strategy[T] { draw: fn() -> Result[unique T, ()] }\nfn make[T](take draw: fn() -> Result[unique T, ()]) -> Strategy[T] { Strategy(draw: take draw) }\nfn need(take s: Strategy[Sample]) {}\npub fn main() { let strategy = make(fn() -> Result[unique Sample, ()] { Ok(Sample(name: \"x\")) }); need(take strategy) }";
         rejected(&mut engine, source, "R4 ", true);
         accepted(
             &mut engine,
