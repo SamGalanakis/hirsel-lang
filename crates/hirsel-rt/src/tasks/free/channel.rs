@@ -37,6 +37,7 @@ pub(crate) unsafe fn open(
     if let Some(object) = &object {
         cell.object.set(object.clone()).unwrap();
     }
+    super::record::track(ctx, object.as_ref());
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         if let Some(replay) = &replay {
             replay.create()?;
@@ -45,7 +46,7 @@ pub(crate) unsafe fn open(
         out.write(sender);
         out.add(1).write(receiver);
         if let Some(writer) = writer {
-            writer.create(object.unwrap());
+            writer.create(object.as_ref().unwrap());
         }
         Ok(())
     });
@@ -219,6 +220,7 @@ pub(crate) unsafe fn receive(
         let mut state = cell.lock();
         state.drop_token(me);
         let mut result = None;
+        super::record::track(ctx, cell.object.get());
         let publication = if cause.is_some() || cell.ready(&state) {
             super::record::publish_with_replay(
                 ctx,
@@ -244,10 +246,7 @@ pub(crate) unsafe fn receive(
                             writer.cancel(cause);
                         }
                         writer.receive(
-                            cell.object
-                                .get()
-                                .expect("a recorded channel identity")
-                                .clone(),
+                            cell.object.get().expect("a recorded channel identity"),
                             outcome,
                         );
                     } else if let Some(replay) = &replay {

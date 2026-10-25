@@ -396,14 +396,16 @@ unsafe extern "C" fn cancel_parked_owner(ctx: *mut u8, data: *mut u8) -> ! {
             }
         }
         super::super::record::begin(ctx);
-        crate::stop::check(
-            ctx,
-            super::super::record::publish(ctx, Phase::Done, |_| {
-                if probe.live {
-                    scheduler(ctx).cancel(0, 3);
-                }
-            }),
-        );
+        // As ordinary cancellation: the walk and wake capacity precede the section.
+        let s = scheduler(ctx) as *mut crate::tasks::Scheduler;
+        let targets = probe.live.then(|| (*s).prepare_cancel(0));
+        let publication = super::super::record::publish(ctx, Phase::Done, |_| {
+            if let Some(targets) = &targets {
+                (*s).cancel_prepared(0, 3, targets);
+            }
+        });
+        drop(targets);
+        crate::stop::check(ctx, publication);
         probe.canceled.store(true, Ordering::Release);
         if !probe.live {
             super::super::replay::start(ctx);

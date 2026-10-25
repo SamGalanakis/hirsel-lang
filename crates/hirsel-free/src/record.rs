@@ -156,29 +156,59 @@ pub const MAX_FIXED: usize = 1 + 10 + 10 + 19;
 /// A payload record's bytes besides the payload: the tag, the op delta and the length.
 pub const PAYLOAD_HEAD: usize = 1 + 10 + 10;
 
-/// An upper bound on the bytes one phase's records take, reserved before its section.
+/// The most label bytes (an outcome such as `"close receiver"` or `"canceled 7"`) one writer
+/// call names. Key and sink names and output bytes are bounded explicitly.
+pub const LABEL: usize = 32;
+
+/// Everything one phase may write, computed before its section opens: record bytes for the
+/// tape and, for an optional observer, diagnostic notes and their label bytes. A phase's
+/// writer enforces it, so a bound that is short fails at once instead of allocating.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RecordBound {
     pub bytes: usize,
+    pub notes: usize,
+    pub text: usize,
 }
 
 impl RecordBound {
-    /// Room for `n` records without a payload.
+    /// Room for `n` writer calls without a payload: each writes at most one fixed record and
+    /// one note with a label.
     pub const fn records(n: usize) -> RecordBound {
         RecordBound {
             bytes: n * MAX_FIXED,
+            notes: n,
+            text: n * LABEL,
         }
     }
     /// Add room for one observation or completion of `len` payload bytes.
     pub const fn payload(self, len: usize) -> RecordBound {
         RecordBound {
             bytes: self.bytes + PAYLOAD_HEAD + len,
+            ..self
         }
     }
-    /// Add room for `n` more records without a payload.
+    /// Add room for `n` more writer calls without a payload.
     pub const fn and(self, n: usize) -> RecordBound {
+        let more = RecordBound::records(n);
         RecordBound {
-            bytes: self.bytes + n * MAX_FIXED,
+            bytes: self.bytes + more.bytes,
+            notes: self.notes + more.notes,
+            text: self.text + more.text,
+        }
+    }
+    /// Add room for one key position on a key named with `name` bytes.
+    pub const fn key(self, name: usize) -> RecordBound {
+        RecordBound {
+            text: self.text + name,
+            ..self.and(1)
+        }
+    }
+    /// Add room for one output note of `len` bytes to a sink named with `sink` bytes.
+    pub const fn output(self, sink: usize, len: usize) -> RecordBound {
+        RecordBound {
+            notes: self.notes + 1,
+            text: self.text + sink + len,
+            ..self
         }
     }
 }

@@ -311,9 +311,13 @@ fn cancellation_changes_keep_their_check_across_host_retries_and_partial_tapes()
         for &(progress, cause) in &checks {
             if concurrent {
                 parallel
-                    .phase(&mut worker, &mut task, progress, |writer| {
-                        writer.cancel(cause)
-                    })
+                    .phase(
+                        &mut worker,
+                        &mut task,
+                        progress,
+                        hirsel_free::record::RecordBound::records(1),
+                        |writer| writer.cancel(cause),
+                    )
                     .unwrap();
                 parallel.flush().unwrap().unwrap();
             } else {

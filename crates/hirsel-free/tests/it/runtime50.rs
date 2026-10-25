@@ -15,24 +15,59 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, mpsc};
 
-/// The test binary's allocator: counts this thread's allocations.
+/// The test binary's allocator: counts this thread's allocations, and separately those
+/// (and frees) made while a recorder section is open on it: the section trap.
 pub struct Counting;
-thread_local! { static ALLOCATIONS: Cell<u64> = const { Cell::new(0) }; }
+thread_local! {
+    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+    static IN_SECTION: Cell<bool> = const { Cell::new(false) };
+    static SECTIONS: Cell<u64> = const { Cell::new(0) };
+    static TRAPPED: Cell<u64> = const { Cell::new(0) };
+}
 fn allocations() -> u64 {
     ALLOCATIONS.with(Cell::get)
 }
+fn count(n: &'static std::thread::LocalKey<Cell<u64>>) {
+    let _ = n.try_with(|n| n.set(n.get() + 1));
+}
+fn trap() {
+    if IN_SECTION.try_with(Cell::get).unwrap_or(false) {
+        count(&TRAPPED);
+    }
+}
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+        count(&ALLOCATIONS);
+        trap();
         unsafe { System.alloc(layout) }
     }
     unsafe fn realloc(&self, block: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+        count(&ALLOCATIONS);
+        trap();
         unsafe { System.realloc(block, layout, size) }
     }
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
+        trap();
         unsafe { System.dealloc(block, layout) }
     }
+}
+
+/// The recorder's section window, on this thread.
+fn section_hook(open: bool) {
+    IN_SECTION.set(open);
+    if open {
+        count(&SECTIONS);
+    }
+}
+
+/// Recorder metrics that arm the section trap.
+fn trapped() -> Arc<Metrics> {
+    Arc::new(Metrics::with_section_hook(section_hook))
+}
+
+/// This thread's (sections opened, allocations and frees inside them).
+fn trap_counts() -> (u64, u64) {
+    (SECTIONS.with(Cell::get), TRAPPED.with(Cell::get))
 }
 
 fn wait(flag: &AtomicBool) {
@@ -45,30 +80,25 @@ fn done(op: u64) -> Progress {
     Progress::new(op, Phase::Done)
 }
 
-/// One phase, counting this thread's allocations from inside the open section (the prefix
-/// runs right after admission) until it published and closed.
+/// One phase on a [`trapped`] recorder: the allocations and frees made while its section
+/// was open, from admission until just before it closed.
 fn counted<S: hirsel_free::recorder::TapeSink, T>(
     recorder: &Recorder<S>,
     slot: &mut ExecutorSlot,
     task: &mut Task,
     progress: Progress,
+    bound: RecordBound,
     action: impl FnOnce(&mut hirsel_free::concurrent::Writer<'_, '_>) -> T,
 ) -> (T, u64) {
-    let opened = Cell::new(0);
-    let result = recorder
-        .phase_if(
-            slot,
-            task,
-            progress,
-            || {
-                opened.set(allocations());
-                true
-            },
-            action,
-        )
-        .unwrap()
-        .unwrap();
-    (result, allocations() - opened.get())
+    let (sections, before) = trap_counts();
+    let result = recorder.phase(slot, task, progress, bound, action).unwrap();
+    let (opened, after) = trap_counts();
+    assert_eq!(
+        opened,
+        sections + 1,
+        "the section trap was armed for this phase"
+    );
+    (result, after - before)
 }
 
 /// Op `op`'s payload: lengths chosen so records straddle and exhaust segments.
@@ -113,7 +143,7 @@ fn admitted_records_complete(marked: &Marked, path: &[u32]) -> usize {
 #[test]
 fn runtime50_reserved_record_write_cut_matrix() {
     const OPS: u64 = 48;
-    let metrics = Arc::new(Metrics::default());
+    let metrics = trapped();
     let recorder = Arc::new(
         Recorder::<Marked>::new(
             Marked::default(),
@@ -152,14 +182,15 @@ fn runtime50_reserved_record_write_cut_matrix() {
                         (cut, effects.load(Ordering::Acquire))
                     }
                 });
-                let (_, allocated) = counted(&recorder, &mut slot, &mut root, done(op), |w| {
-                    effects.fetch_add(1, Ordering::AcqRel);
-                    w.load(u128::from(op) << 100 | 0xfeed);
-                    open.store(true, Ordering::Release);
-                    // The cutter is now closing the gate; it cannot pass this section.
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                    w.observation(&bytes);
-                });
+                let (_, allocated) =
+                    counted(&recorder, &mut slot, &mut root, done(op), bound, |w| {
+                        effects.fetch_add(1, Ordering::AcqRel);
+                        w.load(u128::from(op) << 100 | 0xfeed);
+                        open.store(true, Ordering::Release);
+                        // The cutter is now closing the gate; it cannot pass this section.
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        w.observation(&bytes);
+                    });
                 assert_eq!(allocated, 0, "op {op} allocated inside its section");
                 let (cut, seen) = cutter.join().unwrap();
                 assert_eq!(cut.progress[&Vec::new()], done(op));
@@ -168,7 +199,7 @@ fn runtime50_reserved_record_write_cut_matrix() {
             }
             _ => {}
         }
-        let (_, allocated) = counted(&recorder, &mut slot, &mut root, done(op), |w| {
+        let (_, allocated) = counted(&recorder, &mut slot, &mut root, done(op), bound, |w| {
             effects.fetch_add(1, Ordering::AcqRel);
             w.load(u128::from(op) << 100 | 0xfeed);
             w.observation(&bytes);
@@ -185,16 +216,40 @@ fn runtime50_reserved_record_write_cut_matrix() {
         "the matrix exhausts and links reserved segments"
     );
     let values: BTreeMap<_, _> = metrics.values().into_iter().collect();
-    assert_eq!(values["section_segment_allocations"], 0.0);
+    assert_eq!(values["short_reservations"], 0.0);
 
-    // Short reservation: still complete and correct, but the section allocates (and says so).
+    // Short reservation: admission finds it before the prefix or any effect, reserves
+    // outside the section and admits the same progress once. The section allocates nothing.
     let big = vec![7u8; 3 * SEGMENT_HINT];
-    let (_, allocated) = counted(&recorder, &mut slot, &mut root, done(OPS + 1), |w| {
-        w.observation(&big)
-    });
-    assert!(allocated > 0);
+    let before = allocations();
+    let acted = Cell::new(0);
+    let (_, allocated) = counted(
+        &recorder,
+        &mut slot,
+        &mut root,
+        done(OPS + 1),
+        RecordBound::records(0).payload(big.len()),
+        |w| {
+            acted.set(acted.get() + 1);
+            w.observation(&big)
+        },
+    );
+    assert_eq!(
+        allocated, 0,
+        "a short reservation never allocates in its section"
+    );
+    assert_eq!(acted.get(), 1);
+    assert!(
+        allocations() - before >= 3,
+        "the missing segments were reserved outside"
+    );
     let values: BTreeMap<_, _> = metrics.values().into_iter().collect();
-    assert!(values["section_segment_allocations"] >= 2.0);
+    assert_eq!(values["short_reservations"], 1.0);
+    assert_eq!(
+        root.progress(),
+        done(OPS + 1),
+        "no ordinal was consumed by the shortage"
+    );
 
     // A stop's cut while a section is open waits for it, then admits nothing more.
     let open = Arc::new(AtomicBool::new(false));
@@ -206,17 +261,30 @@ fn runtime50_reserved_record_write_cut_matrix() {
         }
     });
     root.reserve(RecordBound::records(1));
-    counted(&recorder, &mut slot, &mut root, done(OPS + 2), |w| {
-        open.store(true, Ordering::Release);
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        w.load(1);
-    });
+    counted(
+        &recorder,
+        &mut slot,
+        &mut root,
+        done(OPS + 2),
+        RecordBound::records(1),
+        |w| {
+            open.store(true, Ordering::Release);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            w.load(1);
+        },
+    );
     let terminal = stopper.join().unwrap();
     assert_eq!(terminal.progress[&Vec::new()], done(OPS + 2));
     root.reserve(RecordBound::records(1));
     assert!(
         recorder
-            .phase(&mut slot, &mut root, done(OPS + 3), |w| w.load(2))
+            .phase(
+                &mut slot,
+                &mut root,
+                done(OPS + 3),
+                RecordBound::records(1),
+                |w| w.load(2)
+            )
             .is_err()
     );
     drop(slot);
@@ -268,15 +336,19 @@ fn runtime50_reserved_records_complete_under_concurrent_cuts() {
             TASKS + 1,
             false,
             false,
-            None,
+            Some(trapped()),
         )
         .unwrap(),
     );
     let mut slot = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut slot).unwrap();
+    let prepared = root.prepare_children(TASKS as u32);
     let children = recorder
-        .phase(&mut slot, &mut root, done(1), |w| {
-            (0..TASKS).map(|_| w.spawn()).collect::<Vec<_>>()
+        .phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
+            prepared
+                .into_iter()
+                .map(|child| w.spawn_prepared(child))
+                .collect::<Vec<_>>()
         })
         .unwrap();
     drop(slot);
@@ -289,11 +361,13 @@ fn runtime50_reserved_records_complete_under_concurrent_cuts() {
                 let mut slot = recorder.executor_available(1).unwrap();
                 for op in 1..=OPS {
                     let bytes = payload(op);
-                    task.reserve(RecordBound::records(1).payload(bytes.len()));
-                    let (_, allocated) = counted(&recorder, &mut slot, &mut task, done(op), |w| {
-                        w.load(u128::from(op) << 100 | 0xfeed);
-                        w.observation(&bytes);
-                    });
+                    let bound = RecordBound::records(1).payload(bytes.len());
+                    task.reserve(bound);
+                    let (_, allocated) =
+                        counted(&recorder, &mut slot, &mut task, done(op), bound, |w| {
+                            w.load(u128::from(op) << 100 | 0xfeed);
+                            w.observation(&bytes);
+                        });
                     assert_eq!(allocated, 0);
                 }
                 running.fetch_sub(1, Ordering::AcqRel);
@@ -332,8 +406,14 @@ fn runtime50_executor_slot_migration_reentry() {
     );
     let mut home = recorder.executor(2).unwrap();
     let mut root = recorder.root(&mut home).unwrap();
+    let prepared = root.prepare_children(2);
     let mut children = recorder
-        .phase(&mut home, &mut root, done(1), |w| [w.spawn(), w.spawn()])
+        .phase(&mut home, &mut root, done(1), RecordBound::default(), |w| {
+            prepared
+                .into_iter()
+                .map(|child| w.spawn_prepared(child))
+                .collect::<Vec<_>>()
+        })
         .unwrap()
         .into_iter();
     let (mut migrant, mut blocker) = (children.next().unwrap(), children.next().unwrap());
@@ -349,7 +429,13 @@ fn runtime50_executor_slot_migration_reentry() {
             let mut slot = recorder.executor(0).unwrap();
             migrant.reserve(RecordBound::records(1));
             recorder
-                .phase(&mut slot, &mut migrant, done(1), |w| w.load(10))
+                .phase(
+                    &mut slot,
+                    &mut migrant,
+                    done(1),
+                    RecordBound::records(1),
+                    |w| w.load(10),
+                )
                 .unwrap();
             // Migration moves the task's encoder; the physical slot stays with C0.
             to_c1.send(migrant).unwrap();
@@ -366,7 +452,13 @@ fn runtime50_executor_slot_migration_reentry() {
             assert!(recorder.executor(0).is_none(), "C0 still owns its slot");
             migrant.reserve(RecordBound::records(1));
             recorder
-                .phase(&mut slot, &mut migrant, done(2), |w| w.load(11))
+                .phase(
+                    &mut slot,
+                    &mut migrant,
+                    done(2),
+                    RecordBound::records(1),
+                    |w| w.load(11),
+                )
                 .unwrap();
             c0_retired.wait();
             c0_retired.wait();
@@ -388,7 +480,13 @@ fn runtime50_executor_slot_migration_reentry() {
     let mut migrant = from_c1.recv().unwrap();
     migrant.reserve(RecordBound::records(1));
     recorder
-        .phase(&mut home, &mut migrant, done(3), |w| w.load(12))
+        .phase(
+            &mut home,
+            &mut migrant,
+            done(3),
+            RecordBound::records(1),
+            |w| w.load(12),
+        )
         .unwrap();
     // Nested reentry while the outer frame has the home slot checked out: it cannot reuse
     // the active authority and registers a distinct exclusive slot.
@@ -399,12 +497,20 @@ fn runtime50_executor_slot_migration_reentry() {
         assert_ne!(nested.index(), outer.index());
         migrant.reserve(RecordBound::records(1));
         recorder
-            .phase(&mut nested, &mut migrant, done(4), |w| w.load(13))
+            .phase(
+                &mut nested,
+                &mut migrant,
+                done(4),
+                RecordBound::records(1),
+                |w| w.load(13),
+            )
             .unwrap();
         drop(nested);
         root.reserve(RecordBound::records(1));
         recorder
-            .phase(outer, &mut root, done(2), |w| w.load(1))
+            .phase(outer, &mut root, done(2), RecordBound::records(1), |w| {
+                w.load(1)
+            })
             .unwrap();
     }
 
@@ -418,14 +524,26 @@ fn runtime50_executor_slot_migration_reentry() {
             let mut slot = recorder.executor_available(0).unwrap();
             blocker.reserve(RecordBound::records(1));
             recorder
-                .phase(&mut slot, &mut blocker, done(1), |w| {
-                    in_section.store(true, Ordering::Release);
-                    released.recv().unwrap();
-                    w.load(20);
-                })
+                .phase(
+                    &mut slot,
+                    &mut blocker,
+                    done(1),
+                    RecordBound::records(1),
+                    |w| {
+                        in_section.store(true, Ordering::Release);
+                        released.recv().unwrap();
+                        w.load(20);
+                    },
+                )
                 .unwrap();
             blocker.reserve(RecordBound::records(1));
-            let after = recorder.phase(&mut slot, &mut blocker, done(2), |w| w.load(21));
+            let after = recorder.phase(
+                &mut slot,
+                &mut blocker,
+                done(2),
+                RecordBound::records(1),
+                |w| w.load(21),
+            );
             (after.is_err(), slot.index())
         }
     });
@@ -449,7 +567,13 @@ fn runtime50_executor_slot_migration_reentry() {
     root.reserve(RecordBound::records(1));
     assert!(
         recorder
-            .phase(&mut home, &mut root, done(3), |w| w.load(2))
+            .phase(
+                &mut home,
+                &mut root,
+                done(3),
+                RecordBound::records(1),
+                |w| w.load(2)
+            )
             .is_err()
     );
     drop(home);
@@ -471,7 +595,7 @@ fn runtime50_executor_slot_migration_reentry() {
 /// A contended workload over two objects, recorded with or without diagnostics.
 fn contended(trace: bool) -> (Vec<u8>, Option<Projection>, BTreeMap<&'static str, f64>) {
     const OPS: u64 = 24;
-    let metrics = Arc::new(Metrics::default());
+    let metrics = trapped();
     let recorder = Recorder::<Marked>::new(
         Marked::default(),
         b"diagnostics",
@@ -493,37 +617,52 @@ fn contended(trace: bool) -> (Vec<u8>, Option<Projection>, BTreeMap<&'static str
             op: 2,
         },
     ];
+    let prepared = root.prepare_children(2);
+    root.track(&objects[0]);
+    root.track(&objects[1]);
     let mut tasks = recorder
-        .phase(&mut slot, &mut root, done(1), |w| {
-            w.create(objects[0].clone());
-            [w.spawn(), w.spawn()]
-        })
+        .phase(
+            &mut slot,
+            &mut root,
+            done(1),
+            RecordBound::records(1),
+            |w| {
+                w.create(&objects[0]);
+                prepared
+                    .into_iter()
+                    .map(|child| w.spawn_prepared(child))
+                    .collect::<Vec<_>>()
+            },
+        )
         .unwrap();
     recorder
-        .phase(&mut slot, &mut root, done(2), |w| {
-            w.create(objects[1].clone())
-        })
+        .phase(
+            &mut slot,
+            &mut root,
+            done(2),
+            RecordBound::records(1),
+            |w| w.create(&objects[1]),
+        )
         .unwrap();
     let mut versions = [1u64, 1];
     for op in 1..=OPS {
         for (id, task) in tasks.iter_mut().enumerate() {
             let object = &objects[(op as usize + id) % 2];
             task.track(object);
-            task.reserve(RecordBound::records(3));
+            let bound = RecordBound::records(2);
+            task.reserve(bound);
             let version = &mut versions[(op as usize + id) % 2];
-            let (_, allocated) = counted(&recorder, &mut slot, task, done(op), |w| {
+            let (_, allocated) = counted(&recorder, &mut slot, task, done(op), bound, |w| {
                 *version += 1;
                 w.touch(object, *version, 0, "send");
                 if op % 5 == 0 {
                     w.load(u128::from(op));
                 }
             });
-            if !trace {
-                assert_eq!(
-                    allocated, 0,
-                    "no diagnostic Event is built without an observer"
-                );
-            }
+            assert_eq!(
+                allocated, 0,
+                "a section builds no diagnostic Event, traced or not (trace {trace})"
+            );
         }
     }
     let live = trace.then(|| {
@@ -614,7 +753,9 @@ fn runtime50_diagnostic_free_encoding_projection() {
         traced_metrics["compressed_bytes_per_contended_event"]
     );
     assert!(plain_metrics["compressed_bytes_per_contended_event"] <= 4.0);
-    assert_eq!(plain_metrics["section_segment_allocations"], 0.0);
+    // Only the root's first phase was admitted without a reservation ahead.
+    assert_eq!(plain_metrics["short_reservations"], 1.0);
+    assert_eq!(traced_metrics["short_reservations"], 1.0);
     // The log bytes are the scratch encoder's bytes for the same records.
     let parsed = tape::parse(&plain).unwrap();
     for (path, bytes) in &parsed.logs {
@@ -752,9 +893,13 @@ fn serial_callbacks_with_local_cursors() {
     let gate = ObjectId::Gate("package:7".into());
     let mut slot = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut slot).unwrap();
+    let prepared = root.prepare_children(TASKS as u32);
     let children = recorder
-        .phase(&mut slot, &mut root, done(1), |w| {
-            (0..TASKS).map(|_| w.spawn()).collect::<Vec<_>>()
+        .phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
+            prepared
+                .into_iter()
+                .map(|child| w.spawn_prepared(child))
+                .collect::<Vec<_>>()
         })
         .unwrap();
     drop(slot);
@@ -772,10 +917,16 @@ fn serial_callbacks_with_local_cursors() {
                         task.track(&gate);
                         task.reserve(RecordBound::records(1));
                         recorder
-                            .phase(&mut slot, &mut task, done(2 * round + 1 + i as u64), |w| {
-                                *held += 1;
-                                w.touch(&gate, *held, 0, outcome);
-                            })
+                            .phase(
+                                &mut slot,
+                                &mut task,
+                                done(2 * round + 1 + i as u64),
+                                RecordBound::records(1),
+                                |w| {
+                                    *held += 1;
+                                    w.touch(&gate, *held, 0, outcome);
+                                },
+                            )
                             .unwrap();
                     }
                     drop(held);
@@ -940,4 +1091,479 @@ fn runtime50_local_replay_dependency_progress() {
     );
 
     serial_callbacks_with_local_cursors();
+}
+
+/// A root that records phases on a trapped recorder and mirrors its log with a scratch
+/// encoder, so a test knows where each record ends against segment boundaries.
+struct Mirrored {
+    recorder: Arc<Recorder<Marked>>,
+    metrics: Arc<Metrics>,
+    slot: ExecutorSlot,
+    root: Task,
+    op: u64,
+    encoder: Encoder,
+    log: Vec<u8>,
+    records: Vec<Record>,
+}
+
+impl Mirrored {
+    fn new(trace: bool) -> Mirrored {
+        let metrics = trapped();
+        let recorder = Arc::new(
+            Recorder::<Marked>::new(
+                Marked::default(),
+                b"section boundaries",
+                1,
+                false,
+                trace,
+                Some(metrics.clone()),
+            )
+            .unwrap(),
+        );
+        let mut slot = recorder.executor(0).unwrap();
+        let root = recorder.root(&mut slot).unwrap();
+        Mirrored {
+            recorder,
+            metrics,
+            slot,
+            root,
+            op: 0,
+            encoder: Encoder::default(),
+            log: Vec::new(),
+            records: Vec::new(),
+        }
+    }
+
+    /// One phase admitted with `bound`, reserved ahead or not, that writes `records`. A cut
+    /// follows each, so the cutter frees every segment the phase filled.
+    fn phase(
+        &mut self,
+        bound: RecordBound,
+        reserve: bool,
+        records: impl FnOnce(u64) -> Vec<Record>,
+        act: impl FnOnce(&mut hirsel_free::concurrent::Writer<'_, '_>),
+    ) {
+        self.op += 1;
+        let op = self.op;
+        if reserve {
+            self.root.reserve(bound);
+        }
+        let acted = Cell::new(0);
+        let (_, trapped) = counted(
+            &self.recorder,
+            &mut self.slot,
+            &mut self.root,
+            done(op),
+            bound,
+            |w| {
+                acted.set(acted.get() + 1);
+                act(w);
+            },
+        );
+        assert_eq!(
+            trapped, 0,
+            "op {op} (reserved ahead: {reserve}) allocated or freed in its section"
+        );
+        assert_eq!(acted.get(), 1, "op {op} acted exactly once");
+        for record in records(op) {
+            self.encoder.encode(&record, &mut self.log);
+            self.records.push(record);
+        }
+        self.recorder.flush().unwrap().unwrap();
+    }
+
+    /// The payload length whose record (tag, one-byte op delta, length varint, payload) ends
+    /// `at` bytes from a segment end, `segments` segments on.
+    fn payload_ending(&self, at: i64, segments: usize) -> usize {
+        let room = SEGMENT_HINT - self.log.len() % SEGMENT_HINT;
+        let mut end = (room as i64 + at) as usize + segments * SEGMENT_HINT;
+        if end < 4 + 128 {
+            end += SEGMENT_HINT; // a two-byte length varint
+        }
+        end - 4
+    }
+
+    /// Stop, then check the tape's log is the mirror byte for byte. Returns the tape, the
+    /// trace and the short-reservation count.
+    fn finish(self) -> (Vec<u8>, Vec<hirsel_free::projection::Stamped>, f64) {
+        let terminal = self.recorder.stop("returned", None).unwrap().unwrap().0;
+        assert_eq!(terminal.progress[&Vec::new()], done(self.op));
+        drop(self.slot);
+        let short = self
+            .metrics
+            .values()
+            .into_iter()
+            .find(|(name, _)| *name == "short_reservations")
+            .unwrap()
+            .1;
+        let marked = Arc::try_unwrap(self.recorder).ok().unwrap().into_sink();
+        let parsed = tape::parse(&marked.bytes).unwrap();
+        let log = &parsed.logs[&Vec::new()];
+        assert_eq!(
+            log, &self.log,
+            "the log is the scratch encoding, byte for byte"
+        );
+        assert_eq!(decode(log).unwrap(), self.records);
+        (marked.bytes, self.root.trace().to_vec(), short)
+    }
+}
+
+/// rr declines a buffered syscall before its effect when the record would not fit
+/// (src/preload/syscallbuf.c:1309-1333), and block_clone_syscallbuf_overflow.c:5-36 moves
+/// blocks exactly the buffer's size, checking both ends. Here, on one segment size: a first
+/// touch with the largest gap, every fixed kind at its largest fields, a first key position,
+/// an output note, and payloads ending one byte under, exactly at and one byte over a
+/// segment end, two segments on, and empty; each admitted reserved ahead and not.
+fn boundary_vectors(trace: bool) -> (Vec<u8>, Vec<hirsel_free::projection::Event>, f64) {
+    use hirsel_free::projection::{Event, Observed};
+    let mut run = Mirrored::new(trace);
+    let mut events = Vec::new();
+    let object = ObjectId::Made {
+        path: vec![u32::MAX; 3],
+        op: u64::MAX,
+    };
+    run.root.track(&object);
+    run.phase(
+        RecordBound::records(1),
+        false,
+        |op| {
+            vec![Record::Gap {
+                op,
+                sub: u32::MAX,
+                gap: u64::MAX - 2,
+            }]
+        },
+        |w| w.touch(&object, u64::MAX, u32::MAX, "first touch"),
+    );
+    events.push(Event::Versioned {
+        object: object.clone(),
+        version: u64::MAX,
+        sub: u32::MAX,
+        outcome: "first touch".into(),
+    });
+    run.phase(
+        RecordBound::records(5),
+        true,
+        |op| {
+            vec![
+                Record::Load {
+                    op,
+                    bits: u128::MAX,
+                },
+                Record::Cancel {
+                    op,
+                    check: 0,
+                    cause: Some(u32::MAX),
+                },
+                Record::AwaitAny {
+                    op,
+                    index: u64::MAX,
+                },
+                Record::Expired { op },
+                Record::Thaw { op, ok: true },
+            ]
+        },
+        |w| {
+            w.load(u128::MAX);
+            w.cancel(Some(u32::MAX));
+            w.await_any(u64::MAX);
+            w.expired(true);
+            w.thaw(true);
+        },
+    );
+    events.extend(
+        [
+            Observed::Load(u128::MAX),
+            Observed::Cancel(Some(u32::MAX)),
+            Observed::AwaitAny(u64::MAX),
+            Observed::Expired(true),
+            Observed::Thaw(true),
+        ]
+        .map(Event::Observed),
+    );
+    let name = "file:/a/key/name/longer/than/one/outcome/label";
+    run.root.track_key(u32::MAX);
+    run.phase(
+        RecordBound::default().key(name.len()),
+        false,
+        |op| {
+            vec![Record::Key {
+                op,
+                key: u32::MAX,
+                shared: true,
+                gap: u64::MAX,
+            }]
+        },
+        |w| w.key(u32::MAX, name, u64::MAX, true, u32::MAX),
+    );
+    events.push(Event::Key {
+        key: name.into(),
+        epoch: u64::MAX,
+        index: u32::MAX,
+    });
+    let written = payload(5);
+    run.phase(
+        RecordBound::default().output("stdout".len(), written.len()),
+        false,
+        |_| Vec::new(),
+        |w| w.output("stdout", 9, &written),
+    );
+    events.push(Event::Output {
+        sink: "stdout".into(),
+        epoch: 9,
+        bytes: written.clone(),
+    });
+    for reserve in [true, false] {
+        for (at, segments) in [(-1i64, 0), (0, 0), (1, 0), (0, 2)] {
+            let len = run.payload_ending(at, segments);
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 31 + len) as u8).collect();
+            let record = |op| {
+                vec![Record::Observation {
+                    op,
+                    bytes: bytes.clone(),
+                }]
+            };
+            run.phase(RecordBound::default().payload(len), reserve, record, |w| {
+                w.observation(&bytes)
+            });
+            assert_eq!(
+                run.log.len() % SEGMENT_HINT,
+                (SEGMENT_HINT as i64 + at) as usize % SEGMENT_HINT,
+                "the record ends {at} from a segment end"
+            );
+        }
+        run.phase(
+            RecordBound::default().payload(0),
+            reserve,
+            |op| vec![Record::Observation { op, bytes: vec![] }],
+            |w| w.observation(&[]),
+        );
+    }
+    let (bytes, stamped, short) = run.finish();
+    let observed: Vec<_> = stamped.into_iter().map(|stamped| stamped.event).collect();
+    if trace {
+        assert_eq!(
+            observed, events,
+            "each phase's notes, in order, as its events"
+        );
+    } else {
+        assert!(observed.is_empty());
+    }
+    (bytes, observed, short)
+}
+
+#[test]
+fn record51_boundary_vectors_allocate_nothing_in_sections() {
+    let (plain, _, plain_short) = boundary_vectors(false);
+    let (traced, trace, traced_short) = boundary_vectors(true);
+    assert_eq!(trace.len(), 8);
+    assert_eq!(plain, traced, "diagnostics change no tape byte");
+    assert_eq!(plain_short, traced_short);
+    assert!(
+        plain_short >= 3.0,
+        "unreserved phases took the short path: {plain_short}"
+    );
+}
+
+/// Tasks touch one object on their own threads, first touch tracked but nothing reserved
+/// ahead, while a cutter flushes and then stops mid-run. Every section stays clean, and the
+/// observer's projection, which phases publish after their sections, equals both the
+/// traces' projection of the terminal cut and its one-permit replay.
+#[test]
+fn record51_observer_projection_closes_over_racing_cuts() {
+    use hirsel_free::concurrent::Observer;
+    const TASKS: usize = 4;
+    const OPS: u64 = 400;
+    let observer = Arc::new(Observer::default());
+    let mut recorder = Recorder::<Marked>::new(
+        Marked::default(),
+        b"observed cut",
+        TASKS + 1,
+        false,
+        true,
+        Some(trapped()),
+    )
+    .unwrap();
+    recorder.observe(observer.clone());
+    let recorder = Arc::new(recorder);
+    let mut slot = recorder.executor(0).unwrap();
+    let mut root = recorder.root(&mut slot).unwrap();
+    let object = ObjectId::Made {
+        path: vec![],
+        op: 1,
+    };
+    // Children, their slots and the created object are all prepared outside the section.
+    let mut prepared = root.prepare_children(TASKS as u32);
+    let mut tasks = Vec::with_capacity(TASKS);
+    root.track(&object);
+    let ((), trapped) = counted(
+        &recorder,
+        &mut slot,
+        &mut root,
+        done(1),
+        RecordBound::records(1),
+        |w| {
+            w.create(&object);
+            for child in prepared.drain(..) {
+                tasks.push(w.spawn_prepared(child));
+            }
+        },
+    );
+    assert_eq!(
+        trapped, 0,
+        "creation and spawns allocate nothing in their section"
+    );
+    drop(slot);
+    let version = Arc::new(std::sync::Mutex::new(1u64));
+    let halfway = Arc::new(AtomicUsize::new(0));
+    let threads: Vec<_> = tasks
+        .into_iter()
+        .map(|mut task| {
+            let (recorder, version, object, halfway) = (
+                recorder.clone(),
+                version.clone(),
+                object.clone(),
+                halfway.clone(),
+            );
+            std::thread::spawn(move || {
+                let mut slot = recorder.executor_available(1).unwrap();
+                task.track(&object);
+                let mut published = 0;
+                for op in 1..=OPS {
+                    let mut held = version.lock().unwrap();
+                    let (sections, before) = trap_counts();
+                    let phase = recorder.phase(
+                        &mut slot,
+                        &mut task,
+                        done(op),
+                        RecordBound::records(2),
+                        |w| {
+                            *held += 1;
+                            w.touch(&object, *held, 0, "send");
+                            w.load(u128::from(op));
+                        },
+                    );
+                    drop(held);
+                    if phase.is_err() {
+                        break;
+                    }
+                    let (opened, after) = trap_counts();
+                    assert_eq!(opened, sections + 1);
+                    assert_eq!(after, before, "op {op} allocated or freed in its section");
+                    published = op;
+                    if op == OPS / 2 {
+                        halfway.fetch_add(1, Ordering::AcqRel);
+                    }
+                }
+                (task, published)
+            })
+        })
+        .collect();
+    let mut flushes = 0;
+    while halfway.load(Ordering::Acquire) < TASKS {
+        recorder.flush().unwrap().unwrap();
+        flushes += 1;
+    }
+    // The terminal cut lands while phases are still being admitted and publishing notes;
+    // the projection is read before any worker is joined.
+    let cut = recorder.stop("stopped", None).unwrap().unwrap().0;
+    let projection = recorder.projection().unwrap();
+    let tasks: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert!(flushes > 0);
+    let mut trace = root.trace().to_vec();
+    for (id, (task, published)) in tasks.iter().enumerate() {
+        assert_eq!(cut.progress[&vec![id as u32]], done(*published));
+        trace.extend_from_slice(task.trace());
+    }
+    assert_eq!(
+        projection,
+        Projection::new("stopped", &cut.progress, &trace),
+        "the observer's projection waits for every admitted phase's notes"
+    );
+    let history = &projection.objects[&object];
+    assert_eq!(
+        history.versions.keys().copied().collect::<Vec<_>>(),
+        (1..=history.versions.len() as u64).collect::<Vec<_>>(),
+        "the terminal cut admits a closed object prefix"
+    );
+    assert!(history.versions.len() > TASKS * OPS as usize / 2);
+    let marked = Arc::try_unwrap(recorder).ok().unwrap().into_sink();
+    let parsed = tape::parse(&marked.bytes).unwrap();
+    let mut replayer = Replayer::new(&parsed).unwrap();
+    replayer.create(&[], object.clone()).unwrap();
+    replayer.publish(&[], done(1)).unwrap();
+    let mut at: BTreeMap<Vec<u32>, Progress> = [(Vec::new(), done(1))].into();
+    let mut next = [1u64; TASKS];
+    let last: Vec<u64> = tasks.iter().map(|(_, published)| *published).collect();
+    while (0..TASKS).any(|id| next[id] <= last[id]) {
+        let mut moved = false;
+        for id in 0..TASKS {
+            let (op, path) = (next[id], [id as u32]);
+            if op <= last[id] && replayer.enabled(&path, op, 0, &object).unwrap() {
+                replayer.touch(&path, op, 0, &object, "send").unwrap();
+                assert_eq!(replayer.load(&path, op).unwrap(), u128::from(op));
+                replayer.publish(&path, done(op)).unwrap();
+                at.insert(path.to_vec(), done(op));
+                next[id] += 1;
+                moved = true;
+            }
+        }
+        assert!(moved, "the admitted prefix makes progress at one permit");
+    }
+    assert_eq!(replayer.finish(&at).unwrap(), projection);
+}
+
+fn untrapped(binding: &[u8]) -> (Recorder<Marked>, ExecutorSlot, Task) {
+    let recorder =
+        Recorder::<Marked>::new(Marked::default(), binding, 1, false, false, None).unwrap();
+    let mut slot = recorder.executor(0).unwrap();
+    let root = recorder.root(&mut slot).unwrap();
+    (recorder, slot, root)
+}
+
+#[test]
+#[should_panic(expected = "tracked before the section of its first touch")]
+fn record51_an_untracked_first_touch_fails_instead_of_inserting() {
+    let (recorder, mut slot, mut root) = untrapped(b"untracked");
+    let object = ObjectId::Gate("package:1".into());
+    let _ = recorder.phase(
+        &mut slot,
+        &mut root,
+        done(1),
+        RecordBound::records(1),
+        |w| w.touch(&object, 2, 0, "gate enter"),
+    );
+}
+
+#[test]
+#[should_panic(expected = "tracked before the section of its first position")]
+fn record51_an_untracked_key_fails_instead_of_inserting() {
+    let (recorder, mut slot, mut root) = untrapped(b"untracked key");
+    let _ = recorder.phase(
+        &mut slot,
+        &mut root,
+        done(1),
+        RecordBound::default().key(4),
+        |w| w.key(3, "file", 1, false, 0),
+    );
+}
+
+#[test]
+#[should_panic(expected = "record bytes past its bound")]
+fn record51_a_write_past_its_bound_fails_even_with_spare_room() {
+    let (recorder, mut slot, mut root) = untrapped(b"past bound");
+    // Room for many records is reserved, but this phase declared none.
+    root.reserve(RecordBound::records(8));
+    let _ = recorder.phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
+        w.load(1)
+    });
+}
+
+#[test]
+#[should_panic(expected = "noted past its bound")]
+fn record51_an_unbounded_note_fails_with_diagnostics_off() {
+    let (recorder, mut slot, mut root) = untrapped(b"note bound");
+    let _ = recorder.phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
+        w.output("stdout", 1, b"unbounded")
+    });
 }

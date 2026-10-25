@@ -476,20 +476,37 @@ struct Epoch {
 struct Epochs {
     base: u64,
     epochs: VecDeque<Epoch>,
+    /// Prepared transitions that have not taken their position yet; the queue keeps room
+    /// for each, so a take inside a section never grows it.
+    reserved: usize,
 }
 
 impl Epochs {
+    fn reserve(&mut self) {
+        self.reserved += 1;
+        self.epochs.reserve(self.reserved);
+    }
+    fn unreserve(&mut self) {
+        self.reserved -= 1;
+    }
     fn take(&mut self, shared: bool) -> u64 {
+        self.unreserve();
         if self.base == 0 {
             self.base = 1;
         }
         match self.epochs.back_mut() {
             Some(last) if shared && last.shared => last.members += 1,
-            _ => self.epochs.push_back(Epoch {
-                shared,
-                members: 1,
-                ended: 0,
-            }),
+            _ => {
+                assert!(
+                    self.epochs.len() < self.epochs.capacity(),
+                    "a key's epoch was reserved before its take"
+                );
+                self.epochs.push_back(Epoch {
+                    shared,
+                    members: 1,
+                    ended: 0,
+                })
+            }
         }
         self.base + self.epochs.len() as u64 - 1
     }
@@ -524,6 +541,9 @@ struct Cell {
 #[derive(Debug, Default)]
 pub struct KeyTable {
     cells: Mutex<HashMap<Key, Arc<Cell>>>,
+    /// Serialises takes, so a multi-key footprint is taken atomically. Only bounded takes
+    /// hold it, never an allocating [`KeyTable::prepare`].
+    order: Mutex<()>,
     metrics: Option<Arc<crate::io_metrics::IoMetrics>>,
 }
 
@@ -531,32 +551,61 @@ pub struct KeyTable {
 #[derive(Debug)]
 pub struct Positions {
     held: Vec<(Key, Mode, u64, Arc<Cell>)>,
-    ended: bool,
+    state: State,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum State {
+    /// Cells resolved and room reserved; no epoch taken yet.
+    Prepared,
+    Taken,
+    /// Every epoch ended; waiters are woken when the positions drop.
+    Ended,
 }
 
 impl KeyTable {
     pub fn with_metrics(metrics: Option<Arc<crate::io_metrics::IoMetrics>>) -> KeyTable {
         KeyTable {
-            cells: Mutex::default(),
             metrics,
+            ..KeyTable::default()
         }
     }
-    /// Take `keys`' positions, in key order (a request's entered phase).
-    pub fn take(&self, keys: &KeySet) -> Positions {
-        // Taking a multi-key footprint must be atomic. Otherwise a shared namespace
-        // member can acquire its resource epoch after a namespace writer that waits
-        // for that same member, forming a dependency cycle.
+    /// Resolve `keys`' cells and reserve a position on each, outside any section: every
+    /// allocation [`take_prepared`](Self::take_prepared) would need happens here.
+    pub fn prepare(&self, keys: &KeySet) -> Positions {
         let mut cells = self.cells.lock().unwrap();
         let held = keys
             .keys()
             .iter()
             .map(|&(key, mode)| {
                 let cell = cells.entry(key).or_default().clone();
-                let epoch = cell.epochs.lock().unwrap().take(mode == Mode::Shared);
-                (key, mode, epoch, cell)
+                cell.epochs.lock().unwrap().reserve();
+                (key, mode, 0, cell)
             })
             .collect();
-        Positions { held, ended: false }
+        Positions {
+            held,
+            state: State::Prepared,
+        }
+    }
+    /// Take prepared positions, in key order (a request's entered phase). It allocates
+    /// nothing, so it may run inside a section.
+    pub fn take_prepared(&self, positions: &mut Positions) {
+        assert_eq!(positions.state, State::Prepared, "positions are taken once");
+        // Taking a multi-key footprint must be atomic. Otherwise a shared namespace
+        // member can acquire its resource epoch after a namespace writer that waits
+        // for that same member, forming a dependency cycle.
+        let _order = self.order.lock().unwrap();
+        for (_, mode, epoch, cell) in &mut positions.held {
+            *epoch = cell.epochs.lock().unwrap().take(*mode == Mode::Shared);
+        }
+        positions.state = State::Taken;
+    }
+    /// Prepare and take `keys`' positions, outside sections.
+    pub fn take(&self, keys: &KeySet) -> Positions {
+        let mut positions = self.prepare(keys);
+        self.take_prepared(&mut positions);
+        positions
     }
     /// Wait until every epoch `positions` depend on has ended (outside sections; a task
     /// executor parks instead and asks [`Positions::ready`]).
@@ -590,26 +639,40 @@ impl Positions {
             .iter()
             .map(|(key, mode, epoch, _)| (*key, *mode, *epoch))
     }
-    /// The bounded call returned or registered its wait: end every position.
+    /// The bounded call returned or registered its wait: end every position and wake
+    /// blocked waiters.
     pub fn end(mut self) {
-        self.finish();
+        self.end_epochs();
     }
-    fn finish(&mut self) {
-        if std::mem::replace(&mut self.ended, true) {
-            return;
-        }
+    /// End every taken position without waking anyone or freeing anything, so it may run
+    /// inside a section; dropping the positions afterwards wakes [`KeyTable::wait`]ers.
+    pub fn end_epochs(&mut self) {
+        assert_eq!(self.state, State::Taken, "taken positions end once");
         for (_, _, epoch, cell) in &self.held {
             cell.epochs.lock().unwrap().end(*epoch);
-            cell.ended.notify_all();
         }
+        self.state = State::Ended;
     }
 }
 
 impl Drop for Positions {
     /// A transition abandoned before its call (withdrawn, or its task stopped) still ends its
-    /// positions, so no later transition waits for it.
+    /// positions, so no later transition waits for it; one abandoned before its take
+    /// returns its reserved room.
     fn drop(&mut self) {
-        self.finish();
+        match self.state {
+            State::Prepared => {
+                for (_, _, _, cell) in &self.held {
+                    cell.epochs.lock().unwrap().unreserve();
+                }
+                return;
+            }
+            State::Taken => self.end_epochs(),
+            State::Ended => {}
+        }
+        for (_, _, _, cell) in &self.held {
+            cell.ended.notify_all();
+        }
     }
 }
 
@@ -637,6 +700,7 @@ mod tests {
             for _ in 0..60 {
                 if open.is_empty() || next() % 3 != 0 {
                     let shared = next() % 2 == 0;
+                    live.reserve();
                     let epoch = live.take(shared);
                     assert_eq!(epoch, model.take(shared));
                     open.push(epoch);

@@ -64,8 +64,17 @@ pub(crate) struct MutexImage {
 }
 
 impl MutexImage {
+    /// Room for one more waiter's token, before the section that keeps it.
+    pub(crate) fn reserve_token(&mut self) {
+        self.tokens.reserve(1);
+    }
+
     /// Keep `task`'s wake token while it waits in the permit's queue.
     pub(crate) fn keep_token(&mut self, task: u32, token: crate::pool::free::Token) {
+        assert!(
+            self.tokens.len() < self.tokens.capacity(),
+            "token room is reserved"
+        );
         self.tokens.push((task, token));
     }
 
@@ -75,9 +84,10 @@ impl MutexImage {
         Some(self.tokens.swap_remove(index).1)
     }
 
-    /// The permit's waiters were killed: none of them is woken by a put.
-    pub(crate) fn drop_tokens(&mut self) {
-        self.tokens.clear();
+    /// The permit's waiters were killed: none of them is woken by a put. The
+    /// caller drops the returned tokens after its section.
+    pub(crate) fn take_tokens(&mut self) -> Vec<(u32, crate::pool::free::Token)> {
+        std::mem::take(&mut self.tokens)
     }
 }
 
@@ -173,16 +183,34 @@ impl Synchronizers {
         payload_offset: u64,
         payload_size: u64,
     ) {
-        if reservation.word & MUTEX != 0 {
-            fault("a mutex reservation initialized as an atomic");
-        }
-        let image = AtomicImage::new(
+        let image = unsafe { self.prepare_image(image, size, payload_offset, payload_size) };
+        self.initialize_image_cell(reservation, image);
+    }
+
+    /// Build an atomic's image before the section that publishes its creation.
+    /// # Safety
+    /// `image` is readable for `size` bytes.
+    pub(crate) unsafe fn prepare_image(
+        &mut self,
+        image: *const u8,
+        size: u64,
+        payload_offset: u64,
+        payload_size: u64,
+    ) -> Arc<AtomicImage> {
+        Arc::new(AtomicImage::new(
             unsafe { bytes(image, size) },
             payload_offset as usize,
             payload_size as usize,
             || self.stripes.get_or_insert_with(Default::default).clone(),
-        );
-        self.initialize(reservation, Payload::Image(Arc::new(image)));
+        ))
+    }
+
+    /// Commit a reserved word to its prepared image: moves only owned pointers.
+    pub(crate) fn initialize_image_cell(&mut self, reservation: Reserved, image: Arc<AtomicImage>) {
+        if reservation.word & MUTEX != 0 {
+            fault("a mutex reservation initialized as an atomic");
+        }
+        self.initialize(reservation, Payload::Image(image));
     }
 
     /// # Safety

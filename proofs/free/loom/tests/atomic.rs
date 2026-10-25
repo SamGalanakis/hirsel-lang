@@ -7,8 +7,8 @@ fn native_and_striped_cells_share_one_sequentially_consistent_order() {
     for (left, right) in [(8, 8), (8, 16), (16, 16)] {
         loom::model(move || {
             let stripes = Arc::new(Stripes::default());
-            let a = Arc::new(Image::new(&vec![0; left], || stripes.clone()));
-            let b = Arc::new(Image::new(&vec![0; right], || stripes.clone()));
+            let a = Arc::new(Image::new(&vec![0; left], 0, left, || stripes.clone()));
+            let b = Arc::new(Image::new(&vec![0; right], 0, right, || stripes.clone()));
             let first = loom::thread::spawn({
                 let (a, b) = (a.clone(), b.clone());
                 move || {
@@ -34,7 +34,9 @@ fn native_and_striped_cells_share_one_sequentially_consistent_order() {
 fn wide_loads_cannot_tear_across_another_threads_store() {
     for size in [16, 32] {
         loom::model(move || {
-            let image = Arc::new(Image::new(&vec![0; size], || Arc::new(Stripes::default())));
+            let image = Arc::new(Image::new(&vec![0; size], 0, size, || {
+                Arc::new(Stripes::default())
+            }));
             let writer = loom::thread::spawn({
                 let image = image.clone();
                 move || image.access().store(&vec![0x55; size])

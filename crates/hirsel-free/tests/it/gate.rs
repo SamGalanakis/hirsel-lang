@@ -27,6 +27,8 @@ fn every_cut_is_causally_closed() {
                 drop(section);
                 let mut op = 0;
                 while !done.load(Ordering::Relaxed) {
+                    // SAFETY: this thread owns the task's writing side; no section is open.
+                    unsafe { task.reserve(10) };
                     let Ok(section) = gate.enter(slot) else {
                         return;
                     };

@@ -23,10 +23,13 @@ fn recorder(slots: usize) -> Arc<Recorder<Marked>> {
 fn tasks(recorder: &Recorder<Marked>, children: usize) -> (Task, Vec<Task>) {
     let mut home = recorder.executor(HOME).unwrap();
     let mut root = recorder.root(&mut home).unwrap();
-    root.reserve(RecordBound::records(children));
+    let prepared = root.prepare_children(children as u32);
     let spawned = recorder
-        .phase(&mut home, &mut root, done(1), |w| {
-            (0..children).map(|_| w.spawn()).collect()
+        .phase(&mut home, &mut root, done(1), RecordBound::default(), |w| {
+            prepared
+                .into_iter()
+                .map(|child| w.spawn_prepared(child))
+                .collect()
         })
         .unwrap();
     recorder.retire_executor(home);
@@ -63,7 +66,13 @@ fn nested_entry_registers_distinct_slots_and_retires_out_of_order() {
     {
         root.reserve(RecordBound::records(1));
         recorder
-            .phase(slot, &mut root, done(2 + op as u64), |w| w.load(op as u128))
+            .phase(
+                slot,
+                &mut root,
+                done(2 + op as u64),
+                RecordBound::records(1),
+                |w| w.load(op as u128),
+            )
             .unwrap();
     }
     // Out-of-order retirement (Tokio panics for its single entered flag): each word retires
@@ -88,14 +97,20 @@ fn an_executor_slot_is_identified_with_its_own_recording() {
     let mut sb = b.executor_available(1).unwrap();
     for op in 2..6 {
         ra.reserve(RecordBound::records(1));
-        a.phase(&mut sa, &mut ra, done(op), |w| w.load(1)).unwrap();
+        a.phase(&mut sa, &mut ra, done(op), RecordBound::records(1), |w| {
+            w.load(1)
+        })
+        .unwrap();
         rb.reserve(RecordBound::records(1));
-        b.phase(&mut sb, &mut rb, done(op), |w| w.load(2)).unwrap();
+        b.phase(&mut sb, &mut rb, done(op), RecordBound::records(1), |w| {
+            w.load(2)
+        })
+        .unwrap();
     }
     assert!(a.owns(&sa) && !a.owns(&sb) && b.owns(&sb) && !b.owns(&sa));
     assert_eq!((a.registered(), b.registered()), (vec![1], vec![1]));
     let foreign = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        a.phase(&mut sb, &mut ra, done(6), |_| ())
+        a.phase(&mut sb, &mut ra, done(6), RecordBound::records(1), |_| ())
     }));
     assert!(
         foreign.is_err(),
@@ -152,11 +167,17 @@ fn an_open_section_word_is_not_reused_and_a_retired_word_is_not_waited_for() {
             let mut slot = recorder.register(1).unwrap();
             child.reserve(RecordBound::records(1));
             recorder
-                .phase(&mut slot, &mut child, done(1), |w| {
-                    opened.store(true, Ordering::Release);
-                    released.recv().unwrap();
-                    w.load(7);
-                })
+                .phase(
+                    &mut slot,
+                    &mut child,
+                    done(1),
+                    RecordBound::records(1),
+                    |w| {
+                        opened.store(true, Ordering::Release);
+                        released.recv().unwrap();
+                        w.load(7);
+                    },
+                )
                 .unwrap();
             recorder.retire_executor(slot);
         }
@@ -213,9 +234,13 @@ fn shrink_and_retirement_race_concurrent_cuts_with_one_owner_per_word() {
                     );
                     task.reserve(RecordBound::records(1));
                     recorder
-                        .phase(&mut slot, &mut task, done(generation + 1), |w| {
-                            w.load(owner.into())
-                        })
+                        .phase(
+                            &mut slot,
+                            &mut task,
+                            done(generation + 1),
+                            RecordBound::records(1),
+                            |w| w.load(owner.into()),
+                        )
                         .unwrap();
                     assert_eq!(owners[slot.index()].swap(0, Ordering::AcqRel), owner);
                     recorder.retire_executor(slot);

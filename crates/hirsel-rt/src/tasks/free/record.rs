@@ -17,10 +17,10 @@ use hirsel_free::projection::Stamped;
 use hirsel_free::record::RecordBound;
 use std::sync::{Arc, Mutex};
 
-/// Log room every phase reserves before its section: a phase without a payload writes at most
-/// a few fixed records (a gap, a load, a cancellation change). Host phases reserve their key
-/// positions and payloads explicitly with [`reserve`].
-const PHASE: RecordBound = RecordBound::records(4);
+/// The bound of a phase without a payload: at most a few writer calls (a gap, a load, a
+/// cancellation change, a receive). Host phases declare their key positions, payloads and
+/// outputs explicitly with [`publish_bounded`].
+pub(super) const PHASE: RecordBound = RecordBound::records(4);
 
 /// A physical executor's registration in its run's recording, owned by its dispatcher `Exec`:
 /// registered once when the executor starts serving the run and retired when it leaves, after
@@ -387,7 +387,6 @@ impl Task {
         &mut self,
         request: &hirsel_free::claim::Request<crate::io::Request>,
     ) -> Stopped<bool> {
-        self.log.reserve(PHASE);
         let mut worker = checkout(&self.shared);
         let claimed = self
             .shared
@@ -396,6 +395,7 @@ impl Task {
                 &mut worker.slot,
                 &mut self.log,
                 Progress::new(self.ordinal, Phase::Claimed),
+                PHASE,
                 |writer| self.shared.recorder.claim(writer, request),
             )
             .map_err(|_| Stop::Requested);
@@ -444,8 +444,18 @@ pub(super) fn publish<T>(
     phase: Phase,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<T> {
+    publish_bounded(ctx, phase, PHASE, action)
+}
+
+/// [`publish`] for a phase that may write more than [`PHASE`]: `bound` covers all of it.
+pub(super) fn publish_bounded<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    bound: RecordBound,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
     let replay = super::replay::token(ctx);
-    publish_with_replay(ctx, phase, replay.as_ref(), action)
+    publish_with_replay_bounded(ctx, phase, replay.as_ref(), bound, action)
 }
 
 /// Cell owners capture the replay token while holding the scheduler role,
@@ -454,6 +464,16 @@ pub(super) fn publish_with_replay<T>(
     ctx: *mut TaskCtx,
     phase: Phase,
     replay: Option<&super::replay::Token>,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<T> {
+    publish_with_replay_bounded(ctx, phase, replay, PHASE, action)
+}
+
+fn publish_with_replay_bounded<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    replay: Option<&super::replay::Token>,
+    bound: RecordBound,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<T> {
     if !on(ctx) {
@@ -466,20 +486,22 @@ pub(super) fn publish_with_replay<T>(
     if phase == Phase::Done && unsafe { (*ctx).roots.has_pending() } {
         // A nested phase tail may change the outcome this op observes. Finish
         // entry before acting, under the same ordinal, even for an immediate op.
-        publish_phase(ctx, Phase::Entered, |_| ())?;
+        publish_phase(ctx, Phase::Entered, RecordBound::default(), |_| ())?;
     }
-    publish_phase(ctx, phase, action)
+    publish_phase(ctx, phase, bound, action)
 }
 
+/// The recorder admits the phase only with room for all of `bound` reserved; a short
+/// reservation is made up before the prefix, under the same progress.
 fn publish_phase<T>(
     ctx: *mut TaskCtx,
     phase: Phase,
+    bound: RecordBound,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<T> {
     let mut roots = crate::roots::PhaseRoots::prepare(ctx);
     let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
     let shared = task.shared.clone();
-    task.log.reserve(PHASE);
     let mut worker = checkout(&shared);
     let progress = Progress::new(task.ordinal, phase);
     let mut action = Some(action);
@@ -488,6 +510,7 @@ fn publish_phase<T>(
             &mut worker.slot,
             &mut task.log,
             progress,
+            bound,
             || roots.apply(ctx),
             |writer| action.take().expect("one admitted action")(Some(writer)),
         );
@@ -507,19 +530,20 @@ fn publish_phase<T>(
     result.map_err(|_| Stop::Requested)
 }
 
-/// Reserve log room for the next phase's records beyond [`PHASE`], before its section: key
-/// positions and payload bytes the phase will write.
-pub(super) fn reserve(ctx: *mut TaskCtx, bound: RecordBound) {
-    if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
-        task.log.reserve(bound);
-    }
-}
-
-/// Track an object this task is about to touch, before the section: its first touch then
-/// inserts no entry inside the section.
+/// Track an object the next phase names (touches, creates or receives from), before its
+/// section: the section then inserts no entry.
 pub(super) fn track(ctx: *mut TaskCtx, object: Option<&hirsel_free::record::ObjectId>) {
     if let (Some(task), Some(object)) = (unsafe { (*ctx).recording.as_mut() }, object) {
         task.log.track(object);
+    }
+}
+
+/// Track the host keys the next phase takes positions on, before its section.
+pub(super) fn track_keys(ctx: *mut TaskCtx, keys: impl IntoIterator<Item = u32>) {
+    if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
+        for key in keys {
+            task.log.track_key(key);
+        }
     }
 }
 
@@ -540,12 +564,12 @@ pub(crate) fn end<T>(ctx: *mut TaskCtx, action: impl FnOnce() -> T) -> Stopped<T
 /// final phase. Keep the bytes task-owned across deterministic release tails.
 pub(crate) fn end_observed(ctx: *mut TaskCtx, bytes: Vec<u8>) -> Stopped<()> {
     assert!(unsafe { (*ctx).free_terminal.is_none() });
-    reserve(ctx, PHASE.payload(bytes.len()));
+    let bound = PHASE.payload(bytes.len());
     unsafe { (*ctx).free_terminal = Some(bytes) };
     begin(ctx);
     let token = super::replay::token(ctx);
     publish_with_replay(ctx, Phase::Entered, token.as_ref(), |_| ())?;
-    publish_with_replay(ctx, Phase::Done, token.as_ref(), |writer| {
+    publish_with_replay_bounded(ctx, Phase::Done, token.as_ref(), bound, |writer| {
         let bytes = unsafe { (*ctx).free_terminal.as_ref().unwrap() };
         if let Some(writer) = writer {
             writer.observation(bytes);
@@ -603,13 +627,18 @@ pub(crate) unsafe fn atomic_create(
     payload_size: u64,
 ) -> Stopped<()> {
     entry(ctx);
-    // The section's RAII owner must be dropped normally before any stop or
-    // suspension, so the borrow inside it observes no stop.
+    // The image and its table entry are allocated here; the section only
+    // commits them. Its RAII owner must be dropped normally before any stop
+    // or suspension, so the borrow inside it observes no stop.
+    let (image, reservation) = role::with_role(ctx, |s| unsafe {
+        let image = s
+            .sync
+            .prepare_image(value, size, payload_offset, payload_size);
+        (image, s.sync.reserve_image())
+    });
     phase(ctx, |_| unsafe {
-        let word = role::with_held(ctx, |s| {
-            s.sync
-                .create_image(value, size, payload_offset, payload_size)
-        });
+        let word = reservation.word();
+        role::with_held(ctx, |s| s.sync.initialize_image_cell(reservation, image));
         out.write(word);
     })
 }
@@ -725,6 +754,7 @@ impl Recording {
             binding,
             durable,
             false,
+            None,
         )
     }
 
@@ -733,6 +763,7 @@ impl Recording {
         binding: &[u8],
         durable: bool,
         trace: bool,
+        metrics: Option<Arc<hirsel_free::concurrent::Metrics>>,
     ) -> std::io::Result<Arc<Self>> {
         let production = sink.file.is_some();
         let observer = (production && std::env::var_os(crate::free_replay::Report::VAR).is_some())
@@ -745,7 +776,7 @@ impl Recording {
             2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2),
             durable,
             trace,
-            None,
+            metrics,
         )?;
         if let Some(observer) = &observer {
             recorder.observe(observer.clone());
@@ -766,9 +797,20 @@ impl Recording {
         self.recorder.projection()
     }
 
+    /// A traced in-memory recording whose sections arm the test allocator's trap.
     #[cfg(test)]
     pub(crate) fn new(binding: &[u8], durable: bool) -> Arc<Self> {
-        Self::with_sink(Sink::default(), binding, durable, true).unwrap()
+        let trap = hirsel_free::concurrent::Metrics::with_section_hook(
+            crate::io_real::borrowed_net_tests::section_hook,
+        );
+        Self::with_sink(
+            Sink::default(),
+            binding,
+            durable,
+            true,
+            Some(Arc::new(trap)),
+        )
+        .unwrap()
     }
 
     /// # Safety
@@ -804,8 +846,13 @@ impl Recording {
         };
     }
 
+    /// The run's canonical trace. No recorder section in this test process has allocated
+    /// or freed so far.
     #[cfg(test)]
     pub(crate) fn trace(&self) -> Vec<Stamped> {
+        let (sections, trapped) = crate::io_real::borrowed_net_tests::section_traps();
+        assert!(sections > 0, "the section trap was armed");
+        assert_eq!(trapped, 0, "a Free recorder section allocated or freed");
         self.trace.lock().unwrap().clone()
     }
 }

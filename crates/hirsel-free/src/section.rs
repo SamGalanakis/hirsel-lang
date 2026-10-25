@@ -37,7 +37,8 @@ pub const SEGMENT: usize = 4096;
 /// spare segments it reserved outside any section at the tail, and writes records there,
 /// inside its sections ([`Tail`]); the cutter reads from the head and frees segments it has
 /// scanned, only while the gate is closed ([`Head`]). Neither side allocates while a section
-/// is open, and the owner's spare list is never read by the cutter.
+/// is open: a section writes only room reserved before it opened, and the owner's spare list
+/// is never read by the cutter.
 pub struct TaskLog {
     path: Vec<u32>,
     progress: AtomicU64,
@@ -95,22 +96,20 @@ struct Head {
 }
 
 /// A section's direct writer into one task's log: bytes land in place, linking reserved
-/// spares (or, past the reservation, new segments) at the tail.
+/// spares at the tail. It never allocates: writing past the reserved room is a broken bound.
 pub struct LogOut<'a> {
     tail: &'a mut Tail,
     head: &'a mut Head,
     #[allow(clippy::vec_box)]
     spare: &'a mut Vec<Box<Segment>>,
-    /// Segments this section allocated because its reservation was short.
-    pub overflow: usize,
 }
 
 impl LogOut<'_> {
     fn link(&mut self) {
-        let mut segment = self.spare.pop().unwrap_or_else(|| {
-            self.overflow += 1;
-            Segment::new()
-        });
+        let mut segment = self
+            .spare
+            .pop()
+            .expect("a section writes only log room reserved before it opened");
         segment.next = None;
         let last: *mut Segment = &mut *segment;
         if self.tail.last.is_null() {
@@ -219,6 +218,15 @@ impl TaskLog {
     /// The latest progress published (acquire).
     pub fn progress(&self) -> Progress {
         Progress::unpack(self.progress.load(Ordering::Acquire)).expect("a packed progress word")
+    }
+    /// The record bytes a section can write without allocating: the tail's room and the
+    /// reserved spares.
+    ///
+    /// # Safety
+    /// The caller owns this task's writing side.
+    pub unsafe fn room(&self) -> usize {
+        // SAFETY: the owner alone writes the tail and the spares; the cutter only reads the tail.
+        unsafe { self.tail.with(|tail| tail.end - tail.len) + self.spare.with(Vec::len) * SEGMENT }
     }
     /// Make room for `bytes` more record bytes before a section, so the section links spares
     /// instead of allocating. Returns how many segments this allocated.
@@ -411,7 +419,8 @@ impl Section<'_> {
     pub fn register(&self, task: &Arc<TaskLog>) {
         self.mark(task);
     }
-    /// Append record bytes to the log of the task this section runs.
+    /// Append record bytes to the log of the task this section runs, within the room its owner
+    /// reserved before the section ([`TaskLog::reserve`]).
     pub fn append(&self, task: &Arc<TaskLog>, bytes: &[u8]) {
         self.write(task, |out| out.extend(bytes));
     }
@@ -422,14 +431,8 @@ impl Section<'_> {
         let result = unsafe {
             task.tail.with_mut(|tail| {
                 task.head.with_mut(|head| {
-                    task.spare.with_mut(|spare| {
-                        f(&mut LogOut {
-                            tail,
-                            head,
-                            spare,
-                            overflow: 0,
-                        })
-                    })
+                    task.spare
+                        .with_mut(|spare| f(&mut LogOut { tail, head, spare }))
                 })
             })
         };

@@ -76,6 +76,7 @@ pub(crate) unsafe fn create(
     if let Some(object) = &object {
         cell.object.set(object.clone()).unwrap();
     }
+    super::record::track(ctx, object.as_ref());
     let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
         if let Some(replay) = &replay {
             replay.create()?;
@@ -86,7 +87,7 @@ pub(crate) unsafe fn create(
         block.add(1).cast::<u64>().write(word);
         out.write(block as u64);
         if let Some(writer) = writer {
-            writer.create(object.unwrap());
+            writer.create(object.as_ref().unwrap());
         }
         Ok(())
     });
@@ -139,6 +140,8 @@ pub(crate) unsafe fn take(
         unsafe { role::release(ctx) };
         let mut state = cell.lock();
         let mut result = Acquired::Pending;
+        // A token the action takes back is dropped after the section.
+        let mut stale = None;
         let publication = if state.permit.ready_for(me) {
             touched(
                 ctx,
@@ -151,12 +154,15 @@ pub(crate) unsafe fn take(
                     if result == Acquired::Payload {
                         unsafe { cell.take(state, payload) };
                     }
-                    state.take_token(me);
+                    stale = state.take_token(me);
                     "take"
                 },
             )
         } else if !entered {
             state.permit.reserve_waiter();
+            if token.is_some() {
+                state.reserve_token();
+            }
             super::record::publish_with_replay(
                 ctx,
                 Phase::Entered,
@@ -173,6 +179,7 @@ pub(crate) unsafe fn take(
             Ok(())
         };
         drop(state);
+        drop(stale);
         drop(cell);
         drop(replay);
         unsafe { role::enter(ctx) };
@@ -204,6 +211,7 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
     unsafe { role::release(ctx) };
     let mut state = cell.lock();
     let mut next = None;
+    let mut token = None;
     let publication = touched(
         ctx,
         Phase::Done,
@@ -212,13 +220,12 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
         replay.as_ref(),
         |state| {
             next = unsafe { cell.put(state, payload) };
-            if let Some(next) = next {
-                state.take_token(next);
-            }
+            token = next.and_then(|next| state.take_token(next));
             "put"
         },
     );
     drop(state);
+    drop(token);
     drop(cell);
     drop(replay);
     unsafe { role::enter(ctx) };
@@ -248,6 +255,7 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     // runs in the action and no scheduler accessor observes a stop there.
     let mut state = cell.lock();
     let mut waiters = Vec::with_capacity(state.permit.waiting());
+    let mut tokens = Vec::new();
     touched(
         ctx,
         Phase::Done,
@@ -256,12 +264,13 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
         replay.as_ref(),
         |state| {
             state.permit.kill_into(&mut waiters);
-            state.drop_tokens();
+            tokens = state.take_tokens();
             unsafe { role::with_held(ctx, |s| s.sync.set_dead(word, chain)) };
             "kill"
         },
     )?;
     drop(state);
+    drop(tokens);
     drop(cell);
     drop(replay);
     unsafe {

@@ -3100,17 +3100,43 @@ pub(crate) mod borrowed_net_tests {
     use std::mem::MaybeUninit;
     use std::net::TcpListener;
 
+    /// The test binary's allocator: counts this thread's allocation calls, and traps
+    /// allocations and frees made while a Free recorder section is open on the thread.
     pub(crate) struct Count;
-    thread_local! { static CALLS: Cell<u64> = const { Cell::new(0) }; }
+    thread_local! {
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+        static IN_SECTION: Cell<bool> = const { Cell::new(false) };
+    }
+    static SECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    static TRAPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     pub(crate) fn allocation_calls() -> u64 {
         CALLS.with(Cell::get)
+    }
+    /// A test recorder's section window on this thread (`Metrics::with_section_hook`).
+    pub(crate) fn section_hook(open: bool) {
+        IN_SECTION.set(open);
+        if open {
+            SECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    /// Sections opened and allocations or frees inside them, process-wide.
+    pub(crate) fn section_traps() -> (u64, u64) {
+        use std::sync::atomic::Ordering::Relaxed;
+        (SECTIONS.load(Relaxed), TRAPPED.load(Relaxed))
+    }
+    fn trap() {
+        if IN_SECTION.try_with(Cell::get).unwrap_or(false) {
+            TRAPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     unsafe impl GlobalAlloc for Count {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let _ = CALLS.try_with(|n| n.set(n.get() + 1));
+            trap();
             unsafe { System.alloc(layout) }
         }
         unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            trap();
             unsafe { System.dealloc(pointer, layout) }
         }
     }

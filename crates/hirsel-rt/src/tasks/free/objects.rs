@@ -451,6 +451,7 @@ pub(crate) unsafe fn channel_receive(
         return None;
     }
     begin(ctx, replay.as_ref().map(|object| object.token()));
+    super::record::track(ctx, cell.object.get());
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,
@@ -473,10 +474,7 @@ pub(crate) unsafe fn channel_receive(
                     writer.cancel(None);
                 }
                 writer.receive(
-                    cell.object
-                        .get()
-                        .expect("a recorded channel identity")
-                        .clone(),
+                    cell.object.get().expect("a recorded channel identity"),
                     outcome,
                 );
             } else if let Some(replay) = &replay {

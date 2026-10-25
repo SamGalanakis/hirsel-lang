@@ -716,11 +716,19 @@ fn validate(projection: &mut String, scanned: &[hirsel_free::section::Scanned]) 
     }
 }
 
-/// The phase's section, or the segment ends: the stop's cut stays closed.
+/// Log room any one transition writes: a phase record and two root tails.
+const TRANSITION: usize = 3 * 9;
+
+/// The phase's section, or the segment ends: the stop's cut stays closed. Every task's log
+/// has a transition's room reserved first, so the section allocates nothing.
 macro_rules! section {
     ($world:ident, $w:expr) => {{
         if $world.arbiter.gate().unwrap().stopped() {
             return $world.terminate($w);
+        }
+        for task in &$world.tasks {
+            // SAFETY: the driver's one thread owns every log and opens no section here.
+            unsafe { task.log.reserve(TRANSITION) };
         }
         $world
             .arbiter

@@ -21,7 +21,13 @@ fn step(recording: &Recording, slot: &mut ExecutorSlot, root: &mut hirsel_free::
     root.reserve(PHASE);
     recording
         .recorder
-        .phase(slot, root, next, |w| w.load(1))
+        .phase(
+            slot,
+            root,
+            next,
+            hirsel_free::record::RecordBound::records(1),
+            |w| w.load(1),
+        )
         .unwrap();
 }
 

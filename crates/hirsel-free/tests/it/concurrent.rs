@@ -3,7 +3,7 @@
 use hirsel_free::concurrent::{Recorder, Task};
 use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::{Projection, Stamped};
-use hirsel_free::record::ObjectId;
+use hirsel_free::record::{ObjectId, RecordBound};
 use hirsel_free::replay::Replayer;
 use hirsel_free::tape;
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,9 @@ use std::sync::{Arc, Mutex};
 fn done(op: u64) -> Progress {
     Progress::new(op, Phase::Done)
 }
+
+/// A phase that writes a few fixed records.
+const PHASE: RecordBound = RecordBound::records(4);
 
 #[test]
 fn prepared_children_join_the_cut_only_when_their_spawn_section_commits() {
@@ -23,7 +26,7 @@ fn prepared_children_join_the_cut_only_when_their_spawn_section_commits() {
     assert_eq!(first.progress.len(), 1);
     assert!(!first.progress.contains_key(&vec![0]));
     let child = recorder
-        .phase(&mut worker, &mut root, done(1), |writer| {
+        .phase(&mut worker, &mut root, done(1), PHASE, |writer| {
             writer.spawn_prepared(prepared)
         })
         .unwrap();
@@ -37,7 +40,7 @@ fn prepared_children_join_the_cut_only_when_their_spawn_section_commits() {
     let mut acted = false;
     assert!(
         recorder
-            .phase(&mut worker, &mut root, done(2), |writer| {
+            .phase(&mut worker, &mut root, done(2), PHASE, |writer| {
                 acted = true;
                 writer.spawn_prepared(prepared)
             })
@@ -63,11 +66,13 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
         op: 1,
     };
     let mut children = Vec::new();
+    let prepared = root.prepare_children(TASKS as u32);
+    root.track(&object);
     recorder
-        .phase(&mut worker, &mut root, done(1), |phase| {
-            phase.create(object.clone());
-            for _ in 0..TASKS {
-                children.push(phase.spawn());
+        .phase(&mut worker, &mut root, done(1), PHASE, |phase| {
+            phase.create(&object);
+            for child in prepared {
+                children.push(phase.spawn_prepared(child));
             }
         })
         .unwrap();
@@ -80,12 +85,13 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
             let (recorder, version, object) = (recorder.clone(), version.clone(), object.clone());
             std::thread::spawn(move || {
                 let mut worker = recorder.executor(slot).unwrap();
+                task.track(&object);
                 for op in 1..=OPS {
                     // No phase waits for the object lock: take it first. The
                     // version and queue effect then occur inside the section.
                     let mut version = version.lock().unwrap();
                     recorder
-                        .phase(&mut worker, &mut task, done(op), |phase| {
+                        .phase(&mut worker, &mut task, done(op), PHASE, |phase| {
                             *version += 1;
                             phase.touch(&object, *version, 0, "send");
                             phase.load(u128::from(op));
@@ -160,6 +166,7 @@ fn stop_with_a_claimed_request_does_not_wait_for_host_and_quarantines_completion
                 &mut worker,
                 &mut root,
                 Progress::new(1, Phase::Entered),
+                PHASE,
                 |phase| phase.prepare(&request),
             )
             .unwrap();
@@ -169,6 +176,7 @@ fn stop_with_a_claimed_request_does_not_wait_for_host_and_quarantines_completion
                 &mut worker,
                 &mut root,
                 Progress::new(1, Phase::Claimed),
+                PHASE,
                 |phase| assert!(recorder.claim(phase, &request)),
             )
             .unwrap();
@@ -180,7 +188,7 @@ fn stop_with_a_claimed_request_does_not_wait_for_host_and_quarantines_completion
         assert_eq!(request.buffers(), &vec![7; 64]);
         assert!(
             recorder
-                .phase(&mut worker, &mut root, done(1), |_| panic!(
+                .phase(&mut worker, &mut root, done(1), PHASE, |_| panic!(
                     "late completion acted"
                 ))
                 .is_err()
@@ -204,12 +212,19 @@ fn recording_metrics_count_only_gap_bytes_and_do_not_invent_cpu_time() {
     let mut worker = recorder.executor(0).unwrap();
     let mut task: Task = recorder.root(&mut worker).unwrap();
     let object = ObjectId::Gate("package".into());
+    task.track(&object);
     recorder
-        .phase(&mut worker, &mut task, done(1), |phase| {
-            phase.touch(&object, 3, 0, "gate enter"); // One gapped event.
-            phase.observation(&vec![7; 1000]);
-            phase.load(u128::MAX);
-        })
+        .phase(
+            &mut worker,
+            &mut task,
+            done(1),
+            PHASE.payload(1000),
+            |phase| {
+                phase.touch(&object, 3, 0, "gate enter"); // One gapped event.
+                phase.observation(&vec![7; 1000]);
+                phase.load(u128::MAX);
+            },
+        )
         .unwrap();
     let values: std::collections::BTreeMap<_, _> = metrics.values().into_iter().collect();
     assert!(values["compressed_bytes_per_contended_event"] <= 4.0);
@@ -263,6 +278,7 @@ fn a_durable_watermark_never_admits_an_unpublished_prepare_or_a_failed_barrier()
             &mut worker,
             &mut root,
             Progress::new(1, Phase::Entered),
+            PHASE,
             |phase| phase.prepare(&request),
         )
         .unwrap();
@@ -287,9 +303,13 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
     );
     let mut root_worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut root_worker).unwrap();
+    let prepared = root.prepare_children(WORKERS as u32);
     let children = recorder
-        .phase(&mut root_worker, &mut root, done(1), |writer| {
-            (0..WORKERS).map(|_| writer.spawn()).collect::<Vec<_>>()
+        .phase(&mut root_worker, &mut root, done(1), PHASE, |writer| {
+            prepared
+                .into_iter()
+                .map(|child| writer.spawn_prepared(child))
+                .collect::<Vec<_>>()
         })
         .unwrap();
     drop(root_worker);
@@ -308,7 +328,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
                 reserved.wait();
                 resume.wait();
                 recorder
-                    .phase(&mut worker, &mut task, done(1), |writer| {
+                    .phase(&mut worker, &mut task, done(1), PHASE, |writer| {
                         writer.load(index as u128)
                     })
                     .unwrap();
@@ -320,7 +340,7 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
                     std::thread::yield_now();
                 };
                 recorder
-                    .phase(&mut worker, &mut task, done(2), |writer| {
+                    .phase(&mut worker, &mut task, done(2), PHASE, |writer| {
                         writer.load(100 + index as u128)
                     })
                     .unwrap();
@@ -379,7 +399,8 @@ fn a_task_log_cannot_be_written_under_another_runs_gate() {
     let mut a_worker = a.executor(0).unwrap();
     let mut b_worker = b.executor(0).unwrap();
     let mut task = a.root(&mut a_worker).unwrap();
-    b.phase(&mut b_worker, &mut task, done(1), |_| ()).unwrap();
+    b.phase(&mut b_worker, &mut task, done(1), PHASE, |_| ())
+        .unwrap();
 }
 
 #[test]
@@ -393,6 +414,7 @@ fn a_rejected_entry_prefix_leaves_no_progress_record_or_open_gate_slot() {
         &mut worker,
         &mut root,
         done(1),
+        PHASE,
         || false,
         |_| {
             acted = true;
@@ -408,6 +430,7 @@ fn a_rejected_entry_prefix_leaves_no_progress_record_or_open_gate_slot() {
             &mut worker,
             &mut root,
             done(1),
+            PHASE,
             || true,
             |writer| writer.load(77),
         )

@@ -42,6 +42,13 @@ mod channels;
 #[cfg(not(test))]
 #[path = "../../../../crates/hirsel-free/src/record.rs"]
 pub mod record;
+// Channel wake tokens are runtime pool handles; no model parks a receiver.
+#[cfg(not(test))]
+mod pool {
+    pub mod free {
+        pub struct Token;
+    }
+}
 #[cfg(not(test))]
 fn fault(message: &str) -> ! {
     panic!("{message}");

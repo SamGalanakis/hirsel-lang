@@ -103,6 +103,7 @@ fn nested_entry(cut_tail: bool) {
                                 &mut worker,
                                 &mut task.log,
                                 Progress::new(task.ordinal, Phase::Entered),
+                                hirsel_free::record::RecordBound::default(),
                                 || tail.apply(ctx),
                                 |_| (),
                             )
@@ -452,6 +453,7 @@ fn native_replay_applies_nested_root_tails_at_an_entered_only_cut() {
                             &mut worker,
                             &mut task.log,
                             Progress::new(1, Phase::Entered),
+                            hirsel_free::record::RecordBound::default(),
                             || tail.apply(ctx),
                             |_| (),
                         )

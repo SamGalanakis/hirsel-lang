@@ -136,16 +136,15 @@ pub(crate) unsafe fn prepare_with_keys(
     pending.entered = entered;
     let pending = pending as *mut Pending;
     let shield = unsafe { (*ctx).shield };
-    // Prepared, a position per key, a cancellation change and the request observation.
-    super::record::reserve(ctx, unsafe {
-        hirsel_free::record::RecordBound::records(2 + (*pending).names.len()).payload(
-            (*pending)
-                .request_observation
-                .as_ref()
-                .map_or(0, |bytes| bytes.len()),
-        )
+    // Prepared, a cancellation change, a position per key and the request observation.
+    let bound = unsafe { positions_bound(&*pending, 2) }.payload(unsafe {
+        (*pending)
+            .request_observation
+            .as_ref()
+            .map_or(0, |bytes| bytes.len())
     });
-    super::record::publish(ctx, Phase::Entered, |writer| unsafe {
+    unsafe { prepare_positions(ctx, &mut *pending) };
+    super::record::publish_bounded(ctx, Phase::Entered, bound, |writer| unsafe {
         let writer = writer.expect("a recorded host entry");
         writer.prepare(&(*pending).request);
         take_positions(&mut *pending, writer);
@@ -609,10 +608,15 @@ unsafe fn invoke_resolved(
 pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
     let pending = unsafe { (*ctx).pending_host.as_deref_mut().unwrap() } as *mut Pending;
     let index = unsafe { (*pending).attempt };
-    super::record::reserve(ctx, unsafe {
-        hirsel_free::record::RecordBound::records(1).payload((*pending).encoded.len())
-    });
-    super::record::publish(ctx, Phase::Ended(index), |writer| unsafe {
+    // The observation, a blocked record and the output note, if any.
+    let bound = unsafe {
+        let bound = hirsel_free::record::RecordBound::records(1).payload((*pending).encoded.len());
+        match (*pending).output_count {
+            Some(count) => bound.output(exclusive_sink(&*pending).len(), count as usize),
+            None => bound,
+        }
+    };
+    super::record::publish_bounded(ctx, Phase::Ended(index), bound, |writer| unsafe {
         let writer = writer.expect("a recorded host observation");
         writer.observation(&(*pending).encoded);
         if let Some(count) = (*pending).output_count {
@@ -622,40 +626,67 @@ pub(crate) unsafe fn ended(ctx: *mut TaskCtx) -> Stopped<()> {
                 .epochs()
                 .find(|(_, mode, _)| *mode == Mode::Exclusive)
                 .expect("output has an exclusive sink position");
-            let (_, name) = (*pending)
-                .keys
-                .keys()
-                .iter()
-                .zip(&(*pending).names)
-                .find(|((_, mode), _)| *mode == Mode::Exclusive)
-                .unwrap();
-            writer.output(&name.1, epoch, &bytes[..count as usize]);
+            writer.output(exclusive_sink(&*pending), epoch, &bytes[..count as usize]);
         }
         if matches!(&(*pending).completion, Some(Err(AdapterError::Blocked))) {
             writer.blocked();
         }
         (*pending)
             .positions
-            .take()
+            .as_mut()
             .expect("an active host transition")
-            .end();
+            .end_epochs();
     })?;
     // Key positions ended in the same section as the publication. Wake
-    // after leaving it, under scheduler ownership, with no key lock held.
+    // after leaving it, under scheduler ownership, with no key lock held:
+    // dropping them wakes blocked key waiters and frees their storage.
+    drop(unsafe { (*pending).positions.take() });
     wake_retrying(ctx);
     Ok(())
 }
 
-fn take_positions(pending: &mut Pending, writer: &mut hirsel_free::concurrent::Writer<'_, '_>) {
+/// The name of the output sink: the request's exclusive key.
+fn exclusive_sink(pending: &Pending) -> &str {
+    let (_, (_, name)) = pending
+        .keys
+        .keys()
+        .iter()
+        .zip(&pending.names)
+        .find(|((_, mode), _)| *mode == Mode::Exclusive)
+        .expect("output has an exclusive sink key");
+    name
+}
+
+/// `calls` fixed writer calls and a position on each of the request's keys.
+fn positions_bound(pending: &Pending, calls: usize) -> hirsel_free::record::RecordBound {
+    pending.names.iter().fold(
+        hirsel_free::record::RecordBound::records(calls),
+        |bound, (_, name)| bound.key(name.len()),
+    )
+}
+
+/// Before a transition's section: resolve and reserve its key positions and track its keys,
+/// so the section's take allocates nothing.
+/// # Safety
+/// `ctx` is the running owner of `pending`.
+unsafe fn prepare_positions(ctx: *mut TaskCtx, pending: &mut Pending) {
     assert!(
         pending.positions.is_none(),
         "no key survives a readiness wait"
     );
-    let positions = pending.shared.host_keys.take(&pending.keys);
+    pending.positions = Some(pending.shared.host_keys.prepare(&pending.keys));
+    super::record::track_keys(ctx, pending.names.iter().map(|&(id, _)| id));
+}
+
+fn take_positions(pending: &mut Pending, writer: &mut hirsel_free::concurrent::Writer<'_, '_>) {
+    let positions = pending
+        .positions
+        .as_mut()
+        .expect("positions prepared before the section");
+    pending.shared.host_keys.take_prepared(positions);
     for ((_, mode, epoch), (id, name)) in positions.epochs().zip(&pending.names) {
         writer.key(*id, name, epoch, mode == Mode::Shared, pending.attempt);
     }
-    pending.positions = Some(positions);
 }
 
 fn observe_cancel(
@@ -705,12 +736,10 @@ pub(crate) unsafe fn attempt(ctx: *mut TaskCtx) -> Stopped<()> {
     };
     role::admit(ctx);
     let shield = unsafe { (*ctx).shield };
-    // Ready, a position per key and a cancellation change.
-    super::record::reserve(
-        ctx,
-        hirsel_free::record::RecordBound::records(2 + unsafe { (*pending).names.len() }),
-    );
-    super::record::publish(ctx, Phase::Attempt(index), |writer| unsafe {
+    // Ready, a cancellation change and a position per key.
+    let bound = unsafe { positions_bound(&*pending, 2) };
+    unsafe { prepare_positions(ctx, &mut *pending) };
+    super::record::publish_bounded(ctx, Phase::Attempt(index), bound, |writer| unsafe {
         (*pending).attempt = index;
         let writer = writer.expect("a recorded host attempt");
         writer.ready();
@@ -744,7 +773,8 @@ pub(crate) unsafe fn complete_result(
         ),
         "Blocked needs another bounded attempt"
     );
-    super::record::publish(ctx, Phase::Done, |writer| unsafe {
+    let bound = super::record::PHASE.payload(unsafe { (*pending).encoded.len() });
+    super::record::publish_bounded(ctx, Phase::Done, bound, |writer| unsafe {
         writer
             .expect("a recorded completion")
             .complete(&(*pending).request, &(*pending).encoded);
