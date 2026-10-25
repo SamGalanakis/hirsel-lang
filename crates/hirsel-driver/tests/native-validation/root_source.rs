@@ -67,9 +67,6 @@ impl Fixture {
                 .map(|(path, _, _)| path.clone()),
         );
         let paths: Vec<_> = paths.into_iter().collect();
-        let lower = engine
-            .native_original_reader(&paths, store.clone())
-            .unwrap();
         let raw = engine.export_native_input().unwrap();
         let validated = engine.import_native_input(raw).unwrap();
         let mut program = super::super::adapt::program(&validated);
@@ -77,7 +74,7 @@ impl Fixture {
         let entries = program.definitions.iter().filter(|(path,_)| {
             matches!(&program.signatures[*path].kind,SignatureKind::Function(f) if f.generics.is_empty())
         }).map(|(path,definition)|(path.clone(),definition.entry.0)).collect();
-        let declarations: BTreeMap<_, _> = paths
+        let mut declarations: BTreeMap<_, _> = paths
             .iter()
             .map(|path| {
                 (
@@ -86,6 +83,21 @@ impl Fixture {
                 )
             })
             .collect();
+        let lower = engine
+            .native_original_reader(&paths, store.clone())
+            .unwrap();
+        for (path, source) in &mut declarations {
+            source.lower = lower
+                .input(path)
+                .and_then(|(output, _, _, _)| output.cloned());
+        }
+        // The semantic closure also binds CT-3 generator declarations that
+        // have no runtime body in NativeInput.
+        program.signatures.extend(
+            declarations
+                .iter()
+                .map(|(path, product)| (path.clone(), product.signature.clone())),
+        );
         let anchors = declarations
             .iter()
             .map(|(path, product)| {
@@ -300,5 +312,35 @@ fn immutable_launch_manifest_binds_run_seed_and_all_profile_fields() {
         profile.path = profile.file.path.clone();
         source.profiles = Arc::new(profiles);
         assert_eq!(source.manifest_bytes().unwrap(), baseline);
+    });
+}
+
+#[test]
+fn generated_source_selectors_keep_exact_source_ownership() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = "fn body()->Result[Body[fn(u64)->u64 uses {}],String]{Ok(codegen.body(\"fn(x:u64)->u64 uses {} {9u64/x}\"))}\nfn generated(x:u64)->u64 uses {}=comptime body()\npub fn main()->Result[(),()]{let _=generated(0u64);Ok(())}";
+        let mut fixture = Fixture::with_source(Verify::On, source);
+        NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).unwrap();
+        let mut generated = fixture.selected[0].clone();
+        generated.0.name = "generated".into();
+        let original = fixture.anchors[&generated].clone();
+        assert!(
+            original.iter().any(|anchor| fixture
+                .lower
+                .record_context()
+                .record_owner(*anchor)
+                .is_some_and(|(owner, _)| owner != generated)),
+            "generated text must use its codec owner"
+        );
+        // A valid anchor from another source in the same context cannot be
+        // substituted for this definition's source selector.
+        fixture.anchors.get_mut(&generated).unwrap()[0] = fixture.anchors[&fixture.selected[0]][0];
+        assert!(NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).is_err());
+        fixture.anchors.insert(generated.clone(), original);
+        let other = Fixture::with_source(Verify::On, &source.replace("9u64/x", "8u64/x"));
+        fixture
+            .anchors
+            .insert(generated.clone(), other.anchors[&generated].clone());
+        assert!(NativeLinkSource::from_settled(fixture.facts(), &fixture.lower).is_err());
     });
 }
