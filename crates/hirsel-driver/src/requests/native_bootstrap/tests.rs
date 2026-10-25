@@ -1,6 +1,8 @@
 use super::*;
 use crate::native::{object_queries, queries::*};
-use hirsel_engine::{CompileConfig, FrontCheckPlan, FrontNativePlan, LoweringPolicy};
+use hirsel_engine::{
+    CompileConfig, DefinitionQueries, FrontCheckPlan, FrontNativePlan, LoweringPolicy,
+};
 use hirsel_intern::jobs::Jobs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
