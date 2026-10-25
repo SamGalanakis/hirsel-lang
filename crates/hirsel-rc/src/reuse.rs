@@ -77,6 +77,42 @@ pub fn reuse_indexed(
     Ok(crate::reuse_stores::keep(unit, table))
 }
 
+/// Run every reuse subpass with an explicit checked observation boundary.
+/// Identity coordinates are admitted only while their checked LIR bindings
+/// survive; branch expansion or moved markers require a transport recipe.
+pub fn reuse_observed(
+    unit: LirUnit<Rc>,
+    options: &Options,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Reuse>,
+        hirsel_lir::ownership_trace::Plan,
+        Vec<hirsel_lir::ownership_trace::Recipe>,
+    ),
+    String,
+> {
+    hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
+    if !options.reuse {
+        let before = unit.clone();
+        let (unit, plan, recipe) =
+            crate::observation::identity(&before, input, unit.into_stage::<Reuse>())?;
+        return Ok((unit, plan, vec![recipe]));
+    }
+    let before = unit.clone();
+    let unit = crate::specialize_drop::specialize(unit.into_stage::<Reuse>(), index.table())
+        .map_err(|error| error.to_string())?;
+    let (unit, plan, specialization) = crate::observation::identity(&before, input, unit)?;
+    let before = unit.clone();
+    let unit = pair_tokens(unit, index).map_err(|error| error.to_string())?;
+    let (unit, plan, pairing) = crate::observation::identity(&before, &plan, unit)?;
+    let before = unit.clone();
+    let unit = crate::reuse_stores::keep(unit, index.table());
+    let (unit, plan, stores) = crate::observation::identity(&before, &plan, unit)?;
+    Ok((unit, plan, vec![specialization, pairing, stores]))
+}
+
 /// A token bucket: exact usable bytes, alignment and task heap.
 pub(crate) type Bucket = (u64, u32, TaskDomainId);
 

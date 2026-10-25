@@ -1122,3 +1122,152 @@ fn ownership_trace_rc_insertion_refuses_to_turn_an_observed_create_into_a_move()
     assert!(error.contains("observed SSA copy MarkerId(3)"), "{error}");
     assert!(error.contains("explicit semantic transport"), "{error}");
 }
+
+#[test]
+fn ownership_trace_reuse_checks_each_subpass_and_the_disabled_boundary() {
+    let (before, input, table) = fixture_with_table();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    for enabled in [true, false] {
+        let options = hirsel_rc::reuse::Options { reuse: enabled };
+        let ordinary = hirsel_rc::reuse::reuse_indexed(before.clone(), &options, &index).unwrap();
+        let (after, output, recipes) =
+            hirsel_rc::reuse::reuse_observed(before.clone(), &options, &index, &input).unwrap();
+        assert_eq!(
+            hirsel_codec::to_text(&after),
+            hirsel_codec::to_text(&ordinary)
+        );
+        assert_eq!(recipes.len(), if enabled { 3 } else { 1 });
+        assert_eq!(recipes.first().unwrap().before, input.unit);
+        assert_eq!(recipes.last().unwrap().after, output.unit);
+        for adjacent in recipes.windows(2) {
+            assert_eq!(adjacent[0].after, adjacent[1].before);
+        }
+        assert!(
+            recipes
+                .iter()
+                .all(|recipe| recipe.relocations.len() == input.observations.len())
+        );
+        assert_eq!(input.observations, output.observations);
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &output,
+            Some(&recipe(&input, &output)),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn ownership_trace_reuse_keeps_distinct_lifetimes_when_storage_is_recycled() {
+    let mut t = Lir::<Rc>::new(&[], Some(l::BLK));
+    let donor = t.new_block(ENTRY, &[]);
+    t.release(ENTRY, donor, &[]);
+    let recipient = t.new_block(ENTRY, &[]);
+    t.builder.ret(ENTRY, Some(recipient));
+    let operations = t.operations.clone();
+    let (before, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let before = hirsel_lir::validate::validate(before, &inputs)
+        .unwrap()
+        .into_raw();
+    let source = before.tables.source_anchors[0].site;
+    let mut observations = vec![];
+    for (index, inst) in before.blocks[0]
+        .instructions
+        .get(&before.instructions)
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let (kind, value, moment) = match *inst {
+            Inst::Construct { result, .. } => (Kind::Create, result, Moment::After),
+            Inst::Release { value, .. } => (Kind::Drop, value, Moment::Before),
+            _ => continue,
+        };
+        observations.push(Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index: index as u32,
+                moment,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(observations.len() as u32),
+                site: source,
+                kind,
+                token: Location::Value(value),
+                owner: Location::Value(value),
+            },
+        });
+    }
+    observations.push(Observation {
+        point: Point::Return(ENTRY),
+        marker: ObserveOwnership {
+            id: MarkerId(3),
+            site: source,
+            kind: Kind::Move,
+            token: Location::Value(recipient),
+            owner: Location::Return,
+        },
+    });
+    let input = Plan::new(&before, observations);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let options = hirsel_rc::reuse::Options::default();
+    let ordinary = hirsel_rc::reuse::reuse_indexed(before.clone(), &options, &index).unwrap();
+    let violations = hirsel_lir::validate::check(&ordinary, &inputs);
+    assert!(
+        violations.is_empty(),
+        "ordinary reuse must validate: {violations:?}"
+    );
+    assert!(
+        ordinary
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, Inst::Reset { value, .. } if *value == donor))
+    );
+    assert!(
+        ordinary
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, Inst::Reuse { result, .. } if *result == recipient))
+    );
+    let (after, output, recipes) =
+        hirsel_rc::reuse::reuse_observed(before.clone(), &options, &index, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(recipes.len(), 3);
+    assert_eq!(input.observations, output.observations);
+    assert_ne!(
+        output.observations[0].marker.token,
+        output.observations[2].marker.token
+    );
+    check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+}
+
+#[test]
+fn ownership_trace_reuse_refuses_a_stale_input_before_rewriting() {
+    let (before, mut input, table) = fixture_with_table();
+    input.observations[0].marker.site.start += 1;
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let error =
+        hirsel_rc::reuse::reuse_observed(before, &Default::default(), &index, &input).unwrap_err();
+    assert!(error.contains("InvalidSite(MarkerId(0))"), "{error}");
+}
