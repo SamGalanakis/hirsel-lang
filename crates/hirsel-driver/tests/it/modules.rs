@@ -204,3 +204,4 @@ mod scheduled_read_sharing;
 mod native_import_cutover_19;
 mod finalizer_obligation_52;
 mod native_object_products_19;
+mod scheduled_native_proofs_19;

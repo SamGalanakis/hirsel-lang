@@ -213,6 +213,35 @@ impl Proofs {
         })
     }
 
+    /// Assess the complete PS9 export selected by this exact completed native
+    /// source root. The source producer supplies both the package export and
+    /// original Lower products; no NativeInput or native Value is reconstructed.
+    pub fn assess_native(
+        export: &hirsel_engine::FrontProofExport,
+        native: &std::sync::Arc<hirsel_engine::FrontNativeQueries>,
+        completed: hirsel_engine::runtime::ProductRef,
+        evidence: &Evidence,
+        store: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
+    ) -> Result<Self, super::NativeError> {
+        let error = |message| super::NativeError::new(StageName::Import, message);
+        let input = export
+            .input_for_native(native, completed)
+            .map_err(|e| error(format!("proofs: native source export unavailable: {e:?}")))?;
+        let source = native
+            .outcome(completed)
+            .ok_or_else(|| error("proofs: native source root has not completed".to_string()))?;
+        let original = source
+            .products
+            .original_context
+            .reader(source.products.originals.clone(), store)
+            .map_err(|e| {
+                error(format!(
+                    "proofs: original Lower selection unavailable: {e:?}"
+                ))
+            })?;
+        Self::assess_original(&hirsel_proof_export::build(&input), &original, evidence)
+    }
+
     fn assess_selected(
         export: &hirsel_proof_export::Export,
         evidence: &Evidence,
