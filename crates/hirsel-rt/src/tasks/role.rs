@@ -354,6 +354,20 @@ impl IdleGuard {
         }
     }
 
+    /// An idle callback's claim from whichever stack is idle. Home acquires
+    /// as [`home`](Self::home): a role owner may be inside a synchronous home
+    /// loan, which only home can serve, so a blocking idle wait there never
+    /// returns.
+    /// # Safety
+    /// As for new, with no adapter borrow.
+    pub(crate) unsafe fn idle(run: *mut RunShared) -> Self {
+        if unsafe { crate::pool::on_home(run) } {
+            unsafe { Self::home(run) }
+        } else {
+            unsafe { Self::new(run) }
+        }
+    }
+
     /// # Safety
     /// The caller is on an idle stack and holds no role or runtime borrow.
     /// `run` outlives the guard. Enabled callbacks must raw-project role-owned

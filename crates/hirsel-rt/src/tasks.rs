@@ -1708,7 +1708,7 @@ pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) -> 
 /// The caller is on an idle stack and holds no role or runtime borrow; its
 /// dispatch still holds the frame's Lease, whose drop wakes home.
 pub(crate) unsafe fn returned_unstarted(run: *mut crate::context::RunShared) {
-    let _role = unsafe { role::IdleGuard::new(run) };
+    let _role = unsafe { role::IdleGuard::idle(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return;
     }
@@ -1734,7 +1734,7 @@ pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {
 pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, completed: bool) {
     // SAFETY: the worker stays busy and retains its Lease throughout this
     // guard; it cannot be reclaimed even if a callback vacates this task.
-    let _role = unsafe { role::IdleGuard::new(run) };
+    let _role = unsafe { role::IdleGuard::idle(run) };
     let ready = {
         // SAFETY: IdleGuard exclusively owns role-protected task metadata.
         let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {

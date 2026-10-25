@@ -17,7 +17,10 @@ pub(crate) struct Attempt {
 
 pub(crate) struct Service {
     pub(crate) adapter: Arc<dyn ConcurrentAdapter>,
-    driver: Option<crate::readiness::Readiness>,
+    /// The adapter's driver, or one of the service's own when the adapter has
+    /// none: a running job is an event source, and its publication and a stop
+    /// must end the same blocking wait.
+    driver: crate::readiness::Readiness,
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
     jobs: Jobs,
@@ -59,21 +62,17 @@ impl Service {
         adapter: Arc<dyn ConcurrentAdapter>,
     ) -> Stopped<()> {
         let run = unsafe { (*ctx).run_ref() };
-        let driver = adapter.readiness();
-        if let Some(driver) = &driver {
-            driver.notify().map_err(Stop::refusal)?;
-            if let Some(fd) = run.control.wake_fd() {
-                driver.wake_on(fd).map_err(Stop::refusal)?;
-            }
+        let driver = adapter.readiness().unwrap_or_default();
+        driver.notify().map_err(Stop::refusal)?;
+        if let Some(fd) = run.control.wake_fd() {
+            driver.wake_on(fd).map_err(Stop::refusal)?;
         }
         let jobs = Jobs::default();
         let (ready, home) = (driver.clone(), unsafe {
             crate::pool::home_wake((*ctx).run_ptr())
         });
         jobs.set_waker(Arc::new(move || {
-            if let Some(ready) = &ready {
-                let _ = ready.notify();
-            }
+            let _ = ready.notify();
             if let Some(home) = &home {
                 home();
             }
@@ -98,9 +97,9 @@ impl Service {
     }
 
     pub(crate) fn notify(&self) {
-        if let Some(driver) = &self.driver {
-            driver.notify().expect("admitted Ordered wake descriptor");
-        }
+        self.driver
+            .notify()
+            .expect("admitted Ordered wake descriptor");
     }
 
     pub(crate) fn park(&self, token: u64, task: u32, generation: u32) {
@@ -287,8 +286,8 @@ impl Service {
     }
 
     pub(crate) unsafe fn wait(&self, run: *mut RunShared) -> Stopped<bool> {
-        if let (Some(driver), Some(fd)) = (&self.driver, unsafe { (*run).control.wake_fd() }) {
-            driver.wake_on(fd).map_err(Stop::refusal)?;
+        if let Some(fd) = unsafe { (*run).control.wake_fd() } {
+            self.driver.wake_on(fd).map_err(Stop::refusal)?;
         }
         let concurrent = self.adapter.wait_sources().map_err(Stop::refusal)?;
         let home = if unsafe { (*run).host_waits.load(Ordering::Acquire) } != 0 {
@@ -312,10 +311,7 @@ impl Service {
         // block until its publication or a stop notifies the driver, instead
         // of declaring the run quiet.
         if !waited && self.jobs.busy() {
-            let driver = self.driver.as_ref().ok_or_else(|| {
-                Stop::Refused("an Ordered host job requires a readiness driver".into())
-            })?;
-            waited = driver.wait_woken().map_err(Stop::refusal)?;
+            waited = self.driver.wait_woken().map_err(Stop::refusal)?;
         }
         if let Some(stop) = unsafe { (*run).control.stopped() } {
             return Err(stop);
@@ -585,7 +581,7 @@ mod generation_tests {
                 }
                 let io = Service {
                     adapter: Arc::new(Adapter),
-                    driver: None,
+                    driver: Default::default(),
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
                     jobs: Default::default(),
