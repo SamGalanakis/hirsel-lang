@@ -42,6 +42,22 @@ struct Input {
     executable: bool,
     implementation: ContentHash,
 }
+/// Prepared immutable Run inputs and their exact charged bytes. The private
+/// catalog moves into the producer once, so sizing never repeats encoding or
+/// rereads a newer source snapshot. This carries no V or native C authority.
+pub struct FrontRunInputs {
+    signatures: Arc<crate::snapshot::SignatureSnapshot>,
+    source_paths: Vec<DefPath>,
+    inputs: BTreeMap<DefPath, Input>,
+    views: Vec<(SignatureRef, ContentHash)>,
+    required: u64,
+}
+impl FrontRunInputs {
+    pub fn input_bytes(&self) -> u64 {
+        self.required
+    }
+}
+
 /// One immutable input namespace, shared across selected Run roots. Each task
 /// waits for the ordered source transaction before reading semantic products.
 pub struct FrontRunQueries {
@@ -776,6 +792,14 @@ impl QueryEngine {
                 "Run and Lower require the same signature snapshot",
             ));
         }
+        let inputs = self.front_run_inputs(allowance.bytes())?;
+        self.front_run_queries_with_inputs(check, front, lower, inputs, weight, allowance, errors)
+    }
+
+    /// Capture before partitioning the existing host snapshot allowance. Both
+    /// the planner and producer consume this one catalog's exact byte count.
+    pub fn front_run_inputs(&mut self, limit: u64) -> Result<FrontRunInputs, QueryError> {
+        let signatures = self.signature_inputs();
         let source_paths = self.source_paths();
         let mut paths: BTreeSet<_> = source_paths.iter().cloned().collect();
         paths.extend(self.native_builtin_signatures().into_keys());
@@ -787,8 +811,7 @@ impl QueryEngine {
             let source = source_paths.binary_search(&path).is_ok();
             let output = self.item_signature(&path)?;
             let signature = output.value;
-            let owner_signature = lower
-                .signatures()
+            let owner_signature = signatures
                 .body_view(&path.0.package, DefId::intern(&path))
                 .ok_or(QueryError::NotImplemented)?
                 .map_err(Clone::clone)?
@@ -856,7 +879,7 @@ impl QueryEngine {
             required = required
                 .checked_add(content.iter().map(|c| c.len() as u64).sum::<u64>())
                 .ok_or_else(|| operational("Run input content overflow"))?;
-            if required > allowance.bytes() {
+            if required > limit {
                 return Err(operational("Run inputs exceed admission"));
             }
             inputs.insert(
@@ -872,6 +895,42 @@ impl QueryEngine {
                 },
             );
         }
+        Ok(FrontRunInputs {
+            signatures,
+            source_paths,
+            inputs,
+            views,
+            required,
+        })
+    }
+
+    pub fn front_run_queries_with_inputs(
+        &mut self,
+        check: Arc<FrontCheckQueries>,
+        front: Arc<FrontBodyQueries>,
+        lower: Arc<FrontLowerQueries>,
+        inputs: FrontRunInputs,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontRunQueries>, QueryError> {
+        if !Arc::ptr_eq(&inputs.signatures, &self.signature_inputs())
+            || !Arc::ptr_eq(&inputs.signatures, &lower.signatures())
+        {
+            return Err(operational(
+                "Run inputs and Lower require the same signature snapshot",
+            ));
+        }
+        if inputs.required > allowance.bytes() {
+            return Err(operational("Run inputs exceed admission"));
+        }
+        let FrontRunInputs {
+            signatures: _,
+            source_paths,
+            inputs,
+            views,
+            required,
+        } = inputs;
         // Zero representation digests match ordinary execution. Compile-time
         // reflection's digest-bearing runtime remains a different producer.
         let runtime = Arc::new(self.build_runtime_types(views, false)?);

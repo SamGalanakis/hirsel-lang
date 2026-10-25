@@ -16,13 +16,16 @@ mod scheduled_native;
 mod scheduled_native_root;
 mod scheduled_run;
 pub use scheduled_native::{
-    FRONT_NATIVE_DEFINITION_KIND, FrontNativeDefinitionOutput, FrontNativeDefinitionQueries,
+    FRONT_NATIVE_DEFINITION_KIND, FrontNativeDefinitionInputs, FrontNativeDefinitionOutput,
+    FrontNativeDefinitionQueries,
 };
 pub use scheduled_native_root::{
     FRONT_NATIVE_ROOT_KIND, FrontNativeOutput, FrontNativePlan, FrontNativeProducts,
     FrontNativeQueries,
 };
-pub use scheduled_run::{FRONT_RUN_KIND, FrontProofExport, FrontRunOutput, FrontRunQueries};
+pub use scheduled_run::{
+    FRONT_RUN_KIND, FrontProofExport, FrontRunInputs, FrontRunOutput, FrontRunQueries,
+};
 
 mod scheduled_storage;
 pub use scheduled_storage::{

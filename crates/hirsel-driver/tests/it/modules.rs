@@ -206,3 +206,4 @@ mod finalizer_obligation_52;
 mod native_object_products_19;
 mod scheduled_native_proofs_19;
 mod receipt_selection_33;
+mod prepared_source_inputs_49;

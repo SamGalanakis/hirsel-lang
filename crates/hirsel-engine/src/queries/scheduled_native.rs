@@ -25,6 +25,24 @@ struct Input {
     signature: SignatureRef,
     representation: Option<crate::representation::OwnerRecord>,
 }
+/// Prepared bodyless catalogue inputs. Sizing and installation consume the
+/// same private data; the caller cannot supply source V or native authority.
+pub struct FrontNativeDefinitionInputs {
+    definitions: Vec<DefPath>,
+    snapshot: Arc<SignatureSnapshot>,
+    original_context: crate::NativeOriginalContext,
+    inputs: BTreeMap<DefPath, Input>,
+    ids: BTreeMap<DefPath, QueryId>,
+    records: crate::NativeRecords,
+    anchors: crate::NativeRecordContext,
+    store: Arc<dyn ResultStore>,
+    required: u64,
+}
+impl FrontNativeDefinitionInputs {
+    pub fn input_bytes(&self) -> u64 {
+        self.required
+    }
+}
 struct Data {
     product: crate::NativeDiscoveryProduct,
     reads: Arc<Reads>,
@@ -539,15 +557,23 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontNativeDefinitionQueries>, QueryError> {
+        let inputs = self.front_native_definition_inputs(definitions, allowance.bytes())?;
+        self.front_native_definition_queries_with_inputs(
+            front, lower, inputs, weight, allowance, errors,
+        )
+    }
+
+    pub fn front_native_definition_inputs(
+        &mut self,
+        definitions: &[DefPath],
+        limit: u64,
+    ) -> Result<FrontNativeDefinitionInputs, QueryError> {
         let refuse = || {
             QueryError::Operational(hirsel_types::OperationalFailure{operation:"native source admission".into(),message:"native source inputs exceed admission or differ from the pinned source namespace".into()})
         };
         let mut required =
             FrontNativeDefinitionQueries::input_bytes(definitions).ok_or_else(refuse)?;
-        let snapshot = lower.signatures();
-        if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
-            return Err(refuse());
-        }
+        let snapshot = self.signature_inputs();
         let original_context = self.native_original_context(definitions)?;
         let store = self
             .result_store
@@ -560,11 +586,10 @@ impl QueryEngine {
         let mut ids = BTreeMap::new();
         let namespace = serde_json::to_vec(definitions).map_err(|_| refuse())?;
         for path in definitions {
-            if self.generated.contains_key(path)
-                || front.query(path).is_none()
-                || lower.query(path).is_none()
-            {
-                return Err(refuse());
+            if self.generated.contains_key(path) {
+                return Err(native_selection_error(format!(
+                    "generated native catalogue input: {path}"
+                )));
             }
             let signature = snapshot
                 .signature(DefId::intern(path))
@@ -587,7 +612,9 @@ impl QueryEngine {
                     .checked_add(bytes.len() as u64)
                     .ok_or_else(refuse)?;
                 if self.implementation_hash(path) != Some(record.text_hash) {
-                    return Err(refuse());
+                    return Err(native_selection_error(format!(
+                        "native representation revision differs from source: {path}"
+                    )));
                 }
             }
             let bytes = serde_json::to_vec(path).map_err(|_| refuse())?;
@@ -611,9 +638,66 @@ impl QueryEngine {
                 },
             );
         }
-        if required > allowance.bytes() {
-            return Err(refuse());
+        if required > limit {
+            return Err(native_selection_error(format!(
+                "native catalogue inputs exceed admission: required {required}, reserved {}",
+                limit
+            )));
         }
+        Ok(FrontNativeDefinitionInputs {
+            definitions: definitions.to_vec(),
+            snapshot,
+            original_context,
+            inputs,
+            ids,
+            records,
+            anchors,
+            store,
+            required,
+        })
+    }
+
+    pub fn front_native_definition_queries_with_inputs(
+        &mut self,
+        front: Arc<FrontBodyQueries>,
+        lower: Arc<FrontLowerQueries>,
+        inputs: FrontNativeDefinitionInputs,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontNativeDefinitionQueries>, QueryError> {
+        if !Arc::ptr_eq(&inputs.snapshot, &self.signature_inputs())
+            || !Arc::ptr_eq(&inputs.snapshot, &lower.signatures())
+        {
+            return Err(native_selection_error(
+                "native catalogue and Lower signature snapshots differ",
+            ));
+        }
+        if inputs
+            .definitions
+            .iter()
+            .any(|path| front.query(path).is_none() || lower.query(path).is_none())
+        {
+            return Err(native_selection_error(
+                "native catalogue is outside front/Lower namespace",
+            ));
+        }
+        if inputs.required > allowance.bytes() {
+            return Err(native_selection_error(
+                "native catalogue inputs exceed original admission",
+            ));
+        }
+        let FrontNativeDefinitionInputs {
+            definitions: _,
+            snapshot: _,
+            original_context,
+            inputs,
+            ids,
+            records,
+            anchors,
+            store,
+            required,
+        } = inputs;
         let output_budget = allowance.bytes() - required;
         let ownership = Arc::new(SourceOwnership {
             _front: front.clone(),
