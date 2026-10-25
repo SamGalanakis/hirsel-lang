@@ -18,9 +18,83 @@ pub struct FrontProofExport {
     modules: BTreeMap<FileId, String>,
     files: BTreeMap<DefPath, Vec<FileId>>,
     sources: SourceMap,
+    signature_edges: BTreeMap<DefId, Vec<DefId>>,
+    input_metadata_bytes: u64,
     _allowance: MemoryReservation,
 }
+/// A complete input and its decode/clone working admission. Keep this owner
+/// alive while its input is borrowed by an export builder. Final export tables
+/// and encoded text need their own admission.
+pub struct FrontProofInput {
+    input: ExportInput,
+    _owner: Arc<FrontProofExport>,
+    _allowance: MemoryReservation,
+}
+impl FrontProofInput {
+    pub fn input(&self) -> &ExportInput {
+        &self.input
+    }
+}
 impl FrontProofExport {
+    /// Captured layout metadata plus exactly this completed Run's typed body
+    /// and value decode bounds. Does not open a provider or decode any body.
+    pub fn input_bytes(&self, product: ProductRef) -> Result<u64, QueryError> {
+        if product.address != self.query().address {
+            return Err(QueryError::NotImplemented);
+        }
+        let output = self
+            .run
+            .outcome(product)
+            .ok_or(QueryError::NotImplemented)?;
+        let closure = output.semantic.definitions();
+        if !self.roots.is_subset(closure) {
+            return Err(QueryError::NotImplemented);
+        }
+        let mut required = self.input_metadata_bytes;
+        let mut maps = crate::NativeMetadataWeight::default();
+        maps.tree::<DefPath, hirsel_tir::DefinitionRef>(closure.len());
+        maps.tree::<DefPath, hirsel_tir::Materialized>(closure.len());
+        for path in closure {
+            maps.path(path);
+            maps.path(path);
+            let signature = self
+                .headers
+                .signature(path)
+                .ok_or(QueryError::NotImplemented)?;
+            if matches!(signature.kind, SignatureKind::Const { .. }) {
+                required = required
+                    .checked_add(self.run.lower.settled_constant_clone_bytes(path)?)
+                    .ok_or(QueryError::NotImplemented)?;
+            }
+            if self.executable.contains(path) {
+                required = required
+                    .checked_add(self.run.lower.settled_definition_decode_bytes(path)?)
+                    .ok_or(QueryError::NotImplemented)?;
+            }
+        }
+        required
+            .checked_add(maps.bytes())
+            .ok_or(QueryError::NotImplemented)
+    }
+    /// Refuse N-1 before body/provider inspection. The returned owner pins both
+    /// the selected source and the caller's physical decode/clone reservation.
+    pub fn input_with_allowance(
+        self: &Arc<Self>,
+        product: ProductRef,
+        allowance: MemoryReservation,
+    ) -> Result<FrontProofInput, QueryError> {
+        if self.input_bytes(product)? > allowance.bytes() {
+            return Err(operational(
+                "PS9 input decode/clone buffers exceed admission",
+            ));
+        }
+        Ok(FrontProofInput {
+            input: self.input(product)?,
+            _owner: self.clone(),
+            _allowance: allowance,
+        })
+    }
+
     /// Register this exact Run view's factory; its root includes every source
     /// definition in the entry package and their ordinary semantic closure.
     pub fn run(&self) -> &Arc<FrontRunQueries> {
@@ -126,20 +200,33 @@ impl FrontProofExport {
         // The fingerprint closure also reaches declarations named only by
         // public/private type views and registry operation signatures.
         let types = self.run.lower.signatures().types().clone();
-        let mut pending = signatures
-            .values()
-            .flat_map(|section| crate::proof_export::signature_references(&types, section))
-            .collect::<Vec<_>>();
-        while let Some(path) = pending.pop() {
-            if signatures.contains_key(&path) {
+        let mut pending = Vec::new();
+        for path in signatures.keys() {
+            pending.extend(
+                self.signature_edges
+                    .get(&DefId::intern(path))
+                    .ok_or(QueryError::NotImplemented)?
+                    .iter()
+                    .copied(),
+            );
+        }
+        while let Some(id) = pending.pop() {
+            let path = id.path();
+            if signatures.contains_key(path) {
                 continue;
             }
             let section = self
                 .headers
-                .section(&path)
+                .section(path)
                 .ok_or(QueryError::NotImplemented)?;
-            pending.extend(crate::proof_export::signature_references(&types, &section));
-            signatures.insert(path, section);
+            pending.extend(
+                self.signature_edges
+                    .get(&id)
+                    .ok_or(QueryError::NotImplemented)?
+                    .iter()
+                    .copied(),
+            );
+            signatures.insert(path.clone(), section);
         }
         let sources = Rc::new(self.sources.clone());
         let selected_files: BTreeSet<_> = closure
@@ -307,7 +394,60 @@ impl QueryEngine {
                 (path, rows)
             })
             .collect();
+        // Freeze signature-only closure edges while S0 owns normalization.
+        // DefIds retain no copied path payload; later input sizing/formatting
+        // never traverses or reconstructs the signature's type graph.
+        let types = run.lower.signatures().types().clone();
+        let mut signature_edges = BTreeMap::new();
+        for (path, _) in headers.signatures() {
+            let section = headers.section(path).ok_or(QueryError::NotImplemented)?;
+            let edges = crate::proof_export::signature_references(&types, &section)
+                .into_iter()
+                .map(|path| DefId::intern(&path))
+                .collect::<Vec<_>>();
+            signature_edges.insert(DefId::intern(path), edges);
+        }
+        let mut input_weight = crate::NativeMetadataWeight::default();
+        input_weight
+            .add(size_of::<FrontProofInput>() + size_of::<SourceMap>() + 8 * size_of::<usize>());
+        input_weight.add(hirsel_proof_export::FORMAT.len());
+        input_weight.add(headers.environment().compiler_version.capacity());
+        input_weight.path(entry);
+        input_weight.source_snapshot(&sources);
+        input_weight.tree::<FileId, ()>(modules.len());
+        input_weight.map(&modules, |w, _, module| w.add(module.capacity()));
+        let annotation_count: usize = annotations.values().map(Vec::len).sum();
+        input_weight.add(
+            annotation_count
+                .saturating_mul(2)
+                .max(4)
+                .saturating_mul(size_of::<Annotation>()),
+        );
+        for rows in annotations.values() {
+            for a in rows {
+                input_weight.path(&a.path);
+                input_weight.add(a.name.capacity());
+                input_weight.add(a.location.module.capacity());
+                input_weight.vec(&a.payload, |w, token| w.add(token.capacity()));
+            }
+        }
+        let edge_count: usize = signature_edges.values().map(Vec::len).sum();
+        input_weight.add(
+            edge_count
+                .saturating_mul(2)
+                .max(4)
+                .saturating_mul(size_of::<DefId>()),
+        );
+        let input_metadata_bytes = input_weight
+            .bytes()
+            .checked_add(
+                headers
+                    .sections_clone_bytes()
+                    .ok_or(QueryError::NotImplemented)?,
+            )
+            .ok_or(QueryError::NotImplemented)?;
         let mut weight = crate::NativeMetadataWeight::default();
+        weight.map(&signature_edges, |w, _, edges| w.flat_vec(edges));
         weight.add(size_of::<FrontProofExport>() + 2 * size_of::<usize>());
         weight.path(entry);
         weight.source_snapshot(&sources);
@@ -342,6 +482,8 @@ impl QueryEngine {
             modules,
             files,
             sources,
+            signature_edges,
+            input_metadata_bytes,
             _allowance: allowance,
         }))
     }
