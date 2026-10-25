@@ -650,8 +650,10 @@ fn ordered_file_jobs_preserve_host_replay_order() {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = scratch("ordered-file-jobs-");
         let root = scratch.path();
-        fs::write(root.join("0.txt"), b"a").unwrap();
-        fs::write(root.join("1.txt"), b"bb").unwrap();
+        let input = root.join("input");
+        fs::create_dir(&input).unwrap();
+        fs::write(input.join("0.txt"), b"a").unwrap();
+        fs::write(input.join("1.txt"), b"bb").unwrap();
         let source = root.join("main.hir");
         fs::write(
             &source,
@@ -661,7 +663,7 @@ fn ordered_file_jobs_preserve_host_replay_order() {
         let tape = root.join("recording");
         let grants = serde_json::json!({
             "io": {"tasks":"tasks.cooperative@1", "dirs":[{
-                "path":"input", "host":root, "access":"read"
+                "path":"input", "host":input, "access":"read"
             }]},
             "args":[],
             "placement":{"cores":1,"commit":"shared","reorder":"auto"}

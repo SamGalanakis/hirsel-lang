@@ -516,7 +516,9 @@ pub(super) fn notify(ctx: *mut TaskCtx) {
 }
 
 fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
-    let deferred = with_driver(ctx, |driver| driver.host_poll || driver.poll_deferred());
+    let deferred = with_driver(ctx, |driver| {
+        driver.head_job.is_some() || driver.host_poll || driver.poll_deferred()
+    });
     if deferred {
         return Ok(());
     }
