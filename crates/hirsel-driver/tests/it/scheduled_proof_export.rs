@@ -116,6 +116,7 @@ fn export_case_with_ownership(
                         lower: lower.clone(),
                         growth: growth.clone(),
                         unsafe_ffi: program.unsafe_ffi.clone(),
+                        lint_package: None,
                     },
                     weight,
                     budget.reserve(8 << 20).unwrap(),

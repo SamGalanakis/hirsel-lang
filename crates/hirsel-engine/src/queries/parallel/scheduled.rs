@@ -80,12 +80,19 @@ struct FrontOutcome {
     reads: Arc<Reads>,
     diagnostic_phases: Vec<(Diagnostic, String)>,
     checked: CheckedProduct,
+    /// The package dead-arm lint's facts of a checked body.
+    dead_arms: Option<crate::tools::DeadArmUse>,
     // Only active consumers own a decoded body. The settled query retains its
     // canonical archive and compact source facts, including when hold_bytes=0.
     body: Weak<QueryOutput<AnalyzedBody>>,
 }
 impl FrontOutcome {
-    fn capture(reference: Reference, outcome: ModeResult, checked: CheckedProduct) -> Self {
+    fn capture(
+        reference: Reference,
+        outcome: ModeResult,
+        checked: CheckedProduct,
+        dead_arms: Option<crate::tools::DeadArmUse>,
+    ) -> Self {
         let ModeResult {
             definition,
             result,
@@ -105,6 +112,7 @@ impl FrontOutcome {
             reads,
             diagnostic_phases,
             checked,
+            dead_arms,
             body,
         }
     }
@@ -228,6 +236,35 @@ impl FrontBodyQueries {
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(charge)?;
         Some(())
+    }
+    fn retain_dead_arms(&self, uses: Option<&crate::tools::DeadArmUse>) -> Option<()> {
+        let Some(uses) = uses else {
+            return Some(());
+        };
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.tree::<DefPath, ()>(uses.errors.len());
+        weight.tree::<(DefPath, u32), ()>(uses.constructed.len());
+        for path in uses
+            .errors
+            .iter()
+            .chain(uses.constructed.iter().map(|(path, _)| path))
+        {
+            weight.path(path);
+        }
+        let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        *retention = retention.checked_sub(weight.bytes())?;
+        Some(())
+    }
+    /// The package dead-arm lint's facts of `definition`'s settled checked
+    /// body, if this view settled one.
+    pub(crate) fn dead_arm_use(&self, definition: &DefPath) -> Option<crate::tools::DeadArmUse> {
+        let query = self.query(definition)?;
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&query.address.0)?
+            .dead_arms
+            .clone()
     }
 
     /// Actual phase invocations, including failed or discarded producers.
@@ -483,6 +520,7 @@ impl FrontBodyQueries {
                         input.key.1,
                         &bytes,
                         selected.reads.clone(),
+                        None,
                     )?;
                     let output = restored.outcome.result.ok()?;
                     selected.body = Arc::downgrade(&output);
@@ -641,6 +679,11 @@ impl BodyTask {
             input.key.1,
             &bytes,
             Arc::new(variant.reads.clone()),
+            queries
+                .snapshot
+                .signature(input.definition)
+                .and_then(Result::ok)
+                .map(|signature| &**signature),
         )?;
         let definition = input.definition;
         let mut memo_rows = vec![(
@@ -659,6 +702,7 @@ impl BodyTask {
             restored.table_keys.as_ref(),
             &memo_rows,
         )?;
+        queries.retain_dead_arms(restored.dead_arms.as_ref())?;
         if let Some(table_keys) = restored.table_keys {
             queries
                 .table_keys
@@ -682,7 +726,7 @@ impl BodyTask {
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 self.query.address.0,
-                FrontOutcome::capture(variant.output, outcome, checked),
+                FrontOutcome::capture(variant.output, outcome, checked, restored.dead_arms),
             );
         queries.store_adoptions.fetch_add(1, Relaxed);
         timings::count(Count::StoreHits);
@@ -772,6 +816,7 @@ impl BodyTask {
         );
         let memo_rows = completed.memo_snapshot();
         let checked = completed.checked_product();
+        let dead_arms = completed.take_dead_arms();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
             definition: published.definition.clone(),
@@ -846,7 +891,7 @@ impl BodyTask {
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(
                         self.query.address.0,
-                        FrontOutcome::capture(record, output, None),
+                        FrontOutcome::capture(record, output, None, None),
                     );
                 return Err(record);
             }
@@ -889,6 +934,9 @@ impl BodyTask {
             .retain(&outcome, &checked, table_keys.as_ref(), &memo_rows)
             .ok_or(queries.errors.resource)?;
         queries
+            .retain_dead_arms(dead_arms.as_ref())
+            .ok_or(queries.errors.resource)?;
+        queries
             .memos
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -909,7 +957,7 @@ impl BodyTask {
             .unwrap_or_else(|e| e.into_inner())
             .insert(
                 self.query.address.0,
-                FrontOutcome::capture(record, outcome, checked),
+                FrontOutcome::capture(record, outcome, checked, dead_arms),
             );
         if failed {
             return Err(record);

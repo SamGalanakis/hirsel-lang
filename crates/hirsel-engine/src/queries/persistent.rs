@@ -688,6 +688,8 @@ pub(super) struct FrozenMode {
     pub(super) outcome: ModeResult,
     pub(super) checked: Option<(Arc<CheckedSummary>, Arc<Reads>)>,
     pub(super) table_keys: Option<Arc<crate::table_keys::TableKeyUse>>,
+    /// The package lint's facts of the checked body, under `signature`.
+    pub(super) dead_arms: Option<crate::tools::DeadArmUse>,
 }
 /// Decode only after the caller has validated the ordinary S0 variant reads.
 /// This uses the existing Modes codec and type/lexical validation; no engine
@@ -700,6 +702,7 @@ pub(super) fn restore_frozen_mode(
     text: ContentHash,
     bytes: &[u8],
     reads: Arc<Reads>,
+    signature: Option<&hirsel_types::Signature>,
 ) -> Option<FrozenMode> {
     let record: ModeRecord = records.decode_record(bytes, |path, occurrence| {
         citations
@@ -717,6 +720,7 @@ pub(super) fn restore_frozen_mode(
         return None;
     }
     let mut table_keys = None;
+    let mut dead_arms = None;
     let checked = record.checked.map(|checked| {
         let typed = TypedBody {
             syntax: syntax.clone(),
@@ -726,6 +730,7 @@ pub(super) fn restore_frozen_mode(
             boolean: checked.boolean,
         };
         table_keys = Some(Arc::new(crate::table_keys::TableKeyUse::capture(&typed)));
+        dead_arms = Some(super::dead_arms::body_use(types, signature, &typed));
         let (summary, growth) = summarize(types, &typed);
         (Arc::new(CheckedSummary { summary, growth }), reads.clone())
     });
@@ -759,6 +764,7 @@ pub(super) fn restore_frozen_mode(
         },
         checked,
         table_keys,
+        dead_arms,
     })
 }
 

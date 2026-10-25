@@ -127,6 +127,7 @@ fn check_case(
         lower: lower.clone(),
         growth: growth.clone(),
         unsafe_ffi: program.unsafe_ffi.clone(),
+        lint_package: None,
     };
     let check = program
         .engine

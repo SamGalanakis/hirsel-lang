@@ -24,6 +24,29 @@ pub struct FrontCheckPlan {
     pub lower: Arc<FrontLowerQueries>,
     pub growth: Arc<FrontGrowthQueries>,
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
+    /// The root package whose never-constructed error arms (LANG-8) warn.
+    pub lint_package: Option<hirsel_syntax::PackageId>,
+}
+/// LANG-8 inputs captured from the root package's source items: its private
+/// error-type declarations with their arms, and every body that may use them.
+struct DeadArmLint {
+    declarations: BTreeMap<DefPath, (hirsel_span::Anchor, Vec<(String, u32, u32)>)>,
+    bodies: Vec<DefPath>,
+}
+impl DeadArmLint {
+    fn bytes(&self) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(std::mem::size_of::<Self>());
+        weight.tree::<DefPath, (hirsel_span::Anchor, Vec<(String, u32, u32)>)>(
+            self.declarations.len(),
+        );
+        for (path, (_, arms)) in &self.declarations {
+            weight.path(path);
+            weight.vec(arms, |weight, (name, _, _)| weight.add(name.capacity()));
+        }
+        weight.vec(&self.bodies, |weight, path| weight.path(path));
+        weight.bytes()
+    }
 }
 #[derive(Clone)]
 struct FileInput {
@@ -55,6 +78,7 @@ pub struct FrontCheckQueries {
     files: Vec<FileInput>,
     plan: FrontCheckPlan,
     storage: Option<Arc<FrontStorageGraphQueries>>,
+    lint: Option<DeadArmLint>,
     constants: BTreeSet<DefId>,
     sources: SourceMap,
     records: crate::NativeRecords,
@@ -67,6 +91,21 @@ pub struct FrontCheckQueries {
     _allowance: MemoryReservation,
 }
 impl FrontCheckQueries {
+    fn dead_arm_warnings(&self) -> Vec<Diagnostic> {
+        let Some(lint) = &self.lint else {
+            return vec![];
+        };
+        let mut errors = BTreeSet::new();
+        let mut constructed = BTreeSet::new();
+        for body in &lint.bodies {
+            let Some(uses) = self.plan.front.dead_arm_use(body) else {
+                return vec![];
+            };
+            errors.extend(uses.errors);
+            constructed.extend(uses.constructed);
+        }
+        super::dead_arms::dead_arm_diagnostics(lint.declarations.clone(), &errors, &constructed)
+    }
     /// Install the matching actual source storage producer before sharing this
     /// new root with any factory or consumer. No mutable graph switch exists.
     pub fn with_storage(
@@ -535,13 +574,17 @@ impl Task {
         let completion = incomplete.map_or(CheckCompletion::Complete, |phase| {
             CheckCompletion::Incomplete { phase }
         });
-        let diagnostics = crate::select_diagnostics(
-            self.files
-                .iter()
-                .flat_map(|file| file.diagnostics.iter().cloned())
-                .collect(),
-            Some(&queries.sources),
-        );
+        let mut diagnostics: Vec<_> = self
+            .files
+            .iter()
+            .flat_map(|file| file.diagnostics.iter().cloned())
+            .collect();
+        // The root package's dead error arms (LANG-8) warn only after a clean
+        // complete check; a body without settled facts leaves it unlinted.
+        if completion == CheckCompletion::Complete && !has_errors(&diagnostics) {
+            diagnostics.extend(queries.dead_arm_warnings());
+        }
+        let diagnostics = crate::select_diagnostics(diagnostics, Some(&queries.sources));
         let bytes = queries
             .records
             .encode(
@@ -623,6 +666,10 @@ impl QueryEngine {
         };
         let mut files = Vec::new();
         let mut constants = BTreeSet::new();
+        let mut lint = DeadArmLint {
+            declarations: BTreeMap::new(),
+            bodies: Vec::new(),
+        };
         for (file, context, lowering) in &plan.files {
             let mut input = FileInput {
                 paths: Vec::new(),
@@ -643,7 +690,17 @@ impl QueryEngine {
                 }
             }
             if input.error.is_none() && !has_errors(&input.diagnostics) {
+                let linted = plan.lint_package.as_ref() == Some(&context.package);
                 for item in self.source_items(*file) {
+                    if linted && !item.facts.arms.is_empty() {
+                        lint.declarations.insert(
+                            item.definition.clone(),
+                            (item.anchor, item.facts.arms.clone()),
+                        );
+                    }
+                    if linted && item.facts.body {
+                        lint.bodies.push(item.definition.clone());
+                    }
                     if item.facts.constant {
                         constants.insert(DefId::intern(&item.definition));
                     }
@@ -667,12 +724,23 @@ impl QueryEngine {
             .iter()
             .flat_map(|file| file.paths.iter().map(|(path, _)| path.clone()))
             .collect();
+        let lint = (!lint.declarations.is_empty()).then_some(lint);
         if FrontCheckQueries::input_bytes(&definitions, files.len(), weight)
+            .and_then(|required| required.checked_add(lint.as_ref().map_or(0, DeadArmLint::bytes)))
             .is_none_or(|required| required > allowance.bytes())
         {
             return Err(refusal());
         }
         let mut file_identity = Vec::new();
+        if let Some(package) = &plan.lint_package {
+            file_identity.extend(
+                ContentHash::of_parts(
+                    "hirsel.front.check.lint-package.v1",
+                    [package.name.as_bytes(), package.version.as_bytes()],
+                )
+                .0,
+            );
+        }
         for file in &files {
             file_identity.push(file.lowering as u8);
             for (path, _) in &file.paths {
@@ -699,6 +767,7 @@ impl QueryEngine {
             files,
             plan,
             storage: None,
+            lint,
             constants,
             sources: self.sources.clone(),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),

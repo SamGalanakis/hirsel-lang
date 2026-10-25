@@ -126,6 +126,10 @@ pub(crate) struct CompactCompleted {
     outcome: PublishedResult,
 }
 impl CompactCompleted {
+    /// The package dead-arm lint's facts, for a producer that retains them.
+    pub(super) fn take_dead_arms(&mut self) -> Option<crate::tools::DeadArmUse> {
+        self.dead_arms.take()
+    }
     pub(super) fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
         let mut rows = Vec::new();
         let definition = DefId::intern(&self.outcome.definition);
