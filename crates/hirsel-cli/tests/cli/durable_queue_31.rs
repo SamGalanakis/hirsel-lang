@@ -347,15 +347,13 @@ fn fixture_campaign(replay_network: bool) {
                 }
                 // Native images/runners may be cache-owned. Retain these exact
                 // consumed artifacts before action cleanup for offline witnesses.
-                match &runnable {
-                    Runnable::Image(image) => {
-                        fs::copy(&image.path, dir.join("program.image")).unwrap();
-                        fs::copy(&image.runner.path, dir.join("runner")).unwrap();
-                    }
-                    Runnable::Executable(path) => {
-                        fs::copy(path, dir.join("program")).unwrap();
-                    }
-                }
+                let destination = if let Runnable::Image(image) = &runnable {
+                    fs::copy(&image.runner.path, dir.join("runner")).unwrap();
+                    dir.join("program.image")
+                } else {
+                    dir.join("program")
+                };
+                fs::copy(runnable.artifact_path(), destination).unwrap();
                 runnables.push((backend, runnable, dir));
             }
             for (backend, runnable, dir) in &runnables {

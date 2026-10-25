@@ -2542,6 +2542,16 @@ impl std::fmt::Debug for ClosedExecutable {
     }
 }
 impl Runnable {
+    /// The exact linked artifact consumed by this runnable. Image runners and
+    /// closed runtime files remain owned by their respective launch lifetimes.
+    pub fn artifact_path(&self) -> &Path {
+        match self {
+            Self::Executable(path) => path,
+            Self::Image(image) => &image.path,
+            Self::Closed(executable) => &executable.executable,
+        }
+    }
+
     pub(crate) fn closed(
         executable: PathBuf,
         runtime: super::object_queries::runtime::RuntimeFiles,

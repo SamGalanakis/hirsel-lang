@@ -492,10 +492,7 @@ fn chunk_backup_31_scripted_native_record_replay() {
                     run["placement"] =
                         serde_json::json!({"cores":width,"commit":"shared","reorder":"off"});
                     fs::write(path, run.to_string()).unwrap();
-                    let artifact = match &runnable {
-                        Runnable::Executable(p) => p,
-                        Runnable::Image(i) => &i.path,
-                    };
+                    let artifact = runnable.artifact_path();
                     fs::write(
                         dir.join("artifact-before.sha256"),
                         hash(&fs::read(artifact).unwrap()),
