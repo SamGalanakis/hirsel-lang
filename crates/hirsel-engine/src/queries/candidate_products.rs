@@ -9,6 +9,8 @@ use std::rc::Rc;
 pub(crate) struct CheckedScope {
     pub(crate) front: BTreeMap<DefPath, Arc<crate::memo::Reads>>,
     pub(crate) lowered: BTreeSet<DefPath>,
+    /// Settled check-time failures have diagnostics but no body to reconstruct.
+    pub(crate) failed_lowered: BTreeSet<DefPath>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +47,9 @@ impl QueryEngine {
         let mut definitions = BTreeMap::new();
         let paths = self.checked_scope.lowered.clone();
         for path in paths {
+            if self.checked_scope.failed_lowered.contains(&path) {
+                continue;
+            }
             // Failed lowerings are represented by diagnostics, never a body.
             if self
                 .lowered

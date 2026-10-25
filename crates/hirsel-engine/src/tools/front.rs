@@ -273,9 +273,6 @@ impl QueryEngine {
         jobs: hirsel_intern::jobs::Jobs,
         diagnostics: &mut Vec<Diagnostic>,
     ) -> Result<(), QueryError> {
-        self.checked_scope
-            .lowered
-            .extend(definitions.iter().cloned());
         // Image writers still need closure-local scalar evidence. Fake phase
         // adapters keep the scalar contract without a complete frozen source.
         if self.adapters.phases.is_none() {
@@ -329,6 +326,39 @@ impl QueryEngine {
         let outcomes = self.check_lower_definition_prefix(definitions, jobs);
         let changes = self.invalidate_front_products();
         for outcome in outcomes {
+            self.checked_scope
+                .lowered
+                .insert(outcome.definition.clone());
+            if outcome.result.is_err() {
+                self.checked_scope
+                    .failed_lowered
+                    .insert(outcome.definition.clone());
+            }
+            // Keep the delivered failure's reads even when no Lower memo can
+            // retain it. Receipt collection never retries that settled root.
+            let reads = self
+                .checked_scope
+                .front
+                .entry(outcome.definition.clone())
+                .or_default();
+            *reads = Arc::new(
+                Reads::from_vec(
+                    reads
+                        .iter()
+                        .chain(outcome.reads.iter())
+                        .map(|(key, value)| (*key, *value))
+                        .collect(),
+                )
+                .map_err(|_| {
+                    QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "candidate reads".into(),
+                        message: format!(
+                            "conflicting complete read values for {}",
+                            outcome.definition
+                        ),
+                    })
+                })?,
+            );
             if outcome.worker_recomputed {
                 // This counts the admitted logical miss, independently of
                 // whether its facts survive. Scalar fallbacks already count
@@ -376,11 +406,17 @@ impl QueryEngine {
             self.unavailable = matches!(product.result, Err(QueryError::NotImplemented))
                 .then_some(product.phase)
                 .flatten();
+            if product.result.is_err() {
+                self.checked_scope.failed_lowered.insert(definition.clone());
+            }
             return product.result;
         }
         let result = self
             .lower_to_tir(definition)
             .map(|output| output.diagnostics);
+        if result.is_err() {
+            self.checked_scope.failed_lowered.insert(definition.clone());
+        }
         let phase = self.unavailable.or(self.last_phase);
         if let Some(reads) = self.shared_memo_reads(definition, QueryKind::Lower)
             && !reads.is_empty()
