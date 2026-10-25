@@ -945,8 +945,11 @@ impl OperationCheck {
     /// Native list edits move the corresponding ownership subtrees as well as
     /// their values. Keeping only the outer holder loses pushed children's
     /// witnesses; keeping stale indices after remove/swap can invent uniqueness.
+    /// An element moved out of `mut` storage is the caller's, as for Replace:
+    /// it keeps where it lives, not this frame's access root.
     pub fn list_operation(
         &mut self,
+        state: &State,
         path: &DefPath,
         arguments: &[Value],
         result: &crate::OperationResult,
@@ -1030,6 +1033,7 @@ impl OperationCheck {
             None
         };
         if let Some(mut removed) = removed {
+            state.caller_content(&mut removed);
             removed.add_bound(&self.result.total());
             self.result = removed.for_value(value);
         }
@@ -1679,7 +1683,12 @@ mod tests {
                 consumed: vec![],
                 released: vec![],
             };
-            check.list_operation(&DefPath::core(name), &arguments, &completion);
+            check.list_operation(
+                &state(CheckedRuntime::default()).borrow(),
+                &DefPath::core(name),
+                &arguments,
+                &completion,
+            );
             for (i, expected) in expected.into_iter().enumerate() {
                 assert_eq!(
                     check.updates[0].1.part(i).is_unique(),
@@ -1705,6 +1714,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_popped_element_keeps_where_the_callers_content_lives() {
+        let shared = state(CheckedRuntime::default());
+        let mut state = shared.borrow_mut();
+        let arena = state.arena();
+        for (original, expected) in [(vec![], vec![]), (vec![arena], vec![arena])] {
+            // A callee's `mut` parameter rebinds the caller's elements to its
+            // access root, which ends when the callee returns.
+            let access = state.instance(Kind::MutableRoot(original));
+            let first = Value::Bytes(vec![1]);
+            let element = Shadow::of(vec![access]).ownership(&first, true);
+            let mut check = OperationCheck {
+                result: Shadow::default(),
+                updates: vec![(0, Shadow::Parts(vec![element]))],
+                inputs: vec![],
+                callbacks: vec![],
+            };
+            let popped = Value::Variant {
+                variant: 1,
+                fields: vec![Some(first.clone())],
+            };
+            let emptied = Value::Sequence {
+                kind: hirsel_types::BuiltinType::List,
+                elements: Vec::new().into_iter().collect(),
+                arena: None,
+            };
+            check.list_operation(
+                &state,
+                &DefPath::core("list.pop"),
+                &[emptied],
+                &crate::OperationResult::Complete {
+                    value: popped,
+                    arguments: vec![],
+                    consumed: vec![],
+                    released: vec![],
+                },
+            );
+            assert_eq!(check.result.total(), expected);
+        }
+    }
     #[test]
     fn a_view_of_a_global_value_lends_no_lifetime() {
         let global = Shadow::View {

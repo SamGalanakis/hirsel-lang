@@ -2860,15 +2860,16 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                                 ));
                             }
                             let bounds = frame.check.as_ref().map(|check| {
+                                let state = check.state.borrow();
                                 let mut bounds = operation_bounds(
                                     &runtime.types,
-                                    &check.state.borrow(),
+                                    &state,
                                     path,
                                     &checks,
                                     &mut_places,
                                     &taken,
                                 );
-                                bounds.list_operation(path, &arguments, &result);
+                                bounds.list_operation(&state, path, &arguments, &result);
                                 bounds
                             });
                             frame.operation = Some(Box::new((

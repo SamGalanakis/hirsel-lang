@@ -82,3 +82,4 @@ mod scoped_consumer_9;
 mod scoped_proof_context_17;
 mod simd_native_widths_17;
 mod unique_copy_nested_20;
+mod rc_in_place_lend_52;

@@ -4517,8 +4517,11 @@ pub(crate) fn copy_on_write(
         }
     }
     let mut lent = BTreeSet::new();
+    // Lists lent `mut` to a storage primitive that writes them in place.
+    let mut in_place = BTreeSet::new();
     for term in &unit.terminators {
         if let Terminator::Call { call, .. } = *term {
+            let site = &unit.tables.calls[call.index()];
             for a in call_arguments(&unit, call) {
                 if let ArgumentValue::Address { address, .. } = a.value {
                     written.insert(address);
@@ -4527,7 +4530,6 @@ pub(crate) fn copy_on_write(
                         // The checked replacement wrapper reaches this leaf only
                         // after validation and its empty return. Unlike ordinary
                         // mut calls, the leaf writes the list held in this slot.
-                        let site = &unit.tables.calls[call.index()];
                         if let hirsel_lir::ir::Callee::Operation(op) = site.callee
                             && unit.tables.operations[op.index()]
                                 .definition
@@ -4535,6 +4537,29 @@ pub(crate) fn copy_on_write(
                             && a.parameter == 0
                         {
                             holding.insert(address);
+                        }
+                        // `pop`, `remove` and `swap` allocate nothing, so they
+                        // cannot detach: they write the List they are lent in
+                        // place. An arena block is never written in place, and a
+                        // `unique` parameter may hold one, so the caller makes the
+                        // List writable first whatever its root proves.
+                        let callee = match site.callee {
+                            hirsel_lir::ir::Callee::Direct(symbol) => {
+                                Some(&unit.tables.symbols[symbol.index()].definition)
+                            }
+                            hirsel_lir::ir::Callee::Operation(op) => {
+                                Some(&unit.tables.operations[op.index()].definition)
+                            }
+                            _ => None,
+                        };
+                        if a.parameter == 0
+                            && callee.is_some_and(|d| {
+                                ["list.pop", "list.remove", "list.swap"]
+                                    .iter()
+                                    .any(|name| d.is_core(name))
+                            })
+                        {
+                            in_place.insert(address);
                         }
                     }
                 }
@@ -4549,7 +4574,15 @@ pub(crate) fn copy_on_write(
                 && (!p.crossings.is_empty() || holding.contains(&a))
         })
     };
-    if !written.iter().any(|&a| crossing(a)) {
+    // Their loans detach the List where each begins, before the call.
+    let lending: BTreeSet<LoanId> = (0..unit.tables.loans.len())
+        .map(|l| LoanId(l as u32))
+        .filter(|l| {
+            let loan = &unit.tables.loans[l.index()];
+            loan.mutable && in_place.contains(&loan.address)
+        })
+        .collect();
+    if lending.is_empty() && !written.iter().any(|&a| crossing(a)) {
         return Ok(unit);
     }
     let Some(bool_layout) = table
@@ -4588,7 +4621,7 @@ pub(crate) fn copy_on_write(
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
         LayoutId(bool_layout as u32),
     );
-    let mut targets = detach_targets(&ed, lay, &facts, &writes);
+    let mut targets = detach_targets(&ed, lay, &facts, &writes, lending);
     // Back to front, so earlier positions in a block stay put.
     let mut order: Vec<usize> = (0..targets.len()).collect();
     order.sort_by_key(|&k| (targets[k].block, std::cmp::Reverse(targets[k].index)));
@@ -4740,8 +4773,14 @@ struct Target {
 /// detach moves back to the latest point of its block where nothing but a
 /// region mark is pending, so its failure cleanup only drops slots, and no
 /// later operation it passes defines an index the places use or touches the
-/// root slot.
-fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]) -> Vec<Target> {
+/// root slot. Each `lending` loan also detaches its block where it begins.
+fn detach_targets(
+    ed: &Editor<Rc>,
+    lay: Lay<'_>,
+    facts: &Facts,
+    writes: &[Write],
+    lending: BTreeSet<LoanId>,
+) -> Vec<Target> {
     let flow = Flow {
         unit: &ed.unit,
         code: &ed.code,
@@ -4759,7 +4798,7 @@ fn detach_targets(ed: &Editor<Rc>, lay: Lay<'_>, facts: &Facts, writes: &[Write]
     };
     let loan_place = |l: LoanId| projection_of(&ed.unit, ed.unit.tables.loans[l.index()].address);
     let mut targets = Vec::new();
-    let mut lent: BTreeSet<LoanId> = BTreeSet::new();
+    let mut lent = lending;
     for w in writes {
         let pre = pre_states(w.block);
         let Some(state) = pre.get(w.index) else {
