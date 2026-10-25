@@ -244,8 +244,9 @@ unit main params
     v12 = read Take a4 @v11
     a5 := v12 as v13
     StorageLive { slot: SlotId(6) }
+    FrameEnter { failure: FailureId(7) }
     v14 = read Bits a5 @v13
-    v15 = call area(p0=Borrow v14) -> b6 fail -> b5
+    v15 = call area(p0=Borrow v14) -> b7 fail -> b6
   b2 Body:
     BindOrigin { source: AddressId(6), place: AddressId(6), kind: Fresh }
     StorageLive { slot: SlotId(7) }
@@ -261,6 +262,10 @@ unit main params
     propagate
   b5 FailureCleanup:
     propagate
-  b6 Body:
+  b6 FailureCleanup:
+    FrameLeave
+    jump b5
+  b7 Body:
     a6 := v15 as v16
+    FrameLeave
     jump b2

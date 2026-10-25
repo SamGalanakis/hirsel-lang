@@ -38,9 +38,10 @@ unit main params
     v6 = read Bits a2 @v5
     a3 := v6 as v7
     StorageLive { slot: SlotId(4) }
+    FrameEnter { failure: FailureId(4) }
     v8 = read Bits a1 @v3
     v9 = read Bits a3 @v7
-    v10 = call sum(p0=Borrow v8, p1=Borrow v9) -> b6 fail -> b5
+    v10 = call sum(p0=Borrow v8, p1=Borrow v9) -> b7 fail -> b6
   b2 Body:
     BindOrigin { source: AddressId(4), place: AddressId(4), kind: Fresh }
     StorageLive { slot: SlotId(5) }
@@ -56,8 +57,12 @@ unit main params
     propagate
   b5 FailureCleanup:
     propagate
-  b6 Body:
+  b6 FailureCleanup:
+    FrameLeave
+    jump b5
+  b7 Body:
     a4 := v10 as v11
+    FrameLeave
     jump b2
 
 unit sum params (v0, v1)

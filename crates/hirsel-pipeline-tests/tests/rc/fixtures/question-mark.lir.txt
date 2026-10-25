@@ -159,8 +159,9 @@ unit main params
     v2 = read Bits a0 @v1
     a1 := v2 as v3
     StorageLive { slot: SlotId(2) }
+    FrameEnter { failure: FailureId(2) }
     v4 = read Bits a1 @v3
-    v5 = call twice(p0=Borrow v4) -> b9 fail -> b8
+    v5 = call twice(p0=Borrow v4) -> b10 fail -> b9
   b2 Body:
     BindOrigin { source: AddressId(2), place: AddressId(2), kind: Fresh }
     StorageLive { slot: SlotId(3) }
@@ -168,7 +169,7 @@ unit main params
     a3 := v7 as v8
     StorageLive { slot: SlotId(4) }
     v9 = read Bits a3 @v8
-    switch v9 [0 => b11, 1 => b10] else b12
+    switch v9 [0 => b12, 1 => b11] else b13
   b3 Body:
     prepare a4 fail MEM-13 -> b8
     BindFields { source: AddressId(3), fields: 0..+1 }
@@ -206,14 +207,18 @@ unit main params
     propagate
   b8 FailureCleanup:
     propagate
-  b9 Body:
-    a2 := v5 as v6
-    jump b2
+  b9 FailureCleanup:
+    FrameLeave
+    jump b8
   b10 Body:
-    jump b3
+    a2 := v5 as v6
+    FrameLeave
+    jump b2
   b11 Body:
-    jump b4
+    jump b3
   b12 Body:
+    jump b4
+  b13 Body:
     unreachable
 
 unit twice params (v0)
@@ -285,8 +290,9 @@ unit twice params (v0)
     v1 = read Bits a2 @v0
     a3 := v1 as v2
     StorageLive { slot: SlotId(2) }
+    FrameEnter { failure: FailureId(4) }
     v3 = read Bits a3 @v2
-    v4 = call to_string(p0=Borrow v3) -> b11 fail -> b10
+    v4 = call to_string(p0=Borrow v3) -> b12 fail -> b11
   b3 Body:
     BindOrigin { source: AddressId(4), place: AddressId(4), kind: Fresh }
     StorageLive { slot: SlotId(3) }
@@ -301,8 +307,9 @@ unit twice params (v0)
     v10 = read Bits a2 @v0
     a6 := v10 as v11
     StorageLive { slot: SlotId(6) }
+    FrameEnter { failure: FailureId(10) }
     v12 = read Bits a6 @v11
-    v13 = call half(p0=Borrow v12) -> b13 fail -> b12
+    v13 = call half(p0=Borrow v12) -> b16 fail -> b15
   b4 Body:
     BindOrigin { source: AddressId(7), place: AddressId(7), kind: Fresh }
     StorageLive { slot: SlotId(7) }
@@ -316,16 +323,16 @@ unit twice params (v0)
   b6 Body:
     EndLoan { loan: LoanId(0), if_active: false }
     StorageLive { slot: SlotId(8) }
-    prepare a8 fail MEM-13 -> b12
+    prepare a8 fail MEM-13 -> b14
     v18 = read Take a8 @v16
-    Construct { result: ValueId(19), construct: ConstructId(0), failure: FailureId(12) }
+    Construct { result: ValueId(19), construct: ConstructId(0), failure: FailureId(15) }
     a9 := v19 as v20
     v21 = read Take a9 @v20
-    jump b14
+    jump b17
   b7 Body:
     EndLoan { loan: LoanId(0), if_active: false }
     StorageLive { slot: SlotId(9) }
-    prepare a10 fail MEM-13 -> b12
+    prepare a10 fail MEM-13 -> b14
     v22 = read Take a10 @v16
     a11 := v22 as v23
     BindOrigin { source: AddressId(11), place: AddressId(11), kind: Fresh }
@@ -343,9 +350,11 @@ unit twice params (v0)
     a14 := v28 as v29
     BeginLoan { loan: LoanId(1), address: AddressId(1), mutable: false, if_inactive: false }
     StorageLive { slot: SlotId(13) }
+    FrameEnter { failure: FailureId(24) }
     v30 = read Borrow a1 @v9
     SeqLen { result: ValueId(31), value: ValueId(30) }
     a15 := v31 as v32
+    FrameLeave
     jump b8
   b8 Body:
     EndLoan { loan: LoanId(1), if_active: false }
@@ -356,7 +365,7 @@ unit twice params (v0)
     StorageLive { slot: SlotId(15) }
     v35 = read Take a14 @v29
     v36 = read Take a16 @v34
-    v37 = Add v35 v36 fail SEM-1 -> b12
+    v37 = Add v35 v36 fail SEM-1 -> b14
     a17 := v37 as v38
     BindOrigin { source: AddressId(17), place: AddressId(17), kind: Fresh }
     StorageLive { slot: SlotId(16) }
@@ -364,33 +373,48 @@ unit twice params (v0)
     a18 := v39 as v40
     StorageLive { slot: SlotId(17) }
     v41 = read Take a18 @v40
-    Construct { result: ValueId(42), construct: ConstructId(1), failure: FailureId(25) }
+    Construct { result: ValueId(42), construct: ConstructId(1), failure: FailureId(30) }
     a19 := v42 as v43
     BindOrigin { source: AddressId(19), place: AddressId(19), kind: Fresh }
     StorageLive { slot: SlotId(18) }
     v44 = read Take a19 @v43
     a20 := v44 as v45
-    jump b15
+    jump b19
   b9 Body:
     jump b2
   b10 FailureCleanup:
     propagate
-  b11 Body:
+  b11 FailureCleanup:
+    FrameLeave
+    jump b10
+  b12 Body:
     a4 := v4 as v5
+    FrameLeave
     jump b3
-  b12 FailureCleanup:
+  b13 FailureCleanup:
     drop a1 fail -> b10
     jump b10
-  b13 Body:
+  b14 FailureCleanup:
+    drop a1 fail -> b10
+    jump b10
+  b15 FailureCleanup:
+    FrameLeave
+    jump b14
+  b16 Body:
     a7 := v13 as v14
+    FrameLeave
     jump b4
-  b14 Cleanup:
+  b17 Cleanup:
     drop a1 fail -> b10
     return v21
-  b15 Cleanup:
+  b18 FailureCleanup:
+    EndLoan { loan: LoanId(1), if_active: false }
     drop a1 fail -> b10
-    jump b16
-  b16 Body:
+    jump b10
+  b19 Cleanup:
+    drop a1 fail -> b10
+    jump b20
+  b20 Body:
     EndScope { scope: ScopeId(1) }
     BindOrigin { source: AddressId(20), place: AddressId(20), kind: Fresh }
     v46 = read Take a20 @v45
