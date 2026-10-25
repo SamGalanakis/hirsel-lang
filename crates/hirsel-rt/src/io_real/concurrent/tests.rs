@@ -316,6 +316,7 @@ fn proc_run_is_an_event_source_and_releases_namespace_while_waiting_at_one_and_e
             })
             .unwrap(),
         );
+        io.process(crate::process::send_host);
         let process = handle(io.call(Request::Process { io: 1 }).unwrap());
         let command = hirsel_run_schema::Command {
             program: "/bin/sh".into(),
@@ -637,4 +638,21 @@ fn runtime50_path_syscalls_run_outside_the_core_lock() {
         assert_eq!(replay.call(event.request), Ok(completion));
     }
     replay.finish().unwrap();
+}
+
+#[test]
+fn host_provider_constructors_remain_absent_until_their_entries_select_them() {
+    let (_temp, io, _directory) = adapter();
+    assert!(io.core.lock().unwrap().net.is_none());
+    assert!(io.core.lock().unwrap().children.is_none());
+    io.net(crate::net_host::send_provider);
+    {
+        let core = io.core.lock().unwrap();
+        assert!(core.net.is_some());
+        assert!(core.children.is_none());
+    }
+    io.net(|_| panic!("selected network provider must be retained"));
+    io.process(crate::process::send_host);
+    io.process(|| panic!("selected process provider must be retained"));
+    assert!(io.core.lock().unwrap().children.is_some());
 }

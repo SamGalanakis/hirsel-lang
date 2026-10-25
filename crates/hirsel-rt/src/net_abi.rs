@@ -329,7 +329,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::Connect {
@@ -359,7 +361,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_connect_addr(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::ConnectAddr {
@@ -392,7 +396,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_resolve(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::Resolve {
@@ -899,7 +905,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_listen(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::Listen {
@@ -925,7 +933,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_connect(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::UnixConnect {
@@ -954,7 +964,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_unix_listen(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::UnixListen {
@@ -1056,7 +1068,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_net_udp_bind(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.net(crate::net_host::send_provider)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.net(crate::net_host::provider);
     }
     let request = Request::UdpBind {

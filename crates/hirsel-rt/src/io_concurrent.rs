@@ -45,6 +45,14 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn net_ports(&self, _net: u64) -> Option<crate::io_keys::Key> {
         None
     }
+    /// A provider constructor handed over by an entry that opens host network state.
+    fn net(
+        &self,
+        _host: fn(Option<&crate::readiness::Readiness>) -> Box<dyn crate::net::NetProvider + Send>,
+    ) {
+    }
+    /// A provider constructor handed over by an entry that starts a host process.
+    fn process(&self, _host: fn() -> Box<dyn crate::process::ProcessHost + Send>) {}
     fn tls(&self, _engine: &'static dyn crate::net_tls::TlsEngine) {}
     fn tls_roots(&self, _stream: u64, _pem: &[u8]) {}
     fn tls_identity(&self, _stream: u64, _chain: &[u8], _key: &[u8]) {}

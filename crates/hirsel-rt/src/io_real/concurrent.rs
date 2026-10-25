@@ -41,10 +41,6 @@ impl ConcurrentIo {
         let readiness = core.readiness().unwrap_or_default();
         readiness.mark_shared();
         core.set_cooperative_net(readiness);
-        if core.net.is_none() {
-            core.net = Some(crate::net_host::send_provider(core.readiness().as_ref()));
-        }
-        core.children.get_or_insert_with(crate::process::send_host);
         let mut registry = Registry::default();
         // Discover all admitted storage before the first request, even before its
         // language grant is projected. Unknown writers may alias any filesystem.
@@ -350,6 +346,15 @@ impl ConcurrentAdapter for ConcurrentIo {
             return None;
         }
         self.registry.lock().unwrap().net_ports(net)
+    }
+    fn net(&self, host: fn(Option<&crate::readiness::Readiness>) -> Box<dyn NetProvider + Send>) {
+        let mut core = self.core.lock().unwrap();
+        if core.net.is_none() {
+            core.net = Some(host(core.readiness().as_ref()));
+        }
+    }
+    fn process(&self, host: fn() -> Box<dyn crate::process::ProcessHost + Send>) {
+        self.core.lock().unwrap().children.get_or_insert_with(host);
     }
     fn tls(&self, engine: &'static dyn crate::net_tls::TlsEngine) {
         self.core.lock().unwrap().tls(engine);

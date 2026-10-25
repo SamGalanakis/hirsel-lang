@@ -1848,7 +1848,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_run(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.process(crate::process::send_host)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     }
     let request = Request::ProcessRun {
@@ -1922,7 +1924,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_pipeline(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.process(crate::process::send_host)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     }
     let request = Request::ProcessPipeline {
@@ -2098,7 +2102,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.process(crate::process::send_host)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     }
     let request = Request::ProcessSpawn {
@@ -2316,7 +2322,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_proc_spawn_pipeline(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !crate::tasks::free::host::native::enabled(ctx) {
+    if !crate::tasks::free::host::concurrent::with_current(|io| {
+        io.process(crate::process::send_host)
+    }) {
         unsafe { crate::io::Binding::get(ctx) }.process(crate::process::host);
     }
     let request = Request::ProcessSpawnPipeline {
