@@ -630,6 +630,80 @@ impl MemoGraph {
         }
     }
 
+    /// Physical backing bound for retaining this index across source revisions.
+    /// Values and session interners remain with their separately admitted owners.
+    /// Shared read/index allocations are conservatively counted per holder;
+    /// inspection allocates nothing and does not touch verification stamps.
+    pub fn retained_bytes(&self) -> Option<u64> {
+        fn hash<K, V>(capacity: usize) -> Option<usize> {
+            if capacity == 0 {
+                return Some(0);
+            }
+            // Rust std hashbrown raw capacity_to_buckets/calculate_layout_for:
+            // 7/8 load, power-of-two buckets, control group and alignment slack.
+            let buckets = capacity
+                .checked_mul(8)?
+                .div_ceil(7)
+                .checked_next_power_of_two()?
+                .max(4);
+            buckets
+                .checked_mul(size_of::<(K, V)>().checked_add(1)?)?
+                .checked_add(16)?
+                .checked_add(std::mem::align_of::<(K, V)>())
+        }
+        fn set<T>(capacity: usize) -> Option<usize> {
+            hash::<T, ()>(capacity)
+        }
+        fn arc<T: ?Sized>(value: &T) -> Option<usize> {
+            Some(
+                std::alloc::Layout::new::<[usize; 2]>()
+                    .extend(std::alloc::Layout::for_value(value))
+                    .ok()?
+                    .0
+                    .pad_to_align()
+                    .size(),
+            )
+        }
+        let mut total = size_of::<Self>()
+            .checked_add(hash::<MemoKey, Record>(self.records.capacity())?)?
+            .checked_add(hash::<ReadKey, Arc<HashSet<MemoKey>>>(
+                self.subscribers.capacity(),
+            )?)?
+            .checked_add(hash::<ReadKey, ContextInvalidation>(
+                self.validation_contexts.capacity(),
+            )?)?
+            .checked_add(hash::<DefId, HashSet<MemoKey>>(self.by_def.capacity())?)?
+            .checked_add(hash::<MemoKey, Invalidation>(self.dirty.capacity())?)?;
+        for record in self.records.values() {
+            total = total.checked_add(arc(&*record.reads)?)?;
+            for (_, bytes) in record.reads.allocations() {
+                total = total.checked_add(bytes)?;
+            }
+        }
+        for subscribers in self.subscribers.values() {
+            total = total
+                .checked_add(arc(&**subscribers)?)?
+                .checked_add(set::<MemoKey>(subscribers.capacity())?)?;
+        }
+        for context in self.validation_contexts.values() {
+            total = total.checked_add(set::<MemoKey>(context.confirmed.capacity())?)?;
+            if let Some(pending) = &context.pending {
+                total = total
+                    .checked_add(arc(&**pending)?)?
+                    .checked_add(set::<MemoKey>(pending.capacity())?)?;
+            }
+        }
+        for keys in self.by_def.values() {
+            total = total.checked_add(set::<MemoKey>(keys.capacity())?)?;
+        }
+        if let Some(touched) = &self.touched_memos {
+            total = total.checked_add(set::<MemoKey>(touched.capacity())?)?;
+        }
+        let mut stats = crate::NativeMetadataWeight::default();
+        stats.tree::<QueryKind, u64>(self.stats.recomputed.len());
+        (total as u64).checked_add(stats.bytes())
+    }
+
     /// The bytes the bookkeeping holds, for `--mem-usage`.
     pub fn heap_bytes(&self) -> usize {
         let entry = std::mem::size_of::<MemoKey>() + std::mem::size_of::<Record>();
@@ -717,6 +791,73 @@ mod tests {
     }
     fn reads(list: &[(ReadKey, &str)]) -> Arc<Reads> {
         Arc::new(Reads::from_vec(list.iter().map(|(k, v)| (*k, h(v))).collect()).unwrap())
+    }
+
+    #[test]
+    fn retained_index_bound_covers_physical_storage_and_preserves_changed_only_work() {
+        for width in [1, 4, 16] {
+            let ids = (0..width)
+                .map(|i| def(&format!("carry{i}")))
+                .collect::<Vec<_>>();
+            let source = def("source");
+            let ((mut graph, bound), allocations) = crate::test_alloc::measured(|| {
+                let mut graph = MemoGraph::default();
+                for &id in &ids {
+                    graph.adopt(
+                        MemoKey::new(QueryKind::Signature, id),
+                        reads(&[
+                            (ReadKey::Signature(source), "old"),
+                            (ReadKey::UniverseErrors, "old"),
+                        ]),
+                        Durability::Low,
+                    );
+                }
+                graph.begin_touch_tracking();
+                let mut change = ChangeSet::default();
+                change.read(ReadKey::UniverseErrors, Durability::Low);
+                graph.apply(&change);
+                // Mutating subscriptions leaves the pending reverse snapshot live.
+                graph.adopt(
+                    MemoKey::new(QueryKind::Signature, ids[0]),
+                    reads(&[(ReadKey::Signature(source), "current")]),
+                    Durability::Low,
+                );
+                graph.record_recompute(QueryKind::Signature);
+                let before = graph.stats().clone();
+                let (bound, sizing) =
+                    crate::test_alloc::measured_independent(|| graph.retained_bytes());
+                assert_eq!(sizing.allocations, 0);
+                assert_eq!(*graph.stats(), before);
+                (graph, bound.unwrap())
+            });
+            assert!(allocations.live >= 0);
+            assert!(
+                allocations.live as u64 <= bound,
+                "width {width}: retained {} exceeds {bound}",
+                allocations.live
+            );
+            let untouched = MemoKey::new(QueryKind::Signature, def("unrelated"));
+            graph.adopt(
+                untouched,
+                reads(&[(ReadKey::Environment, "environment")]),
+                Durability::Low,
+            );
+            let before = graph.stats().touched;
+            let mut change = ChangeSet::default();
+            change.read(ReadKey::Signature(source), Durability::Low);
+            graph.apply(&change);
+            assert_eq!(graph.stats().touched - before, width as u64);
+            assert!(!graph.is_dirty(&untouched));
+            assert_eq!(
+                graph.subscribers(&ReadKey::Signature(source)).count(),
+                width
+            );
+            let (_, released) = crate::test_alloc::measured(|| drop(graph));
+            assert!(
+                released.live < 0,
+                "dropping the retained index releases its physical backing"
+            );
+        }
     }
 
     #[test]
