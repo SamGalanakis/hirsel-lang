@@ -23,12 +23,60 @@ const FAILURE: Domain = Domain {
 };
 type Key = ContentHash;
 type CheckedProduct = Option<(Arc<CheckedSummary>, Arc<Reads>)>;
+enum FrontSummary {
+    Checked {
+        definition: DefId,
+        text: ContentHash,
+    },
+    Owned(Arc<PublishedSummary>),
+}
+impl FrontSummary {
+    fn shareable(summary: &PublishedSummary, checked: &CheckedProduct, reads: &Reads) -> bool {
+        checked.as_ref().is_some_and(|(value, _)| {
+            summary.storage.is_none()
+                && summary
+                    .checked
+                    .as_ref()
+                    .is_some_and(|c| Arc::ptr_eq(c, value))
+                && summary.summary == value.summary
+                && summary.growth == value.growth
+                && summary.reads.as_ref() == reads
+        })
+    }
+    fn capture(summary: Arc<PublishedSummary>, checked: &CheckedProduct, reads: &Reads) -> Self {
+        if Self::shareable(&summary, checked, reads) {
+            Self::Checked {
+                definition: summary.definition,
+                text: summary.text,
+            }
+        } else {
+            Self::Owned(summary)
+        }
+    }
+    fn materialize(&self, checked: &CheckedProduct, reads: &Arc<Reads>) -> Arc<PublishedSummary> {
+        match self {
+            Self::Owned(summary) => summary.clone(),
+            Self::Checked { definition, text } => {
+                let (checked, _) = checked.as_ref().expect("captured checked summary");
+                Arc::new(PublishedSummary {
+                    definition: *definition,
+                    text: *text,
+                    summary: checked.summary.clone(),
+                    growth: checked.growth.clone(),
+                    storage: None,
+                    checked: Some(checked.clone()),
+                    reads: reads.clone(),
+                })
+            }
+        }
+    }
+}
 struct FrontOutcome {
     reference: Reference,
-    definition: DefPath,
+    definition: DefId,
     status: Result<(), QueryError>,
     phase: Option<QueryKind>,
-    summary: Option<Arc<PublishedSummary>>,
+    summary: Option<FrontSummary>,
     reads: Arc<Reads>,
     diagnostic_phases: Vec<(Diagnostic, String)>,
     checked: CheckedProduct,
@@ -47,9 +95,10 @@ impl FrontOutcome {
             diagnostic_phases,
         } = outcome;
         let body = result.as_ref().ok().map(Arc::downgrade).unwrap_or_default();
+        let summary = summary.map(|summary| FrontSummary::capture(summary, &checked, &reads));
         Self {
             reference,
-            definition,
+            definition: DefId::intern(&definition),
             status: result.map(|_| ()),
             phase,
             summary,
@@ -61,7 +110,7 @@ impl FrontOutcome {
     }
 }
 struct Input {
-    definition: DefPath,
+    definition: DefId,
     syntax: Reference,
     text: ContentHash,
     implementation: ContentHash,
@@ -84,12 +133,12 @@ pub struct FrontBodyQueries {
     checker: Option<Arc<dyn CheckerPhase>>,
     modes: Option<Arc<dyn ModesPhase>>,
     environment: ContentHash,
-    candidates: BTreeMap<DefPath, ContentHash>,
+    candidates: BTreeMap<DefId, ContentHash>,
     records: Arc<persistent::TypeRecords>,
     input_records: crate::NativeRecords,
     anchors: Arc<crate::NativeRecordContext>,
     store: Arc<dyn ResultStore>,
-    work: Mutex<BTreeMap<(DefPath, QueryKind), u64>>,
+    work: Mutex<BTreeMap<(DefId, QueryKind), u64>>,
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     store_adoptions: AtomicU64,
@@ -139,7 +188,7 @@ impl FrontBodyQueries {
         let bytes = self.store.get_content(input.syntax)?;
         let (mut syntax, occurrence): (ItemSyntax, u32) =
             self.input_records.decode(&*self.anchors, &bytes)?;
-        if syntax.item.definition != input.definition
+        if syntax.item.definition != *input.definition.path()
             || syntax.text_hash != input.implementation
             || !syntax.structurally_valid(|span| self.citations.sources.slice(span).is_some())
         {
@@ -153,17 +202,14 @@ impl FrontBodyQueries {
     /// metadata consumes the remaining allowance only on demand. Archive bytes
     /// belong to the selected provider, not to these reference-only rows.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions
-            .iter()
-            .try_fold(std::mem::size_of::<Self>() as u64, |n, path| {
-                n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(4)?)?
-                    .checked_add(
-                        (std::mem::size_of::<Input>()
-                            + std::mem::size_of::<FrontOutcome>()
-                            + 8 * std::mem::size_of::<crate::memo::MemoKey>()
-                            + 32 * std::mem::size_of::<usize>()) as u64,
-                    )
-            })
+        (definitions.len() as u64)
+            .checked_mul(
+                (std::mem::size_of::<Input>()
+                    + std::mem::size_of::<FrontOutcome>()
+                    + 8 * std::mem::size_of::<crate::memo::MemoKey>()
+                    + 32 * std::mem::size_of::<usize>()) as u64,
+            )?
+            .checked_add(std::mem::size_of::<Self>() as u64)
     }
     fn retain(
         &self,
@@ -172,7 +218,7 @@ impl FrontBodyQueries {
         table_keys: Option<&Arc<crate::table_keys::TableKeyUse>>,
         memos: &[(crate::memo::MemoKey, Arc<Reads>)],
     ) -> Option<()> {
-        let charge = retained::metadata(outcome, checked, table_keys, memos)?;
+        let charge = retained::compact_metadata(outcome, checked, table_keys, memos)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         *retention = retention.checked_sub(charge)?;
         Some(())
@@ -264,7 +310,7 @@ impl FrontBodyQueries {
             ReadKey::DeclarationCandidates(id) => self
                 .snapshot
                 .declaration_candidates(id)
-                .or_else(|| self.candidates.get(id.path()).copied())
+                .or_else(|| self.candidates.get(&id).copied())
                 .unwrap_or_else(memos::no_candidates),
             ReadKey::Environment => self.environment,
             ReadKey::ValidationView(id) => self
@@ -308,14 +354,14 @@ impl FrontBodyQueries {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .iter()
-            .map(|((path, kind), count)| (path.clone(), *kind, *count))
+            .map(|((path, kind), count)| (path.path().clone(), *kind, *count))
             .collect()
     }
     pub fn recompute_count(&self, definition: &DefPath, kind: QueryKind) -> u64 {
         self.work
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(&(definition.clone(), kind))
+            .get(&(DefId::intern(definition), kind))
             .copied()
             .unwrap_or(0)
     }
@@ -351,7 +397,7 @@ impl FrontBodyQueries {
 
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
         self.inputs.iter().find_map(|(&address, input)| {
-            (input.definition == *definition).then_some(QueryId {
+            (input.definition.path() == definition).then_some(QueryId {
                 kind: FRONT_BODY_KIND,
                 address: hirsel_artifact_store::Address(address),
             })
@@ -393,10 +439,13 @@ impl FrontBodyQueries {
         };
         Some(FrontBodyOutput {
             outcome: ModeResult {
-                definition: selected.definition.clone(),
+                definition: selected.definition.path().clone(),
                 result,
                 phase: selected.phase,
-                summary: selected.summary.clone(),
+                summary: selected
+                    .summary
+                    .as_ref()
+                    .map(|summary| summary.materialize(&selected.checked, &selected.reads)),
                 reads: selected.reads.clone(),
                 diagnostic_phases: selected.diagnostic_phases.clone(),
             },
@@ -415,7 +464,7 @@ impl FrontBodyQueries {
         let input = self
             .inputs
             .values()
-            .find(|input| &input.definition == path)?;
+            .find(|input| input.definition.path() == path)?;
         Some((self.syntax(input)?, input.signature.as_ref().ok()?.clone()))
     }
 
@@ -511,7 +560,7 @@ impl BodyTask {
         entry
             .variants
             .retain(|variant| variant.inputs == input.key.1 && variant.valid(&input.key));
-        let variant = entry.hit(|read| queries.observe(&input.definition, read))?;
+        let variant = entry.hit(|read| queries.observe(input.definition.path(), read))?;
         if variant.output.len > self.weight.scratch {
             return None;
         }
@@ -525,7 +574,7 @@ impl BodyTask {
             &bytes,
             Arc::new(variant.reads.clone()),
         )?;
-        let definition = DefId::intern(&input.definition);
+        let definition = input.definition;
         let mut memo_rows = vec![(
             crate::memo::MemoKey::new(QueryKind::Modes, definition),
             restored.outcome.reads.clone(),
@@ -598,7 +647,7 @@ impl BodyTask {
                     && variant.output.len <= self.weight.scratch
             });
             entry
-                .hit(|read| queries.observe(&input.definition, read))
+                .hit(|read| queries.observe(input.definition.path(), read))
                 .and_then(|variant| {
                     queries
                         .store
@@ -612,7 +661,7 @@ impl BodyTask {
         let syntax = queries.syntax(input).ok_or(queries.errors.protocol)?;
         let done = worker.run(Task {
             index: 0,
-            definition: input.definition.clone(),
+            definition: input.definition.path().clone(),
             syntax,
             signature: input.signature.clone(),
             signature_reads: input.signature_reads.clone(),
@@ -625,7 +674,7 @@ impl BodyTask {
                 .work
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .entry((done.definition.clone(), kind))
+                .entry((DefId::intern(&done.definition), kind))
                 .or_default() += 1;
         }
         let table_keys = done
@@ -637,7 +686,10 @@ impl BodyTask {
         let mut source = FrozenReadSource {
             declarations: &queries.declarations,
             citations: &queries.citations,
-            candidates: queries.candidates.get(&done.definition).copied(),
+            candidates: queries
+                .candidates
+                .get(&DefId::intern(&done.definition))
+                .copied(),
             environment: queries.environment,
         };
         let mut completed = CompactCompleted::capture(
@@ -647,7 +699,7 @@ impl BodyTask {
             &mut source,
             Some(&queries.records),
         );
-        let memo_rows = completed.memo_snapshot(&mut source);
+        let memo_rows = completed.memo_snapshot();
         let checked = completed.checked_product();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
@@ -694,7 +746,7 @@ impl BodyTask {
                     .records
                     .encode_record(
                         &(
-                            &input.definition,
+                            input.definition.path(),
                             &error,
                             QueryKind::Modes.phase_name(),
                             &*outcome.reads,
@@ -707,7 +759,7 @@ impl BodyTask {
                     .put_content(FAILURE, &failure)
                     .ok_or(queries.errors.resource)?;
                 let output = ModeResult {
-                    definition: input.definition.clone(),
+                    definition: input.definition.path().clone(),
                     result: Err(error),
                     phase: Some(QueryKind::Modes),
                     summary: None,
@@ -916,7 +968,7 @@ impl QueryEngine {
                     signature_reads: self
                         .shared_memo_reads(&definition, QueryKind::Signature)
                         .unwrap_or_else(|| Arc::new(Reads::empty())),
-                    definition,
+                    definition: id,
                     syntax,
                     text,
                     implementation,
@@ -939,8 +991,8 @@ impl QueryEngine {
             .values()
             .map(|input| {
                 (
-                    input.definition.clone(),
-                    self.candidates_value(&input.definition),
+                    input.definition,
+                    self.candidates_value(input.definition.path()),
                 )
             })
             .collect();

@@ -271,7 +271,7 @@ impl QueryEngine {
             }
             let address =
                 ContentHash::of_parts("hirsel.front.storage.address.v1", [address.0.as_slice()]);
-            inputs.insert(address, input.definition.clone());
+            inputs.insert(address, input.definition.path().clone());
         }
         let store = front.store.clone();
         Ok(Arc::new(FrontStorageQueries {
