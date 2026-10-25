@@ -32,7 +32,7 @@ fn refused(record: &RunConfig) {
 fn empty_record_has_fixed_bytes_and_an_independent_sha256_vector() {
     let run = valid(&empty());
     let golden = concat!(
-        "{\"schema\":1,\"depth_semantics\":\"hirsel.depth.invocations.v1\",\"program\":\"0000000000000000000000000000000000000000000000000000000000000000\",",
+        "{\"schema\":1,\"depth_semantics\":\"hirsel.depth.invocations.v2\",\"program\":\"0000000000000000000000000000000000000000000000000000000000000000\",",
         "\"entry\":\"probe@1/main\",\"launch\":\"main\",\"inputs\":{\"hash_seed\":0,\"random_seed\":0,\"test_seed\":0,\"scheduler\":null},",
         "\"io\":null,\"args\":null,\"env\":null,\"unsafe\":false,\"admission\":null}"
     );
@@ -40,7 +40,7 @@ fn empty_record_has_fixed_bytes_and_an_independent_sha256_vector() {
     // hashlib.sha256 over independently framed domain + golden bytes.
     assert_eq!(
         hex(&run.identity()),
-        "aa85228e50999b368b090e9ed2c17093c8cce79d929f3d5437707df81e992c65"
+        "7aca52f208071e78cd18d87f6987da8e6fc998a423b831ec7662d07b21ba25f7"
     );
     let config = run.config();
     assert_eq!(

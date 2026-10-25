@@ -171,8 +171,9 @@ function bodies are [CT-5](compile-time.md#ct-5-generation), and conditional let
 
 ## Deterministic depth revision
 
-The depth semantics identity is `hirsel.depth.invocations.v1` (2026-10-23). It specifies
-[LANG-10](language.md#lang-10-recursion)'s 1,024 foreground invocations,
+The depth semantics identity is `hirsel.depth.invocations.v2` (2026-10-25). It specifies
+[LANG-10](language.md#lang-10-recursion)'s 1,024 foreground invocations, which leaf
+operations do not add to,
 [FAIL-3](failure.md#fail-3-what-runs)'s independent 64 cleanup invocations and
 [MEM-3](memory.md#mem-3-freeing)'s 1,088 logical structural edges, with the root at zero.
 This revision replaces the unfinished frame-byte promise and visited-only structural

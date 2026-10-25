@@ -378,7 +378,7 @@ impl RunConfig {
         if record.depth_semantics != hirsel_run_schema::DEPTH_SEMANTICS {
             return Err(invalid(
                 "depth_semantics",
-                "incompatible depth semantics; expected hirsel.depth.invocations.v1",
+                "incompatible depth semantics; expected hirsel.depth.invocations.v2",
             ));
         }
         digest(&record.program)

@@ -17,6 +17,18 @@ pub struct ReferenceInvocation {
     pub callee: Option<DefPath>,
 }
 
+impl ReferenceInvocation {
+    /// Whether this call admits an activation: neither a self restart nor a
+    /// direct call of a LANG-10 leaf operation.
+    pub fn admitted(&self) -> bool {
+        !self.restart
+            && self
+                .callee
+                .as_ref()
+                .is_none_or(hirsel_core_contract::depth::adds_activation)
+    }
+}
+
 /// Body selected by the independent source instance plan. Candidate anchors
 /// cannot select which source invocation inventory they are checked against.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,7 +61,7 @@ pub fn check<S: Stage>(
     }
     let expected: BTreeSet<_> = reference
         .iter()
-        .filter(|site| site.body == body && !site.restart)
+        .filter(|site| site.body == body && site.admitted())
         .map(|site| (site.body, site.block, site.statement))
         .collect();
     let mut found = BTreeSet::new();
@@ -147,7 +159,7 @@ pub fn check<S: Stage>(
                 .ok_or("invocation call outside table")?;
             let id = identity(call.anchor)?;
             if let Some(site) = references.get(&id).filter(|site| !site.restart) {
-                if active != Some(id) {
+                if active != site.admitted().then_some(id) {
                     return Err("language call occurs outside its admitted invocation".into());
                 }
                 if let Some(expected) = &site.callee {

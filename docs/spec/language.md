@@ -577,10 +577,16 @@ Each task has a foreground activation count initially zero and a limit of 1,024.
 Entering a language function, closure, callback, or declared primitive operation adds
 one activation. The entry function of a task is included. Invocations of ordinary
 library functions follow the same rule. Operators, constructors, projections, pattern
-matching, and runtime implementation helpers add no activation themselves; language
-calls made while evaluating them do. A callback is additional to the still-active
-invocation which called it. A primitive implemented by an adapter has one activation,
-regardless of the number of host helper calls. Compiler-generated adapters add none.
+matching, runtime implementation helpers and leaf operations add no activation
+themselves; language calls made while evaluating them do. A leaf operation is a direct
+call of a core primitive that is not adapter-backed, takes no callback and never runs
+language code: every operation of the `int`, `float`, `f32`, `f64` and `char` modules,
+`failure.check`, `list.len`, `array.len`, `bytes.len`, `map.len`, `set.len`,
+`string.byte_len`, `list.push`, `list.reserve` and `bytes.from_list`. Calling one
+through a function value is an ordinary invocation. A callback is additional to the
+still-active invocation which called it. A primitive implemented by an adapter has one
+activation, regardless of the number of host helper calls. Compiler-generated adapters
+add none.
 
 After evaluating the callee and all arguments in their specified order, but before
 transferring taken arguments, starting the callee's contracts, or performing a primitive

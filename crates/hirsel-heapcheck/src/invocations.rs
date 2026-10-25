@@ -22,6 +22,11 @@ pub(crate) fn audit<S: Stage>(
         .filter(|r| r.body == body && !r.restart)
         .map(|r| ((r.body, r.block, r.statement), r))
         .collect();
+    let admitted: BTreeSet<_> = expected
+        .iter()
+        .filter(|(_, r)| r.admitted())
+        .map(|(id, _)| *id)
+        .collect();
     let identity = |id: SourceAnchorId| -> Checked<Identity> {
         let a = unit
             .tables
@@ -40,7 +45,7 @@ pub(crate) fn audit<S: Stage>(
                 .ok_or_else(|| malformed("admission failure is outside its table"))?;
             let id = identity(failure.anchor)?;
             if failure.rule.as_deref() != Some("LANG-10")
-                || !expected.contains_key(&id)
+                || !admitted.contains(&id)
                 || !found.insert(id)
             {
                 return Err(malformed(
@@ -49,7 +54,7 @@ pub(crate) fn audit<S: Stage>(
             }
         }
     }
-    if found != expected.keys().copied().collect() {
+    if found != admitted {
         return Err(malformed(
             "invocation events omit an independent source invocation",
         ));
@@ -107,7 +112,12 @@ pub(crate) fn audit<S: Stage>(
                 .ok_or_else(|| malformed("invocation call"))?;
             let id = identity(call.anchor)?;
             if let Some(reference) = expected.get(&id) {
-                if active.last() != Some(&id) {
+                let scope = if reference.admitted() {
+                    active.last() == Some(&id)
+                } else {
+                    active.is_empty()
+                };
+                if !scope {
                     return Err(malformed(
                         "call is outside its independent invocation scope",
                     ));

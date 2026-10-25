@@ -93,7 +93,9 @@ impl Importer<'_> {
                         ..
                     }
                 );
-                if !adapter && self.plan.is_none_or(|p| p.site(t).is_none()) {
+                let leaf = matches!(callee, tir::Callee::Definition { path, .. }
+                    if !hirsel_core_contract::depth::adds_activation(path));
+                if !adapter && !leaf && self.plan.is_none_or(|p| p.site(t).is_none()) {
                     // The arguments have been evaluated into TIR temporaries.
                     // Until admission all their storage belongs to this caller;
                     // the entered-callee cleanup deliberately excludes takes.

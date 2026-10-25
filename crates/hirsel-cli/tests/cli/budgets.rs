@@ -234,7 +234,7 @@ fn a_run_without_budgets_keeps_historical_identity_and_events_with_placement_pro
     // historical tape stays untouched; only this fresh recording's oracle changes.
     expected[5] = expected[5].replacen(
         "\"schema\":1,",
-        "\"schema\":1,\"depth_semantics\":\"hirsel.depth.invocations.v1\",",
+        "\"schema\":1,\"depth_semantics\":\"hirsel.depth.invocations.v2\",",
         1,
     );
     // c9f5ab7c separates the unchanged request from observed capacity provenance.

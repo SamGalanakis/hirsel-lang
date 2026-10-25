@@ -4538,7 +4538,9 @@ fn execute_terminator(
                     ..
                 }
             );
-            let activation = if self_tail || adapter {
+            let leaf = matches!(callee, Callee::Definition { path, .. }
+                if !hirsel_core_contract::depth::adds_activation(path));
+            let activation = if self_tail || adapter || leaf {
                 None
             } else {
                 Some(frame.depth.admit().ok_or(EvalError::InvocationDepth)?)

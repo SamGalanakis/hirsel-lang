@@ -291,6 +291,40 @@ pub fn main()->Result[(), ()] {
         agreement("p5-depth-never-outofspace", source, &["LANG-10"]);
     });
 }
+/// LANG-10 leaf operations add no activation, so a frame at the limit still runs
+/// them, and recursion still stops at exactly 1,024. A callback primitive, an
+/// adapter-backed primitive and a leaf called through a function value still count.
+#[test]
+fn p6_leaf_operations_add_no_activation_at_the_boundary() {
+    hirsel_engine::with_compiler_stack(|| {
+        // At f(0), main and the f frames hold n + 2 activations.
+        let leaf = "fn f(n:u64)->u64 {if n==0u64 {let mut xs:List[u64]=[]; list.reserve(mut xs,1u64); list.push(mut xs,int.wrapping_add(n,1u64)); failure.check(list.len(xs)==1u64,TextInvariant()); f64.bits(f64.from_bits(xs[0u64]))} else {1u64+f(n-1u64)}}";
+        let callback = "fn f(n:u64)->u64 {if n==0u64 {arena.with(fn(a:Arena)->u64 {0u64})} else {1u64+f(n-1u64)}}";
+        let indirect = "fn f(n:u64)->u64 {if n==0u64 {let g:fn(u64,u64)->u64=int.wrapping_add; g(n,1u64)} else {1u64+f(n-1u64)}}";
+        for (name, header, n, rules) in [
+            ("p6-leaf-exact", leaf, 1022, &[][..]),
+            ("p6-leaf-over", leaf, 1023, &["LANG-10"][..]),
+            ("p6-callback-exact", callback, 1020, &[][..]),
+            ("p6-callback-over", callback, 1021, &["LANG-10"][..]),
+            ("p6-indirect-exact", indirect, 1021, &[][..]),
+            ("p6-indirect-over", indirect, 1022, &["LANG-10"][..]),
+        ] {
+            let source =
+                format!("{header}\npub fn main()->Result[(), ()] {{let _ = f({n}u64); Ok(())}}");
+            agreement(name, &source, rules);
+        }
+        for (n, rules, output) in [
+            (1021, &[][..], b"deep\n".as_slice()),
+            (1022, &["LANG-10"][..], b"".as_slice()),
+        ] {
+            let source = format!(
+                r#"fn f(n:u64,s:Stdout)->u64 {{if n==0u64 {{let _=out.print(s,"deep\n"); 0u64}} else {{1u64+f(n-1u64,s)}}}}
+pub fn main(rt:Io)->Result[(),GrantError] {{let s=io.stdout(rt)?; let _=f({n}u64,s); Ok(())}}"#
+            );
+            agreement_output(&format!("p6-adapter-{n}"), &source, rules, Some(output));
+        }
+    });
+}
 const P3_CHAIN: &str = r#"
 type Chain = End(value:Option[u64]) | Link(next:box Chain)
 type Alias = Chain

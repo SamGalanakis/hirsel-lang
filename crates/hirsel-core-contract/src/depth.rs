@@ -1,9 +1,43 @@
 //! Versioned logical depth units. Physical stack and operational budgets are separate.
+use hirsel_syntax::DefPath;
 
-pub const SEMANTICS: &str = "hirsel.depth.invocations.v1";
+pub const SEMANTICS: &str = "hirsel.depth.invocations.v2";
 pub const FOREGROUND_LIMIT: u16 = 1024;
 pub const CLEANUP_LIMIT: u16 = 64;
 pub const STRUCTURAL_LIMIT: u64 = 1088;
+
+/// LANG-10 leaf operations, part one: every operation of these core scalar
+/// modules. Each reads borrowed scalars and returns a value; none is adapter-backed,
+/// takes a callback or runs language code (no finalizer, check or host call).
+pub const LEAF_MODULES: &[&str] = &["int", "float", "f32", "f64", "char"];
+
+/// LANG-10 leaf operations, part two: the check primitive, the size queries of
+/// core collections, the list operations that only append or reserve, and the
+/// byte-list conversion. None releases a value that can have a finalizer.
+pub const LEAF_OPERATIONS: &[&str] = &[
+    "failure.check",
+    "list.len",
+    "array.len",
+    "bytes.len",
+    "map.len",
+    "set.len",
+    "string.byte_len",
+    "list.push",
+    "list.reserve",
+    "bytes.from_list",
+];
+
+/// Whether a direct call of `callee` adds an activation (LANG-10). Like operators,
+/// a leaf operation adds none. Indirect calls always do: the callable invocation is
+/// counted whatever it names. Every engine asks this and no other table.
+pub fn adds_activation(callee: &DefPath) -> bool {
+    let leaf = callee.package_is("core", "1")
+        && match callee.0.modules.as_slice() {
+            [module] => LEAF_MODULES.contains(&module.as_str()),
+            _ => false,
+        };
+    !(leaf || LEAF_OPERATIONS.iter().any(|name| callee.is_core(name)))
+}
 
 /// Admission returns a linear retirement token, including which allowance it used.
 /// A rejected admission creates no token and changes neither count.
