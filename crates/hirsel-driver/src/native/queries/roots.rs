@@ -8,7 +8,7 @@ use super::{
 };
 use crate::native::root_source::NativeLinkSource;
 use hirsel_engine::store::{Action, Domain};
-use hirsel_lir::{fragment::UnitSummary, products::Binding};
+use hirsel_lir::{fragment::UnitSummary, products::Binding, validate::NativeEnvironment};
 use std::collections::{BTreeMap, BTreeSet};
 
 const ROOT_RECORD: Domain = Domain {
