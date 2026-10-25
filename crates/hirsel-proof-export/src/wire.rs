@@ -48,6 +48,8 @@ pub struct Cx {
     pub(crate) locator: Locator,
     pub(crate) collecting: bool,
     pub(crate) sizing: Option<crate::admission::WireShape>,
+    pub(crate) capture_roots: Option<Vec<TypeId>>,
+    pub(crate) captured_types: Option<Arc<std::collections::HashSet<TypeId>>>,
     pub(crate) locations: Vec<Location>,
     location_ids: HashMap<Location, u32>,
     /// Per syntax-id kind: file-arena id -> order-preserving per-section rank.
@@ -82,6 +84,8 @@ impl Cx {
             locator,
             collecting: false,
             sizing: None,
+            capture_roots: None,
+            captured_types: None,
             locations: vec![],
             location_ids: HashMap::new(),
             syntax_seen: Default::default(),
@@ -124,6 +128,9 @@ impl Cx {
         self.syntax_rank = Default::default();
     }
     fn location(&mut self, span: Span) -> u32 {
+        if self.capture_roots.is_some() {
+            return 0;
+        }
         if let Some(shape) = &mut self.sizing {
             shape.spans = shape.spans.checked_add(1).unwrap_or(usize::MAX);
             return 0;
@@ -138,6 +145,9 @@ impl Cx {
         id
     }
     fn syntax(&mut self, kind: usize, id: u32) -> u32 {
+        if self.capture_roots.is_some() {
+            return 0;
+        }
         if let Some(shape) = &mut self.sizing {
             shape.syntax[kind] = shape.syntax[kind].checked_add(1).unwrap_or(usize::MAX);
             return 0;
@@ -290,9 +300,18 @@ const MISSING: u32 = u32::MAX;
 
 impl Snapshot<Cx> for TypeId {
     fn write(&self, w: &mut Writer<Cx>) {
+        if let Some(roots) = &mut w.context.capture_roots {
+            roots.push(*self);
+            w.uint(0);
+            return;
+        }
         if let Some(shape) = &mut w.context.sizing {
-            shape.unloaded |=
-                *self != TypeId::DANGLING && w.context.types.get_if_loaded(*self).is_none();
+            shape.unloaded |= *self != TypeId::DANGLING
+                && (w.context.types.get_if_loaded(*self).is_none()
+                    || w.context
+                        .captured_types
+                        .as_ref()
+                        .is_some_and(|rows| !rows.contains(self)));
             shape.types = shape.types.checked_add(1).unwrap_or(usize::MAX);
             w.uint(0);
             return;
@@ -333,7 +352,7 @@ fn probe(w: &Writer<Cx>, write: impl FnOnce(&mut Writer<Cx>)) -> Vec<TypeId> {
 /// its TypeIds as positions in that table. The table stays current for the
 /// rest of the section.
 pub(crate) fn tabled(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
-    if w.context.sizing.is_some() {
+    if w.context.sizing.is_some() || w.context.capture_roots.is_some() {
         write(w);
         return;
     }
@@ -433,7 +452,11 @@ impl<T: Snapshot<Cx>> Snapshot<Cx> for SharedSlice<T> {
 impl<T: Snapshot<Cx> + Clone> Snapshot<Cx> for SharedPath<T> {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("list");
-        if let Some(shape) = &mut w.context.sizing {
+        if w.context.capture_roots.is_some() {
+            for index in 0..self.len() {
+                self.get(index).expect("path index").write(w);
+            }
+        } else if let Some(shape) = &mut w.context.sizing {
             shape.path_iter_bytes = self
                 .len()
                 .checked_mul(size_of::<&T>())
