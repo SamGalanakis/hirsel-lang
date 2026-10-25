@@ -203,14 +203,6 @@ fn ready_case_policy(
             for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
                 runtime.register(kind, traced.clone()).unwrap();
             }
-            let request = runtime.request(&[tasks.discovery_id()]);
-            let result = runtime.wait(request).unwrap_or_else(|error| {
-                panic!(
-                    "{}",
-                    String::from_utf8_lossy(&store.get_content(error).unwrap())
-                )
-            });
-            let discovery_output = result[0];
             let arenas = ArenaTasks::new(
                 tasks.clone(),
                 store.clone(),
@@ -230,6 +222,14 @@ fn ready_case_policy(
             for kind in [ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, ARENA_GRAPH_KIND] {
                 runtime.register(kind, arena_factory.clone()).unwrap();
             }
+            let request = runtime.request(&[tasks.discovery_id()]);
+            let result = runtime.wait(request).unwrap_or_else(|error| {
+                panic!(
+                    "{}",
+                    String::from_utf8_lossy(&store.get_content(error).unwrap())
+                )
+            });
+            let discovery_output = result[0];
             let arena_request = runtime.request(&[arenas.query_id()]);
             let arena_output = runtime.wait(arena_request).unwrap_or_else(|error| {
                 panic!(
