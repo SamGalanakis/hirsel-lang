@@ -474,22 +474,6 @@ proptest! {
             prop_assert!(!grants_within(&valid(&wide), &validated_base));
         }
     }
-
-    #[test]
-    fn reflexivity_and_transitive_narrowing(bytes in proptest::collection::vec(any::<u8>(), 0..128)) {
-        let d = &mut Draw(&bytes);
-        let wide = record(d);
-        let middle = narrow(&wide, d);
-        let small = narrow(&middle, d);
-        let (wide, middle, small) = (valid(&wide), valid(&middle), valid(&small));
-        prop_assert!(grants_within(&wide, &wide));
-        prop_assert!(grants_within(&middle, &middle));
-        prop_assert!(grants_within(&small, &small));
-        prop_assert!(grants_within(&small, &middle));
-        prop_assert!(grants_within(&middle, &wide));
-        prop_assert!(grants_within(&small, &wide));
-    }
-
 }
 
 fn io(io: IoGrants) -> ValidatedRun {

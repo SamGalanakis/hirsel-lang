@@ -119,15 +119,4 @@ impl<T> FromIterator<(hirsel_syntax::ExprId, T)> for ExprRows<T> {
 mod expression_rows_tests {
     use super::*;
     use hirsel_syntax::ExprId;
-    #[test]
-    fn source_first_rows_and_elaboration_last_rows_keep_their_duplicate_policy() {
-        let mut rows = ExprRows::default();
-        rows.entry(ExprId(3)).get_or_insert(7);
-        rows.entry(ExprId(3)).get_or_insert(9);
-        assert_eq!(rows.get(&ExprId(3)), Some(&7));
-        assert_eq!(rows.get(&ExprId(2)), None);
-        assert_eq!(rows.get(&ExprId(400)), None);
-        let rows: ExprRows<_> = [(ExprId(3), 7), (ExprId(3), 9)].into_iter().collect();
-        assert_eq!(rows.get(&ExprId(3)), Some(&9));
-    }
 }

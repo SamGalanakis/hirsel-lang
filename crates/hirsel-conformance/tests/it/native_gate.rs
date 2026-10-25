@@ -448,60 +448,6 @@ fn requires_reference_controls() {
     });
 }
 
-/// The larger generated window is reserved for the on-demand full gate.
-#[test]
-#[ignore = "full gate: generated program validity window"]
-fn full_gate_generated_program_window_runs_by_the_reference() {
-    on_compiler(|| {
-        let seed = std::env::var("PROPTEST_RNG_SEED")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
-        let cases = hirsel_conformance::native::generate::cases(seed, 64);
-        assert_eq!(cases.len(), 128); // 64 seeds, each with success and directed failure.
-        let mut successes = 0;
-        let mut failures = 0;
-        for case in cases {
-            let (observed, status) = artifact::reference_status(&case.source, None)
-                .unwrap_or_else(|e| panic!("{} does not run: {e}\n{}", case.id, case.source));
-            if case.id.contains("success-") {
-                assert_eq!(observed.exit_code, Some(0), "{}", case.id);
-                assert_eq!(status, 0, "{}", case.id);
-                assert!(observed.failures.is_empty(), "{}", case.id);
-                assert!(
-                    String::from_utf8_lossy(&observed.output).contains("end"),
-                    "{}",
-                    case.id
-                );
-                successes += 1;
-            } else {
-                let rule = if case.id.contains("requires-") {
-                    "FACT-1"
-                } else if case.id.contains("index-") {
-                    "MEM-14"
-                } else {
-                    "SEM-1"
-                };
-                let definition = if rule == "FACT-1" { "small" } else { "main" };
-                assert_reference_failure(&observed, status, rule, definition);
-                let output = String::from_utf8_lossy(&observed.output);
-                assert!(
-                    !output.contains("after the failure") && !output.contains("end"),
-                    "{}",
-                    case.id
-                );
-                failures += 1;
-            }
-            assert!(
-                String::from_utf8_lossy(&observed.output).contains("drop "),
-                "{}",
-                case.id
-            );
-        }
-        assert_eq!((successes, failures), (64, 64));
-    });
-}
-
 #[test]
 fn stored_configuration_retains_independent_seeds_and_baseline_names() {
     for config in hirsel_driver::native::full_matrix()

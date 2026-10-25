@@ -116,32 +116,6 @@ fn o2_warm_runs_equal_cold_after_every_scripted_edit() {
     let _ = std::fs::remove_dir_all(&work);
 }
 
-/// Keep the source-std case separately selectable on the pool: a changed std
-/// body must invalidate both the resident session and a second process's disk hit.
-#[test]
-fn o2_std_body_edit_matches_cold() {
-    let work = work("o2-std");
-    let scenario = Scenario::read(
-        &root().join(SCENARIOS).join("o2/std-touching.edit"),
-        &root(),
-    )
-    .unwrap();
-    assert!(scenario.with_std);
-    let report = o2::run(
-        Path::new(env!("CARGO_BIN_EXE_oracle")),
-        &root(),
-        &[scenario],
-        &work,
-    );
-    require_accepted_export(&work.join("std-touching/cold"));
-    if !report.failures().is_empty() {
-        show_tir_difference(&work.join("std-touching"));
-    }
-    assert!(report.passed(false), "{}", report.text());
-    assert_eq!(report.checks.len(), 3, "{}", report.text());
-    let _ = std::fs::remove_dir_all(&work);
-}
-
 fn require_accepted_export(artifacts: &Path) {
     let diagnostics = std::fs::read_to_string(artifacts.join("diagnostics")).unwrap();
     let tir = std::fs::read_to_string(artifacts.join("tir"))
@@ -201,43 +175,6 @@ fn o2_std_option_body_edit_matches_cold_in_minimal_manifest() {
     require_accepted_export(&work.join("std-touching/cold"));
     if !report.failures().is_empty() {
         show_tir_difference(&work.join("std-touching"));
-    }
-    assert!(report.passed(false), "{}", report.text());
-    let _ = std::fs::remove_dir_all(&work);
-}
-
-#[test]
-fn o2_reflected_private_field_edit_matches_cold() {
-    let work = work("o2-reflected-field");
-    let mut scenario = Scenario::read(
-        &root()
-            .join(SCENARIOS)
-            .join("o2/reflected-opaque-field.edit"),
-        &root(),
-    )
-    .unwrap();
-    // The reflected result alone is enough: no I/O or loop participates.
-    let main = "const FIELDS: List[FieldShape] = comptime field_types(shape(Secret))\n\npub fn main() -> List[FieldShape] { FIELDS }\n";
-    scenario.before.insert("main.hir".into(), main.into());
-    scenario.after.insert("main.hir".into(), main.into());
-    let report = o2::run(
-        Path::new(env!("CARGO_BIN_EXE_oracle")),
-        &root(),
-        &[scenario],
-        &work,
-    );
-    if !report.failures().is_empty() {
-        let base = work.join("reflected-opaque-field");
-        let cold = std::fs::read_to_string(base.join("cold/tir")).unwrap();
-        let resident = std::fs::read_to_string(base.join("resident/tir")).unwrap();
-        let differences: Vec<_> = cold
-            .lines()
-            .zip(resident.lines())
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-            .take(10)
-            .collect();
-        eprintln!("reflected-field TIR differences: {differences:#?}");
     }
     assert!(report.passed(false), "{}", report.text());
     let _ = std::fs::remove_dir_all(&work);

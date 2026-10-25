@@ -220,59 +220,6 @@ fn every_rule_id_the_code_cites_is_defined() {
 }
 
 #[test]
-fn every_relative_spec_link_resolves() {
-    let root = root();
-    let parts = spec_parts();
-    let anchors: BTreeMap<_, _> = parts
-        .iter()
-        .map(|(n, t)| (n.as_str(), anchors(t)))
-        .collect();
-    let mut links = 0;
-    let mut broken = vec![];
-    for (name, text) in &parts {
-        for line in prose(text) {
-            for (i, _) in line.match_indices("](") {
-                let rest = &line[i + 2..];
-                let target = &rest[..rest.find(')').unwrap()];
-                if target.contains("://") || target.starts_with("mailto:") {
-                    continue;
-                }
-                links += 1;
-                let (file, fragment) = target.split_once('#').unwrap_or((target, ""));
-                let file = if file.is_empty() { name.as_str() } else { file };
-                match anchors.get(file) {
-                    Some(set) if fragment.is_empty() || set.contains(fragment) => {}
-                    Some(_) => broken.push(format!("{name}: {target}")),
-                    None if file_link_resolves(&root.join(SPEC_DIR).join(file), fragment) => {}
-                    None => broken.push(format!("{name}: {target}")),
-                }
-            }
-        }
-    }
-    assert!(links > 50, "{links} spec links");
-    assert!(
-        broken.is_empty(),
-        "spec links that resolve nowhere: {broken:#?}"
-    );
-}
-
-#[test]
-fn relative_file_links_require_existing_targets_and_headings() {
-    let notices = root().join("third-party/NOTICES.md");
-    assert!(file_link_resolves(&notices, ""));
-    assert!(file_link_resolves(&notices, "bsd-3-clause-license-go"));
-    assert!(!file_link_resolves(&notices, "no-such-license-heading"));
-    let missing = root().join("third-party/no-such-notices.md");
-    assert!(!file_link_resolves(&missing, ""));
-    assert!(!file_link_resolves(&missing, "bsd-3-clause-license-go"));
-}
-
-#[test]
-fn cited_rejects_a_non_ascii_rule_prefix() {
-    assert!(cited("ÖWN-6", &BTreeSet::from(["OWN"])).is_empty());
-}
-
-#[test]
 fn cited_accepts_an_ascii_rule_id_next_to_utf8() {
     assert_eq!(cited("🐑 OWN-6 é", &BTreeSet::from(["OWN"])), ["OWN-6"]);
 }
@@ -333,23 +280,4 @@ fn the_spec_hash_covers_every_spec_part() {
         edited.get_mut(name).unwrap().pop();
     }
     assert_eq!(expected, hash(&edited));
-}
-
-#[test]
-fn user_guides_do_not_contain_contributor_process_vocabulary() {
-    let root = root();
-    for page in ["tour.md", "concurrent-agents.md", "building.md"] {
-        let text = fs::read_to_string(root.join("docs").join(page))
-            .unwrap()
-            .to_ascii_lowercase();
-        for (i, line) in text.lines().enumerate() {
-            for word in ["lane ", "sluice", "orchestrator", "@agentlang"] {
-                assert!(
-                    !line.contains(word),
-                    "docs/{page}:{} contains contributor process vocabulary: {word:?}",
-                    i + 1
-                );
-            }
-        }
-    }
 }

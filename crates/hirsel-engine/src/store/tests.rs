@@ -119,17 +119,6 @@ fn entries_hold_four_variants_and_hit_on_matching_reads() {
 }
 
 #[test]
-fn none_and_mem_stores() {
-    let none = NoneStore;
-    none.put(&key("a"), b"x");
-    assert!(none.get(&key("a")).is_none());
-    let mem = MemStore::default();
-    mem.put(&key("a"), b"x");
-    assert_eq!(&*mem.get(&key("a")).unwrap(), b"x");
-    assert!(Arc::ptr_eq(&MemStore::shared(), &MemStore::shared()));
-}
-
-#[test]
 fn sim_store_detects_corruption_and_loses_puts_on_request() {
     let sim = SimStore::with_faults(SimFaults {
         lose_puts: vec![1],

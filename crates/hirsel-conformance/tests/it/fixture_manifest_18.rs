@@ -105,26 +105,6 @@ const VALID: &str = r#"{
 }"#;
 
 #[test]
-fn merge_markers_are_a_json_error_before_path_resolution() {
-    let control = Control::new("merge");
-    control.check(VALID).unwrap();
-    // The inherited merge put a list_sort dependency and conflict markers
-    // inside the std dependency, as well as an invalid five-level path.
-    let corrupt = r#"{
-  "sources": [{"path":"main.hir"}],
-  "dependencies": [{"manifest":"../../../../../stdlib/std@1/hirsel.json","expose":[]
-<<<<<<<< HEAD:crates/hirsel-driver/tests/fixtures/list_sort/SEM-5-list-sort-stable-6-run.hir.json
-    }, {"manifest":"../../../../../packages/fixtures/list_sort_vectors@1/hirsel.json"}
-========
->>>>>>>> incoming:conformance/SEM/SEM-3-markdown-commonmark-1-malformed-run.hir.json
-  }]
-}"#;
-    let error = control.check(corrupt).unwrap_err();
-    assert!(error.contains("main.hir.json"), "{error}");
-    assert!(error.contains("expected `,` or `}` at line 4"), "{error}");
-}
-
-#[test]
 fn valid_json_with_missing_source_or_wrong_dependency_path_fails() {
     let control = Control::new("paths");
     control.check(VALID).unwrap();

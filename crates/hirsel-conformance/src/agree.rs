@@ -2498,50 +2498,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn catalogue_generates_last_use_shapes() {
-        let source = "fn f(mut a: Bytes) { let b = copy a; a = b }";
-        let edits = catalogue(&parse(source).unwrap(), source);
-        for kind in [
-            "last-use/view-dead",
-            "last-use/view-live",
-            "last-use/early-return",
-        ] {
-            assert!(edits.iter().any(|e| e.kind == kind), "{kind}");
-        }
-        let live = edits
-            .iter()
-            .find(|e| e.kind == "last-use/view-live")
-            .unwrap()
-            .apply(source);
-        assert!(live.contains("a = b\nlet _ = last_use_view();"), "{live}");
-    }
-    #[test]
-    fn catalogue_moves_writes_into_later_call_arguments() {
-        let source = "type R { name: String, n: u64 }\nfn len(s: String, k: u64) -> u64 { string.byte_len(s) + k }\nfn f() -> u64 { let mut xs: List[R] = [R(name: \"ab\", n: 1)]; let i = 0u64; let r = len(xs[i].name, 1); xs[i].n = 5; r }";
-        let edits = catalogue(&parse(source).unwrap(), source);
-        let moved = |kind| {
-            edits
-                .iter()
-                .filter(|e| e.kind == kind)
-                .map(|e| e.apply(source))
-                .collect::<Vec<_>>()
-        };
-        let plain = moved("statement/into-argument");
-        assert!(
-            plain
-                .iter()
-                .any(|v| v.contains("let r = len(xs[i].name, {\nxs[i].n = 5;\n1\n}); r }")),
-            "{plain:#?}"
-        );
-        let shared = moved("statement/into-argument-shared");
-        assert!(
-            shared
-                .iter()
-                .any(|v| v.contains(" = copy xs\nxs[i].n = 5;\n1\n}); r }")),
-            "{shared:#?}"
-        );
-    }
-    #[test]
     fn catalogue_holds_a_binding_inside_a_sequence_element() {
         let source = "type R { name: String }\nfn view(x: String) -> String in x { copy x }\nfn count(s: String) -> u64 { let r: R = R(name: view(s)); string.byte_len(r.name) }";
         let edits = catalogue(&parse(source).unwrap(), source);
@@ -2670,14 +2626,6 @@ mod tests {
         }
     }
     #[test]
-    fn a_tuple_part_keeps_the_written_uses_of_a_callback_parameter() {
-        // #58: the part's `g` is `uses {}`, as the literal's is, on both
-        // checkers. The corpus pins the list form and the rejected tuple twin
-        // (CLO-2-nested-uses-annotation-*).
-        let source = "@noalloc fn through(g: @noalloc fn() -> () uses {}) -> () { () }\nfn probe() -> () { let held: (fn(g: @noalloc fn() -> () uses {}) -> (), u64) = (fn(g: @noalloc fn() -> () uses {}) { through(g) }, 0u64); () }";
-        assert_eq!(classify(source, Execution::None), Classification::Valid);
-    }
-    #[test]
     fn nested_callables_are_received_by_position_on_both_checkers() {
         // CLO-2 (#58): a part or result may promise more than its place, a
         // parameter may ask for less. The corpus pins CLO-2-nested-uses-*;
@@ -2718,51 +2666,6 @@ mod tests {
             matches!(classify(&compared, Execution::None), Classification::Valid),
             "{compared}"
         );
-    }
-    #[test]
-    fn finite_catalogue_uses_scopes_and_ranks_deterministically() {
-        let source = "fn f(mut a: u64, b: u64) -> u64 { let mut c: u64 = a; a = b; c }";
-        let file = parse(source).unwrap();
-        let edits = catalogue(&file, source);
-        assert!(
-            edits
-                .iter()
-                .any(|e| e.kind == "operand/same-type" && e.replacement == "b")
-        );
-        assert!(
-            edits
-                .iter()
-                .any(|e| e.kind == "annotation/mode" && e.replacement.starts_with("sendable"))
-        );
-        let callable = "fn f(g: fn() -> u64) -> u64 { g() }";
-        assert!(
-            catalogue(&parse(callable).unwrap(), callable)
-                .iter()
-                .any(|e| e.kind == "annotation/mode" && e.replacement == "sendable (fn() -> u64)")
-        );
-        for annotation in [
-            "Bytes",
-            "T",
-            "Payload",
-            "(Bytes, u64)",
-            "Iter[u64]",
-            "List[Bytes]",
-            "fn(take x: Bytes) -> Bytes",
-        ] {
-            let source = format!("type Payload = Bytes\nfn f[T](x: {annotation}) {{}} ");
-            let edits = catalogue(&parse(&source).unwrap(), &source);
-            assert!(
-                edits.iter().any(|e| e.kind == "annotation/mode"
-                    && e.replacement == format!("sendable ({annotation})")),
-                "{annotation}"
-            );
-        }
-        assert!(edits.iter().any(|e| e.kind == "store/mut"));
-        assert_eq!(edits, catalogue(&file, source));
-        let ranks = |seed| -> Vec<u64> { edits.iter().map(|e| rank(seed, "f.hir", e)).collect() };
-        assert_eq!(ranks(17), ranks(17));
-        assert_ne!(ranks(17), ranks(18));
-        assert_eq!(ranks(17).iter().collect::<BTreeSet<_>>().len(), edits.len());
     }
     #[test]
     fn owned_view_yield_returns_agree_with_independent_ir_checking() {

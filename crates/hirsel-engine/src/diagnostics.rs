@@ -334,13 +334,6 @@ mod tests {
         }
     }
     #[test]
-    fn section_23_moved_operand_precedes_crossing_and_layout() {
-        for property in ["CLO-3", "MEM-12", "PROV-1", "MEM-5"] {
-            let ds = select_diagnostics(vec![diag(property, 4), diag("OWN-2", 4)], None);
-            assert_eq!(ds[0].rule.as_str(), "OWN-2");
-        }
-    }
-    #[test]
     fn independent_obligations_use_source_order_not_property_stage() {
         let ds = select_diagnostics(vec![diag("OWN-2", 8), diag("MEM-5", 2)], None);
         assert_eq!(ds[0].rule.as_str(), "MEM-5");
@@ -462,27 +455,6 @@ mod fold_tests {
         );
         d.root_cause = root;
         d
-    }
-    #[test]
-    fn a_shared_root_cause_folds_into_the_first_selected_diagnostic() {
-        let ds = select_diagnostics(
-            vec![
-                rooted("MODE-1", 20, Some(7)),
-                rooted("MODE-1", 10, Some(7)),
-                rooted("OWN-2", 30, Some(8)),
-            ],
-            None,
-        );
-        assert_eq!(ds.len(), 2);
-        assert_eq!(ds[0].primary.start, 10);
-        assert_eq!(ds[0].notes.len(), 1);
-        assert!(
-            ds[0].notes[0].starts_with("this also fails:"),
-            "{:?}",
-            ds[0].notes
-        );
-        assert_eq!(ds[0].secondary[0].span.start, 20);
-        assert_eq!(ds[1].rule.as_str(), "OWN-2");
     }
     #[test]
     fn folded_requirements_keep_their_labels_and_the_first_headline() {

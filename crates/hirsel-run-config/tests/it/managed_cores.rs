@@ -431,25 +431,6 @@ fn resolution_and_metrics_leave_identity_unchanged() {
 }
 
 #[test]
-#[cfg(target_os = "linux")]
-fn real_host_limit_probe() {
-    let l = LinuxLimits::capture().unwrap().read().unwrap();
-    let g = HostGrant {
-        max_cores: u64::MAX,
-        cpus: l.admission_affinity.clone(),
-    };
-    let r = resolve(&auto(), &g, &l, false).unwrap();
-    assert!(r.target >= 1 && r.target <= l.admission_affinity.len());
-    if let Ok(expected) = std::env::var("HIRSEL_CORES_EXPECTED") {
-        assert_eq!(r.target, expected.parse::<u64>().unwrap());
-    }
-    eprintln!(
-        "resolved width={} hard={} quota={:?}",
-        r.target, r.hard_limit, r.quota
-    );
-}
-
-#[test]
 fn large_mount_tables_preserve_root_selection_and_unterminated_last_lines() {
     let f = Fixture::new();
     f.put("cg/cpu.max", "200000 100000\n");

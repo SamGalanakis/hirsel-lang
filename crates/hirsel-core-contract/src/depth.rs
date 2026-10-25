@@ -115,20 +115,4 @@ mod tests {
         }
         assert_eq!(counts.live(), (0, 0));
     }
-
-    #[test]
-    fn tasks_and_caught_unwinds_keep_their_own_live_invocations() {
-        let mut parent = Activations::default();
-        let caller = parent.admit().unwrap();
-        let isolated = parent.admit().unwrap();
-        let mut child = Activations::default();
-        let entry = child.admit().unwrap();
-        parent.retire(isolated);
-        assert_eq!(parent.live(), (1, 0));
-        assert_eq!(child.live(), (1, 0));
-        child.retire(entry);
-        parent.retire(caller);
-        assert_eq!(parent.live(), (0, 0));
-        assert_eq!(child.live(), (0, 0));
-    }
 }

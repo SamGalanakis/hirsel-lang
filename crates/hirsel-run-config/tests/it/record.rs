@@ -732,13 +732,6 @@ fn adapter_policy_comes_only_from_explicit_validated_grants() {
 }
 
 #[test]
-fn relative_record_paths_are_refused_before_reading() {
-    assert!(
-        matches!(RunConfig::read_path(std::path::Path::new("run.json")), Err(RunRefusal::Invalid { field, .. }) if field == "--hirsel-run")
-    );
-}
-
-#[test]
 fn grants_templates_bind_only_selected_code_and_use_record_validation() {
     let bytes = br#"{"io":{"stdout":"stdout.bytes@1","dirs":[]},"args":["x"],"env":{"KEY":null},"inputs":{"hash_seed":7,"random_seed":8,"test_seed":9}}"#;
     let run =

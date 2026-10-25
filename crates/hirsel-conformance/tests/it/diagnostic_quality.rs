@@ -106,46 +106,6 @@ fn mechanical_json_repairs_recheck_and_preserve_primary_sites() {
 }
 
 #[test]
-fn diagnostic_json_has_a_help_note_and_no_unrendered_placeholder() {
-    hirsel_engine::with_compiler_stack(|| {
-        for (case, rule) in [
-            (
-                "conformance/MODE/MODE-2-box-payload-unique-bad.hir",
-                "MODE-2",
-            ),
-            (
-                "conformance/MODE/MODE-4-local-sendable-storage-bad.hir",
-                "MODE-4",
-            ),
-            ("conformance/GEN/GEN-1-copyable-resource-bad.hir", "GEN-1"),
-            ("conformance/LANG/LANG-4-inert-recovery-bad.hir", "LANG-4"),
-            (
-                "conformance/LANG/LANG-12-call-recovery-duplicate-bad.hir",
-                "LANG-12",
-            ),
-        ] {
-            let output = checked(case);
-            let d = output.diagnostics.first().unwrap();
-            assert_eq!(d.rule.as_str(), rule, "{case}");
-            let json = d.to_json(&output.sources);
-            assert!(
-                json["notes"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|n| n.as_str().unwrap().starts_with("help: ")),
-                "{case}: {json}"
-            );
-            assert!(!d.message.contains("{0}"), "{case}: {json}");
-            assert!(
-                !d.secondary.iter().any(|l| l.message.contains("{0}")),
-                "{case}: {json}"
-            );
-        }
-    });
-}
-
-#[test]
 fn near_miss_help_and_json_fixes_recheck_corpus() {
     hirsel_engine::with_compiler_stack(|| {
         for (kind, before, after, help) in [

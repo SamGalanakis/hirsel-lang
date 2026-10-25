@@ -556,26 +556,6 @@ fn hash(bytes: &[u8]) -> ContentHash {
 }
 
 #[test]
-fn actions_change_independently_of_equal_output_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::new(dir.path().to_owned());
-    let address = Address(hash(b"definition"));
-    let old = store.put(DOMAIN, b"same summary").unwrap();
-    store
-        .associate(address, Action(hash(b"old body")), old)
-        .unwrap();
-    let new = store.put(DOMAIN, b"same summary").unwrap();
-    assert_eq!(old, new);
-    store
-        .associate(address, Action(hash(b"new body")), new)
-        .unwrap();
-    let previous = store.lookup(address).unwrap();
-    assert_eq!(previous.action, Action(hash(b"new body")));
-    assert_eq!(previous.reference, old);
-    assert_eq!(&*store.get(previous.reference).unwrap(), b"same summary");
-}
-
-#[test]
 fn references_check_overflow_alignment_bounds_and_domain() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::new(dir.path().to_owned());

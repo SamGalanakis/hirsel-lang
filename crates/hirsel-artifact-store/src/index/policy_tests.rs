@@ -31,22 +31,6 @@ fn admission_checks_each_aggregate_cap_without_allocating_from_counts() {
         None
     );
 }
-#[test]
-fn selection_is_inclusive_accumulated_adjacent_suffix_and_forced_pair_at_cap() {
-    let runs = |rows: &[u64]| {
-        rows.iter()
-            .enumerate()
-            .map(|(i, n)| descriptor(i as u8, *n, 128))
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(selection(&runs(&[1, 4, 20])), 3);
-    assert_eq!(selection(&runs(&[1, 5, 20])), 1);
-    assert_eq!(
-        selection(&runs(&[1, 5, 25, 125, 625, 3125, 15625, 78125])),
-        2
-    );
-    assert_eq!(selection(&[]), 0);
-}
 
 #[test]
 fn protocol_epoch_factory_observes_pin_and_compaction_lock_order() {

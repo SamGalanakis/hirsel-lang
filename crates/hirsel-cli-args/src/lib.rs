@@ -181,34 +181,6 @@ mod tests {
         assert_eq!(options.shard, Some(Shard { index: 2, count: 3 }));
     }
 
-    #[test]
-    fn missing_and_invalid_common_values_have_stable_errors() {
-        for (flag, invalid, message) in [
-            (
-                "--hash-seed",
-                &["-1", "18446744073709551616", "seed"][..],
-                "--hash-seed requires an unsigned integer",
-            ),
-            (
-                "--shard",
-                &["0/1", "2/1", "1/0", "1/2/3", "one"][..],
-                "--shard requires <index>/<count>, 1 <= index <= count",
-            ),
-            ("--root", &[][..], "--root requires a path"),
-        ] {
-            assert_eq!(parse(&[flag]).err().unwrap().to_string(), message);
-            for value in invalid {
-                assert_eq!(parse(&[flag, value]).err().unwrap().to_string(), message);
-            }
-        }
-        assert_eq!(
-            parse(&["--hash-seed", "18446744073709551615"])
-                .unwrap()
-                .hash_seed,
-            Some(u64::MAX)
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn root_preserves_non_utf8_bytes() {

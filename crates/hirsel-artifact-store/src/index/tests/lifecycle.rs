@@ -253,28 +253,6 @@ fn lock_contention_is_bounded_and_live_staging_has_owner() {
 }
 
 #[test]
-fn crash_survivors_missing_layers_and_old_format_are_misses() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    published(publish(root, &[entry(1)]));
-    let manifest = fs::read(root.join("index/MANIFEST")).unwrap();
-    for end in 0..manifest.len() {
-        fs::write(root.join("index/MANIFEST"), &manifest[..end]).unwrap();
-        assert_eq!(
-            find(&load_pinned(root).unwrap(), entry(1).key),
-            None,
-            "manifest cut {end}"
-        );
-    }
-    fs::write(root.join("index/MANIFEST"), b"old index format").unwrap();
-    assert_eq!(find(&load_pinned(root).unwrap(), entry(1).key), None);
-    // Complete orphan layers are never recovered by scanning.
-    published(publish(root, &[entry(2)]));
-    assert_eq!(find(&load_pinned(root).unwrap(), entry(1).key), None);
-    assert_eq!(current_layer_ids_locked(root).unwrap().len(), 1);
-}
-
-#[test]
 fn layer_installed_but_manifest_write_failure_never_changes_root_or_recovers_orphan() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

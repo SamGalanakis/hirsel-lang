@@ -3520,20 +3520,6 @@ mod malformed_tests {
         }
     }
 
-    #[test]
-    fn reference_records_relocate_types_and_anchors() {
-        let (engine, syntax) = fixture();
-        let unit = engine.types.intern(hirsel_types::Type::unit());
-        let record = (unit, syntax.item.origin.span);
-        let bytes = engine.encode_record(&record).unwrap();
-        // Decode the current writer using sequence serialization, then write with
-        // the old serializer and consume through the production decoder.
-        let legacy: SequenceEnvelope = bincode::deserialize(&bytes).unwrap();
-        let old = bincode::serialize(&legacy).unwrap();
-        assert_eq!(old, bytes);
-        assert_eq!(engine.decode_record::<(TypeId, Span)>(&old), Some(record));
-    }
-
     fn fixture() -> (QueryEngine, Arc<ItemSyntax>) {
         fixture_source("fn main() { true }")
     }

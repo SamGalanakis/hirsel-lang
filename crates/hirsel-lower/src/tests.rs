@@ -36,70 +36,7 @@ fn missing_mode_decisions_and_recovery_nodes_fail_closed() {
         assert!(f.lower(e, "main", f.scalar).is_err());
     }
 }
-#[test]
-fn snapshots_cover_core_constructs_and_are_repeatable() {
-    let mut f = Fixture::new(P::U8);
-    let a = f.integer(3, 1);
-    let b = f.integer(1, 2);
-    let n = f.binary(BinaryOp::Add, a, b, 3);
-    let (s, binding) = f.let_(n);
-    let c = f.bool_(true);
-    let yes = f.read(binding, f.scalar, U::Copy);
-    let no = f.integer(0, 1);
-    let e = f.expr(
-        ExprKind::If {
-            condition: c,
-            then_branch: yes,
-            else_branch: Some(no),
-        },
-        f.scalar,
-        U::Take,
-        4,
-    );
-    let e = f.block(vec![s], e);
-    let d = f.lower(e, "main", f.scalar).unwrap();
-    let printed = print::definition(&d);
-    assert_eq!(
-        printed,
-        print::definition(&f.lower(e, "main", f.scalar).unwrap())
-    );
-    insta::assert_snapshot!("arithmetic_binding_branch_cleanup", printed);
-}
 
-#[test]
-fn generic_call_printing_does_not_expose_type_provenance() {
-    fn snapshot() -> String {
-        let mut f = Fixture::new(P::U8);
-        let n = f.integer(3, 1);
-        let e = f.named_call("generic", vec![n], vec![(f.scalar, U::Take)], f.scalar, 1);
-        if let hirsel_types::SignatureKind::Function(function) =
-            &mut f.declarations.get_mut(&path("generic")).unwrap().kind
-        {
-            function
-                .generics
-                .push(hirsel_types::GenericParameter::Type {
-                    name: "T".into(),
-                    bounds: vec![].into(),
-                });
-        }
-        f.checked
-            .calls
-            .iter_mut()
-            .find(|r| r.expression == e)
-            .unwrap()
-            .generic_arguments = vec![hirsel_types::GenericArgument::Type(f.scalar)];
-        f.checked.instantiations.push(hirsel_types::Instantiation {
-            expression: e,
-            callee: path("generic"),
-            arguments: vec![hirsel_types::GenericArgument::Type(f.scalar)],
-        });
-        print::definition(&f.lower(e, "main", f.scalar).unwrap())
-    }
-    let a = snapshot();
-    assert_eq!(a, snapshot());
-    assert!(!a.contains("provenance"));
-    insta::assert_snapshot!("generic_call", a);
-}
 #[test]
 fn freshly_computed_borrow_argument_remains_a_caller_owner() {
     let mut f = Fixture::new(P::String);

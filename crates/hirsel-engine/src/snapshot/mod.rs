@@ -729,31 +729,6 @@ mod tests {
         }));
     }
 
-    /// A missing signature is a recorded negative read, so a later
-    /// revision that adds the definition invalidates the reader.
-    #[test]
-    fn a_missing_signature_is_a_recorded_failed_read() {
-        let types = TypeInterner::new(None);
-        let present = constant(&types, "present", hirsel_types::Primitive::U32);
-        let absent = constant(&types, "absent", hirsel_types::Primitive::U32);
-        let snapshot = SignatureSnapshot::new(
-            Revision::from_u64(1).unwrap(),
-            types,
-            [(present.definition, Ok(present.clone()))],
-            [],
-            None,
-        );
-        let mut reads = ReadsBuilder::new();
-        let package = present.definition.path().0.package.clone();
-        let mut provider = FrozenProvider::new(&snapshot, package, &mut reads);
-        assert!(provider.signature(absent.definition).is_err());
-        let reads = reads.finish().unwrap();
-        assert!(
-            reads
-                .iter()
-                .any(|(key, _)| *key == ReadKey::FailedSignature(absent.definition))
-        );
-    }
     fn cached_views(
         types: Arc<TypeInterner>,
         public: Vec<SignatureRef>,

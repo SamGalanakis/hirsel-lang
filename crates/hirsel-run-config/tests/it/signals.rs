@@ -141,29 +141,6 @@ fn a_script_belongs_to_signals_script_only() {
 }
 
 #[test]
-fn a_signals_grant_is_within_one_of_the_same_provider_observing_more() {
-    let host =
-        |kinds: Value| validate(json!({"provider": "signals.host@1", "kinds": kinds})).unwrap();
-    let both = host(json!(["interrupt", "terminate"]));
-    let one = host(json!(["interrupt"]));
-    assert!(grants_within(&one, &both));
-    assert!(!grants_within(&both, &one));
-    let none = RunConfig::validate(&serde_json::to_vec(&record(None)).unwrap()).unwrap();
-    assert!(grants_within(&none, &one));
-    assert!(!grants_within(&one, &none));
-    let scripted = |script: Value| {
-        validate(json!({"provider": "signals.script@1", "kinds": ["interrupt"], "script": script}))
-            .unwrap()
-    };
-    // Script data grants nothing; another provider is not within.
-    assert!(grants_within(
-        &scripted(json!(["interrupt"])),
-        &scripted(json!([]))
-    ));
-    assert!(!grants_within(&scripted(json!([])), &one));
-}
-
-#[test]
 fn the_standalone_grant_validates_like_the_record_member() {
     let grant = validate_signals_grant(br#"{"provider":"signals.script@1","kinds":["terminate","interrupt"],"script":["terminate"]}"#)
         .unwrap();

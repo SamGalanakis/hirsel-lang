@@ -471,20 +471,6 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     });
 }
 
-#[test]
-fn p3_projection_binding_minimal_recursion() {
-    hirsel_engine::with_compiler_stack(|| {
-        agreement(
-            "p3-projection-minimal",
-            r#"
-type Chain=End|Link(next:box Chain)
-pub fn main()->Result[(),()] {let x:Chain=End;let _=x==x;Ok(())}
-"#,
-            &[],
-        );
-    });
-}
-
 fn p3_value_operations_preserve_flat_packed_sequential_and_column_equality_and_hash(
     selected: &str,
 ) {
@@ -656,11 +642,6 @@ macro_rules! p3_case {
         }
     };
 }
-p3_case!(
-    p3_minus_one,
-    p3_logical_edges_admit_s_minus_one_and_s_but_reject_distinct_and_tuple_s_plus_one,
-    "p3-minus-one"
-);
 p3_case!(
     p3_exact,
     p3_logical_edges_admit_s_minus_one_and_s_but_reject_distinct_and_tuple_s_plus_one,

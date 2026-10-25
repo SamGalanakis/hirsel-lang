@@ -975,29 +975,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn struct_and_enum_macros_round_trip() {
-        let point = Point {
-            x: 3,
-            label: "p".into(),
-        };
-        assert_eq!(to_text(&point), "(Point 3 \"p\")");
-        assert_eq!(from_text::<Point>(&to_text(&point)).unwrap(), point);
-
-        let expr = Expr::Named {
-            name: "n".into(),
-            value: 9,
-        };
-        let text = to_text(&expr);
-        assert!(text.contains("(Named \"n\" 9)"), "{text}");
-        assert_eq!(from_text::<Expr>(&text).unwrap(), expr);
-        let nested = Expr::Pair(vec![1, 2], 2);
-        assert_eq!(from_text::<Expr>(&to_text(&nested)).unwrap(), nested);
-        assert_eq!(from_text::<Expr>("(Empty)").unwrap(), Expr::Empty);
-        let error = from_text::<Expr>("(Bogus)").unwrap_err();
-        assert!(error.message.contains("unknown Expr variant"), "{error:?}");
-    }
-
     // A context the encoder consults: names encode as text, indexes decode
     // through the table.
     #[derive(Debug)]

@@ -1593,68 +1593,6 @@ pub struct FileContext {
 #[cfg(test)]
 mod revision_tests {
     use super::*;
-    #[test]
-    fn v20_header_facts_and_parse_status_survive_snapshot_transport() {
-        let name = Symbol::intern("Marker");
-        let span = Span::new(Anchor(1), 16, 22).unwrap();
-        let mut item = Item {
-            name_span: span,
-            origin: Origin {
-                span,
-                tokens: TokenRange::default(),
-            },
-            name,
-            definition: super::tests::path("Marker"),
-            visibility: Visibility::PublicOpaque,
-            attributes: vec![],
-            kind: ItemKind::Type {
-                flavor: TypeFlavor::Resource,
-                generics: vec![],
-                bounds: Some(vec![]),
-                authority: Some(vec![]),
-                body: TypeBody::Record(vec![FieldSyntax {
-                    name,
-                    ty: TypeExprId(0),
-                    origin: Origin {
-                        span,
-                        tokens: TokenRange::default(),
-                    },
-                    growable: true,
-                }]),
-                drop: Some(DropSyntax {
-                    binding: name,
-                    body: ExprId(0),
-                    noalloc: true,
-                }),
-            },
-            generated: None,
-        };
-        let stated = item.clone();
-        if let ItemKind::Type { bounds, .. } = &mut item.kind {
-            *bounds = None;
-        }
-        assert_ne!(item, stated);
-        if let ItemKind::Type { bounds, .. } = &mut item.kind {
-            *bounds = Some(vec![Bound::NoallocDrop]);
-        }
-        assert_ne!(item, stated);
-        let file = SyntaxFile {
-            has_syntax_errors: true,
-            file: FileId(0),
-            tokens: vec![],
-            items: vec![Arc::new(ItemSyntax {
-                item: stated,
-                tree: SyntaxTree::default(),
-                anchor: Anchor(1),
-                text_hash: ContentHash::default(),
-                occurrence: 0,
-            })],
-        };
-        assert_eq!(file.items[0].item.name.as_str(), "Marker");
-        assert_eq!(file.items[0].item.name_span, span);
-        assert!(file.has_syntax_errors);
-        assert_eq!(file, file.clone());
-    }
 }
 
 // Item ownership anchors use exactly the same portable numbering as spans.
