@@ -126,7 +126,7 @@ pub struct PublishedSummary {
     #[serde(default)]
     pub storage: Option<std::sync::Arc<hirsel_types::storage::graph::StorageDefinition>>,
     #[serde(default)]
-    pub checked: Option<CheckedSummary>,
+    pub checked: Option<std::sync::Arc<CheckedSummary>>,
     pub reads: std::sync::Arc<crate::memo::Reads>,
     /// The owner's body and package-manifest key, as for a body memo.
     pub text: hirsel_syntax::ContentHash,

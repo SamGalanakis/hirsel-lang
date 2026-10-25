@@ -27,6 +27,14 @@ struct TableKeyCall {
     arguments: Vec<GenericArgument>,
 }
 impl TableKeyUse {
+    pub(crate) fn retained(&self, weight: &mut crate::memo::retained::Weight) {
+        self.generics
+            .visit_retained_allocations(|id, bytes| weight.allocation(id, bytes));
+        weight.vec(&self.calls, |w, call| {
+            w.def_path(&call.callee);
+            w.flat_vec(&call.arguments);
+        });
+    }
     pub(crate) fn capture(body: &crate::TypedBody) -> Self {
         Self {
             owner: body.syntax.owner(),

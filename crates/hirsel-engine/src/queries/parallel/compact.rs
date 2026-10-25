@@ -107,7 +107,7 @@ pub(crate) struct CompactCompleted {
     resolution: Option<Product<Resolution>>,
     checked: Option<CompactStage>,
     modes: Option<CompactStage>,
-    checked_summary: Option<CheckedSummary>,
+    checked_summary: Option<Arc<CheckedSummary>>,
     dead_arms: Option<crate::tools::DeadArmUse>,
     lowering_inputs: Option<lowering::LoweringUse>,
     payload: Option<Vec<u8>>,
@@ -160,10 +160,7 @@ impl CompactCompleted {
         if !stage.consistent || stage.error.is_some() {
             return None;
         }
-        Some((
-            Arc::new(self.checked_summary.as_ref()?.clone()),
-            stage.reads.clone(),
-        ))
+        Some((self.checked_summary.as_ref()?.clone(), stage.reads.clone()))
     }
 
     pub(super) fn outcome(&self) -> &PublishedResult {
@@ -210,7 +207,7 @@ impl CompactCompleted {
         let checked_output = done.checked.as_ref().and_then(|p| p.result().ok());
         let checked_summary = checked_output.as_ref().map(|output| {
             let (summary, growth) = summarize(worker.types, &output.value);
-            CheckedSummary { summary, growth }
+            Arc::new(CheckedSummary { summary, growth })
         });
         let dead_arms = checked_output.as_ref().map(|output| {
             dead_arms::body_use(

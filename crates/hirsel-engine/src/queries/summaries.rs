@@ -100,10 +100,10 @@ impl QueryEngine {
             if summary.checked.is_none() {
                 let (checked, growth) = self.checked_definition_summary(definition)?;
                 let mut extended = (*summary).clone();
-                extended.checked = Some(CheckedSummary {
+                extended.checked = Some(Arc::new(CheckedSummary {
                     summary: checked,
                     growth,
-                });
+                }));
                 let mut reads = ReadsBuilder::new();
                 reads.merge(&extended.reads);
                 if let Some(entry) = self.checked.get(&definition) {
@@ -212,7 +212,7 @@ impl QueryEngine {
                 .and_then(|entry| entry.result().ok())
                 .map(|body| {
                     let (summary, growth) = summarize(self.types(), &body.value);
-                    CheckedSummary { summary, growth }
+                    Arc::new(CheckedSummary { summary, growth })
                 })
         });
         let published = std::sync::Arc::new(PublishedSummary {
@@ -249,7 +249,7 @@ impl QueryEngine {
             self.start(definition, QueryKind::CheckedSummary)?;
             self.record_checked_summary(
                 id,
-                CheckedSummary { summary, growth },
+                Arc::new(CheckedSummary { summary, growth }),
                 checked.memo.text,
                 checked.memo.reads.clone(),
                 checked.detail.clone(),
@@ -310,8 +310,11 @@ impl QueryEngine {
         let reads = summary.reads.clone();
         let key = crate::memo::MemoKey::new(QueryKind::Summary, definition);
         let text = summary.text;
-        let output =
-            self.summary_output(&summary.summary, &summary.growth, summary.checked.as_ref());
+        let output = self.summary_output(
+            &summary.summary,
+            &summary.growth,
+            summary.checked.as_deref(),
+        );
         let value = Ok(std::sync::Arc::new(QueryOutput {
             value: summary,
             diagnostics: vec![],
@@ -347,7 +350,7 @@ impl QueryEngine {
         definition: DefId,
     ) -> Result<(DefinitionSummary, ParameterGrowth), QueryError> {
         if let Some(checked) = self.retained_checked_summary(definition) {
-            return Ok((checked.summary, checked.growth));
+            return Ok((checked.summary.clone(), checked.growth.clone()));
         }
         let path = definition.path();
         // A durable final summary carries its original pre-mode input. Restore
@@ -368,7 +371,7 @@ impl QueryEngine {
                 entry.detail.clone(),
                 true,
             );
-            return Ok((checked.summary, checked.growth));
+            return Ok((checked.summary.clone(), checked.growth.clone()));
         }
         let checked = self.check_query(path)?;
         let (summary, growth) = summarize(self.types(), &checked.value);
@@ -378,7 +381,7 @@ impl QueryEngine {
             self.start(path, QueryKind::CheckedSummary)?;
             self.record_checked_summary(
                 definition,
-                product.clone(),
+                Arc::new(product.clone()),
                 text,
                 entry.memo.reads.clone(),
                 entry.detail.clone(),
@@ -389,19 +392,19 @@ impl QueryEngine {
         }
         Ok((product.summary, product.growth))
     }
-    fn retained_checked_summary(&mut self, definition: DefId) -> Option<CheckedSummary> {
+    fn retained_checked_summary(&mut self, definition: DefId) -> Option<Arc<CheckedSummary>> {
         let entry = self.checked_summaries.get(&definition)?.clone();
         let text = self
             .key_text(definition.path(), QueryKind::CheckedSummary)
             .ok()?;
         self.memo_valid(definition.path(), &entry, text)
-            .then(|| entry.result().ok().map(|output| (*output.value).clone()))
+            .then(|| entry.result().ok().map(|output| output.value.clone()))
             .flatten()
     }
     pub(super) fn record_checked_summary(
         &mut self,
         definition: DefId,
-        summary: CheckedSummary,
+        summary: Arc<CheckedSummary>,
         text: ContentHash,
         reads: Arc<Reads>,
         detail: DependencyReads,
@@ -411,7 +414,7 @@ impl QueryEngine {
         let durability = reads.durability(|read| self.durability_of(read));
         let output = self.summary_output(&summary.summary, &summary.growth, None);
         let value = Ok(Arc::new(QueryOutput {
-            value: Arc::new(summary),
+            value: summary,
             diagnostics: vec![],
             dependencies: detail.signatures.clone(),
         }));
