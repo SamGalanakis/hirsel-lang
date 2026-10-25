@@ -37,6 +37,7 @@ use std::fmt::Write as _;
 
 mod models;
 mod progress;
+mod reduce;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Entry {
@@ -77,15 +78,40 @@ pub(super) struct Divergence {
     pub(super) actual: Entry,
 }
 
+/// Where choices come from: the seed's generator, or an explicit schedule.
+enum Source {
+    Seeded(u64),
+    /// One value per choice, in order: a random draw's value, or the index of
+    /// an `event` decision's selection in its (possibly mutated) runnable
+    /// order. Past its end every draw is 0 and decisions go round-robin: the
+    /// count of filled decisions modulo the runnable count, so a filled tail
+    /// never starves a transition that stays enabled.
+    Schedule {
+        choices: Vec<u64>,
+        at: usize,
+        filled: u64,
+    },
+}
+
+/// Mutation only: a choice reads process state outside the seed, and the
+/// runnable order it sees is rotated by `epoch`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Mutation {
+    pub(super) epoch: u64,
+    /// Only `event` decisions where a running pool host call competes.
+    pub(super) host_only: bool,
+}
+
 /// Seeded choices and their checked transcript. With `expected`, the first
 /// entry that differs is retained and the run ends there.
 pub(super) struct Controller {
-    rng: u64,
+    source: Source,
     transcript: Vec<Entry>,
     expected: Option<Vec<Entry>>,
     divergence: Option<Divergence>,
-    /// Mutation only: process state outside the seed, read at every choice.
-    uncontrolled: Option<u64>,
+    /// A scheduled choice out of its bound, at this transcript index.
+    invalid: Option<usize>,
+    uncontrolled: Option<Mutation>,
     first_uncontrolled: Option<usize>,
 }
 
@@ -95,23 +121,75 @@ impl Controller {
         expected: Option<Vec<Entry>>,
         uncontrolled: Option<&AtomicU64>,
     ) -> Self {
+        let mutation = uncontrolled.map(|clock| Mutation {
+            epoch: clock.fetch_add(1, Ordering::Relaxed),
+            host_only: false,
+        });
+        Self::with(
+            Source::Seeded(seed ^ 0x5851_f42d_4c95_7f2d),
+            expected,
+            mutation,
+        )
+    }
+
+    /// Replay explicit choices instead of drawing them.
+    pub(super) fn schedule(
+        choices: &[u64],
+        expected: Option<Vec<Entry>>,
+        mutation: Option<Mutation>,
+    ) -> Self {
+        Self::with(
+            Source::Schedule {
+                choices: choices.to_vec(),
+                at: 0,
+                filled: 0,
+            },
+            expected,
+            mutation,
+        )
+    }
+
+    fn with(source: Source, expected: Option<Vec<Entry>>, uncontrolled: Option<Mutation>) -> Self {
         Self {
-            rng: seed ^ 0x5851_f42d_4c95_7f2d,
+            source,
             transcript: Vec::new(),
             expected,
             divergence: None,
-            uncontrolled: uncontrolled.map(|clock| clock.fetch_add(1, Ordering::Relaxed)),
+            invalid: None,
+            uncontrolled,
             first_uncontrolled: None,
         }
     }
 
-    fn draw(&mut self) -> u64 {
-        // SplitMix64, as MadSim's GlobalRng seeds its generator.
-        self.rng = self.rng.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
+    /// The next choice below `bound`, for a decision or a random draw.
+    fn draw(&mut self, bound: u64, decision: bool) -> u64 {
+        match &mut self.source {
+            Source::Seeded(rng) => {
+                // SplitMix64, as MadSim's GlobalRng seeds its generator.
+                *rng = rng.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = *rng;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                (z ^ (z >> 31)) % bound
+            }
+            Source::Schedule {
+                choices,
+                at,
+                filled,
+            } => {
+                let Some(&value) = choices.get(*at) else {
+                    *filled += u64::from(decision);
+                    return if decision { (*filled - 1) % bound } else { 0 };
+                };
+                *at += 1;
+                if value < bound {
+                    value
+                } else {
+                    self.invalid.get_or_insert(self.transcript.len());
+                    0
+                }
+            }
+        }
     }
 
     fn push(&mut self, entry: Entry) {
@@ -128,12 +206,13 @@ impl Controller {
         self.transcript.push(entry);
     }
 
-    pub(super) fn diverged(&self) -> bool {
-        self.divergence.is_some()
+    /// The run ends: a checked entry differed or a scheduled choice was invalid.
+    pub(super) fn halted(&self) -> bool {
+        self.divergence.is_some() || self.invalid.is_some()
     }
 
     pub(super) fn random(&mut self, site: &'static str, bound: u64) -> u64 {
-        let value = self.draw() % bound;
+        let value = self.draw(bound, false);
         self.push(Entry::Random { site, bound, value });
         value
     }
@@ -141,16 +220,17 @@ impl Controller {
     /// Choose one member of a canonical runnable set.
     pub(super) fn decide(&mut self, site: &'static str, mut runnable: Vec<u32>) -> Option<u32> {
         runnable.sort_unstable();
-        if let Some(epoch) = self.uncontrolled
+        if let Some(mutation) = self.uncontrolled
             && runnable.len() > 1
+            && (!mutation.host_only || runnable.iter().any(|&e| e >> 24 == 7))
         {
             // Like iterating a randomly keyed map: an order the seed never chose.
-            let by = (epoch % runnable.len() as u64) as usize;
+            let by = (mutation.epoch % runnable.len() as u64) as usize;
             runnable.rotate_left(by);
             self.first_uncontrolled.get_or_insert(self.transcript.len());
         }
         let selected = (!runnable.is_empty())
-            .then(|| runnable[(self.draw() % runnable.len() as u64) as usize]);
+            .then(|| runnable[self.draw(runnable.len() as u64, true) as usize]);
         self.push(Entry::Decision {
             site,
             runnable,
@@ -513,6 +593,7 @@ pub(super) struct Outcome {
     pub(super) transcript: Vec<Entry>,
     pub(super) projection: String,
     pub(super) divergence: Option<Divergence>,
+    pub(super) invalid: Option<usize>,
     pub(super) first_uncontrolled: Option<usize>,
     pub(super) coverage: Coverage,
 }
@@ -982,7 +1063,7 @@ impl World {
             self.inject();
             let events = self.events();
             let event = self.c.decide("event", events);
-            if self.c.diverged() {
+            if self.c.halted() {
                 break;
             }
             let Some(event) = event else { break };
@@ -1024,7 +1105,7 @@ impl World {
                     }
                 }
             }
-            if self.c.diverged() {
+            if self.c.halted() {
                 break;
             }
             self.check();
@@ -2011,7 +2092,8 @@ impl World {
 
     fn finish(mut self) -> Outcome {
         let divergence = self.c.divergence.take();
-        if divergence.is_none() {
+        let complete = divergence.is_none() && self.c.invalid.is_none();
+        if complete {
             if self.stopped {
                 assert!(self.arbiter.gate().unwrap().stopped());
             } else if self.config.mutant.is_some() {
@@ -2113,7 +2195,7 @@ impl World {
         coverage.late_handles += after - abandoned;
         drop(requests);
         drop(execs);
-        if divergence.is_none() {
+        if complete {
             assert_eq!(pool.held(), 0, "a credit outlived its call");
             let stats = pool.stats();
             let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
@@ -2149,6 +2231,7 @@ impl World {
         }
         Outcome {
             stranded,
+            invalid: c.invalid,
             first_uncontrolled: c.first_uncontrolled,
             transcript: c.transcript,
             projection,
@@ -2164,6 +2247,16 @@ pub(super) fn run(
     uncontrolled: Option<&AtomicU64>,
 ) -> Outcome {
     World::new(config, Controller::new(config.seed, expected, uncontrolled)).run()
+}
+
+/// Run `config` from explicit choices (`Controller::schedule`) instead of its seed.
+pub(super) fn replay(
+    config: Config,
+    choices: &[u64],
+    expected: Option<Vec<Entry>>,
+    mutation: Option<Mutation>,
+) -> Outcome {
+    World::new(config, Controller::schedule(choices, expected, mutation)).run()
 }
 
 const SEEDS: u64 = 96;
