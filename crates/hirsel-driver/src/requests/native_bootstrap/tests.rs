@@ -1300,12 +1300,7 @@ fn proof_graph(
         .unwrap();
     let export = program
         .engine
-        .front_proof_export_from_native(
-            &entry,
-            &source,
-            headers,
-            budget.reserve(4 << 20).unwrap(),
-        )
+        .front_proof_export_from_native(&entry, &source, headers, budget.reserve(4 << 20).unwrap())
         .unwrap();
     runtime
         .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
@@ -1497,7 +1492,12 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
             match (selected, bootstrap.proofs()) {
                 (None, None) => {}
                 (Some(_), Some(proofs)) => {
-                    let sites = proofs.discharge.0.values().map(|sites| sites.len()).sum::<usize>();
+                    let sites = proofs
+                        .discharge
+                        .0
+                        .values()
+                        .map(|sites| sites.len())
+                        .sum::<usize>();
                     assert_eq!(sites, removed, "assessed discharge sites");
                     let report = proofs.report_discharged(&proofs.discharge);
                     assert!(
@@ -1517,7 +1517,11 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
         }
         queries.sort();
         queries.dedup();
-        assert_eq!(queries.len(), 3, "evidence identity selects its own bootstrap");
+        assert_eq!(
+            queries.len(),
+            3,
+            "evidence identity selects its own bootstrap"
+        );
 
         // A caller-planned discharge cannot bypass the settled assessment.
         let graph = proof_graph(&manifest, &store, &budget, errors, weight);

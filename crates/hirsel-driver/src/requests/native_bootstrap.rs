@@ -253,7 +253,9 @@ impl NativeBootstrap {
     }
     /// The assessment selected for this bootstrap's completed source root.
     pub fn proofs(&self) -> Option<&native::Proofs> {
-        self.prepared.get().and_then(|prepared| prepared.proofs.as_ref())
+        self.prepared
+            .get()
+            .and_then(|prepared| prepared.proofs.as_ref())
     }
     pub fn failure(&self, reference: Reference) -> Option<String> {
         self.failure
