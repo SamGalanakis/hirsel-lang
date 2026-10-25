@@ -333,7 +333,8 @@ unsafe fn request(ctx: *mut TaskCtx, request: Request) -> Result<Completion, Ada
     // Recording off: the same ownership through the live claim word.
     let io = unsafe { (*ctx).run_ref().free_io.get().unwrap() };
     let keys = io.adapter.keys(&request);
-    unsafe { crate::stop::check(ctx, live::request(ctx, request, keys)) }
+    let blocking = io.adapter.blocking(&request);
+    unsafe { crate::stop::check(ctx, live::request(ctx, request, keys, blocking)) }
 }
 
 fn compute() -> u64 {

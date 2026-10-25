@@ -36,10 +36,12 @@ pub(crate) struct Pending {
 /// # Safety
 /// Native live Free owner holds the role. The service owns all adapter state;
 /// task-owned Pending retains every result/buffer through suspension or stop.
+/// `blocking` is the adapter's answer for this request, asked outside the role.
 pub(super) unsafe fn request(
     ctx: *mut TaskCtx,
     request: Request,
     keys: KeySet,
+    blocking: bool,
 ) -> Stopped<Result<Completion, AdapterError>> {
     let io = unsafe { &**(*ctx).run_ref().free_io.get().expect("live Free service") };
     let state = io.live.clone();
@@ -60,10 +62,6 @@ pub(super) unsafe fn request(
     super::super::record::begin(ctx);
     let pending = unsafe { (*ctx).live_host.as_deref_mut().unwrap() } as *mut Pending;
     let wait = io.register(token, unsafe { (*pending).request.buffers().clone() });
-    let blocking = {
-        let _segment = unsafe { role::Segment::new(ctx) };
-        io.adapter.blocking(unsafe { (*pending).request.buffers() })
-    };
     if blocking {
         unsafe { (*pending).job = Some(super::jobs::Owned::new(ctx)) };
     }

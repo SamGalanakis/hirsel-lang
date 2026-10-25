@@ -52,11 +52,11 @@ pub(crate) unsafe fn issue(
             .host_keys(&request)?;
         unsafe { replay_request(ctx, request, keys) }?
     } else if super::super::record::on(ctx) {
-        let keys = unsafe { concurrent::native_keys(ctx, &request) }?;
+        let (keys, _) = unsafe { concurrent::native_keys(ctx, &request) }?;
         unsafe { concurrent::request_with_keys(ctx, request, keys) }?
     } else {
-        let keys = unsafe { concurrent::native_keys(ctx, &request) }?;
-        unsafe { super::live::request(ctx, request, keys) }?
+        let (keys, blocking) = unsafe { concurrent::native_keys(ctx, &request) }?;
+        unsafe { super::live::request(ctx, request, keys, blocking) }?
     };
     // The existing native caller performs its bounded quantum check after
     // delivery. Waiting attempts already released their key positions.

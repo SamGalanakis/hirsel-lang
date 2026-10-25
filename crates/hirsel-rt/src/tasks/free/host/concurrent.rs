@@ -304,9 +304,11 @@ pub(super) unsafe fn request_with_keys(
 }
 
 /// Validate the whole supported footprint before any prepared record or effect.
+/// The same released segment also asks whether the adapter runs the request as
+/// a blocking job, so admission needs no second role release for it.
 /// # Safety
 /// The owner holds the role and its request buffers; the adapter is admitted.
-pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stopped<KeySet> {
+pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stopped<(KeySet, bool)> {
     let io = unsafe {
         (*ctx)
             .run_ref()
@@ -350,7 +352,7 @@ pub(super) unsafe fn native_keys(ctx: *mut TaskCtx, request: &Request) -> Stoppe
             "native host footprint has unadmitted domains".into(),
         ));
     }
-    Ok(expected)
+    Ok((expected, io.adapter.blocking(request)))
 }
 
 /// # Safety
