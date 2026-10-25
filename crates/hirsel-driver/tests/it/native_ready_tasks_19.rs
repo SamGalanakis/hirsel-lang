@@ -48,6 +48,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
         "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
         false,
         false,
+        false,
     );
 }
 const ADAPTER_SOURCE: &str = r#"
@@ -62,28 +63,55 @@ pub fn main()->Result[(),()] {
 }"#;
 #[test]
 fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
-    ready_case(ADAPTER_SOURCE, true, false);
+    ready_case(ADAPTER_SOURCE, true, false, false);
 }
 #[test]
 fn native_ready_tasks_refuse_missing_independent_adapter_inventory_before_materialization() {
-    ready_case(ADAPTER_SOURCE, true, true);
+    ready_case(ADAPTER_SOURCE, true, true, false);
 }
+#[test]
+fn every_stage_recomputes_instance_and_ready_hits_in_fresh_snapshots() {
+    for validation in [native::Validation::Ready, native::Validation::EveryStage] {
+        ready_case_policy(
+            "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+            false,
+            false,
+            false,
+            validation,
+            store::VerifyStore::Off,
+        );
+    }
+}
+
 #[test]
 fn explicit_store_verification_recomputes_instance_hits_under_boundary_validation() {
     ready_case_policy(
         "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
         false,
         false,
+        false,
+        native::Validation::Ready,
         store::VerifyStore::Recompute,
     );
 }
-fn ready_case(source: &str, adapter: bool, missing_inventory: bool) {
-    ready_case_policy(source, adapter, missing_inventory, store::VerifyStore::Off);
+
+pub(super) fn ready_case(source: &str, adapter: bool, missing_inventory: bool, assemble: bool) {
+    ready_case_policy(
+        source,
+        adapter,
+        missing_inventory,
+        assemble,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+    );
 }
+
 fn ready_case_policy(
     source: &str,
     adapter: bool,
     missing_inventory: bool,
+    assemble: bool,
+    validation: native::Validation,
     verify_store: store::VerifyStore,
 ) {
     with_compiler_stack(|| {
@@ -93,6 +121,10 @@ fn ready_case_policy(
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let policy =
             hirsel_syntax::ContentHash::of_bytes(b"native demand task current source control");
+        let mut options = native::Options::new(target.clone());
+        options.validation = validation;
+        let recompute = validation == native::Validation::EveryStage;
+        let recompute_instances = recompute || verify_store == store::VerifyStore::Recompute;
         let mut expected = None;
         for fresh in [false, true] {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
@@ -145,7 +177,7 @@ fn ready_case_policy(
             let tasks = InstanceTasks::new(
                 inputs,
                 store.clone(),
-                native::Options::new(target.clone()),
+                options.clone(),
                 policy,
                 MemoryWeight {
                     scratch: 16 << 20,
@@ -154,8 +186,9 @@ fn ready_case_policy(
                 },
                 budget.reserve(16 << 20).unwrap(),
             )
+            .unwrap()
+            .with_store_verification(verify_store)
             .unwrap();
-            let tasks = tasks.with_store_verification(verify_store).unwrap();
             if verify_store == store::VerifyStore::Recompute {
                 let shared = tasks.clone();
                 let error = match shared.with_store_verification(store::VerifyStore::Off) {
@@ -268,7 +301,7 @@ fn ready_case_policy(
                 store.clone(),
                 products,
                 graph,
-                native::Options::new(target.clone()),
+                options.clone(),
                 EmissionOptions::request(
                     input,
                     hirsel_lir::emission::OptLevel::None,
@@ -330,6 +363,32 @@ fn ready_case_policy(
             ] {
                 ready_runtime.register(kind, ready_factory.clone()).unwrap();
             }
+            if assemble {
+                for (key, _) in tasks.completed_instances(result[0]).unwrap() {
+                    let request = ready_runtime.request(&[key.ready_query_id()]);
+                    ready_runtime.wait(request).unwrap_or_else(|error| {
+                        panic!(
+                            "cross-owner Ready {}: {}",
+                            key.instance.definition(),
+                            String::from_utf8_lossy(&store.get_content(error).unwrap()),
+                        )
+                    });
+                }
+                use native::queries::NativeProducts;
+                let mut products = native::queries::products::DemandProducts::new(snapshot.clone());
+                let selected = tasks
+                    .completed_instances(result[0])
+                    .unwrap()
+                    .iter()
+                    .map(|(key, _)| products.ready(key).unwrap())
+                    .collect::<Vec<_>>();
+                products
+                    .with_ready(&selected, |units, _| {
+                        assert!(!units.is_empty());
+                        Ok(())
+                    })
+                    .unwrap();
+            }
             let selected = ready_runtime.request(&[main.ready_query_id()]);
             let ready = ready_runtime.wait(selected).unwrap_or_else(|error| {
                 panic!(
@@ -343,7 +402,7 @@ fn ready_case_policy(
             if adapter && !fresh {
                 assert!(transformations > 0);
             } else {
-                assert_eq!(transformations, u64::from(!fresh));
+                assert_eq!(transformations, u64::from(!fresh || recompute));
             }
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
@@ -361,7 +420,7 @@ fn ready_case_policy(
                 .collect::<Vec<_>>();
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));
-                if verify_store == store::VerifyStore::Recompute {
+                if recompute_instances {
                     assert_eq!(
                         tasks.imports.load(Ordering::Relaxed),
                         completed.len() as u64
