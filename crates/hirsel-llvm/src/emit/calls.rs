@@ -346,6 +346,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
+        // Any boundary call can suspend its frame: a resumable callee, or an
+        // operation that holds or parks from the saved frame (`STATUS_SUSPENDED`).
+        let boundary = self.resume_boundary_call(call);
         let nested = self.resume_boundary(call)?;
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         // The callee: a named function, or a code pointer and its environment.
@@ -711,7 +714,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         signature.attribute_call(self.module, returned);
         // A rejected gate leaves mut roots and temporary scatters unpublished.
         let status = signature.status(&self.builder, returned);
-        if nested.is_some() {
+        if boundary {
             self.resume_propagate(status)?;
         }
         if let Some(rejected) = site.pretransfer_failure {

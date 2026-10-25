@@ -286,12 +286,18 @@ type Line = (String, u32, u32, String, bool);
 /// Ordered admission on four cores with forced migration, in the diagnostic
 /// archive with its compact trace.
 pub(crate) fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
-    compact_runs_with(source, label, true)
+    compact_runs_with(source, label, true, "tasks.cooperative@1")
 }
 
-/// As [`compact_runs`]; without `migrate` no runtime knob is set and frames
-/// save only where their tasks wait.
-pub(crate) fn compact_runs_with(source: &str, label: &str, migrate: bool) -> Vec<Vec<Line>> {
+/// As [`compact_runs`] under the `tasks` provider (`tasks.cooperative@1` for
+/// Ordered, `tasks.free@1` for Free); without `migrate` no runtime knob is set
+/// and frames save only where their tasks wait.
+pub(crate) fn compact_runs_with(
+    source: &str,
+    label: &str,
+    migrate: bool,
+    tasks: &str,
+) -> Vec<Vec<Line>> {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -335,7 +341,9 @@ pub(crate) fn compact_runs_with(source: &str, label: &str, migrate: bool) -> Vec
         let grants = dir.join("grants.json");
         std::fs::write(
             &grants,
-            r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[],"placement":{"cores":4}}"#,
+            format!(
+                r#"{{"io":{{"stdout":"stdout.bytes@1","tasks":"{tasks}","dirs":[]}},"args":[],"placement":{{"cores":4}}}}"#
+            ),
         )
         .unwrap();
         let tape = dir.join("run.tape");
@@ -371,7 +379,7 @@ pub(crate) fn compact_runs_with(source: &str, label: &str, migrate: bool) -> Vec
                 stderr: output.stderr,
                 record: std::fs::read_to_string(&record).unwrap(),
             };
-            let cell = format!("{label} {backend:?} replay={replay}");
+            let cell = format!("{label} {tasks} {backend:?} replay={replay}");
             assert_eq!(
                 native::observe(&launched, &ready, &sites).unwrap(),
                 expected,
@@ -717,7 +725,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     let mut sum=0u64
     for _ in 1u64..CHILDREN {
       for _ in 0u64..2u64 {
-        match channel.receive(tasks,mut rx) {Ok(x)=>{sum=sum*31u64+x}, Error(_)=>{}}
+        match channel.receive(tasks,mut rx) {Ok(x)=>{sum=sum+x*x}, Error(_)=>{}}
       }
     }
     if let Ok(rows)=std@1/task.all(s,take set) {for x in rows {sum=sum+x}}
@@ -728,24 +736,57 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 }
 "#;
 
-/// With no runtime knob the fanout runs under default routing on both
-/// backends, live and replayed, and every observation equals the reference
-/// interpreter's (`compact_runs_with`). Every resume point is decided, every
-/// frame that leaves gives its stack back to its worker's pool, and each
-/// leave is activated once at its saved state.
+/// The most stacks suspended children held at once: a child holds its stack
+/// from a `hold` until its next `resume`. Task row 0 is the root.
+fn peak_held(trace: &[Line]) -> usize {
+    let mut held = std::collections::BTreeSet::new();
+    let mut peak = 0;
+    for (kind, task, ..) in trace {
+        match kind.as_str() {
+            "hold" if *task != 0 => {
+                held.insert(*task);
+                peak = peak.max(held.len());
+            }
+            "resume" | "activate" => {
+                held.remove(task);
+            }
+            _ => {}
+        }
+    }
+    peak
+}
+
+/// Go's `TestStackMem` (`runtime/stack_test.go:24-79`) as a native fanout:
+/// with no runtime knob, N children whose ends hold their results until the
+/// root's `task.all` hold at most one stack per worker (4 cores), not one
+/// each, on both backends: under Ordered live and replayed, and under Free
+/// live. Each child's end holds its result from its saved compact frame,
+/// whose stack its worker pooled; every observation equals the reference
+/// interpreter's (`compact_runs_with`), under Free replayed too. A Free
+/// replay's send still waits for its tape turn on its stack, inside the
+/// library body that implements it, so Free replay checks only the leaves.
 #[test]
-fn runtime52_default_routing_fanout_agrees_live_and_replayed() {
+fn runtime52_parked_fanout_holds_worker_stacks() {
     with_compiler_stack(|| {
-        for children in [8u64, 32] {
+        for (children, tasks) in [8u64, 32]
+            .into_iter()
+            .flat_map(|n| [(n, "tasks.cooperative@1"), (n, "tasks.free@1")])
+        {
             let source = DEFAULT_FANOUT.replace("CHILDREN", &format!("{}u64", children + 1));
-            let label = format!("default fanout {children}");
-            for (index, trace) in compact_runs_with(&source, &label, false).iter().enumerate() {
+            let label = format!("parked fanout {children} {tasks}");
+            for (index, trace) in compact_runs_with(&source, &label, false, tasks)
+                .iter()
+                .enumerate()
+            {
                 let cell = format!("{label} run {index}");
-                let points = trace.iter().filter(|line| line.0 == "point").count();
-                assert!(
-                    points as u64 >= 2 * children,
-                    "{cell}: {points} resume points"
-                );
+                let leaves = trace.iter().filter(|line| line.0 == "leave").count();
+                let peak = peak_held(trace);
+                eprintln!("{cell}: leaves {leaves} peak held {peak}");
+                assert!(leaves as u64 >= children, "{cell}: {leaves} leaves");
+                // Runs alternate live and replayed, LLVM first.
+                if tasks != "tasks.free@1" || index % 2 == 0 {
+                    assert!(peak <= 4, "{cell}: {peak} suspended children held stacks");
+                }
                 let mut saved = std::collections::BTreeMap::new();
                 for (kind, task, state, _, flag) in trace {
                     match kind.as_str() {

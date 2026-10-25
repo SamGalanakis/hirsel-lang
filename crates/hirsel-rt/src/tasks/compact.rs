@@ -98,6 +98,56 @@ pub(crate) unsafe fn parks(ctx: *mut TaskCtx, ahead: Ahead) -> bool {
     (unsafe { movable(ctx) }) && ordered::engine::on(ctx) && ordered::engine::waits(ctx, ahead)
 }
 
+/// Bind the running task's compact frame image while its resumable body
+/// runs, or clear it.
+pub(crate) fn bind_frame(ctx: *mut TaskCtx, frame: Option<(usize, usize)>) {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).compact_frame = frame;
+    });
+}
+
+/// Whether the running task's end can hold its result from a saved compact
+/// frame instead of parking on its stack: its result's `size` bytes at
+/// `slot` lie in its compact frame image, which outlives the stack, and the
+/// task can leave its stack. Its end then returns `STATUS_SUSPENDED` to the
+/// boundary call, the frame leaves, and the reissued end continues after the
+/// hold (Tokio's harness goes idle only on `Pending`,
+/// `runtime/task/harness.rs:193-231`; here the end's first half is that poll).
+///
+/// # Safety
+/// The running task is in its task end, called from its body.
+pub(crate) unsafe fn can_hold(ctx: *mut TaskCtx, slot: *mut u8, size: u64) -> bool {
+    let inside = role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).compact_frame.is_some_and(|(base, bytes)| {
+            let start = slot as usize;
+            start >= base && start.saturating_add(size as usize) <= base + bytes
+        })
+    });
+    // SAFETY: caller contract.
+    inside && unsafe { movable(ctx) }
+}
+
+/// Record that the running task's end holds its result from its saved
+/// frame: [`leave`] publishes no wake of its own (only the parent's hand-off
+/// resumes it), and the reissued end continues after the hold.
+pub(crate) fn hold(ctx: *mut TaskCtx) {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        assert!(!std::mem::replace(&mut s.task(me).hold_left, true));
+    });
+}
+
+/// Whether this end is the reissue of one that held its result from a saved
+/// frame; it then continues after the hold.
+pub(crate) fn held(ctx: *mut TaskCtx) -> bool {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        std::mem::take(&mut s.task(me).hold_left)
+    })
+}
+
 /// Whether the running task can leave its stack at this resume point. If it
 /// can, its logical policy records the physical leave, and the caller must
 /// leave: Ordered marks the frame saving (a wait resumes at head; a published
@@ -112,9 +162,16 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
     if !unsafe { movable(ctx) } {
         return false;
     }
+    let holding = role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).hold_left
+    });
     if ordered::engine::on(ctx) {
         let published = crate::pool::free::migrating(unsafe { (*ctx).run_ref() });
-        ordered::engine::transfer(ctx, !published);
+        // A held end resumes when its parent calls its rest, as its park would.
+        ordered::engine::transfer(ctx, !published && !holding);
+    } else if holding {
+        // Only the parent's hand-off makes a holding task Ready again.
     } else {
         // SAFETY: the role is held and no table borrow survives this call.
         unsafe {

@@ -374,6 +374,12 @@ pub(crate) unsafe fn finish(
     size: u64,
     descriptor: u32,
 ) -> Stopped<u8> {
+    if crate::tasks::compact::held(ctx) {
+        // The reissued end of a result held from a saved compact frame: its
+        // parent called its rest, as `save_boundary` returns below.
+        engine::at_head(ctx)?;
+        return Ok(STATUS_OK);
+    }
     engine::at_head(ctx)?;
     let me = role::with_role(ctx, |s| s.current);
     unsafe { super::events::task_result(ctx, descriptor, slot) };
@@ -412,6 +418,12 @@ pub(crate) unsafe fn finish(
             .holding
             .insert(task)
     });
+    if unsafe { crate::tasks::compact::can_hold(ctx, slot, size) } {
+        // The result stays in the compact frame; the frame leaves its stack.
+        engine::defer_boundary_poll(ctx, progress);
+        crate::tasks::compact::hold(ctx);
+        return Ok(crate::STATUS_SUSPENDED);
+    }
     engine::save_boundary(ctx, progress)?;
     Ok(STATUS_OK)
 }

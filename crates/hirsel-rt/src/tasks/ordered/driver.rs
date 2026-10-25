@@ -244,7 +244,11 @@ impl Driver {
     /// claim, which the next worker adopts by [`Driver::claimed`].
     pub(super) fn left(&mut self, task: TaskId, head_only: bool) {
         self.suspending(task, head_only);
-        if !head_only {
+        let running = self
+            .frontier
+            .as_ref()
+            .is_some_and(|f| matches!(f.state(task), State::Running(_)));
+        if !head_only && running {
             self.moved.insert(task);
         }
     }

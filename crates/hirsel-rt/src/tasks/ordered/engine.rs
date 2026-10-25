@@ -878,11 +878,18 @@ pub(super) fn continue_after_read(ctx: *mut TaskCtx, progress: Progress) -> Stop
 /// callback finishes its poll and may only then select a logical continuation.
 pub(super) fn save_boundary(ctx: *mut TaskCtx, progress: Progress) -> Stopped<()> {
     let task = current(ctx);
-    if progress == Progress::Poll {
-        with_driver(ctx, |d| d.defer_poll_until_saved(task));
-    }
+    defer_boundary_poll(ctx, progress);
     suspend(ctx, task, false);
     at_head(ctx)
+}
+
+/// The retirement poll of a park or holding publication waits for the
+/// physical save, a stackful suspension's or a compact frame's leave.
+pub(super) fn defer_boundary_poll(ctx: *mut TaskCtx, progress: Progress) {
+    if progress == Progress::Poll {
+        let task = current(ctx);
+        with_driver(ctx, |d| d.defer_poll_until_saved(task));
+    }
 }
 
 /// Reserve a host wait's retirement poll before its home bridge. The bridge

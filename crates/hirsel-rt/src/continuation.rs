@@ -386,6 +386,7 @@ unsafe fn drive(
     mut frame: OwnedResumeFrame,
 ) -> u8 {
     loop {
+        crate::tasks::compact::bind_frame(ctx, Some((frame.as_mut_ptr() as usize, frame.bytes())));
         let status = {
             // SAFETY: no scheduler borrow survives the call into compiled code.
             let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
@@ -400,6 +401,7 @@ unsafe fn drive(
                 )
             }
         };
+        crate::tasks::compact::bind_frame(ctx, None);
         if status != crate::STATUS_SUSPENDED {
             owner.complete();
             return status;

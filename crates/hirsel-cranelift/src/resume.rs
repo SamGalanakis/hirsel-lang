@@ -205,6 +205,13 @@ impl FnEmitter<'_, '_, '_> {
         self.return_suspended()
     }
 
+    /// Whether `call` is a boundary of this body's resumable plan.
+    pub(crate) fn resume_boundary_call(&self, call: CallId) -> bool {
+        self.resume
+            .as_ref()
+            .is_some_and(|r| r.plan.states.iter().any(|s| s.boundary.call == call))
+    }
+
     /// The boundary protocol before `call`; for a resumable callee, its frame.
     pub(crate) fn resume_boundary(
         &mut self,

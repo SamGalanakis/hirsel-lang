@@ -2076,6 +2076,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if abi.shape == CallableShape::Foreign {
             return self.foreign_call(call, abi, normal);
         }
+        // Any boundary call can suspend its frame: a resumable callee, or an
+        // operation that holds or parks from the saved frame (`STATUS_SUSPENDED`).
+        let boundary = self.resume_boundary_call(call);
         let nested = self.resume_boundary(call)?;
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         let mut runtime_primitive = false;
@@ -2308,7 +2311,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         };
         self.ahead_reload();
         let status = returned[usize::from(signature.value.is_some())];
-        if nested.is_some() {
+        if boundary {
             self.resume_propagate(status)?;
         }
         if let Some(rejected) = site.pretransfer_failure {

@@ -43,6 +43,8 @@ struct Log {
     ahead: bool,
     /// Boundaries each child crosses.
     boundaries: u32,
+    /// Per child: ends that held the result from the saved frame.
+    holds: BTreeMap<u64, u32>,
     /// Children inside their dispatcher now.
     running: std::collections::BTreeSet<u64>,
     /// Children whose dispatcher returned their result.
@@ -148,8 +150,9 @@ unsafe fn boundary(ctx: *mut crate::TaskCtx, own: u64, identity: u64, k: u32) {
     assert_eq!(seen, value);
 }
 
-/// The child's last operations: the shared atomic, then its result.
-unsafe fn finish(ctx: *mut crate::TaskCtx, shared: u64, identity: u64) -> u8 {
+/// The child's last operation before its end: the shared atomic. Its
+/// result is `[1, identity * 1000 + observed]`.
+unsafe fn last(ctx: *mut crate::TaskCtx, shared: u64, identity: u64) -> [u64; 2] {
     let mut observed = 0u64;
     unsafe {
         if identity.is_multiple_of(2) {
@@ -157,15 +160,19 @@ unsafe fn finish(ctx: *mut crate::TaskCtx, shared: u64, identity: u64) -> u8 {
         } else {
             tasks::hirsel_rt_v2_atomic_load(ctx, &shared, (&raw mut observed).cast(), 8);
         }
-        let mut result = [1u64, identity * 1000 + observed];
-        tasks::hirsel_rt_v2_task_finish(
-            ctx,
-            result.as_mut_ptr().cast(),
-            [0u64; 2].as_ptr().cast(),
-            16,
-            3,
-        )
     }
+    [1, identity * 1000 + observed]
+}
+
+/// The child's end: its result, at `result`, held for its parent.
+unsafe fn end(ctx: *mut crate::TaskCtx, result: *mut [u64; 2]) -> u8 {
+    unsafe { tasks::hirsel_rt_v2_task_finish(ctx, result.cast(), [0u64; 2].as_ptr().cast(), 16, 3) }
+}
+
+/// The child's last operations: the shared atomic, then its end.
+unsafe fn finish(ctx: *mut crate::TaskCtx, shared: u64, identity: u64) -> u8 {
+    let mut result = unsafe { last(ctx, shared, identity) };
+    unsafe { end(ctx, &raw mut result) }
 }
 
 /// The straight-line stackful reference.
@@ -222,7 +229,8 @@ fn head(ctx: *mut crate::TaskCtx) -> bool {
 /// The body's dispatcher. State k reissues boundary k and nothing before it;
 /// at each later boundary the resume point decides whether the frame saves
 /// or the boundary proceeds in place. The frame's live word counts the
-/// boundaries already done.
+/// boundaries already done; the last state is the end, whose result lives in
+/// the frame (bytes 16..32), so the end can hold it from the saved frame.
 unsafe extern "C" fn dispatcher(
     ctx: *mut crate::TaskCtx,
     environment: *mut crate::Header,
@@ -249,11 +257,43 @@ unsafe extern "C" fn dispatcher(
         (log.ahead, log.boundaries)
     };
     sample(ctx, log);
+    let result = unsafe { frame.add(16).cast::<[u64; 2]>() };
+    let save = |state: u32, held: bool| {
+        log.lock().unwrap().running.remove(&identity);
+        sample(ctx, log);
+        let mut log = log.lock().unwrap();
+        log.saves
+            .entry(identity)
+            .or_default()
+            .push((state, crate::pool::compute_index()));
+        if held {
+            *log.holds.entry(identity).or_default() += 1;
+        }
+        if log.stop_at == Some((identity, state)) {
+            unsafe {
+                (*ctx)
+                    .run_ref()
+                    .control
+                    .request(crate::stop::Stop::Requested)
+            };
+        }
+        crate::STATUS_SUSPENDED
+    };
     unsafe {
         if state == 0 {
             live.write(identity * 7);
         }
         loop {
+            if state == boundaries + 1 {
+                let status = end(ctx, result);
+                if status == crate::STATUS_SUSPENDED {
+                    return save(state, true);
+                }
+                let mut log = log.lock().unwrap();
+                log.running.remove(&identity);
+                log.done.insert(identity);
+                return status;
+            }
             assert_eq!(
                 live.read(),
                 identity * 7 + u64::from(state.saturating_sub(1))
@@ -263,32 +303,20 @@ unsafe extern "C" fn dispatcher(
                 live.write(live.read() + 1);
             }
             if state == boundaries {
-                let status = finish(ctx, shared, identity);
-                let mut log = log.lock().unwrap();
-                log.running.remove(&identity);
-                log.done.insert(identity);
-                return status;
+                result.write(last(ctx, shared, identity));
             }
             state += 1;
             header.write(state);
-            let hint = if ahead { crate::RESUME_EARLY } else { 0 };
+            // The end needs the head; each boundary is an atomic store and load.
+            let hint = if ahead && state <= boundaries {
+                crate::RESUME_EARLY
+            } else {
+                0
+            };
             if crate::continuation::hirsel_rt_v2_resume_point(ctx, frame, state | hint) == 0 {
                 continue;
             }
-            log.lock().unwrap().running.remove(&identity);
-            sample(ctx, log);
-            let mut log = log.lock().unwrap();
-            log.saves
-                .entry(identity)
-                .or_default()
-                .push((state, crate::pool::compute_index()));
-            if log.stop_at == Some((identity, state)) {
-                (*ctx)
-                    .run_ref()
-                    .control
-                    .request(crate::stop::Stop::Requested);
-            }
-            return crate::STATUS_SUSPENDED;
+            return save(state, false);
         }
     }
 }
@@ -508,13 +536,21 @@ fn runtime50_compact_frames_leave_their_stacks_and_agree_with_stackful_bodies() 
                         continue;
                     }
                     exact_custody(&log, &name, Some(CHILDREN));
+                    // Each end held its result from its saved frame, off any stack.
+                    for identity in 0..CHILDREN {
+                        assert_eq!(
+                            log.holds.get(&identity),
+                            Some(&1),
+                            "{name} child {identity}"
+                        );
+                    }
                     if migrate && width > 1 {
                         // A published frame saves at every boundary and
                         // activates on another worker.
                         for identity in 0..CHILDREN {
                             assert_eq!(
                                 log.entries[&identity].len() as u32,
-                                BOUNDARIES + 1,
+                                BOUNDARIES + 3,
                                 "{name}"
                             );
                             for (save, entry) in log.saves[&identity]
@@ -532,8 +568,9 @@ fn runtime50_compact_frames_leave_their_stacks_and_agree_with_stackful_bodies() 
         }
     }
     assert_eq!(cells, 48);
-    // Widths 2, 4 and 8 under both reorders and both hints.
-    assert_eq!(moved, 12 * CHILDREN * u64::from(BOUNDARIES));
+    // Widths 2, 4 and 8 under both reorders and both hints: every boundary,
+    // the end's resume point and its hold.
+    assert_eq!(moved, 12 * CHILDREN * u64::from(BOUNDARIES + 2));
 }
 
 #[test]
@@ -570,38 +607,45 @@ fn runtime50_compact_frame_stopped_while_saved_is_never_activated() {
 fn runtime52_parked_compact_children_hold_no_stacks() {
     const WIDTH: u32 = 4;
     let mut reference = None;
-    for compact in [false, true] {
+    for (free, compact) in [(false, false), (false, true), (true, true)] {
         let cell = Cell {
             ahead: false,
+            free,
             children: PARKED,
             boundaries: PARKED as u32,
             ..Cell::new(WIDTH, false, compact)
         };
+        let name = format!("free {free} compact {compact}");
         let (outcome, trace, log) = run(&cell);
-        assert_eq!(outcome.ended, Ok(crate::STATUS_OK), "compact {compact}");
-        let trace = trace.unwrap();
-        match &reference {
-            Some(reference) => assert_eq!(trace.bytes(), reference, "compact {compact}"),
-            None => reference = Some(trace.bytes().to_vec()),
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK), "{name}");
+        if !free {
+            let trace = trace.unwrap();
+            match &reference {
+                Some(reference) => assert_eq!(trace.bytes(), reference, "{name}"),
+                None => reference = Some(trace.bytes().to_vec()),
+            }
         }
         if !compact {
             continue;
         }
         let log = log.lock().unwrap();
-        exact_custody(&log, "parked", Some(PARKED));
+        exact_custody(&log, &name, Some(PARKED));
+        // Every end held its result from its saved frame.
+        assert!(log.holds.values().all(|&holds| holds == 1), "{name}");
+        assert_eq!(log.holds.len() as u64, PARKED, "{name}");
         let (held, bytes) = log.peak_held;
         eprintln!(
-            "{} children parked at once; parked children held at most {held} stacks ({bytes} B)",
+            "{name}: {} children parked at once; parked children held at most {held} stacks ({bytes} B)",
             log.peak_saved
         );
         assert!(
             log.peak_saved as u64 > u64::from(WIDTH) * 2,
-            "only {} children parked at once",
+            "{name}: only {} children parked at once",
             log.peak_saved
         );
         assert!(
             held <= WIDTH as usize && bytes < 4 << 20,
-            "{held} stacks ({bytes} resident bytes) held by {} parked children",
+            "{name}: {held} stacks ({bytes} resident bytes) held by {} parked children",
             log.peak_saved
         );
     }
@@ -675,10 +719,15 @@ fn runtime52_free_compact_frames_leave_their_stacks() {
             for identity in 0..CHILDREN {
                 assert_eq!(
                     log.entries[&identity].len() as u32,
-                    BOUNDARIES + 1,
+                    BOUNDARIES + 3,
                     "{name}"
                 );
                 assert!(!log.released[&log.rows[&identity]].is_empty(), "{name}");
+                assert_eq!(
+                    log.holds.get(&identity),
+                    Some(&1),
+                    "{name} child {identity}"
+                );
             }
         }
     }

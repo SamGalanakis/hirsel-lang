@@ -168,6 +168,11 @@ struct Task {
     stack: Option<Stack>,
     /// A compact task's context, once its first stack is gone. Its stack, if any, is lent.
     context_home: Option<Box<compact::ContextHome>>,
+    /// While its resumable body runs: the bytes of its compact frame image.
+    compact_frame: Option<(usize, usize)>,
+    /// Its result is held for its parent from a saved compact frame: the
+    /// reissued task end continues after the hold (`compact::hold`).
+    hold_left: bool,
     /// Fast children own a stable context independently of the lent fiber.
     inline_context: Option<Box<std::cell::UnsafeCell<TaskCtx>>>,
     /// Parent destination while an immediate child runs on its parent's fiber.
@@ -949,6 +954,8 @@ impl Task {
             ctx,
             stack: None,
             context_home: None,
+            compact_frame: None,
+            hold_left: false,
             inline_context: None,
             inline_result: None,
             inline_value: None,

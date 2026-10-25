@@ -346,6 +346,12 @@ pub(crate) unsafe fn finish(
     none: *const u8,
     size: u64,
 ) -> Stopped<u8> {
+    if crate::tasks::compact::held(ctx) {
+        // The reissued end of a result held from a saved compact frame: its
+        // parent's hand-off resumed it, as `run_next` returns below.
+        super::replay::start(ctx);
+        return Ok(STATUS_OK);
+    }
     if unsafe { super::spawn::finish(ctx, slot, none, size) }? {
         return Ok(STATUS_OK);
     }
@@ -387,6 +393,12 @@ pub(crate) unsafe fn finish(
             s.settle(me);
         })
     })?;
+    if unsafe { crate::tasks::compact::can_hold(ctx, slot, size) } {
+        // The result stays in the compact frame; the frame leaves its stack.
+        crate::tasks::compact::hold(ctx);
+        unsafe { super::dispatch_ready(ctx) };
+        return Ok(crate::STATUS_SUSPENDED);
+    }
     unsafe { run_next(&mut *ctx) }?;
     super::replay::start(ctx);
     Ok(STATUS_OK)
