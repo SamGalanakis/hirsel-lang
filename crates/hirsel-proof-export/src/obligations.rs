@@ -467,7 +467,7 @@ fn integer(types: &TypeInterner, body: &Body, operand: &Operand) -> bool {
 
 /// SEM-1 checked integer operations; comparisons, bitwise operations and
 /// floats cannot fail.
-fn checked_arithmetic(types: &TypeInterner, body: &Body, rvalue: &Rvalue) -> bool {
+pub(crate) fn checked_arithmetic(types: &TypeInterner, body: &Body, rvalue: &Rvalue) -> bool {
     match rvalue {
         Rvalue::Binary { op, left, .. } => {
             matches!(
