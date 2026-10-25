@@ -68,7 +68,24 @@ fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and
 fn native_ready_tasks_refuse_missing_independent_adapter_inventory_before_materialization() {
     ready_case(ADAPTER_SOURCE, true, true);
 }
+#[test]
+fn explicit_store_verification_recomputes_instance_hits_under_boundary_validation() {
+    ready_case_policy(
+        "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+        false,
+        false,
+        store::VerifyStore::Recompute,
+    );
+}
 fn ready_case(source: &str, adapter: bool, missing_inventory: bool) {
+    ready_case_policy(source, adapter, missing_inventory, store::VerifyStore::Off);
+}
+fn ready_case_policy(
+    source: &str,
+    adapter: bool,
+    missing_inventory: bool,
+    verify_store: store::VerifyStore,
+) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -138,6 +155,15 @@ fn ready_case(source: &str, adapter: bool, missing_inventory: bool) {
                 budget.reserve(16 << 20).unwrap(),
             )
             .unwrap();
+            let tasks = tasks.with_store_verification(verify_store).unwrap();
+            if verify_store == store::VerifyStore::Recompute {
+                let shared = tasks.clone();
+                let error = match shared.with_store_verification(store::VerifyStore::Off) {
+                    Err(error) => error,
+                    Ok(_) => panic!("shared native Instance policy was mutated"),
+                };
+                assert!(error.contains("shared before store verification binding"), "{error}");
+            }
             let factory = Arc::new(InstanceTaskFactory::new(tasks.clone()));
             let main = tasks
                 .roots()
@@ -332,9 +358,15 @@ fn ready_case(source: &str, adapter: bool, missing_inventory: bool) {
                 .collect::<Vec<_>>();
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));
-                assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
-                assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
-                assert_eq!(trace.totals(), Default::default());
+                if verify_store == store::VerifyStore::Recompute {
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), completed.len() as u64);
+                    assert!(tasks.source_body_demands.load(Ordering::Relaxed) > 0);
+                    assert_ne!(trace.totals(), Default::default());
+                } else {
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                    assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
+                    assert_eq!(trace.totals(), Default::default());
+                }
             } else {
                 assert_eq!(
                     tasks.imports.load(Ordering::Relaxed),
