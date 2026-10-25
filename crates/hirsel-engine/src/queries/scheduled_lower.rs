@@ -85,11 +85,9 @@ struct Outcome {
 impl Outcome {
     fn retained_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
-        weight.add(
-            self.reads
-                .len()
-                .checked_mul(std::mem::size_of::<(ReadKey, ContentHash)>())?,
-        );
+        for (_, bytes) in self.reads.allocations() {
+            weight.add(bytes);
+        }
         weight.add(std::mem::size_of_val(&*self.depth.first));
         match &self.result {
             Ok(Value::Lower(lower)) => {
@@ -1315,6 +1313,7 @@ mod retention_tests {
         let expected = capacity
             + substitutions_bytes
             + std::mem::size_of::<(ReadKey, ContentHash)>()
+            + 2 * std::mem::size_of::<usize>()
             + std::mem::size_of_val(&*outcome.depth.first);
         assert_eq!(outcome.retained_bytes(), Some(expected as u64));
         assert_eq!(outcome_table_bytes(0), 0);

@@ -65,7 +65,7 @@ impl CompactStage {
     fn capture<T>(
         owner: &DefPath,
         product: Product<T>,
-        inherited: &Reads,
+        inherited: &Arc<Reads>,
         source: &mut impl memos::ReadSource,
     ) -> Self {
         let (computed, result, detail, products, reads) = match product {
@@ -89,6 +89,15 @@ impl CompactStage {
                 )
             }
         };
+        // Canonical equality permits retaining the predecessor allocation.
+        // Phase identity and complete read coverage remain separate rows.
+        let reads = reads.map(|reads| {
+            if reads.as_ref() == inherited.as_ref() {
+                inherited.clone()
+            } else {
+                reads
+            }
+        });
         let consistent = reads.is_ok();
         Self {
             computed,
@@ -105,6 +114,7 @@ pub(crate) struct CompactCompleted {
     pub(super) index: usize,
     text: ContentHash,
     resolution: Option<Product<Resolution>>,
+    resolution_reads: Option<Arc<Reads>>,
     checked: Option<CompactStage>,
     modes: Option<CompactStage>,
     checked_summary: Option<Arc<CheckedSummary>>,
@@ -116,28 +126,14 @@ pub(crate) struct CompactCompleted {
     outcome: PublishedResult,
 }
 impl CompactCompleted {
-    pub(super) fn memo_snapshot(
-        &self,
-        source: &mut impl memos::ReadSource,
-    ) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
+    pub(super) fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
         let mut rows = Vec::new();
-        let owner = &self.outcome.definition;
-        let definition = DefId::intern(owner);
-        if let Some(resolution) = &self.resolution {
-            let reads = match resolution {
-                Product::Hit(entry) => Some(entry.memo.reads.clone()),
-                Product::Computed(stage) => {
-                    memos::complete_reads(owner, &stage.detail, &stage.observed, source)
-                        .ok()
-                        .map(Arc::new)
-                }
-            };
-            if let Some(reads) = reads {
-                rows.push((
-                    crate::memo::MemoKey::new(QueryKind::Resolve, definition),
-                    reads,
-                ));
-            }
+        let definition = DefId::intern(&self.outcome.definition);
+        if let Some(reads) = &self.resolution_reads {
+            rows.push((
+                crate::memo::MemoKey::new(QueryKind::Resolve, definition),
+                reads.clone(),
+            ));
         }
         for (kind, stage) in [
             (QueryKind::Check, &self.checked),
@@ -290,7 +286,12 @@ impl CompactCompleted {
                 Err(_) => consistent = false,
             }
         }
-        let checked = done.checked.map(|product| {
+        let mut resolution_reads = done
+            .resolution
+            .as_ref()
+            .filter(|_| consistent)
+            .map(|_| inherited.clone());
+        let mut checked = done.checked.map(|product| {
             let mut stage = CompactStage::capture(&done.definition, product, &inherited, source);
             // An inconsistent predecessor cannot grant a coherent descendant.
             stage.consistent &= consistent;
@@ -310,6 +311,20 @@ impl CompactCompleted {
             match inherited.union(&done.signature_reads) {
                 Ok(reads) => inherited = Arc::new(reads),
                 Err(_) => consistent = false,
+            }
+        }
+        if consistent {
+            if let Some(reads) = &mut resolution_reads
+                && !Arc::ptr_eq(reads, &inherited)
+                && let Some(shared) = reads.share_rows(&inherited)
+            {
+                *reads = Arc::new(shared);
+            }
+            if let Some(stage) = &mut checked
+                && !Arc::ptr_eq(&stage.reads, &inherited)
+                && let Some(shared) = stage.reads.share_rows(&inherited)
+            {
+                stage.reads = Arc::new(shared);
             }
         }
         let mode_archive = modes
@@ -338,6 +353,7 @@ impl CompactCompleted {
             index: done.index,
             text: done.text,
             resolution: done.resolution,
+            resolution_reads,
             checked,
             modes,
             checked_summary,

@@ -49,11 +49,9 @@ pub(crate) fn retained_lowering_metadata_bytes(
     registrations: &Vec<StagedRegistration>,
 ) -> u64 {
     let mut weight = Weight::default();
-    weight.add(
-        reads
-            .len()
-            .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
-    );
+    for (identity, bytes) in reads.allocations() {
+        weight.allocation(identity, bytes);
+    }
     weight.add(size_of_val(&*depth.first));
     weight.vec(registrations, |w, registration| {
         w.def_path(&registration.path);
@@ -118,12 +116,9 @@ pub(crate) fn retained_lower_entry_bytes(
     let mut weight = Weight::default();
     weight.add(arc_bytes(entry));
     weight.add(arc_bytes(&*entry.memo.reads));
-    weight.add(
-        entry
-            .reads()
-            .len()
-            .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
-    );
+    for (identity, bytes) in entry.reads().allocations() {
+        weight.allocation(identity, bytes);
+    }
     weight.detail(&entry.detail);
     weight.flat_vec(&entry.covered);
     weight.vec(&entry.selections, |w, selection| {
@@ -206,11 +201,9 @@ impl Weight {
     }
     pub(crate) fn reads(&mut self, value: &std::sync::Arc<Reads>) {
         self.arc(value, |w, reads| {
-            w.add(
-                reads
-                    .len()
-                    .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
-            )
+            for (identity, bytes) in reads.allocations() {
+                w.allocation(identity, bytes);
+            }
         });
     }
     pub(crate) fn diagnostic(&mut self, diagnostic: &hirsel_diag::Diagnostic) {

@@ -251,7 +251,10 @@ impl AdmittedRuntime {
             stack,
         )
     }
-    fn with_reservation(
+    /// Construct a runtime with an explicit physical worker-stack reservation.
+    /// Callers must provide the stack required by their registered phases;
+    /// ordinary compiler callers use `new` and its compiler-stack default.
+    pub fn with_reservation(
         jobs: Jobs,
         reservation: MemoryReservation,
         errors: RuntimeErrors,

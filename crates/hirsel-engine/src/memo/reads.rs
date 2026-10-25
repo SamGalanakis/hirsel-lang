@@ -306,8 +306,27 @@ impl ReadKey {
 }
 
 /// A memo's reads: `(ReadKey, observed value)` sorted by key, one entry per key.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Hash)]
-pub struct Reads(Box<[(ReadKey, ContentHash)]>);
+#[derive(Clone, Debug, Default)]
+pub struct Reads {
+    rows: std::sync::Arc<[(ReadKey, ContentHash)]>,
+    // A sorted view into the same canonical rows. Normal receipts stay flat;
+    // completed predecessor phases can share the final phase's allocation.
+    indices: Option<std::sync::Arc<[u32]>>,
+}
+impl PartialEq for Reads {
+    fn eq(&self, other: &Self) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+impl Eq for Reads {}
+impl std::hash::Hash for Reads {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.len().hash(state);
+        for row in self.iter() {
+            row.hash(state);
+        }
+    }
+}
 
 /// Two observations of one key disagreed inside one evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -357,27 +376,73 @@ impl Reads {
         if let Some(w) = reads.windows(2).find(|w| w[0].0 == w[1].0) {
             return Err(Inconsistent(w[0].0));
         }
-        Ok(Self(reads.into_boxed_slice()))
+        Ok(Self {
+            rows: reads.into(),
+            indices: None,
+        })
     }
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &(ReadKey, ContentHash)> {
-        self.0.iter()
+        (0..self.len())
+            .map(|at| &self.rows[self.indices.as_ref().map_or(at, |rows| rows[at] as usize)])
     }
     pub fn len(&self) -> usize {
-        self.0.len()
+        self.indices
+            .as_ref()
+            .map_or(self.rows.len(), |rows| rows.len())
     }
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.len() == 0
     }
     pub fn get(&self, key: &ReadKey) -> Option<ContentHash> {
-        self.0
-            .binary_search_by(|(k, _)| k.cmp(key))
-            .ok()
-            .map(|i| self.0[i].1)
+        let at = self.rows.binary_search_by(|(k, _)| k.cmp(key)).ok()?;
+        if let Some(indices) = &self.indices {
+            let index = u32::try_from(at).ok()?;
+            indices.binary_search(&index).ok()?;
+        }
+        Some(self.rows[at].1)
+    }
+    /// A lossless view of these exact observations in a complete superset.
+    /// Standard Arc slice ownership and sorted integer indices keep the flat
+    /// binary-search/order/codec contract; no lookup can see an excluded row.
+    pub(crate) fn share_rows(&self, complete: &Self) -> Option<Self> {
+        if complete.indices.is_some() || self.len() > complete.len() {
+            return None;
+        }
+        let mut indices = Vec::with_capacity(self.len());
+        for (key, value) in self.iter() {
+            let at = complete
+                .rows
+                .binary_search_by(|(candidate, _)| candidate.cmp(key))
+                .ok()?;
+            if complete.rows[at].1 != *value {
+                return None;
+            }
+            indices.push(u32::try_from(at).ok()?);
+        }
+        Some(Self {
+            rows: complete.rows.clone(),
+            indices: (indices.len() != complete.len()).then(|| indices.into()),
+        })
+    }
+    /// Actual distinct Arc backing allocations; the containing Reads value is
+    /// accounted separately by its owner. This exposes no semantic identity.
+    pub(crate) fn allocations(&self) -> impl Iterator<Item = (usize, usize)> {
+        let rows = Some((
+            self.rows.as_ptr() as usize,
+            2 * size_of::<usize>() + size_of_val(&*self.rows),
+        ));
+        let indices = self.indices.as_ref().map(|indices| {
+            (
+                indices.as_ptr() as usize,
+                2 * size_of::<usize>() + size_of_val(&**indices),
+            )
+        });
+        [rows, indices].into_iter().flatten()
     }
     /// The union of two read sets (execution closure, design §1b).
     pub fn union(&self, other: &Reads) -> Result<Reads, Inconsistent> {
-        let (mut a, mut b) = (self.0.iter().peekable(), other.0.iter().peekable());
-        let mut out = Vec::with_capacity(self.0.len() + other.0.len());
+        let (mut a, mut b) = (self.iter().peekable(), other.iter().peekable());
+        let mut out = Vec::with_capacity(self.len() + other.len());
         loop {
             match (a.peek(), b.peek()) {
                 (Some(x), Some(y)) => match x.0.cmp(&y.0) {
@@ -396,12 +461,14 @@ impl Reads {
                 (None, None) => break,
             }
         }
-        Ok(Self(out.into_boxed_slice()))
+        Ok(Self {
+            rows: out.into(),
+            indices: None,
+        })
     }
     /// The minimum durability over every read, given each read's durability.
     pub fn durability(&self, of: impl Fn(&ReadKey) -> Durability) -> Durability {
-        self.0
-            .iter()
+        self.iter()
             .map(|(k, _)| of(k))
             .min()
             .unwrap_or(Durability::High)
@@ -411,8 +478,7 @@ impl Reads {
         &self,
         mut current: impl FnMut(&ReadKey) -> Option<ContentHash>,
     ) -> Option<ReadKey> {
-        self.0
-            .iter()
+        self.iter()
             .find(|(k, v)| current(k) != Some(*v))
             .map(|(k, _)| *k)
     }
@@ -421,8 +487,8 @@ impl Reads {
         // Version 2 separates lookup identity from diagnostic spelling repairs.
         // Reject pre-separation receipts even when they contain no new tags.
         out.extend(b"HRD2");
-        out.extend((self.0.len() as u32).to_le_bytes());
-        for (key, value) in self.0.iter() {
+        out.extend((self.len() as u32).to_le_bytes());
+        for (key, value) in self.iter() {
             key.encode(out);
             out.extend(value.0);
         }
@@ -644,7 +710,10 @@ mod tests {
             if let Some(w) = rows.windows(2).find(|w| w[0].0 == w[1].0) {
                 return Err(Inconsistent(w[0].0));
             }
-            Ok(Reads(rows.into_boxed_slice()))
+            Ok(Reads {
+                rows: rows.into(),
+                indices: None,
+            })
         }
         let (a, b) = (def("read_z"), def("read_a"));
         let ctx = FileContext {
@@ -738,6 +807,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn read_allocation_layout_includes_even_the_empty_arc_header() {
+        let empty = Reads::empty();
+        assert_eq!(
+            empty.allocations().map(|(_, bytes)| bytes).sum::<usize>(),
+            2 * size_of::<usize>()
+        );
+        let complete = Reads::from_vec(vec![(ReadKey::Environment, h("env"))]).unwrap();
+        let subset = empty.share_rows(&complete).unwrap();
+        assert_eq!(
+            subset.allocations().map(|(_, bytes)| bytes).sum::<usize>(),
+            4 * size_of::<usize>() + size_of::<(ReadKey, ContentHash)>()
+        );
+    }
+    #[test]
+    fn shared_subsets_keep_order_get_encoding_hash_and_exclude_unobserved_rows() {
+        use std::hash::{Hash, Hasher};
+        let a = ReadKey::Signature(def("a"));
+        let b = ReadKey::ExecutedBody(def("b"));
+        let c = ReadKey::Signature(def("c"));
+        let complete = Reads::from_vec(vec![(a, h("a")), (b, h("b")), (c, h("c"))]).unwrap();
+        let hash = |reads: &Reads| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            reads.hash(&mut h);
+            h.finish()
+        };
+        for values in [
+            vec![],
+            vec![(a, h("a"))],
+            vec![(a, h("a")), (b, h("b"))],
+            complete.iter().copied().collect(),
+        ] {
+            let original = Reads::from_vec(values).unwrap();
+            let shared = original.share_rows(&complete).unwrap();
+            assert_eq!(shared, original);
+            assert_eq!(shared.len(), original.len());
+            assert_eq!(shared.iter().len(), original.len());
+            assert_eq!(hash(&shared), hash(&original));
+            assert_eq!(shared.digest(), original.digest());
+            let mut bytes = vec![];
+            shared.encode(&mut bytes);
+            assert_eq!(Reads::decode(&mut bytes.as_slice()), Some(original.clone()));
+            for key in [a, b, c] {
+                assert_eq!(shared.get(&key), original.get(&key));
+            }
+            assert_eq!(shared.union(&complete), original.union(&complete));
+            assert_eq!(shared.rows.as_ptr(), complete.rows.as_ptr());
+        }
+        let inconsistent = Reads::from_vec(vec![(a, h("other"))]).unwrap();
+        assert!(inconsistent.share_rows(&complete).is_none());
+        let missing = Reads::from_vec(vec![(ReadKey::Environment, h("e"))]).unwrap();
+        assert!(missing.share_rows(&complete).is_none());
+    }
     #[test]
     fn encoding_round_trips_through_paths_not_ids() {
         let context = FileContext {
