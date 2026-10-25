@@ -167,7 +167,8 @@ fn instruction_uses(body: &Body, kind: &InstructionKind) -> Option<usize> {
         InstructionKind::StorageLive(_)
         | InstructionKind::EndScope(_)
         | InstructionKind::EndLoan { .. }
-        | InstructionKind::RunCleanup(_) => 0,
+        | InstructionKind::RunCleanup(_)
+        | InstructionKind::Charge(_) => 0,
     })
 }
 fn terminator_uses(value: &Terminator) -> Option<usize> {
