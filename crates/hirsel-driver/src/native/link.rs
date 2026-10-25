@@ -1090,7 +1090,7 @@ pub fn partition_backend_objects_with_jobs(
 /// The link's debug object (`hirsel_cranelift::debug_object`): line tables for the
 /// functions `objects` define, their intervals resolved in `sources`. A body an object
 /// recorded intervals for but no longer defines (a template inlined everywhere) has none.
-fn debug_artifact(
+pub(super) fn debug_artifact(
     program: &ReadyProgram,
     objects: &[hirsel_lir::stage::ObjectArtifact],
     sources: &hirsel_lir::profile::ProfileSources,

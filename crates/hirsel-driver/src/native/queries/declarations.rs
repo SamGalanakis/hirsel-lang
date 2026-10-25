@@ -117,9 +117,13 @@ impl NativeDeclarations {
         requested: &[DefPath],
     ) -> Result<Self, QueryError> {
         let roots = engine.native_source_roots(requested)?;
-        let selected: BTreeSet<_> = roots.definitions.iter().cloned().collect();
+        let mut selected: BTreeSet<_> = roots.definitions.iter().cloned().collect();
+        // CT-3 removes compile-time-only functions from runtime instance roots,
+        // while semantic launch revisions still bind their source declarations.
+        let semantic = engine.native_semantic_program(roots.definitions.clone())?;
+        selected.extend(semantic.source_bindings().map(|(path, _, _)| path.clone()));
         let mut catalogue = Vec::new();
-        for path in &roots.definitions {
+        for path in &selected {
             catalogue.push(cache.definition(engine, path, &selected)?);
         }
         let source_constants = catalogue
@@ -164,8 +168,12 @@ impl NativeDeclarations {
                 return Err(invalid("duplicate settled native source declaration"));
             }
         }
-        if catalogue.len() != roots.definitions.len()
-            || catalogue.keys().ne(roots.definitions.iter())
+        let selected: BTreeSet<_> = roots.definitions.iter().cloned().collect();
+        if !selected.iter().all(|path| catalogue.contains_key(path))
+            || catalogue.iter().any(|(path, product)| {
+                !selected.contains(path)
+                    && !compile_time_only(&product.source.signature, signatures)
+            })
         {
             return Err(invalid(
                 "settled native source catalogue differs from root selection",
@@ -222,7 +230,7 @@ impl NativeDeclarations {
         let mut discoveries = Vec::new();
         let mut source_anchors = BTreeMap::new();
         let mut graph = InstanceGraph::default();
-        for path in &roots.definitions {
+        for path in &catalogue.keys().cloned().collect::<Vec<_>>() {
             let product = catalogue
                 .remove(path)
                 .ok_or_else(|| invalid(format!("missing settled native declaration {path}")))?;
@@ -243,8 +251,9 @@ impl NativeDeclarations {
                     "native declaration differs from its source snapshot: {path}"
                 )));
             }
-            if let Some(declaration) =
-                super::source::source_declaration(&product).map_err(invalid)?
+            if selected.contains(path)
+                && let Some(declaration) =
+                    super::source::source_declaration(&product).map_err(invalid)?
             {
                 context.sources.insert(path.clone(), declaration);
             }
@@ -328,6 +337,17 @@ impl NativeDeclarations {
         })
     }
 }
+fn compile_time_only(
+    signature: &hirsel_types::SignatureRef,
+    signatures: &hirsel_engine::SignatureSnapshot,
+) -> bool {
+    matches!(&signature.kind, hirsel_types::SignatureKind::Function(function)
+        if function.generics.is_empty()
+            && function.parameters.iter().map(|parameter| parameter.ty)
+                .chain([function.result])
+                .any(|ty| hirsel_types::mentions_compile_time_only(signatures.types(), ty)))
+}
+
 fn invalid(message: impl Into<String>) -> QueryError {
     QueryError::Operational(hirsel_types::OperationalFailure {
         operation: "native declarations".into(),

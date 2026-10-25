@@ -1564,19 +1564,10 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                         verification,
                         |ready, artifacts| {
                             link.then(|| {
-                                let registry =
-                                    hirsel_lir::descriptor_registry::DescriptorRegistry::new(
-                                        &ready.table,
-                                        &ready.finalizers,
-                                    );
-                                let mut objects = artifacts.to_vec();
-                                objects.push(
-                                    native::emit_glue(ready, Backend::Llvm, &registry).unwrap(),
-                                );
                                 let exe = native::link_objects(
                                     ready,
                                     &checked.entry,
-                                    &objects,
+                                    artifacts,
                                     &tools,
                                     &dir,
                                 )
@@ -1891,8 +1882,8 @@ fn generated_body_origins_follow_item_moves_without_stale_source_names() {
 
 #[test]
 fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
-    use hirsel_driver::native::{self, Backend, OptLevel, UnitObjects, Validation};
-    use hirsel_lir::objects::{NoObjects, ObjectStore, SimObjects};
+    use hirsel_driver::native::{self, Backend, OptLevel, Validation};
+    use hirsel_engine::store::{MemStore, ResultStore, VerifyStore};
     use std::sync::Arc;
     with_compiler_stack(|| {
         let source = generated_failure_sources().remove(0).1;
@@ -1929,30 +1920,91 @@ fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
             (Backend::Cranelift, OptLevel::None),
             (Backend::Llvm, OptLevel::Default),
         ] {
-            let store = Arc::new(SimObjects::default());
-            let mut warm_engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+            let mut warm_engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone());
             let mut baseline = None;
             for (version, (first, second)) in versions.iter().enumerate() {
                 let warm = load(&mut warm_engine, first, second);
-                let mut fresh_engine = QueryEngine::new(default_environment(), compiler_adapters());
+                let cold_store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                let mut fresh_engine = QueryEngine::new(default_environment(), compiler_adapters())
+                    .with_result_store(cold_store.clone());
                 let fresh = load(&mut fresh_engine, first, second);
                 assert_eq!(warm.reference, fresh.reference);
-                let compile = |checked: &Checked, store: Arc<dyn ObjectStore>, validation, jobs| {
+                let compile = |engine: &mut QueryEngine,
+                               store: Arc<dyn ResultStore>,
+                               validation,
+                               jobs,
+                               link: bool| {
                     let mut options = native::Options::new(x86());
                     options.validation = validation;
-                    options.objects = Some(UnitObjects {
+                    let verification = match validation {
+                        Validation::Ready => VerifyStore::Off,
+                        Validation::EveryStage => VerifyStore::Recompute,
+                    };
+                    crate::native_object_products_19::compile_with_context(
+                        engine,
                         store,
+                        &warm.entry,
                         backend,
                         opt,
-                        debug: true,
-                        fuel: false,
-                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
-                        byte_budget: None,
-                    });
-                    native::build(&checked.validated, &options).unwrap()
+                        options,
+                        true,
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                        verification,
+                        |ready, objects| {
+                            if !link {
+                                return;
+                            }
+                            let dir = scratch(&format!(
+                                "generated-debug-{backend:?}-{version}-{jobs}-{validation:?}"
+                            ));
+                            let exe =
+                                native::link_objects(ready, &warm.entry, objects, &tools, &dir)
+                                    .unwrap();
+                            let launched =
+                                native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
+                            assert_eq!(launched.exit, Some(2));
+                            let actual = native::observe(
+                                &launched,
+                                ready,
+                                &native::Sites::new(warm.validated.snapshot()),
+                            )
+                            .unwrap();
+                            assert_eq!(actual, warm.reference, "{backend:?}, version={version}");
+                            let verification = std::process::Command::new(&dwarf)
+                                .arg("--verify")
+                                .arg(&exe)
+                                .output()
+                                .unwrap();
+                            assert!(
+                                verification.status.success(),
+                                "{}",
+                                String::from_utf8_lossy(&verification.stdout)
+                            );
+                            let lines = std::process::Command::new(&dwarf)
+                                .arg("--debug-line")
+                                .arg(&exe)
+                                .output()
+                                .unwrap();
+                            assert!(lines.status.success());
+                            assert!(
+                                String::from_utf8_lossy(&lines.stdout)
+                                    .contains("<generated:standalone@0/generated>"),
+                                "generated debug origin missing"
+                            );
+                        },
+                    )
+                    .0
                 };
-                let cold = compile(&fresh, Arc::new(NoObjects), Validation::EveryStage, 1);
-                let cold_objects = &cold.unit_objects.as_ref().unwrap().objects;
+                let cold = compile(
+                    &mut fresh_engine,
+                    cold_store,
+                    Validation::EveryStage,
+                    1,
+                    false,
+                );
+                let cold_objects = &cold.objects;
                 if let Some(baseline) = &baseline {
                     assert!(
                         cold_objects == baseline,
@@ -1969,8 +2021,7 @@ fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
                     (Validation::Ready, 8),
                     (Validation::EveryStage, 2),
                 ] {
-                    let ready = compile(&warm, store.clone(), validation, jobs);
-                    let built = ready.unit_objects.as_ref().unwrap();
+                    let built = compile(&mut warm_engine, store.clone(), validation, jobs, true);
                     assert!(
                         &built.objects == cold_objects,
                         "{backend:?}: version={version}, jobs={jobs}, {validation:?}: warm and fresh object bytes differ"
@@ -1978,51 +2029,6 @@ fn generated_body_objects_rebind_debug_and_failures_after_source_moves() {
                     if version > 0 || jobs > 1 {
                         assert!(built.hits > 0, "warm build must actually hit");
                     }
-                    let sources = native::profile_sources(warm.validated.snapshot());
-                    let objects = native::emit_backend_objects(
-                        &ready,
-                        backend,
-                        opt,
-                        Partition::Whole,
-                        false,
-                        Some(&sources),
-                    )
-                    .unwrap();
-                    let dir = scratch(&format!(
-                        "generated-debug-{backend:?}-{version}-{jobs}-{validation:?}"
-                    ));
-                    let exe =
-                        native::link_objects(&ready, &warm.entry, &objects, &tools, &dir).unwrap();
-                    let launched = native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
-                    assert_eq!(launched.exit, Some(2));
-                    let actual = native::observe(
-                        &launched,
-                        &ready,
-                        &native::Sites::new(warm.validated.snapshot()),
-                    )
-                    .unwrap();
-                    assert_eq!(actual, warm.reference, "{backend:?}, version={version}");
-                    let verification = std::process::Command::new(&dwarf)
-                        .arg("--verify")
-                        .arg(&exe)
-                        .output()
-                        .unwrap();
-                    assert!(
-                        verification.status.success(),
-                        "{}",
-                        String::from_utf8_lossy(&verification.stdout)
-                    );
-                    let lines = std::process::Command::new(&dwarf)
-                        .arg("--debug-line")
-                        .arg(&exe)
-                        .output()
-                        .unwrap();
-                    assert!(lines.status.success());
-                    assert!(
-                        String::from_utf8_lossy(&lines.stdout)
-                            .contains("<generated:standalone@0/generated>"),
-                        "generated debug origin missing"
-                    );
                 }
             }
         }

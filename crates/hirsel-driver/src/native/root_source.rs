@@ -130,8 +130,18 @@ impl NativeLinkSource {
                 .anchors
                 .get(path)
                 .ok_or_else(|| failed(format!("missing settled source anchors {path}")))?;
-            for (index, anchor) in anchors.iter().enumerate() {
-                if context.record_source_anchor(path, index as u32) != Some(*anchor)
+            if anchors.is_empty() || anchors.iter().collect::<BTreeSet<_>>().len() != anchors.len()
+            {
+                return Err(failed(format!(
+                    "missing or duplicate source anchor for {path}"
+                )));
+            }
+            for anchor in anchors {
+                let owner = context.record_owner(*anchor);
+                if context.source_definition(*anchor) != Some(path)
+                    || owner.as_ref().and_then(|(owner, occurrence)| {
+                        context.record_source_anchor(owner, *occurrence)
+                    }) != Some(*anchor)
                     || facts.roots.sources.anchor(*anchor).is_none()
                 {
                     return Err(failed(format!("settled source anchor differs for {path}")));

@@ -275,6 +275,20 @@ impl RootProducts {
         })
     }
 
+    /// Assemble existing program glue and optional current source debug data
+    /// around already emitted fragments. No Ready body is restored here.
+    pub fn backend_objects(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        backend: crate::native::Backend,
+        objects: &[hirsel_lir::stage::ObjectArtifact],
+    ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, String> {
+        self.with_link_objects(root, products, backend, objects, |_, objects| {
+            Ok(objects.to_vec())
+        })
+    }
+
     fn with_link_objects<R>(
         &mut self,
         root: &Arc<NativeRootProduct>,
@@ -286,6 +300,12 @@ impl RootProducts {
             &[hirsel_lir::stage::ObjectArtifact],
         ) -> Result<R, String>,
     ) -> Result<R, String> {
+        let sources = self
+            .inner
+            .snapshot
+            .emission
+            .debug
+            .then(|| self.source.profiles());
         self.with_link_context(root, products, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
@@ -296,6 +316,12 @@ impl RootProducts {
             objects.push(
                 crate::native::emit_glue(program, backend, &registry).map_err(|e| e.to_string())?,
             );
+            if let Some(sources) = &sources {
+                objects.push(
+                    crate::native::link::debug_artifact(program, &objects, sources)
+                        .map_err(|error| error.to_string())?,
+                );
+            }
             use_objects(program, &objects)
         })
     }

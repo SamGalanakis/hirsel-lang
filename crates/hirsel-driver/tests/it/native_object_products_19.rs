@@ -307,13 +307,19 @@ pub(super) fn compile_with_context<R>(
         .map(|product| queries::ready_product(store.as_ref(), *product).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
+    let link_objects = products
+        .backend_objects(&root, &readies, backend, &artifacts)
+        .unwrap();
     let (summaries, output) = products
         .with_link_context(&root, &readies, |program| {
             assert!(
                 program.units.is_empty(),
                 "fragment checks reconstructed Ready bodies"
             );
-            Ok((program.summaries.clone(), use_context(program, &artifacts)))
+            Ok((
+                program.summaries.clone(),
+                use_context(program, &link_objects),
+            ))
         })
         .unwrap();
     assert_eq!(summaries.len(), artifacts.len());
