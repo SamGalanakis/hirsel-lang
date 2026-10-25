@@ -606,11 +606,18 @@ impl Received {
 unsafe fn receive_into(ctx: *mut TaskCtx, receiver: &mut u64, received: &Received) {
     let mut image = [0u64; 2];
     let mut status = 99;
+    let thread = std::thread::current().id();
     let before = role::thread_acquisitions();
     unsafe {
         hirsel_rt_v2_channel_receive(ctx, 0, 0, &mut status, receiver, image.as_mut_ptr().cast())
     };
-    let roles = role::thread_acquisitions() - before;
+    // A receive that parked may resume on another worker, whose count says
+    // nothing about this one: it took the role, so it is not role-free.
+    let roles = if std::thread::current().id() == thread {
+        role::thread_acquisitions() - before
+    } else {
+        u64::MAX
+    };
     received.rows.lock().unwrap().push((roles, status, image));
     received.flush();
 }
