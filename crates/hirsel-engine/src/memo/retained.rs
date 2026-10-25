@@ -1,5 +1,7 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
+mod signature;
+pub(crate) use signature::retained_signature_payload_bytes;
 mod syntax;
 use super::{DepthEvidence, Reads};
 use crate::comptime::StagedRegistration;
