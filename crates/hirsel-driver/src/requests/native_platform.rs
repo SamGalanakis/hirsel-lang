@@ -247,6 +247,7 @@ mod tests {
             let mut request = NativeRequest {
                 definition: None,
                 test_entries: Vec::new(),
+                supplemental_sources: Vec::new(),
                 backend,
                 profile: BuildProfile::Default,
                 target: native::TargetSpec::x86_64_unknown_linux_gnu(),

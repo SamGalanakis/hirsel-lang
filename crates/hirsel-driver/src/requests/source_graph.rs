@@ -516,6 +516,16 @@ pub(super) fn install(
             Ok(program) => program,
             Err(error) => return Err(loading.failed(error)),
         };
+    if let CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) =
+        &request.operation
+        && let Err(error) = super::native_sources::install(
+            &mut program,
+            &native.supplemental_sources,
+            limits.snapshot_bytes,
+        )
+    {
+        return Err(loading.failed(error));
+    }
     let launch_entry = program.launch_entry().cloned();
     let foreign_unreplayable = program.engine.foreign_unreplayable;
     let sources = program.engine.sources.clone();

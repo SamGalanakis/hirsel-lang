@@ -67,6 +67,7 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
             let mut native = NativeRequest {
                 definition: None,
                 test_entries: Vec::new(),
+                supplemental_sources: Vec::new(),
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),
@@ -201,6 +202,7 @@ fn native_test_table_order_seed_and_definition_are_request_inputs() {
     let mut request = NativeRequest {
         definition: Some(path.clone()),
         test_entries: vec![],
+        supplemental_sources: Vec::new(),
         backend: native::Backend::Cranelift,
         profile: native::BuildProfile::Default,
         target: native::TargetSpec::x86_64_unknown_linux_gnu(),
@@ -229,4 +231,55 @@ fn native_test_table_order_seed_and_definition_are_request_inputs() {
     let mut table_weight = hirsel_engine::NativeMetadataWeight::default();
     super::super::native_products::request_metadata(&mut table_weight, &request);
     assert!(table_weight.bytes() > empty_weight.bytes());
+}
+
+#[test]
+fn native_source_text_context_and_name_are_request_inputs() {
+    let path = hirsel_engine::entry_path(&hirsel_engine::default_context());
+    let mut request = NativeRequest {
+        definition: Some(path.clone()),
+        test_entries: vec![],
+        supplemental_sources: vec![],
+        backend: native::Backend::Cranelift,
+        profile: native::BuildProfile::Default,
+        target: native::TargetSpec::x86_64_unknown_linux_gnu(),
+        validation: native::Validation::Ready,
+        launch: Default::default(),
+        run: None,
+        fuel: false,
+        evidence: None,
+    };
+    let plain = request_key(&request, NativePurpose::Build).unwrap();
+    request
+        .supplemental_sources
+        .push(crate::requests::NativeSourceText {
+            name: "<generated>".into(),
+            context: hirsel_syntax::FileContext {
+                package: path.0.package,
+                modules: vec![],
+            },
+            text: "pub fn generated()->u64{7u64}".into(),
+        });
+    let original = request_key(&request, NativePurpose::Build).unwrap();
+    assert_ne!(plain, original);
+    request.supplemental_sources[0].text = "pub fn generated()->u64{8u64}".into();
+    assert_ne!(
+        original,
+        request_key(&request, NativePurpose::Build).unwrap()
+    );
+    request.supplemental_sources[0].text = "pub fn generated()->u64{7u64}".into();
+    request.supplemental_sources[0].name.push('2');
+    assert_ne!(
+        original,
+        request_key(&request, NativePurpose::Build).unwrap()
+    );
+    request.supplemental_sources[0].name.pop();
+    request.supplemental_sources[0]
+        .context
+        .modules
+        .push("other".into());
+    assert_ne!(
+        original,
+        request_key(&request, NativePurpose::Build).unwrap()
+    );
 }

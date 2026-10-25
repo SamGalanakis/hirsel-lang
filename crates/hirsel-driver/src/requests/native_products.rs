@@ -202,6 +202,16 @@ pub(super) fn request_metadata(
         weight.path(path);
     }
     weight.vec(&request.test_entries, |weight, (path, _)| weight.path(path));
+    weight.vec(&request.supplemental_sources, |weight, source| {
+        weight.add(source.name.capacity());
+        weight.add(source.context.package.name.capacity());
+        weight.add(source.context.package.version.capacity());
+        weight.vec(&source.context.modules, |weight, module| {
+            weight.add(module.capacity())
+        });
+        // Text is shared caller input. Parsed source storage is charged with
+        // the front source inventory before any native factory is installed.
+    });
     let target = &request.target;
     weight.add(target.triple.capacity());
     weight.add(target.cpu.capacity());

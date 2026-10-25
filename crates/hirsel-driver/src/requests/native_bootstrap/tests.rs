@@ -955,6 +955,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let request = NativeRequest {
                 definition: Some(entry.clone()),
                 test_entries: Vec::new(),
+                supplemental_sources: Vec::new(),
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),

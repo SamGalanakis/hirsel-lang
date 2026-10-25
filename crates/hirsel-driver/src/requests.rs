@@ -15,6 +15,7 @@ mod native_platform;
 mod native_products;
 mod native_routing;
 mod native_selection;
+mod native_sources;
 mod output;
 mod safe_check;
 mod selector;
@@ -76,6 +77,9 @@ pub struct NativeRequest {
     /// Ordered test dispatcher entries and their seeds. Empty for an ordinary
     /// executable; binding occurs before native metadata admission.
     pub test_entries: Vec<(DefPath, u64)>,
+    /// Additional source produced by the package test or surface compiler.
+    /// These ordinary inputs are parsed and checked in the owning package.
+    pub supplemental_sources: Vec<NativeSourceText>,
     pub backend: Backend,
     pub profile: BuildProfile,
     pub target: TargetSpec,
@@ -88,4 +92,12 @@ pub struct NativeRequest {
     /// Independently assessed source evidence; its selected discharge policy
     /// participates in native actions, never a launch-time fallback.
     pub evidence: Option<std::sync::Arc<crate::native::Evidence>>,
+}
+
+/// Immutable source input, never a body, task, or validation capability.
+#[derive(Clone, serde::Serialize)]
+pub struct NativeSourceText {
+    pub name: String,
+    pub context: hirsel_syntax::FileContext,
+    pub text: std::sync::Arc<str>,
 }
