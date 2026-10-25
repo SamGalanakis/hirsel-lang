@@ -19,7 +19,7 @@ fn every_cut_is_causally_closed() {
         .map(|slot| {
             let (gate, version, done) = (gate.clone(), version.clone(), done.clone());
             std::thread::spawn(move || {
-                let task = TaskLog::new(vec![slot as u32]);
+                let task = TaskLog::new(&[slot as u32]);
                 let Ok(section) = gate.enter(slot) else {
                     return;
                 };

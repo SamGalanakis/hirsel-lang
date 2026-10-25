@@ -14,7 +14,7 @@ use loom::sync::Arc;
 /// section, then retirement after the acknowledgement. `Some(word)` when it registered.
 fn serve(executors: &Executors, gate: &Gate, path: u32) -> Option<usize> {
     let slot = executors.register(1, || gate.stopped())?;
-    let task = TaskLog::new(vec![path]);
+    let task = TaskLog::new(&[path]);
     // SAFETY: this thread owns the new log; its section writes within this room.
     unsafe { task.reserve(64) };
     if let Ok(section) = gate.enter(slot.index()) {

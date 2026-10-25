@@ -6,7 +6,7 @@ use hirsel_free::phase::{Phase, Progress};
 use hirsel_free::projection::Projection;
 use hirsel_free::record::{Encoder, ObjectId, Record, RecordBound, decode};
 use hirsel_free::replay::{Admission, Replayer, Shared};
-use hirsel_free::section::SEGMENT as SEGMENT_HINT;
+use hirsel_free::section::{INLINE, SEGMENT as SEGMENT_HINT};
 use hirsel_free::session::{Marked, Session};
 use hirsel_free::tape;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -749,8 +749,9 @@ fn runtime50_diagnostic_free_encoding_projection() {
         traced_metrics["compressed_bytes_per_contended_event"]
     );
     assert!(plain_metrics["compressed_bytes_per_contended_event"] <= 4.0);
-    // Only the root's first phase was admitted without a reservation ahead.
-    assert_eq!(plain_metrics["short_reservations"], 1.0);
+    // Only the root's first phase was admitted without a reservation ahead: its records fit
+    // the log's inline room, and with diagnostics its notes are short.
+    assert_eq!(plain_metrics["short_reservations"], 0.0);
     assert_eq!(traced_metrics["short_reservations"], 1.0);
     // The log bytes are the scratch encoder's bytes for the same records.
     let parsed = tape::parse(&plain).unwrap();
@@ -1167,9 +1168,10 @@ impl Mirrored {
     }
 
     /// The payload length whose record (tag, one-byte op delta, length varint, payload) ends
-    /// `at` bytes from a segment end, `segments` segments on.
+    /// `at` bytes from a storage end (the inline room's or a segment's), `segments` segments
+    /// on.
     fn payload_ending(&self, at: i64, segments: usize) -> usize {
-        let room = SEGMENT_HINT - self.log.len() % SEGMENT_HINT;
+        let room = to_boundary(self.log.len());
         let mut end = (room as i64 + at) as usize + segments * SEGMENT_HINT;
         if end < 4 + 128 {
             end += SEGMENT_HINT; // a two-byte length varint
@@ -1199,6 +1201,16 @@ impl Mirrored {
         );
         assert_eq!(decode(log).unwrap(), self.records);
         (marked.bytes, self.root.trace().to_vec(), short)
+    }
+}
+
+/// The bytes from log length `len` to the end of its storage: the task's inline room, then
+/// each segment.
+fn to_boundary(len: usize) -> usize {
+    if len < INLINE {
+        INLINE - len
+    } else {
+        SEGMENT_HINT - (len - INLINE) % SEGMENT_HINT
     }
 }
 
@@ -1321,8 +1333,12 @@ fn boundary_vectors(trace: bool) -> (Vec<u8>, Vec<hirsel_free::projection::Event
                 w.observation(&bytes)
             });
             assert_eq!(
-                run.log.len() % SEGMENT_HINT,
-                (SEGMENT_HINT as i64 + at) as usize % SEGMENT_HINT,
+                to_boundary(run.log.len()) as i64,
+                if at < 0 {
+                    -at
+                } else {
+                    SEGMENT_HINT as i64 - at
+                },
                 "the record ends {at} from a segment end"
             );
         }
@@ -1352,11 +1368,212 @@ fn record51_boundary_vectors_allocate_nothing_in_sections() {
     let (traced, trace, traced_short) = boundary_vectors(true);
     assert_eq!(trace.len(), 8);
     assert_eq!(plain, traced, "diagnostics change no tape byte");
-    assert_eq!(plain_short, traced_short);
+    // The unreserved first phase fits the log's inline room; only its notes are short.
+    assert_eq!(plain_short + 1.0, traced_short);
     assert!(
         plain_short >= 3.0,
         "unreserved phases took the short path: {plain_short}"
     );
+}
+
+/// block_clone_syscallbuf_overflow.c:5-36 at the inline room's end: payload records ending
+/// one byte under, exactly at and one byte over it, each followed by a fixed record and a
+/// payload that spans a segment, reserved ahead and not. The task's first phases need no
+/// segment; the tape mirrors the scratch encoding byte for byte and no section allocates.
+#[test]
+fn record53_inline_room_boundary_vectors() {
+    for reserve in [true, false] {
+        for at in [-1i64, 0, 1] {
+            let mut run = Mirrored::new(false);
+            let first = run.root.reserve(RecordBound::records(4));
+            assert_eq!(first.allocated, 0, "a first phase fits the inline room");
+            run.phase(
+                RecordBound::records(1),
+                reserve,
+                |op| vec![Record::Thaw { op, ok: true }],
+                |w| w.thaw(true),
+            );
+            let len = run.payload_ending(at, 0);
+            assert!(len >= 128 && run.log.len() + 4 + len == (INLINE as i64 + at) as usize);
+            let bytes: Vec<u8> = (0..len).map(|i| (i * 7 + len) as u8).collect();
+            run.phase(
+                RecordBound::default().payload(len),
+                reserve,
+                |op| {
+                    vec![Record::Observation {
+                        op,
+                        bytes: bytes.clone(),
+                    }]
+                },
+                |w| w.observation(&bytes),
+            );
+            run.phase(
+                RecordBound::records(1),
+                reserve,
+                |op| {
+                    vec![Record::Load {
+                        op,
+                        bits: u128::MAX,
+                    }]
+                },
+                |w| w.load(u128::MAX),
+            );
+            let spans: Vec<u8> = (0..SEGMENT_HINT).map(|i| i as u8).collect();
+            run.phase(
+                RecordBound::default().payload(spans.len()),
+                reserve,
+                |op| {
+                    vec![Record::Observation {
+                        op,
+                        bytes: spans.clone(),
+                    }]
+                },
+                |w| w.observation(&spans),
+            );
+            run.finish();
+        }
+    }
+}
+
+/// Nested reentry across the inline end: the root reserves a payload that crosses its inline
+/// room on the outer slot, then a nested slot on the same thread runs a child's phases across
+/// the child's inline end before the outer phase is admitted. The outer reservation is still
+/// whole (no short path), no section allocates, the nested word retires first, and the tape
+/// holds both logs exactly.
+#[test]
+fn record53_nested_reentry_keeps_reserved_room() {
+    let metrics = trapped();
+    let recorder = Recorder::<Marked>::new(
+        Marked::default(),
+        b"nested inline",
+        3,
+        false,
+        false,
+        Some(metrics.clone()),
+    )
+    .unwrap();
+    let mut outer = recorder.executor(0).unwrap();
+    let mut root = recorder.root(&mut outer).unwrap();
+    let child = root.prepare_child();
+    let (mut child, trapped) = counted(
+        &recorder,
+        &mut outer,
+        &mut root,
+        done(1),
+        RecordBound::records(1),
+        |w| w.spawn_prepared(child),
+    );
+    assert_eq!(trapped, 0);
+    let big: Vec<u8> = (0..INLINE * 2).map(|i| i as u8).collect();
+    let outer_bound = RecordBound::default().payload(big.len());
+    assert_eq!(root.reserve(outer_bound).allocated, 1);
+    let mut nested = recorder.executor_available(outer.index()).unwrap();
+    let mut expected = Vec::new();
+    let mut encoder = Encoder::default();
+    for op in 1..=4u64 {
+        let bytes = vec![op as u8; INLINE / 3];
+        let bound = RecordBound::default().payload(bytes.len());
+        let ((), trapped) = counted(&recorder, &mut nested, &mut child, done(op), bound, |w| {
+            w.observation(&bytes)
+        });
+        assert_eq!(trapped, 0, "nested op {op} allocated in its section");
+        encoder.encode(&Record::Observation { op, bytes }, &mut expected);
+    }
+    assert!(
+        expected.len() > INLINE,
+        "the child's log crossed its inline end"
+    );
+    recorder.retire_executor(nested);
+    let ((), trapped) = counted(
+        &recorder,
+        &mut outer,
+        &mut root,
+        done(2),
+        outer_bound,
+        |w| w.observation(&big),
+    );
+    assert_eq!(trapped, 0);
+    let values: BTreeMap<_, _> = metrics.values().into_iter().collect();
+    assert_eq!(
+        values["short_reservations"], 1.0,
+        "only the child's unreserved crossing"
+    );
+    recorder.stop("returned", None).unwrap().unwrap();
+    drop(outer);
+    let parsed = tape::parse(&recorder.into_sink().bytes).unwrap();
+    assert_eq!(parsed.logs[&vec![0]], expected);
+    assert_eq!(
+        decode(&parsed.logs[&Vec::new()]).unwrap(),
+        [Record::Observation { op: 2, bytes: big }]
+    );
+}
+
+/// A child's log, path and reserved room take one allocation: a spawn chain eight deep (two
+/// past the inline path) keeps each path, and a short child's phases link no segment.
+#[test]
+fn record53_child_log_is_one_allocation() {
+    let recorder = Recorder::<Marked>::new(
+        Marked::default(),
+        b"spawn chain",
+        1,
+        false,
+        false,
+        Some(trapped()),
+    )
+    .unwrap();
+    let mut slot = recorder.executor(0).unwrap();
+    let mut task = recorder.root(&mut slot).unwrap();
+    let mut spawn_at = 1;
+    let mut chain = Vec::new();
+    for depth in 1..=8u32 {
+        let before = allocations();
+        let child = task.prepare_child();
+        let made = allocations() - before;
+        assert!(
+            made <= if depth > 6 { 2 } else { 1 },
+            "depth {depth}: preparing a child made {made} allocations"
+        );
+        let (mut child, trapped) = counted(
+            &recorder,
+            &mut slot,
+            &mut task,
+            done(spawn_at),
+            RecordBound::records(1),
+            |w| w.spawn_prepared(child),
+        );
+        assert_eq!(trapped, 0);
+        assert_eq!(child.path(), vec![0; depth as usize]);
+        for op in 1..=2 {
+            let reservation = child.reserve(RecordBound::records(4));
+            assert_eq!(reservation.allocated, 0, "a short child links no segment");
+            let ((), trapped) = counted(
+                &recorder,
+                &mut slot,
+                &mut child,
+                done(op),
+                RecordBound::records(4),
+                |w| w.load(u128::from(op)),
+            );
+            assert_eq!(trapped, 0);
+        }
+        spawn_at = 3;
+        chain.push(std::mem::replace(&mut task, child));
+    }
+    let (cut, _) = recorder.stop("returned", None).unwrap().unwrap();
+    assert_eq!(cut.progress.len(), 9);
+    assert_eq!(cut.progress[&vec![0; 8]], done(2));
+    drop(slot);
+    let parsed = tape::parse(&recorder.into_sink().bytes).unwrap();
+    for depth in 1..=8 {
+        let log = decode(&parsed.logs[&vec![0; depth]]).unwrap();
+        assert_eq!(
+            log,
+            [1, 2].map(|op| Record::Load {
+                op,
+                bits: u128::from(op)
+            })
+        );
+    }
 }
 
 /// Tasks touch one object on their own threads, first touch tracked but nothing reserved

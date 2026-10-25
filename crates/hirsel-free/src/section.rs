@@ -31,23 +31,31 @@ use crate::sync::{SectionWaits, sc_load, sc_store, section_open};
 /// Bytes per log segment: a published record never moves.
 pub const SEGMENT: usize = 4096;
 
+/// Log bytes held in the task's own allocation, before its first segment: a short task's whole
+/// log (a few phases) links no segment. Room for one [`RecordBound::records(4)`] phase and more.
+///
+/// [`RecordBound::records(4)`]: crate::record::RecordBound::records
+pub const INLINE: usize = 256;
+
+/// Spawn path ordinals held in the task's own allocation; a deeper path is boxed.
+const INLINE_PATH: usize = 6;
+
 /// A task's record log and published progress.
 ///
-/// The log is a chain of fixed segments split by who may touch what. The task's owner links
-/// spare segments it reserved outside any section at the tail, and writes records there,
-/// inside its sections ([`Tail`]); the cutter reads from the head and frees segments it has
-/// scanned, only while the gate is closed ([`Head`]). Neither side allocates while a section
-/// is open: a section writes only room reserved before it opened, and the owner's spare list
-/// is never read by the cutter.
+/// The log is its first [`INLINE`] bytes in the task's allocation, then a chain of fixed
+/// segments, split by who may touch what. The task's owner links spare segments it reserved
+/// outside any section at the tail, and writes records there, inside its sections ([`Tail`]);
+/// the cutter reads from the head and frees segments it has scanned, only while the gate is
+/// closed ([`Head`]). Neither side allocates while a section is open: a section writes only
+/// room reserved before it opened, and the owner's spare list is never read by the cutter.
 pub struct TaskLog {
-    path: Vec<u32>,
+    path: Path,
     progress: AtomicU64,
     tail: Cell<Tail>,
     head: Cell<Head>,
     /// Owner only: segments reserved before a section, linked by the next section that fills
-    /// its tail. Boxed: linking moves only the pointer, so a segment keeps its address.
-    #[allow(clippy::vec_box)]
-    spare: Cell<Vec<Box<Segment>>>,
+    /// its tail.
+    spare: Cell<Spare>,
     /// On a slot's dirty list since the last scan.
     dirty: Cell<bool>,
     /// The next task on the same slot's dirty list (an intrusive list: marking allocates
@@ -58,18 +66,72 @@ pub struct TaskLog {
     scanned: Cell<(usize, bool)>,
 }
 
-/// One fixed segment of a log.
+/// A spawn path: inline when short, so registering a child allocates only its log.
+enum Path {
+    Inline(u8, [u32; INLINE_PATH]),
+    Boxed(Box<[u32]>),
+}
+
+impl Path {
+    fn new(parent: &[u32], ordinal: Option<u32>) -> Path {
+        let len = parent.len() + usize::from(ordinal.is_some());
+        if len > INLINE_PATH {
+            return Path::Boxed(parent.iter().copied().chain(ordinal).collect());
+        }
+        let mut ids = [0; INLINE_PATH];
+        ids[..parent.len()].copy_from_slice(parent);
+        if let Some(ordinal) = ordinal {
+            ids[parent.len()] = ordinal;
+        }
+        Path::Inline(len as u8, ids)
+    }
+    fn get(&self) -> &[u32] {
+        match self {
+            Path::Inline(len, ids) => &ids[..usize::from(*len)],
+            Path::Boxed(ids) => ids,
+        }
+    }
+}
+
+/// One fixed segment of a log, zeroed in a single allocation. Boxed: linking moves only the
+/// pointer, so a segment keeps its address.
 pub struct Segment {
-    bytes: Box<[u8]>,
+    bytes: [u8; SEGMENT],
     next: Option<Box<Segment>>,
 }
 
 impl Segment {
     fn new() -> Box<Segment> {
-        Box::new(Segment {
-            bytes: vec![0; SEGMENT].into_boxed_slice(),
-            next: None,
-        })
+        // SAFETY: all-zero bytes are a valid `Segment`: zero bytes and a `None` next.
+        unsafe { Box::<Segment>::new_zeroed().assume_init() }
+    }
+}
+
+/// The owner's reserved segments, linked through their own `next`: reserving and linking one
+/// moves only pointers.
+#[derive(Default)]
+struct Spare {
+    first: Option<Box<Segment>>,
+    len: usize,
+}
+
+impl Spare {
+    fn push(&mut self, mut segment: Box<Segment>) {
+        segment.next = self.first.take();
+        self.first = Some(segment);
+        self.len += 1;
+    }
+    fn pop(&mut self) -> Option<Box<Segment>> {
+        let mut segment = self.first.take()?;
+        self.first = segment.next.take();
+        self.len -= 1;
+        Some(segment)
+    }
+}
+
+impl Drop for Spare {
+    fn drop(&mut self) {
+        while self.pop().is_some() {}
     }
 }
 
@@ -80,8 +142,11 @@ struct Tail {
     last: *mut Segment,
     /// The committed length, from the log's start.
     len: usize,
-    /// The end of the linked capacity, from the log's start.
+    /// The end of the linked capacity, from the log's start: [`INLINE`] before the first
+    /// segment.
     end: usize,
+    /// The log's first bytes, before any segment.
+    inline: [u8; INLINE],
 }
 
 // SAFETY: `last` points into the chain its `TaskLog` owns; the section protocol orders every
@@ -100,8 +165,7 @@ struct Head {
 pub struct LogOut<'a> {
     tail: &'a mut Tail,
     head: &'a mut Head,
-    #[allow(clippy::vec_box)]
-    spare: &'a mut Vec<Box<Segment>>,
+    spare: &'a mut Spare,
 }
 
 impl LogOut<'_> {
@@ -110,7 +174,6 @@ impl LogOut<'_> {
             .spare
             .pop()
             .expect("a section writes only log room reserved before it opened");
-        segment.next = None;
         let last: *mut Segment = &mut *segment;
         if self.tail.last.is_null() {
             self.head.first = Some(segment);
@@ -129,25 +192,28 @@ impl LogOut<'_> {
     pub fn is_empty(&self) -> bool {
         self.tail.len == 0
     }
-    pub fn push(&mut self, byte: u8) {
+    /// The unwritten rest of the tail's storage, linking the next spare when it is full.
+    fn room(&mut self) -> &mut [u8] {
         if self.tail.len == self.tail.end {
             self.link();
         }
-        // SAFETY: the tail segment has room at `len % SEGMENT`; only this section reaches it.
+        let len = self.tail.len;
+        if self.tail.last.is_null() {
+            return &mut self.tail.inline[len..];
+        }
+        // SAFETY: the tail segment holds `end - SEGMENT..end`; only this section reaches it.
         let segment = unsafe { &mut *self.tail.last };
-        segment.bytes[self.tail.len % SEGMENT] = byte;
+        &mut segment.bytes[len + SEGMENT - self.tail.end..]
+    }
+    pub fn push(&mut self, byte: u8) {
+        self.room()[0] = byte;
         self.tail.len += 1;
     }
     pub fn extend(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
-            if self.tail.len == self.tail.end {
-                self.link();
-            }
-            let at = self.tail.len % SEGMENT;
-            let n = bytes.len().min(SEGMENT - at);
-            // SAFETY: as in `push`.
-            let segment = unsafe { &mut *self.tail.last };
-            segment.bytes[at..at + n].copy_from_slice(&bytes[..n]);
+            let room = self.room();
+            let n = bytes.len().min(room.len());
+            room[..n].copy_from_slice(&bytes[..n]);
             self.tail.len += n;
             bytes = &bytes[n..];
         }
@@ -155,7 +221,13 @@ impl LogOut<'_> {
 }
 
 impl Head {
-    fn read(&self, mut from: usize, to: usize, out: &mut Vec<u8>) {
+    /// Append the log's bytes `from..to` to `out`; `inline` is the tail's inline storage.
+    fn read(&self, inline: &[u8; INLINE], mut from: usize, to: usize, out: &mut Vec<u8>) {
+        if from < INLINE {
+            let n = to.min(INLINE) - from;
+            out.extend_from_slice(&inline[from..from + n]);
+            from += n;
+        }
         let mut segment = self.first.as_deref();
         let mut base = self.base;
         while from < to {
@@ -196,24 +268,32 @@ impl Drop for Head {
 }
 
 impl TaskLog {
-    pub fn new(path: Vec<u32>) -> Arc<TaskLog> {
+    pub fn new(path: &[u32]) -> Arc<TaskLog> {
+        TaskLog::at(Path::new(path, None))
+    }
+    /// The log of this task's child `ordinal`.
+    pub fn child(&self, ordinal: u32) -> Arc<TaskLog> {
+        TaskLog::at(Path::new(self.path(), Some(ordinal)))
+    }
+    fn at(path: Path) -> Arc<TaskLog> {
         Arc::new(TaskLog {
             path,
             progress: AtomicU64::new(Progress::START.pack()),
             tail: Cell::new(Tail {
                 last: std::ptr::null_mut(),
                 len: 0,
-                end: 0,
+                end: INLINE,
+                inline: [0; INLINE],
             }),
             head: Cell::new(Head::default()),
-            spare: Cell::new(Vec::new()),
+            spare: Cell::new(Spare::default()),
             dirty: Cell::new(false),
             next_dirty: Cell::new(None),
             scanned: Cell::new((0, false)),
         })
     }
     pub fn path(&self) -> &[u32] {
-        &self.path
+        self.path.get()
     }
     /// The latest progress published (acquire).
     pub fn progress(&self) -> Progress {
@@ -226,7 +306,10 @@ impl TaskLog {
     /// The caller owns this task's writing side.
     pub unsafe fn room(&self) -> usize {
         // SAFETY: the owner alone writes the tail and the spares; the cutter only reads the tail.
-        unsafe { self.tail.with(|tail| tail.end - tail.len) + self.spare.with(Vec::len) * SEGMENT }
+        unsafe {
+            self.tail.with(|tail| tail.end - tail.len)
+                + self.spare.with(|spare| spare.len) * SEGMENT
+        }
     }
     /// Make room for `bytes` more record bytes before a section, so the section links spares
     /// instead of allocating. Returns how many segments this allocated.
@@ -240,9 +323,8 @@ impl TaskLog {
         // SAFETY: owner only.
         unsafe {
             self.spare.with_mut(|spare| {
-                let have = room + spare.len() * SEGMENT;
+                let have = room + spare.len * SEGMENT;
                 let want = bytes.saturating_sub(have).div_ceil(SEGMENT);
-                spare.reserve(want);
                 for _ in 0..want {
                     spare.push(Segment::new());
                 }
@@ -499,16 +581,18 @@ impl Cut<'_> {
                     task.dirty.with_mut(|dirty| *dirty = false);
                     let (from, seen) = task.scanned.with(|scanned| *scanned);
                     let mut bytes = Vec::new();
-                    let to = task.tail.with(|tail| tail.len);
-                    task.head.with_mut(|head| {
-                        head.read(from, to, &mut bytes);
-                        head.release(to);
+                    let to = task.tail.with(|tail| {
+                        task.head.with_mut(|head| {
+                            head.read(&tail.inline, from, tail.len, &mut bytes);
+                            head.release(tail.len);
+                        });
+                        tail.len
                     });
                     task.scanned.with_mut(|scanned| *scanned = (to, true));
                     (
                         seen,
                         Scanned {
-                            path: task.path.clone(),
+                            path: task.path().to_vec(),
                             progress: task.progress(),
                             bytes,
                         },
@@ -528,7 +612,7 @@ impl Cut<'_> {
     pub fn progress(&self) -> Vec<(Vec<u32>, Progress)> {
         self.known
             .iter()
-            .map(|task| (task.path.clone(), task.progress()))
+            .map(|task| (task.path().to_vec(), task.progress()))
             .collect()
     }
 }

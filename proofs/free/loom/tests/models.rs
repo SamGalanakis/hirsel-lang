@@ -44,7 +44,7 @@ fn every_cut_is_causally_closed() {
             .map(|slot| {
                 let (gate, version) = (gate.clone(), version.clone());
                 loom::thread::spawn(move || {
-                    let task = TaskLog::new(vec![slot]);
+                    let task = TaskLog::new(&[slot]);
                     // SAFETY: this thread owns the new log; its sections write within this room.
                     unsafe { task.reserve(64) };
                     for op in 1..=OPS {
@@ -95,7 +95,7 @@ fn old_receive_new_send() {
         let sender = {
             let (gate, sent) = (gate.clone(), sent.clone());
             loom::thread::spawn(move || {
-                let task = TaskLog::new(vec![0]);
+                let task = TaskLog::new(&[0]);
                 // SAFETY: this thread owns the new log; its sections write within this room.
                 unsafe { task.reserve(64) };
                 for op in 1..=OPS {
@@ -109,7 +109,7 @@ fn old_receive_new_send() {
         let receiver = {
             let (gate, sent) = (gate.clone(), sent.clone());
             loom::thread::spawn(move || {
-                let task = TaskLog::new(vec![1]);
+                let task = TaskLog::new(&[1]);
                 // SAFETY: this thread owns the new log; its sections write within this room.
                 unsafe { task.reserve(64) };
                 // Entered, then one retry of the done phase under the same ordinal.
@@ -152,10 +152,10 @@ fn registration_and_end_during_a_cut() {
         let parent = {
             let gate = gate.clone();
             loom::thread::spawn(move || {
-                let parent = TaskLog::new(vec![]);
+                let parent = TaskLog::new(&[]);
                 // SAFETY: this thread owns the new log; its sections write within this room.
                 unsafe { parent.reserve(64) };
-                let child = TaskLog::new(vec![0]);
+                let child = TaskLog::new(&[0]);
                 // SAFETY: this thread owns the new log; its sections write within this room.
                 unsafe { child.reserve(64) };
                 {
@@ -224,7 +224,7 @@ fn claim_matrix(recording: bool) {
         let issued = Arc::new(AtomicBool::new(false));
         let frees = Arc::new(AtomicUsize::new(0));
         let prepared = Arc::new(AtomicBool::new(false));
-        let task = TaskLog::new(vec![0]);
+        let task = TaskLog::new(&[0]);
         // SAFETY: this thread owns the new log; its sections write within this room.
         unsafe { task.reserve(64) };
         let issuer = {

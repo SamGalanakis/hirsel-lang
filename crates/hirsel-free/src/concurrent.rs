@@ -138,15 +138,13 @@ impl Task {
         (0..n).map(|at| self.prepare_spawn(at)).collect()
     }
     fn prepare_spawn(&self, at: u32) -> PreparedChild {
-        let mut path = self.path().to_vec();
-        path.push(
-            self.spawned
-                .checked_add(at)
-                .expect("spawn path ordinal overflow"),
-        );
+        let ordinal = self
+            .spawned
+            .checked_add(at)
+            .expect("spawn path ordinal overflow");
         PreparedChild(unregistered_task(
             self.identity.clone(),
-            path,
+            self.log.child(ordinal),
             self.trace.is_some(),
             self.observer.clone(),
         ))
@@ -433,7 +431,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
         self.check_worker(worker);
         let task = unregistered_task(
             self.identity.clone(),
-            Vec::new(),
+            TaskLog::new(&[]),
             self.trace,
             self.observer.clone(),
         );
@@ -698,13 +696,13 @@ fn chunks(scanned: Vec<Scanned>) -> Vec<TaskChunk> {
 }
 fn unregistered_task(
     identity: Arc<()>,
-    path: Vec<u32>,
+    log: Arc<TaskLog>,
     trace: bool,
     observer: Option<Arc<Observer>>,
 ) -> Task {
     Task {
         identity,
-        log: TaskLog::new(path),
+        log,
         encoder: Encoder::default(),
         last: HashMap::new(),
         epochs: HashMap::new(),

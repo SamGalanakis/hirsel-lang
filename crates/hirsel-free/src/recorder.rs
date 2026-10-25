@@ -121,7 +121,7 @@ impl<S: TapeSink> Recorder<S> {
 
     /// Register a task: the root (no parent), or a child in its parent's spawn section.
     pub fn start(&mut self, child: Vec<u32>) -> Result<(), Stopped> {
-        let log = TaskLog::new(child.clone());
+        let log = TaskLog::new(&child);
         let gate = self.arbiter.gate().expect("a recording has a gate");
         gate.enter(0)?.register(&log);
         self.tasks.insert(

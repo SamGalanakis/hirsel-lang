@@ -851,7 +851,7 @@ impl World {
                 None => script(&mut c),
             };
             let key = rows.spawn(slot);
-            let log = TaskLog::new(vec![slot, 0]);
+            let log = TaskLog::new(&[slot, 0]);
             let (task, queued) = prepare(slot, key, 0, script, log, config.reuse);
             rows.attach(key, task.frame.clone());
             tasks.push(task);
@@ -1659,7 +1659,7 @@ impl World {
         }
         let successor = (task.reuse > 0).then(|| {
             let script = script(&mut self.c);
-            let log = TaskLog::new(vec![task.slot, task.ordinal + 1]);
+            let log = TaskLog::new(&[task.slot, task.ordinal + 1]);
             section.register(&log);
             Successor {
                 script,
@@ -2368,7 +2368,7 @@ fn runtime50_composed_ownership_cut_matrix() {
         let exec = execs.compute.lock().unwrap().active[0].clone();
         let mut rows = Rows::new();
         let key = rows.spawn(0);
-        let (task, first) = prepare(0, key, 0, Vec::new(), TaskLog::new(vec![0, 0]), 0);
+        let (task, first) = prepare(0, key, 0, Vec::new(), TaskLog::new(&[0, 0]), 0);
         rows.attach(key, task.frame.clone());
         let lease = || Lease::new(&execs.dispatch.get().unwrap().count);
         publish(
@@ -2417,7 +2417,7 @@ fn runtime50_composed_ownership_cut_matrix() {
             0
         );
         // Row reuse: the old generation's notification stays inert.
-        let (reused, queued) = prepare(0, key, 1, Vec::new(), TaskLog::new(vec![0, 1]), 0);
+        let (reused, queued) = prepare(0, key, 1, Vec::new(), TaskLog::new(&[0, 1]), 0);
         assert!(task.frame.notification.notify().is_none());
         drop(queued.start());
         assert!(reused.frame.notification.notify().is_none());
