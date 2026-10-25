@@ -81,7 +81,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-fn owner(frame: u64, location: u64) -> Result<Owner, Error> {
+fn owner(frame: u64, parent: Option<u64>, location: u64) -> Result<Owner, Error> {
     let index = location as u32;
     let storage = match location >> 32 {
         0 => Storage::Value {
@@ -89,6 +89,18 @@ fn owner(frame: u64, location: u64) -> Result<Owner, Error> {
             value: index,
         },
         1 => Storage::Slot { frame, slot: index },
+        2 => Storage::Argument {
+            call: frame,
+            parameter: index,
+        },
+        3 => Storage::Argument {
+            call: parent.ok_or(Error::InvalidLocation(location))?,
+            parameter: index,
+        },
+        4 if index == 0 => Storage::Return {
+            call: parent.ok_or(Error::InvalidLocation(location))?,
+        },
+        5 if index == 0 => Storage::Return { call: frame },
         _ => return Err(Error::InvalidLocation(location)),
     };
     Ok(Owner {
@@ -205,8 +217,12 @@ fn decode(
                 {
                     return Err(Error::InvalidMarker(marker));
                 }
-                let from = owner(frame, token)?;
-                let to = owner(frame, recipient)?;
+                let parent = frames.iter().rev().nth(1).map(|(frame, _)| *frame);
+                if calls.is_none() && (token >> 32 > 1 || recipient >> 32 > 1) {
+                    return Err(Error::InvalidLocation(token.max(recipient)));
+                }
+                let from = owner(frame, parent, token)?;
+                let to = owner(frame, parent, recipient)?;
                 let context = Context {
                     task: TaskPath::default(),
                     operation: 0,

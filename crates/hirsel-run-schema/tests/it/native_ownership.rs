@@ -361,3 +361,101 @@ fn native_ownership_local_calls_refuse_wrong_parent_missing_target_and_parent_ev
         Error::InvalidFrame(1)
     );
 }
+
+fn owned_call_rows() -> (Log, Units, LocalCalls) {
+    let parent = [7; 32];
+    let child = [8; 32];
+    let mut rows = vec![Row::Enter {
+        task: 0,
+        frame: 1,
+        unit: parent,
+    }];
+    let mut units = Units::from([(parent, BTreeMap::new()), (child, BTreeMap::new())]);
+    let mut event = |unit, frame, marker, action, token, owner| {
+        let metadata = Metadata {
+            action,
+            token,
+            owner,
+            site: 42,
+            layout: 7,
+            source: Site {
+                definition: "identity".into(),
+                file: "call.hir".into(),
+                line: 1,
+                column: 1,
+            },
+            value_type: "Token".into(),
+        };
+        units.get_mut(&unit).unwrap().insert(marker, metadata);
+        Row::Event {
+            task: 0,
+            frame,
+            marker,
+            action,
+            token,
+            owner,
+            site: 42,
+            layout: 7,
+        }
+    };
+    // One logical token leaves parent SSA, enters the owned callee parameter,
+    // returns in the same custody and is finally dropped by the caller.
+    rows.push(event(parent, 1, 0, 0, 0, 0));
+    rows.push(event(parent, 1, 1, 1, 0, 2u64 << 32));
+    rows.push(Row::Enter {
+        task: 0,
+        frame: 2,
+        unit: child,
+    });
+    rows.push(event(child, 2, 0, 1, 3u64 << 32, 0));
+    rows.push(event(child, 2, 1, 1, 0, 4u64 << 32));
+    rows.push(Row::Leave { task: 0, frame: 2 });
+    rows.push(event(parent, 1, 2, 1, 5u64 << 32, 1));
+    rows.push(event(parent, 1, 3, 2, 1, 1));
+    rows.push(Row::Leave { task: 0, frame: 1 });
+    (
+        Log {
+            version: VERSION,
+            program: [49; 32],
+            row_count: rows.len() as u64,
+            rows,
+            complete: true,
+        },
+        units,
+        LocalCalls::from([(parent, [child].into())]),
+    )
+}
+#[test]
+fn native_ownership_direct_call_transports_one_token_through_parameter_and_return() {
+    let (log, units, calls) = owned_call_rows();
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let result = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (result.created, result.dropped, result.live.len()),
+        (1, 1, 0)
+    );
+    assert_eq!(trace.events.len(), 6);
+    assert!(trace.events.iter().all(|event| match &event.action {
+        Action::Create { token, .. } | Action::Move { token, .. } | Action::Drop { token, .. } =>
+            token.sequence == 0,
+    }));
+}
+#[test]
+fn native_ownership_direct_call_refuses_missing_arguments_returns_and_root_transport() {
+    let (log, units, calls) = owned_call_rows();
+    for omitted in [2, 4, 5, 7] {
+        let mut broken = log.clone();
+        broken.rows.remove(omitted);
+        broken.row_count -= 1;
+        assert!(
+            decode_local_calls(&broken, [49; 32], &units, &calls, 100).is_err(),
+            "missing row {omitted}"
+        );
+    }
+    assert!(decode_leaf(&log, [49; 32], &units, 100).is_err());
+    let mut wrong = log.clone();
+    if let Row::Event { token, .. } = &mut wrong.rows[4] {
+        *token = 3u64 << 32 | 1;
+    }
+    assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
+}
