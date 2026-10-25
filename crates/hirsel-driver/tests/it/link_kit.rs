@@ -152,7 +152,8 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
     let providers = |bytes: &[u8]| {
         // Read ELF symbol tables as native::runner does. setsockopt is also
         // used by managed_cores' control socket, so the network marker names
-        // its provider constructor rather than that shared libc dependency.
+        // its provider constructors rather than that shared libc dependency.
+        // Local bindings select provider; concurrent bindings select send_provider.
         let header = elf::FileHeader64::<LittleEndian>::parse(bytes).unwrap();
         let endian = header.endian().unwrap();
         let sections = header.sections(endian, bytes).unwrap();
@@ -173,7 +174,7 @@ fn an_executable_links_each_host_provider_only_when_its_program_reaches_it() {
             symbol(b"ClientConnection"),
             bytes.windows(b"ISRG Root".len()).any(|w| w == b"ISRG Root"),
             symbol(b"getaddrinfo"),
-            symbol(b"net_host8provider"),
+            symbol(b"net_host8provider") || symbol(b"net_host13send_provider"),
             symbol(b"posix_spawnp"),
         ]
     };
