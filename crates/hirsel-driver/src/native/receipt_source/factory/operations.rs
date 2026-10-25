@@ -7,7 +7,7 @@ use hirsel_tir::Callee;
 use hirsel_types::{GenericArgument, UseKind};
 
 pub(super) enum Demand {
-    Seal(ExternalDemand),
+    External(ExternalDemand),
     ArenaScope { callback: u32 },
     RegionRead { owner: u32, callback: u32 },
 }
@@ -19,9 +19,40 @@ pub(super) fn expand(
     let Callee::Definition { path, arguments } = &call.callee else {
         return Ok(None);
     };
+    let simple = if path.is_core("$intrinsic.heap") {
+        Some((0, 0, vec![], ExternalDemand::default()))
+    } else if path.is_core("list.len") {
+        Some((1, 1, vec![UseKind::Borrow], ExternalDemand::default()))
+    } else if path.is_core("bytes.len") {
+        Some((0, 1, vec![UseKind::Borrow], ExternalDemand::default()))
+    } else if path.is_core("copy_to") {
+        Some((
+            1,
+            2,
+            vec![UseKind::Borrow, UseKind::Borrow],
+            ExternalDemand {
+                result: vec![1],
+                retained: vec![(0, vec![1])],
+                ..Default::default()
+            },
+        ))
+    } else if path.is_core("list.push") {
+        Some((
+            1,
+            2,
+            vec![UseKind::Mut, UseKind::Take],
+            ExternalDemand {
+                mutations: vec![(0, vec![0, 1])],
+                ..Default::default()
+            },
+        ))
+    } else {
+        None
+    };
     if !path.is_core("arena.seal")
         && !path.is_core("region.with")
         && hirsel_types::core_roles::arena_scope_callback(path).is_none()
+        && simple.is_none()
     {
         return Ok(None);
     }
@@ -44,6 +75,35 @@ pub(super) fn expand(
         return Err(SourceError::Malformed(
             "receipt operation declaration differs from reviewed core",
         ));
+    }
+    if let Some((generics, arity, uses, demand)) = simple {
+        if arguments.len() != generics
+            || !arguments
+                .iter()
+                .all(|argument| matches!(argument, GenericArgument::Type(_)))
+            || call.environment.is_some()
+            || call.arguments.len() != arity
+            || !uses.iter().enumerate().all(|(ordinal, expected)| {
+                call.arguments
+                    .get(&(ordinal as u32))
+                    .is_some_and(|argument| {
+                        argument.usage == *expected
+                            || (*expected == UseKind::Borrow && argument.usage == UseKind::Copy)
+                    })
+            })
+            || call.result.is_none()
+        {
+            return Err(SourceError::Malformed(
+                "receipt collection original call differs",
+            ));
+        }
+        return Ok(Some((
+            OperationId {
+                definition: path.clone(),
+                declaration_digest: reviewed.fingerprint,
+            },
+            Demand::External(demand),
+        )));
     }
     if path.is_core("region.with") {
         if !matches!(
@@ -118,7 +178,7 @@ pub(super) fn expand(
             definition: path.clone(),
             declaration_digest: reviewed.fingerprint,
         },
-        Demand::Seal(ExternalDemand {
+        Demand::External(ExternalDemand {
             parameters: vec![1],
             inventory: vec![0],
             ..Default::default()

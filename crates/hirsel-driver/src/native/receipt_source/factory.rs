@@ -377,7 +377,7 @@ pub fn named_graph(
             let operation = operations::expand(provider, call)?;
             let mut read_owner = None;
             let scope = match operation {
-                Some((operation, operations::Demand::Seal(demand))) => {
+                Some((operation, operations::Demand::External(demand))) => {
                     calls.insert(
                         block,
                         hirsel_rc::sealed_source::contract::registry::Expansion::External(demand),

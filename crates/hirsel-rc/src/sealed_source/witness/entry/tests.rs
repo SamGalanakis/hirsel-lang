@@ -562,3 +562,27 @@ fn original_entry_callable_identity_keeps_header_axes_beyond_parameter_types() {
     assert_eq!(a.result(), b.result());
     assert_ne!(a.callable().source_type, b.callable().source_type);
 }
+
+#[test]
+fn borrowed_capture_retains_distinct_source_and_receiving_envelopes() {
+    let (types, mut source, key) = closure(&[true]);
+    let parent_ty = source.definition.bodies[0].places[0].ty;
+    let mut receiving = types.get(parent_ty).unwrap().clone();
+    receiving.modes.relation = hirsel_types::Relation::environment();
+    receiving.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+    receiving.modes.sendability = hirsel_types::Sendability::NotSendable;
+    let receiving = types.intern(receiving);
+    Arc::make_mut(&mut source.definition).bodies[1].locals[1].ty = receiving;
+    let entry = source
+        .closure_entry(&key, &types, BodyId(0), hirsel_tir::BlockId(0), 0, Ok)
+        .unwrap();
+    assert_ne!(entry.captures()[0].source_ty, entry.captures()[0].ty);
+    assert_eq!(
+        entry.captures()[0].source_ty,
+        super::super::super::closed_storage_type(&types, parent_ty).unwrap()
+    );
+    assert_eq!(
+        entry.captures()[0].ty,
+        super::super::super::closed_storage_type(&types, receiving).unwrap()
+    );
+}

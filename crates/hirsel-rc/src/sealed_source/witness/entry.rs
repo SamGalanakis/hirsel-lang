@@ -21,6 +21,9 @@ pub struct SourceCapture {
     /// Original parent place, including its original typed projection.
     pub place: u32,
     pub usage: UseKind,
+    /// Full original source operand before its receiving capture qualification.
+    pub source_ty: ClosedStorageType,
+    /// Full declared type of the capture as read within the closure body.
     pub ty: ClosedStorageType,
 }
 
@@ -450,17 +453,44 @@ impl SourceInput {
                 .places
                 .get(operand.place.0 as usize)
                 .ok_or(SourceError::Malformed("original closure capture place"))?;
-            let ty = super::super::closed_storage_type(types, substitute(source.ty)?)?;
-            if ty != super::super::closed_storage_type(types, substitute(declared.ty)?)? {
-                return Err(SourceError::Malformed(
-                    "original closure capture type differs",
-                ));
+            let source_type = substitute(source.ty)?;
+            let declared_type = substitute(declared.ty)?;
+            let source_ty = super::super::closed_storage_type(types, source_type)?;
+            let ty = super::super::closed_storage_type(types, declared_type)?;
+            if source_ty != ty {
+                let mut receiving = types
+                    .get(declared_type)
+                    .ok_or(SourceError::Malformed("original capture receiving type"))?
+                    .clone();
+                // A borrowed capture has a receiving access contract, distinct
+                // from its parent's owning envelope. Reuse the full type view
+                // relation; do not erase the observed source or capture type.
+                receiving.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
+                receiving.modes.sendability = hirsel_types::Sendability::NotSendable;
+                receiving.sendability_requirement = hirsel_types::SendabilityRequirement::None;
+                let receiving = types.intern(receiving);
+                let generics = hirsel_types::GenericDeclarations::default();
+                let mut lookup = |_| Ok(None);
+                let valid = operand.usage == UseKind::Borrow
+                    && hirsel_types::ContextMemo::new(types, &generics, &mut lookup)
+                        .view(
+                            receiving,
+                            source_type,
+                            hirsel_types::TypeRelation::Parameter,
+                        )
+                        .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+                if !valid {
+                    return Err(SourceError::Malformed(
+                        "original closure capture type differs",
+                    ));
+                }
             }
             entry.captures.push(SourceCapture {
                 ordinal: ordinal as u32,
                 local: local as u32,
                 place: operand.place.0,
                 usage: operand.usage,
+                source_ty,
                 ty,
             });
         }

@@ -751,3 +751,169 @@ pub fn main()->u64 {
         );
     });
 }
+
+#[test]
+fn source_factory_tracks_before_scope_payloads_and_mutated_arena_collections() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let leaf:Bytes in heap=copy_to(heap,b"abc")
+  let mut r=arena.with(fn(a:Arena)->Region[List[Bytes]] {
+    let independent:Bytes in heap=copy_to(heap,leaf)
+    let mut root:List[Bytes] in a=[copy independent]
+    list.push(mut root,copy independent)
+    arena.seal(take a,take root)
+  })
+  region.with(mut r,fn(root:List[Bytes])->u64 {
+    list.len(root)+bytes.len(root[0])
+  })
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("noncallable ports")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 3);
+        assert_eq!(graph.operations.len(), 10);
+        let constructor = graph
+            .contexts
+            .iter()
+            .zip(&graph.requests)
+            .find(|(context, _)| context.source.entry().arena_scope_grant().is_some())
+            .unwrap();
+        let contract = constructor.1.declaration().contract().unwrap();
+        assert_eq!(contract.captures.len(), 1);
+        assert_eq!(contract.captures[0].ordinal, 0);
+        assert_eq!(
+            contract.captures[0].mode,
+            hirsel_lir::sealed_payload_source::ReceiptMode::Borrow
+        );
+        assert!(
+            graph.requests[0]
+                .declaration()
+                .requirements()
+                .payload_locals
+                .len()
+                > 1
+        );
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+            signature_override: None,
+        };
+        graph
+            .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
+                panic!("noncallable ports")
+            })
+            .unwrap();
+        let original = front.signature(&DefPath::core("list.push")).unwrap();
+        let mut forged = (*original).clone();
+        if let hirsel_types::SignatureKind::Function(function) = &mut forged.kind {
+            function.parameters[0].passing = hirsel_types::PassingMode::Borrow;
+        } else {
+            unreachable!()
+        }
+        simulated.signature_override = Some(Arc::new(forged));
+        assert!(matches!(
+            named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt operation declaration differs from reviewed core"
+            ))
+        ));
+    });
+}
+
+#[test]
+fn source_factory_keeps_reviewed_scalar_observations_empty_without_a_seal() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let bytes:Bytes in heap=copy_to(heap,b"abc")
+  let mut xs:List[Bytes] in heap=[]
+  list.push(mut xs,copy bytes)
+  list.len(xs)+bytes.len(bytes)
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("noncallable ports")
+        })
+        .unwrap_or_else(|error| {
+            let original = front.original(&path).unwrap();
+            let calls: Vec<_> = original
+                .definition()
+                .bodies
+                .iter()
+                .flat_map(|body| {
+                    body.blocks
+                        .iter()
+                        .filter_map(|block| match &block.terminator {
+                            hirsel_tir::Terminator::Call { callee, .. } => Some(callee.clone()),
+                            _ => None,
+                        })
+                })
+                .collect();
+            panic!("{error:?}; original collection calls: {calls:?}")
+        });
+        assert_eq!(graph.operations.len(), 5);
+        assert_eq!(graph.contexts.len(), 1);
+        assert!(graph.requests[0].aware_key().is_none());
+        assert!(
+            graph.requests[0]
+                .declaration()
+                .requirements()
+                .payload_locals
+                .is_empty()
+        );
+    });
+}
+
+#[test]
+fn source_factory_rejects_borrowed_before_scope_payload_without_detachment() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine
+            .sources
+            .add(
+                "borrowed-before-scope.hir",
+                r#"
+pub fn main()->u64 {
+  let leaf:Bytes in heap=copy_to(heap,b"abc")
+  let mut r=arena.with(fn(a:Arena)->Region[List[Bytes]] {
+    let mut root:List[Bytes] in a=[copy leaf]
+    list.push(mut root,copy leaf)
+    arena.seal(take a,take root)
+  })
+  region.with(mut r,fn(root:List[Bytes])->u64 {
+    list.len(root)+bytes.len(root[0])
+  })
+}
+"#
+                .into(),
+            )
+            .unwrap();
+        let report = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule.as_str() == "MODE-1"),
+            "{:?}",
+            report.diagnostics
+        );
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.rule.as_str() == "MEM-4"),
+            "{:?}",
+            report.diagnostics
+        );
+    });
+}
