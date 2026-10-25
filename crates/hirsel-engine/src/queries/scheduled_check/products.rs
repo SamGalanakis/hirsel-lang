@@ -81,18 +81,22 @@ impl FrontCheckScope {
         required = required
             .checked_add(lower.settled_constants_input_bytes()?)
             .ok_or(QueryError::NotImplemented)?;
+        let mut transient = 0u64;
         for path in self.lowered() {
             if self.failed_lowered().contains(path) {
                 continue;
             }
             weight.path(path);
+            let layout = lower.settled_definition_decode_layout(path)?;
+            transient = transient.max(layout.transient);
             required = required
-                .checked_add(lower.settled_definition_decode_bytes(path)?)
+                .checked_add(layout.retained)
                 .and_then(|n| n.checked_add(lower.settled_constant_selection_bytes(path).ok()?))
                 .ok_or(QueryError::NotImplemented)?;
         }
         required
-            .checked_add(weight.bytes())
+            .checked_add(transient)
+            .and_then(|n| n.checked_add(weight.bytes()))
             .ok_or(QueryError::NotImplemented)
     }
     /// N-1 refuses before original body I/O. The returned wrapper owns the
