@@ -61,9 +61,11 @@ def main(args):
     if selected:
         cases = [case for case in cases if case['id'] in selected.split(',')]
     assert cases, 'zero selected native cells'
+    widths = [int(value) for value in os.environ.get('SITEBUILD_29_WIDTHS', '1,2,4').split(',')]
+    assert widths and all(width in [1, 2, 4] for width in widths), 'invalid native widths'
     for backend in backends:
         binary = binaries[backend]
-        for width in ([1] if os.environ.get('SITEBUILD_29_CAPS') else [1, 2, 4]):
+        for width in ([1] if os.environ.get('SITEBUILD_29_CAPS') else widths):
             for case in cases:
                 if width != 1 and case['id'] not in ['nested-three', 'invalid-utf8']:
                     continue
