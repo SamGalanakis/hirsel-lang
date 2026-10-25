@@ -724,7 +724,9 @@ impl QueryEngine {
                     }
                 }
             }
-            if names_changed {
+            // A GEN-6 specialization's name is never written in source, so no
+            // lookup can observe it appearing.
+            if names_changed && hirsel_types::specialization_parts(&path).is_none() {
                 any_names_changed = true;
                 changes.read(
                     ReadKey::NameSet(

@@ -312,7 +312,12 @@ fn input_digest<'a>(
     heap: Option<&(DefId, HeapRole)>,
     errors: ContentHash,
 ) -> ContentHash {
-    let mut views: Vec<_> = views.collect();
+    // GEN-6 specializations are left out: one materializing in a program must
+    // not invalidate every validation of its declaring package. A caller of
+    // one reads its declaration and implementations, which determine it.
+    let mut views: Vec<_> = views
+        .filter(|view| hirsel_types::specialization_parts(view.d.path()).is_none())
+        .collect();
     views.sort_by(|a, b| a.d.path().cmp(b.d.path()));
     let mut bytes = Vec::with_capacity(views.len() * 96);
     bytes.extend((views.len() as u64).to_le_bytes());

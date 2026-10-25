@@ -139,3 +139,63 @@ fn specializations_call_their_targets_directly_at_optimization_zero() {
         assert!(!clif.contains("call_indirect"), "{name}\n{clif}");
     }
 }
+
+/// Declarations only: materializing `total`'s specialization is the one change.
+const DECLARATIONS: &str = "signature Source {
+  type Item: plain
+  fn make() -> Item uses {}
+}
+fn make_u64() -> u64 uses {} { 5 }
+implementation five: Source {
+  type Item = u64
+  make = make_u64
+}
+fn total[A: implementation Source]() -> A.Item uses {} { A.make() }
+";
+
+/// The standalone package's validation-input digest after checking `source`,
+/// then after materializing `total`'s specialization at `five`, and whether the
+/// snapshot then holds the specialization.
+fn digests(source: &str) -> (hirsel_syntax::ContentHash, hirsel_syntax::ContentHash, bool) {
+    use hirsel_types::SignatureProvider;
+    let source = source.to_owned();
+    with_compiler_stack(move || {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let file = engine.sources.add("contracts.hir", source).unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let package = default_context().package;
+        let before = engine
+            .signature_snapshot()
+            .validation_input_digest(&package);
+        let path = |name: &str| {
+            hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: package.clone(),
+                modules: vec![],
+                name: name.into(),
+            })
+        };
+        let (base, five) = (path("total"), path("five"));
+        let specialization = hirsel_types::specialization_path(&base, &[("A".into(), five)]);
+        let id = hirsel_syntax::DefId::intern(&specialization);
+        engine.signature(id).unwrap();
+        let snapshot = engine.signature_snapshot();
+        let held = matches!(snapshot.signature(id), Some(Ok(_)));
+        (before, snapshot.validation_input_digest(&package), held)
+    })
+}
+
+#[test]
+fn a_specialization_leaves_its_package_validation_digest_unchanged() {
+    let (before, after, held) = digests(DECLARATIONS);
+    // The validator still finds the specialization's signature...
+    assert!(held);
+    // ...but materializing it in a program does not invalidate every
+    // validation of its declaring package.
+    assert_eq!(before, after);
+    // An ordinary declaration remains part of the package's universe.
+    let (other, _, _) = digests(&format!(
+        "{DECLARATIONS}fn extra() -> u64 uses {{}} {{ 1 }}\n"
+    ));
+    assert_ne!(before, other);
+}
