@@ -335,7 +335,8 @@ pub(crate) struct RunShared {
     pub(crate) schedule: hirsel_kernels::schedule::Schedule,
     /// Free mode's session and test channel (`crate::free`).
     pub(crate) free: RoleCell<Option<Box<crate::free::Free>>>,
-    /// The admitted tasks.free@1 policy, independently of recording.
+    /// The admitted tasks.free@1 policy, independently of recording or
+    /// physical dispatch; false for Ordered and the cooperative test harness.
     pub(crate) free_mode: bool,
     /// The Free logical policy without replay, fixed at admission: immediate
     /// object operations may then act on resolved leases without the role.

@@ -228,8 +228,6 @@ struct Task {
     pinned: bool,
     /// The compute worker it last ran on, at width > 1.
     last: Option<u16>,
-    /// Consecutive immediate ops since this task last gave up its worker.
-    budget: hirsel_free::schedule::Budget,
 }
 
 /// A task set (CONC-2): its scope and its members' Task words in add order, `None` once
@@ -980,7 +978,6 @@ impl Task {
             owner: Owner::Any,
             pinned: false,
             last: None,
-            budget: Default::default(),
         }
     }
 }
@@ -1307,7 +1304,6 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     let next_row = unsafe {
         role::with_held(ctx, |t| {
             let from = t.current;
-            t.task(from).budget.reset();
             // A suspension ends the running task's hold on the home thread for the Io binding.
             if let Some(Some(row)) = t.tasks.get_mut(from as usize) {
                 unpin(row);
@@ -2507,23 +2503,6 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     if free::enabled(ctx) {
         return unsafe { free::try_yield(ctx) };
     }
-    // In free mode, semantic ordinals and publications still happen for
-    // every op, while immediate ops keep this worker for at most 128 ops.
-    // F0's injected schedule retains its one-op quantum for reference tests.
-    if ctx.run_ref().free_mode && ctx.run_ref().free.is_none() {
-        if unsafe {
-            role::with_held(ctx, |t| {
-                let me = t.current;
-                t.task(me).budget.proceed()
-            })
-        } {
-            if let Some(metrics) = &ctx.run_ref().worker_metrics {
-                metrics.elision();
-            }
-            unsafe { go_on(ctx) };
-            return crate::stop::observe(ctx);
-        }
-    }
     // Tokio ce685ee6 current_thread/mod.rs:818-879 keeps polling its sole
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
@@ -2662,7 +2641,6 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
     let current = unsafe {
         role::with_held(ctx, |t| {
             let current = t.current;
-            t.task(current).budget.reset();
             t.task(current).wait_site = site;
             t.park(wait);
             current

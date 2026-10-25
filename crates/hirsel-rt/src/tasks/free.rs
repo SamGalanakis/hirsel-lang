@@ -19,6 +19,8 @@ pub(crate) mod host;
 pub(crate) mod lifecycle;
 pub(crate) mod mutex;
 pub(crate) mod objects;
+#[cfg(test)]
+mod quantum_tests;
 pub(crate) mod record;
 pub(crate) mod replay;
 pub(crate) mod sets;
@@ -29,9 +31,7 @@ pub(crate) struct Driver {
     replay: Option<std::sync::Arc<replay::Replay>>,
 }
 
-/// Admit the free logical policy for explicit dispatcher tests. General
-/// activation additionally requires the semantic suspension/end branches,
-/// recorder sections, host readiness and concurrent service lifetime audit.
+/// Admit the Free logical policy used by production launches and dispatcher tests.
 /// # Safety
 /// Admission only, before the root starts. The body uses only saved-stack
 /// dispatch and supported waits; it cannot invoke cooperative switch paths.

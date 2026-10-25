@@ -2377,8 +2377,8 @@ pub(crate) unsafe fn execute(
                     limits,
                     std::time::Duration::ZERO,
                     crate::host::RunControl::from_inner(std::sync::Arc::clone(&options.control)),
-                    // Explicit worker knobs exercise the substrate; production activation
-                    // belongs to the ordered/free differential gate (E1/F1).
+                    // Both production policies and explicit worker tests use
+                    // the managed physical topology.
                     options.workers.is_some() || ordered_enabled || production_free,
                 )?);
                 let metrics_pin = placement
