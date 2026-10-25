@@ -5,6 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
+mod retained;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Namespace {
