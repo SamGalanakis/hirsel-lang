@@ -230,12 +230,7 @@ fn run(jobs: usize) {
 fn selected_object_and_link_verification_recomputes_fresh_hits_without_source_work() {
     with_compiler_stack(|| run_case(1, false, false, true));
 }
-fn run_case(
-    jobs: usize,
-    observation_only: bool,
-    frozen_plan: bool,
-    verify_objects: bool,
-) {
+fn run_case(jobs: usize, observation_only: bool, frozen_plan: bool, verify_objects: bool) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
