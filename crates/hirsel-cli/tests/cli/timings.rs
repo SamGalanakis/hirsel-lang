@@ -273,7 +273,7 @@ fn mem_usage_reports_peak_rss_and_the_tables_held() {
             .unwrap_or_else(|| panic!("no {name:?} in {memory}"))
     };
     assert!(
-        held("std image") > 0 && held("engine: signature snapshot") > 0,
+        held("engine: snapshot row provenance") > 0 && held("engine: signature snapshot") > 0,
         "{memory}"
     );
     assert!(held("engine: signatures") > 0, "{memory}");
