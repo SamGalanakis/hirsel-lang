@@ -288,10 +288,18 @@ no runtime overlap checks.
 keeps its own declaration's layout.
 
 `@soa T` changes only the storage of a direct `List[T]` or `Array[T]`; a standalone `T`, and
-`T` inside any other type, stays an ordinary value. Every column has a fixed stride, so an
+`T` inside any other type, stays an ordinary value. A record's immediate fields become one
+column each, a nested record staying one whole column. A variant's rows become two columns:
+its active variant's ordinal, in the narrowest of `u8`, `u16` and `u32` that holds every
+variant, and one payload column as wide as its largest variant; only a row's active payload
+is read, scanned and dropped, and assigning another variant to a row drops the old payload
+once before the new one is written. A borrowed element is a projection of its row's
+columns; taking one assembles the row, and growth and copy-on-write move every column
+together, keeping element and field cleanup order. Every column has a fixed stride, so an
 `@soa` declaration whose inline storage holds a `Packed` value
 ([MEM-13](#mem-13-packed-variants)), a variable-size flat value or a resource, or that is
-itself a resource, is rejected, and so is `Inline[T, n]` of an `@soa` `T`. Ordinary `String`,
+itself a resource, is rejected, and so are `Inline[T, n]` of an `@soa` `T` and an
+`@serializable` `@soa` variant. Ordinary `String`,
 `Bytes`, `List` and `box` fields are fixed-size carriers that keep their owners. Each
 rejection is a MEM-7 error at the `@soa` attribute, except a `Packed` occurrence, which is
 MEM-13.

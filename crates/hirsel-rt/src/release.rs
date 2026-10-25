@@ -81,7 +81,10 @@ pub const STEP_RELEASE: u32 = 1;
 pub const STEP_FINALIZE: u32 = 2;
 /// Close the run-context handle stored at `offset` through the Io adapter.
 pub const STEP_CLOSE_HANDLE: u32 = 3;
-/// Unless the `u32` tag at `offset` equals `variant`, skip the next `span` steps.
+/// Unless the `u32` tag at `offset` equals `variant`, skip the next `span` steps. A column
+/// tag (nonzero `stride`, runtime ABI 68) is an `@soa` variant row's ordinal, `stride` bytes
+/// wide, in a column of its loop's element `i`: at `offset + capacity * count + i * stride`,
+/// where `capacity` is the `u64` at `count_offset`.
 pub const STEP_TAG: u32 = 4;
 /// Run the next `span` steps once per element, highest index first; element `i` is at
 /// `offset + i * stride`. The count is `count`, or the `u64` at `count_offset`.
@@ -187,13 +190,38 @@ fn spans(kind: u32) -> bool {
     )
 }
 
+/// Where a step reads its word in the frame whose element is `base` at loop index `index`:
+/// `offset` into it, except a column [`STEP_TAG`]'s ordinal, in a column of the element.
+#[inline(always)]
+pub(crate) unsafe fn step_at(step: &Step, base: *mut u8, index: u64) -> *mut u8 {
+    if step.kind != STEP_TAG || step.stride == 0 {
+        return base.wrapping_add(step.offset as usize);
+    }
+    // SAFETY: a column tag's capacity word lies in its loop's element (`check_frame`).
+    let capacity = unsafe {
+        base.add(step.count_offset as usize)
+            .cast::<u64>()
+            .read_unaligned()
+    };
+    base.wrapping_add(
+        step.offset
+            .wrapping_add(capacity.wrapping_mul(step.count))
+            .wrapping_add(index.wrapping_mul(step.stride)) as usize,
+    )
+}
+
 /// Whether a [`STEP_TAG`] or [`STEP_NONNULL`] at `at` skips its span: its variant is inactive.
 #[inline(always)]
 pub(crate) unsafe fn variant_inactive(step: &Step, at: *const u8) -> bool {
     // SAFETY: `at` addresses the step's tag or niche word inside the value being dropped.
     unsafe {
         if step.kind == STEP_TAG {
-            at.cast::<u32>().read_unaligned() != step.variant
+            let ordinal = match step.stride {
+                1 => u32::from(at.read()),
+                2 => u32::from(at.cast::<u16>().read_unaligned()),
+                _ => at.cast::<u32>().read_unaligned(),
+            };
+            ordinal != step.variant
         } else if step.kind == STEP_LIVE_BIT {
             at.cast::<u64>().read_unaligned() & (1u64 << step.variant) == 0
         } else {
@@ -254,7 +282,7 @@ pub(crate) unsafe fn check_layout(layout: *const Layout) {
     if wide && layout.flags & LAYOUT_WIDE_CURSOR == 0 {
         fault("a loop/column descriptor lacks WIDE_CURSOR");
     }
-    check_frame(layout, steps, 0, steps.len(), Some(layout.size), 0);
+    check_frame(layout, steps, 0, steps.len(), Some(layout.size), 0, false);
     // Runtime-owned mechanical descriptors can have a host cleanup thunk and
     // no language scope. Emitted library descriptors still pair their marker.
     let own_scope = layout.finalizer.is_some()
@@ -322,8 +350,8 @@ fn check_finalizer_scopes(layout: &Layout, steps: &[Step], start: usize, end: us
 }
 
 /// Check `steps[start..end]`, one frame's steps, whose element extent is `extent` bytes
-/// (`None`: dynamic) inside `loops` enclosing loops. Recursion follows the descriptor's static
-/// frame nesting, never the data.
+/// (`None`: dynamic) inside `loops` enclosing loops; `column` when the frame is a column's.
+/// Recursion follows the descriptor's static frame nesting, never the data.
 fn check_frame(
     layout: &Layout,
     steps: &[Step],
@@ -331,6 +359,7 @@ fn check_frame(
     end: usize,
     extent: Option<u64>,
     loops: u32,
+    column: bool,
 ) {
     let fits = |offset: u64, bytes: u64| {
         extent.is_none_or(|extent| offset.checked_add(bytes).is_some_and(|e| e <= extent))
@@ -375,7 +404,8 @@ fn check_frame(
             framed(steps, start, end, &mut |m| {
                 let other = &steps[m];
                 found |= other.kind == STEP_TAG
-                    && other.offset == tag.offset
+                    && (other.offset, other.count, other.stride)
+                        == (tag.offset, tag.count, tag.stride)
                     && other.variant != tag.variant
                     && inside(m, b);
             });
@@ -385,6 +415,7 @@ fn check_frame(
     framed(steps, start, end, &mut |control_at| {
         let step = &steps[control_at];
         let control = match step.kind {
+            STEP_TAG if step.stride != 0 => Some((step.count_offset, 8)),
             STEP_TAG => Some((step.offset, 4)),
             STEP_LIVE_BIT => Some((step.offset, 8)),
             STEP_LOOP if step.count_offset != NO_OFFSET => Some((step.count_offset, 8)),
@@ -476,11 +507,21 @@ fn check_frame(
                 if step.kind == STEP_LIVE_BIT && step.variant >= 64 {
                     fault("live bit outside its word");
                 }
-                let width = if step.kind == STEP_TAG { 4 } else { 8 };
-                if !fits(step.offset, width) {
-                    fault("a drop step's tag lies outside its layout");
+                if step.kind == STEP_TAG && step.stride != 0 {
+                    // A column tag reads its loop's element: never the root's or a column's.
+                    if loops == 0 || column || !matches!(step.stride, 1 | 2 | 4) {
+                        fault("a column tag outside a loop's element or of another width");
+                    }
+                    if !fits(step.count_offset, 8) {
+                        fault("a column tag's capacity lies outside its layout");
+                    }
+                } else {
+                    let width = if step.kind == STEP_TAG { 4 } else { 8 };
+                    if !fits(step.offset, width) {
+                        fault("a drop step's tag lies outside its layout");
+                    }
                 }
-                check_frame(layout, steps, body, close, extent, loops);
+                check_frame(layout, steps, body, close, extent, loops, column);
             }
             STEP_LOOP => {
                 let element = if step.count_offset == NO_OFFSET {
@@ -503,7 +544,7 @@ fn check_frame(
                         (stride, _) => Some(stride),
                     }
                 };
-                check_frame(layout, steps, body, close, element, loops + 1);
+                check_frame(layout, steps, body, close, element, loops + 1, false);
             }
             STEP_COLUMN => {
                 if loops == 0 {
@@ -512,7 +553,7 @@ fn check_frame(
                 if !fits(step.count_offset, 8) {
                     fault("a drop column's capacity lies outside its layout");
                 }
-                check_frame(layout, steps, body, close, Some(step.stride), loops);
+                check_frame(layout, steps, body, close, Some(step.stride), loops, true);
             }
             _ => fault("a drop step has an unknown kind"),
         }
@@ -1221,7 +1262,7 @@ unsafe fn walk_frames(
                     frame = frame.enter(pc - 1, step, 0);
                 }
                 _ => {
-                    let at = frame.base.wrapping_add(step.offset as usize);
+                    let at = step_at(step, frame.base, frame.index);
                     let child = run_step(ctx, step, at, &mut pc, anchor, operation_site, status);
                     if !child.is_null() {
                         return (child, suspended(pc, &frame, nest));

@@ -201,7 +201,7 @@ impl<S: Stage> Machine<'_, S> {
                     view.children.push(child(*value, projection.location));
                 }
                 Node::Fields { fields, .. } => {
-                    let (data, _, columns) = self.column_shape(element)?;
+                    let (data, _, columns) = self.field_columns(element)?;
                     if fields.len() != columns.len() {
                         return fail(V::Malformed, "projection column field count");
                     }

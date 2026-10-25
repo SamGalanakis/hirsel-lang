@@ -1,0 +1,49 @@
+// rule: MEM-7
+// expect: run
+// Zero-sized and high-alignment columns (Zig multi_array_list.zig "0 sized
+// struct field"): a unit column takes no bytes, a u128 column keeps its
+// alignment across growth, and a nested record stays one whole column.
+type Point {
+  x: u32,
+  y: u32,
+}
+
+@soa
+type Row {
+  none: (),
+  wide: u128,
+  small: u8,
+  at: Point,
+}
+
+@soa
+type Unit {
+  a: (),
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut rows: List[Row] = [
+    Row(none: (), wide: 1u128, small: 1, at: Point(x: 1, y: 2))
+  ]
+  for i in 0u64..20u64 {
+    list.push(
+      mut rows,
+      Row(
+        none: (),
+        wide: 340282366920938463463374607431768211455u128,
+        small: 2,
+        at: Point(x: 3, y: 4)
+      )
+    )
+  }
+  test.check(t, list.len(rows) == 21)
+  test.check(t, rows[0].wide == 1u128)
+  test.check(t, rows[20].wide == 340282366920938463463374607431768211455u128)
+  test.check(t, rows[20].at.y == 4)
+  test.check(t, rows[0].at.x == 1)
+  let mut units: List[Unit] = []
+  list.push(mut units, Unit(a: ()))
+  list.push(mut units, Unit(a: ()))
+  test.check(t, list.len(units) == 2)
+  Ok(())
+}

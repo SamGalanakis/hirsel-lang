@@ -3,6 +3,9 @@ use super::*;
 impl<'m, 'a> FnEmitter<'m, 'a> {
     /// The active variant ordinal (an `i32`) of the tagged value at `place`.
     pub(super) fn active_tag(&self, place: Place<'m>) -> Emitted<Value<'m>> {
+        if place.columns.is_some() {
+            return self.column_tag(place);
+        }
         let record = self.layout(place.layout)?;
         let Some(tag) = &record.tag else {
             return self.invalid("a tag read of an untagged layout");
@@ -32,6 +35,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Makes `variant` the active variant of the tagged storage at `place`; the only tag
     /// writer.
     pub(super) fn store_tag(&self, place: Place<'m>, variant: u32) -> Emitted {
+        if place.columns.is_some() {
+            return self.store_column_tag(place, variant);
+        }
         let record = self.layout(place.layout)?;
         let Some(tag) = &record.tag else {
             return self.invalid("a tag write of an untagged layout");
@@ -979,7 +985,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             (SizeSpec::Dynamic(_), LayoutKind::SoaColumns { element }) => {
                 let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
                 let capacity = self.column_capacity(count, element)?;
-                let (data, _, width) = self.column_shape(element)?;
+                let shape = self.soa(element)?;
+                let (data, width) = (shape.data_offset, shape.width);
                 capacity
                     .checked_mul(width)
                     .and_then(|b| b.checked_add(data))

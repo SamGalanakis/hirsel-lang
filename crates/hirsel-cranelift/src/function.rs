@@ -676,15 +676,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         unaligned: bool,
     ) -> Emitted<Place> {
         if place.columns.is_some() {
-            let Some(field) = self
-                .layout(place.layout)?
-                .fields
-                .iter()
-                .find(|f| f.offset == offset && f.layout == layout)
-            else {
-                return self.invalid("column field absent");
-            };
-            return self.column_field(place, field);
+            return self.column_field(place, offset, layout);
         }
         let ptr = self.offset(place.ptr, offset);
         let align = if unaligned {

@@ -144,7 +144,8 @@ impl Program {
                     return;
                 }
                 LayoutKind::SoaColumns { element } => {
-                    let Some(e) = table.layout(*element) else {
+                    // A variant's tag and payload columns have no value metadata yet.
+                    let Some(e) = table.layout(*element).filter(|e| e.tag.is_none()) else {
                         return;
                     };
                     let quantum = e
@@ -490,6 +491,10 @@ impl Program {
                     self.words[at + 2] = *count;
                     self.words[at + 3] = *stride;
                     self.reference(at + 4, *element);
+                }
+                // A holder scan has no column tag test: a variant's arms are unknown.
+                ScanStep::Columns(columns) if columns.tag.is_some() => {
+                    self.instruction(UNKNOWN, 0);
                 }
                 ScanStep::Columns(columns) => {
                     for column in &columns.columns {

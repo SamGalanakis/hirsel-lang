@@ -1,6 +1,9 @@
-//! Capacity-based structure-of-arrays storage. Element places retain their row
-//! coordinates until a field projection, gather or scatter consumes them.
+//! Capacity-based structure-of-arrays storage (MEM-7). Element places retain their row
+//! coordinates until a field or payload projection, tag access, gather or scatter consumes
+//! them. A variant's row is its u32 tag and its payload; its columns hold the tag narrowed
+//! and the payload's bytes.
 use super::*;
+use hirsel_lir::layout::{SoaPart, SoaShape, SoaSpan};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ColumnRow<'m> {
@@ -10,21 +13,15 @@ pub(super) struct ColumnRow<'m> {
 }
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
-    pub(super) fn column_shape(&self, element: LayoutId) -> Emitted<(u64, u64, u64)> {
-        let fields = &self.layout(element)?.fields;
-        let mut width = 0;
-        let mut quantum = 1;
-        for field in fields {
-            width += self.fixed_size(field.layout)?;
-            quantum = quantum.max(u64::from(self.layout(field.layout)?.align));
-        }
-        let data = hirsel_lir::layout::soa_data_offset(quantum)
-            .or_else(|e| self.invalid(format!("{e:?}")))?;
-        Ok((data, quantum, width))
+    pub(super) fn soa(&self, element: LayoutId) -> Emitted<SoaShape> {
+        self.inputs
+            .layouts
+            .soa_shape(element)
+            .or_else(|e| self.invalid(format!("{e:?}")))
     }
 
     pub(super) fn column_capacity(&self, count: u64, element: LayoutId) -> Emitted<u64> {
-        let (_, quantum, _) = self.column_shape(element)?;
+        let quantum = self.soa(element)?.quantum;
         hirsel_lir::layout::align_up(count, quantum).or_else(|e| self.invalid(format!("{e:?}")))
     }
 
@@ -34,7 +31,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         element: LayoutId,
         index: Value<'m>,
     ) -> Emitted<Place<'m>> {
-        let (offset, _, _) = self.column_shape(element)?;
+        let offset = self.soa(element)?.data_offset;
         let capacity = self.load_u64(self.builder.offset(place.ptr, self.const_u64(8)));
         Ok(Place {
             columns: Some(ColumnRow {
@@ -47,30 +44,139 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         })
     }
 
-    pub(super) fn column_field(&self, place: Place<'m>, field: &FieldLayout) -> Emitted<Place<'m>> {
+    /// The address of `span`'s element in the row `place` names.
+    fn column_element(&self, place: Place<'m>, span: &SoaSpan) -> Value<'m> {
         let row = place.columns.expect("column row");
-        let mut prefix = 0;
-        for before in &self.layout(place.layout)?.fields {
-            if before.ordinal == field.ordinal {
-                break;
-            }
-            prefix += self.fixed_size(before.layout)?;
-        }
         let column = self
             .builder
-            .binary(BinOp::Mul, row.capacity, self.const_u64(prefix));
-        let stride = self.fixed_size(field.layout)?;
+            .binary(BinOp::Mul, row.capacity, self.const_u64(span.prefix));
         let offset = self
             .builder
-            .binary(BinOp::Mul, row.index, self.const_u64(stride));
+            .binary(BinOp::Mul, row.index, self.const_u64(span.stride));
         let offset = self.builder.binary(BinOp::Add, column, offset);
+        self.builder.offset(row.data, offset)
+    }
+
+    /// The place of the row's bytes at `offset` holding `layout`: a record field's own
+    /// column, or a part of a variant's payload column.
+    pub(super) fn column_field(
+        &self,
+        place: Place<'m>,
+        offset: u64,
+        layout: LayoutId,
+    ) -> Emitted<Place<'m>> {
+        let shape = self.soa(place.layout)?;
+        let found = shape.spans.iter().find(|s| match s.part {
+            SoaPart::Field { layout: l, .. } => s.row_offset == offset && l == layout,
+            SoaPart::Payload => offset >= s.row_offset && offset < s.row_offset + s.stride.max(1),
+            SoaPart::Tag(_) => false,
+        });
+        let Some(span) = found else {
+            return self.invalid("column field absent");
+        };
+        let mut ptr = self.column_element(place, span);
+        let mut align = self.layout(layout)?.align;
+        if span.part == SoaPart::Payload && offset != span.row_offset {
+            let within = offset - span.row_offset;
+            ptr = self.builder.offset(ptr, self.const_u64(within));
+            align = align.min(low_bit(within)).min(span.align);
+        }
         Ok(Place {
-            ptr: self.builder.offset(row.data, offset),
-            layout: field.layout,
-            align: self.layout(field.layout)?.align,
+            ptr,
+            layout,
+            align,
             block: place.block,
             columns: None,
         })
+    }
+
+    /// The active ordinal (an `i32`) of a variant row, from its tag column.
+    pub(super) fn column_tag(&self, place: Place<'m>) -> Emitted<Value<'m>> {
+        let shape = self.soa(place.layout)?;
+        let Some((span, scalar)) = shape.tag() else {
+            return self.invalid("a tag read of a record row");
+        };
+        let narrow = self.load(
+            Shape::Scalar(scalar),
+            Place {
+                ptr: self.column_element(place, span),
+                layout: place.layout,
+                align: span.align,
+                block: place.block,
+                columns: None,
+            },
+        );
+        Ok(widen_tag(self, narrow, scalar))
+    }
+
+    /// Makes `variant` the active ordinal of a variant row.
+    pub(super) fn store_column_tag(&self, place: Place<'m>, variant: u32) -> Emitted {
+        let shape = self.soa(place.layout)?;
+        let Some((span, scalar)) = shape.tag() else {
+            return self.invalid("a tag write of a record row");
+        };
+        let ty = self.llvm_type(Shape::Scalar(scalar));
+        let value = self.module.const_int(ty, u128::from(variant));
+        self.builder
+            .store(value, self.column_element(place, span), span.align);
+        Ok(())
+    }
+
+    /// Copies one column's element between the row `place` names and `temp`, its row image.
+    fn transfer(&self, place: Place<'m>, temp: Place<'m>, span: &SoaSpan, out: bool) -> Emitted {
+        let column = self.column_element(place, span);
+        let image = self
+            .builder
+            .offset(temp.ptr, self.const_u64(span.row_offset));
+        let image_align = temp.align.min(low_bit(span.row_offset));
+        match span.part {
+            SoaPart::Field { layout, .. } => {
+                let shape = self.layout_shape(layout)?;
+                let align = self.layout(layout)?.align;
+                let at = |ptr, align| Place {
+                    ptr,
+                    layout,
+                    align,
+                    block: place.block,
+                    columns: None,
+                };
+                let (from, to) = if out {
+                    (at(column, align), at(image, image_align.min(align)))
+                } else {
+                    (at(image, image_align.min(align)), at(column, align))
+                };
+                self.store(shape, self.load(shape, from), to);
+            }
+            SoaPart::Tag(scalar) => {
+                let narrow_ty = self.llvm_type(Shape::Scalar(scalar));
+                let word = self.module.int_type(32);
+                if out {
+                    let narrow = self.builder.load(narrow_ty, column, span.align);
+                    let wide = widen_tag(self, narrow, scalar);
+                    self.builder.store(wide, image, image_align.min(4));
+                } else {
+                    let wide = self.builder.load(word, image, image_align.min(4));
+                    let narrow = if scalar == ScalarKind::U32 {
+                        wide
+                    } else {
+                        self.builder.cast(Cast::Trunc, wide, narrow_ty)
+                    };
+                    self.builder.store(narrow, column, span.align);
+                }
+            }
+            SoaPart::Payload => {
+                if span.stride != 0 {
+                    let bytes = self.const_u64(span.stride);
+                    let align = image_align.min(span.align);
+                    if out {
+                        self.builder.memcpy(image, align, column, span.align, bytes);
+                    } else {
+                        self.builder.memcpy(column, span.align, image, align, bytes);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn gather(&self, place: Place<'m>) -> Emitted<Place<'m>> {
@@ -78,11 +184,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return Ok(place);
         }
         let temp = self.stack(place.layout)?;
-        for field in &self.layout(place.layout)?.fields {
-            let from = self.column_field(place, field)?;
-            let to = self.field_place(temp, field.offset, field.layout, field.unaligned)?;
-            let shape = self.layout_shape(field.layout)?;
-            self.store(shape, self.load(shape, from), to);
+        for span in &self.soa(place.layout)?.spans {
+            self.transfer(place, temp, span, true)?;
         }
         Ok(temp)
     }
@@ -94,15 +197,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let temp = self.stack(place.layout)?;
         self.store(shape, value, temp);
-        for field in &self.layout(place.layout)?.fields {
-            let from = self.field_place(temp, field.offset, field.layout, field.unaligned)?;
-            let to = self.column_field(place, field)?;
-            let shape = self.layout_shape(field.layout)?;
-            self.store(shape, self.load(shape, from), to);
+        for span in &self.soa(place.layout)?.spans {
+            self.transfer(place, temp, span, false)?;
         }
         Ok(())
     }
-
     /// A reserve retains a private block only when its current column capacity
     /// suffices. Otherwise every column moves to the new capacity's offsets.
     pub(super) fn reserve_columns(
@@ -128,7 +227,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let done = self.module.append_block(self.function);
         self.builder.cond_br(keep, done, grow);
         self.builder.position(grow);
-        let (data, quantum, width) = self.column_shape(element)?;
+        let shape = self.soa(element)?;
+        let (data, quantum, width) = (shape.data_offset, shape.quantum, shape.width);
         let more = self.builder.icmp(IntPredicate::Ugt, wanted, count);
         let requested = self.builder.select(more, wanted, count);
         let rounded = self.flat_add(requested, self.const_u64(quantum - 1))?;
@@ -201,13 +301,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.store(count, target.ptr, 8);
         self.builder
             .store(cap, self.builder.offset(target.ptr, self.const_u64(8)), 8);
-        let mut prefix = 0;
-        for field in &self.layout(element)?.fields {
-            let stride = self.fixed_size(field.layout)?;
+        // Every column moves together, as Zig's MultiArrayList.setCapacity copies each
+        // field's items (multi_array_list.zig:543-569).
+        for span in &shape.spans {
             let at = |base, capacity| {
                 let offset = self
                     .builder
-                    .binary(BinOp::Mul, capacity, self.const_u64(prefix));
+                    .binary(BinOp::Mul, capacity, self.const_u64(span.prefix));
                 let offset = self
                     .builder
                     .binary(BinOp::Add, offset, self.const_u64(data));
@@ -215,15 +315,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             };
             let bytes = self
                 .builder
-                .binary(BinOp::Mul, count, self.const_u64(stride));
+                .binary(BinOp::Mul, count, self.const_u64(span.stride));
             self.builder.memcpy(
                 at(target.ptr, cap),
-                self.layout(field.layout)?.align,
+                span.align,
                 at(source.ptr, capacity),
-                self.layout(field.layout)?.align,
+                span.align,
                 bytes,
             );
-            prefix += stride;
         }
         let moved = self.module.append_block(self.function);
         let copied = self.module.append_block(self.function);
@@ -284,5 +383,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.builder.br(done);
         self.builder.position(done);
         Ok(())
+    }
+}
+
+/// A tag column's ordinal widened to the row's `i32`.
+fn widen_tag<'m>(emitter: &FnEmitter<'m, '_>, narrow: Value<'m>, scalar: ScalarKind) -> Value<'m> {
+    if scalar == ScalarKind::U32 {
+        narrow
+    } else {
+        emitter
+            .builder
+            .cast(Cast::ZExt, narrow, emitter.module.int_type(32))
     }
 }

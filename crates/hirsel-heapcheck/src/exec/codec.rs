@@ -397,7 +397,7 @@ impl<S: Stage> Machine<'_, S> {
                                     return fail(V::Malformed, "codec column element");
                                 };
                                 let capacity = self.bits_at(At::Heap(block.at(8)), 8)? as u64;
-                                let (data, _, columns) = self.column_shape(e)?;
+                                let (data, _, columns) = self.field_columns(e)?;
                                 for i in (0..count).rev() {
                                     for (child, (prefix, stride)) in
                                         fields.iter().zip(&columns).rev()
@@ -1169,7 +1169,7 @@ impl<S: Stage> Machine<'_, S> {
                             else {
                                 return fail(V::Malformed, "codec column fields");
                             };
-                            let (data, quantum, columns) = self.column_shape(e)?;
+                            let (data, quantum, columns) = self.field_columns(e)?;
                             let capacity = hirsel_lir::layout::align_up(count, quantum)
                                 .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
                             let stride: u64 = columns.iter().map(|&(_, stride)| stride).sum();

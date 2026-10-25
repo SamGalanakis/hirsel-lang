@@ -35,6 +35,7 @@ mod structural;
 mod structural_values;
 pub use flat::{FlatStorage, run_with_flat_storage_observer};
 mod soa;
+use hirsel_lir::layout::SoaPart;
 use soa::ColumnRow;
 mod fork;
 pub(crate) use fork::campaign as fork_campaign;
@@ -1235,22 +1236,44 @@ impl<'p, S: Stage> Machine<'p, S> {
                 layout = payload;
             }
             if let (Some(row), ProjectionStep::Field(ordinal)) = (columns, *step) {
-                let fields = self.record(layout)?.fields.clone();
-                let position = fields
-                    .iter()
-                    .position(|f| f.ordinal == ordinal)
-                    .ok_or_else(|| err(V::Malformed, "column field absent"))?;
-                let (data, _, physical) = self.column_shape(layout)?;
-                let (prefix, stride) = physical[position];
+                let shape = self.column_shape(layout)?;
+                let Some(span) = shape.field(ordinal) else {
+                    return fail(V::Malformed, "column field absent");
+                };
+                let SoaPart::Field { layout: field, .. } = span.part else {
+                    unreachable!("a field span")
+                };
                 let row_at = self
                     .ledger
                     .project(row.base, 0, ProjectionStep::Index(row.index));
                 ptr = self.ledger.project(
                     row_at,
-                    data + row.capacity * prefix + row.index * stride,
+                    shape.data_offset + row.capacity * span.prefix + row.index * span.stride,
                     ProjectionStep::Field(ordinal),
                 );
-                layout = fields[position].layout;
+                layout = field;
+                columns = None;
+                continue;
+            }
+            // A variant row's payload field lies in its payload column, read only under
+            // the arm its tag column names.
+            if let (Some(row), ProjectionStep::VariantField { variant, field }) = (columns, *step) {
+                let row = Resolved {
+                    ptr,
+                    layout,
+                    columns: Some(row),
+                    path: path.clone(),
+                    root_slot,
+                    flat_content: None,
+                    flat_end: None,
+                };
+                match self.column_variant_field(&row, variant, field, unchecked)? {
+                    Ok((at, field)) => {
+                        ptr = at;
+                        layout = field;
+                    }
+                    Err(failure) => return Ok(Err(failure)),
+                }
                 columns = None;
                 continue;
             }
@@ -6482,8 +6505,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     // A counted sequence: its u64 count, then its elements
                     // from their alignment.
                     (None, LayoutKind::SoaColumns { element }) => {
-                        let (data, quantum, columns) = self.column_shape(*element)?;
-                        let width: u64 = columns.iter().map(|&(_, stride)| stride).sum();
+                        let shape = self.column_shape(*element)?;
+                        let (data, quantum, width) =
+                            (shape.data_offset, shape.quantum, shape.width);
                         let cap = hirsel_lir::layout::align_up(fields.len() as u64, quantum)
                             .map_err(|_| err(V::OutOfExtent, "column construction overflow"))?;
                         self.place_sized(f, site.placement, payload, data + cap * width)?
@@ -6624,7 +6648,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let LayoutKind::SoaColumns { element } = record.kind else {
                     unreachable!()
                 };
-                let (_, quantum, _) = self.column_shape(element)?;
+                let quantum = self.column_shape(element)?.quantum;
                 let count = fields.len() as u64;
                 let cap = hirsel_lir::layout::align_up(count, quantum)
                     .map_err(|_| err(V::OutOfExtent, "column construction overflow"))?;
@@ -6966,6 +6990,51 @@ impl<'p, S: Stage> Machine<'p, S> {
                     let capacity = word(columns.capacity_offset)?;
                     if count > capacity || capacity % columns.capacity_quantum != 0 {
                         return fail(V::OutOfExtent, "invalid column scan capacity");
+                    }
+                    if let Some(tag) = columns.tag {
+                        // Each row's payload through the arm its tag names, and no other.
+                        let width = soa_tag_width(tag.scalar);
+                        let at = |prefix: u64, i: u64, stride: u64| {
+                            capacity
+                                .checked_mul(prefix)
+                                .and_then(|n| n.checked_add(columns.data_offset + base))
+                                .and_then(|n| i.checked_mul(stride).and_then(|j| n.checked_add(j)))
+                                .ok_or_else(|| err(V::OutOfExtent, "column scan offset overflow"))
+                        };
+                        for i in 0..count {
+                            let tag_at = at(tag.prefix, i, width)?;
+                            image.check_range(tag_at, width)?;
+                            if !image.all_init(tag_at, width) {
+                                return fail(
+                                    V::UninitializedRead,
+                                    "column scan has an unwritten tag",
+                                );
+                            }
+                            let mut ordinal = [0u8; 8];
+                            ordinal[..width as usize]
+                                .copy_from_slice(&image.read_bytes(tag_at, width));
+                            let ordinal = u64::from_le_bytes(ordinal);
+                            for column in &columns.columns {
+                                let Some(arm) = column.arm else {
+                                    return fail(V::Malformed, "a tagged column without an arm");
+                                };
+                                if u64::from(arm) == ordinal {
+                                    let start = at(column.prefix, i, column.stride)?;
+                                    self.copy_scan_elements(
+                                        image,
+                                        &mut work,
+                                        start,
+                                        1,
+                                        column.stride,
+                                        column.layout,
+                                    )?;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if columns.columns.iter().any(|c| c.arm.is_some()) {
+                        return fail(V::Malformed, "an arm column without a tag column");
                     }
                     for column in columns.columns {
                         let start = capacity
@@ -10112,10 +10181,37 @@ impl<'p, S: Stage> Machine<'p, S> {
                             if count > capacity || capacity % columns.capacity_quantum != 0 {
                                 return fail(V::OutOfExtent, "invalid column drop capacity");
                             }
+                            if columns.tag.is_none()
+                                && columns.columns.iter().any(|c| c.arm.is_some())
+                            {
+                                return fail(V::Malformed, "an arm column without a tag column");
+                            }
                             // Pushed low to high: rows drop high to low, and each
-                            // row's fields in reverse declaration order.
+                            // row's fields in reverse declaration order; a variant row
+                            // only its active arm's payload.
                             for i in 0..count {
+                                let active = match columns.tag {
+                                    Some(tag) => {
+                                        let width = soa_tag_width(tag.scalar);
+                                        let at = capacity
+                                            .checked_mul(tag.prefix)
+                                            .and_then(|n| n.checked_add(columns.data_offset))
+                                            .and_then(|n| {
+                                                i.checked_mul(width).and_then(|j| n.checked_add(j))
+                                            })
+                                            .ok_or_else(|| {
+                                                err(V::OutOfExtent, "column drop offset overflow")
+                                            })?;
+                                        Some(self.scan_scalar(base.at(at), width)? as u64)
+                                    }
+                                    None => None,
+                                };
                                 for column in &columns.columns {
+                                    if let Some(active) = active
+                                        && column.arm.map(u64::from) != Some(active)
+                                    {
+                                        continue;
+                                    }
                                     let offset = capacity
                                         .checked_mul(column.prefix)
                                         .and_then(|n| n.checked_add(columns.data_offset))
@@ -10602,5 +10698,14 @@ impl<'p, S: Stage> Machine<'p, S> {
             }
             _ => Observed::Opaque,
         })
+    }
+}
+
+/// The bytes of an `@soa` tag column's ordinal.
+fn soa_tag_width(scalar: ScalarKind) -> u64 {
+    match scalar {
+        ScalarKind::U8 => 1,
+        ScalarKind::U16 => 2,
+        _ => 4,
     }
 }

@@ -1493,17 +1493,21 @@ impl<'a> Validator<'a> {
         }
     }
 
-    fn soa(&mut self, s: &Subject, r: &LayoutRecord, element: LayoutId) {
-        let e = self.get(element).clone();
+    /// A record element's declaration-order field columns: (quantum, data
+    /// offset, row width, columns, no tag).
+    #[allow(clippy::type_complexity)]
+    fn soa_fields(
+        &mut self,
+        s: &Subject,
+        e: &LayoutRecord,
+    ) -> Option<(u64, u64, u64, Vec<SoaColumn>, Option<SoaTag>)> {
         let quantum = e
             .fields
             .iter()
             .map(|f| u64::from(self.get(f.layout).align))
             .max()
             .unwrap_or(1);
-        let Ok(data_offset) = soa_data_offset(quantum) else {
-            return;
-        };
+        let data_offset = soa_data_offset(quantum).ok()?;
         let mut columns = Vec::new();
         let mut prefix = 0u64;
         for f in &e.fields {
@@ -1513,16 +1517,159 @@ impl<'a> Validator<'a> {
                     Obligation::Size,
                     "SoA column of a dynamic-extent field",
                 );
-                return;
+                return None;
             };
             columns.push(SoaColumn {
                 field: f.ordinal,
                 prefix,
                 stride,
                 layout: f.layout,
+                arm: None,
             });
             prefix = prefix.saturating_add(stride);
         }
+        Some((quantum, data_offset, prefix, columns, None))
+    }
+
+    /// A variant element's columns (MEM-7), derived from its row: the narrowest
+    /// ordinal column, then one payload column as wide as the row past its tag
+    /// word. Each arm view the record claims must be exactly its variant's
+    /// fields over that column, and every arm with holders needs one, so a
+    /// scan or drop reaches an arm's holders only under its own tag.
+    #[allow(clippy::type_complexity)]
+    fn soa_variant(
+        &mut self,
+        s: &Subject,
+        r: &LayoutRecord,
+        e: &LayoutRecord,
+    ) -> Option<(u64, u64, u64, Vec<SoaColumn>, Option<SoaTag>)> {
+        let tag = e.tag.as_ref()?;
+        if tag.offset != 0 || tag.form != TagForm::Ordinal || e.abi.unaligned {
+            self.fail(
+                s.clone(),
+                Obligation::Tag,
+                "an @soa variant row lacks an aligned ordinal tag at offset 0",
+            );
+            return None;
+        }
+        let payload_align = tag
+            .variants
+            .iter()
+            .flat_map(|v| &v.fields)
+            .map(|f| u64::from(self.get(f.layout).align))
+            .max()
+            .unwrap_or(1);
+        let start = 4u64.div_ceil(payload_align) * payload_align;
+        let Some(stride) = static_size(e, false).and_then(|size| size.checked_sub(start)) else {
+            self.fail(
+                s.clone(),
+                Obligation::Size,
+                "an @soa variant row without a payload extent",
+            );
+            return None;
+        };
+        let (scalar, width) = match tag.variants.len() {
+            n if n <= 1 << 8 => (ScalarKind::U8, 1),
+            n if n <= 1 << 16 => (ScalarKind::U16, 2),
+            _ => (ScalarKind::U32, 4),
+        };
+        let quantum = payload_align.max(width);
+        let data_offset = soa_data_offset(quantum).ok()?;
+        let claimed: Vec<SoaColumn> = r
+            .scan
+            .iter()
+            .filter_map(|step| match step {
+                ScanStep::Columns(c) => Some(c.columns.clone()),
+                _ => None,
+            })
+            .chain(r.drop.iter().filter_map(|step| match step {
+                DropStep::ColumnsReverse(c) => Some(c.columns.clone()),
+                _ => None,
+            }))
+            .flatten()
+            .collect();
+        let scanned: Vec<u32> = e
+            .scan
+            .iter()
+            .flat_map(|step| match step {
+                ScanStep::ActiveVariant { variants, .. } => {
+                    variants.iter().map(|(o, _)| *o).collect()
+                }
+                _ => vec![],
+            })
+            .collect();
+        let dropped: Vec<u32> = e
+            .drop
+            .iter()
+            .flat_map(|step| match step {
+                DropStep::ActiveVariant { variants, .. } => {
+                    variants.iter().map(|(o, _)| *o).collect()
+                }
+                _ => vec![],
+            })
+            .collect();
+        let mut columns = Vec::new();
+        for variant in &tag.variants {
+            let Some(view) = claimed.iter().find(|c| c.arm == Some(variant.ordinal)) else {
+                if scanned.contains(&variant.ordinal) || dropped.contains(&variant.ordinal) {
+                    self.fail(
+                        s.clone(),
+                        Obligation::Scan,
+                        "an @soa variant arm with holders has no column view",
+                    );
+                }
+                continue;
+            };
+            let fields: Option<Vec<FieldLayout>> = variant
+                .fields
+                .iter()
+                .map(|f| {
+                    Some(FieldLayout {
+                        offset: f.offset.checked_sub(start)?,
+                        ..f.clone()
+                    })
+                })
+                .collect();
+            let arm = self.get(view.layout).clone();
+            if fields.as_ref() != Some(&arm.fields)
+                || arm.kind != LayoutKind::Aggregate
+                || arm.tag.is_some()
+                || !matches!(arm.size, SizeSpec::Fixed(size) if size <= stride)
+                || u64::from(arm.align) != payload_align
+            {
+                self.fail(
+                    s.clone(),
+                    Obligation::Offset,
+                    "an @soa arm view is not its variant's payload over the payload column",
+                );
+            }
+            columns.push(SoaColumn {
+                field: variant.ordinal,
+                prefix: width,
+                stride,
+                layout: view.layout,
+                arm: Some(variant.ordinal),
+            });
+        }
+        Some((
+            quantum,
+            data_offset,
+            width + stride,
+            columns,
+            Some(SoaTag { prefix: 0, scalar }),
+        ))
+    }
+
+    fn soa(&mut self, s: &Subject, r: &LayoutRecord, element: LayoutId) {
+        let e = self.get(element).clone();
+        let derived = if e.tag.is_some() {
+            self.soa_variant(s, r, &e)
+        } else {
+            self.soa_fields(s, &e)
+        };
+        let Some((quantum, data_offset, prefix, columns, tag)) = derived else {
+            return;
+        };
         let placement = |pick: &dyn Fn(&LayoutRecord) -> bool| SoaColumns {
             count_offset: 0,
             capacity_offset: 8,
@@ -1533,6 +1680,7 @@ impl<'a> Validator<'a> {
                 .filter(|c| pick(self.get(c.layout)))
                 .cloned()
                 .collect(),
+            tag,
         };
         let scanned = placement(&|c| !c.scan.is_empty());
         let dropped = placement(&|c| !c.drop.is_empty());

@@ -402,7 +402,22 @@ fn run_drop(
                 let n = read_u64(bytes, base + c.count_offset);
                 let cap = read_u64(bytes, base + c.capacity_offset);
                 for i in (0..n).rev() {
+                    // A variant row drops only the arm its tag column names.
+                    let active = c.tag.map(|tag| {
+                        let width = match tag.scalar {
+                            ScalarKind::U8 => 1,
+                            ScalarKind::U16 => 2,
+                            _ => 4,
+                        };
+                        let at = (base + c.data_offset + cap * tag.prefix + i * width) as usize;
+                        let mut word = [0u8; 4];
+                        word[..width as usize].copy_from_slice(&bytes[at..at + width as usize]);
+                        u32::from_le_bytes(word)
+                    });
                     for column in c.columns.iter().rev() {
+                        if active.is_some() && column.arm != active {
+                            continue;
+                        }
                         let at = base + c.data_offset + cap * column.prefix + i * column.stride;
                         drop_events(table, column.layout, bytes, at, out);
                     }
@@ -1043,6 +1058,99 @@ fn soa_sequences_drop_elements_high_to_low_and_fields_in_reverse() {
 }
 
 #[test]
+fn soa_variants_store_a_narrow_tag_column_and_drop_only_active_payloads() {
+    let mut owners = Owners::default();
+    let soa = || OwnerSpec {
+        promises: Layout {
+            soa: true,
+            ..Layout::default()
+        },
+        ..OwnerSpec::default()
+    };
+    let named = owner(&mut owners, "Named", soa(), |t| {
+        let string = t.p(Primitive::String);
+        t.variant(&[&[], &[string]])
+    });
+    let sample = owner(&mut owners, "Sample", soa(), |t| {
+        let (u8_, i64_, u128_, string) = (
+            t.p(Primitive::U8),
+            t.p(Primitive::I64),
+            t.p(Primitive::U128),
+            t.p(Primitive::String),
+        );
+        t.variant(&[&[u8_], &[string, i64_], &[u128_], &[]])
+    });
+    let mut b = LayoutBuilder::new(&x86(), &owners);
+    let mut t = ty();
+    let n = t.named(&named, vec![]);
+    let s = t.named(&sample, vec![]);
+    let list = t.list(s);
+    let named_row = b.layout(&t.store, n).unwrap();
+    let row = b.layout(&t.store, s).unwrap();
+    let lid = b.layout(&t.store, list).unwrap();
+    let table = checked(b);
+    // An @soa variant has no null-pointer niche: its rows keep an ordinal tag.
+    assert_eq!(
+        rec(&table, named_row)
+            .tag
+            .as_ref()
+            .map(|t| (t.offset, t.form)),
+        Some((0, TagForm::Ordinal))
+    );
+    // Row: u32 tag, payload from 16 (u128 alignment), 48 bytes in all.
+    assert_eq!((fixed(rec(&table, row)), rec(&table, row).align), (48, 16));
+    let LayoutKind::Block { payload } = rec(&table, lid).kind else {
+        panic!("a list is a block")
+    };
+    let DropStep::ColumnsReverse(columns) = &rec(&table, payload).drop[0] else {
+        panic!("SoA drop")
+    };
+    // Four arms fit a u8 tag column; the payload column follows it, 32 bytes a row.
+    assert_eq!(
+        columns.tag,
+        Some(SoaTag {
+            prefix: 0,
+            scalar: ScalarKind::U8
+        })
+    );
+    assert_eq!((columns.data_offset, columns.capacity_quantum), (16, 16));
+    assert_eq!(
+        columns
+            .columns
+            .iter()
+            .map(|c| (c.field, c.prefix, c.stride, c.arm))
+            .collect::<Vec<_>>(),
+        [(1, 1, 32, Some(1))]
+    );
+    // Capacity 16, two rows: row 0 is the String arm, row 1 the u8 arm.
+    let mut bytes = vec![0u8; 16 + 16 * 33];
+    bytes[..8].copy_from_slice(&2u64.to_le_bytes());
+    bytes[8..16].copy_from_slice(&16u64.to_le_bytes());
+    bytes[16] = 1;
+    bytes[17] = 0;
+    assert_eq!(extent(&table, payload, &bytes), Ok(16 + 16 * 33));
+    let mut events = Vec::new();
+    drop_events(&table, payload, &bytes, 0, &mut events);
+    assert_eq!(events, [(16 + 16, "release")]);
+
+    // V: an arm view must sit under the tag column, as its own arm.
+    let target = x86();
+    let mutate = |edit: &dyn Fn(&mut SoaColumns)| {
+        let mut bad = table.clone();
+        let record = &mut bad.layouts[payload.0 as usize];
+        let DropStep::ColumnsReverse(c) = &mut record.drop[0] else {
+            unreachable!()
+        };
+        edit(c);
+        validate_table(&bad, &target).is_err()
+    };
+    assert!(mutate(&|c| c.columns[0].arm = None));
+    assert!(mutate(&|c| c.columns[0].arm = Some(0)));
+    assert!(mutate(&|c| c.tag = None));
+    assert!(mutate(&|c| c.columns.clear()));
+}
+
+#[test]
 fn empty_large_and_overflowing_inline_arrays() {
     let owners = Owners::default();
     let mut b = LayoutBuilder::new(&x86(), &owners);
@@ -1546,7 +1654,7 @@ fn relations_never_change_a_layout() {
 #[test]
 fn incomplete_and_foreign_types_are_named() {
     let mut owners = Owners::default();
-    let unavailable_cases: [(&str, Layout, bool, Option<u32>); 5] = [
+    let unavailable_cases: [(&str, Layout, bool, Option<u32>); 3] = [
         (
             "PackAlign",
             Layout {
@@ -1556,24 +1664,6 @@ fn incomplete_and_foreign_types_are_named() {
             },
             false,
             Some(47),
-        ),
-        (
-            "SoaEnum",
-            Layout {
-                soa: true,
-                ..Layout::default()
-            },
-            true,
-            Some(47),
-        ),
-        (
-            "CEnum",
-            Layout {
-                c: true,
-                ..Layout::default()
-            },
-            true,
-            Some(6),
         ),
         (
             "FlatC",
@@ -1629,6 +1719,38 @@ fn incomplete_and_foreign_types_are_named() {
             t.record(&[a])
         },
     );
+    // MEM-7: an @soa variant and a C variant (a C tag, then a union of the arms'
+    // structs) both derive.
+    let mut supported = Vec::new();
+    for (name, promises) in [
+        (
+            "SoaEnum",
+            Layout {
+                soa: true,
+                ..Layout::default()
+            },
+        ),
+        (
+            "CEnum",
+            Layout {
+                c: true,
+                ..Layout::default()
+            },
+        ),
+    ] {
+        supported.push(owner(
+            &mut owners,
+            name,
+            OwnerSpec {
+                promises,
+                ..OwnerSpec::default()
+            },
+            |t| {
+                let (a, b) = (t.p(Primitive::U32), t.p(Primitive::U64));
+                t.variant(&[&[a], &[b], &[]])
+            },
+        ));
+    }
     let cbox = owner(
         &mut owners,
         "CBox",
@@ -1652,6 +1774,18 @@ fn incomplete_and_foreign_types_are_named() {
             Err(LayoutError::Unavailable { issue: i, .. }) => assert_eq!(i, *issue, "{name}"),
             other => panic!("{name}: {other:?}"),
         }
+    }
+    for enumeration in &supported {
+        let mut builder = LayoutBuilder::new(&x86(), &owners);
+        let e = t.named(enumeration, vec![]);
+        let id = builder.layout(&t.store, e).unwrap();
+        let record = builder.record(id);
+        let tag = record.tag.as_ref().unwrap();
+        assert_eq!((tag.offset, tag.form), (0, TagForm::Ordinal));
+        assert_eq!(
+            (record.size.clone(), record.align),
+            (SizeSpec::Fixed(16), 8)
+        );
     }
     let s = t.named(&soa, vec![]);
     let inline_soa = t.inline(s, 4);

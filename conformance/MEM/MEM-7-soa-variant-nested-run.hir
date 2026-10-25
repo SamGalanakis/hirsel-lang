@@ -1,0 +1,39 @@
+// rule: MEM-7
+// expect: run
+// @soa never propagates: a record holding an @soa variant List, an arm holding a
+// record and a List of rows, and a List of those records all stay ordinary values
+// around the inner columns.
+type Pair {
+  left: u64,
+  right: String,
+}
+
+@soa
+type Event = Moved(Pair) | Batch(List[u64]) | Tick
+
+type Track {
+  id: u64,
+  events: List[Event],
+}
+
+fn total(e: Event) -> u64 {
+  match e {
+    Moved(p) => p.left,
+    Batch(items) => list.len(items),
+    Tick => 1,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut track = Track(id: 1, events: [Tick, Moved(Pair(left: 9, right: "r"))])
+  list.push(mut track.events, Batch([1, 2, 3]))
+  let tracks: List[Track] = [copy track, track]
+  let mut sum: u64 = 0
+  for tr in tracks {
+    for e in tr.events {
+      sum += total(e)
+    }
+  }
+  test.check(t, sum == 26)
+  Ok(())
+}

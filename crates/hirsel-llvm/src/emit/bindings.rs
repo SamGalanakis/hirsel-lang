@@ -263,16 +263,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         unaligned: bool,
     ) -> Emitted<Place<'m>> {
         if place.columns.is_some() {
-            let field = self
-                .layout(place.layout)?
-                .fields
-                .iter()
-                .find(|f| f.offset == offset && f.layout == layout)
-                .ok_or_else(|| CodegenError::Invalid {
-                    definition: self.definition().clone(),
-                    what: "column field absent".into(),
-                })?;
-            return self.column_field(place, field);
+            return self.column_field(place, offset, layout);
         }
         let ptr = if offset == 0 {
             place.ptr

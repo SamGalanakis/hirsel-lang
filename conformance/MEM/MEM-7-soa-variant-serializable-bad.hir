@@ -1,0 +1,6 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 5
+// twin: MEM/MEM-7-soa-variant-run.hir
+@serializable
+@soa
+type Sample = Number(u64) | Flag(bool)

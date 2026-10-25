@@ -169,14 +169,17 @@ fn layouts(target: &TargetSpec) -> LayoutTable {
                 prefix: 0,
                 stride: 8,
                 layout: LayoutId(1),
+                arm: None,
             },
             SoaColumn {
                 field: 1,
                 prefix: 8,
                 stride: 8,
                 layout: LayoutId(1),
+                arm: None,
             },
         ],
+        tag: None,
     };
     let mut soa = record(
         target,

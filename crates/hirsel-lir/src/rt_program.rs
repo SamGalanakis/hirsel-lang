@@ -22,7 +22,8 @@
 //! - `ElementsReverse` and `RepeatReverse` become a `STEP_LOOP` (dynamic or
 //!   static count) over the element's program; `ColumnsReverse` becomes a
 //!   dynamic `STEP_LOOP` of stride 0 holding one `STEP_COLUMN` per dropped
-//!   column, in reverse declaration order.
+//!   column, in reverse declaration order; a variant's payload column through
+//!   one arm sits inside a column `STEP_TAG` on that arm.
 //! - `Thaw` (a `Shared` root's `Frozen` payload) becomes a `STEP_THAW` naming the
 //!   frozen value's layout, so that layout gets its own descriptor too.
 //! - The layout's own leading `Finalize` is the descriptor's finalizer.
@@ -38,8 +39,8 @@
 //! never identify contributions: zero-sized siblings still have separate ordinals.
 use crate::layout::{borrowed_scan, shift_drop};
 use crate::layout_types::{
-    DropStep, FieldLayout, FinalizerRef, LayoutId, LayoutKind, LayoutRecord, LayoutTable, ScanStep,
-    SizeSpec, TagForm,
+    DropStep, FieldLayout, FinalizerRef, LayoutId, LayoutKind, LayoutRecord, LayoutTable,
+    ScalarKind, ScanStep, SizeSpec, TagForm,
 };
 use crate::runtime_abi::{
     LAYOUT_DYNAMIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
@@ -175,6 +176,15 @@ pub enum DescriptorError {
     Malformed(String),
     /// The program exceeds what a dead header's cursor can count.
     TooLarge(String),
+}
+
+/// The bytes of an `@soa` tag column's ordinal.
+fn scalar_width(scalar: ScalarKind) -> u64 {
+    match scalar {
+        ScalarKind::U8 => 1,
+        ScalarKind::U16 => 2,
+        _ => 4,
+    }
 }
 
 fn malformed<T>(what: impl Into<String>) -> Result<T, DescriptorError> {
@@ -981,6 +991,25 @@ impl Lower<'_> {
                     });
                     self.loops += 1;
                     for column in columns.columns.iter().rev() {
+                        // A variant's payload column, through one arm, only in rows whose
+                        // column tag is that arm.
+                        let arm = match (column.arm, columns.tag) {
+                            (None, None) => None,
+                            (Some(arm), Some(tag)) => {
+                                Some(self.open(StepKind::Tag, WHOLE_VALUE, |s| {
+                                    s.offset = columns.data_offset;
+                                    s.stride = scalar_width(tag.scalar);
+                                    s.count = tag.prefix;
+                                    s.count_offset = columns.capacity_offset;
+                                    s.variant = arm;
+                                }))
+                            }
+                            _ => {
+                                return malformed(
+                                    "a column arm without a tag column, or the reverse",
+                                );
+                            }
+                        };
                         let inner = self.open(StepKind::Column, WHOLE_VALUE, |s| {
                             s.offset = columns.data_offset;
                             s.stride = column.stride;
@@ -989,6 +1018,9 @@ impl Lower<'_> {
                         });
                         self.child(column.layout, 0)?;
                         self.close(inner)?;
+                        if let Some(arm) = arm {
+                            self.close(arm)?;
+                        }
                     }
                     self.loops -= 1;
                     self.close(open)?;

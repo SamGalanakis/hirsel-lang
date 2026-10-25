@@ -76,6 +76,14 @@ impl Audit<'_, '_> {
         };
         let parts: Vec<TypeId> = match self.types.get(representation).unwrap().kind.clone() {
             TypeKind::Record(fields) => fields.iter().map(|f| f.ty).collect(),
+            TypeKind::Variant(_) if definition.serializable => {
+                self.report(
+                    const { RuleId::of("MEM-7") },
+                    at,
+                    "an @soa variant is not serializable",
+                );
+                return Ok(());
+            }
             TypeKind::Variant(variants) => variants
                 .iter()
                 .flat_map(|v| v.fields.iter().map(|(_, t)| *t))

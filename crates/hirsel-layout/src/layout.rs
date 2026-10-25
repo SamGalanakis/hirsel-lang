@@ -1899,69 +1899,78 @@ impl<'o> LayoutBuilder<'o> {
         Ok(record)
     }
 
-    /// Declaration-order field columns in one allocation: a u64 length, a u64
-    /// element capacity (a multiple of the largest field alignment), then one
-    /// column per field at `data_offset + capacity * prefix`.
+    /// Columns in one allocation (MEM-7): a u64 length, a u64 element capacity
+    /// (a multiple of the largest column alignment), then one column per
+    /// `soa_shape` span at `data_offset + capacity * prefix`. A variant's
+    /// payload column is scanned and dropped through one arm layout per
+    /// variant, only in rows whose tag is that arm.
     fn soa_record(&mut self, element: LayoutId) -> Result<LayoutRecord, LayoutError> {
         let e = self.record(element).clone();
         if e.finalizer.is_some() {
-            return unavailable(
-                Some(47),
-                "@soa sequence of a resource with a drop body (the finalizer would need a projection bundle)",
-            );
+            return unavailable(Some(47), "@soa sequence of a resource with a drop body");
         }
-        if e.kind != LayoutKind::Aggregate && e.kind != LayoutKind::Resource || e.tag.is_some() {
-            return unavailable(Some(47), "@soa sequence of a non-record element");
-        }
-        let count = self.scalar(ScalarKind::U64);
-        let quantum = e
-            .fields
-            .iter()
-            .map(|field| u64::from(self.record(field.layout).align))
-            .max()
-            .unwrap_or(1);
-        let data_offset = soa_data_offset(quantum)?;
+        let shape = soa_shape(&e, |id| Ok(self.record(id)))?;
         let mut columns = Vec::new();
-        let mut prefix = 0u64;
-        for field in &e.fields {
-            let SizeSpec::Fixed(stride) = self.record(field.layout).size else {
-                return unavailable(Some(47), "@soa sequence of a variable-size record");
-            };
-            columns.push(SoaColumn {
-                field: field.ordinal,
-                prefix,
-                stride,
-                layout: field.layout,
-            });
-            prefix = prefix.checked_add(stride).ok_or(LayoutError::Overflow)?;
+        let mut tag = None;
+        for span in &shape.spans {
+            match span.part {
+                SoaPart::Field { ordinal, layout } => columns.push(SoaColumn {
+                    field: ordinal,
+                    prefix: span.prefix,
+                    stride: span.stride,
+                    layout,
+                    arm: None,
+                }),
+                SoaPart::Tag(scalar) => {
+                    tag = Some(SoaTag {
+                        prefix: span.prefix,
+                        scalar,
+                    })
+                }
+                SoaPart::Payload => {
+                    let variants = e.tag.as_ref().map_or(&[][..], |t| &t.variants[..]);
+                    for variant in variants {
+                        let layout = self.soa_arm(&e, variant, span)?;
+                        columns.push(SoaColumn {
+                            field: variant.ordinal,
+                            prefix: span.prefix,
+                            stride: span.stride,
+                            layout,
+                            arm: Some(variant.ordinal),
+                        });
+                    }
+                }
+            }
         }
         let placement = |pick: &dyn Fn(&LayoutRecord) -> bool| SoaColumns {
             count_offset: 0,
             capacity_offset: 8,
-            data_offset,
-            capacity_quantum: quantum,
+            data_offset: shape.data_offset,
+            capacity_quantum: shape.quantum,
             columns: columns
                 .iter()
                 .filter(|c| pick(self.record(c.layout)))
                 .cloned()
                 .collect(),
+            tag,
         };
         let scanned = placement(&|r| !r.scan.is_empty());
         let dropped = placement(&|r| !r.drop.is_empty());
+        let count = self.scalar(ScalarKind::U64);
         let mut record = self.blank(
             &[],
             LayoutKind::SoaColumns { element },
             SizeSpec::Dynamic(vec![
-                SizeTerm::Constant(data_offset),
+                SizeTerm::Constant(shape.data_offset),
                 SizeTerm::ReadLength {
                     offset: 8,
                     scalar: ScalarKind::U64,
                 },
-                SizeTerm::Constant(prefix),
+                SizeTerm::Constant(shape.width),
                 SizeTerm::Multiply,
                 SizeTerm::Add,
             ]),
-            u32::try_from(quantum.max(8)).map_err(|_| LayoutError::Overflow)?,
+            u32::try_from(shape.quantum.max(8)).map_err(|_| LayoutError::Overflow)?,
         );
         record.fields = vec![
             FieldLayout {
@@ -1986,6 +1995,54 @@ impl<'o> LayoutBuilder<'o> {
         record.copy = CopyRecipe::NotCopyable;
         record.storage = e.storage.clone();
         Ok(record)
+    }
+
+    /// One arm's view of a variant's payload column: its fields at their row
+    /// offsets less the payload's, in a record no wider than the column.
+    fn soa_arm(
+        &mut self,
+        element: &LayoutRecord,
+        variant: &VariantLayout,
+        payload: &SoaSpan,
+    ) -> Result<LayoutId, LayoutError> {
+        let mut key = Encoder {
+            bytes: Vec::new(),
+            revisions: true,
+        };
+        key.tag("soa-arm");
+        key.atom(&element.key.instance.map_or([0; 32], |h| h.0));
+        key.atom(&variant.ordinal.to_le_bytes());
+        if let Some(&id) = self.memo_id(&key.bytes) {
+            return Ok(id);
+        }
+        let fields = variant
+            .fields
+            .iter()
+            .map(|f| {
+                Ok(FieldLayout {
+                    offset: f
+                        .offset
+                        .checked_sub(payload.row_offset)
+                        .ok_or(LayoutError::Overflow)?,
+                    ..f.clone()
+                })
+            })
+            .collect::<Result<Vec<_>, LayoutError>>()?;
+        let mut end = 0u64;
+        for f in &fields {
+            let SizeSpec::Fixed(size) = self.record(f.layout).size else {
+                return invalid("an @soa arm field of dynamic extent");
+            };
+            end = end.max(f.offset.checked_add(size).ok_or(LayoutError::Overflow)?);
+        }
+        let mut record = self.blank(
+            &key.bytes,
+            LayoutKind::Aggregate,
+            SizeSpec::Fixed(align_up(end, u64::from(payload.align))?),
+            payload.align,
+        );
+        self.adopt_fields(&mut record, fields);
+        Ok(self.insert(key.bytes, record))
     }
 
     /// Inline declaration-order fields with explicit padding; `packed` places
@@ -2123,7 +2180,14 @@ impl<'o> LayoutBuilder<'o> {
             }
             layouts.push(pieces);
         }
-        if let Some((nullary, dataful, field, within)) = self.niche(&layouts, packed) {
+        // An @soa variant's tag is a column of its own and a C variant's is a C
+        // `int` before a union of the arms' structs: neither has a niche.
+        let niche = if promises.soa || promises.c {
+            None
+        } else {
+            self.niche(&layouts, packed)
+        };
+        if let Some((nullary, dataful, field, within)) = niche {
             let (fields, end, natural) = self.place(&layouts[dataful as usize], false, 0)?;
             let tag = TagEncoding {
                 offset: fields[field].offset + within,
@@ -2614,14 +2678,17 @@ impl<'o> LayoutBuilder<'o> {
                 Ok(layout)
             }
             TypeKind::Variant(variants) => {
-                if p.soa {
-                    return unavailable(Some(47), format!("{name}: @soa on a variant"));
-                }
-                if p.c {
-                    return unavailable(Some(6), format!("{name}: @layout(c) on a variant"));
-                }
                 let variants = variant_fields(variants);
-                self.variant(walk, key, &variants, sf, p)
+                if p.c {
+                    for &field in variants.iter().flatten() {
+                        self.require_c(walk, field, sf, &name)?;
+                    }
+                }
+                let mut layout = self.variant(walk, key, &variants, sf, p)?;
+                if p.c {
+                    layout.initialized = InitializedBytes::ZeroPadding;
+                }
+                Ok(layout)
             }
             _ => {
                 if p.c || p.packed || p.align.is_some() || p.soa {

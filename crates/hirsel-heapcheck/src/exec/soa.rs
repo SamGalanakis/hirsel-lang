@@ -1,6 +1,7 @@
 //! Logical rows over independently checked physical columns.
 use super::*;
-use hirsel_lir::layout_types::FieldLayout;
+use hirsel_lir::layout::{SoaPart, SoaShape};
+use hirsel_lir::layout_types::ScanStep;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ColumnRow {
@@ -9,40 +10,47 @@ pub(super) struct ColumnRow {
     pub(super) index: u64,
 }
 
+/// One column's share of a row: the row image's `size` bytes at `row_offset`, stored at
+/// `at` and named by `step`; `field` is a record field's layout.
+pub(super) struct ColumnPart {
+    pub(super) row_offset: u64,
+    pub(super) size: u64,
+    pub(super) at: Ptr,
+    pub(super) step: ProjectionStep<u64>,
+    pub(super) part: SoaPart,
+}
+
 impl<S: Stage> Machine<'_, S> {
-    /// SoA columns use the stored capacity, including over-reserved sources.
-    pub(super) fn column_shape(&self, element: LayoutId) -> Checked<(u64, u64, Vec<(u64, u64)>)> {
-        let r = self.record(element)?;
-        let quantum = r
-            .fields
-            .iter()
-            .map(|f| self.record(f.layout).map(|r| u64::from(r.align)))
-            .collect::<Checked<Vec<_>>>()?
-            .into_iter()
-            .max()
-            .unwrap_or(1);
-        let data = hirsel_lir::layout::soa_data_offset(quantum)
-            .map_err(|e| err(V::Malformed, format!("{e:?}")))?;
-        let mut prefix = 0;
-        let mut columns = Vec::new();
-        for f in &r.fields {
-            let stride = self.size(f.layout)?;
-            columns.push((prefix, stride));
-            prefix += stride;
-        }
-        Ok((data, quantum, columns))
+    /// The columns of an `@soa` sequence of `element`, derived from its row layout alone:
+    /// never from the payload record's own column claims.
+    pub(super) fn column_shape(&self, element: LayoutId) -> Checked<SoaShape> {
+        self.program
+            .layouts
+            .soa_shape(element)
+            .map_err(|e| err(V::Malformed, format!("{e:?}")))
     }
 
+    /// A record element's field columns as (data offset, quantum, (prefix, stride) per
+    /// field), for walks that visit fields; a variant's columns have no fields.
+    pub(super) fn field_columns(&self, element: LayoutId) -> Checked<(u64, u64, Vec<(u64, u64)>)> {
+        let shape = self.column_shape(element)?;
+        if shape.tag().is_some() {
+            return fail(V::Unsupported, "a field walk of a variant's columns");
+        }
+        let columns = shape.spans.iter().map(|s| (s.prefix, s.stride)).collect();
+        Ok((shape.data_offset, shape.quantum, columns))
+    }
+
+    /// SoA columns use the stored capacity, including over-reserved sources.
     pub(super) fn columns_capacity(&self, base: Ptr, element: LayoutId) -> Checked<u64> {
-        let (data, quantum, columns) = self.column_shape(element)?;
-        let width: u64 = columns.iter().map(|&(_, stride)| stride).sum();
+        let shape = self.column_shape(element)?;
         let capacity = self.read_scalar(base.at(8), 8)? as u64;
-        if !capacity.is_multiple_of(quantum) {
+        if !capacity.is_multiple_of(shape.quantum) {
             return fail(V::Malformed, "column capacity is not aligned");
         }
         let bytes = capacity
-            .checked_mul(width)
-            .and_then(|b| data.checked_add(b))
+            .checked_mul(shape.width)
+            .and_then(|b| shape.data_offset.checked_add(b))
             .ok_or_else(|| err(V::OutOfExtent, "column capacity overflow"))?;
         self.ledger
             .check(base)?
@@ -59,10 +67,10 @@ impl<S: Stage> Machine<'_, S> {
         if count > capacity {
             return fail(V::OutOfExtent, "column count exceeds capacity");
         }
-        let (data, _, columns) = self.column_shape(element)?;
-        for (prefix, stride) in columns {
-            let at = base.offset + data + capacity * prefix + count * stride;
-            let bytes = (capacity - count) * stride;
+        let shape = self.column_shape(element)?;
+        for span in shape.spans {
+            let at = base.offset + shape.data_offset + capacity * span.prefix + count * span.stride;
+            let bytes = (capacity - count) * span.stride;
             self.ledger
                 .get_mut(base.alloc)
                 .extent
@@ -71,30 +79,94 @@ impl<S: Stage> Machine<'_, S> {
         Ok(())
     }
 
-    pub(super) fn column_fields(&mut self, r: &Resolved) -> Checked<Vec<(FieldLayout, Ptr)>> {
+    /// The parts of the row `r` names, one per column.
+    pub(super) fn column_parts(&mut self, r: &Resolved) -> Checked<Vec<ColumnPart>> {
         let row = r
             .columns
             .ok_or_else(|| err(V::Malformed, "missing column row"))?;
-        let (data, _, columns) = self.column_shape(r.layout)?;
-        let fields = self.record(r.layout)?.fields.clone();
-        fields
+        let shape = self.column_shape(r.layout)?;
+        let row_at = self
+            .ledger
+            .project(row.base, 0, ProjectionStep::Index(row.index));
+        let mut parts = Vec::new();
+        for (position, span) in shape.spans.iter().enumerate() {
+            let offset = shape.data_offset + row.capacity * span.prefix + row.index * span.stride;
+            let step = match span.part {
+                SoaPart::Field { ordinal, .. } => ProjectionStep::Field(ordinal),
+                _ => ProjectionStep::Field(position as u32),
+            };
+            let at = self.ledger.project(row_at, offset, step);
+            self.ledger
+                .check(at)?
+                .extent
+                .check_range(at.offset, span.stride)?;
+            parts.push(ColumnPart {
+                row_offset: span.row_offset,
+                size: span.stride,
+                at,
+                step,
+                part: span.part,
+            });
+        }
+        Ok(parts)
+    }
+
+    /// The active ordinal of the variant row `r` names, read from its tag column.
+    pub(super) fn column_variant(&mut self, r: &Resolved) -> Checked<u32> {
+        let tag = self
+            .column_parts(r)?
             .into_iter()
-            .zip(columns)
-            .map(|(field, (prefix, stride))| {
-                let offset = data + row.capacity * prefix + row.index * stride;
-                let row_at = self
-                    .ledger
-                    .project(row.base, 0, ProjectionStep::Index(row.index));
-                let at = self
-                    .ledger
-                    .project(row_at, offset, ProjectionStep::Field(field.ordinal));
-                self.ledger
-                    .check(at)?
-                    .extent
-                    .check_range(at.offset, stride)?;
-                Ok((field, at))
-            })
-            .collect()
+            .find(|p| matches!(p.part, SoaPart::Tag(_)))
+            .ok_or_else(|| err(V::TypeConfusion, "a variant read of a record row"))?;
+        Ok(self.read_scalar(tag.at, tag.size)? as u32)
+    }
+
+    /// The place of variant field `field` of arm `variant` in the payload column of the row
+    /// `r` names. Reading a payload through an arm the tag column does not name is a
+    /// failure, or a checker violation when the projection claims a proof.
+    pub(super) fn column_variant_field(
+        &mut self,
+        r: &Resolved,
+        variant: u32,
+        field: u32,
+        unchecked: bool,
+    ) -> Checked<Result<(Ptr, LayoutId), LangFailure>> {
+        let active = self.column_variant(r)?;
+        if active != variant {
+            if unchecked {
+                return fail(V::TypeConfusion, "invalid proved variant projection");
+            }
+            return Ok(Err(LangFailure));
+        }
+        let tag = self
+            .record(r.layout)?
+            .tag
+            .as_ref()
+            .ok_or_else(|| err(V::Malformed, "a variant row without a tag"))?;
+        let fl = tag
+            .variants
+            .iter()
+            .find(|v| v.ordinal == variant)
+            .and_then(|v| v.fields.iter().find(|fl| fl.ordinal == field))
+            .ok_or_else(|| err(V::Malformed, format!("no variant field {field}")))?
+            .clone();
+        let payload = self
+            .column_parts(r)?
+            .into_iter()
+            .find(|p| p.part == SoaPart::Payload)
+            .ok_or_else(|| err(V::Malformed, "a variant row without a payload column"))?;
+        let within = fl
+            .offset
+            .checked_sub(payload.row_offset)
+            .ok_or_else(|| err(V::Malformed, "a variant field before its payload"))?;
+        Ok(Ok((
+            self.ledger.project(
+                payload.at,
+                within,
+                ProjectionStep::VariantField { variant, field },
+            ),
+            fl.layout,
+        )))
     }
 
     pub(super) fn column_resolved(
@@ -122,7 +194,8 @@ impl<S: Stage> Machine<'_, S> {
         })
     }
 
-    /// Gather without importing any producer's ownership or initialization facts.
+    /// Gather without importing any producer's ownership or initialization facts. A
+    /// variant row's tag widens to its u32 tag word; its payload bytes come whole.
     pub(super) fn read_resolved(
         &mut self,
         r: &Resolved,
@@ -131,19 +204,24 @@ impl<S: Stage> Machine<'_, S> {
     ) -> Checked<Extent> {
         if r.columns.is_some() {
             let mut image = Extent::new(self.size(r.layout)?);
-            for (field, at) in self.column_fields(r)? {
-                let size = self.size(field.layout)?;
-                let owned = self.resources_of(field.layout)?;
-                let part = if take {
-                    self.take_part(at, size, &owned)
+            for part in self.column_parts(r)? {
+                let owned = match part.part {
+                    SoaPart::Field { layout, .. } => self.resources_of(layout)?,
+                    _ => Vec::new(),
+                };
+                let piece = if take {
+                    self.take_part(part.at, part.size, &owned)
                 } else {
-                    self.ledger.check(at)?.extent.copy(
-                        at.offset,
-                        size,
-                        Some((&self.ledger.path(at), &owned)),
+                    self.ledger.check(part.at)?.extent.copy(
+                        part.at.offset,
+                        part.size,
+                        Some((&self.ledger.path(part.at), &owned)),
                     )
                 };
-                image.place_at(field.offset, &[ProjectionStep::Field(field.ordinal)], part);
+                if let SoaPart::Tag(_) = part.part {
+                    image.write_bytes(part.row_offset, &[0; 4]);
+                }
+                image.place_at(part.row_offset, &[part.step], piece);
             }
             Ok(image)
         } else {
@@ -177,21 +255,116 @@ impl<S: Stage> Machine<'_, S> {
         let Val::Image(mut image) = m.val else {
             return fail(V::TypeConfusion, "column row is not an aggregate image");
         };
-        for (field, at) in self.column_fields(r)? {
-            let size = self.size(field.layout)?;
-            let owned = self.resources_of(field.layout)?;
-            let prefix = [ProjectionStep::Field(field.ordinal)];
-            let part = image.take(field.offset, size, UNINIT_POISON, Some((&prefix, &owned)));
-            self.write_value(
-                at,
-                field.layout,
-                Moved {
-                    val: Val::Image(part),
-                    credited: m.credited,
-                    borrow: m.borrow,
-                },
-            )?;
+        // A variant row's payload is written through the arm its own tag names.
+        let active = match self.record(r.layout)?.tag {
+            Some(_) => Some(image.active(0, TagForm::Ordinal, self.word)?),
+            None => None,
+        };
+        for part in self.column_parts(r)? {
+            let prefix = [part.step];
+            match part.part {
+                SoaPart::Field { layout, .. } => {
+                    let owned = self.resources_of(layout)?;
+                    let piece = image.take(
+                        part.row_offset,
+                        part.size,
+                        UNINIT_POISON,
+                        Some((&prefix, &owned)),
+                    );
+                    self.write_value(
+                        part.at,
+                        layout,
+                        Moved {
+                            val: Val::Image(piece),
+                            credited: m.credited,
+                            borrow: m.borrow,
+                        },
+                    )?;
+                }
+                SoaPart::Tag(_) => {
+                    let ordinal = u64::from(active.unwrap_or(0));
+                    if part.size < 8 && ordinal >> (8 * part.size) != 0 {
+                        return fail(V::Malformed, "a variant ordinal wider than its tag column");
+                    }
+                    let piece = image.take(0, 4, UNINIT_POISON, Some((&prefix, &[])));
+                    self.write_raw(part.at, piece.copy(0, part.size, None))?;
+                }
+                SoaPart::Payload => {
+                    let mut piece = image.take(
+                        part.row_offset,
+                        part.size,
+                        UNINIT_POISON,
+                        Some((&prefix, &[])),
+                    );
+                    match self.arm_view(r, active.unwrap_or(0))? {
+                        Some(arm) => {
+                            let held = self.size(arm)?;
+                            let rest = piece.take(held, part.size - held, UNINIT_POISON, None);
+                            let head = piece.take(0, held, UNINIT_POISON, None);
+                            self.write_value(
+                                part.at,
+                                arm,
+                                Moved {
+                                    val: Val::Image(head),
+                                    credited: m.credited,
+                                    borrow: m.borrow,
+                                },
+                            )?;
+                            self.write_raw(part.at.at(held), rest)?;
+                        }
+                        None => self.write_raw(part.at, piece)?,
+                    }
+                }
+            }
         }
+        Ok(())
+    }
+
+    /// The arm view a variant row's payload column has for `variant`, when that arm holds
+    /// anything: the column of the payload block's own scan with that arm.
+    fn arm_view(&self, r: &Resolved, variant: u32) -> Checked<Option<LayoutId>> {
+        let row = r
+            .columns
+            .ok_or_else(|| err(V::Malformed, "missing column row"))?;
+        let Some(payload) = self.ledger.check(row.base)?.layout else {
+            return fail(V::Malformed, "column block without layout");
+        };
+        let record = self.record(payload)?;
+        let views = record.scan.iter().filter_map(|step| match step {
+            ScanStep::Columns(c) => Some(&c.columns),
+            _ => None,
+        });
+        Ok(views
+            .flatten()
+            .find(|c| c.arm == Some(variant))
+            .map(|c| c.layout))
+    }
+
+    /// Store bytes that hold no reference into unwritten storage.
+    fn write_raw(&mut self, at: Ptr, piece: Extent) -> Checked<()> {
+        if !piece.cells.is_empty() || !piece.resources.is_empty() {
+            return fail(
+                V::TypeConfusion,
+                "a reference stored through an arm with no holders",
+            );
+        }
+        self.ledger
+            .check(at)?
+            .extent
+            .check_range(at.offset, piece.len())?;
+        if self.has_content(at, piece.len())? {
+            return fail(
+                V::StoreOverInitialized,
+                format!(
+                    "store over initialized bytes at {:?}+{}",
+                    at.alloc, at.offset
+                ),
+            );
+        }
+        self.ledger
+            .get_mut(at.alloc)
+            .extent
+            .place_at(at.offset, &[], piece);
         Ok(())
     }
 
@@ -230,8 +403,8 @@ impl<S: Stage> Machine<'_, S> {
             (old.count == Some(Count::Finite(1)) && old.owner == Owner::Heap && !old.published)
                 || (region.is_some() && old.count == Some(Count::Arena { shared: false }));
         if !private || bits > u128::from(old_capacity) {
-            let (data, quantum, columns) = self.column_shape(element)?;
-            let width: u64 = columns.iter().map(|&(_, stride)| stride).sum();
+            let shape = self.column_shape(element)?;
+            let (data, quantum, width) = (shape.data_offset, shape.quantum, shape.width);
             let wanted = u64::try_from(bits)
                 .map_err(|_| err(V::OutOfExtent, "column capacity exceeds u64"))?
                 .max(count);
@@ -356,3 +529,6 @@ impl<S: Stage> Machine<'_, S> {
         self.define_version(f, version)
     }
 }
+
+#[cfg(test)]
+mod tests;

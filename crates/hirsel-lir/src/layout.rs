@@ -88,6 +88,167 @@ pub fn soa_data_offset(quantum: u64) -> Result<u64, LayoutError> {
     align_up(16, quantum)
 }
 
+/// One column of an `@soa` sequence (MEM-7), in placement order: the bytes at
+/// `row_offset` of its element's row layout, `stride` of them per row at
+/// `data_offset + capacity * prefix` of the payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SoaSpan {
+    pub row_offset: u64,
+    pub prefix: u64,
+    pub stride: u64,
+    pub align: u32,
+    pub part: SoaPart,
+}
+
+/// What a column holds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SoaPart {
+    /// A record field.
+    Field { ordinal: u32, layout: LayoutId },
+    /// A variant's ordinal: the row's u32 tag narrowed to `scalar`.
+    Tag(ScalarKind),
+    /// A variant's payload: the row's bytes from the end of its tag word, as
+    /// wide as the largest arm.
+    Payload,
+}
+
+/// The columns of an `@soa` sequence of one element, as Zig's `MultiArrayList`
+/// lays out a struct's fields or a tagged union's tags and bare-union payloads
+/// (multi_array_list.zig:44-67): `width` bytes per row, columns aligned by a
+/// capacity that is a multiple of `quantum`, the first at `data_offset`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SoaShape {
+    pub data_offset: u64,
+    pub quantum: u64,
+    pub width: u64,
+    pub spans: Vec<SoaSpan>,
+}
+
+impl SoaShape {
+    pub fn tag(&self) -> Option<(&SoaSpan, ScalarKind)> {
+        self.spans.iter().find_map(|s| match s.part {
+            SoaPart::Tag(scalar) => Some((s, scalar)),
+            _ => None,
+        })
+    }
+
+    pub fn payload(&self) -> Option<&SoaSpan> {
+        self.spans.iter().find(|s| s.part == SoaPart::Payload)
+    }
+
+    pub fn field(&self, ordinal: u32) -> Option<&SoaSpan> {
+        self.spans
+            .iter()
+            .find(|s| matches!(s.part, SoaPart::Field { ordinal: o, .. } if o == ordinal))
+    }
+}
+
+impl LayoutTable {
+    /// [`soa_shape`] of the table's `element`.
+    pub fn soa_shape(&self, element: LayoutId) -> Result<SoaShape, LayoutError> {
+        let lookup = |id: LayoutId| {
+            self.layout(id)
+                .ok_or_else(|| LayoutError::Invalid(format!("no layout {}", id.0)))
+        };
+        soa_shape(lookup(element)?, lookup)
+    }
+}
+
+/// The smallest unsigned ordinal that holds `arms` variants, as Zig's
+/// `MultiArrayList` keeps a union's own tag type in its tags column.
+pub fn soa_tag_scalar(arms: usize) -> ScalarKind {
+    if arms <= 1 << 8 {
+        ScalarKind::U8
+    } else if arms <= 1 << 16 {
+        ScalarKind::U16
+    } else {
+        ScalarKind::U32
+    }
+}
+
+/// The columns of an `@soa` sequence of `element`: a record's fields in
+/// declaration order, or a variant's tag then its payload. A variant row holds
+/// its u32 ordinal at offset 0 and its payload from the first offset aligned
+/// to every arm field (MEM-7: an `@soa` variant has no niche).
+pub fn soa_shape<'r>(
+    element: &'r LayoutRecord,
+    record: impl Fn(LayoutId) -> Result<&'r LayoutRecord, LayoutError>,
+) -> Result<SoaShape, LayoutError> {
+    let fixed = |layout: &LayoutRecord| match layout.size {
+        SizeSpec::Fixed(size) => Ok(size),
+        _ => Err(LayoutError::Unavailable {
+            issue: None,
+            what: "an @soa column of a dynamic-extent value".into(),
+        }),
+    };
+    let mut spans = Vec::new();
+    let mut prefix = 0u64;
+    let mut push = |row_offset, stride, align, part| -> Result<(), LayoutError> {
+        spans.push(SoaSpan {
+            row_offset,
+            prefix,
+            stride,
+            align,
+            part,
+        });
+        prefix = prefix.checked_add(stride).ok_or(LayoutError::Overflow)?;
+        Ok(())
+    };
+    match (&element.kind, &element.tag) {
+        (LayoutKind::Variant, Some(tag)) => {
+            if tag.offset != 0 || tag.form != TagForm::Ordinal || element.abi.unaligned {
+                return Err(LayoutError::Invalid(
+                    "an @soa variant without an aligned ordinal tag at offset 0".into(),
+                ));
+            }
+            let mut payload_align = 1u32;
+            for variant in &tag.variants {
+                for field in &variant.fields {
+                    payload_align = payload_align.max(record(field.layout)?.align);
+                }
+            }
+            let start = align_up(4, u64::from(payload_align))?;
+            let size = fixed(element)?;
+            let stride = size.checked_sub(start).ok_or(LayoutError::Overflow)?;
+            let scalar = soa_tag_scalar(tag.variants.len());
+            let width = match scalar {
+                ScalarKind::U8 => 1,
+                ScalarKind::U16 => 2,
+                _ => 4,
+            };
+            push(0, width, width as u32, SoaPart::Tag(scalar))?;
+            push(start, stride, payload_align, SoaPart::Payload)?;
+        }
+        (LayoutKind::Aggregate | LayoutKind::Resource, None) => {
+            for field in &element.fields {
+                let r = record(field.layout)?;
+                push(
+                    field.offset,
+                    fixed(r)?,
+                    r.align,
+                    SoaPart::Field {
+                        ordinal: field.ordinal,
+                        layout: field.layout,
+                    },
+                )?;
+            }
+        }
+        _ => {
+            return Err(LayoutError::Unavailable {
+                issue: None,
+                what: "an @soa sequence of an element that is no record or variant".into(),
+            });
+        }
+    }
+    let quantum = spans.iter().map(|s| u64::from(s.align)).max().unwrap_or(1);
+    Ok(SoaShape {
+        data_offset: soa_data_offset(quantum)?,
+        quantum,
+        width: prefix,
+        spans,
+    })
+}
+
 /// Offset of a block payload of alignment `align` from its header: the
 /// payload follows the counted header v2. No consumer hardcodes it.
 pub fn payload_offset(align: u32) -> Result<u64, LayoutError> {

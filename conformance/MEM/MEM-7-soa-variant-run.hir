@@ -1,0 +1,82 @@
+// rule: MEM-7
+// expect: run
+// An @soa variant List stores a narrow tag column and one payload column as wide
+// as its largest arm (Zig MultiArrayList's tags and bare-union data). Growth and
+// copy move both columns together; changing a row's arm drops only the old
+// active payload; only active payloads are scanned and dropped.
+@soa
+type Sample = Number(u64) | Flag(bool) | Name(String) | Wide(u128) | Empty
+
+fn sample(i: u64) -> Sample {
+  match i % 5 {
+    0 => Number(i),
+    1 => Flag(i % 2 == 0),
+    2 => Name(f"n{i}"),
+    3 => Wide(12345678901234567890123u128),
+    _ => Empty,
+  }
+}
+
+fn weight(s: Sample) -> u64 {
+  match s {
+    Number(v) => v,
+    Flag(b) => if b {
+      1
+    } else {
+      2
+    },
+    Name(text) => bytes.len(string.as_bytes(text)),
+    Wide(w) => if w > 1000u128 {
+      3
+    } else {
+      4
+    },
+    Empty => 1000,
+  }
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut xs: List[Sample] = [Number(7), Flag(true), Name("seven")]
+  test.check(t, weight(xs[0]) == 7)
+  test.check(t, weight(xs[2]) == 5)
+  let shared = copy xs
+  for i in 3u64..40u64 {
+    list.push(mut xs, sample(i))
+  }
+  test.check(t, list.len(xs) == 40)
+  test.check(t, list.len(shared) == 3)
+  test.check(t, weight(shared[2]) == 5)
+  let mut total: u64 = 0
+  let mut names: u64 = 0
+  for x in xs {
+    total += weight(x)
+    match x {
+      Name(_) => {
+        names += 1
+      },
+      _ => {},
+    }
+  }
+  test.check(t, names == 8)
+  // Change arms in place: a Name row's String is dropped once, and a row
+  // that becomes a Name holds its new String.
+  xs[2] = Number(99)
+  xs[0] = Name("replaced")
+  xs[4] = Wide(5u128)
+  test.check(t, weight(xs[2]) == 99)
+  test.check(t, weight(xs[0]) == 8)
+  test.check(t, weight(xs[4]) == 4)
+  test.check(t, weight(shared[0]) == 7)
+  test.check(t, weight(shared[2]) == 5)
+  let mut ys: unique List[Sample] = unique xs
+  match list.pop(mut ys) {
+    Some(Empty) => test.check(t, true),
+    _ => test.check(t, false),
+  }
+  let removed = list.remove(mut ys, 7)
+  test.check(t, weight(removed) == 2)
+  test.check(t, list.len(ys) == 38)
+  test.check(t, weight(ys[7]) == 3)
+  test.check(t, total > 0)
+  Ok(())
+}

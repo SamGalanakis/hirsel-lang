@@ -286,7 +286,8 @@ pub enum LayoutKind {
     /// record has size `8 + prefix` and one field, its content: at offset 8, or
     /// at 16 after a u64 element count for a list of variable elements.
     Flat,
-    /// Fixed-record sequence stored as declaration-order columns (#47 assumption).
+    /// An `@soa` sequence payload (MEM-7): a record element's declaration-order
+    /// field columns, or a variant element's tag column then its payload column.
     SoaColumns {
         element: LayoutId,
     },
@@ -566,7 +567,7 @@ pub enum DropStep {
     ReleaseSealed { offset: u64 },
 }
 
-/// Column placement of a structure-of-arrays sequence payload (#47 assumption).
+/// Column placement of a structure-of-arrays sequence payload (MEM-7).
 /// Column `c` starts at `data_offset + capacity * c.prefix`, where `capacity`
 /// is the u64 element capacity stored at `capacity_offset`, always a multiple
 /// of `capacity_quantum`; element `i` of the column is `i * c.stride` further.
@@ -577,16 +578,31 @@ pub struct SoaColumns {
     pub data_offset: u64,
     pub capacity_quantum: u64,
     pub columns: Vec<SoaColumn>,
+    /// A variant element's tag column: its rows' active ordinals. Every column
+    /// then has an `arm`.
+    pub tag: Option<SoaTag>,
 }
 
-/// One field column: the element field's ordinal, the summed strides of the
-/// columns before it, its own stride and its layout.
+/// One column: the element field's ordinal (a variant's arm ordinal), the
+/// summed strides of the columns before it, its own stride and its layout.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SoaColumn {
     pub field: u32,
     pub prefix: u64,
     pub stride: u64,
     pub layout: LayoutId,
+    /// The variant's shared payload column viewed through this arm's payload
+    /// layout: read, scanned and dropped only in rows whose tag is the arm.
+    pub arm: Option<u32>,
+}
+
+/// The tag column of a variant element's columns: at `prefix`, one unsigned
+/// ordinal of `scalar` (the smallest of u8, u16 and u32 that holds every arm)
+/// per row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct SoaTag {
+    pub prefix: u64,
+    pub scalar: ScalarKind,
 }
 
 /// How a semantic Copy of this layout is performed.
@@ -913,14 +929,17 @@ snapshot_struct!(SoaColumns {
     capacity_offset,
     data_offset,
     capacity_quantum,
-    columns
+    columns,
+    tag
 });
 snapshot_struct!(SoaColumn {
     field,
     prefix,
     stride,
-    layout
+    layout,
+    arm
 });
+snapshot_struct!(SoaTag { prefix, scalar });
 snapshot_enum!(CopyRecipe {
     Bits,
     FlatBytes,

@@ -55,7 +55,7 @@ use crate::release::{
 use crate::release::{
     Layout, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP,
     STEP_NONNULL, STEP_RELEASE, STEP_RELEASE_LAST, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, Step,
-    variant_inactive,
+    step_at, variant_inactive,
 };
 use crate::{STATUS_EXHAUSTED, STATUS_OK, fault};
 
@@ -164,7 +164,7 @@ unsafe fn holder_views(
             while pc < end {
                 let step = &*steps.add(pc);
                 pc += 1;
-                let at = base.wrapping_add(step.offset as usize);
+                let at = step_at(step, base, index);
                 match step.kind {
                     STEP_RELEASE | STEP_RELEASE_LAST => visit(at, step.stride == 24),
                     STEP_RELEASE_ROOT => visit(at, false),

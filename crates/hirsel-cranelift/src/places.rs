@@ -293,7 +293,11 @@ impl FnEmitter<'_, '_, '_> {
                 };
                 // MEM-13: the active tag must be the projected variant.
                 if !unchecked {
-                    let active = self.load_tag(place.ptr, tag.offset, tag.form);
+                    let active = if place.columns.is_some() {
+                        self.column_tag(place)?
+                    } else {
+                        self.load_tag(place.ptr, tag.offset, tag.form)
+                    };
                     let wrong =
                         self.b
                             .ins()

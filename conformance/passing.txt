@@ -2959,6 +2959,7 @@ conformance/MEM/MEM-7-packed.hir
 conformance/MEM/MEM-7-recursive-field-bad.hir
 conformance/MEM/MEM-7-recursive-field-ok.hir
 conformance/MEM/MEM-7-soa-align-bad.hir
+conformance/MEM/MEM-7-soa-columns-shape-run.hir
 conformance/MEM/MEM-7-soa-construct-refs-run.hir
 conformance/MEM/MEM-7-soa-construct-scalars-run.hir
 conformance/MEM/MEM-7-soa-flat-field-bad.hir
@@ -2983,6 +2984,9 @@ conformance/MEM/MEM-7-soa-reserve-scalars-run.hir
 conformance/MEM/MEM-7-soa-resource-bad.hir
 conformance/MEM/MEM-7-soa-resource-field-bad.hir
 conformance/MEM/MEM-7-soa-resource-field-ok.hir
+conformance/MEM/MEM-7-soa-variant-nested-run.hir
+conformance/MEM/MEM-7-soa-variant-run.hir
+conformance/MEM/MEM-7-soa-variant-serializable-bad.hir
 conformance/MEM/MEM-7-soa.hir
 conformance/MEM/MEM-7-tree-example.hir
 conformance/MEM/MEM-8-bool-lane-annotation-ok.hir

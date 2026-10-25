@@ -866,6 +866,21 @@ mod schema_release {
                 t.record(&[id, name, f, bf, two])
             },
         );
+        // An @soa variant: a u8 tag column and one payload column, dropped by arm.
+        let sample = nominal(
+            &mut owners,
+            "Sample",
+            Nominal {
+                soa: true,
+                ..Nominal::default()
+            },
+            |t| {
+                let (name, f, u) = (t.p(Str), t.p(F64), t.p(U64));
+                let bu = t.boxed(u);
+                let two = t.inline(bu, 2);
+                t.variant(&[&[bu], &[], &[name, f], &[two, name]])
+            },
+        );
         let res_enum = nominal(&mut owners, "ResEnum", finalized, |t| {
             let u = t.p(U64);
             let a = t.boxed(u);
@@ -881,6 +896,7 @@ mod schema_release {
             t.named(&particle, Vec::new()),
             t.named(&res_enum, Vec::new()),
         );
+        let sm = t.named(&sample, Vec::new());
         let leaf = t.boxed(u);
         let grid = t.inline(r, 2);
         let grid = t.inline(grid, 3);
@@ -900,6 +916,7 @@ mod schema_release {
             ("Box[{Inline[Inline[Res,2],3], Box}]", t.boxed(gridded)),
             ("List[Inline[Pair,2]]", t.list(pairs)),
             ("@soa List[Particle]", t.list(pa)),
+            ("@soa List[Sample]", t.list(sm)),
             ("Box[ResEnum]", t.boxed(re)),
             ("List[ResEnum]", t.list(re)),
             ("List[Inline[Inline[Box,64],32]]", t.list(wide)),

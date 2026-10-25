@@ -10,7 +10,8 @@ use std::collections::HashMap;
 use hirsel_layout::layout::{LayoutBuilder, OwnerRepresentation, Owners};
 use hirsel_lir::layout::evaluate_size;
 use hirsel_lir::layout_types::{
-    DropStep, LayoutId, LayoutKind, LayoutTable, SizeSpec, TagForm, TargetSpec,
+    DropStep, LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec, SoaColumns, SoaTag, TagForm,
+    TargetSpec,
 };
 use hirsel_lir::layout_validate::validate_table;
 use hirsel_lir::rt_program::{self, Descriptor, StepKind};
@@ -426,7 +427,17 @@ impl Derived {
                 DropStep::ColumnsReverse(c) => {
                     let (n, capacity) = (read(base, c.count_offset), read(base, c.capacity_offset));
                     for i in 0..n {
+                        // A variant row: an arm with holders, or a tag that names none.
+                        let active = c.tag.map(|tag| {
+                            let pick = next(rng) as usize % (c.columns.len() + 1);
+                            let ordinal = c.columns.get(pick).and_then(|c| c.arm).unwrap_or(250);
+                            write_tag(base, column_tag(c, tag, capacity, i), tag.scalar, ordinal);
+                            ordinal
+                        });
                         for column in &c.columns {
+                            if active.is_some() && column.arm != active {
+                                continue;
+                            }
                             let at = c.data_offset + capacity * column.prefix + i * column.stride;
                             self.fill_layout(ctx, column.layout, base, at, rng);
                         }
@@ -522,7 +533,13 @@ impl Derived {
                 DropStep::ColumnsReverse(c) => {
                     let (n, capacity) = (read(base, c.count_offset), read(base, c.capacity_offset));
                     for i in (0..n).rev() {
+                        let active = c
+                            .tag
+                            .map(|tag| read_tag(base, column_tag(c, tag, capacity, i), tag.scalar));
                         for column in c.columns.iter().rev() {
+                            if active.is_some() && column.arm != active {
+                                continue;
+                            }
                             let at = c.data_offset + capacity * column.prefix + i * column.stride;
                             self.expected(column.layout, unsafe { base.add(at as usize) }, out);
                         }
@@ -543,6 +560,32 @@ impl Derived {
             .values()
             .any(|d| d.steps.iter().any(|s| s.kind == kind))
     }
+}
+
+/// The offset of row `i`'s ordinal in a variant's tag column.
+fn column_tag(c: &SoaColumns, tag: SoaTag, capacity: u64, i: u64) -> u64 {
+    c.data_offset + capacity * tag.prefix + i * tag_width(tag.scalar)
+}
+
+fn tag_width(scalar: ScalarKind) -> u64 {
+    match scalar {
+        ScalarKind::U8 => 1,
+        ScalarKind::U16 => 2,
+        _ => 4,
+    }
+}
+
+fn write_tag(base: *mut u8, offset: u64, scalar: ScalarKind, ordinal: u32) {
+    let bytes = ordinal.to_le_bytes();
+    let width = tag_width(scalar) as usize;
+    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), base.add(offset as usize), width) };
+}
+
+fn read_tag(base: *mut u8, offset: u64, scalar: ScalarKind) -> u32 {
+    let mut bytes = [0u8; 4];
+    let width = tag_width(scalar) as usize;
+    unsafe { std::ptr::copy_nonoverlapping(base.add(offset as usize), bytes.as_mut_ptr(), width) };
+    u32::from_le_bytes(bytes)
 }
 
 fn read(base: *mut u8, offset: u64) -> u64 {

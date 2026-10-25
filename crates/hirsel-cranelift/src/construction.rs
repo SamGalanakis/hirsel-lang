@@ -381,6 +381,9 @@ impl<'a> FnEmitter<'_, 'a, '_> {
 
     /// Makes `variant` the active variant of the tagged storage at `place`.
     fn store_tag(&mut self, place: Place, variant: u32) -> Emitted {
+        if place.columns.is_some() {
+            return self.store_column_tag(place, variant);
+        }
         let record = self.layout(place.layout)?;
         let Some(tag) = &record.tag else {
             return self.invalid("a tag write of an untagged layout");
@@ -946,7 +949,8 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             (SizeSpec::Dynamic(_), LayoutKind::SoaColumns { element }) => {
                 let count = self.pool(site.fields, &self.unit.pools.fields)?.len() as u64;
                 let capacity = self.column_capacity(count, element)?;
-                let (data, _, width) = self.column_shape(element)?;
+                let shape = self.soa(element)?;
+                let (data, width) = (shape.data_offset, shape.width);
                 match capacity
                     .checked_mul(width)
                     .and_then(|b| b.checked_add(data))
