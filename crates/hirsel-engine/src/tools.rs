@@ -427,6 +427,13 @@ pub(crate) fn check_files(
     engine: &mut QueryEngine,
     files: &[(FileId, &FileContext, LoweringPolicy)],
 ) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
+    check_files_impl(engine, files, true)
+}
+pub(crate) fn check_files_impl(
+    engine: &mut QueryEngine,
+    files: &[(FileId, &FileContext, LoweringPolicy)],
+    recipes: bool,
+) -> Result<Vec<(FileId, FileCheckOutput)>, QueryError> {
     use hirsel_intern::timings::{Interval, interval};
     engine.checked_scope = Default::default();
     let _reads = engine
@@ -623,6 +630,11 @@ pub(crate) fn check_files(
         && let Some(publication) = publication
     {
         let _ = publication.finish();
+    }
+    if recipes {
+        for ((file, context, lowering), (_, output)) in files.iter().zip(&mut outputs) {
+            crate::queries::recipes::offer(engine, *file, context, *lowering, &mut output.diagnostics);
+        }
     }
     Ok(outputs)
 }

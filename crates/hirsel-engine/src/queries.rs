@@ -6,6 +6,7 @@ pub use checked_signatures::FrontCheckedSignatures;
 pub(crate) mod catalog;
 pub use candidate_products::{CheckedProductEncoder, CheckedProducts};
 mod arm_fixes;
+pub(crate) mod recipes;
 mod frontier;
 pub use frontier::FrontChanges;
 mod parallel;
