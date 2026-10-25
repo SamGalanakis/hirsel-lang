@@ -465,6 +465,23 @@ impl TypeInterner {
             .map(|entry| &entry.normals)
     }
 
+    /// Inspect an already materialized row without calling a lazy base source.
+    /// A metadata visitor must not turn sizing into provider I/O.
+    pub fn get_if_loaded(&self, id: TypeId) -> Option<&Type> {
+        let position = id.position()?;
+        if position < self.base_len {
+            self.base
+                .as_ref()?
+                .entries
+                .get(position as usize)?
+                .get()
+                .map(|entry| &entry.row)
+        } else {
+            self.entries
+                .get(position - self.base_len)
+                .map(|entry| &entry.row)
+        }
+    }
     /// The row of `id`, or None for an id this interner never assigned.
     pub fn get(&self, id: TypeId) -> Option<&Type> {
         self.entry(id).map(|e| &e.row)

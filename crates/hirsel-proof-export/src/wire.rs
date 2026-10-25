@@ -49,6 +49,7 @@ pub type Locator = Rc<dyn Fn(Span) -> Location>;
 pub struct Cx {
     pub(crate) locator: Locator,
     pub(crate) collecting: bool,
+    pub(crate) sizing: Option<crate::admission::WireShape>,
     pub(crate) locations: Vec<Location>,
     location_ids: HashMap<Location, u32>,
     /// Per syntax-id kind: file-arena id -> order-preserving per-section rank.
@@ -82,6 +83,7 @@ impl Cx {
         Self {
             locator,
             collecting: false,
+            sizing: None,
             locations: vec![],
             location_ids: HashMap::new(),
             syntax_seen: Default::default(),
@@ -124,6 +126,10 @@ impl Cx {
         self.syntax_rank = Default::default();
     }
     fn location(&mut self, span: Span) -> u32 {
+        if let Some(shape) = &mut self.sizing {
+            shape.spans = shape.spans.checked_add(1).unwrap_or(usize::MAX);
+            return 0;
+        }
         let location = (self.locator)(span);
         if let Some(id) = self.location_ids.get(&location) {
             return *id;
@@ -134,6 +140,10 @@ impl Cx {
         id
     }
     fn syntax(&mut self, kind: usize, id: u32) -> u32 {
+        if let Some(shape) = &mut self.sizing {
+            shape.syntax[kind] = shape.syntax[kind].checked_add(1).unwrap_or(usize::MAX);
+            return 0;
+        }
         if self.collecting {
             self.syntax_seen[kind].insert(id);
             0
@@ -282,6 +292,13 @@ const MISSING: u32 = u32::MAX;
 
 impl Snapshot<Cx> for TypeId {
     fn write(&self, w: &mut Writer<Cx>) {
+        if let Some(shape) = &mut w.context.sizing {
+            shape.unloaded |=
+                *self != TypeId::DANGLING && w.context.types.get_if_loaded(*self).is_none();
+            shape.types = shape.types.checked_add(1).unwrap_or(usize::MAX);
+            w.uint(0);
+            return;
+        }
         if let Some(probe) = &mut w.context.probe {
             probe.push(*self);
             w.uint(0);
@@ -318,6 +335,10 @@ fn probe(w: &Writer<Cx>, write: impl FnOnce(&mut Writer<Cx>)) -> Vec<TypeId> {
 /// its TypeIds as positions in that table. The table stays current for the
 /// rest of the section.
 pub(crate) fn tabled(w: &mut Writer<Cx>, write: impl Fn(&mut Writer<Cx>)) {
+    if w.context.sizing.is_some() {
+        write(w);
+        return;
+    }
     let types = w.context.types.clone();
     let order = hirsel_types::closure(&types, probe(w, &write));
     w.context.type_index = order
@@ -391,7 +412,7 @@ impl Snapshot<Cx> for hirsel_syntax::DefId {
 /// A name is written as its text.
 impl Snapshot<Cx> for hirsel_intern::Symbol {
     fn write(&self, w: &mut Writer<Cx>) {
-        self.as_str().to_owned().write(w);
+        w.text(self.as_str());
     }
     fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
         Ok(hirsel_intern::Symbol::intern(&String::read(r)?))
@@ -414,8 +435,21 @@ impl<T: Snapshot<Cx>> Snapshot<Cx> for SharedSlice<T> {
 impl<T: Snapshot<Cx> + Clone> Snapshot<Cx> for SharedPath<T> {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("list");
-        for item in self.to_vec() {
-            item.write(w);
+        if let Some(shape) = &mut w.context.sizing {
+            shape.path_iter_bytes = self
+                .len()
+                .checked_mul(size_of::<&T>())
+                .and_then(|bytes| shape.path_iter_bytes.checked_add(bytes))
+                .unwrap_or(usize::MAX);
+            // SharedPath::iter materializes a reverse traversal buffer. Sizing
+            // uses indexed access so it needs no temporary allocation.
+            for index in 0..self.len() {
+                self.get(index).expect("path index").write(w);
+            }
+        } else {
+            for item in self.iter() {
+                item.write(w);
+            }
         }
         w.close();
     }
@@ -460,7 +494,11 @@ impl<P: Snapshot<Cx>> Snapshot<Cx> for BinderRef<P> {
 impl Snapshot<Cx> for Relation {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("Relation");
-        self.reaches().to_vec().write(w);
+        w.open("list");
+        for reach in self.reaches() {
+            reach.write(w);
+        }
+        w.close();
         w.close();
     }
     fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
@@ -617,16 +655,15 @@ impl Snapshot<Cx> for GenericParameter {
     fn write(&self, w: &mut Writer<Cx>) {
         // Generic parameters are referenced by position; their names are local.
         let erase = w.context.content.is_some();
-        let name = |name: &String| if erase { String::new() } else { name.clone() };
         match self {
             Self::Type { name: n, bounds } => {
                 w.open("Type");
-                name(n).write(w);
+                w.text(if erase { "" } else { n.as_str() });
                 bounds.write(w);
             }
             Self::Size { name: n } => {
                 w.open("Size");
-                name(n).write(w);
+                w.text(if erase { "" } else { n.as_str() });
             }
         }
         w.close();
