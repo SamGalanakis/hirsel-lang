@@ -18,8 +18,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_hint,
-    resume_name,
+    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeState,
+    resume_hint, resume_name,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
@@ -86,7 +86,9 @@ impl FnEmitter<'_, '_, '_> {
     /// Declared parameters, materialized once: state 0 stores each incoming
     /// value (an address parameter's bytes) in its frame record, and every
     /// state binds the parameter from that record, never from a re-entry's
-    /// arguments, which the caller passes again unchanged.
+    /// arguments, which the caller passes again unchanged. An exclusive
+    /// parameter's record holds the caller slot's address, and its slot is that
+    /// place: every access reaches the caller's canonical bytes.
     pub(crate) fn resume_parameters(&mut self) -> Emitted {
         let (plan, state) = {
             let resume = self.resume.as_ref().unwrap();
@@ -97,6 +99,30 @@ impl FnEmitter<'_, '_, '_> {
             return self.invalid("a resumable plan off its body's parameters");
         }
         for (i, (parameter, record)) in abi.parameters.iter().zip(&plan.parameters).enumerate() {
+            if parameter.passing == ParameterPassing::ExclusiveAddress {
+                let (Some(slot), ParameterPassing::ExclusiveAddress) =
+                    (record.slot, record.passing)
+                else {
+                    return self
+                        .invalid("an exclusive parameter without its slot's address record");
+                };
+                let frame = self.frame();
+                let at = self.offset(frame, record.offset);
+                if state == 0 {
+                    let incoming = self.entry_params[self.sig.first[i]];
+                    self.b.ins().store(flags(), incoming, at, 0);
+                }
+                let ptr = self.load_ptr(at);
+                let align = self.layout(record.layout)?.align;
+                self.slots[slot.index()] = Some(Place {
+                    columns: None,
+                    ptr,
+                    layout: record.layout,
+                    align,
+                    block: None,
+                });
+                continue;
+            }
             let shape = self.layout_shape(record.layout)?;
             let place = self.frame_place(record.offset, record.layout)?;
             if state == 0 {
@@ -206,6 +232,35 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     /// Whether `call` is a boundary of this body's resumable plan.
+    /// The proof that nested boundary `call` passes callee parameter `source`
+    /// as a slot of this frame.
+    pub(crate) fn resume_exclusive(&self, call: CallId, source: u32) -> Option<ExclusiveSlot> {
+        let plan = self.resume.as_ref()?.plan;
+        plan.states
+            .iter()
+            .find(|s| s.boundary.call == call)?
+            .exclusive
+            .clone()
+            .filter(|e| e.call == call && e.parameter == source)
+    }
+
+    /// The stable address of a proved exclusive slot: its offset in this
+    /// frame's allocation, never a temporary.
+    pub(crate) fn exclusive_slot_address(&mut self, proof: &ExclusiveSlot) -> Emitted<Value> {
+        let bound = self.slots.get(proof.slot.index()).copied().flatten();
+        let stored = self.resume.as_ref().is_some_and(|r| {
+            r.plan
+                .storage
+                .iter()
+                .any(|s| s.slot == proof.slot && s.offset == proof.offset)
+        });
+        if !stored || !bound.is_some_and(|p| p.columns.is_none() && p.layout == proof.layout) {
+            return self.invalid("an exclusive slot outside this frame's storage");
+        }
+        let frame = self.frame();
+        Ok(self.offset(frame, proof.offset))
+    }
+
     pub(crate) fn resume_boundary_call(&self, call: CallId) -> bool {
         self.resume
             .as_ref()

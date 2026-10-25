@@ -8,8 +8,8 @@
 //! suspension.
 use super::*;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_hint,
-    resume_name,
+    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeState,
+    resume_hint, resume_name,
 };
 use hirsel_lir::runtime_abi::STATUS_SUSPENDED;
 
@@ -74,7 +74,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     /// Declared parameters, materialized once: state 0 stores each incoming
     /// value (an address parameter's bytes) in its frame record, and every
     /// state binds the parameter from that record, never from a re-entry's
-    /// arguments, which the caller passes again unchanged.
+    /// arguments, which the caller passes again unchanged. An exclusive
+    /// parameter's record holds the caller slot's address, and its slot is that
+    /// place: every access reaches the caller's canonical bytes.
     pub(super) fn resume_parameters(&mut self) -> Emitted {
         let (plan, state) = {
             let resume = self.resume.as_ref().unwrap();
@@ -86,6 +88,31 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         self.builder.position(self.prologue_block);
         for (i, (parameter, record)) in abi.parameters.iter().zip(&plan.parameters).enumerate() {
+            if parameter.passing == ParameterPassing::ExclusiveAddress {
+                let (Some(slot), ParameterPassing::ExclusiveAddress) =
+                    (record.slot, record.passing)
+                else {
+                    return self
+                        .invalid("an exclusive parameter without its slot's address record");
+                };
+                let frame = self.resume.as_ref().unwrap().frame;
+                let at = self.builder.offset(frame, self.const_u64(record.offset));
+                if state == 0 {
+                    let incoming = self
+                        .module
+                        .parameter(self.function, self.signature.first[i]);
+                    self.builder.store(incoming, at, 8);
+                }
+                let ptr = self.builder.load(self.module.ptr_type(), at, 8);
+                self.slots[slot.index()] = Some(Place {
+                    columns: None,
+                    ptr,
+                    layout: record.layout,
+                    align: self.layout(record.layout)?.align,
+                    block: None,
+                });
+                continue;
+            }
             let shape = self.layout_shape(record.layout)?;
             let place = self.frame_place(record.offset, record.layout)?;
             if state == 0 {
@@ -173,6 +200,38 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     fn return_suspended(&mut self) -> Emitted {
         self.return_status(u128::from(STATUS_SUSPENDED), None)
+    }
+
+    /// The proof that nested boundary `call` passes callee parameter `source`
+    /// as a slot of this frame.
+    pub(super) fn resume_exclusive(&self, call: CallId, source: u32) -> Option<&'a ExclusiveSlot> {
+        let plan = self.resume.as_ref()?.plan;
+        plan.states
+            .iter()
+            .find(|s| s.boundary.call == call)?
+            .exclusive
+            .as_ref()
+            .filter(|e| e.call == call && e.parameter == source)
+    }
+
+    /// The stable address of a proved exclusive slot: its offset in this
+    /// frame's allocation, never a temporary.
+    pub(super) fn exclusive_slot_address(&self, proof: &ExclusiveSlot) -> Emitted<Value<'m>> {
+        let frame = self.resume.as_ref().expect("resume frame").frame;
+        let bound = self.slots.get(proof.slot.index()).copied().flatten();
+        if !bound.is_some_and(|p| p.columns.is_none() && p.layout == proof.layout)
+            || !self
+                .resume
+                .as_ref()
+                .unwrap()
+                .plan
+                .storage
+                .iter()
+                .any(|s| s.slot == proof.slot && s.offset == proof.offset)
+        {
+            return self.invalid("an exclusive slot outside this frame's storage");
+        }
+        Ok(self.builder.offset(frame, self.const_u64(proof.offset)))
     }
 
     /// Whether `call` is a boundary of this body's resumable plan.

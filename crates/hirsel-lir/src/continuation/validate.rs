@@ -22,6 +22,9 @@ pub enum ContinuationError {
     RegionToken(ContentHash, u32),
     CleanupAnchor(ContentHash, u32),
     ResumeLabel(ContentHash, u32),
+    /// A nested callee's exclusive parameter without its call-edge proof, or
+    /// with a proof this body does not establish (by state).
+    Exclusive(ContentHash, u32),
     Frame(ContentHash),
     Certificate(ContentHash),
     Identity,
@@ -304,6 +307,134 @@ fn anchors(u: &LirUnit<Ready>, entry: BlockId) -> Vec<CleanupAnchorId> {
     out.into_iter().collect()
 }
 
+/// The slot an address finally names, through its chain of bases.
+fn root_slot(u: &LirUnit<Ready>, address: AddressId) -> Option<SlotId> {
+    let mut seen = BTreeSet::new();
+    let mut a = address;
+    while seen.insert(a) {
+        match u.addresses.get(a.index())?.base {
+            AddressBase::Slot(s) => return Some(s),
+            AddressBase::Address(b) => a = b,
+            AddressBase::Value(_) => return None,
+        }
+    }
+    None
+}
+
+/// Recompute a nested call edge's exclusive-slot proof from the body: the
+/// argument for the callee's exclusive parameter `record` must be the whole
+/// place of one local slot whose layout is the parameter's non-owning scalar
+/// layout, held at an aligned offset of this frame's storage while the call
+/// runs, and the only active loan reaching that slot must be the argument's,
+/// mutable. A direct call without a pretransfer gate only.
+#[allow(clippy::too_many_arguments)]
+fn exclusive_proof(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    block: BlockId,
+    call: CallId,
+    body: ContentHash,
+    record: &ExclusiveParameter,
+    slots: &BTreeSet<SlotId>,
+    loans: &BTreeSet<LoanId>,
+    frame: &[LiveStorage],
+) -> Option<ExclusiveSlot> {
+    let Terminator::Call {
+        call: at,
+        normal: Some(normal),
+        failure,
+    } = u.terminators[block.index()]
+    else {
+        return None;
+    };
+    let site = u.tables.calls.get(call.index())?;
+    if at != call || site.pretransfer_failure.is_some() {
+        return None;
+    }
+    let Callee::Direct(_) = site.callee else {
+        return None;
+    };
+    let arguments = site.arguments.get(&u.pools.call_arguments)?;
+    let passed: Vec<_> = arguments
+        .iter()
+        .filter(|a| a.parameter == record.source)
+        .collect();
+    let [argument] = passed[..] else {
+        return None;
+    };
+    let ArgumentValue::Address { address, .. } = argument.value else {
+        return None;
+    };
+    let place = u.addresses.get(address.index())?;
+    let AddressBase::Slot(slot) = place.base else {
+        return None;
+    };
+    let layout = table.layout(record.layout)?;
+    let LayoutKind::Scalar(kind) = layout.kind else {
+        return None;
+    };
+    let SizeSpec::Fixed(size) = layout.size else {
+        return None;
+    };
+    let align = u64::from(layout.align.max(1));
+    let info = u.slots.get(slot.index())?;
+    if kind == ScalarKind::Pointer
+        || !layout.scan.is_empty()
+        || !layout.drop.is_empty()
+        || layout.finalizer.is_some()
+        || place.projection.len != 0
+        || !place.unchecked.is_empty()
+        || !matches!(info.kind, SlotKind::Local | SlotKind::Temporary)
+        || u.types[info.ty.index()].layout != record.layout
+        || u.types[place.ty.index()].layout != record.layout
+        || !slots.contains(&slot)
+    {
+        return None;
+    }
+    let stored: Vec<_> = frame.iter().filter(|s| s.slot == slot).collect();
+    let [stored] = stored[..] else {
+        return None;
+    };
+    if stored.layout != record.layout || stored.offset % align != 0 {
+        return None;
+    }
+    let aliased = arguments.iter().any(|other| {
+        other.parameter != record.source
+            && matches!(other.value, ArgumentValue::Address { address, .. }
+                if root_slot(u, address) == Some(slot))
+    });
+    if aliased {
+        return None;
+    }
+    let active: Vec<LoanId> = loans
+        .iter()
+        .copied()
+        .filter(|l| root_slot(u, u.tables.loans[l.index()].address) == Some(slot))
+        .collect();
+    let [loan] = active[..] else {
+        return None;
+    };
+    let lent = &u.tables.loans[loan.index()];
+    if !lent.mutable || lent.address != address {
+        return None;
+    }
+    Some(ExclusiveSlot {
+        callee: body,
+        call,
+        parameter: record.source,
+        address,
+        loan,
+        slot,
+        offset: stored.offset,
+        layout: record.layout,
+        size,
+        align,
+        normal,
+        failure,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn check_state(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
@@ -312,6 +443,7 @@ fn check_state(
     state: &ResumeState,
     expected: &ExistingBoundary,
     callee: Option<(ContentHash, u64)>,
+    exclusive: Option<&ExclusiveParameter>,
     frame: &[LiveStorage],
     base: u64,
 ) -> Result<(), ContinuationError> {
@@ -365,6 +497,17 @@ fn check_state(
         return Err(ContinuationError::LiveOwner(id, n));
     }
     let (mut slots, loans) = storage(u, b);
+    let proof = match (exclusive, callee) {
+        (None, _) => None,
+        (Some(record), Some((body, _))) => Some(
+            exclusive_proof(u, table, b, call, body, record, &slots, &loans, frame)
+                .ok_or(ContinuationError::Exclusive(id, n))?,
+        ),
+        (Some(_), None) => return Err(ContinuationError::Exclusive(id, n)),
+    };
+    if state.exclusive != proof {
+        return Err(ContinuationError::Exclusive(id, n));
+    }
     slots.retain(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)));
     let expected_storage: Vec<_> = frame
         .iter()
@@ -443,6 +586,7 @@ fn check_state(
 fn check_fixed(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
+    target: &TargetSpec,
     plan: &ContinuationPlan,
 ) -> Result<u64, ContinuationError> {
     let id = u.header.instance;
@@ -456,6 +600,7 @@ fn check_fixed(
         ));
     }
     let mut end = FRAME_HEADER_BYTES;
+    let mut exclusive = 0;
     for (i, ((p, &value), record)) in abi
         .parameters
         .iter()
@@ -464,22 +609,34 @@ fn check_fixed(
         .enumerate()
     {
         let refused = ContinuationError::Parameter(id, i as u32);
-        // Only a parameter received as bytes the frame can hold: never the
-        // caller's storage (an exclusive address) or a dynamic extent.
-        if !matches!(
-            p.passing,
-            ParameterPassing::ByValue
-                | ParameterPassing::ReadOnlyAddress
-                | ParameterPassing::TransferAddress
-        ) {
-            return Err(refused);
-        }
         let slots: Vec<_> = (0..u.slots.len() as u32)
             .map(SlotId)
             .filter(|s| u.slots[s.index()].kind == SlotKind::Parameter(p.source))
             .collect();
-        let Some((size, align)) = fixed(table, p.layout) else {
-            return Err(refused);
+        // Only a parameter received as bytes the frame can hold, or one whole
+        // non-owning scalar `mut` place whose record is the caller's address
+        // (its edges carry `ExclusiveSlot` proofs): never other caller
+        // storage or a dynamic extent.
+        let (size, align) = match p.passing {
+            ParameterPassing::ByValue
+            | ParameterPassing::ReadOnlyAddress
+            | ParameterPassing::TransferAddress => fixed(table, p.layout).ok_or(refused.clone())?,
+            ParameterPassing::ExclusiveAddress => {
+                exclusive += 1;
+                let scalar = table.layout(p.layout).is_some_and(|l| {
+                    matches!(l.kind, LayoutKind::Scalar(k) if k != ScalarKind::Pointer)
+                        && matches!(l.size, SizeSpec::Fixed(_))
+                        && l.scan.is_empty()
+                        && l.drop.is_empty()
+                        && l.finalizer.is_none()
+                });
+                if exclusive > 1 || p.convention != Passing::Mut || !scalar || slots.len() != 1 {
+                    return Err(refused);
+                }
+                let pointer = u64::from(target.pointer_bytes);
+                (pointer, pointer)
+            }
+            ParameterPassing::PointerLength => return Err(refused),
         };
         if record.value != value
             || record.source != p.source
@@ -566,7 +723,50 @@ pub fn validate(
     {
         return Err(ContinuationError::Coverage(*id));
     }
-    for (id, plan) in &plans.plans {
+    // Callers before their nested callees: a caller's refusal to nest a
+    // forged callee is reported at the caller, whatever the bodies' hashes.
+    fn post(
+        id: ContentHash,
+        nested: &BTreeMap<ContentHash, Vec<ContentHash>>,
+        seen: &mut BTreeSet<ContentHash>,
+        out: &mut Vec<ContentHash>,
+    ) {
+        if !seen.insert(id) {
+            return;
+        }
+        for callee in nested.get(&id).into_iter().flatten() {
+            post(*callee, nested, seen, out);
+        }
+        out.push(id);
+    }
+    let nested: BTreeMap<ContentHash, Vec<ContentHash>> = plans
+        .plans
+        .keys()
+        .map(|id| {
+            let u = index[id];
+            let callees = u
+                .tables
+                .calls
+                .iter()
+                .filter_map(
+                    |c| match call_effect(u, c, &index, &suspends, inputs.classify) {
+                        CallEffect::Nested(callee) if plans.plans.contains_key(&callee) => {
+                            Some(callee)
+                        }
+                        _ => None,
+                    },
+                )
+                .collect();
+            (*id, callees)
+        })
+        .collect();
+    let mut order = Vec::new();
+    let mut seen = BTreeSet::new();
+    for id in plans.plans.keys() {
+        post(*id, &nested, &mut seen, &mut order);
+    }
+    for id in order.iter().rev() {
+        let (id, plan) = (id, &plans.plans[id]);
         let u = index[id];
         if plan.body != *id || plan.digest != u.digest() {
             return Err(ContinuationError::Body(*id));
@@ -577,7 +777,7 @@ pub fn validate(
             .iter()
             .map(|c| call_effect(u, c, &index, &suspends, inputs.classify))
             .collect();
-        let sites = super::sites(u, &effects, &plans.plans);
+        let sites = super::sites(u, inputs.table, &effects, &plans.plans);
         match &plan.representation {
             Representation::Resumable => {
                 let Ok(sites) = sites else {
@@ -609,7 +809,7 @@ pub fn validate(
                         }
                     }
                 }
-                let mut end = check_fixed(u, inputs.table, plan)?;
+                let mut end = check_fixed(u, inputs.table, inputs.target, plan)?;
                 // Fixed storage: every slot live at some boundary, in slot
                 // order, but a parameter's, which its record holds.
                 let union: BTreeSet<SlotId> = sites
@@ -652,6 +852,7 @@ pub fn validate(
                         state,
                         &boundary,
                         site.callee,
+                        site.exclusive.as_ref(),
                         &plan.storage,
                         base,
                     )?;

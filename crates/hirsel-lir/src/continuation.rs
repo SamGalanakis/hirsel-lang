@@ -8,8 +8,11 @@
 //! declared parameters and region records live in the frame for the whole
 //! body: a re-entry binds parameters from their records instead of its
 //! arguments, and a region token, its record's address, survives a save. A body
-//! reaching an unknown call, or suspending inside a nested frame, keeps the
-//! general stackful representation. Both use the same Saved/Active ownership
+//! reaching an unknown call, or suspending inside a stackful nested frame, keeps
+//! the general stackful representation. One aligned, non-owning scalar `mut`
+//! parameter is held as its caller place's address; only a call edge proved to
+//! pass a slot of the caller's own frame ([`ExclusiveSlot`]) enters that body
+//! compactly. Both use the same Saved/Active ownership
 //! protocol in the runtime; the representation never changes semantics.
 //!
 //! Cost classes only choose representation and placement. Like Rayon's join
@@ -25,7 +28,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 
 use crate::abi_types::ParameterPassing;
 use crate::ir::*;
-use crate::layout_types::{LayoutId, LayoutTable, SizeSpec, TargetSpec};
+use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec, TargetSpec};
 use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
@@ -283,7 +286,9 @@ pub enum RegionKind {
 
 /// A declared parameter, materialized once: state 0 stores its incoming value
 /// (an address parameter's bytes) here and every state binds the parameter
-/// from this record, so a re-entry never takes its arguments again. As Rayon's
+/// from this record, so a re-entry never takes its arguments again. An
+/// exclusive parameter's record is pointer-sized: it holds the caller place's
+/// address, never a copy of its bytes ([`ExclusiveSlot`]). As Rayon's
 /// `StackJob::new` does before the job is pushed (`join/mod.rs:132-138`), it is
 /// in the frame before the first point a continuation can move.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -341,11 +346,40 @@ pub struct NestedFrame {
     pub bytes: u64,
 }
 
+/// Call-edge evidence that a nested callee's exclusive parameter borrows one
+/// whole slot of this frame directly: the slot is frame storage live at the
+/// boundary, aligned for its non-owning scalar layout, and the call's one
+/// active mutable loan names exactly that place. The frame's allocation moves
+/// with its continuation and is never reallocated, so the address the callee
+/// records stays valid across a save and a migration; the callee writes the
+/// canonical place, so returning or failing needs no copy-out.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ExclusiveSlot {
+    pub callee: ContentHash,
+    pub call: CallId,
+    /// The callee parameter (its ABI source) the slot is passed as.
+    pub parameter: u32,
+    pub address: AddressId,
+    pub loan: LoanId,
+    pub slot: SlotId,
+    /// The slot's offset in this frame's storage.
+    pub offset: u64,
+    pub layout: LayoutId,
+    pub size: u64,
+    pub align: u64,
+    /// Where the caller continues once the callee returns or fails: its
+    /// mutations are already in the slot.
+    pub normal: EdgeId,
+    pub failure: FailureId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ResumeState {
     pub boundary: ExistingBoundary,
     /// Set when the boundary is a call of a resumable body.
     pub callee: Option<NestedFrame>,
+    /// Set when that callee takes an exclusive parameter.
+    pub exclusive: Option<ExclusiveSlot>,
     pub live: Vec<LiveOwnedSlot>,
     /// The frame-resident storage live here, at the plan's fixed offsets.
     pub storage: Vec<LiveStorage>,
@@ -832,6 +866,16 @@ pub(crate) struct Site {
     pub(crate) call: CallId,
     pub(crate) operation: DefPath,
     pub(crate) callee: Option<(ContentHash, u64)>,
+    /// The resumable callee's exclusive parameter, from the call's own FnAbi
+    /// (never the callee's plan): its edge needs an [`ExclusiveSlot`] proof.
+    pub(crate) exclusive: Option<ExclusiveParameter>,
+}
+
+/// A call's exclusive parameter: its ABI source and layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ExclusiveParameter {
+    pub(crate) source: u32,
+    pub(crate) layout: LayoutId,
 }
 
 /// Whether a slot is homed outside the plan's storage: a parameter's slot is
@@ -840,13 +884,29 @@ fn parameter_slot(u: &LirUnit<Ready>, s: SlotId) -> bool {
     matches!(u.slots[s.index()].kind, SlotKind::Parameter(_))
 }
 
+/// Whether a `mut` parameter of `layout` can be borrowed in place by a
+/// compact frame: a whole non-owning scalar (no pointer, scan, drop or
+/// finalizer), so its record is only an address and no writeback, gather or
+/// realignment exists.
+fn exclusive_scalar(table: &LayoutTable, layout: LayoutId) -> bool {
+    table.layout(layout).is_some_and(|l| {
+        matches!(l.kind, LayoutKind::Scalar(k) if k != ScalarKind::Pointer)
+            && matches!(l.size, SizeSpec::Fixed(_))
+            && l.scan.is_empty()
+            && l.drop.is_empty()
+            && l.finalizer.is_none()
+    })
+}
+
 /// The fixed area after the header: each declared parameter's record, then
 /// each region's, and where storage starts. A parameter the frame cannot hold
-/// by value (an exclusive address names the caller's storage; a pointer/length
-/// extent is dynamic) refuses the compact form.
+/// by value refuses the compact form: a pointer/length extent is dynamic, and
+/// an exclusive address names the caller's storage, so only one whole
+/// non-owning scalar `mut` parameter, recorded as that address, is held.
 fn fixed_area(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
+    target: &TargetSpec,
 ) -> Result<(Vec<FrameParameter>, Vec<FrameRegion>, u64), String> {
     let abi = table
         .fn_abis
@@ -855,21 +915,44 @@ fn fixed_area(
     if abi.parameters.len() != u.parameters.len() {
         return Err("parameter count differs from the FnAbi".into());
     }
+    let mut exclusive = 0;
+    let mut extents = Vec::with_capacity(abi.parameters.len());
     for p in &abi.parameters {
         match p.passing {
             ParameterPassing::ByValue
             | ParameterPassing::ReadOnlyAddress
-            | ParameterPassing::TransferAddress => {}
-            ParameterPassing::ExclusiveAddress => return Err("exclusive parameter".into()),
+            | ParameterPassing::TransferAddress => {
+                extents.push(fixed(table, p.layout).ok_or("dynamic parameter")?);
+            }
+            ParameterPassing::ExclusiveAddress => {
+                exclusive += 1;
+                let slotted = u
+                    .slots
+                    .iter()
+                    .filter(|s| s.kind == SlotKind::Parameter(p.source))
+                    .count()
+                    == 1;
+                if exclusive > 1
+                    || p.convention != Passing::Mut
+                    || !slotted
+                    || !exclusive_scalar(table, p.layout)
+                {
+                    return Err("exclusive parameter".into());
+                }
+                let pointer = u64::from(target.pointer_bytes);
+                extents.push((pointer, pointer));
+            }
             ParameterPassing::PointerLength => return Err("pointer/length parameter".into()),
         }
     }
-    let (offsets, end) = place(
-        table,
-        FRAME_HEADER_BYTES,
-        &abi.parameters.iter().map(|p| p.layout).collect::<Vec<_>>(),
-    )
-    .ok_or("dynamic parameter")?;
+    let mut offsets = Vec::with_capacity(extents.len());
+    let mut at = FRAME_HEADER_BYTES;
+    for (size, align) in extents {
+        at = at.next_multiple_of(align);
+        offsets.push(at);
+        at += size;
+    }
+    let end = at.next_multiple_of(8);
     let parameters = abi
         .parameters
         .iter()
@@ -902,6 +985,108 @@ fn fixed_area(
             .ok_or("oversize live image")?;
     }
     Ok((parameters, records, at))
+}
+
+/// The [`ExclusiveSlot`] proof of a nested call edge, from the Ready body:
+/// None unless a direct call passes, as the callee's exclusive parameter, a
+/// whole local slot (no projection) with the parameter's layout, frame storage
+/// live at the boundary and aligned there, under exactly one active loan of
+/// that place, mutable, with no other argument or active loan reaching the slot
+/// and no pretransfer gate.
+#[allow(clippy::too_many_arguments)]
+fn exclusive_edge(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    site: &Site,
+    callee: ContentHash,
+    record: &ExclusiveParameter,
+    slots: &BTreeSet<SlotId>,
+    loans: &BTreeSet<LoanId>,
+    storage: &[LiveStorage],
+) -> Option<ExclusiveSlot> {
+    let call = &u.tables.calls[site.call.index()];
+    let Terminator::Call {
+        normal: Some(normal),
+        failure,
+        ..
+    } = u.terminators[site.block.index()]
+    else {
+        return None;
+    };
+    if !matches!(call.callee, Callee::Direct(_)) || call.pretransfer_failure.is_some() {
+        return None;
+    }
+    let arguments = call.arguments.get(&u.pools.call_arguments).unwrap_or(&[]);
+    let mut matching = arguments.iter().filter(|a| a.parameter == record.source);
+    let (Some(argument), None) = (matching.next(), matching.next()) else {
+        return None;
+    };
+    let ArgumentValue::Address { address, .. } = argument.value else {
+        return None;
+    };
+    let info = &u.addresses[address.index()];
+    let AddressBase::Slot(slot) = info.base else {
+        return None;
+    };
+    if info.projection.len != 0
+        || !info.unchecked.is_empty()
+        || !matches!(
+            u.slots[slot.index()].kind,
+            SlotKind::Local | SlotKind::Temporary
+        )
+        || slot_layout(u, slot).0 != record.layout
+        || u.types[info.ty.index()].layout != record.layout
+        || !exclusive_scalar(table, record.layout)
+        || !slots.contains(&slot)
+    {
+        return None;
+    }
+    let (size, align) = fixed(table, record.layout)?;
+    let offset = storage.iter().find(|s| s.slot == slot)?.offset;
+    if offset % align != 0 {
+        return None;
+    }
+    // The slot's root, through any chain of address bases.
+    let root = |mut a: AddressId| loop {
+        match u.addresses[a.index()].base {
+            AddressBase::Address(b) => a = b,
+            AddressBase::Slot(s) => return Some(s),
+            AddressBase::Value(_) => return None,
+        }
+    };
+    let reaches = |a: AddressId| root(a) == Some(slot);
+    // No other argument reaches the slot.
+    if arguments.iter().any(|a| {
+        a.parameter != record.source
+            && matches!(a.value, ArgumentValue::Address { address, .. } if reaches(address))
+    }) {
+        return None;
+    }
+    // Exactly one active loan reaches the slot: the argument's, mutable.
+    let mut reaching = loans
+        .iter()
+        .filter(|l| reaches(u.tables.loans[l.index()].address));
+    let (Some(&loan), None) = (reaching.next(), reaching.next()) else {
+        return None;
+    };
+    let info = &u.tables.loans[loan.index()];
+    if info.address != address || !info.mutable {
+        return None;
+    }
+    Some(ExclusiveSlot {
+        callee,
+        call: site.call,
+        parameter: record.source,
+        address,
+        loan,
+        slot,
+        offset,
+        layout: record.layout,
+        size,
+        align,
+        normal,
+        failure,
+    })
 }
 
 type Fixed = (Vec<FrameParameter>, Vec<FrameRegion>);
@@ -981,6 +1166,14 @@ fn states(
         });
         let entry = u.tables.edges[u.tables.failures[failure.index()].cleanup.index()].target;
         let ty = |v: ValueId| &u.types[u.values[v.index()].ty.index()];
+        let exclusive = match (&site.exclusive, site.callee) {
+            (None, _) => None,
+            (Some(record), Some((body, _))) => Some(
+                exclusive_edge(u, table, site, body, record, &slots, &loans, &storage)
+                    .ok_or("exclusive argument outside this frame's slots")?,
+            ),
+            (Some(_), None) => return Err("exclusive argument without a nested frame".into()),
+        };
         out.push(ResumeState {
             boundary: ExistingBoundary {
                 block: site.block,
@@ -988,6 +1181,7 @@ fn states(
                 operation: site.operation.clone(),
             },
             callee,
+            exclusive,
             live: values
                 .iter()
                 .zip(voffsets)
@@ -1078,6 +1272,7 @@ pub(crate) fn certify(
 /// The boundaries of a closed body, in block order; Err refuses the compact form.
 pub(crate) fn sites(
     u: &LirUnit<Ready>,
+    table: &LayoutTable,
     effects: &[CallEffect],
     plans: &BTreeMap<ContentHash, ContinuationPlan>,
 ) -> Result<Vec<Site>, String> {
@@ -1086,16 +1281,27 @@ pub(crate) fn sites(
         let Terminator::Call { call, .. } = term else {
             continue;
         };
-        let (operation, callee) = match &effects[call.index()] {
+        let (operation, callee, exclusive) = match &effects[call.index()] {
             CallEffect::Local => continue,
             CallEffect::Unknown(why) => return Err(why.clone()),
-            CallEffect::Boundary(op) => (op.clone(), None),
+            CallEffect::Boundary(op) => (op.clone(), None, None),
             CallEffect::Nested(id) => match plans.get(id) {
                 Some(p) if p.representation == Representation::Resumable => (
                     callee_symbol(u, &u.tables.calls[call.index()])
                         .unwrap()
                         .definition,
                     Some((*id, p.cost.frame_bytes)),
+                    table
+                        .fn_abis
+                        .get(u.tables.calls[call.index()].abi.0 as usize)
+                        .ok_or("a call outside the ABI table")?
+                        .parameters
+                        .iter()
+                        .find(|p| p.passing == ParameterPassing::ExclusiveAddress)
+                        .map(|p| ExclusiveParameter {
+                            source: p.source,
+                            layout: p.layout,
+                        }),
                 ),
                 _ => return Err(format!("suspends inside stackful callee {id:?}")),
             },
@@ -1105,6 +1311,7 @@ pub(crate) fn sites(
             call: *call,
             operation,
             callee,
+            exclusive,
         });
     }
     Ok(out)
@@ -1129,11 +1336,11 @@ fn plan_unit(
         .get(&u.header.instance)
         .copied()
         .flatten();
-    let built = sites(u, &effects, done).and_then(|sites| {
+    let built = sites(u, inputs.table, &effects, done).and_then(|sites| {
         if sites.is_empty() {
             return Ok((Fixed::default(), Vec::new(), Vec::new()));
         }
-        let (parameters, records, base) = fixed_area(u, inputs.table)?;
+        let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
         let (storage, states) = states(u, inputs.table, &sites, base)?;
         Ok(((parameters, records), storage, states))
     });

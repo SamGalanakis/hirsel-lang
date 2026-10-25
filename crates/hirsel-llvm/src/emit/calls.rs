@@ -538,6 +538,21 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.store(self.value_shape(value)?, self.get(value)?, place);
                     args.push(place.ptr);
                 }
+                // A resumable callee's frame holds the address it is passed:
+                // only a slot of this frame, proved for this edge.
+                (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { .. })
+                    if nested.is_some() =>
+                {
+                    let Some(proof) = self.resume_exclusive(call, parameter.source) else {
+                        return self.invalid(
+                            "a nested resumable callee's exclusive parameter without its edge proof",
+                        );
+                    };
+                    if signature.roots.contains(&i) {
+                        return self.invalid("an exclusive root parameter of a nested frame");
+                    }
+                    args.push(self.exclusive_slot_address(proof)?);
+                }
                 (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }) => {
                     let place = self.place(address)?;
                     if signature.roots.contains(&i) {
