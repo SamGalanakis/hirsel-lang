@@ -62,6 +62,9 @@ pub(crate) struct TaskRoots {
     pub(crate) trace_creator: crate::ordered::root_ids::Creator,
     /// Only trace admission records decrements, including immediate nested tails.
     pub(crate) trace_releases: Vec<Option<(crate::ordered::root_ids::SharedRootId, bool)>>,
+    /// Native replay: roots this task's releases left at count 1, whose thaw
+    /// waits its phase publication wakes.
+    pub(crate) sole: Vec<usize>,
 }
 
 impl TaskRoots {
@@ -170,6 +173,14 @@ unsafe fn add(ctx: &mut TaskCtx, block: *mut Header) {
     }
 }
 
+/// A release left `block` at count 1: in native replay, a thaw may wait for it.
+#[cold]
+fn left_sole(ctx: &mut TaskCtx, block: *mut Header) {
+    if ctx.run_ref().free_replay {
+        ctx.roots.sole.push(block.addr());
+    }
+}
+
 /// Give up one root at once: whether it was the last, after which the caller walks the root
 /// (its count stays 1, the dying block's alone).
 unsafe fn take(ctx: &mut TaskCtx, block: *mut Header) -> bool {
@@ -213,6 +224,9 @@ unsafe fn take_inner(ctx: &mut TaskCtx, block: *mut Header) -> bool {
                 word.store(back, Ordering::Release);
                 drop(table);
                 measure(ctx, "root_overflow_exits");
+                if back == 1 {
+                    left_sole(ctx, block);
+                }
             }
             return false;
         }
@@ -221,6 +235,9 @@ unsafe fn take_inner(ctx: &mut TaskCtx, block: *mut Header) -> bool {
             .is_ok()
         {
             measure(ctx, "root_atomics");
+            if count == 2 {
+                left_sole(ctx, block);
+            }
             return false;
         }
     }
@@ -409,6 +426,9 @@ impl PhaseRoots {
                             table.remove(&root);
                             word.store(back, Ordering::Release);
                             measure(ctx, "root_overflow_exits");
+                            if back == 1 {
+                                left_sole(ctx, block);
+                            }
                         }
                         break;
                     }
@@ -422,6 +442,9 @@ impl PhaseRoots {
                         .is_ok()
                     {
                         measure(ctx, "root_atomics");
+                        if count == 2 {
+                            left_sole(ctx, block);
+                        }
                         break;
                     }
                 }

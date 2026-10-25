@@ -214,12 +214,8 @@ pub(crate) unsafe fn receive(
         };
         super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
         // A parking receiver's wake needs no role: a send that makes a message
-        // visible takes the oldest token. Replay keeps its retry wait.
-        let mut token = if replay.is_some() {
-            None
-        } else {
-            unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
-        };
+        // visible takes the oldest token.
+        let mut token = { unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) } };
         let mut state = cell.lock();
         state.drop_token(me);
         let mut result = None;
@@ -283,7 +279,6 @@ pub(crate) unsafe fn receive(
         drop(state);
         drop(cell);
         drop(canceled_outcome);
-        let replaying = replay.is_some();
         drop(replay);
         publication??;
         if result.is_some() {
@@ -295,12 +290,9 @@ pub(crate) unsafe fn receive(
             return unsafe { try_yield(&mut *ctx) };
         }
         entered = true;
-        let wait = if replaying {
-            super::replay::retry_later(ctx);
-            Wait::Retry { cancelable: false }
-        } else {
-            Wait::ReceiveReady { channel }
-        };
+        // Replay waits as live does: its recorded cancellation is fixed for
+        // the op, so only a visible message or a close can end the wait.
+        let wait = Wait::ReceiveReady { channel };
         // No object lock, Arc, recorder borrow, or frame slot is retained by
         // the poll. A send racing this park is caught by its first idle poll.
         unsafe { try_block(&mut *ctx, wait, false, caller_site) }?;

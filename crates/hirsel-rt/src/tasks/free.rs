@@ -118,7 +118,6 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// As for try_yield.
 pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
-    role::with_role(ctx, |s| replay::wake(s));
     if replay::at_cut(ctx) {
         park_final(ctx);
     }
@@ -213,7 +212,6 @@ pub(super) unsafe fn after_save(
     completed: bool,
     pool_available: bool,
 ) -> Vec<(u32, Owner)> {
-    replay::wake(s);
     if let Some(Some(row)) = s.tasks.get(task as usize) {
         if completed && row.finishing {
             let row = s.task(task);

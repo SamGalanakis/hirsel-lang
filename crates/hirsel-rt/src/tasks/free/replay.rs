@@ -4,11 +4,16 @@
 //! against. Object handle lookup, key epochs and the terminal check are the
 //! only shared administration. No cursor borrow or lock crosses a physical
 //! save; atomic carriers are released before cut parking.
+//!
+//! A replay-pending wait registers its role-free wake (S2 `NotifyToken`) on
+//! the one dependency it waits for (an object's version cell, a key's epochs,
+//! or a thawed root's count) and rechecks after registering. A publication
+//! wakes exactly the waits it enabled, after its phase is published.
 use super::super::*;
 use hirsel_free::phase::Progress;
 use hirsel_free::projection::Projection;
 use hirsel_free::record::ObjectId;
-use hirsel_free::replay::{Cursor, Diverged, Shared};
+use hirsel_free::replay::{Admission, Cursor, DependencyToken, Diverged, Shared, Subscriber};
 use hirsel_free::session::Handle;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,8 +43,9 @@ pub(crate) struct Replay {
     /// Every task the tape can start, built at admission and never changed.
     tasks: HashMap<Vec<u32>, Arc<TaskReplay>>,
     objects: RwLock<HashMap<Handle, ObjectId>>,
+    /// Thaw waits by root block, registered until a release leaves the root sole.
+    thaws: Mutex<HashMap<usize, Vec<Subscriber>>>,
     finished: AtomicBool,
-    published: AtomicBool,
     handles: Mutex<super::host::handles::Handles>,
     output: Mutex<(Vec<u8>, Vec<u8>)>,
     authorities: super::host::requests::Authorities,
@@ -72,8 +78,8 @@ impl Replay {
             shared,
             tasks,
             objects: RwLock::default(),
+            thaws: Mutex::default(),
             finished: AtomicBool::new(false),
-            published: AtomicBool::new(false),
             handles: Mutex::default(),
             output: Mutex::default(),
             authorities: Default::default(),
@@ -123,6 +129,7 @@ impl Replay {
             !self.finished.swap(true, Ordering::AcqRel),
             "one replay finish"
         );
+        self.thaws.lock().unwrap().clear();
         let mut paths: Vec<_> = self.tasks.keys().collect();
         paths.sort();
         let states: Vec<_> = paths
@@ -155,6 +162,108 @@ impl Replay {
     pub(crate) fn output(&self) -> (Vec<u8>, Vec<u8>) {
         self.output.lock().unwrap().clone()
     }
+
+    /// Registrations publications examined (`Shared::visits`).
+    #[cfg(test)]
+    pub(crate) fn visits(&self) -> u64 {
+        self.shared.visits()
+    }
+
+    /// Register a thaw wait on `root`, then recheck: `true` means the root is
+    /// sole and nothing stays registered. Releases that leave a root sole take
+    /// this lock after their decrement, so a missed registration rechecks it.
+    ///
+    /// # Safety
+    /// The caller holds a root of the live root block.
+    unsafe fn subscribe_thaw(&self, root: *mut crate::Header, subscriber: Subscriber) -> bool {
+        let mut thaws = self.thaws.lock().unwrap();
+        let sole = unsafe { crate::roots::sole(root) };
+        let waiters = thaws.entry(root.addr()).or_default();
+        waiters.retain(|s| s.waiter != subscriber.waiter);
+        if !sole {
+            waiters.push(subscriber);
+        }
+        if waiters.is_empty() {
+            thaws.remove(&root.addr());
+        }
+        sole
+    }
+
+    /// The thaw waits on roots this task's releases left sole.
+    fn thawed(&self, roots: Vec<usize>, wakes: &mut Vec<std::task::Waker>) {
+        if roots.is_empty() {
+            return;
+        }
+        let mut thaws = self.thaws.lock().unwrap();
+        for root in roots {
+            if let Some(waiters) = thaws.remove(&root) {
+                wakes.extend(waiters.into_iter().map(|s| s.waker));
+            }
+        }
+    }
+}
+
+/// A replay wait's role-free wake: the waiter's frame and park owner, as the
+/// mutex and channel waits capture them (`pool::free::Token`).
+struct Wake {
+    run: *mut crate::context::RunShared,
+    token: crate::pool::free::Token,
+}
+
+// SAFETY: the run outlives every replay registration. Only this run's
+// publications wake one, and the replay drops the rest at its finish.
+unsafe impl Send for Wake {}
+unsafe impl Sync for Wake {}
+
+impl std::task::Wake for Wake {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        // SAFETY: a registration exists only under physical dispatch (`subscriber`).
+        unsafe { crate::pool::free::notify(self.run, &self.token) };
+    }
+}
+
+/// The running task's registration for a replay dependency: its row and that
+/// row's generation, and its role-free wake.
+fn subscriber(ctx: *mut TaskCtx) -> Subscriber {
+    let (me, waiter, owner) = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        let owner = if row.pinned { Owner::Any } else { row.owner };
+        (me, u64::from(row.generation) << 32 | u64::from(me), owner)
+    });
+    let run = unsafe { (*ctx).run_ptr() };
+    let token = unsafe { crate::pool::free::token(run, me, owner) }
+        .expect("native replay runs under physical dispatch");
+    Subscriber {
+        waiter,
+        waker: std::task::Waker::from(Arc::new(Wake { run, token })),
+    }
+}
+
+/// Register the running task on `dependency`, then recheck: `true` means it
+/// is ready and nothing stays registered.
+pub(super) fn subscribe(ctx: *mut TaskCtx, dependency: &DependencyToken) -> bool {
+    dependency.subscribe(subscriber(ctx))
+}
+
+/// Register the running host request on its key positions, then recheck.
+pub(super) fn subscribe_keys(
+    ctx: *mut TaskCtx,
+    token: &Token,
+    positions: &[hirsel_free::recorder::Position],
+) -> bool {
+    token.host_subscribe(positions, subscriber(ctx))
+}
+
+/// Park a replay wait registered on its dependency; its wake ends the wait.
+/// # Safety
+/// The role is held and the frame retains no runtime borrow.
+unsafe fn park(ctx: *mut TaskCtx) -> Stopped<()> {
+    unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }
 }
 
 fn state(ctx: *mut TaskCtx) -> Option<Arc<Replay>> {
@@ -235,26 +344,6 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
     task.op = task.op.checked_add(1).expect("native op ordinal overflow");
 }
 
-/// A publication can enable replay waits. Drain the notification only under
-/// scheduler ownership, outside independent cell accesses and session locks.
-pub(super) fn wake(s: &mut Scheduler) {
-    let Logical::Free(driver) = &s.logical else {
-        return;
-    };
-    let Some(replay) = &driver.replay else { return };
-    if !replay.published.swap(false, Ordering::AcqRel) {
-        return;
-    }
-    for task in std::mem::take(&mut s.retrying) {
-        if let Some(Some(row)) = s.tasks.get_mut(task as usize)
-            && matches!(row.wait, Some(Wait::Retry { .. }))
-        {
-            row.retried = true;
-            s.wake(task);
-        }
-    }
-}
-
 /// # Safety
 /// Thaw's ordinal has begun, the role is held, root is live, out writable.
 pub(super) unsafe fn thaw(
@@ -302,8 +391,12 @@ pub(super) unsafe fn thaw(
         if at_cut(ctx) {
             return Err(Stop::Requested);
         }
-        retry_later(ctx);
-        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+        let replay = state(ctx).expect("an admitted native replay");
+        if unsafe { replay.subscribe_thaw(root, subscriber(ctx)) } {
+            continue;
+        }
+        drop(replay);
+        unsafe { park(ctx) }?;
     }
 }
 
@@ -345,20 +438,23 @@ pub(super) unsafe fn wait_object(
     loop {
         {
             let object = object(ctx, handle).expect("an admitted object replay");
-            if object.ready(ctx)? {
+            let Some(dependency) = object.pending(ctx)? else {
                 return Ok(());
-            }
+            };
             if !entered {
                 object.token.publish(ctx, Phase::Entered, || ())?;
                 entered = true;
             }
+            if dependency.subscribe(subscriber(ctx)) {
+                continue;
+            }
         }
-        retry_later(ctx);
-        unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
+        unsafe { park(ctx) }?;
     }
 }
 
-/// Queue the running task for the next replay publication.
+/// Queue the running task for the next `wake_retrying`: live host-key waits,
+/// which a publication's key ends wake under the role.
 pub(super) fn retry_later(ctx: *mut TaskCtx) {
     role::with_role(ctx, |s| {
         let me = s.current;
@@ -390,7 +486,8 @@ impl Object {
         Ok(())
     }
 
-    fn ready(&self, ctx: *mut TaskCtx) -> Stopped<bool> {
+    /// The version this op still waits for, or `None` once it is enabled.
+    fn pending(&self, ctx: *mut TaskCtx) -> Stopped<Option<DependencyToken>> {
         self.token.entry(ctx, Phase::Done)?;
         if !self.token.admits(Phase::Done) {
             self.token.publish(ctx, Phase::Entered, || ())?;
@@ -398,8 +495,7 @@ impl Object {
         }
         let id = self.id()?;
         self.token
-            .with(|task| task.cursor.enabled(task.op, 0, &id))
-            .map_err(|error| Stop::Diverged(error.0))
+            .diverged(|task| task.cursor.admission(task.op, 0, &id).map(pending))
     }
 
     fn id(&self) -> Stopped<ObjectId> {
@@ -420,6 +516,13 @@ impl Object {
         let id = self.id()?;
         self.token.with(|task| task.cursor.receive(&id, outcome));
         Ok(())
+    }
+}
+
+fn pending(admission: Admission) -> Option<DependencyToken> {
+    match admission {
+        Admission::Ready => None,
+        Admission::Pending(token) => Some(token),
     }
 }
 
@@ -527,16 +630,18 @@ impl Token {
             crate::roots::wait_phase(ctx);
         }
         let result = action();
-        let publication = self.with(|task| {
+        let (publication, mut wakes) = self.with(|task| {
             let progress = task.at(phase);
-            task.cursor.publish(progress)?;
-            task.progress = progress;
-            Ok::<_, Diverged>(())
+            let publication = task.cursor.publish(progress).map(|()| {
+                task.progress = progress;
+            });
+            (publication, task.cursor.take_wakes())
         });
         roots.finish(ctx);
-        if publication.is_ok() {
-            self.shared.published.store(true, Ordering::Release);
-        }
+        // Version, epoch and root progress is published; wake what it enabled.
+        let sole = std::mem::take(unsafe { &mut (*ctx).roots.sole });
+        self.shared.thawed(sole, &mut wakes);
+        wakes.into_iter().for_each(std::task::Waker::wake);
         publication
             .map(|()| result)
             .map_err(|error| crate::stop::Stop::Diverged(error.0))
@@ -635,13 +740,26 @@ impl Token {
         self.shared.shared.positions_ready(positions)
     }
 
+    /// Register a key wait, then recheck: `true` means every position is ready.
+    pub(super) fn host_subscribe(
+        &self,
+        positions: &[hirsel_free::recorder::Position],
+        subscriber: Subscriber,
+    ) -> bool {
+        self.shared
+            .shared
+            .subscribe_positions(positions, subscriber)
+    }
+
     pub(super) fn host_observation(
         &self,
         positions: &[hirsel_free::recorder::Position],
     ) -> Stopped<Vec<u8>> {
-        let bytes = self.diverged(|task| task.cursor.observation(task.op))?;
-        self.shared.shared.end_positions(positions);
-        Ok(bytes)
+        self.diverged(|task| {
+            let bytes = task.cursor.observation(task.op)?;
+            task.cursor.end_positions(positions);
+            Ok(bytes)
+        })
     }
 
     pub(super) fn host_output(
@@ -696,14 +814,19 @@ impl Token {
         Ok(())
     }
 
-    pub(super) fn gate_ready(&self, ctx: *mut TaskCtx, gate: u32) -> Stopped<bool> {
+    /// The gate version this op still waits for, or `None` once enabled.
+    pub(super) fn gate_pending(
+        &self,
+        ctx: *mut TaskCtx,
+        gate: u32,
+    ) -> Stopped<Option<DependencyToken>> {
         self.entry(ctx, Phase::Done)?;
         if !self.admits(Phase::Done) {
             self.publish(ctx, Phase::Entered, || ())?;
             return Err(Stop::Requested);
         }
         let id = self.gate_id(gate);
-        self.diverged(|task| task.cursor.enabled(task.op, 0, &id))
+        self.diverged(|task| task.cursor.admission(task.op, 0, &id).map(pending))
     }
 
     /// A serial gate exists from admission at version 1, under its package identity.

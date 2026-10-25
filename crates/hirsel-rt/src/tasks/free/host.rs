@@ -936,19 +936,23 @@ pub(crate) fn replay_created_key(ctx: *mut TaskCtx, word: u64) -> Stopped<crate:
         .host_resource(word)
 }
 
+/// Wait for the request's key positions: registered on the first key whose
+/// previous epoch has not ended, whose last end wakes it.
 unsafe fn replay_wait_keys(ctx: *mut TaskCtx) -> Stopped<()> {
     loop {
-        let ready = {
+        {
             let token = super::replay::token(ctx).unwrap();
-            token.host_ready(&unsafe { (*ctx).replay_host.as_ref().unwrap() }.positions)
-        };
-        if ready {
-            return Ok(());
+            let positions = &unsafe { (*ctx).replay_host.as_ref().unwrap() }.positions;
+            if token.host_ready(positions) {
+                return Ok(());
+            }
+            if super::replay::at_cut(ctx) {
+                return Err(Stop::Requested);
+            }
+            if super::replay::subscribe_keys(ctx, &token, positions) {
+                return Ok(());
+            }
         }
-        if super::replay::at_cut(ctx) {
-            return Err(Stop::Requested);
-        }
-        super::replay::retry_later(ctx);
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
     }
 }

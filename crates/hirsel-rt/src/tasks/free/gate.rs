@@ -31,12 +31,12 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
     loop {
         role::with_role(ctx, |s| s.task(me).retried = false);
         let replay = super::replay::token(ctx);
-        let enabled = replay
+        let pending = replay
             .as_ref()
-            .map(|token| token.gate_ready(ctx, gate))
+            .map(|token| token.gate_pending(ctx, gate))
             .transpose()?
-            .unwrap_or(true);
-        if enabled && unsafe { role::with_held(ctx, |s| s.gate(gate).owner.is_none()) } {
+            .flatten();
+        if pending.is_none() && unsafe { role::with_held(ctx, |s| s.gate(gate).owner.is_none()) } {
             let object = super::record::on(ctx).then(|| ObjectId::Gate(format!("package:{gate}")));
             super::record::track(ctx, object.as_ref());
             let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
@@ -74,7 +74,6 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
             }
             return Ok(true);
         }
-        let replaying = replay.is_some();
         drop(replay);
         unsafe {
             role::with_held(ctx, |s| {
@@ -89,8 +88,12 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, gate: u32, site: u64) -> Stopped<b
             super::record::publish(ctx, Phase::Entered, |_| ())?;
             entered = true;
         }
-        if replaying {
-            super::replay::retry_later(ctx);
+        // The holder's leave wakes its waiters; a replayed version wait also
+        // registers on the gate's version cell.
+        if let Some(pending) = pending
+            && super::replay::subscribe(ctx, &pending)
+        {
+            continue;
         }
         unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, site) }?;
     }
@@ -119,7 +122,7 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) -> Sto
     super::record::begin(ctx);
     let replay = super::replay::token(ctx);
     if let Some(replay) = &replay
-        && !replay.gate_ready(ctx, gate)?
+        && replay.gate_pending(ctx, gate)?.is_some()
     {
         return Err(crate::stop::Stop::Diverged(
             "a held gate's leave is not enabled".into(),

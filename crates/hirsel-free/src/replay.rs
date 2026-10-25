@@ -14,6 +14,13 @@
 //!   transition when every transition of its key's previous epoch ended. A task waiting for
 //!   enablement is replay-pending: it holds nothing and releases its worker
 //!   ([`Admission::Pending`]).
+//! - **Wakes.** A pending wait registers a [`Subscriber`] on the one dependency it waits for (an
+//!   object's version cell or a key's epochs) and rechecks under the registration lock, as Tokio
+//!   `sync/notify.rs:1138-1197` (ce685ee6916549ed7e52dbfd5430858bbdc734d3) registers and reloads
+//!   its state. A publication advances the cell first, then takes exactly the registrations it
+//!   enabled, and the engine wakes them after the phase is published: a publication visits no
+//!   other dependency's registrations. A wait at its cut never registers; [`Shared::finish`]
+//!   drops the registrations of waits that never became ready.
 //! - **Substitution.** Loads, `await_any`, thaws, cancellation checks, `scope_until`, host
 //!   observations and completions take their recorded outcomes; no host call is made.
 //! - **Finish.** At the end every record is consumed, or the replay [`Diverged`].
@@ -38,6 +45,7 @@ use crate::tape::{End, Tape};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::task::Waker;
 
 /// The replay cannot follow its tape.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,14 +63,84 @@ struct Stream {
     cut: Option<Progress>,
 }
 
+/// A replay-pending wait's registration on one dependency. `waiter` names the wait by its task
+/// row and that row's generation, so a reused row registers as a new waiter while registering
+/// the same wait again replaces its entry; `waker` makes the task runnable without the
+/// scheduler.
+pub struct Subscriber {
+    pub waiter: u64,
+    pub waker: Waker,
+}
+
+impl std::fmt::Debug for Subscriber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Subscriber({:#x})", self.waiter)
+    }
+}
+
+/// Replace `subscriber`'s earlier registration in `waiters`, waiting for `at`.
+fn register(waiters: &mut Vec<(u64, Subscriber)>, at: u64, subscriber: Subscriber) {
+    waiters.retain(|(_, s)| s.waiter != subscriber.waiter);
+    waiters.push((at, subscriber));
+}
+
+/// Take the registrations `ready` enables, counting every registration examined.
+fn take_ready(
+    waiters: &mut Vec<(u64, Subscriber)>,
+    visits: &AtomicU64,
+    wakes: &mut Vec<Waker>,
+    ready: impl Fn(u64) -> bool,
+) {
+    if waiters.is_empty() {
+        return;
+    }
+    visits.fetch_add(waiters.len() as u64, Ordering::Relaxed);
+    let mut i = 0;
+    while i < waiters.len() {
+        if ready(waiters[i].0) {
+            wakes.push(waiters.swap_remove(i).1.waker);
+        } else {
+            i += 1;
+        }
+    }
+}
+
 /// An object's replayed version: the dependency cell its gapped sub-events wait on. A
 /// sub-event advances it by one, from exactly the version it requires.
 #[derive(Debug)]
-pub struct Version(AtomicU64);
+pub struct Version {
+    value: AtomicU64,
+    /// Pending waits and the version each waits for.
+    waiters: Mutex<Vec<(u64, Subscriber)>>,
+}
 
 impl Version {
+    fn new(version: u64) -> Self {
+        Self {
+            value: AtomicU64::new(version),
+            waiters: Mutex::default(),
+        }
+    }
+
     pub fn get(&self) -> u64 {
-        self.0.load(Ordering::Acquire)
+        self.value.load(Ordering::Acquire)
+    }
+
+    /// Advance from `from` to `from + 1`, then take the waits that version enables. A wait
+    /// registering after the take sees the new version on its recheck under the same lock.
+    fn advance(&self, from: u64, visits: &AtomicU64, wakes: &mut Vec<Waker>) -> bool {
+        if self
+            .value
+            .compare_exchange(from, from + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        // A wait for a version this one passed diverges when it rechecks, never hangs.
+        take_ready(&mut self.waiters.lock().unwrap(), visits, wakes, |at| {
+            at <= from + 1
+        });
+        true
     }
 }
 
@@ -80,6 +158,23 @@ impl DependencyToken {
     /// The version the dependency waits for.
     pub fn at(&self) -> u64 {
         self.at
+    }
+
+    /// Register `subscriber` for this dependency, then recheck under the registration lock:
+    /// `true` means it is ready and nothing stays registered.
+    pub fn subscribe(&self, subscriber: Subscriber) -> bool {
+        let mut waiters = self.cell.waiters.lock().unwrap();
+        if self.ready() {
+            waiters.retain(|(_, s)| s.waiter != subscriber.waiter);
+            return true;
+        }
+        register(&mut waiters, self.at, subscriber);
+        false
+    }
+
+    /// Registrations waiting on this dependency's cell.
+    pub fn waiting(&self) -> usize {
+        self.cell.waiters.lock().unwrap().len()
     }
 }
 
@@ -99,7 +194,17 @@ pub struct Shared {
     keys: Vec<String>,
     streams: HashMap<Vec<u32>, Arc<Stream>>,
     objects: RwLock<HashMap<ObjectId, Arc<Version>>>,
-    epochs: Mutex<Vec<KeyEpochs>>,
+    epochs: Mutex<Keys>,
+    /// Registrations examined by publications, so tests can show a publication visits only its
+    /// own dependency's waits.
+    visits: AtomicU64,
+}
+
+/// Every key's epochs and the waits registered on each key.
+struct Keys {
+    epochs: Vec<KeyEpochs>,
+    /// Per key: pending waits and the epoch each waits to start.
+    waiters: Vec<Vec<(u64, Subscriber)>>,
 }
 
 impl Shared {
@@ -162,7 +267,11 @@ impl Shared {
             keys: tape.keys.clone(),
             streams,
             objects: RwLock::new(HashMap::new()),
-            epochs: Mutex::new(epochs),
+            epochs: Mutex::new(Keys {
+                waiters: epochs.iter().map(|_| Vec::new()).collect(),
+                epochs,
+            }),
+            visits: AtomicU64::new(0),
         }))
     }
 
@@ -203,6 +312,7 @@ impl Shared {
             cancel_checks: CheckIndex::default(),
             staged: Vec::new(),
             events: Vec::new(),
+            wakes: Vec::new(),
         }
     }
 
@@ -217,7 +327,7 @@ impl Shared {
             .write()
             .unwrap()
             .entry(id)
-            .or_insert_with(|| Arc::new(Version(AtomicU64::new(1))));
+            .or_insert_with(|| Arc::new(Version::new(1)));
     }
 
     /// `object`'s version cell, once created.
@@ -239,16 +349,66 @@ impl Shared {
     }
 
     pub fn positions_ready(&self, positions: &[crate::recorder::Position]) -> bool {
-        let epochs = self.epochs.lock().unwrap();
+        let keys = self.epochs.lock().unwrap();
         positions
             .iter()
-            .all(|p| epochs[p.key as usize].ready(p.epoch))
+            .all(|p| keys.epochs[p.key as usize].ready(p.epoch))
     }
 
-    pub fn end_positions(&self, positions: &[crate::recorder::Position]) {
-        let mut epochs = self.epochs.lock().unwrap();
+    /// Register `subscriber` on the first of `positions` whose epoch may not start yet, checked
+    /// under the registration lock: `true` means every position is ready and nothing is
+    /// registered. A wait for several keys registers on one at a time.
+    pub fn subscribe_positions(
+        &self,
+        positions: &[crate::recorder::Position],
+        subscriber: Subscriber,
+    ) -> bool {
+        let mut keys = self.epochs.lock().unwrap();
+        let Some(p) = positions
+            .iter()
+            .find(|p| !keys.epochs[p.key as usize].ready(p.epoch))
+        else {
+            return true;
+        };
+        register(&mut keys.waiters[p.key as usize], p.epoch, subscriber);
+        false
+    }
+
+    /// End `positions`' transitions; the waits whose epochs they let start.
+    pub fn end_positions(&self, positions: &[crate::recorder::Position]) -> Vec<Waker> {
+        let mut keys = self.epochs.lock().unwrap();
+        let Keys { epochs, waiters } = &mut *keys;
         for p in positions {
             epochs[p.key as usize].end(p.epoch);
+        }
+        let mut wakes = Vec::new();
+        for (i, p) in positions.iter().enumerate() {
+            if positions[..i].iter().any(|q| q.key == p.key) {
+                continue;
+            }
+            let epochs = &epochs[p.key as usize];
+            take_ready(
+                &mut waiters[p.key as usize],
+                &self.visits,
+                &mut wakes,
+                |epoch| epochs.ready(epoch),
+            );
+        }
+        wakes
+    }
+
+    /// Registrations examined by publications so far.
+    pub fn visits(&self) -> u64 {
+        self.visits.load(Ordering::Relaxed)
+    }
+
+    /// Drop the registrations of waits that never became ready: the replay ended.
+    fn end_subscriptions(&self) {
+        for cell in self.objects.read().unwrap().values() {
+            cell.waiters.lock().unwrap().clear();
+        }
+        for waiters in &mut self.epochs.lock().unwrap().waiters {
+            waiters.clear();
         }
     }
 
@@ -258,6 +418,7 @@ impl Shared {
         &self,
         cursors: impl IntoIterator<Item = (&'c Cursor, Progress)>,
     ) -> Result<Projection, Diverged> {
+        self.end_subscriptions();
         let mut events = Vec::new();
         let mut reached: BTreeMap<&[u32], Progress> = BTreeMap::new();
         for (cursor, at) in cursors {
@@ -313,6 +474,8 @@ pub struct Cursor {
     /// The current phase's effects, stamped at its publication.
     staged: Vec<Event>,
     events: Vec<Stamped>,
+    /// Waits this task's sub-events and key ends enabled, woken once its phase is published.
+    wakes: Vec<Waker>,
 }
 
 impl Cursor {
@@ -383,7 +546,7 @@ impl Cursor {
             .objects
             .write()
             .unwrap()
-            .insert(object.clone(), Arc::new(Version(AtomicU64::new(1))));
+            .insert(object.clone(), Arc::new(Version::new(1)));
         self.staged.push(Event::Versioned {
             object,
             version: 1,
@@ -432,14 +595,12 @@ impl Cursor {
     ) -> Result<Event, Diverged> {
         let cell = self.shared.object(object)?;
         let required = self.required(op, sub, object);
-        cell.0
-            .compare_exchange(required, required + 1, Ordering::AcqRel, Ordering::Acquire)
-            .map_err(|_| {
-                Diverged(format!(
-                    "{:?} op {op} touched {object} before it was enabled",
-                    self.path
-                ))
-            })?;
+        if !cell.advance(required, &self.shared.visits, &mut self.wakes) {
+            return Err(Diverged(format!(
+                "{:?} op {op} touched {object} before it was enabled",
+                self.path
+            )));
+        }
         self.take(op, |r| {
             matches!(*r, Record::Gap { sub: s, .. } if s == sub).then_some(())
         });
@@ -642,6 +803,17 @@ impl Cursor {
             positions.push(crate::recorder::Position { key, epoch });
         }
         Ok(positions)
+    }
+
+    /// End a request's key positions; the waits they enable wake with this task's phase.
+    pub fn end_positions(&mut self, positions: &[crate::recorder::Position]) {
+        let wakes = self.shared.end_positions(positions);
+        self.wakes.extend(wakes);
+    }
+
+    /// The waits enabled since the last call, for the engine to wake after publication.
+    pub fn take_wakes(&mut self) -> Vec<Waker> {
+        std::mem::take(&mut self.wakes)
     }
 
     pub fn output(&mut self, sink: &str, epoch: u64, bytes: &[u8]) {
@@ -872,7 +1044,8 @@ impl Replayer {
     }
 
     pub fn end_positions(&mut self, positions: &[crate::recorder::Position]) {
-        self.shared.end_positions(positions);
+        // A width-1 engine polls its pending tasks and registers no waits.
+        drop(self.shared.end_positions(positions));
     }
 
     pub fn output(
@@ -923,3 +1096,6 @@ impl Replayer {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests;
