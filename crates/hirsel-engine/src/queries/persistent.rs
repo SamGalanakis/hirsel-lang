@@ -1293,6 +1293,9 @@ impl QueryEngine {
         detail: DependencyReads,
     ) -> Arc<Entry<T>> {
         let key = MemoKey::new(kind, DefId::intern(path));
+        if kind == QueryKind::Lower {
+            self.front_products.forget(&key);
+        }
         let reads = Arc::new(variant.reads);
         let durability = reads.durability(|read| self.durability_of(read));
         let text = self.key_text(path, kind).expect("indexed");

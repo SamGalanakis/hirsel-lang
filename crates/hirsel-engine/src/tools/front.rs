@@ -25,6 +25,7 @@ pub(crate) struct DeadArmUse {
 }
 #[derive(Clone)]
 struct LowerProduct {
+    text: hirsel_syntax::ContentHash,
     result: Result<Vec<Diagnostic>, QueryError>,
     phase: Option<QueryKind>,
     reads: std::sync::Arc<Reads>,
@@ -36,7 +37,9 @@ impl FrontProducts {
         }
         self.outcomes.remove(&definition);
         self.checked.remove(&definition);
-        self.lowered.remove(&definition);
+        // Keep diagnostic facts available if a later edit restores their reads.
+        // Every use rechecks their text and pending inputs; Lower publication
+        // retires them independently through forget().
         self.selection.remove(&definition);
         self.dead_arms.remove(&definition);
         self.lowering_inputs.remove(&definition);
@@ -93,7 +96,7 @@ impl QueryEngine {
             // S1 can already have settled the phase memo that caused this
             // notification. Revalidate its complete earlier P product before
             // dropping compact lint/lowering inputs with the old generation.
-            // Lower products have their own execution/V reads and still retire.
+            // Retained Lower facts recheck their own execution/V inputs on use.
             let previous = self.front_products.outcomes.get(&definition).cloned();
             let previous = previous.and_then(|mut outcome| {
                 let published = outcome.result.as_mut().ok()?;
@@ -137,8 +140,30 @@ impl QueryEngine {
         self.acknowledge_frontier(&changes, &removed);
         for definition in removed {
             self.front_products.invalidated.remove(&definition);
+            self.front_products.lowered.remove(&definition);
         }
         changes
+    }
+
+    /// Reuse completed diagnostics without confirming or adopting a Lower
+    /// memo. Direct changes still demand Lower; broad V notifications can be
+    /// discharged for these facts only when their exact inputs are unchanged.
+    fn current_lower_facts(&mut self, definition: DefId) -> Option<LowerProduct> {
+        let product = self.front_products.lowered.get(&definition)?.clone();
+        let reads = self
+            .graph
+            .pending_context_reads(&crate::memo::MemoKey::new(QueryKind::Lower, definition))?;
+        if self.key_text(definition.path(), QueryKind::Lower).ok()? != product.text
+            || reads.into_iter().any(|read| {
+                product
+                    .reads
+                    .get(&read)
+                    .is_none_or(|expected| self.observe(definition.path(), &read) != Some(expected))
+            })
+        {
+            return None;
+        }
+        Some(product)
     }
 
     /// Compact input of program selection. A hit reads no body memo, but
@@ -187,11 +212,7 @@ impl QueryEngine {
             return false;
         }
         self.invalidate_front_products();
-        if self
-            .front_products
-            .lowered
-            .contains_key(&DefId::intern(root))
-        {
+        if self.current_lower_facts(DefId::intern(root)).is_some() {
             return true;
         }
         let mut pending = vec![DefId::intern(root)];
@@ -291,16 +312,14 @@ impl QueryEngine {
             }
             static_prefix = Some(static_root);
             if self
-                .front_products
-                .lowered
-                .contains_key(&DefId::intern(&definition))
+                .current_lower_facts(DefId::intern(&definition))
+                .is_some()
             {
                 self.front_lower_frontier(std::mem::take(&mut pending), jobs, diagnostics)?;
                 self.invalidate_front_products();
                 if self
-                    .front_products
-                    .lowered
-                    .contains_key(&DefId::intern(&definition))
+                    .current_lower_facts(DefId::intern(&definition))
+                    .is_some()
                 {
                     diagnostics.extend(self.front_lower(&definition)?);
                 } else {
@@ -375,9 +394,11 @@ impl QueryEngine {
             let result = outcome.result.map(|output| output.diagnostics);
             if cacheable {
                 let id = DefId::intern(&outcome.definition);
+                let text = self.key_text(&outcome.definition, QueryKind::Lower)?;
                 self.front_products.lowered.insert(
                     id,
                     LowerProduct {
+                        text,
                         result: result.clone(),
                         phase: outcome.phase,
                         reads: outcome.reads,
@@ -400,7 +421,7 @@ impl QueryEngine {
         self.work.front_lower_visits += 1;
         let changes = self.invalidate_front_products();
         let id = DefId::intern(definition);
-        if let Some(product) = self.front_products.lowered.get(&id).cloned() {
+        if let Some(product) = self.current_lower_facts(id) {
             self.merge_execution(&product.reads);
             self.last_phase = product.phase;
             self.unavailable = matches!(product.result, Err(QueryError::NotImplemented))
@@ -409,6 +430,7 @@ impl QueryEngine {
             if product.result.is_err() {
                 self.checked_scope.failed_lowered.insert(definition.clone());
             }
+            self.acknowledge_frontier(&changes, &[id]);
             return product.result;
         }
         let result = self
@@ -428,10 +450,12 @@ impl QueryEngine {
                 .graph
                 .is_dirty(&crate::memo::MemoKey::new(QueryKind::Lower, id))
             && !result.as_ref().is_err_and(|error| !error.cacheable())
+            && let Ok(text) = self.key_text(definition, QueryKind::Lower)
         {
             self.front_products.lowered.insert(
                 id,
                 LowerProduct {
+                    text,
                     result: result.clone(),
                     phase,
                     reads,
