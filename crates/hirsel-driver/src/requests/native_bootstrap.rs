@@ -341,6 +341,13 @@ impl NativeBootstrap {
             .context
             .sources
             .iter()
+            // Source contracts also describe generic bodies and nominal
+            // finalizers. The launch table contains ordinary monomorphic
+            // functions; finalizer instances remain in discovery/layout facts.
+            .filter(|(path, _)| {
+                matches!(declarations.program.signatures.get(*path).map(|signature| &signature.kind),
+                    Some(hirsel_types::SignatureKind::Function(function)) if function.generics.is_empty())
+            })
             .map(|(path, context)| (path.clone(), context.entry.0))
             .collect();
         let operations = Arc::new(declarations.program.operation_registry());
