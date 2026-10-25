@@ -1,6 +1,8 @@
 use crate::memo::{MemoGraph, MemoKey, ReadKey, Reads, ReadsBuilder};
 use crate::*;
 mod candidate_products;
+mod checked_signatures;
+pub use checked_signatures::FrontCheckedSignatures;
 pub(crate) mod catalog;
 pub use candidate_products::{CheckedProductEncoder, CheckedProducts};
 mod arm_fixes;
