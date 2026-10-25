@@ -141,6 +141,7 @@ pub fn emit_leaf(
     let empty = BTreeSet::new();
     let inputs = EmitInputs {
         ahead: None,
+        continuation: None,
         alternate: false,
         index: None,
         verify_backend: program.validation == super::Validation::EveryStage,
