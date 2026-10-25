@@ -197,3 +197,4 @@ mod mode2_recipes_52;
 mod storage_sorted_map_33;
 mod native_compilation_tasks_19;
 mod runtime52_resume_coverage;
+mod scheduled_proof_export;

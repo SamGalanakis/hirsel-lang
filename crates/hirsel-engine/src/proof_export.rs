@@ -35,7 +35,10 @@ fn reason(error: &QueryError) -> String {
     }
 }
 
-fn signature_references(types: &Arc<TypeInterner>, section: &SignatureSection) -> Vec<DefPath> {
+pub(crate) fn signature_references(
+    types: &Arc<TypeInterner>,
+    section: &SignatureSection,
+) -> Vec<DefPath> {
     let mut references: Vec<_> = section
         .dependencies
         .iter()

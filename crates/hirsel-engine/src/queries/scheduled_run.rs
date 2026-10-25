@@ -1,6 +1,8 @@
 //! Immutable launch facts from the admitted source semantic closure.
 use super::*;
+mod proof_export;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
+pub use proof_export::FrontProofExport;
 /// Metadata consumed by interpreter/H/native hosts. No mutable query engine,
 /// body cache or native Value reconstruction is available through this output.
 pub struct FrontRunOutput {
@@ -395,7 +397,7 @@ impl Task {
                     .iter()
                     .map(|d| d.definition.path().clone()),
             );
-            extend_reads(&mut dependencies, &output.outcome.reads);
+            extend_reads(&mut dependencies, &output.outcome.reads, &queries.front);
             if input.executable {
                 let Some(id) = queries.lower.query(path) else {
                     return Poll::Ready(Err(queries
@@ -423,7 +425,7 @@ impl Task {
                         .iter()
                         .map(|d| d.definition.path().clone()),
                 );
-                extend_reads(&mut dependencies, &output.reads);
+                extend_reads(&mut dependencies, &output.reads, &queries.front);
                 tir = Some(output.output.value);
                 if matches!(&input.signature.kind, SignatureKind::Const {generics, ..} if generics.is_empty())
                 {
@@ -438,7 +440,7 @@ impl Task {
                         Poll::Ready(Ok(_)) => {}
                     }
                     if let Some(reads) = queries.lower.settled_reads(path, QueryKind::Evaluate) {
-                        extend_reads(&mut dependencies, &reads);
+                        extend_reads(&mut dependencies, &reads, &queries.front);
                     }
                     let value = match queries.lower.settled_constant(path, &[]) {
                         Ok(value) => value,
@@ -721,13 +723,14 @@ fn operational(message: impl Into<String>) -> QueryError {
         message: message.into(),
     })
 }
-fn extend_reads(dependencies: &mut BTreeSet<DefPath>, reads: &Reads) {
+fn extend_reads(dependencies: &mut BTreeSet<DefPath>, reads: &Reads, front: &FrontBodyQueries) {
     dependencies.extend(reads.iter().filter_map(|(read, _)| match read {
         ReadKey::Signature(id)
         | ReadKey::ExecutedSignature(id)
         | ReadKey::ExecutedBody(id)
         | ReadKey::LayoutBody(id)
         | ReadKey::Representation(id) => Some(id.path().clone()),
+        ReadKey::Lookup(key) => front.lookup_definition(*key),
         _ => None,
     }));
 }
@@ -804,6 +807,34 @@ impl QueryEngine {
                 .iter()
                 .map(|d| d.definition.path().clone())
                 .collect();
+            // Scalar semantic_body_node follows the complete Signature
+            // observations too: normalized coverage can omit aliases and
+            // primitive lookups whose spelling still belongs to PS9 closure.
+            if let Some(reads) = self.shared_memo_reads(&path, QueryKind::Signature) {
+                extend_reads(&mut dependencies, &reads, &front);
+            }
+            if let Some(reads) = self.dependency_reads(&path, QueryKind::Signature) {
+                dependencies.extend(reads.signatures.iter().map(|d| d.definition.path().clone()));
+                for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
+                    match read {
+                        hirsel_types::DependencyRead::Signature { definition, .. } => {
+                            dependencies.insert(definition.path().clone());
+                        }
+                        hirsel_types::DependencyRead::Lookup {
+                            result: Ok(definition),
+                            ..
+                        } => {
+                            dependencies.insert(definition.clone());
+                        }
+                        hirsel_types::DependencyRead::ProviderLookup { output, .. } => {
+                            if let Ok(definition) = &output.result {
+                                dependencies.insert(definition.clone());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
             let mut executable = false;
             let mut implementation = ContentHash::default();
             if source {

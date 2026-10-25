@@ -22,7 +22,7 @@ pub use scheduled_native_root::{
     FRONT_NATIVE_ROOT_KIND, FrontNativeOutput, FrontNativePlan, FrontNativeProducts,
     FrontNativeQueries,
 };
-pub use scheduled_run::{FRONT_RUN_KIND, FrontRunOutput, FrontRunQueries};
+pub use scheduled_run::{FRONT_RUN_KIND, FrontProofExport, FrontRunOutput, FrontRunQueries};
 
 mod scheduled_storage;
 pub use scheduled_storage::{

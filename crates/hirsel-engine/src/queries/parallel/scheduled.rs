@@ -204,6 +204,29 @@ impl FrontBodyQueries {
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions.load(Relaxed)
     }
+    /// Successful lookup targets are semantic closure edges even when a
+    /// primitive/alias adds no normalized signature fingerprint dependency.
+    pub(crate) fn lookup_definition(&self, key: crate::memo::LookupKey) -> Option<DefPath> {
+        use crate::memo::LookupSource;
+        let context = key.context();
+        let path = hirsel_syntax::Path {
+            package: key.qualifier(),
+            segments: key
+                .segments()
+                .iter()
+                .map(|part| Symbol::intern(part))
+                .collect(),
+        };
+        match key.source {
+            LookupSource::Provider => self.snapshot.lookup(&context, &path).result.ok(),
+            LookupSource::Manifest => self
+                .declarations
+                .index(context.package.clone())
+                .lookup(&context, &path)
+                .ok(),
+            LookupSource::Head | LookupSource::Candidates => None,
+        }
+    }
     fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         use crate::memo::LookupSource;
         Some(match *read {
