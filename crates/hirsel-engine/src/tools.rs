@@ -613,6 +613,13 @@ pub(crate) fn check_files(
     if outputs
         .iter()
         .all(|(_, output)| output.completion == CheckCompletion::Complete)
+        && engine.last_comptime_limit.is_none()
+    {
+        engine.checked_scope.completed = Some(engine.graph.revision());
+    }
+    if outputs
+        .iter()
+        .all(|(_, output)| output.completion == CheckCompletion::Complete)
         && let Some(publication) = publication
     {
         let _ = publication.finish();

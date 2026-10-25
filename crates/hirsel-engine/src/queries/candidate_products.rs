@@ -7,6 +7,7 @@ use std::rc::Rc;
 /// Current ordinary-check obligations, independent of retained cache contents.
 #[derive(Default)]
 pub(crate) struct CheckedScope {
+    pub(crate) completed: Option<crate::memo::Revision>,
     pub(crate) front: BTreeMap<DefPath, Arc<crate::memo::Reads>>,
     pub(crate) lowered: BTreeSet<DefPath>,
     /// Settled check-time failures have diagnostics but no body to reconstruct.
@@ -44,6 +45,29 @@ impl QueryEngine {
     /// already required by this check may be reconstructed through the normal
     /// eligible store path; this cost belongs to receipt production.
     pub fn checked_products(&mut self, entry: &DefPath) -> Result<CheckedProducts, QueryError> {
+        if self.checked_scope.completed != Some(self.graph.revision()) {
+            return Err(QueryError::NotImplemented);
+        }
+        let failed = self
+            .checked_scope
+            .failed_lowered
+            .iter()
+            .map(|path| {
+                (
+                    path.clone(),
+                    self.checked_scope
+                        .front
+                        .get(path)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (path, reads) in failed {
+            if !self.execution_valid(&path, &reads) {
+                return Err(QueryError::NotImplemented);
+            }
+        }
         let mut definitions = BTreeMap::new();
         let paths = self.checked_scope.lowered.clone();
         for path in paths {

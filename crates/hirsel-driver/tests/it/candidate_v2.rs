@@ -876,6 +876,115 @@ fn candidate_v2_h16_old_secondary_diagnostics_survive_deletion_and_pressure() {
     assert!(w.counters().retained_bytes > 0);
 }
 #[test]
+fn candidate_receipts_bind_failed_lowerings_to_complete_current_checks() {
+    hirsel_engine::with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            for retention in [
+                hirsel_engine::memo::Retention::Batch,
+                hirsel_engine::memo::Retention::Resident,
+            ] {
+                let tree = Tree::basic();
+                tree.write("helper.hir", "pub fn value()->unique u32{1 / 0}\n");
+                tree.write(
+                    "main.hir",
+                    "const VALUE:u32=comptime helper.value()\npub fn main()->u64{1}\n",
+                );
+                tree.write(
+                    "hirsel.json",
+                    &manifest(
+                        "app",
+                        "1",
+                        &[("main.hir", &[]), ("helper.hir", &["helper"])],
+                        vec![],
+                    ),
+                );
+                let compiler = hirsel_driver::COMPILER
+                    .clone()
+                    .with_config(CompileConfig {
+                        retention,
+                        store: Arc::new(hirsel_engine::store::NoneStore),
+                        ..config(jobs)
+                    })
+                    .with_owned_engines();
+                let mut program = compiler
+                    .load_program_inputs(
+                        &tree.0.join("hirsel.json"),
+                        &hirsel_engine::loader_inputs::DiskInputs,
+                        false,
+                    )
+                    .unwrap();
+                let lowering = program.engine.adapters.lowering.take();
+                let incomplete = program.check(LoweringPolicy::Comptime).unwrap();
+                assert_ne!(
+                    incomplete.completion,
+                    hirsel_engine::CheckCompletion::Complete
+                );
+                assert!(program.engine.checked_products(&program.entry).is_err());
+                program.engine.adapters.lowering = lowering;
+                let rejected = program.check(LoweringPolicy::Comptime).unwrap();
+                assert_eq!(
+                    rejected.completion,
+                    hirsel_engine::CheckCompletion::Complete
+                );
+                assert!(
+                    rejected
+                        .diagnostics
+                        .iter()
+                        .any(|d| d.rule == hirsel_diag::RuleId::of("CT-1"))
+                );
+                let mut failed = program.entry.clone();
+                failed.0.name = "VALUE".into();
+                let before = program
+                    .engine
+                    .recompute_count(&failed, hirsel_engine::QueryKind::Lower);
+                let receipt = program.engine.checked_products(&program.entry).unwrap();
+                assert_eq!(
+                    program
+                        .engine
+                        .checked_products(&program.entry)
+                        .unwrap()
+                        .digest,
+                    receipt.digest
+                );
+                assert_eq!(
+                    program
+                        .engine
+                        .recompute_count(&failed, hirsel_engine::QueryKind::Lower),
+                    before,
+                    "receipt collection must not repeat a settled failed initializer"
+                );
+                assert!(
+                    program
+                        .replace_source(&tree.0.join("main.hir"), MAIN.into())
+                        .unwrap()
+                );
+                assert!(
+                    program.engine.checked_products(&program.entry).is_err(),
+                    "the old failure cannot certify edited inputs"
+                );
+                let repaired = program.check(LoweringPolicy::Comptime).unwrap();
+                assert_eq!(
+                    repaired.completion,
+                    hirsel_engine::CheckCompletion::Complete
+                );
+                assert!(
+                    repaired.diagnostics.is_empty(),
+                    "{:?}",
+                    repaired.diagnostics
+                );
+                assert_ne!(
+                    program
+                        .engine
+                        .checked_products(&program.entry)
+                        .unwrap()
+                        .digest,
+                    receipt.digest
+                );
+            }
+        }
+    });
+}
+#[test]
 fn candidate_v2_h19_removed_roots_never_discover_host_inputs() {
     // This test also runs in a separate hostile-environment process below.
     let t = Tree::basic();
