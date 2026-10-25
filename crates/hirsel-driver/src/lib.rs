@@ -7,8 +7,8 @@
 hirsel_guard::install!();
 
 use hirsel_engine::{
-    CheckOutput, Compiler, DefinitionQueries, LoadedProgram, NotImplemented, PhaseAdapters,
-    RunOutcome, SimulationConfig, ToolError,
+    CheckOutput, Compiler, LoadedProgram, NotImplemented, PhaseAdapters, RunOutcome,
+    SimulationConfig, ToolError,
 };
 pub mod api_index;
 pub mod candidate;

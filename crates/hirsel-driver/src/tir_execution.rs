@@ -423,7 +423,13 @@ fn run_provider_on_host(
         })
     } else {
         hirsel_interp::run_with_runtime(
-            provider, &sources, &tir_run, args, limits, &mut operations, &runtime,
+            provider,
+            &sources,
+            &tir_run,
+            args,
+            limits,
+            &mut operations,
+            &runtime,
         )
     };
     if let Some(hook) = &free
