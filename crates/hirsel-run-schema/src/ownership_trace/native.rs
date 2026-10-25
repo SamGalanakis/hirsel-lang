@@ -57,6 +57,8 @@ pub struct Metadata {
     pub value_type: String,
 }
 pub type Units = BTreeMap<[u8; 32], BTreeMap<u32, Metadata>>;
+/// Closed direct-call targets, derived from checked units rather than log rows.
+pub type LocalCalls = BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -106,6 +108,33 @@ pub fn decode_leaf(
     units: &Units,
     limit: usize,
 ) -> Result<Trace, Error> {
+    decode(log, program, units, None, limit)
+}
+
+/// Local lifetimes may nest only across a compiler-checked call without owned
+/// input/output transport. The original leaf decoder retains its strict policy.
+pub fn decode_local_calls(
+    log: &Log,
+    program: [u8; 32],
+    units: &Units,
+    calls: &LocalCalls,
+    limit: usize,
+) -> Result<Trace, Error> {
+    if calls.iter().any(|(parent, targets)| {
+        !units.contains_key(parent) || targets.iter().any(|target| !units.contains_key(target))
+    }) {
+        return Err(Error::Binding);
+    }
+    decode(log, program, units, Some(calls), limit)
+}
+
+fn decode(
+    log: &Log,
+    program: [u8; 32],
+    units: &Units,
+    calls: Option<&LocalCalls>,
+    limit: usize,
+) -> Result<Trace, Error> {
     if log.version != VERSION || log.program != program {
         return Err(Error::Binding);
     }
@@ -131,7 +160,12 @@ pub fn decode_leaf(
                 // Descriptor finalizers can enter an emitted body even when
                 // Ready has no call instruction. Empty checked units carry no
                 // tracked input/output or ownership events across this frame.
-                if !frames.is_empty() && !metadata.is_empty() {
+                if let Some((_, parent)) = frames.last()
+                    && !metadata.is_empty()
+                    && !calls
+                        .and_then(|calls| calls.get(parent))
+                        .is_some_and(|targets| targets.contains(&unit))
+                {
                     return Err(Error::InvalidFrame(frame));
                 }
                 frames.push((frame, unit));

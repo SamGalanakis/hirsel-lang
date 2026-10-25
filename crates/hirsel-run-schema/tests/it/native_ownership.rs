@@ -292,3 +292,72 @@ fn native_ownership_empty_nested_units_preserve_parent_lifetimes_and_stack_check
         Error::InvalidFrame(2)
     );
 }
+
+fn nested_local_calls() -> (Log, Units, LocalCalls) {
+    let (mut log, mut units) = fixture();
+    let mut child = log.rows.clone();
+    for row in &mut child {
+        match row {
+            Row::Enter { frame, unit, .. } => {
+                *frame = 2;
+                *unit = [8; 32];
+            }
+            Row::Event { frame, .. } | Row::Leave { frame, .. } => *frame = 2,
+        }
+    }
+    log.rows.splice(2..2, child);
+    log.row_count = log.rows.len() as u64;
+    units.insert([8; 32], units[&[7; 32]].clone());
+    let calls = BTreeMap::from([([7; 32], std::collections::BTreeSet::from([[8; 32]]))]);
+    (log, units, calls)
+}
+
+#[test]
+fn native_ownership_local_calls_keep_equal_storage_in_distinct_dynamic_frames() {
+    let (log, units, calls) = nested_local_calls();
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (4, 4, 0)
+    );
+    let creates = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Create { token, .. } => Some(token.clone()),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(creates.len(), 4);
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
+}
+
+#[test]
+fn native_ownership_local_calls_refuse_wrong_parent_missing_target_and_parent_events() {
+    let (log, units, calls) = nested_local_calls();
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &BTreeMap::new(), 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
+    let wrong = BTreeMap::from([([8; 32], std::collections::BTreeSet::from([[7; 32]]))]);
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &wrong, 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
+    let unknown = BTreeMap::from([([7; 32], std::collections::BTreeSet::from([[9; 32]]))]);
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &unknown, 100).unwrap_err(),
+        Error::Binding
+    );
+    let mut changed = log.clone();
+    changed.rows.insert(3, log.rows[1]);
+    changed.row_count += 1;
+    assert_eq!(
+        decode_local_calls(&changed, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::InvalidFrame(1)
+    );
+}
