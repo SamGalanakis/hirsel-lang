@@ -110,7 +110,7 @@ pub(super) fn targets<S: Stage>(
     Ok(references)
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) struct Resource {
     slot: SlotId,
     path: Vec<(u8, u64, u64)>,
@@ -119,7 +119,7 @@ pub(super) struct Resource {
 pub(super) struct Target {
     pub reference: ReferenceInvocation,
     pub address: AddressId,
-    resource: Resource,
+    pub(super) resource: Resource,
 }
 impl Target {
     pub fn descendant_of(&self, parent: &Self) -> bool {

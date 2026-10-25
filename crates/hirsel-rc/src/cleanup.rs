@@ -284,6 +284,7 @@ fn lower_reporting<S: Stage, R: Reporter>(
         inserted: Vec::new(),
         prepared: Vec::new(),
         flags: BTreeMap::new(),
+        retire_flags: BTreeMap::new(),
         drop_at: BlockId(0),
     };
     // Later drops of a block first, so splitting a block leaves the
@@ -1425,6 +1426,9 @@ enum Action {
         fields: Vec<Action>,
     },
     /// An intact variant containing inline finalizers needs an active-arm plan.
+    Retire {
+        slot: SlotId,
+    },
     Variant {
         path: Vec<Step>,
         layout: LayoutId,
@@ -1450,6 +1454,7 @@ struct Lowering<'e, 'a> {
     inserted: Vec<(BlockId, usize)>,
     prepared: Vec<(SlotId, Vec<Step>, AddressId)>,
     flags: BTreeMap<Vec<Step>, ValueId>,
+    retire_flags: BTreeMap<(SlotId, Vec<Step>), (SlotId, AddressId, ValueId)>,
     /// The block of the drop being lowered.
     drop_at: BlockId,
 }
@@ -1642,6 +1647,12 @@ impl Lowering<'_, '_> {
         actions: &[Action],
         site: &Site,
     ) -> Result<BlockId, PassError> {
+        // Keep finalizer bodies, descendant actions and retirement in one
+        // flat plan. Every failure goes to the shared remaining suffix rather
+        // than recursively cloning the complete descendant tree per outcome.
+        let mut flat = Vec::new();
+        self.flatten(actions, site, &mut flat)?;
+        let actions = flat.as_slice();
         // Each chain block runs one action and goes on to the next; the last
         // continues into the drop's own failure successor.
         let mut chain: Vec<BlockId> = vec![BlockId(u32::MAX); actions.len() + 1];
@@ -1673,6 +1684,117 @@ impl Lowering<'_, '_> {
             })?;
         }
         Ok(at)
+    }
+
+    fn flatten(
+        &mut self,
+        actions: &[Action],
+        site: &Site,
+        out: &mut Vec<Action>,
+    ) -> Result<(), PassError> {
+        for action in actions {
+            if let Action::Finalize {
+                path,
+                layout,
+                fields,
+            } = action
+            {
+                let source = self
+                    .finalizers
+                    .0
+                    .get(layout)
+                    .is_some_and(|f| f.origin == hirsel_lir::ir::UnitOrigin::Source);
+                let guard = source.then(|| self.retire_flag(site, path)).transpose()?;
+                out.push(Action::Finalize {
+                    path: path.clone(),
+                    layout: *layout,
+                    fields: vec![],
+                });
+                self.flatten(fields, site, out)?;
+                if let Some((slot, _, _)) = guard {
+                    out.push(Action::Retire { slot });
+                }
+            } else {
+                out.push(action.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn retire_flag(
+        &mut self,
+        site: &Site,
+        path: &[Step],
+    ) -> Result<(SlotId, AddressId, ValueId), PassError> {
+        let key = (site.slot, path.to_vec());
+        if let Some(&flag) = self.retire_flags.get(&key) {
+            return Ok(flag);
+        }
+        let layout = self
+            .index
+            .scalar(hirsel_lir::layout_types::ScalarKind::Bool)
+            .ok_or_else(|| PassError::Malformed("finalizer retirement needs bool layout".into()))?;
+        let ty = type_of(
+            &mut self.ed.unit,
+            ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
+            layout,
+        );
+        let slot = SlotId(self.ed.unit.slots.len() as u32);
+        self.ed.unit.slots.push(hirsel_lir::ir::SlotInfo {
+            ty,
+            kind: hirsel_lir::ir::SlotKind::Temporary,
+            scope: self.ed.unit.slots[site.slot.index()].scope,
+        });
+        let before = self.ed.code[self.ed.unit.entry.index()].len();
+        let insertion = self.ed.code[self.ed.unit.entry.index()]
+            .iter()
+            .position(|inst| matches!(inst, Inst::Address { .. }))
+            .unwrap_or(0);
+        let address = self.ed.whole(self.facts, slot);
+        if self.ed.code[self.ed.unit.entry.index()].len() > before {
+            self.inserted.push((self.ed.unit.entry, insertion));
+        }
+        let reaching = self.ed.value(ty, Holding::Plain);
+        let flag = (slot, address, reaching);
+        self.retire_flags.insert(key, flag);
+        Ok(flag)
+    }
+
+    fn store_retirement_flag(
+        &mut self,
+        at: BlockId,
+        flag: (SlotId, AddressId, ValueId),
+        value: bool,
+    ) {
+        let ty = self.ed.unit.slots[flag.0.index()].ty;
+        let constant = hirsel_lir::ir::ConstantId(self.ed.unit.tables.constants.len() as u32);
+        self.ed
+            .unit
+            .tables
+            .constants
+            .push(hirsel_lir::ir::ConstantData {
+                ty,
+                value: hirsel_lir::ir::ConstantValue::Bool(value),
+            });
+        let result = self.ed.value(ty, Holding::Plain);
+        let version = self.ed.value(ty, Holding::Plain);
+        if value {
+            let old = self.ed.value(ty, Holding::Plain);
+            self.ed.code[at.index()].push(Inst::Read {
+                result: old,
+                address: flag.1,
+                reaching: flag.2,
+                mode: ReadMode::Take,
+            });
+        }
+        self.ed.code[at.index()].extend([
+            Inst::Const { result, constant },
+            Inst::Store {
+                address: flag.1,
+                value: result,
+                version,
+            },
+        ]);
     }
 
     /// The edge into chain position `j`: the next chain block, or the drop's
@@ -1755,6 +1877,37 @@ impl Lowering<'_, '_> {
                 self.prepared.truncate(base);
                 Ok(joined)
             }
+            Action::Retire { slot } => {
+                let (_, address, reaching) = self
+                    .retire_flags
+                    .values()
+                    .find(|(candidate, _, _)| candidate == slot)
+                    .copied()
+                    .unwrap();
+                let ty = self.ed.unit.slots[slot.index()].ty;
+                let condition = self.ed.value(ty, Holding::Plain);
+                self.ed.code[at.index()].push(Inst::Read {
+                    result: condition,
+                    address,
+                    reaching,
+                    mode: ReadMode::Bits,
+                });
+                let block = &self.ed.unit.blocks[at.index()];
+                let (kind, anchor) = (block.kind, block.anchor);
+                let retire = self.ed.block(kind, &[], anchor);
+                let joined = self.ed.block(kind, &[], anchor);
+                let yes = self.ed.edge(retire, &[]);
+                let no = self.ed.edge(joined, &[]);
+                self.ed.unit.terminators[at.index()] = Terminator::Branch { condition, yes, no };
+                self.ed.code[retire.index()].push(Inst::FrameLeave);
+                self.ed.unit.terminators[retire.index()] =
+                    Terminator::Jump(self.ed.edge(joined, &[]));
+                self.ed.code[joined.index()].push(Inst::StorageDead {
+                    slot: *slot,
+                    if_live: false,
+                });
+                Ok(joined)
+            }
             Action::EmptyVariant { layout } => {
                 let whole = self.ed.whole(self.facts, site.slot);
                 let ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, *layout);
@@ -1832,7 +1985,7 @@ impl Lowering<'_, '_> {
             Action::Finalize {
                 path,
                 layout,
-                fields,
+                fields: _,
             } => {
                 let finalizer = self.finalizers.0.get(layout).cloned().ok_or_else(|| {
                     PassError::Unsupported(format!("no drop body instance for {layout:?}"))
@@ -1923,26 +2076,21 @@ impl Lowering<'_, '_> {
                         address,
                         anchor: site.anchor,
                     });
-                    let tail = &self.ed.unit.tables.edges[rest.cleanup.index()];
-                    let target = tail.target;
-                    let arguments = tail
-                        .arguments
-                        .get(&self.ed.unit.pools.values)
-                        .unwrap_or(&[])
-                        .to_vec();
-                    let rejected_end =
-                        self.finalizer_fields(rejected, fields, site, &rest, false)?;
-                    self.ed.unit.terminators[rejected_end.index()] =
-                        Terminator::Jump(self.ed.edge(target, &arguments));
+                    let cleanup = extended(self.ed, rest.cleanup, &[]);
+                    self.ed.unit.terminators[rejected.index()] = Terminator::Jump(cleanup);
                     let cleanup = self.ed.edge(rejected, &[]);
                     let failure = FailureId(self.ed.unit.tables.failures.len() as u32);
                     self.ed.unit.tables.failures.push(FailureEdge {
                         cleanup,
                         rule: Some("LANG-10".into()),
                         anchor: self.ed.unit.tables.calls[call.index()].anchor,
-                        dispose: PoolRange::EMPTY,
+                        dispose: rest.dispose,
                     });
+                    let flag = self.retire_flag(site, path)?;
+                    self.ed.code[at.index()].push(Inst::StorageLive { slot: flag.0 });
+                    self.store_retirement_flag(at, flag, false);
                     self.ed.code[at.index()].push(Inst::FrameEnter { failure });
+                    self.store_retirement_flag(at, flag, true);
                 }
                 let into_failed = self.ed.edge(failed, &[]);
                 let call_failure = FailureId(self.ed.unit.tables.failures.len() as u32);
@@ -1958,51 +2106,11 @@ impl Lowering<'_, '_> {
                     normal: Some(into_normal),
                     failure: call_failure,
                 };
-                // The body phase ends before fields, but its activation belongs
-                // to the complete resource obligation, including failed cleanup.
-                let mut failed_rest = rest.clone();
-                failed_rest.dispose = PoolRange::EMPTY;
-                let failed = self.finalizer_fields(failed, fields, site, &failed_rest, !mutable)?;
                 let cleanup = extended(self.ed, rest.cleanup, &[]);
                 self.ed.unit.terminators[failed.index()] = Terminator::Jump(cleanup);
-                self.finalizer_fields(normal, fields, site, &rest, !mutable)
+                Ok(normal)
             }
         }
-    }
-
-    /// An entered finalizer retires only after all its owned fields, on both
-    /// outcomes. Rejected entry has no activation to retire.
-    fn finalizer_fields(
-        &mut self,
-        at: BlockId,
-        fields: &[Action],
-        site: &Site,
-        rest: &FailureEdge,
-        entered: bool,
-    ) -> Result<BlockId, PassError> {
-        let mut failure = rest.clone();
-        if entered {
-            let retired = self.ed.block(BlockKind::FailureCleanup, &[], rest.anchor);
-            self.ed.code[retired.index()].push(Inst::FrameLeave);
-            let cleanup = extended(self.ed, rest.cleanup, &[]);
-            self.ed.unit.terminators[retired.index()] = Terminator::Jump(cleanup);
-            failure.cleanup = self.ed.edge(retired, &[]);
-        }
-        let local = Site {
-            slot: site.slot,
-            version: site.version,
-            anchor: site.anchor,
-            failure,
-        };
-        // Static field addresses are prepared at entry by `address`; checked
-        // variant paths are prepared in their selected arm, before the parent
-        // finalizer begins. Preparing them here would add a failure path that
-        // retires the activation while its descendants are still owned.
-        let end = self.sequence(at, fields, &local)?;
-        if entered {
-            self.ed.code[end.index()].push(Inst::FrameLeave);
-        }
-        Ok(end)
     }
 
     /// Select an intact variant's active arm. Ordinary variants use a
@@ -2316,7 +2424,7 @@ impl Lowering<'_, '_> {
             }
             let (path, layout) = match action {
                 Action::Conditional { .. } => continue,
-                Action::EmptyVariant { .. } => continue,
+                Action::EmptyVariant { .. } | Action::Retire { .. } => continue,
                 Action::Release { path, layout, .. }
                 | Action::Finalize { path, layout, .. }
                 | Action::Variant { path, layout }
@@ -3002,6 +3110,7 @@ mod pending_tests {
             inserted: vec![],
             prepared: vec![],
             flags: BTreeMap::new(),
+            retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
         };
         let mut actions = Vec::new();
@@ -3064,6 +3173,7 @@ mod pending_tests {
             inserted: vec![],
             prepared: vec![],
             flags: BTreeMap::new(),
+            retire_flags: BTreeMap::new(),
             drop_at: BlockId(0),
         };
         let mut state = crate::insert::SlotState {

@@ -2,7 +2,7 @@
 use hirsel_driver::{compiler_adapters, native};
 use hirsel_engine::*;
 use hirsel_lir::{ir::*, stage::Ready, validate};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 fn program() -> native::ReadyProgram {
     let source = r#"
@@ -17,6 +17,10 @@ pub fn main()->Result[(),()] {
  Ok(())
 }
 "#;
+    source_program(source)
+}
+
+fn source_program(source: &str) -> native::ReadyProgram {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
     let file = engine
         .sources
@@ -182,54 +186,52 @@ fn finalizer_obligation_52_ordinary_admission_cannot_nest_in_cleanup() {
 /// Locate matched retirement instructions only to move them in a valid fixture.
 /// The verdict comes from C's independent declarations and ownership walk.
 fn retirements(unit: &LirUnit<Ready>) -> BTreeMap<(BlockId, usize), AddressId> {
-    let entries: BTreeMap<_, _> = entries(unit).into_iter().collect();
-    let mut incoming = BTreeMap::from([(unit.entry, Vec::<Option<AddressId>>::new())]);
-    let mut pending = VecDeque::from([unit.entry]);
-    let mut retired = BTreeMap::new();
-    while let Some(block) = pending.pop_front() {
-        let mut stack = incoming[&block].clone();
-        let mut outgoing = Vec::new();
-        for (index, inst) in unit.blocks[block.index()]
+    let mut flags = BTreeMap::new();
+    for (block, resource) in entries(unit) {
+        let code = unit.blocks[block.index()]
             .instructions
             .get(&unit.instructions)
-            .unwrap()
+            .unwrap();
+        let enter = code
             .iter()
-            .enumerate()
-        {
-            if let Some(failure) = inst.failure() {
-                outgoing.push((unit.tables.failures[failure.index()].cleanup, stack.clone()));
-            }
-            match inst {
-                Inst::FrameEnter { .. } => stack.push(entries.get(&block).copied()),
-                Inst::FrameLeave => {
-                    if let Some(Some(address)) = stack.pop() {
-                        retired.insert((block, index), address);
-                    }
-                }
-                _ => (),
-            }
-        }
-        outgoing.extend(
-            unit.terminators[block.index()]
-                .normal_edges(&unit.pools)
-                .into_iter()
-                .map(|edge| (edge, stack.clone())),
-        );
-        outgoing.extend(
-            unit.terminators[block.index()]
-                .failure_edges(&unit.tables)
-                .into_iter()
-                .map(|failure| (unit.tables.failures[failure.index()].cleanup, stack.clone())),
-        );
-        for (edge, state) in outgoing {
-            let target = unit.tables.edges[edge.index()].target;
-            if let Some(previous) = incoming.get(&target) {
-                assert_eq!(previous, &state);
-            } else {
-                incoming.insert(target, state);
-                pending.push_back(target);
-            }
-        }
+            .position(|inst| matches!(inst, Inst::FrameEnter { .. }))
+            .unwrap();
+        let address = code[enter + 1..]
+            .iter()
+            .find_map(|inst| match inst {
+                Inst::Store { address, .. } => Some(*address),
+                _ => None,
+            })
+            .unwrap();
+        flags.insert(address, resource);
+    }
+    let mut retired = BTreeMap::new();
+    for (index, block) in unit.blocks.iter().enumerate() {
+        let Terminator::Branch { condition, yes, .. } = unit.terminators[index] else {
+            continue;
+        };
+        let code = block.instructions.get(&unit.instructions).unwrap();
+        let Some(address) = code.iter().find_map(|inst| match inst {
+            Inst::Read {
+                result, address, ..
+            } if *result == condition => Some(*address),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(resource) = flags.get(&address) else {
+            continue;
+        };
+        let target = unit.tables.edges[yes.index()].target;
+        let code = unit.blocks[target.index()]
+            .instructions
+            .get(&unit.instructions)
+            .unwrap();
+        let ordinal = code
+            .iter()
+            .position(|inst| matches!(inst, Inst::FrameLeave))
+            .unwrap();
+        retired.insert((target, ordinal), *resource);
     }
     retired
 }
@@ -298,5 +300,81 @@ fn finalizer_obligation_52_retirement_requires_descendants_absent() {
             let errors = errors(&program, &unit, &program.operations);
             assert!(errors.iter().any(|e| matches!(&e.kind, validate::ViolationKind::Schema(text) if text.contains("before owned descendants"))), "{errors:?}");
         }
+    });
+}
+
+#[test]
+fn finalizer_obligation_52_nested_cleanup_has_shared_failure_suffixes() {
+    with_compiler_stack(|| {
+        let counts = [2usize, 4, 8].map(|depth| {
+            let mut source = String::from("resource type R0 {n:u64}\ndrop(x) {()}\n");
+            let mut value = String::from("R0(n:0u64)");
+            for level in 1..depth {
+                source.push_str(&format!(
+                    "resource type R{level} {{inner:R{}}}\ndrop(x) {{()}}\n",
+                    level - 1
+                ));
+                value = format!("R{level}(inner:{value})");
+            }
+            source.push_str(&format!(
+                "pub fn main()->Result[(),()] {{let root={value};Ok(())}}\n"
+            ));
+            let program = source_program(&source);
+            program
+                .raw_units()
+                .iter()
+                .flat_map(|unit| &unit.instructions)
+                .filter(|inst| matches!(inst, Inst::FinalizeBegin { .. }))
+                .count()
+        });
+        let first = counts[1].checked_sub(counts[0]).unwrap();
+        let second = counts[2].checked_sub(counts[1]).unwrap();
+        assert!(
+            first > 0 && 2 * second <= 5 * first,
+            "FinalizeBegin at inline resource depths 2/4/8: {counts:?}"
+        );
+        eprintln!("FinalizeBegin at inline resource depths 2/4/8: {counts:?}");
+    });
+}
+
+#[test]
+fn finalizer_obligation_52_false_guard_cannot_hide_an_entered_cleanup() {
+    with_compiler_stack(|| {
+        let program = program();
+        let mut unit = main_unit(&program);
+        assert!(errors(&program, &unit, &program.operations).is_empty());
+        let mut changed = 0;
+        for (block, address) in entries(&unit) {
+            if !path(&unit, address).is_empty() {
+                continue;
+            }
+            let code = unit.blocks[block.index()]
+                .instructions
+                .get(&unit.instructions)
+                .unwrap();
+            let enter = code
+                .iter()
+                .position(|inst| matches!(inst, Inst::FrameEnter { .. }))
+                .unwrap();
+            let constant = code[enter + 1..]
+                .iter()
+                .find_map(|inst| match inst {
+                    Inst::Const { constant, .. }
+                        if matches!(
+                            unit.tables.constants[constant.index()].value,
+                            ConstantValue::Bool(true)
+                        ) =>
+                    {
+                        Some(*constant)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            unit.tables.constants[constant.index()].value = ConstantValue::Bool(false);
+            changed += 1;
+        }
+        assert!(changed > 0);
+        let violations = errors(&program, &unit, &program.operations);
+        assert!(violations.iter().any(|v| matches!(&v.kind, validate::ViolationKind::Schema(message) if message.contains("guard") || message.contains("invocation"))), "{violations:?}");
     });
 }

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod cleanup;
 pub mod room;
+mod state;
 
 /// Include cleanup admissions reconstructed from independently selected
 /// finalizer bodies and the supplied physical layouts, never call counters.
@@ -157,8 +158,9 @@ fn check_inner<S: Stage>(
             .map(|a| (a.body, a.block, a.statement))
             .ok_or("invocation source anchor outside table")
     };
+    let guards = state::Guards::new(unit, &cleanups);
     let mut retired = BTreeMap::new();
-    let mut incoming = BTreeMap::from([(unit.entry, Vec::new())]);
+    let mut incoming = BTreeMap::from([(unit.entry, state::State::default())]);
     let mut pending = VecDeque::from([unit.entry]);
     let edge = |id: EdgeId| {
         unit.tables
@@ -185,11 +187,12 @@ fn check_inner<S: Stage>(
                     .cleanup;
                 outgoing.push((edge(cleanup)?, active.clone()));
             }
+            guards.instruction(&mut active, instruction)?;
             match instruction {
                 Inst::FrameEnter { failure } => {
                     let next = identity(unit.tables.failures[failure.index()].anchor)?;
-                    if let Some(parent) = active.last() {
-                        match (cleanups.get(parent), cleanups.get(&next)) {
+                    if let Some(parent) = active.active.last() {
+                        match (cleanups.get(&parent.identity), cleanups.get(&next)) {
                             (Some(parent), Some(child)) if child.descendant_of(parent) => (),
                             _ => {
                                 return Err(
@@ -198,12 +201,10 @@ fn check_inner<S: Stage>(
                             }
                         }
                     }
-                    active.push(next);
+                    active.active.push(guards.enter(next));
                 }
                 Inst::FrameLeave => {
-                    let identity = active
-                        .pop()
-                        .ok_or("invocation retirement without admission")?;
+                    let identity = active.leave()?.identity;
                     if let Some(target) = cleanups.get(&identity) {
                         retired.insert((block, ordinal as u32), target.address);
                     }
@@ -215,7 +216,7 @@ fn check_inner<S: Stage>(
         if matches!(
             terminator,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && !active.is_empty()
+        ) && !active.active.is_empty()
         {
             return Err("semantic invocation remains live at unit exit".into());
         }
@@ -227,7 +228,7 @@ fn check_inner<S: Stage>(
                 .ok_or("invocation call outside table")?;
             let id = identity(call.anchor)?;
             if let Some(site) = references.get(&id).filter(|site| !site.restart) {
-                if active.last().copied() != site.admitted().then_some(id) {
+                if active.current() != site.admitted().then(|| guards.identity(id)) {
                     return Err("language call occurs outside its admitted invocation".into());
                 }
                 if let Some(expected) = &site.callee {
@@ -269,13 +270,24 @@ fn check_inner<S: Stage>(
                 }
             }
         }
-        outgoing.extend(
-            terminator
-                .normal_edges(&unit.pools)
-                .into_iter()
-                .map(|e| edge(e).map(|b| (b, active.clone())))
-                .collect::<Result<Vec<_>, _>>()?,
-        );
+        if let Some(slot) = guards.branch(unit, block) {
+            let Terminator::Branch { yes, no, .. } = terminator else {
+                unreachable!()
+            };
+            for (target, value) in [(*yes, true), (*no, false)] {
+                if let Some(next) = active.refine(slot, value)? {
+                    outgoing.push((edge(target)?, next));
+                }
+            }
+        } else {
+            outgoing.extend(
+                terminator
+                    .normal_edges(&unit.pools)
+                    .into_iter()
+                    .map(|e| edge(e).map(|b| (b, active.clone())))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
         for failure in terminator.failure_edges(&unit.tables) {
             outgoing.push((
                 edge(unit.tables.failures[failure.index()].cleanup)?,
@@ -284,10 +296,11 @@ fn check_inner<S: Stage>(
         }
         for (target, state) in outgoing {
             match incoming.get(&target) {
-                Some(previous) if *previous != state => {
-                    return Err("invocation identity differs at control-flow join".into());
+                Some(_) => {
+                    if incoming.get_mut(&target).unwrap().join(&state, &cleanups)? {
+                        pending.push_back(target);
+                    }
                 }
-                Some(_) => (),
                 None => {
                     incoming.insert(target, state);
                     pending.push_back(target);
@@ -408,7 +421,8 @@ fn check_library_context<S: Stage>(
             .ok_or_else(|| "library invocation edge outside table".to_owned())
     };
     let mut retired = BTreeMap::new();
-    let mut states = BTreeMap::from([(unit.entry, Vec::<((u32, u32, u32), bool)>::new())]);
+    let guards = state::Guards::new(unit, &targets);
+    let mut states = BTreeMap::from([(unit.entry, state::State::default())]);
     let mut pending = VecDeque::from([unit.entry]);
     while let Some(block) = pending.pop_front() {
         let mut active = states[&block].clone();
@@ -432,14 +446,15 @@ fn check_library_context<S: Stage>(
                     .ok_or("library invocation failure")?;
                 outgoing.push((edge(failure.cleanup)?, active.clone()));
             }
+            guards.instruction(&mut active, inst)?;
             match *inst {
                 Inst::FrameEnter { failure } => {
                     if unit.tables.failures[failure.index()].rule.as_deref() != Some("LANG-10") {
                         return Err("invalid library callback admission".into());
                     }
                     let next = identity(unit.tables.failures[failure.index()].anchor)?;
-                    if let Some((parent, _)) = active.last() {
-                        match (targets.get(parent), targets.get(&next)) {
+                    if let Some(parent) = active.active.last() {
+                        match (targets.get(&parent.identity), targets.get(&next)) {
                             (Some(parent), Some(child)) if child.descendant_of(parent) => (),
                             _ => return Err(
                                 "nested library invocation is not an owned descendant finalizer"
@@ -447,15 +462,15 @@ fn check_library_context<S: Stage>(
                             ),
                         }
                     }
-                    active.push((next, false));
+                    active.active.push(guards.enter(next));
                 }
                 Inst::FrameLeave => {
-                    if active.last().is_none_or(|(_, dispatched)| {
-                        !dispatched && row.kind != BlockKind::FailureCleanup
+                    if active.active.last().is_none_or(|frame| {
+                        !frame.dispatched && row.kind != BlockKind::FailureCleanup
                     }) {
                         return Err("library retirement has no callback invocation".into());
                     }
-                    let (identity, _) = active.pop().unwrap();
+                    let identity = active.leave()?.identity;
                     if let Some(target) = targets.get(&identity) {
                         retired.insert((block, ordinal as u32), target.address);
                     }
@@ -486,23 +501,34 @@ fn check_library_context<S: Stage>(
             if Some(*id) != forwarded
                 && (source_direct
                     || matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
-                    || !active.is_empty() && !call.forward_caller)
+                    || !active.active.is_empty() && !call.forward_caller)
             {
-                if active.last().is_none_or(|(_, dispatched)| *dispatched) {
+                if active.active.last().is_none_or(|frame| frame.dispatched) {
                     return Err("library callback lacks its own admission".into());
                 }
-                active.last_mut().unwrap().1 = true;
+                active.active.last_mut().unwrap().dispatched = true;
             }
         }
         if matches!(
             term,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && !active.is_empty()
+        ) && !active.active.is_empty()
         {
             return Err("library callback remains active at exit".into());
         }
-        for id in term.normal_edges(&unit.pools) {
-            outgoing.push((edge(id)?, active.clone()));
+        if let Some(slot) = guards.branch(unit, block) {
+            let Terminator::Branch { yes, no, .. } = term else {
+                unreachable!()
+            };
+            for (target, value) in [(*yes, true), (*no, false)] {
+                if let Some(next) = active.refine(slot, value)? {
+                    outgoing.push((edge(target)?, next));
+                }
+            }
+        } else {
+            for id in term.normal_edges(&unit.pools) {
+                outgoing.push((edge(id)?, active.clone()));
+            }
         }
         for failure in term.failure_edges(&unit.tables) {
             outgoing.push((
@@ -512,10 +538,11 @@ fn check_library_context<S: Stage>(
         }
         for (target, state) in outgoing {
             match states.get(&target) {
-                Some(previous) if *previous != state => {
-                    return Err("library callback scope differs at join".into());
+                Some(_) => {
+                    if states.get_mut(&target).unwrap().join(&state, &targets)? {
+                        pending.push_back(target);
+                    }
                 }
-                Some(_) => (),
                 None => {
                     states.insert(target, state);
                     pending.push_back(target);
