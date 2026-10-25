@@ -67,6 +67,7 @@ struct LowerProduct {
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     materialized: Reference,
+    definition_decode_bytes: u64,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -286,6 +287,36 @@ impl FrontLowerQueries {
             .ok_or(QueryError::NotImplemented)?
             .map(Arc::clone)
             .map_err(Clone::clone)
+    }
+    /// Captured physical decode working memory for an already settled original.
+    /// Reads metadata only; no provider fetch, body decoder or query runs.
+    pub fn settled_definition_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        let id = self.query(path).ok_or(QueryError::NotImplemented)?;
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let (_, outcome, _) = outcomes
+            .get(&(id.kind, id.address.0))
+            .ok_or(QueryError::NotImplemented)?;
+        match &outcome.result {
+            Ok(Value::Lower(lower)) => Ok(lower.definition_decode_bytes),
+            Err(error) => Err(error.clone()),
+            _ => Err(QueryError::NotImplemented),
+        }
+    }
+    /// Decode under an explicitly retained caller working reservation. The
+    /// precheck precedes provider I/O; callers keep this grant alive while any
+    /// returned body clone is held. No Lower work or query is requested.
+    pub fn settled_definition_with_allowance(
+        self: &Arc<Self>,
+        path: &DefPath,
+        allowance: &MemoryReservation,
+    ) -> Result<DefinitionRef, QueryError> {
+        if self.settled_definition_decode_bytes(path)? > allowance.bytes() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "original body inspection".into(),
+                message: "captured decode buffers exceed caller working admission".into(),
+            }));
+        }
+        self.settled_definition(path)
     }
     pub fn settled_definition(
         self: &Arc<Self>,
@@ -800,9 +831,16 @@ impl FrontLowerQueries {
         if has_errors(&output.diagnostics) {
             return Err(QueryError::Diagnostics(output.diagnostics));
         }
-        let bytes = self
+        let (bytes, record_decode_bytes) = self
             .records
-            .encode(&self.anchors, &definition)
+            .encode_with_decode_bytes(&self.anchors, &definition)
+            .ok_or(QueryError::NotImplemented)?;
+        // Arc/slice decoding can temporarily overlap its construction buffers.
+        // Count serialized shared rows independently; source sharing is not a
+        // promise made by the ordinary decoder.
+        let definition_decode_bytes = crate::memo::retained::decoded_tir_bytes(&definition)
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(record_decode_bytes))
             .ok_or(QueryError::NotImplemented)?;
         // Ordinary body bytes belong to the selected provider. Encoding uses
         // the active scratch reservation, rather than the saved future frame.
@@ -830,6 +868,7 @@ impl FrontLowerQueries {
             verified,
             acceptance,
             materialized,
+            definition_decode_bytes,
         }))
     }
 }
