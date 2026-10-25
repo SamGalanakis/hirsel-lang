@@ -403,18 +403,18 @@ type ReadyRecord = (
 );
 pub mod arena_tasks;
 pub mod compilation_tasks;
-pub mod link_tasks;
-pub mod root_tasks;
-pub mod roots;
 pub mod demand;
 pub mod emission;
 pub mod instance;
 pub mod instance_tasks;
+pub mod link_tasks;
 pub mod local;
 pub mod optimizer;
 pub mod products;
 pub mod ready;
 pub mod ready_source;
+pub mod root_tasks;
+pub mod roots;
 pub mod source_inputs;
 pub mod tasks;
 

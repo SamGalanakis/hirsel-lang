@@ -250,7 +250,6 @@ fn frozen_root_plans_run_both_backends_without_live_linker_inputs() {
 #[ignore = "requires root-frozen-kit-proof selected linker inputs"]
 fn admitted_root_plans_bind_the_kit_before_codegen() {
     with_compiler_stack(|| run_case(1, false, true, true, false));
-
 }
 fn run(jobs: usize) {
     run_case(jobs, false, false, false, false);
