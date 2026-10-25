@@ -931,3 +931,194 @@ fn ownership_trace_placement_checks_incoming_sites_instead_of_rebuilding_markers
     let error = hirsel_rc::placement::place_observed(before, &table, &options, &input).unwrap_err();
     assert!(error.contains("InvalidSite(MarkerId(0))"), "{error}");
 }
+
+#[test]
+fn ownership_trace_rc_insertion_reports_all_three_resource_boundaries() {
+    let (value, input, table) = placement_resource_fixture();
+    let placement = hirsel_rc::placement::Options {
+        regions: true,
+        noalloc: false,
+    };
+    let (placed, input, _) =
+        hirsel_rc::placement::place_observed(value, &table, &placement, &input).unwrap();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let ordinary = hirsel_rc::insert::insert(placed.clone(), &table, &proofs).unwrap();
+    let (after, output, recipes) =
+        hirsel_rc::insert::insert_observed(placed, &table, &proofs, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    assert_eq!(recipes.len(), 3);
+    assert_eq!(recipes[0].before, input.unit);
+    assert_eq!(recipes[2].after, output.unit);
+    assert!(
+        recipes
+            .windows(2)
+            .all(|pair| pair[0].after == pair[1].before)
+    );
+    assert!(
+        recipes
+            .iter()
+            .all(|recipe| recipe.relocations.len() == input.observations.len())
+    );
+}
+
+fn ssa_copy_fixture(
+    observe_copy: bool,
+) -> (
+    LirUnit<hirsel_lir::stage::Placed>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+    LirUnit<Rc>,
+) {
+    use hirsel_lir::stage::Placed;
+    let mut t = Lir::<Placed>::new(&[(Passing::Take, l::BLK)], Some(l::PAIR));
+    let original = t.owned(l::BLK);
+    t.param(original);
+    let copied = t.owned(l::BLK);
+    t.builder.push(
+        ENTRY,
+        Inst::CopyValue {
+            result: copied,
+            value: original,
+        },
+    );
+    let symbol = t.symbol(SymbolKind::Type);
+    let site = t.construct_site(
+        ConstructorKind::Record(symbol),
+        l::PAIR,
+        &[(0, original), (1, copied)],
+        t.heap(),
+    );
+    let aggregate = t.owned(l::PAIR);
+    // Construct takes both fields and disposes them itself on failure.
+    let cleanup = t.cleanup(&[]);
+    let failure = t.failure(cleanup);
+    t.builder.push(
+        ENTRY,
+        Inst::Construct {
+            result: aggregate,
+            construct: site,
+            failure,
+        },
+    );
+    t.builder.ret(ENTRY, Some(aggregate));
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
+        .unwrap()
+        .into_raw();
+    let ordinary = hirsel_rc::insert::insert(unit.clone(), &table, &Default::default()).unwrap();
+    let violations = hirsel_lir::validate::check(&ordinary, &inputs);
+    assert!(
+        violations.is_empty(),
+        "ordinary RC output must independently validate: {violations:?}"
+    );
+    assert!(
+        ordinary
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Inst::Dup { .. }))
+    );
+    assert!(
+        !ordinary
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Inst::CopyValue { .. }))
+    );
+    let source = unit.tables.source_anchors[0].site;
+    let mut observations = vec![
+        Observation {
+            point: Point::Entry,
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: source,
+                kind: Kind::Move,
+                token: Location::Parameter(0),
+                owner: Location::Value(original),
+            },
+        },
+        Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index: 1,
+                moment: Moment::After,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(1),
+                site: source,
+                kind: Kind::Create,
+                token: Location::Value(aggregate),
+                owner: Location::Value(aggregate),
+            },
+        },
+        Observation {
+            point: Point::Return(ENTRY),
+            marker: ObserveOwnership {
+                id: MarkerId(2),
+                site: source,
+                kind: Kind::Move,
+                token: Location::Value(aggregate),
+                owner: Location::Return,
+            },
+        },
+    ];
+    if observe_copy {
+        observations.insert(
+            1,
+            Observation {
+                point: Point::Instruction {
+                    block: ENTRY,
+                    index: 0,
+                    moment: Moment::After,
+                },
+                marker: ObserveOwnership {
+                    id: MarkerId(3),
+                    site: source,
+                    kind: Kind::Create,
+                    token: Location::Value(copied),
+                    owner: Location::Value(copied),
+                },
+            },
+        );
+    }
+    let plan = Plan::new(&unit, observations);
+    (unit, plan, table, ordinary)
+}
+
+#[test]
+fn ownership_trace_rc_insertion_tracks_shifted_markers_after_a_real_ssa_copy() {
+    let (before, input, table, ordinary) = ssa_copy_fixture(false);
+    let (after, output, recipes) =
+        hirsel_rc::insert::insert_observed(before.clone(), &table, &Default::default(), &input)
+            .unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(recipes.len(), 3);
+    assert_ne!(input.observations[1].point, output.observations[1].point);
+    assert_eq!(input.observations[1].marker, output.observations[1].marker);
+    let composed = recipe(&input, &output);
+    check_transform(&before, &input, &after, &output, Some(&composed)).unwrap();
+}
+
+#[test]
+fn ownership_trace_rc_insertion_refuses_to_turn_an_observed_create_into_a_move() {
+    let (before, input, table, _) = ssa_copy_fixture(true);
+    let error = hirsel_rc::insert::insert_observed(before, &table, &Default::default(), &input)
+        .unwrap_err();
+    assert!(error.contains("observed SSA copy MarkerId(3)"), "{error}");
+    assert!(error.contains("explicit semantic transport"), "{error}");
+}

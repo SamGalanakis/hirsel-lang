@@ -111,26 +111,114 @@ pub fn insert_without_copy_on_write(
 /// the credit that the independently checked Recast transfers to the result.
 fn lower_value_copies(unit: LirUnit<Rc>) -> LirUnit<Rc> {
     let mut editor = Editor::new(unit);
-    for code in &mut editor.code {
-        *code = std::mem::take(code)
-            .into_iter()
-            .flat_map(|instruction| match instruction {
+    match rewrite_value_copies(&mut editor, |_, _, _, _| {
+        Ok::<_, std::convert::Infallible>(())
+    }) {
+        Ok(()) => editor.finish(),
+        Err(never) => match never {},
+    }
+}
+
+fn rewrite_value_copies<E>(
+    editor: &mut Editor<Rc>,
+    mut record: impl FnMut(usize, usize, usize, bool) -> Result<(), E>,
+) -> Result<(), E> {
+    for b in 0..editor.code.len() {
+        let mut lowered = Vec::with_capacity(editor.code[b].len());
+        for (index, instruction) in std::mem::take(&mut editor.code[b]).into_iter().enumerate() {
+            let at = lowered.len();
+            let changed = matches!(instruction, Inst::CopyValue { .. });
+            record(b, index, at, changed)?;
+            match instruction {
                 Inst::CopyValue { result, value } => {
                     let counted = editor.unit.types[editor.unit.values[value.index()].ty.index()]
                         .repr
                         == ValueRepr::Block;
-                    let mut lowered = Vec::new();
                     if counted {
                         lowered.push(Inst::Dup { value });
                     }
                     lowered.push(Inst::Recast { result, value });
-                    lowered
                 }
-                other => vec![other],
-            })
-            .collect();
+                other => lowered.push(other),
+            }
+        }
+        editor.code[b] = lowered;
     }
-    editor.finish()
+    Ok(())
+}
+
+/// First RC subpass, with original instruction origins. An observed semantic
+/// copy cannot become a transport silently: that expansion needs its own rule.
+pub fn lower_value_copies_observed(
+    unit: LirUnit<Placed>,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Rc>,
+        hirsel_lir::ownership_trace::Plan,
+        hirsel_lir::ownership_trace::Recipe,
+    ),
+    String,
+> {
+    use hirsel_lir::ownership_trace::Point;
+    hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
+    let before = unit.clone();
+    let mut editor = Editor::new(unit.into_stage::<Rc>());
+    let mut points: Vec<BTreeMap<u32, u32>> = vec![BTreeMap::new(); editor.code.len()];
+    rewrite_value_copies(&mut editor, |b, index, at, changed| {
+        if changed
+            && let Some(observation) = input.observations.iter().find(|observation| {
+                matches!(observation.point, Point::Instruction { block, index: old, .. }
+                if block == BlockId(b as u32) && old == index as u32)
+            })
+        {
+            return Err(format!(
+                "ownership trace: observed SSA copy {:?} needs an explicit semantic transport",
+                observation.marker.id
+            ));
+        }
+        if !changed {
+            points[b].insert(at as u32, index as u32);
+        }
+        Ok(())
+    })?;
+    let origins: Vec<Vec<Option<u32>>> = editor
+        .code
+        .iter()
+        .enumerate()
+        .map(|(b, code)| {
+            (0..code.len())
+                .map(|index| points[b].get(&(index as u32)).copied())
+                .collect()
+        })
+        .collect();
+    crate::observation::finish(&before, input, editor, &origins)
+}
+
+/// Each RC subpass supplies and checks a recipe, including unchanged subpasses.
+/// Detach/release rewrites currently admit only surviving marker coordinates;
+/// unsupported transports fail rather than replacing the input observations.
+pub fn insert_observed(
+    unit: LirUnit<Placed>,
+    table: &LayoutTable,
+    proofs: &Proofs,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Rc>,
+        hirsel_lir::ownership_trace::Plan,
+        Vec<hirsel_lir::ownership_trace::Recipe>,
+    ),
+    String,
+> {
+    let (unit, plan, copies) = lower_value_copies_observed(unit, input)?;
+    let before = unit.clone();
+    let unit = copy_on_write(unit, table, proofs).map_err(|error| error.to_string())?;
+    let (unit, plan, detach) = crate::observation::identity(&before, &plan, unit)?;
+    let before = unit.clone();
+    let unit = release_at_last_use(unit, table).map_err(|error| error.to_string())?;
+    let (unit, plan, releases) = crate::observation::identity(&before, &plan, unit)?;
+    Ok((unit, plan, vec![copies, detach, releases]))
 }
 
 // ---------------------------------------------------------------------------
