@@ -414,11 +414,10 @@ impl ObjectTaskSnapshot for CodegenTasks {
     fn products(&self, settled: &[ProductRef]) -> Result<Box<dyn ObjectProducts>, Reference> {
         let native = SettledProducts::new(self.native.snapshot.clone(), settled)
             .map_err(|e| self.failure(&e))?;
-        Ok(Box::new(ObjectQueries::new(
-            self.native.snapshot.store.clone(),
-            native,
-            no_link,
-        )))
+        Ok(Box::new(
+            ObjectQueries::new(self.native.snapshot.store.clone(), native, no_link)
+                .with_verification(self.native.snapshot.verify_store),
+        ))
     }
     fn failure(&self, message: &str) -> Reference {
         self.native.failure(message)

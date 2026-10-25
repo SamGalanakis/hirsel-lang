@@ -264,7 +264,8 @@ impl DemandProducts {
             local: LocalReadyQueries::with_validator(
                 snapshot.store.clone(),
                 snapshot.native.clone(),
-            ),
+            )
+            .with_verification(snapshot.verify_store),
             snapshot,
             ready_materializations: 0,
             selected: BTreeMap::new(),
