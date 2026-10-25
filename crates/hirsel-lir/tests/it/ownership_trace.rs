@@ -1508,3 +1508,139 @@ fn ownership_trace_cleanup_lowering_refuses_a_stale_or_forged_input() {
         .unwrap_err();
     assert!(error.contains("StalePlan"), "{error}");
 }
+
+#[test]
+fn ownership_trace_ready_checks_both_passes_after_a_semantic_drop_moves() {
+    let (before, input, _, _, table) = drop_transport_fixture_with_table();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let ordinary =
+        hirsel_rc::ready::ready_indexed(before.clone(), &Default::default(), &index).unwrap();
+    let (observed, output, recipes) =
+        hirsel_rc::ready::ready_observed(before.clone(), &Default::default(), &index, &input)
+            .unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&observed),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(recipes.len(), 2);
+    assert_eq!(recipes[0].before, input.unit);
+    assert_eq!(recipes[0].after, recipes[1].before);
+    assert_eq!(recipes[1].after, output.unit);
+    assert!(recipes.iter().all(|recipe| recipe.relocations.len() == 1));
+    assert_eq!(input.observations[0].marker, output.observations[0].marker);
+    assert!(matches!(
+        output.observations[0].point,
+        Point::ReleaseDrop { .. }
+    ));
+    check(&observed, &output).unwrap();
+    // A dropped or forged marker cannot be introduced at the composed boundary.
+    let mut missing = output.clone();
+    missing.observations.clear();
+    assert_eq!(
+        check_transform(
+            &before,
+            &input,
+            &observed,
+            &missing,
+            Some(&recipe(&input, &missing))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(MarkerId(0))
+    );
+    let mut forged = output;
+    forged.observations[0].marker.id = MarkerId(9);
+    assert!(
+        check_transform(
+            &before,
+            &input,
+            &observed,
+            &forged,
+            Some(&recipe(&input, &forged))
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn ownership_trace_pipeline_preserves_resource_identity_and_every_pass_recipe() {
+    let (before, input, table) = placement_resource_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let placement = hirsel_rc::placement::Options {
+        regions: true,
+        noalloc: false,
+    };
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let finalizers = hirsel_rc::cleanup::Finalizers::default();
+    for elide in [false, true] {
+        for reuse in [false, true] {
+            let reuse = hirsel_rc::reuse::Options { reuse };
+            let options = hirsel_rc::observed::Options {
+                placement: &placement,
+                proofs: &proofs,
+                elide,
+                reuse: &reuse,
+                finalizers: &finalizers,
+            };
+            let ordinary = hirsel_rc::placement::place(before.clone(), &table, &placement).unwrap();
+            let ordinary = hirsel_rc::insert::insert(ordinary, &table, &proofs).unwrap();
+            let ordinary = if elide {
+                hirsel_rc::elide::elide(ordinary, &table).unwrap()
+            } else {
+                ordinary
+            };
+            let ordinary = hirsel_rc::reuse::reuse_indexed(ordinary, &reuse, &index).unwrap();
+            let ordinary = hirsel_rc::ready::ready_indexed(ordinary, &finalizers, &index).unwrap();
+            let observed =
+                hirsel_rc::observed::lower(before.clone(), &input, &index, &options).unwrap();
+            assert_eq!(
+                hirsel_codec::to_text(&observed.unit),
+                hirsel_codec::to_text(&ordinary)
+            );
+            assert_eq!(input.observations, observed.plan.observations);
+            assert_eq!(observed.recipes.len(), if reuse.reuse { 10 } else { 8 });
+            assert_eq!(observed.recipes[0].before, input.unit);
+            assert_eq!(observed.recipes.last().unwrap().after, observed.plan.unit);
+            assert!(
+                observed
+                    .recipes
+                    .windows(2)
+                    .all(|pair| pair[0].after == pair[1].before)
+            );
+            for recipe in &observed.recipes {
+                assert_eq!(recipe.relocations.len(), input.observations.len());
+                assert!(
+                    recipe
+                        .relocations
+                        .iter()
+                        .zip(&input.observations)
+                        .all(|(relocation, observation)| relocation.id == observation.marker.id)
+                );
+            }
+            check(&observed.unit, &observed.plan).unwrap();
+        }
+    }
+}
+
+#[test]
+fn ownership_trace_pipeline_refuses_forged_attribution_at_the_first_boundary() {
+    let (before, mut input, table) = placement_resource_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let finalizers = hirsel_rc::cleanup::Finalizers::default();
+    input.observations[0].marker.site.start += 1;
+    let result = hirsel_rc::observed::lower(
+        before,
+        &input,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &placement,
+            proofs: &proofs,
+            elide: true,
+            reuse: &reuse,
+            finalizers: &finalizers,
+        },
+    );
+    assert!(matches!(result, Err(ref error) if error.contains("InvalidSite(MarkerId(0))")));
+}

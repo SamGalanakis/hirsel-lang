@@ -36,3 +36,24 @@ pub fn ready_indexed<S: Stage>(
     let unit = cleanup::lower_indexed(unit, finalizers, index)?;
     legalize::legalize_indexed(unit, index)
 }
+
+/// Opt-in Ready lowering. Both rewriting passes check their own recipes;
+/// neither can rebuild an observation from its output or skip a boundary.
+/// Ordinary lowering never constructs or checks an ownership plan.
+pub fn ready_observed<S: Stage>(
+    unit: LirUnit<S>,
+    finalizers: &Finalizers,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Ready>,
+        hirsel_lir::ownership_trace::Plan,
+        Vec<hirsel_lir::ownership_trace::Recipe>,
+    ),
+    String,
+> {
+    let (unit, plan, cleanup) = cleanup::lower_observed(unit, finalizers, index, input)?;
+    let (unit, plan, legalization) = legalize::legalize_observed(unit, index, &plan)?;
+    Ok((unit, plan, vec![cleanup, legalization]))
+}
