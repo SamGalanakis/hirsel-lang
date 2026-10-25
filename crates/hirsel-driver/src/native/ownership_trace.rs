@@ -6,7 +6,7 @@ use hirsel_lir::emission::{EmitInputs, site_code};
 use hirsel_lir::ir::{BlockId, ConstructorKind, Inst};
 use hirsel_lir::ownership_trace::{Moment, native::LeafPlan};
 use hirsel_lir::stage::ObjectArtifact;
-use hirsel_run_schema::ownership_trace::native::{Metadata, Units};
+use hirsel_run_schema::ownership_trace::native::{LocalCalls, Metadata, Units};
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,6 +17,7 @@ pub struct LeafObjects {
     units: Units,
     program: [u8; 32],
     entry: DefPath,
+    calls: LocalCalls,
 }
 fn name(path: &DefPath) -> String {
     format!(
@@ -58,6 +59,9 @@ pub fn emit_leaf(
         .revision(entry)
         .ok_or_else(|| failed("ownership emission has no checked semantic entry binding"))?
         .digest();
+    let selected: Vec<_> = program.units.iter().collect();
+    let calls = hirsel_lir::ownership_trace::native::local_calls(&selected)
+        .map_err(|message| NativeError::new(StageName::Emission, message))?;
     let mut units = BTreeMap::new();
     for unit in &program.units {
         let plan = LeafPlan::prepare(unit, &program.table).map_err(|message| NativeError {
@@ -134,7 +138,6 @@ pub fn emit_leaf(
         }
     }
     super::check_runtime_calls(program)?;
-    let selected: Vec<_> = program.units.iter().collect();
     let empty = BTreeSet::new();
     let inputs = EmitInputs {
         ahead: None,
@@ -172,6 +175,7 @@ pub fn emit_leaf(
         units,
         program: revision,
         entry: entry.clone(),
+        calls,
     })
 }
 
@@ -233,10 +237,11 @@ impl LeafObjects {
             // Bound a corrupt external log before serde allocates its rows.
             let log = serde_json::from_reader(std::io::BufReader::new(file).take(32 * 1024 * 1024))
                 .map_err(|error| format!("ownership sidecar: {error}"))?;
-            hirsel_run_schema::ownership_trace::native::decode_leaf(
+            hirsel_run_schema::ownership_trace::native::decode_local_calls(
                 &log,
                 self.program,
                 &self.units,
+                &self.calls,
                 event_limit,
             )
             .map_err(|error| error.to_string())

@@ -1,5 +1,6 @@
 //! Native emission of leaf ownership transitions. This staged adapter accepts
-//! only whole local storage and leaf values; calls, captures, joins, nested
+//! only whole local storage and leaf values. Direct calls without owned
+//! transport require a closed diagnostic call graph; captures, joins, nested
 //! ownership and compound operations fail closed. It supplies Ready-local
 //! coverage, not the still-required earlier compiler-pass transport proof.
 use super::*;
@@ -263,10 +264,22 @@ impl LeafPlan {
                 }
             }
             match unit.terminators[b.index()] {
-                Terminator::Call { .. } => {
-                    return Err(
-                        "native ownership tracing: call transport is not implemented".into(),
-                    );
+                Terminator::Call { call, .. } => {
+                    let call = &unit.tables.calls[call.index()];
+                    if !matches!(call.callee, Callee::Direct(_))
+                        || call.result.is_some_and(owned)
+                        || call
+                            .arguments
+                            .get(&unit.pools.call_arguments)
+                            .unwrap_or(&[])
+                            .iter()
+                            .any(|argument| match argument.value {
+                                ArgumentValue::Value(value) => owned(value),
+                                ArgumentValue::Address { .. } => true,
+                            })
+                    {
+                        return Err("native ownership tracing: owned, mutable or indirect call transport is not implemented".into());
+                    }
                 }
                 Terminator::Return(Some(v)) if owned(v) => {
                     return Err("native ownership tracing: owned return is not implemented".into());
@@ -300,6 +313,50 @@ impl LeafPlan {
             .filter(move |o| o.point == point)
             .map(|o| self.markers[&o.marker.id])
     }
+}
+
+/// Independently derived parent/target unit identities for diagnostic objects.
+/// Every direct target must be present: an ordinary object cannot silently
+/// supply an unobserved callee. Descriptor finalizers remain checked separately.
+pub fn local_calls(
+    units: &[&ValidatedUnit<Ready>],
+) -> Result<BTreeMap<[u8; 32], std::collections::BTreeSet<[u8; 32]>>, String> {
+    let mut symbols = BTreeMap::new();
+    for unit in units {
+        let body = unit.unit();
+        if symbols
+            .insert(
+                (&body.header.definition, body.header.instance),
+                body.digest().0,
+            )
+            .is_some()
+        {
+            return Err("native ownership tracing: duplicate diagnostic call target".into());
+        }
+    }
+    let mut calls = BTreeMap::new();
+    for unit in units {
+        let body = unit.unit();
+        let mut targets = std::collections::BTreeSet::new();
+        for terminator in &body.terminators {
+            let Terminator::Call { call, .. } = terminator else {
+                continue;
+            };
+            let Callee::Direct(symbol) = body.tables.calls[call.index()].callee else {
+                return Err("native ownership tracing: indirect or operation call target".into());
+            };
+            let symbol = &body.tables.symbols[symbol.index()];
+            let instance = symbol
+                .instance
+                .ok_or("native ownership tracing: unspecialized diagnostic call target")?;
+            let target = symbols
+                .get(&(&symbol.definition, instance))
+                .ok_or("native ownership tracing: missing diagnostic call target")?;
+            targets.insert(*target);
+        }
+        calls.insert(body.digest().0, targets);
+    }
+    Ok(calls)
 }
 
 fn location<S>(unit: &LirUnit<S>, location: Location) -> Result<NativeLocation, String> {

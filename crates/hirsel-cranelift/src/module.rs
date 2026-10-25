@@ -311,6 +311,8 @@ pub(crate) fn emit(
                 message: "ownership tracing with alternate/template code is not implemented".into(),
             });
         }
+        hirsel_lir::ownership_trace::native::local_calls(units)
+            .map_err(|message| CodegenError::Object { message })?;
         Some(
             units
                 .iter()

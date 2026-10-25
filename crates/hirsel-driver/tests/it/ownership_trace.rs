@@ -779,6 +779,37 @@ fn ownership_native_source_emission_binds_checked_metadata_and_preserves_ordinar
 
 #[test]
 fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_engines() {
+    observed_native_source(
+        "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n let first = Token(value: 7u64)\n let second = Token(value: 7u64)\n let moved = take first\n Ok(())\n}\n",
+        2,
+        false,
+    );
+}
+
+#[test]
+fn ownership_native_local_calls_preserve_distinct_lifetimes_on_four_engines() {
+    observed_native_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn make_local(pick: bool) -> u64 {
+  let first = Token(value: 7u64)
+  let moved = take first
+  if pick { 1u64 } else { 2u64 }
+}
+pub fn main() -> Result[(), ()] {
+  let held = Token(value: 7u64)
+  let first = make_local(true)
+  let second = make_local(false)
+  if first + second == 3u64 { Ok(()) } else { Error(()) }
+}
+"#,
+        3,
+        true,
+    );
+}
+
+fn observed_native_source(body: &str, created: u64, expect_calls: bool) {
     hirsel_engine::with_compiler_stack(|| {
         use hirsel_driver::native::{
             self, Backend, OptLevel, Options, RuntimeBuild, Sites, TargetSpec, Toolchain,
@@ -786,7 +817,7 @@ fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_e
         use hirsel_run_schema::ownership_trace::Action;
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("main.hir");
-        std::fs::write(&source, "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n let first = Token(value: 7u64)\n let second = Token(value: 7u64)\n let moved = take first\n Ok(())\n}\n").unwrap();
+        std::fs::write(&source, body).unwrap();
         let mut traces = vec![];
         let mut host_outcome = None;
         for checked in [false, true] {
@@ -821,6 +852,23 @@ fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_e
         let checked = loaded.engine.import_native_input(input).unwrap();
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let ready = native::build(&checked, &Options::new(target.clone())).unwrap();
+        let selected: Vec<_> = ready.units.iter().collect();
+        let calls = hirsel_lir::ownership_trace::native::local_calls(&selected).unwrap();
+        assert_eq!(
+            calls.values().any(|targets| !targets.is_empty()),
+            expect_calls
+        );
+        if expect_calls {
+            let caller = ready
+                .units
+                .iter()
+                .find(|unit| unit.unit().header.definition == loaded.entry)
+                .unwrap();
+            assert!(
+                hirsel_lir::ownership_trace::native::local_calls(&[caller]).is_err(),
+                "an ordinary object must not fill a missing diagnostic call target"
+            );
+        }
         let sites = Sites::new(checked.snapshot());
         let variants = [
             RuntimeBuild::default(),
@@ -880,7 +928,7 @@ fn ownership_native_selected_runtime_decodes_the_same_source_lifetimes_on_four_e
             let analysis = trace.analyze(run.program, 1000).unwrap();
             assert_eq!(
                 (analysis.created, analysis.dropped, analysis.live.len()),
-                (2, 2, 0)
+                (created, created, 0)
             );
             traces.push(trace);
         }

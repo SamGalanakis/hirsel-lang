@@ -467,6 +467,8 @@ fn lower<T>(
                 what: "ownership tracing with alternate/template code".into(),
             });
         }
+        hirsel_lir::ownership_trace::native::local_calls(units)
+            .map_err(|what| CodegenError::Glue { what })?;
         Some(
             units
                 .iter()
