@@ -1299,6 +1299,9 @@ impl Checker<'_, '_> {
         // the declaration's own leading generics.
         let target_args = match &target {
             CallTarget::Definition(path) if hirsel_types::specialization_parts(path).is_some() => {
+                // Demand the specialization, so it exists for every later
+                // phase; a body naming one takes the serial front path.
+                self.snapshot(path)?;
                 let hidden = match &self.input.syntax.tree.expressions[id.0 as usize].kind {
                     ast::ExprKind::Call { callee, .. } => {
                         match self.input.syntax.tree.expressions[callee.0 as usize].kind {

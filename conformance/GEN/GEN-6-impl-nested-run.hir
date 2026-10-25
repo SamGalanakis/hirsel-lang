@@ -1,0 +1,29 @@
+// rule: GEN-6
+// expect: run
+// A specialization calls another specialization at the same map.
+signature Source {
+  type Item: plain
+  fn make() -> Item uses {}
+}
+
+fn make_u64() -> u64 uses {} {
+  5
+}
+
+implementation five: Source {
+  type Item = u64
+  make = make_u64
+}
+
+fn inner[A: implementation Source]() -> A.Item uses {} {
+  A.make()
+}
+
+fn outer[A: implementation Source]() -> A.Item uses {} {
+  inner with (A = A)()
+}
+
+pub fn main() -> Result[(), ()] {
+  core@1/failure.check(outer with (A = five)() == 5u64, TextInvariant())
+  Ok(())
+}

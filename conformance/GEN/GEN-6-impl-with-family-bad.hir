@@ -1,0 +1,62 @@
+// rule: GEN-6
+// expect: reject GEN-6 at line 48
+// twin: GEN/GEN-6-impl-sharing-run.hir
+signature Source {
+  type Item: plain
+  fn make() -> Item uses {}
+}
+
+signature Sink {
+  type Item: plain
+  fn weigh(x: Item) -> u64 uses {}
+}
+
+fn make_u64() -> u64 uses {} {
+  5
+}
+
+fn make_u32() -> u32 uses {} {
+  5
+}
+
+fn weigh_u64(x: u64) -> u64 uses {} {
+  x * 2
+}
+
+implementation five: Source {
+  type Item = u64
+  make = make_u64
+}
+
+implementation five32: Source {
+  type Item = u32
+  make = make_u32
+}
+
+implementation double: Sink {
+  type Item = u64
+  weigh = weigh_u64
+}
+
+fn pipe[A: implementation Source, B: implementation Sink where B.Item = A.Item]() -> u64 uses {} {
+  B.weigh(A.make())
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if pipe with (A = double, B = double)() == 10u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+fn ignore[E](take e: E) {}

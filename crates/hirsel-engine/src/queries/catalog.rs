@@ -740,7 +740,10 @@ impl QueryEngine {
             ));
         };
         self.items.insert(path.clone(), vec![syntax]);
+        // A new definition, as a CT-5 instance: the signature snapshot now
+        // includes it.
         self.note_inputs([path.clone()]);
+        self.retire_snapshot();
         Ok(())
     }
     pub(crate) fn materialize_source(&mut self, file: FileId) -> Result<(), QueryError> {
