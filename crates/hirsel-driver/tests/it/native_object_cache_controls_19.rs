@@ -71,6 +71,16 @@ fn compile(
     backend: native::Backend,
     verification: VerifyStore,
 ) -> crate::native_object_products_19::Objects {
+    compile_source(store, jobs, backend, verification, "warm-object.hir", || ())
+}
+fn compile_source(
+    store: Arc<Store>,
+    jobs: usize,
+    backend: native::Backend,
+    verification: VerifyStore,
+    name: &str,
+    before_native: impl FnOnce(),
+) -> crate::native_object_products_19::Objects {
     // Production owns one physical publication epoch through worker shutdown.
     // Without it, each concurrent native receipt performs an independent
     // best-effort index write and may legitimately lose persistence on lock
@@ -84,20 +94,18 @@ fn compile(
     ));
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
-    let file = engine
-        .sources
-        .add("warm-object.hir", SOURCE.into())
-        .unwrap();
+    let file = engine.sources.add(name, SOURCE.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let input = engine.export_native_input().unwrap();
     let _validated = engine.import_native_input(input).unwrap();
     let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
-    options.validation = if verification == VerifyStore::Recompute {
+    options.validation = if name == "warm-object.hir" && verification == VerifyStore::Recompute {
         native::Validation::EveryStage
     } else {
         native::Validation::Ready
     };
+    before_native();
     let objects = crate::native_object_products_19::compile_with_context(
         &mut engine,
         store,
@@ -278,5 +286,145 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
         run,
     ) {
         assert_eq!(outputs, ["checked"]);
+    }
+}
+
+#[test]
+fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputation() {
+    let run = || {
+        with_compiler_stack(|| {
+            timings::enable();
+            let work = [
+                Count::ValueDecodes,
+                Count::ValueDecodeBytes,
+                Count::ValueRebinds,
+                Count::ImportEffectReplays,
+                Count::NativeAppendExpand,
+                Count::ClosureBodyScans,
+                Count::ArenaBodyScans,
+                Count::LateKeys,
+                Count::Units,
+            ];
+            let counts = || {
+                work.map(|selected| {
+                    timings::report()
+                        .counts
+                        .iter()
+                        .find(|(kind, _)| *kind == selected)
+                        .unwrap()
+                        .1
+                })
+            };
+            let mut observed = Vec::new();
+            for workers in [1, 2, 8] {
+                let directory = tempfile::tempdir().unwrap();
+                let store = Arc::new(Store {
+                    inner: store::DirStore::new(directory.path().join("products")),
+                    substituted: Mutex::new(vec![]),
+                    fragment_puts: AtomicUsize::new(0),
+                });
+                let cold = compile_source(
+                    store.clone(),
+                    workers,
+                    native::Backend::Cranelift,
+                    VerifyStore::Off,
+                    "plan.hir",
+                    || (),
+                );
+                assert_eq!(cold.hits, 0);
+                assert!(!cold.summaries.is_empty());
+                let mut before = None;
+                let hit = compile_source(
+                    store.clone(),
+                    workers,
+                    native::Backend::Cranelift,
+                    VerifyStore::Off,
+                    "plan.hir",
+                    || before = Some(counts()),
+                );
+                assert_eq!(hit.hits, hit.objects.len());
+                assert_eq!(
+                    before.unwrap(),
+                    counts(),
+                    "complete hit did Value or late-key work"
+                );
+                assert_eq!(cold.summaries, hit.summaries);
+                assert_eq!(cold.objects, hit.objects);
+                let before = counts();
+                let verified = compile_source(
+                    store.clone(),
+                    workers,
+                    native::Backend::Cranelift,
+                    VerifyStore::Recompute,
+                    "plan.hir",
+                    || (),
+                );
+                assert_eq!(cold.summaries, verified.summaries);
+                assert_eq!(cold.objects, verified.objects);
+                assert!(counts()[4] > before[4]);
+                observed.push(
+                    cold.products
+                        .iter()
+                        .map(|(key, product)| (key.address(), product.record))
+                        .collect::<Vec<_>>(),
+                );
+                let other = compile_source(
+                    store.clone(),
+                    workers,
+                    native::Backend::Llvm,
+                    VerifyStore::Off,
+                    "plan.hir",
+                    || (),
+                );
+                *store.substituted.lock().unwrap() = cold
+                    .products
+                    .iter()
+                    .map(|(key, original)| {
+                        let (_, replacement) = other
+                            .products
+                            .iter()
+                            .find(|(other, _)| other.owner == key.owner)
+                            .unwrap();
+                        assert_ne!(original.record, replacement.record);
+                        (
+                            key.address(),
+                            Association {
+                                action: original.action,
+                                reference: replacement.record,
+                            },
+                        )
+                    })
+                    .collect();
+                let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    compile_source(
+                        store.clone(),
+                        workers,
+                        native::Backend::Cranelift,
+                        VerifyStore::Recompute,
+                        "plan.hir",
+                        || (),
+                    )
+                }));
+                let message = refused.err().expect("changed output must fail");
+                let text = message
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| message.downcast_ref::<&str>().copied())
+                    .unwrap_or("");
+                assert!(
+                    text.contains("recomputed object fragment differs from cached output"),
+                    "{text}"
+                );
+            }
+            assert!(observed.windows(2).all(|pair| pair[0] == pair[1]));
+            format!("{observed:?}")
+        })
+    };
+    if let Some(outputs) = hirsel_intern::under_salts(
+        "native_object_cache_controls_19::original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputation",
+        &[1, 17, 65537],
+        run,
+    ) {
+        assert!(outputs.windows(2).all(|pair| pair[0] == pair[1]));
     }
 }
