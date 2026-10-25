@@ -56,6 +56,7 @@ pub struct CompilationTasks {
     backends: Vec<CompilationBackend>,
     query: QueryId,
     verify_store: hirsel_engine::store::VerifyStore,
+    emit_only: bool,
     weight: MemoryWeight,
     allowance: Arc<MemoryReservation>,
     dispatch: OnceLock<Dispatch>,
@@ -153,12 +154,31 @@ impl CompilationTasks {
             backends,
             query,
             verify_store,
+            emit_only: false,
             weight,
             allowance: Arc::new(allowance),
             dispatch: OnceLock::new(),
             completed: OnceLock::new(),
             fallback,
         }))
+    }
+    /// Select object emission before installing any factory. This uses the
+    /// same discovery, arena, independent C and Ready/Codegen dependencies;
+    /// no Link task is demanded and no executable is manufactured.
+    pub fn with_codegen_output(mut self: Arc<Self>) -> Result<Arc<Self>, String> {
+        let this =
+            Arc::get_mut(&mut self).ok_or("Codegen output requires an unshared compilation")?;
+        if this.dispatch.get().is_some() || this.completed.get().is_some() {
+            return Err("Codegen output must be selected before dispatch".into());
+        }
+        if !this.emit_only {
+            this.query.address = Address(ContentHash::of_parts(
+                "hirsel.native.compilation-codegen-address.v1",
+                [this.query.address.0.0.as_slice()],
+            ));
+            this.emit_only = true;
+        }
+        Ok(self)
     }
     pub fn query_id(&self) -> QueryId {
         self.query
@@ -290,11 +310,23 @@ impl CompilationTasks {
                 .collect::<Vec<_>>();
             match backend.executor.codegen_partition() {
                 super::link_tasks::CodegenPartition::PerInstance => {
-                    codegen.extend(fragments.iter().cloned())
+                    if self.emit_only {
+                        links.extend(fragments.iter().map(CodegenKey::query_id));
+                    }
+                    codegen.extend(fragments.iter().cloned());
                 }
-                super::link_tasks::CodegenPartition::WholeModule => whole_codegen.push(
-                    crate::native::object_queries::whole::WholeCodegenKey::new(fragments.clone())?,
-                ),
+                super::link_tasks::CodegenPartition::WholeModule => {
+                    let key = crate::native::object_queries::whole::WholeCodegenKey::new(
+                        fragments.clone(),
+                    )?;
+                    if self.emit_only {
+                        links.push(key.query_id());
+                    }
+                    whole_codegen.push(key);
+                }
+            }
+            if self.emit_only {
+                continue;
             }
             let key = LinkKey {
                 roots: owners.clone(),
@@ -360,10 +392,22 @@ impl CompilationTasks {
             .get()
             .ok_or("native compilation dispatch is unavailable".into())
     }
-    /// Exact Link outputs read by this completed compilation, in backend order.
+    /// Exact selected outputs, in backend order: Link for executables and
+    /// Codegen fragments for emit-only requests.
     pub fn outputs(&self, compilation: ProductRef) -> Result<&[ProductRef], String> {
         self.selected(compilation)?;
         Ok(&self.completed.get().unwrap().1)
+    }
+    /// Number of independently admitted instances emitted by this completion.
+    pub fn emitted_instances(&self, compilation: ProductRef) -> Result<usize, String> {
+        let dispatch = self.selected(compilation)?;
+        if !self.emit_only {
+            return Err("compilation selected an executable, not object emission".into());
+        }
+        Ok(self
+            .instances
+            .completed_instances(dispatch.discovery)?
+            .len())
     }
     pub fn native(&self, compilation: ProductRef) -> Result<Arc<NativeTasks>, String> {
         Ok(self.selected(compilation)?.native.clone())
@@ -518,7 +562,7 @@ impl CompilationTask {
                 _ => {
                     return Err(tasks
                         .instances
-                        .failure("native compilation read another Link output"));
+                        .failure("native compilation read another selected output"));
                 }
             }
         }

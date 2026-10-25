@@ -31,15 +31,20 @@ impl link_tasks::NativeLinkExecutor for StopLink {
 
 #[test]
 fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_after_loader_drop() {
-    bootstrap_link_refusal(false);
+    bootstrap_link_refusal(false, false);
 }
 
 #[test]
 fn native_test_table_binds_before_admission_and_survives_loader_drop() {
-    bootstrap_link_refusal(true);
+    bootstrap_link_refusal(true, false);
 }
 
-fn bootstrap_link_refusal(test_table: bool) {
+#[test]
+fn native_emit_only_bootstrap_completes_actual_codegen_without_link_after_loader_drop() {
+    bootstrap_link_refusal(false, true);
+}
+
+fn bootstrap_link_refusal(test_table: bool, emit_only: bool) {
     hirsel_engine::with_compiler_stack(|| {
         for jobs in [1, 2] {
             let directory = tempfile::tempdir().unwrap();
@@ -213,6 +218,7 @@ fn bootstrap_link_refusal(test_table: bool) {
                     measurement: false,
                     fuel: false,
                     requested_run: None,
+                    emit_only,
                     test_entries: if test_table {
                         vec![(program.entry.clone(), 731)]
                     } else {
@@ -292,6 +298,28 @@ fn bootstrap_link_refusal(test_table: bool) {
             runtime.cancel(first);
             runtime.completion().wait(second);
             let result = runtime.poll(second);
+            if emit_only {
+                let Poll::Ready(Ok(complete)) = result else {
+                    panic!("expected actual Codegen completion, got {result:?}");
+                };
+                let (compilation, product, _) = bootstrap.outcome(complete[0]).unwrap();
+                assert_eq!(
+                    calls.load(Ordering::SeqCst),
+                    0,
+                    "emit-only must not call Link"
+                );
+                let outputs = compilation.outputs(product).unwrap();
+                assert!(!outputs.is_empty(), "actual emitted objects");
+                assert!(compilation.emitted_instances(product).unwrap() > 0);
+                for output in outputs {
+                    let fragment =
+                        object_queries::fragment_product(store.as_ref(), *output).unwrap();
+                    let object =
+                        object_queries::load_object(store.as_ref(), fragment.object).unwrap();
+                    assert!(!object.bytes.is_empty(), "real backend object bytes");
+                }
+                continue;
+            }
             let Poll::Ready(Err(error)) = result else {
                 panic!("expected exact Link refusal, got {result:?}");
             };
@@ -592,6 +620,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                     fuel: false,
                     requested_run: None,
                     test_entries: Vec::new(),
+                    emit_only: false,
                     backends: vec![selected_backend],
                 },
                 NativeAdmission {
@@ -1459,6 +1488,7 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
             fuel: false,
             requested_run: None,
             test_entries: Vec::new(),
+            emit_only: false,
             backends: vec![CompilationBackend {
                 backend: "cranelift".into(),
                 backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),

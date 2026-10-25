@@ -48,6 +48,7 @@ pub(super) struct NativePlan {
     pub backends: Vec<CompilationBackend>,
     pub requested_run: Option<Arc<hirsel_run_config::ValidatedRun>>,
     pub test_entries: Vec<(DefPath, u64)>,
+    pub emit_only: bool,
 }
 /// Selected evidence and the PS9 export captured over this bootstrap's native
 /// source root. Assessment reads only that root's completed product.
@@ -145,6 +146,7 @@ impl NativeBootstrap {
             },
             plan.requested_run.as_ref().map(|run| run.identity()),
             &plan.test_entries,
+            plan.emit_only,
             plan.debug,
             plan.verify_backend,
             plan.measurement,
@@ -431,6 +433,11 @@ impl NativeBootstrap {
             admission.compilation,
             plan.verify_store,
         )?;
+        let compilation = if plan.emit_only {
+            compilation.with_codegen_output()?
+        } else {
+            compilation
+        };
         self.routing
             .bind(compilation.factories())
             .map_err(str::to_owned)?;

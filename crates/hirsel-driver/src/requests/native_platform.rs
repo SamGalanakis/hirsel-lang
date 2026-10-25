@@ -225,6 +225,7 @@ impl NativePlatformSelection {
                 fuel: request.fuel,
                 requested_run: request.run.clone(),
                 test_entries: request.test_entries.clone(),
+                emit_only: false,
                 backends: vec![platform.backend(
                     ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
                     target.digest(),
