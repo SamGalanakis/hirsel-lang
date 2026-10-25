@@ -158,6 +158,33 @@ impl<'a> Lay<'a> {
         self.get(id)
             .is_some_and(|l| l.drop.is_empty() && l.finalizer.is_none())
     }
+    /// Finalizers reached in this value's inline storage need explicit
+    /// cleanup phases. A counted reference's payload is destroyed separately.
+    pub fn inline_finalizer(&self, id: LayoutId) -> bool {
+        let Some(layout) = self.get(id) else {
+            return true;
+        };
+        if layout.finalizer.is_some() {
+            return true;
+        }
+        match layout.kind {
+            LayoutKind::Block { .. } | LayoutKind::Box { .. } | LayoutKind::Shared { .. } => false,
+            LayoutKind::Inline { element, .. } | LayoutKind::Simd { element, .. } => {
+                self.inline_finalizer(element)
+            }
+            _ => layout
+                .fields
+                .iter()
+                .chain(
+                    layout
+                        .tag
+                        .iter()
+                        .flat_map(|tag| &tag.variants)
+                        .flat_map(|v| &v.fields),
+                )
+                .any(|field| self.inline_finalizer(field.layout)),
+        }
+    }
     /// Whether destroying a value of this layout is user-visible: its drop
     /// program at any depth runs a finalizer or closes a handle.
     pub fn destructible(&self, id: LayoutId) -> bool {

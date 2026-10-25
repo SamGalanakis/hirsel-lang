@@ -2317,7 +2317,7 @@ impl Lowering<'_, '_> {
         // finalizer; counted payloads still run their own drop programs.
         if !under
             && s.fields_pending.at(&paths, &path) == Tri::No
-            && !self.index.inline_finalizer(layout)
+            && !self.lay.inline_finalizer(layout)
         {
             out.push(Action::Release {
                 path,
