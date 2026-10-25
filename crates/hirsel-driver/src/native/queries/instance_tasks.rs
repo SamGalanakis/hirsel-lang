@@ -545,12 +545,15 @@ impl QueryTask for InstanceTask {
         self.id
     }
     fn weight(&self) -> MemoryWeight {
-        self.tasks.weight
+        // Registry descriptors have their own reservation. This task retains
+        // only Arc handles, its identity and a terminal result across polls.
+        MemoryWeight {
+            retained: std::mem::size_of::<Self>() as u64,
+            ..self.tasks.weight
+        }
     }
     fn continuation_bytes(&self) -> u64 {
-        // Completed products remain owned by the registry/snapshot and its
-        // explicit reservation. This charge covers only the task frame.
-        self.tasks.weight.retained
+        std::mem::size_of::<Self>() as u64
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
