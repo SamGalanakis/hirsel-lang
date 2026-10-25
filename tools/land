@@ -15,7 +15,8 @@ bisects until its culprits are found, checking up to three trees at once in
 land slots and pushing each green group at once (docs/landing.md). A waiting ticket
 landed in a batch exits with its own landed commits. A push rejected because
 main moved goes back to the rebase with full jitter and no attempt limit.
-Every proposed tree is checked; a proven unchanged graph can narrow a retry to
+Row-only main moves reuse a batch's passed checks after a clean rebase.
+Other proposed trees are checked; a proven unchanged graph can narrow a retry to
 incoming crates and their reverse dependencies. A red check refuses the push
 and prints its first error.
 
@@ -540,6 +541,18 @@ def changed_paths(before, after):
     return set(result.stdout.rstrip('\0').split('\0')) - {''}
 
 
+def row_only_move(before, after):
+    """Every incoming commit changes only the failure ledger, including merge sides.
+
+    Inspect history rather than its net diff: a source edit followed by a
+    revert still takes the normal retry path. No movement is not a row push.
+    """
+    if before == after or git('merge-base', '--is-ancestor', before, after).returncode:
+        return False
+    paths = git('log', '--format=', '--name-only', '-z', '-m', '--no-renames', f'{before}..{after}')
+    return paths.returncode == 0 and set(paths.stdout.rstrip('\0').split('\0')) == {'tools/known-failures.tsv'}
+
+
 def retry_scope(previous, base, head, root=ROOT):
     """Narrow only disjoint edits to existing crate src/*.rs with an unchanged lane.
 
@@ -682,7 +695,7 @@ class Batch:
         # The tickets pushed so far in this attempt, in push order, with their commits.
         self.landed = []
         self.pushed = main_sha
-        # The last green check whose tip moved before its push: (base, tree, inventory).
+        # The last green check whose tip moved before its push: (base, tree, inventory, submitted heads).
         self.proof = None
         # The tickets of the newest speculative batch.
         self.speculative = set()
@@ -839,6 +852,19 @@ class Batch:
         """
         for slot in self.slots:
             slot.cancelled.clear()
+        submitted = {member.ticket: member.head for member in members}
+        if previous and previous[3] == submitted and row_only_move(previous[0], self.main):
+            tree, applied = self.apply(self.main, members)
+            group = [member for member, _ in applied]
+            left = [member for member in group if member is not self.own]
+            if ({member.ticket: member.head for member in group} == submitted
+                    and set(self.queue.live(left)) == set(left)):
+                if not unchanged(tree):
+                    raise Refusal('the worktree changed after rebase; refusing to push')
+                say('main moved only by known-failures rows; clean rebase reuses all passed checks')
+                self.proof = (self.main, tree, previous[2], submitted)
+                self.publish(tree, applied)
+                return self.pushed
         members = self.screen(self.main, members, self.slots[0])
         pending = [(members, previous)] if members else []
         free, running, bisecting = list(self.slots), {}, False
@@ -878,7 +904,8 @@ class Batch:
                                 if rest := [m for m in group if m not in gone]:
                                     pending.append((rest, None))
                             elif base == self.pushed:
-                                self.proof = (base, tree, inventory)
+                                self.proof = (base, tree, inventory,
+                                              {member.ticket: member.head for member in group})
                                 self.publish(tree, applied)
                             else:
                                 slot.say(f'main moved to {self.pushed[:12]} during the check; checking again')
@@ -1003,6 +1030,10 @@ def train(queue, branch, slots):
             say('git fetch failed\n' + fetched.stderr)
             return 1
         main_sha = revision('origin/main')
+        # An edited lane needs checks. Only our own successful rebase may
+        # advance its submitted head while carrying a previous batch pass.
+        if previous and previous[3].get(queue.ticket.name) != revision('HEAD'):
+            previous = None
         if rebase(main_sha).returncode:
             conflicts = git('diff', '--name-only', '--diff-filter=U').stdout.split()
             git('rebase', '--abort')
@@ -1018,6 +1049,8 @@ def train(queue, branch, slots):
             print('\n'.join('land: ' + line for line in refused), flush=True)
             return 1
         head = revision('HEAD')
+        if previous:
+            previous[3][queue.ticket.name] = head
         if head == main_sha:
             say('nothing to land; HEAD is on origin/main')
             return 0

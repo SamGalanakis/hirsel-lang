@@ -63,8 +63,15 @@ toolchain under `RUSTUP_HOME` (default `~/.rustup`), then `CARGO_HOME/bin`
 subprocess receives that explicit PATH, including nested preparation and
 build-file generation, so the batch head needs no shell Rust setup.
 
-Every retry checks its rebased tree. There is no third-attempt exception,
-no inherited lint pass and no attempt limit. Losing a push race waits a
+When every new main commit touches only `tools/known-failures.tsv`, a
+previously passed batch rebases and pushes without running any check again,
+including the fast screen. The same tickets and submitted heads must remain
+in the batch, and the rebase and worktree must be clean. The normal union
+merge preserves both sides' ledger rows. History is inspected commit by
+commit: a source edit followed by its revert still requires checks.
+
+Every other retry checks its rebased tree. There is no third-attempt exception,
+no inherited lint environment flag and no attempt limit. Losing a push race waits a
 random duration in `[0, min(30, 2**attempt)]` seconds, then fetches and
 rebases again. Non-race push errors stop with the error. This is the full
 jitter algorithm from
@@ -133,7 +140,7 @@ the items behind a failing one. A head drives at most four batches, and
 at most one speculative batch is open at a time. A batch of one is a
 single land, as before, checked in a slot.
 
-Every pushed tree is one this attempt checked green. Before the push, the
+Every pushed tree has passed checks, reused only for row-only moves as above. Before the push, the
 head confirms that it still owns the queue head and that every batched
 ticket is still held by its live process; a dropped ticket's commits never
 land, and the head rebuilds the batch without it. A lost push race retries
@@ -144,7 +151,7 @@ pushes nor delivers outcomes. If the head's own change is a culprit, it
 still pushes the green rest; after a lost race it exits instead, and the
 next head lands the rest. A head whose own change landed in an early push
 exits 0 if a later push loses its race; the tickets not yet pushed keep
-their places.
+their places. A row-only main move can reuse the batch's prior pass as above.
 
 A ticket queued by an older `tools/land` has no `head`. The batch takes the
 tip of the branch that its worktree has checked out, as `git worktree list`
@@ -272,7 +279,9 @@ while a red batch bisects, the next batch is checked speculatively in the
 third slot, and no more than three builds overlap; a
 conflict in the middle ticket leaves only that ticket; a conflict with a
 red ticket ahead stays queued and lands next; a dead lane's ticket is dropped; a batch that
-loses a push race is checked again and lands whole; and a ticket queued
+loses a push race is checked again and lands whole; a passed batch rebases
+over repeated row-only main moves with zero further checks and unions the
+rows; source moves (including an edit and revert) still re-check; and a ticket queued
 by an older land is batched and later finds nothing to land.
 Further cases cover
 22 rejected attempts, a red retry in each aggregate, worktree/HEAD edits,

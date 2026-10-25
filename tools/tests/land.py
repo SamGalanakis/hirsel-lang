@@ -444,6 +444,81 @@ if not marker.exists():
         for i in (1, 2):
             self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
 
+    def batch_with_main_moves(self, moves):
+        """Move the real remote after each green batch, immediately before its push."""
+        (self.lane / 'tools/known-failures.tsv').write_text('base-row\n')
+        (self.lane / '.gitattributes').write_text('tools/known-failures.tsv merge=hirsel\n')
+        (self.lane / 'source.rs').write_text('fn original() {}\n')
+        self.git(self.lane, 'add', '-A')
+        self.git(self.lane, 'commit', '-qm', 'ledger and source')
+        checks, lanes, lands, holder = self.batch_lanes(
+            3, edits={1: ('tools/known-failures.tsv', 'base-row\nlane-row\n')})
+        # This test permits inherited passes; the stage records below prove
+        # exactly which trees ran checks. Other tests retain the strict hook.
+        (self.origin / 'hooks/pre-receive').write_text('#!/bin/sh\nexit 0\n')
+        hook = self.lane / '.git/hooks/pre-push'
+        hook.write_text('''#!/usr/bin/env python3
+import os, pathlib, subprocess
+''' + 'moves = ' + repr(moves) + '''
+root = pathlib.Path(os.environ['FAKE_CHECKS'])
+env = {k: v for k, v in os.environ.items() if k not in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE')}
+for i, commits in enumerate(moves):
+    marker = root / ('race-' + str(i))
+    if marker.exists():
+        continue
+    marker.touch()
+    other = root / ('other-' + str(i))
+    def git(*args):
+        subprocess.run(['git', *args], cwd=other, env=env, check=True, capture_output=True)
+    subprocess.run(['git', 'clone', '-q', os.environ['FAKE_ORIGIN'], str(other)], env=env, check=True)
+    for path, text in commits:
+        (other / path).write_text(text)
+        git('add', path)
+        git('commit', '-qm', 'main move')
+    git('push', '-q', 'origin', 'HEAD:main')
+    break
+''')
+        hook.chmod(0o755)
+        holder.unlink()
+        outputs = [self.finish_land(land) for land in lands]
+        self.assertEqual(self.main_log()[:3], ['lane 2', 'lane 1', 'lane 0'])
+        for i in (1, 2):
+            self.assertEqual(self.subjects(self.landed(outputs[i])), [f'lane {i}'])
+        self.assertEqual(self.queued(), [])
+        return checks, outputs[0]
+
+    def test_row_only_main_moves_rebase_a_passed_batch_without_any_checks(self):
+        checks, output = self.batch_with_main_moves([
+            [('tools/known-failures.tsv', 'base-row\nmain-row-1\n')],
+            [('tools/known-failures.tsv', 'base-row\nmain-row-1\nmain-row-2\n')],
+        ])
+        self.assertEqual(output.count('main moved only by known-failures rows'), 2, output)
+        self.assertEqual(output.count('pass  workspace build'), 1, output)
+        retry = output[output.index('main moved during the checks'):]
+        self.assertNotIn('pass  ', retry, output)  # Includes prepare, sync, hot files and the fast screen.
+        self.assertEqual(len(list(checks.glob('*/build'))), 1)
+        self.assertEqual(set(self.git(self.origin, 'show', 'main:tools/known-failures.tsv').splitlines()),
+                         {'base-row', 'lane-row', 'main-row-1', 'main-row-2'})
+        tip = self.git(self.origin, 'rev-parse', 'main').strip()
+        self.assertFalse((checks / tip).exists())
+
+    def test_a_source_main_move_still_rechecks_the_batch(self):
+        checks, output = self.batch_with_main_moves([[('source.rs', 'fn changed() {}\n')]])
+        self.assertNotIn('reuses all passed checks', output)
+        for stage in ('workspace build', 'Clippy', 'formatting', 'screen: formatting'):
+            self.assertEqual(output.count('pass  ' + stage), 2, output)
+        self.assertEqual(len(list(checks.glob('*/build'))), 2)
+
+    def test_a_source_edit_and_revert_is_not_a_row_only_main_move(self):
+        checks, output = self.batch_with_main_moves([[
+            ('source.rs', 'fn changed() {}\n'),
+            ('source.rs', 'fn original() {}\n'),
+            ('tools/known-failures.tsv', 'base-row\nmain-row\n'),
+        ]])
+        self.assertNotIn('reuses all passed checks', output)
+        self.assertEqual(output.count('pass  workspace build'), 2, output)
+        self.assertEqual(len(list(checks.glob('*/build'))), 2)
+
     def test_an_older_lands_waiting_ticket_is_batched_and_later_finds_nothing_to_land(self):
         checks, lanes, lands, holder = self.batch_lanes(2, old=(1,))
         holder.unlink()
