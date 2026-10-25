@@ -2312,7 +2312,13 @@ impl Lowering<'_, '_> {
             out.push(Action::Conditional { condition, actions });
             return Ok(());
         }
-        if !under && s.fields_pending.at(&paths, &path) == Tri::No {
+        // Inline finalizers use the explicit phase/call/field cleanup below.
+        // A whole release is only valid when destruction reaches no inline
+        // finalizer; counted payloads still run their own drop programs.
+        if !under
+            && s.fields_pending.at(&paths, &path) == Tri::No
+            && !self.index.inline_finalizer(layout)
+        {
             out.push(Action::Release {
                 path,
                 layout,
