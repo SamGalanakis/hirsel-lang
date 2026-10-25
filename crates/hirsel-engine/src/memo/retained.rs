@@ -397,7 +397,7 @@ impl Weight {
             hirsel_types::AuthoritySummary::Unknown => (),
         }
     }
-    fn signature(&mut self, value: &hirsel_types::SignatureRef) {
+    pub(crate) fn signature(&mut self, value: &hirsel_types::SignatureRef) {
         if !self.shared.insert(std::sync::Arc::as_ptr(value) as usize) {
             return;
         }

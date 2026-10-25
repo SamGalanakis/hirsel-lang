@@ -184,3 +184,4 @@ mod storage_map_remove_33;
 mod scheduled_check_cases;
 mod native_instance_products_19;
 mod storage_core_callable_33;
+mod checked_signatures;
