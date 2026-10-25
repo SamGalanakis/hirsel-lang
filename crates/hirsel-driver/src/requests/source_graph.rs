@@ -578,7 +578,9 @@ impl Plan {
             native,
             ownership,
             run: MemoryWeight {
-                retained: (run_slack / 4).min(retained),
+                // Run accumulates the selected semantic closure, so it uses
+                // its counted root continuation rather than one Lower body.
+                retained: (run_slack / 4).min(root_bound),
                 scratch,
                 stack: 0,
             },
