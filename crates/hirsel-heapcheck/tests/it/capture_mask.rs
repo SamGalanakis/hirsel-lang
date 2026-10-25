@@ -155,7 +155,9 @@ fn taken_capture(clear: bool) -> Program<Ready> {
     let capture = body.b.slot(BLOCK, boxed, SlotKind::Capture(0));
     let word = body.b.slot(U64, common.u64, SlotKind::Capture(1));
     let (held, live) = (body.b.unit.captures[0], body.b.unit.captures[1]);
-    let at = body.b.address(AddressBase::Slot(capture), &[], BLOCK, boxed);
+    let at = body
+        .b
+        .address(AddressBase::Slot(capture), &[], BLOCK, boxed);
     let failure = body.propagates();
     body.inst(Inst::Address {
         address: at,
@@ -169,7 +171,9 @@ fn taken_capture(clear: bool) -> Program<Ready> {
         mode: ReadMode::Take,
     });
     if clear {
-        let at = body.b.address(AddressBase::Slot(word), &[], U64, common.u64);
+        let at = body
+            .b
+            .address(AddressBase::Slot(word), &[], U64, common.u64);
         let failure = body.propagates();
         body.inst(Inst::Address {
             address: at,
