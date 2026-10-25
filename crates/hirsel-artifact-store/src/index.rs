@@ -21,6 +21,7 @@ const MAX_LAYERS: usize = 8;
 #[cfg(test)]
 thread_local! {
     static COMPACT_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static CONSTRUCTION_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce(usize)>>> = const { std::cell::RefCell::new(None) };
     static PIN_OBSERVER: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
 }
 /// Deterministic test barrier after selection, with the publication lock free.
@@ -31,6 +32,17 @@ pub(crate) fn observe_compaction(callback: impl FnOnce() + 'static) {
 #[cfg(test)]
 pub(crate) fn observe_pin(callback: impl FnOnce() + 'static) {
     PIN_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(callback)));
+}
+
+#[cfg(test)]
+fn construction_observation(bytes: usize) {
+    CONSTRUCTION_OBSERVER.with(|slot| {
+        // Release the borrow first: a callback may construct a nested layer.
+        let callback = slot.borrow_mut().take();
+        if let Some(callback) = callback {
+            callback(bytes);
+        }
+    });
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -313,6 +325,76 @@ pub(crate) fn publish_delta(
     })
 }
 
+/// Input mappings have their own input-byte grant. Scratch includes every
+/// retained validation array, dictionary capacity, physical output and fixed
+/// cursor/root/path workspace. No merged Entry array or logical plane copies.
+fn compaction_scratch(layers: &[Descriptor]) -> Option<u64> {
+    let rows = layers
+        .iter()
+        .try_fold(0usize, |n, d| n.checked_add(usize::try_from(d.rows).ok()?))?;
+    let construction = format::construction_scratch(rows)?;
+    let validation = layers.iter().try_fold(0usize, |n, d| {
+        n.checked_add(format::validation_scratch(
+            usize::try_from(d.rows).ok()?,
+            usize::try_from(d.len).ok()?,
+        ))
+    })?;
+    Some(
+        construction
+            .checked_add(validation)?
+            .checked_add(64 << 10)? as u64,
+    )
+}
+
+// Git midx-write.c:226-256,270-315 informs chain traversal and bounded
+// construction; no Git implementation code is copied. Already-sorted checked
+// Hirsel layers permit one retained head per layer instead of fanout sorting.
+struct MergedEntries<'a> {
+    layers: &'a [Layer],
+    positions: [usize; MAX_LAYERS],
+    heads: [Option<Entry>; MAX_LAYERS],
+}
+impl<'a> MergedEntries<'a> {
+    fn new(layers: &'a [Layer]) -> io::Result<Self> {
+        let mut result = Self {
+            layers,
+            positions: [0; MAX_LAYERS],
+            heads: [None; MAX_LAYERS],
+        };
+        for (i, layer) in layers.iter().enumerate() {
+            result.heads[i] = Some(layer.entry(0).ok_or_else(invalid)?);
+        }
+        Ok(result)
+    }
+}
+impl Iterator for MergedEntries<'_> {
+    type Item = io::Result<Entry>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut best: Option<Entry> = None;
+        for entry in self.heads.iter().flatten() {
+            // Strict comparison retains chronological precedence on ties.
+            if best.is_none_or(|b| entry.key < b.key) {
+                best = Some(*entry);
+            }
+        }
+        let best = best?;
+        for (i, layer) in self.layers.iter().enumerate() {
+            if self.heads[i].is_some_and(|e| e.key == best.key) {
+                self.positions[i] += 1;
+                self.heads[i] = if self.positions[i] < layer.rows() {
+                    match layer.entry(self.positions[i]) {
+                        Some(entry) => Some(entry),
+                        None => return Some(Err(invalid())),
+                    }
+                } else {
+                    None
+                };
+            }
+        }
+        Some(Ok(best))
+    }
+}
+
 pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<CompactOutcome> {
     if !root.exists() {
         return Ok(CompactOutcome::NotNeeded);
@@ -335,12 +417,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
         };
         let rows: u64 = selected.layers.iter().map(|d| d.rows).sum();
         let bytes: u64 = selected.layers.iter().map(|d| d.len).sum();
-        // Conservative peak: merged Entry storage, dictionary, all logical and
-        // physical output planes, and mapping status arrays. No payload copy.
-        let scratch = rows
-            .checked_mul(240)
-            .and_then(|n| n.checked_add(4 << 20))
-            .ok_or_else(input)?;
+        let scratch = compaction_scratch(&selected.layers).ok_or_else(input)?;
         if rows > u64::from(budget.max_rows)
             || bytes > budget.max_input_bytes
             || scratch > budget.max_scratch_bytes.min(MAX_SCRATCH as u64)
@@ -360,37 +437,18 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
     for layer in &pinned.0.layers {
         layer.validate_all()?;
     }
-    // At most eight sorted streams. A linear head picker is bounded and avoids
-    // heap churn; newest-first tie selection preserves the newest locator.
     let capacity = selected.layers.iter().map(|d| d.rows as usize).sum();
-    let mut merged = Vec::new();
-    merged.try_reserve_exact(capacity).map_err(|_| input())?;
-    let mut positions = [0usize; MAX_LAYERS];
-    loop {
-        let mut best: Option<Entry> = None;
-        for (i, layer) in pinned.0.layers.iter().enumerate() {
-            if positions[i] < layer.rows() {
-                let entry = layer.entry(positions[i]).ok_or_else(invalid)?;
-                if best.is_none_or(|b| entry.key < b.key) {
-                    best = Some(entry);
-                }
-            }
-        }
-        let Some(best) = best else {
-            break;
-        };
-        merged.push(best);
-        for (i, layer) in pinned.0.layers.iter().enumerate() {
-            if positions[i] < layer.rows()
-                && layer.key(positions[i]).ok_or_else(invalid)? == best.key
-            {
-                positions[i] += 1;
-            }
-        }
-    }
-    let delta = build(root, &merged, Durability::Rebuildable)?;
-    let descriptor = delta.descriptor.ok_or_else(invalid)?;
-    let stage = delta.stage.as_ref().ok_or_else(invalid)?;
+    // Retained immutable pins make both traversals identical. No staging data
+    // becomes reachable until construction and the root comparison complete.
+    let (bytes, rows) = format::encode_replayed(capacity, || MergedEntries::new(&pinned.0.layers))?;
+    let descriptor = Descriptor {
+        id: ContentHash::of_parts("hirsel.artifact.index-layer.v36", [&bytes[..]]),
+        rows: rows as u64,
+        len: bytes.len() as u64,
+    };
+    let stage = Stage::new(root, Durability::Rebuildable)?;
+    stage.write("layer", &bytes)?;
+    drop(bytes);
     let Some(_lock) = Lock::publication(root, true)? else {
         return Ok(CompactOutcome::Deferred);
     };
@@ -424,7 +482,7 @@ pub(crate) fn compact(root: &Path, budget: MaintenanceBudget) -> io::Result<Comp
     if !stage.install(root, descriptor)? && !reusable {
         return Ok(CompactOutcome::Deferred);
     }
-    let generation = latest.publish(root, stage)?;
+    let generation = latest.publish(root, &stage)?;
     Ok(CompactOutcome::Published {
         generation,
         layers: latest.layers.len() as u8,

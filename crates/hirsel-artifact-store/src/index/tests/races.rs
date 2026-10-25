@@ -344,3 +344,21 @@ fn multiprocess_same_address_precedence_follows_publication_order() {
         Some(expected)
     );
 }
+
+#[test]
+fn concurrent_writer_during_plane_construction_preserves_newer_locator_and_old_pin() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    write(root, &[entry(1)]);
+    write(root, &[entry(2)]);
+    let old = load_pinned(root).unwrap();
+    let path = root.to_owned();
+    let mut newer = entry(1);
+    newer.location.offset = 128;
+    CONSTRUCTION_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(move |_| write(&path, &[newer]))));
+    assert!(matches!(compact(root, budget()).unwrap(), CompactOutcome::Published { layers: 2, .. }));
+    assert_eq!(find(&old, newer.key), Some(entry(1).location));
+    let current = load_pinned(root).unwrap();
+    assert_eq!(find(&current, newer.key), Some(newer.location));
+    assert_eq!(find(&current, entry(2).key), Some(entry(2).location));
+}

@@ -437,3 +437,30 @@ fn repaired_crc_rejects_misplaced_keys_and_noncanonical_dictionaries_in_full_val
     let (_dir, result) = open(&bad, records.len());
     assert!(result.unwrap().validate_all().is_err());
 }
+
+#[test]
+fn replay_construction_propagates_second_pass_failure_and_checks_row_bounds() {
+    let records = fixture_entries(17);
+    let calls = std::cell::Cell::new(0);
+    assert!(
+        encode_replayed(17, || {
+            calls.set(calls.get() + 1);
+            let fail = calls.get() == 2;
+            Ok(records.iter().copied().enumerate().map(move |(i, e)| {
+                if fail && i == 8 {
+                    Err(io::Error::from(io::ErrorKind::Interrupted))
+                } else {
+                    Ok(e)
+                }
+            }))
+        })
+        .is_err()
+    );
+    assert_eq!(calls.get(), 2);
+    assert!(encode_replayed(16, || Ok(records.iter().copied().map(Ok))).is_err());
+    assert!(encode_replayed(0, || Ok(std::iter::empty())).is_err());
+    assert!(encode_replayed(MAX_ROWS + 1, || Ok(std::iter::empty())).is_err());
+    let (streamed, rows) = encode_replayed(34, || Ok(records.iter().copied().map(Ok))).unwrap();
+    assert_eq!(rows, 17);
+    assert_eq!(streamed, encode_layer(&records).unwrap());
+}

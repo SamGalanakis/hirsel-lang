@@ -211,18 +211,42 @@ impl Plane {
         }
     }
 }
-fn layout(rows: usize, segments: usize) -> Option<([Plane; 5], usize, usize)> {
-    if rows == 0 || rows > MAX_ROWS || segments == 0 || segments > rows {
-        return None;
-    }
-    let r = radix(rows);
-    let sizes = [
-        4usize.checked_mul((2usize << r) + 1)?,
+fn plane_sizes(rows: usize, segments: usize) -> Option<[usize; 5]> {
+    Some([
+        4usize.checked_mul((2usize << radix(rows)) + 1)?,
         rows.checked_add(15)? & !15,
         rows.checked_mul(33)?,
         rows.checked_mul(12)?,
         segments.checked_mul(32)?,
-    ];
+    ])
+}
+
+pub(super) fn construction_scratch(rows: usize) -> Option<usize> {
+    if rows == 0 || rows > MAX_ROWS {
+        return None;
+    }
+    let physical = plane_sizes(rows, rows)?
+        .into_iter()
+        .try_fold(128usize, |n, len| {
+            n.checked_add(len)?
+                .checked_add(len.div_ceil(BLOCK).checked_mul(5)?)
+        })?;
+    // An output exceeding MAX_BYTES is rejected before its allocation.
+    physical
+        .min(MAX_BYTES)
+        .checked_add(rows.checked_mul(size_of::<ContentHash>())?)
+}
+
+pub(super) fn validation_scratch(rows: usize, len: usize) -> usize {
+    // Directory, bucket status, block status (at most five partial blocks).
+    5 * (2usize << radix(rows)) + 4 + len.div_ceil(BLOCK) + 5 + size_of::<Layer>()
+}
+
+fn layout(rows: usize, segments: usize) -> Option<([Plane; 5], usize, usize)> {
+    if rows == 0 || rows > MAX_ROWS || segments == 0 || segments > rows {
+        return None;
+    }
+    let sizes = plane_sizes(rows, segments)?;
     let mut planes = [Plane::default(); 5];
     let mut end = 128usize;
     let mut blocks = 0;
@@ -246,19 +270,33 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     if rows == 0 || rows > MAX_ROWS || rows.checked_mul(32).is_none_or(|n| n > MAX_SCRATCH) {
         return Err(input());
     }
+    encode_replayed(rows, || Ok(entries.iter().copied().map(Ok))).map(|(bytes, _)| bytes)
+}
+
+/// Replay immutable sorted streams instead of retaining a merged Entry per row.
+/// The first pass retains only segment IDs; the second fills physical planes
+/// directly, including cross-block rows. Sorting uses no auxiliary allocation.
+pub(super) fn encode_replayed<I: Iterator<Item = io::Result<Entry>>>(
+    row_limit: usize,
+    replay: impl Fn() -> io::Result<I>,
+) -> io::Result<(Vec<u8>, usize)> {
+    let bound = construction_scratch(row_limit).ok_or_else(input)?;
+    let mut dictionary = Vec::new();
+    dictionary
+        .try_reserve_exact(row_limit)
+        .map_err(|_| input())?;
+    let mut rows = 0;
     let mut previous = None;
-    for entry in entries {
-        if previous.is_some_and(|k| k >= entry.key) || !valid_location(entry.location) {
+    for entry in replay()? {
+        let entry = entry?;
+        if rows == row_limit
+            || previous.is_some_and(|k| k >= entry.key)
+            || !valid_location(entry.location)
+        {
             return Err(input());
         }
         previous = Some(entry.key);
-    }
-    let mut dictionary = Vec::new();
-    dictionary.try_reserve_exact(rows).map_err(|_| input())?;
-    // Real packs commonly contribute adjacent records. Eliminate adjacent
-    // repeats before sorting, without assuming that nonadjacent IDs are equal
-    // or that input segment IDs arrive in dictionary order.
-    for entry in entries {
+        rows += 1;
         if dictionary.last() != Some(&entry.location.segment) {
             dictionary.push(entry.location.segment);
         }
@@ -266,11 +304,7 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     dictionary.sort_unstable();
     dictionary.dedup();
     let (planes, len, blocks) = layout(rows, dictionary.len()).ok_or_else(input)?;
-    let scratch = len
-        .checked_add(rows.checked_mul(32).ok_or_else(input)?)
-        .and_then(|n| n.checked_add(planes[0].len))
-        .ok_or_else(input)?;
-    if scratch > MAX_SCRATCH {
+    if len + dictionary.capacity() * size_of::<ContentHash>() > bound {
         return Err(input());
     }
     let mut bytes = Vec::new();
@@ -292,7 +326,17 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     put32(&mut bytes, 76, blocks as u32);
     let mut next_bucket = 0;
     let mut last_segment = None;
-    for (i, entry) in entries.iter().enumerate() {
+    #[cfg(test)]
+    super::construction_observation(
+        dictionary.capacity() * size_of::<ContentHash>() + bytes.capacity(),
+    );
+    let mut written = 0;
+    for (i, entry) in replay()?.enumerate() {
+        let entry = entry?;
+        if i >= rows {
+            return Err(input());
+        }
+        written += 1;
         let b = bucket(entry.key, bytes[25]);
         while next_bucket <= b {
             planes[0].write(&mut bytes, next_bucket * 4, &(i as u32).to_le_bytes());
@@ -313,6 +357,9 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
         put32(&mut locator, 8, entry.location.len);
         planes[3].write(&mut bytes, i * 12, &locator);
     }
+    if written != rows {
+        return Err(input());
+    }
     while next_bucket < planes[0].len / 4 {
         planes[0].write(&mut bytes, next_bucket * 4, &(rows as u32).to_le_bytes());
         next_bucket += 1;
@@ -331,7 +378,7 @@ pub(super) fn encode_layer(entries: &[Entry]) -> io::Result<Vec<u8>> {
     }
     let checksum = mask(crc32c::crc32c(&bytes[..124]));
     put32(&mut bytes, 124, checksum);
-    Ok(bytes)
+    Ok((bytes, rows))
 }
 
 pub(super) struct Layer {

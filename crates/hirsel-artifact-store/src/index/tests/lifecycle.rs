@@ -394,3 +394,103 @@ fn diagnostics_distinguish_invalid_absence_and_count_each_bad_block_once_per_pin
     assert_eq!(find(&fresh, entry(1).key), Some(entry(1).location));
     assert_eq!(fresh.diagnostics(), IndexDiagnostics::default());
 }
+
+#[test]
+fn bounded_construction_scales_and_reopens_eight_layer_publication() {
+    // Git t5335:60-104 vector intent: nonlexical chronological layer order,
+    // objects repeated across layers occur once and the newest locator wins.
+    let mut observed = Vec::new();
+    for rows_per_layer in [128u64, 256, 512] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for (layer, segment) in [3, 2, 0, 1, 4, 2, 1, 0].into_iter().enumerate() {
+            // Layers l and l + 4 share every key with distinct locators.
+            let entries: Vec<_> = (0..rows_per_layer)
+                .map(|n| {
+                    let mut e = entry(n * 4 + layer as u64 % 4);
+                    // Exercise both key domains, skew and boundary crossings.
+                    if n >= rows_per_layer / 2 {
+                        e.key.kind = KeyKind::Association;
+                    }
+                    e.location.segment = ContentHash([segment; 32]);
+                    e.location.offset = 64 + 8 * layer as u32;
+                    e
+                })
+                .collect();
+            published(publish(root, &entries));
+        }
+        let mut duplicate = entry(0);
+        duplicate.location.offset = 1024;
+        let manifest = format::Manifest::read(root).unwrap();
+        let pin = load_pinned(root).unwrap();
+        let scratch = compaction_scratch(&manifest.layers).unwrap();
+        let old_root = fs::read(root.join("index/MANIFEST")).unwrap();
+        assert_eq!(
+            publish(root, &[duplicate]),
+            PublishOutcome::Skipped(SkipReason::LayerLimit)
+        );
+        let short = MaintenanceBudget {
+            max_scratch_bytes: scratch - 1,
+            ..budget()
+        };
+        assert_eq!(compact(root, short).unwrap(), CompactOutcome::Deferred);
+        assert_eq!(fs::read(root.join("index/MANIFEST")).unwrap(), old_root);
+        let capacity = rows_per_layer as usize * 8;
+        let actual = std::rc::Rc::new(std::cell::Cell::new(0));
+        let sink = actual.clone();
+        CONSTRUCTION_OBSERVER.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |bytes| sink.set(bytes)))
+        });
+        let exact = MaintenanceBudget {
+            max_scratch_bytes: scratch,
+            ..budget()
+        };
+        assert!(matches!(
+            compact(root, exact).unwrap(),
+            CompactOutcome::Published { layers: 1, .. }
+        ));
+        assert!(actual.get() > 0);
+        assert!(actual.get() <= format::construction_scratch(capacity).unwrap());
+        observed.push(actual.get());
+        let merged = load_pinned(root).unwrap();
+        merged.0.layers[0].validate_all().unwrap();
+        assert_eq!(merged.0.layers[0].rows(), capacity / 2);
+        // Every key keeps the newest locator; the old pin stays readable.
+        for layer in &pin.0.layers {
+            for i in 0..layer.rows() {
+                let key = layer.entry(i).unwrap().key;
+                let newest = find(&pin, key).unwrap();
+                assert_eq!(find(&merged, key), Some(newest));
+                let n = u64::from_be_bytes(key.digest.0[..8].try_into().unwrap());
+                assert_eq!(u64::from(newest.offset), 64 + 8 * (4 + n % 4));
+            }
+        }
+        published(publish(root, &[duplicate]));
+        assert_eq!(
+            find(&load_pinned(root).unwrap(), duplicate.key),
+            Some(duplicate.location)
+        );
+        assert_ne!(find(&pin, duplicate.key), Some(duplicate.location));
+    }
+    // Retained construction bytes scale linearly with merged input rows.
+    for pair in observed.windows(2) {
+        assert!(pair[1] <= pair[0] * 2 + (16 << 10), "{observed:?}");
+        assert!(pair[1] >= pair[0] * 3 / 2, "{observed:?}");
+    }
+}
+
+#[test]
+fn interrupted_plane_construction_preserves_root_pins_and_cleans_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    published(publish(root, &[entry(1)]));
+    published(publish(root, &[entry(2)]));
+    let before = fs::read(root.join("index/MANIFEST")).unwrap();
+    let old = load_pinned(root).unwrap();
+    CONSTRUCTION_OBSERVER.with(|slot| *slot.borrow_mut() = Some(Box::new(|_| panic!("cancel construction"))));
+    assert!(std::panic::catch_unwind(|| compact(root, budget())).is_err());
+    assert_eq!(fs::read(root.join("index/MANIFEST")).unwrap(), before);
+    assert_eq!(fs::read_dir(root.join("index/staging")).unwrap().count(), 0);
+    for n in [1, 2] { assert_eq!(find(&old, entry(n).key), Some(entry(n).location)); }
+    assert!(matches!(compact(root, budget()).unwrap(), CompactOutcome::Published { layers: 1, .. }));
+}

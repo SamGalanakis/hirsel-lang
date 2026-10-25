@@ -108,3 +108,20 @@ fn protocol_epoch_factory_observes_pin_and_compaction_lock_order() {
         assert_eq!(find(&current, entry(n).key), Some(entry(n).location));
     }
 }
+
+#[test]
+fn exact_eight_by_250k_boundary_fits_existing_scratch_grant_without_row_allocation() {
+    let layers: Vec<_> = (0..8)
+        .map(|i| descriptor(i, 250_000, (128 << 20) / 8))
+        .collect();
+    assert_eq!(admission(&layers), None);
+    assert_eq!(selection(&layers), 8);
+    let scratch = compaction_scratch(&layers).unwrap();
+    assert_eq!(layers.iter().map(|d| d.rows).sum::<u64>(), 2_000_000);
+    assert_eq!(layers.iter().map(|d| d.len).sum::<u64>(), 128 << 20);
+    assert!(scratch <= 256 << 20, "scratch={scratch}");
+    // Charge the whole physical output cap and worst-case dictionary, plus
+    // validation arrays, rather than merely decreasing the old estimate.
+    assert!(scratch > (128 << 20) + 32 * 2_000_000);
+    assert!(compaction_scratch(&[descriptor(0, u64::MAX, 128)]).is_none());
+}
