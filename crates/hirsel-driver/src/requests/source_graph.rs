@@ -552,11 +552,15 @@ impl Plan {
         } else {
             slack / 4
         };
-        // A checked receipt is a root output after Check, like Run: it takes
-        // Run's share of the slack and no Run inventory or rows.
+        // A checked receipt is a root output after Check, like Run, and takes
+        // the remainder with no Run inventory or rows. Its staged input and
+        // construction hold every lowered original, while Lower itself keeps
+        // only settled metadata, so Lower cedes half of Run's split to it.
         let lower_slack = if needs_ownership {
             slack / 12
-        } else if needs_run || needs_receipt {
+        } else if needs_receipt {
+            slack / 6
+        } else if needs_run {
             slack / 3
         } else {
             slack / 2
@@ -566,9 +570,13 @@ impl Plan {
         } else {
             slack / 8
         };
+        // Check's grant only admits its fixed input rows; beyond them a
+        // receipt needs just its captured headers from this partition.
         let check_slack = if needs_ownership {
             slack / 48
-        } else if needs_run || needs_receipt {
+        } else if needs_receipt {
+            slack / 32
+        } else if needs_run {
             slack / 8
         } else {
             slack - front_slack - lower_slack - growth_slack
