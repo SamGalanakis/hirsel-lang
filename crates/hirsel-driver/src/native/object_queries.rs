@@ -285,6 +285,8 @@ where
                         debug: ready.debug,
                         sources: None,
                     };
+                    let _timing =
+                        hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
                     match backend {
                         super::Backend::Llvm => {
                             hirsel_llvm::emit_object_profile(units, &inputs, profile)

@@ -366,16 +366,18 @@ impl ReadyQueries {
         )
         .map_err(|e| e.to_string())?;
         self.counts.validations += 1;
-        let (checked, output) = self
-            .native
-            .validate_output(
-                subject(key, action),
-                key.policy,
-                ready,
-                inputs,
-                miss.additional_abis,
-            )
-            .map_err(|rejected| format!("native Ready refused: {:?}", rejected.violations))?;
+        let (checked, output) = {
+            let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::LirValidate);
+            self.native
+                .validate_output(
+                    subject(key, action),
+                    key.policy,
+                    ready,
+                    inputs,
+                    miss.additional_abis,
+                )
+                .map_err(|rejected| format!("native Ready refused: {:?}", rejected.violations))?
+        };
         crate::native::emit::check_unit_runtime_calls(
             checked.unit(),
             inputs.layouts,

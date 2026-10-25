@@ -141,6 +141,10 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 VerifyStore::Off,
             );
             let after = calls();
+            let cold_calls: [_; 6] = std::array::from_fn(|i| after.0[i] - before.0[i]);
+            let units = after.1 - before.1;
+            assert!(units > 0);
+            assert!(cold_calls.iter().all(|calls| *calls > 0));
             assert!(!cold.objects.is_empty());
             assert_eq!(cold.hits, 0);
             assert!(cold.ready_transformations > 0);
@@ -170,16 +174,14 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
             assert_eq!(verified.objects, cold.objects);
             assert_eq!(verified.hits, cold.objects.len());
             assert_eq!(verified.ready_transformations, cold.ready_transformations);
-            assert!(
-                after_verified.0[5] > after_warm.0[5],
-                "EveryStage skipped validation"
-            );
-            assert!(
-                after
-                    .0
-                    .iter()
-                    .zip(before.0)
-                    .any(|(after, before)| *after > before)
+            let checked_calls: [_; 6] =
+                std::array::from_fn(|i| after_verified.0[i] - after_warm.0[i]);
+            assert_eq!(after_verified.1 - after_warm.1, units);
+            assert_eq!(&checked_calls[..5], &cold_calls[..5]);
+            assert_eq!(
+                checked_calls[5] - cold_calls[5],
+                4 * units,
+                "warm EveryStage did not restore all four intermediate checkpoints"
             );
             // Coherent bytes from another actual backend cannot acquire the
             // selected Codegen action by forging its ordinary association.
