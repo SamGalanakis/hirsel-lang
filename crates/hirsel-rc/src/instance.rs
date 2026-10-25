@@ -2038,7 +2038,7 @@ fn instantiate_row(
 }
 
 /// The lexical binders whose generics `arguments` (rows of `types`) name.
-fn body_scopes(types: &TypeInterner, arguments: &[GenericArgument]) -> Vec<SiteRef> {
+pub(crate) fn body_scopes(types: &TypeInterner, arguments: &[GenericArgument]) -> Vec<SiteRef> {
     let mut scopes = Vec::new();
     let size = |s: &Size, scopes: &mut Vec<SiteRef>| {
         if let Size::Parameter(BinderRef::Body { scope, .. }) = s

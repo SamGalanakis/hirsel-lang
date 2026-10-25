@@ -43,14 +43,61 @@ pub fn request(
     Ok(Some(request))
 }
 
-fn build(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
-    let path = hirsel_lir::pretransfer::primitive(&cx.path).expect("keyed adapter path");
-    let request = Request::operation(
-        cx.program,
+/// Plan an adapter's primitive from its original declaration and typed actuals.
+/// This does not require constructing either native body.
+pub fn primitive_request(
+    program: &Program,
+    adapter: &DefPath,
+    arguments: Vec<GenericArgument>,
+) -> Result<Option<Request>, InstanceError> {
+    let Some(path) = hirsel_lir::pretransfer::primitive(adapter) else {
+        return Ok(None);
+    };
+    Request::operation(
+        program,
         super::body_index(&path).expect("keyed primitive body"),
         &path,
-        cx.arguments.clone(),
-    )?;
+        arguments,
+    )
+    .map(Some)
+}
+
+/// Materialized keyed references in the independent GEN-5 owner catalogue.
+/// Requirements belonging to an unbound nested generic remain with that owner.
+pub fn source_requests(
+    program: &Program,
+    context: &crate::instance::DiscoveryContext,
+    owner: &DefPath,
+    actuals: &crate::instance::Actuals,
+) -> Result<Vec<Request>, InstanceError> {
+    let mut requests = Vec::new();
+    for requirement in context.requirements.get(owner).into_iter().flatten() {
+        if requirement.kind != crate::instance::RequirementKind::Reference
+            || !crate::instance::body_scopes(&program.types, &requirement.arguments)
+                .iter()
+                .all(|scope| actuals.binders().any(|(bound, _)| bound == *scope))
+        {
+            continue;
+        }
+        let arguments = crate::instance::callee_actuals(
+            &program.types,
+            &program.memo,
+            Some(requirement.binder),
+            &requirement.arguments,
+            actuals,
+            requirement.owner_binder.is_some(),
+            &requirement.callee,
+        )?;
+        if let Some(request) = request(program, &requirement.callee, arguments.arguments)? {
+            requests.push(request);
+        }
+    }
+    Ok(requests)
+}
+
+fn build(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+    let request =
+        primitive_request(cx.program, &cx.path, cx.arguments.clone())?.expect("keyed adapter path");
     let direct = cx.require(request)?;
     let mut b = Body::new(cx)?;
     let key = b.parameters[1];

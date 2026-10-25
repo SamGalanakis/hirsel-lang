@@ -28,6 +28,9 @@ impl QueryTask for TracedTask {
     fn weight(&self) -> MemoryWeight {
         self.0.weight()
     }
+    fn continuation_bytes(&self) -> u64 {
+        self.0.continuation_bytes()
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let _observe = self.1.enter();
         self.0.poll(cx)
@@ -41,6 +44,25 @@ impl QueryContext for Pending {
 }
 #[test]
 fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invocations() {
+    ready_case("fn other()->u64{9u64}\npub fn main()->u64{7u64}", false);
+}
+#[test]
+fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
+    ready_case(
+        r#"
+fn other(x:u64)->u64 { 10u64/x }
+pub fn main()->Result[(),()] {
+ let mut s:Set[String]=set.empty()
+ let insert:fn(mut Set[String],take String)->()=set.insert
+ let _=insert(mut s,"key")
+ let f=other
+ let _=f(2u64)
+ Ok(())
+}"#,
+        true,
+    );
+}
+fn ready_case(source: &str, adapter: bool) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -54,10 +76,7 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                 .with_result_store(store.clone());
             let file = engine
                 .sources
-                .add(
-                    "settled-demand.hir",
-                    "fn other()->u64{9u64}\npub fn main()->u64{7u64}".into(),
-                )
+                .add("settled-demand.hir", source.into())
                 .unwrap();
             engine.parse_file(file, &default_context()).unwrap();
             if fresh {
@@ -129,11 +148,11 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
             let denied = tasks.failure("native task control refusal");
             let errors = RuntimeErrors {
-                resource: denied,
-                cycle: denied,
-                cancelled: denied,
-                protocol: denied,
-                panicked: denied,
+                resource: tasks.failure("runtime resource admission refused"),
+                cycle: tasks.failure("runtime dependency cycle refused"),
+                cancelled: tasks.failure("runtime request cancelled"),
+                protocol: tasks.failure("runtime dependency protocol refused"),
+                panicked: tasks.failure("runtime worker panicked"),
             };
             let mut runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
@@ -145,14 +164,6 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
                 runtime.register(kind, traced.clone()).unwrap();
             }
-            let request = runtime.request(&[tasks.discovery_id()]);
-            let result = runtime.wait(request).unwrap_or_else(|error| {
-                panic!(
-                    "{}",
-                    String::from_utf8_lossy(&store.get_content(error).unwrap())
-                )
-            });
-            let discovery_output = result[0];
             let arenas = ArenaTasks::new(
                 tasks.clone(),
                 store.clone(),
@@ -172,10 +183,20 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             for kind in [ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, ARENA_GRAPH_KIND] {
                 runtime.register(kind, arena_factory.clone()).unwrap();
             }
+            let request = runtime.request(&[tasks.discovery_id()]);
+            let result = runtime.wait(request).unwrap_or_else(|error| {
+                panic!(
+                    "discovery phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
+                    String::from_utf8_lossy(&store.get_content(error).unwrap())
+                )
+            });
+            let discovery_output = result[0];
             let arena_request = runtime.request(&[arenas.query_id()]);
             let arena_output = runtime.wait(arena_request).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "arena phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             })[0];
@@ -192,6 +213,17 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
                     .count(),
                 2
             );
+            if adapter {
+                assert!(
+                    !operations.pretransfer_adapters.is_empty(),
+                    "completed source discovery must retain its real adapter inventory"
+                );
+                assert_eq!(
+                    operations.pretransfer_actuals.len(),
+                    operations.pretransfer_adapters.len(),
+                    "canonical ABI actuals must come from the independent source planner"
+                );
+            }
             let products = tasks.products(discovery_output).unwrap();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
@@ -242,15 +274,18 @@ fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invo
             let selected = ready_runtime.request(&[main.ready_query_id()]);
             let ready = ready_runtime.wait(selected).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "Ready phase: {error:?}, {:?}: {}",
+                    ready_runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
             assert_eq!(ready.len(), 1);
-            assert_eq!(
-                ready_tasks.ready_transformations.load(Ordering::Relaxed),
-                u64::from(!fresh)
-            );
+            let transformations = ready_tasks.ready_transformations.load(Ordering::Relaxed);
+            if adapter && !fresh {
+                assert!(transformations > 0);
+            } else {
+                assert_eq!(transformations, u64::from(!fresh));
+            }
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
             assert_eq!(

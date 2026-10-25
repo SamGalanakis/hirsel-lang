@@ -263,6 +263,7 @@ impl InstanceTasks {
         .map_err(|e| e.to_string())?;
         let bytes = ordinary
             .len()
+            .saturating_add(hirsel_codec::to_text(&output.adapters).len())
             .saturating_add(output.ready_source.encode()?.len())
             .saturating_add(
                 output
@@ -355,6 +356,11 @@ impl InstanceTasks {
             self.source.provider()
         };
         let mut registry = self.source.declarations.program.operation_registry();
+        self.producer().bind_planned_adapters(
+            &source,
+            entries.iter().map(|entry| &entry.request),
+            &mut registry,
+        )?;
         for entry in entries {
             let Some(path) = entry.request.source_definition() else {
                 continue;
@@ -501,6 +507,11 @@ impl QueryTask for InstanceTask {
     fn weight(&self) -> MemoryWeight {
         self.tasks.weight
     }
+    fn continuation_bytes(&self) -> u64 {
+        // Completed products remain owned by the registry/snapshot and its
+        // explicit reservation. This charge covers only the task frame.
+        self.tasks.weight.retained
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
             return finish(result);
@@ -642,6 +653,11 @@ impl QueryTask for DiscoveryTask {
     }
     fn weight(&self) -> MemoryWeight {
         self.tasks.weight
+    }
+    fn continuation_bytes(&self) -> u64 {
+        // Completed products remain owned by the registry/snapshot and its
+        // explicit reservation. This charge covers only the task frame.
+        self.tasks.weight.retained
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
