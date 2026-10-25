@@ -105,7 +105,16 @@ impl RootProducts {
                 .inner
                 .local
                 .queries
-                .lookup(owner, read.action, &snapshot.environment())
+                .lookup(
+                    owner,
+                    read.action,
+                    &NativeEnvironment {
+                        operations: &snapshot
+                            .instances
+                            .operations(owner, &snapshot.environment())?,
+                        ..snapshot.environment()
+                    },
+                )
                 .ok_or("settled link Ready lost current C admission")?;
             if current.product != *read
                 || view.inner.selected.insert(read.address.0, *read).is_some()
