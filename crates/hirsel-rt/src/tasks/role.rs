@@ -8,7 +8,7 @@
 //! before starting workers, after installing boundary coverage.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use crate::{TaskCtx, context::RunShared};
@@ -19,14 +19,22 @@ use super::Scheduler;
 // This marker is used only by acquire_idle, which never permits re-entry.
 // The marker is even but not aligned like TaskCtx, and claims are odd.
 const IDLE_OWNER: usize = usize::MAX - 1;
+/// The `held` word of an unowned role; no owner uses it.
+const UNOWNED: usize = usize::MAX;
 
 pub(crate) mod cell;
 
-#[derive(Default)]
 pub(crate) struct Role {
     enabled: AtomicBool,
     owner: Mutex<Option<usize>>,
+    /// The owner word, written only under `owner`. Only the owning task moves
+    /// ownership away from itself, so a task that reads its own word here
+    /// already owns the role and re-enters without the predicate lock.
+    held: AtomicUsize,
     available: Condvar,
+    /// Task and idle acquirers blocked on `available`, changed under `owner`.
+    /// Home's wait is `home_waiting`; a release with neither skips the wake.
+    waiting: AtomicUsize,
     home_waiting: AtomicBool,
     /// Ownership transitions into a task, claim or idle owner. Re-entry by
     /// the current owner is not an acquisition.
@@ -45,6 +53,20 @@ pub(crate) fn thread_acquisitions() -> u64 {
     THREAD_ACQUISITIONS.with(Cell::get)
 }
 
+impl Default for Role {
+    fn default() -> Self {
+        Self {
+            enabled: AtomicBool::new(false),
+            owner: Mutex::new(None),
+            held: AtomicUsize::new(UNOWNED),
+            available: Condvar::new(),
+            waiting: AtomicUsize::new(0),
+            home_waiting: AtomicBool::new(false),
+            acquisitions: AtomicU64::new(0),
+        }
+    }
+}
+
 impl Role {
     /// Admission only, before any worker can execute Hirsel code.
     pub(crate) fn enable(&self) {
@@ -56,39 +78,56 @@ impl Role {
         self.acquisitions.load(Ordering::Relaxed)
     }
 
-    fn acquired(&self) {
+    /// Record `task` as the new owner; the caller holds `owner`.
+    fn acquired(&self, owner: &mut Option<usize>, task: usize) {
+        *owner = Some(task);
+        self.held.store(task, Ordering::Relaxed);
         self.acquisitions.fetch_add(1, Ordering::Relaxed);
         #[cfg(test)]
         THREAD_ACQUISITIONS.with(|count| count.set(count.get() + 1));
     }
 
+    /// Whether `task` already owns the role, read without the predicate lock.
+    #[inline(always)]
+    fn reentered(&self, task: usize) -> bool {
+        self.held.load(Ordering::Relaxed) == task
+    }
+
     fn acquire(&self, task: usize) {
+        if self.reentered(task) {
+            return;
+        }
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
         if *owner == Some(task) {
             return;
         }
-        while owner.is_some() {
-            owner = self
-                .available
-                .wait(owner)
-                .unwrap_or_else(|e| e.into_inner());
+        owner = self.wait_unowned(owner);
+        self.acquired(&mut owner, task);
+    }
+
+    fn wait_unowned<'a>(
+        &self,
+        mut owner: std::sync::MutexGuard<'a, Option<usize>>,
+    ) -> std::sync::MutexGuard<'a, Option<usize>> {
+        if owner.is_some() {
+            self.waiting.fetch_add(1, Ordering::Relaxed);
+            while owner.is_some() {
+                owner = self
+                    .available
+                    .wait(owner)
+                    .unwrap_or_else(|e| e.into_inner());
+            }
+            self.waiting.fetch_sub(1, Ordering::Relaxed);
         }
-        *owner = Some(task);
-        self.acquired();
+        owner
     }
 
     fn acquire_idle(&self) {
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
         // Unlike task acquisition, even the same marker must wait. Distinct
         // idle workers have no task identity and cannot share ownership.
-        while owner.is_some() {
-            owner = self
-                .available
-                .wait(owner)
-                .unwrap_or_else(|e| e.into_inner());
-        }
-        *owner = Some(IDLE_OWNER);
-        self.acquired();
+        owner = self.wait_unowned(owner);
+        self.acquired(&mut owner, IDLE_OWNER);
     }
 
     /// Like std Condvar::wait_while (rust-lang/rust a7c37f9f0ee5,
@@ -96,6 +135,9 @@ impl Role {
     /// predicate under the notification lock. Hirsel's home thread must also
     /// run synchronous bridges: the role owner may be waiting for one.
     unsafe fn acquire_home(&self, run: *mut RunShared, task: usize) {
+        if task != IDLE_OWNER && self.reentered(task) {
+            return;
+        }
         let mut owner = self.owner.lock().unwrap_or_else(|e| e.into_inner());
         // Same-task reentry owns R already and must not service another loan.
         // Idle callbacks remain nonreentrant even for the same marker.
@@ -117,8 +159,7 @@ impl Role {
             }
         }
         self.home_waiting.store(false, Ordering::Relaxed);
-        *owner = Some(task);
-        self.acquired();
+        self.acquired(&mut owner, task);
     }
 
     #[cfg(test)]
@@ -146,8 +187,7 @@ impl Role {
         if owner.is_some() {
             return false;
         }
-        *owner = Some(IDLE_OWNER);
-        self.acquired();
+        self.acquired(&mut owner, IDLE_OWNER);
         true
     }
 
@@ -160,9 +200,10 @@ impl Role {
         if *owner == Some(task) {
             before();
             *owner = None;
+            self.held.store(UNOWNED, Ordering::Relaxed);
             if self.home_waiting.load(Ordering::Relaxed) {
                 self.available.notify_all();
-            } else {
+            } else if self.waiting.load(Ordering::Relaxed) != 0 {
                 self.available.notify_one();
             }
             true
@@ -434,6 +475,7 @@ pub(crate) unsafe fn claim(run: *mut crate::context::RunShared, task: u32) -> *m
             let mut owner = role.owner.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(*owner, Some(claim));
             *owner = Some(ctx.addr());
+            role.held.store(ctx.addr(), Ordering::Relaxed);
         }
         ctx
     }
