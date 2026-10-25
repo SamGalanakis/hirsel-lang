@@ -8,8 +8,10 @@ use crate::io_keys::{Key, KeySet, KeyTable, Kind, Registry};
 use std::sync::Mutex;
 
 /// The bit a live Ordered run's home binding sets on its tokens; service
-/// tokens stay below 2^48 and readiness run tags occupy bits 48..62.
-pub(crate) const HOME_TOKEN: u64 = 1 << 62;
+/// request tokens stay below 2^48 and readiness run tags occupy bits 48 through 61.
+/// Bit 62 belongs to Free scope timers, which the service must receive intact.
+/// The scheduler strips its separate concurrent-wait bit before adapter calls.
+pub(crate) const HOME_TOKEN: u64 = 1 << 63;
 
 /// Real host I/O callable on any worker. Only bounded calls hold resource positions;
 /// providers register readiness and return before a process/socket/timer wait.

@@ -693,3 +693,60 @@ fn one_scheduling_point_counts_one_wait_log_point_for_home_and_service() {
     ConcurrentAdapter::ready(&io).unwrap();
     assert_eq!(points(), Some(4));
 }
+
+/// Scope timer tokens use bit 62. Home routing must preserve that bit on the
+/// service side, including when an Ordered home poll discovers the edge first.
+#[test]
+fn free_scope_timers_keep_their_token_when_home_polls_first() {
+    for home_first in [false, true] {
+        let temp = tempfile::tempdir().unwrap();
+        let mut real = RealIo::grant(temp.path()).unwrap();
+        real.virtual_clock(0);
+        let io = real
+            .into_concurrent()
+            .unwrap_or_else(|_| panic!("Send streams"));
+        let clock = match io.call(Request::MonotonicClock { io: 1 }).unwrap() {
+            Completion::ClockGrant(Ok(clock)) => clock,
+            other => panic!("{other:?}"),
+        };
+        let timer = (1 << 62) | 7;
+        let home = HOME_TOKEN | 8;
+        for token in [timer, home] {
+            assert_eq!(
+                io.call_at(
+                    token,
+                    Request::SleepUntil {
+                        clock,
+                        deadline: 100
+                    }
+                ),
+                Err(AdapterError::Blocked)
+            );
+            io.parked(token);
+        }
+        assert!(io.wait().unwrap());
+        if home_first {
+            assert_eq!(io.ready_for(true).unwrap(), Ready::Tokens(vec![8]));
+            assert_eq!(
+                io.ready_after_home(&Ready::Tokens(vec![8])),
+                Ready::Tokens(vec![timer])
+            );
+        } else {
+            assert_eq!(io.ready().unwrap(), Ready::Tokens(vec![timer]));
+            assert_eq!(io.ready_for(true).unwrap(), Ready::Tokens(vec![8]));
+        }
+        for token in [timer, home] {
+            assert!(matches!(
+                io.call_at(
+                    token,
+                    Request::SleepUntil {
+                        clock,
+                        deadline: 100
+                    }
+                ),
+                Ok(Completion::Wait(Ok(())))
+            ));
+            io.finish(token);
+        }
+    }
+}
