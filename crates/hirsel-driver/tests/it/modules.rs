@@ -180,3 +180,4 @@ mod scheduled_dictionary;
 mod runtime50_resume;
 mod storage_constructor_33;
 mod leaf_operations;
+mod storage_map_remove_33;

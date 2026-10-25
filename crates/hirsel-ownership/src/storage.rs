@@ -681,11 +681,23 @@ impl Producer<'_, '_> {
                 && function.allocation == Allocation::MayAllocate;
             return Ok(reviewed.then_some(StorageCallee::MapInsert));
         }
+        let removing = path.is_core("map.remove");
         if function.parameters.len() != 2
-            || first.passing != ast::PassingMode::Borrow
+            || first.passing
+                != if removing {
+                    ast::PassingMode::Mut
+                } else {
+                    ast::PassingMode::Borrow
+                }
+            || removing && self.types.row(first.ty).modes.uniqueness != Uniqueness::Unique
             || function.parameters[1].passing != ast::PassingMode::Borrow
             || self.types.row(function.parameters[1].ty).kind != self.types.row(arguments[0]).kind
-            || function.allocation != Allocation::NoAlloc
+            || function.allocation
+                != if removing {
+                    Allocation::MayAllocate
+                } else {
+                    Allocation::NoAlloc
+                }
         {
             return Ok(None);
         }
@@ -729,13 +741,37 @@ impl Producer<'_, '_> {
         else {
             return Ok(None);
         };
-        let reaches = self.types.row(function.result).modes.relation.reaches();
-        if reaches.len() != 1
+        let result_modes = &self.types.row(function.result).modes;
+        let reaches = result_modes.relation.reaches();
+        if removing {
+            if result_modes.uniqueness != Uniqueness::Unique || !result_modes.relation.is_global() {
+                return Ok(None);
+            }
+        } else if reaches.len() != 1
             || !matches!(&reaches[0], Reach::Place(Origin { root: OriginRoot::Parameter(ParameterRef::Bound { depth: 0, parameter: ParamId(0) }), fields }) if fields.is_empty())
         {
             return Ok(None);
         }
-        Ok(Some(StorageCallee::MapGet { result_path: vec![OwnedTypePart::VariantField { variant: variant as u32, field: 0 }].into(), requires_code: match &self.types.row(result).kind { TypeKind::Named { arguments, .. } => arguments.iter().any(|argument| matches!(argument, GenericArgument::Type(ty) if matches!(self.types.row(*ty).kind, TypeKind::Function(_)))), _ => false } }))
+        let result_path = vec![OwnedTypePart::VariantField {
+            variant: variant as u32,
+            field: 0,
+        }]
+        .into();
+        let requires_code = match &self.types.row(result).kind {
+            TypeKind::Named { arguments, .. } => arguments.iter().any(|argument| matches!(argument, GenericArgument::Type(ty) if matches!(self.types.row(*ty).kind, TypeKind::Function(_)))),
+            _ => false,
+        };
+        Ok(Some(if removing {
+            StorageCallee::MapRemove {
+                result_path,
+                requires_code,
+            }
+        } else {
+            StorageCallee::MapGet {
+                result_path,
+                requires_code,
+            }
+        }))
     }
     fn call(&mut self, expression: ExprId, graph: &cfg::Graph) -> Result<StorageOp, QueryError> {
         let Some(row) = self.rows.call(expression) else {
@@ -1033,7 +1069,10 @@ impl Producer<'_, '_> {
                 let SignatureKind::Function(function) = &signature.kind else {
                     return Ok(self.assign(expression, StorageValue::Unknown));
                 };
-                if path.is_core("map.insert") || path.is_core("map.get") {
+                if path.is_core("map.insert")
+                    || path.is_core("map.get")
+                    || path.is_core("map.remove")
+                {
                     let recipe = self.map_callee(path, function, call.result)?;
                     return Ok(StorageOp::Call {
                         mutations: call

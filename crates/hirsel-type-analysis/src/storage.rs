@@ -117,10 +117,14 @@ impl StorageDomain {
                         add(result_path);
                     }
                     match callee {
-                        StorageCallee::MapInsert | StorageCallee::MapGet { .. } => {
+                        StorageCallee::MapInsert
+                        | StorageCallee::MapGet { .. }
+                        | StorageCallee::MapRemove { .. } => {
                             add(&vec![OwnedTypePart::Elements, OwnedTypePart::Field(0)].into());
                             add(&vec![OwnedTypePart::Elements, OwnedTypePart::Field(1)].into());
-                            if let StorageCallee::MapGet { result_path, .. } = callee {
+                            if let StorageCallee::MapGet { result_path, .. }
+                            | StorageCallee::MapRemove { result_path, .. } = callee
+                            {
                                 add(result_path);
                             }
                         }

@@ -1576,6 +1576,10 @@ impl Program<'_> {
                         StorageCallee::MapGet {
                             result_path,
                             requires_code,
+                        }
+                        | StorageCallee::MapRemove {
+                            result_path,
+                            requires_code,
                         } => {
                             let receiver = arguments
                                 .get(&ParamId(0))
@@ -1589,11 +1593,24 @@ impl Program<'_> {
                                 Summary::default()
                             } else {
                                 value.payload.unknown |= missing_code;
-                                Summary {
+                                let mut result = Summary {
                                     unknown: value.payload.unknown,
                                     result: value.prefixed(result_path),
                                     ..Summary::default()
+                                };
+                                if matches!(callee, StorageCallee::MapRemove { .. }) {
+                                    result.allocations.extend(
+                                        receiver
+                                            .payload
+                                            .dependencies
+                                            .iter()
+                                            .map(|dependency| dependency.source.clone()),
+                                    );
+                                    // Removing an entry only shrinks the set of possible
+                                    // stored producers; retaining the original set is sound.
+                                    result.updates.insert(ParamId(0), receiver);
                                 }
+                                result
                             }
                         }
                         StorageCallee::SealArena => {
@@ -2621,6 +2638,90 @@ mod tests {
             Err(StorageProgramError::InvalidSuccessor { .. })
         ));
     }
+    #[test]
+    fn storage_map_removal_charges_receiver_and_preserves_possible_values() {
+        let selected: Path = vec![OwnedTypePart::VariantField {
+            variant: 1,
+            field: 0,
+        }]
+        .into();
+        for output in [0, 2, 3] {
+            let mut callback = body(
+                "remove",
+                vec![
+                    StorageOp::Assign(vec![(StoragePlace::root(1), StorageValue::Fresh)]),
+                    StorageOp::Call {
+                        mutations: vec![ParamId(0)],
+                        callee: StorageCallee::MapRemove {
+                            result_path: selected.clone(),
+                            requires_code: false,
+                        },
+                        arguments: vec![
+                            (ParamId(0), StoragePlace::root(0)),
+                            (ParamId(1), StoragePlace::root(1)),
+                        ],
+                        destination: Some(StoragePlace::root(2)),
+                    },
+                    StorageOp::Call {
+                        mutations: vec![],
+                        callee: StorageCallee::MapGet {
+                            result_path: selected.clone(),
+                            requires_code: false,
+                        },
+                        arguments: vec![
+                            (ParamId(0), StoragePlace::root(0)),
+                            (ParamId(1), StoragePlace::root(1)),
+                        ],
+                        destination: Some(StoragePlace::root(3)),
+                    },
+                    StorageOp::Return(StoragePlace::root(output)),
+                ],
+            );
+            callback.inputs[0].mutable = true;
+            let result = analyze(
+                std::slice::from_ref(&callback),
+                &[StorageDomain::for_body(&callback)],
+            )
+            .unwrap();
+            let StorageBehavior::Known {
+                allocations,
+                results,
+            } = &result.behaviors[0]
+            else {
+                panic!("{result:?}")
+            };
+            assert_eq!(allocations.as_ref(), [selector(0)]);
+            let mut source = selector(0);
+            let parts = if output == 0 {
+                Path::new()
+            } else {
+                source.parts = vec![OwnedTypePart::Elements, OwnedTypePart::Field(1)].into();
+                selected.clone()
+            };
+            assert!(
+                results
+                    .iter()
+                    .any(|result| result.parts == parts && result.source == source),
+                "output {output}: {results:?}"
+            );
+
+            let StorageOp::Call {
+                callee: StorageCallee::MapRemove { requires_code, .. },
+                ..
+            } = &mut callback.nodes[1].operation
+            else {
+                unreachable!()
+            };
+            *requires_code = true;
+            let result = analyze(
+                std::slice::from_ref(&callback),
+                &[StorageDomain::for_body(&callback)],
+            )
+            .unwrap();
+            assert_eq!(result.behaviors[0], StorageBehavior::Unknown);
+        }
+    }
+
     #[test]
     fn storage_map_retains_inserted_payload_through_lookup() {
         let mut callback = body(

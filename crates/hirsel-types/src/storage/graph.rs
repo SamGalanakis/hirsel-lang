@@ -118,6 +118,12 @@ pub enum StorageCallee {
         result_path: SharedPath<OwnedTypePart>,
         requires_code: bool,
     },
+    /// Removal may allocate from its receiver and returns an old stored value.
+    /// The remaining receiver conservatively retains every possible producer.
+    MapRemove {
+        result_path: SharedPath<OwnedTypePart>,
+        requires_code: bool,
+    },
     /// Move the actual child's stored result out of a reviewed Task carrier,
     /// preserving code producers as well as storage dependencies.
     TaskAwait,
