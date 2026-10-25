@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 
 pub mod contract;
 pub mod demand;
+pub mod profile;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceError {

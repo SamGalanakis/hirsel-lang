@@ -20,7 +20,7 @@ pub fn derive_with_owners(
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     owners: &crate::layout::Owners,
 ) -> Result<Option<ShapeGraph>, QueryError> {
-    Ok(derive_typed_impl(types, root, lookup, Some(owners))?.map(|derived| derived.graph))
+    Ok(derive_typed_impl(types, root, lookup, Some(owners), false)?.map(|derived| derived.graph))
 }
 
 /// Transient correspondence for this derivation's interner. Numeric TypeIds
@@ -36,7 +36,19 @@ pub fn derive_typed<'a>(
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
-    derive_typed_impl(types, root, lookup, None)
+    derive_typed_impl(types, root, lookup, None, false)
+}
+
+/// Reuse the declaration-derived owned graph for source storage profiles.
+/// A function is a leaf here: its signature is not its owned environment.
+/// The profile query must independently expand every such leaf's actual code
+/// cases and owned captures. Ordinary structural admission remains unchanged.
+pub fn derive_profile_shape<'a>(
+    types: &'a TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Option<DerivedShape<'a>>, QueryError> {
+    derive_typed_impl(types, root, lookup, None, true)
 }
 
 fn derive_typed_impl<'a>(
@@ -44,6 +56,7 @@ fn derive_typed_impl<'a>(
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     owners: Option<&crate::layout::Owners>,
+    callable_leaves: bool,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
     let memo = TypeMemo::new();
     let mut graph = ShapeGraph {
@@ -81,6 +94,7 @@ fn derive_typed_impl<'a>(
              known: &mut HashMap<TypeId, u32>,
              pending: &mut Vec<(TypeId, bool)>| node(ty, graph, known, pending);
         let shape = match &row.kind {
+            TypeKind::Function(_) if callable_leaves => Shape::Leaf,
             TypeKind::Primitive(Primitive::Never)
             | TypeKind::Function(_)
             | TypeKind::Parameter(_)

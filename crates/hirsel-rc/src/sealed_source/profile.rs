@@ -1,0 +1,106 @@
+//! Reconstruct one complete profile from original types and source-selected
+//! callable observations. No layout, native ABI or candidate LIR is read.
+use super::{SourceError, closed_storage_type};
+use hirsel_lir::sealed_payload_source::{
+    ClosedStorageCase, ClosedStorageFunction, ClosedStorageProfile,
+};
+use hirsel_syntax::DefId;
+use hirsel_types::{QueryError, SignatureRef, TypeId, TypeInterner, TypeKind};
+use std::collections::{BTreeMap, HashSet};
+
+/// One independently selected original callable case. Capture TypeIds belong
+/// to this query's interner and retain the full original types in slot order.
+/// The case's recipe must be the actual observed CT5 recipe, never a signature
+/// hash or a recipe synthesized for a direct named call.
+pub struct CallableCase {
+    pub case: ClosedStorageCase,
+    pub captures: Vec<TypeId>,
+}
+
+/// `callables` must return every case for the given full callable type in this
+/// original context. Unknown and empty answers cannot stand for completeness.
+/// These callbacks provide source data; the query owner still binds its current
+/// source/V observations independently before publishing any provider result.
+pub fn derive(
+    types: &TypeInterner,
+    root: TypeId,
+    declarations: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    callables: &mut impl FnMut(TypeId) -> Result<Vec<CallableCase>, SourceError>,
+) -> Result<ClosedStorageProfile, SourceError> {
+    let root_type = closed_storage_type(types, root)?;
+    let mut pending = vec![root];
+    let mut visited = HashSet::new();
+    let mut functions = BTreeMap::new();
+    while let Some(ty) = pending.pop() {
+        if !visited.insert(ty) {
+            continue;
+        }
+        let shape = hirsel_layout::structural::derive_profile_shape(types, ty, declarations)
+            .map_err(|error| SourceError::Type(format!("{error:?}")))?
+            .ok_or(SourceError::Unsupported(
+                "storage profile needs a complete resource-free source shape",
+            ))?;
+        for ty in shape.node_types {
+            let Some(row) = types.get(ty) else {
+                return Err(SourceError::Malformed("storage profile source type"));
+            };
+            let TypeKind::Function(function) = &row.kind else {
+                continue;
+            };
+            if function.incomplete || !function.generics.is_empty() {
+                return Err(SourceError::Unsupported(
+                    "storage profile needs a fully selected original callable type",
+                ));
+            }
+            let closed = closed_storage_type(types, ty)?;
+            if functions.contains_key(&closed.source_type) {
+                continue;
+            }
+            let observed = callables(ty)?;
+            if observed.is_empty() {
+                return Err(SourceError::Unsupported(
+                    "storage profile needs complete original callable cases",
+                ));
+            }
+            let mut cases = Vec::with_capacity(observed.len());
+            for observed in observed {
+                match &observed.case.environment {
+                    None if !observed.captures.is_empty() => {
+                        return Err(SourceError::Malformed("code-only case has source captures"));
+                    }
+                    None => (),
+                    Some(environment) => {
+                        if environment.captures.len() != observed.captures.len() {
+                            return Err(SourceError::Malformed(
+                                "callable environment source capture arity",
+                            ));
+                        }
+                        for (capture, &ty) in environment.captures.iter().zip(&observed.captures) {
+                            if capture.ty != closed_storage_type(types, ty)? {
+                                return Err(SourceError::Malformed(
+                                    "callable environment differs from original capture type",
+                                ));
+                            }
+                        }
+                    }
+                }
+                pending.extend(observed.captures);
+                cases.push(observed.case);
+            }
+            functions.insert(
+                closed.source_type,
+                ClosedStorageFunction { ty: closed, cases },
+            );
+        }
+    }
+    ClosedStorageProfile {
+        schema: ClosedStorageProfile::SCHEMA,
+        root: root_type,
+        functions: functions.into_values().collect(),
+    }
+    .canonical()
+    .map_err(SourceError::Malformed)
+}
+
+#[cfg(test)]
+mod tests;

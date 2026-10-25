@@ -9,7 +9,6 @@ use hirsel_engine::{
     QueryEngine, RunConfiguration, SimulationConfig, ValidatedNativeInput, Verify, check_progress,
     default_context, default_environment, entry_path, run_observed_snapshot, with_compiler_stack,
 };
-use hirsel_lir::sealed_payload_source::ClosedStorageProfile;
 use hirsel_rc::instance::{Actuals, key_of};
 use hirsel_rc::sealed_source::contract::registry::{Context, Registry};
 use hirsel_rc::sealed_source::contract::{self, Input, Port};
@@ -217,8 +216,8 @@ fn port_context_declared_function_values_keep_distinct_actuals_and_reject_profil
             let [GenericArgument::Type(actual)] = arguments.as_slice() else {
                 panic!("id has one original type actual")
             };
-            let unique =
-                original.types.get(*actual).unwrap().modes.uniqueness == Uniqueness::Unique;
+            let actual = *actual;
+            let unique = original.types.get(actual).unwrap().modes.uniqueness == Uniqueness::Unique;
             let actuals = Actuals {
                 binder: Some(body.parameter_scope),
                 arguments,
@@ -245,13 +244,15 @@ fn port_context_declared_function_values_keep_distinct_actuals_and_reject_profil
             let projection = source.demand_projection(&base).unwrap();
             assert_eq!(entry.parameters().len(), 1);
             assert_eq!(&entry.parameters()[0].ty, entry.result());
-            let profile = ClosedStorageProfile {
-                schema: ClosedStorageProfile::SCHEMA,
-                root: entry.parameters()[0].ty.clone(),
-                functions: vec![],
-            }
-            .canonical()
+            let profile = hirsel_rc::sealed_source::profile::derive(
+                &original.types,
+                actual,
+                &mut |definition| Ok(original.signatures.get(definition.path()).cloned()),
+                &mut |_| Err(SourceError::Unsupported("fixture has no held callable")),
+            )
             .unwrap();
+            assert_eq!(profile.root, entry.parameters()[0].ty);
+            assert!(profile.functions.is_empty());
             let profiles = BTreeMap::from([
                 (Port::Parameter(0), profile.clone()),
                 (Port::Result, profile),
