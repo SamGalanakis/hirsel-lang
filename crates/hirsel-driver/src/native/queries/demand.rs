@@ -517,7 +517,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v9",
+            "hirsel.native.demand-import-action.v10",
             [bytes.as_slice()],
         )))
     }
@@ -734,7 +734,16 @@ impl DemandInstances {
             if recipe.key()? != key.instance {
                 return Err("library recipe differs from demanded key".into());
             }
-            recipe.restore(&inputs.declarations().program, &mut layouts)?
+            let (instances, id) = recipe.restore(&inputs.declarations().program, &mut layouts)?;
+            let instances = hirsel_rc::instance::discover_library_instance(
+                &inputs.declarations().program,
+                &inputs.declarations().context,
+                &mut layouts,
+                instances,
+                id,
+            )
+            .map_err(|error| format!("native library cleanup discovery: {error:?}"))?;
+            (instances, id)
         };
         self.imports += 1;
         let imported = hirsel_rc::import::import_instance(

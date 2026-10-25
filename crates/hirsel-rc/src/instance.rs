@@ -1021,6 +1021,52 @@ pub fn discover_instance(
     Ok((discovery.out, required))
 }
 
+/// Discover cleanup dependencies of a restored library instance from its
+/// concrete type arguments and callable header. Library-generated temporaries
+/// (such as channel.open's Option[T]) have no source body whose locals could
+/// supply these dependencies. No implementation body is read here.
+pub fn discover_library_instance(
+    program: &Program,
+    context: &DiscoveryContext,
+    layouts: &mut LayoutBuilder<'_>,
+    instances: Instances,
+    id: InstanceId,
+) -> Result<Instances, InstanceError> {
+    if !instances
+        .roles
+        .get(id.index())
+        .is_some_and(InstanceRole::is_library)
+    {
+        return Err(InstanceError::Malformed(
+            "expected a library instance".into(),
+        ));
+    }
+    let mut types = instances.actuals[id.index()]
+        .arguments
+        .iter()
+        .filter_map(|argument| match argument {
+            GenericArgument::Type(ty) => Some(*ty),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if let Some(callable) = program.types.get(instances.callables[id.index()])
+        && let TypeKind::Function(callable) = &callable.kind
+    {
+        types.extend(callable.parameters.iter().map(|parameter| parameter.ty));
+        types.push(callable.result);
+        types.extend(callable.error);
+    }
+    let mut discovery = Expander {
+        program,
+        layouts,
+        out: instances,
+        context,
+        nominals: Default::default(),
+    };
+    discovery.local_nominals(types)?;
+    Ok(discovery.out)
+}
+
 /// Register source, nominal-finalizer and registry-constant roots using only
 /// compact contracts. Every returned source instance starts without a body.
 pub fn seed_instances(
