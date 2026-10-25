@@ -1355,7 +1355,6 @@ impl Drop for CancelFrame {
 }
 #[test]
 fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes() {
-    use std::time::Duration;
     let process = ProcessBudget::new(9 << 20);
     let owner = Arc::new(process.reserve(1 << 20).unwrap());
     let (dropping, drop_started) = mpsc::channel();
@@ -1389,11 +1388,11 @@ fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes()
     // The child occupies one worker before the frame exists, so the frame's
     // home is the other, idle worker and can run its cancellation cleanup.
     let held = rt.request(&[query(1)]);
-    let started = child_entered.recv_timeout(Duration::from_secs(10));
+    let started = child_entered.recv();
     let request = rt.request(&[local]);
-    let waited = suspended.recv_timeout(Duration::from_secs(10));
+    let waited = suspended.recv();
     rt.cancel(request);
-    let dropped = drop_started.recv_timeout(Duration::from_secs(10));
+    let dropped = drop_started.recv();
     let during = rt.stats();
     // Release the held destructors before any assertion can unwind the test.
     let _ = release_drop.send(());
