@@ -26,6 +26,78 @@ struct ArtifactsExport {
     output: MemoryReservation,
 }
 
+/// The checked-product receipt of the completed Check root: its captured
+/// headers, and the one grant its staged construction is admitted from.
+struct CheckedReceipt {
+    headers: Arc<hirsel_engine::FrontCheckedSignatures>,
+    allowance: Mutex<Option<MemoryReservation>>,
+    products: std::sync::OnceLock<Arc<hirsel_engine::CheckedProducts>>,
+}
+impl CheckedReceipt {
+    fn products(
+        &self,
+        check: &Arc<FrontCheckQueries>,
+        product: ProductRef,
+        entry: &DefPath,
+    ) -> Result<Arc<hirsel_engine::CheckedProducts>, ToolError> {
+        if let Some(products) = self.products.get() {
+            return Ok(products.clone());
+        }
+        let refused = |error: hirsel_engine::QueryError| {
+            ToolError::Runtime(format!("checked products: {error:?}"))
+        };
+        let mut pool = self
+            .allowance
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(uninstalled)?;
+        let mut stage = |bytes: u64, what: &str| {
+            pool.split(bytes).ok_or_else(|| {
+                ToolError::Runtime(format!("checked product {what} exceeds its admission"))
+            })
+        };
+        // Each stage is sized before it allocates. Scope, input, type capture
+        // and construction are released with `built`; the receipt keeps only
+        // its output text and read maps charged.
+        let scope = check.completed_scope_bytes(product).map_err(refused)?;
+        let scope = Arc::new(
+            check
+                .completed_scope(product, stage(scope, "scope")?)
+                .map_err(refused)?,
+        );
+        let input = scope
+            .checked_product_input_bytes(&self.headers, entry)
+            .map_err(refused)?;
+        let input = std::rc::Rc::new(
+            scope
+                .checked_product_input_with_allowance(
+                    self.headers.clone(),
+                    entry,
+                    stage(input, "input")?,
+                )
+                .map_err(refused)?,
+        );
+        let capture = input.type_capture_bytes().map_err(refused)?;
+        let prepared = input
+            .capture_types_with_allowance(stage(capture, "type capture")?)
+            .map_err(refused)?;
+        // Construction moves the uniquely owned originals and their grants
+        // into the export rather than admitting a second payload copy.
+        let build = prepared.owned_build_bytes().map_err(refused)?;
+        let built = prepared
+            .build_owned_with_allowance(stage(build, "construction")?)
+            .map_err(refused)?;
+        let output = stage(built.output_bytes().map_err(refused)?, "output")?;
+        let receipt = stage(built.checked_products_bytes().map_err(refused)?, "receipt")?;
+        let products = built
+            .checked_products_with_allowances(output, receipt)
+            .map_err(refused)?;
+        drop(built);
+        Ok(self.products.get_or_init(|| products).clone())
+    }
+}
+
 struct SourceProducts {
     entry: DefPath,
     inputs: FrozenInputs,
@@ -37,6 +109,7 @@ struct SourceProducts {
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     export: Option<Arc<ArtifactsExport>>,
+    receipt: Option<Arc<CheckedReceipt>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -51,6 +124,9 @@ impl GraphProducts for SourceProducts {
     fn accepts(&self, operation: &CompileOperation) -> bool {
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
+            CompileOperation::CheckedProducts { lowering, .. } => {
+                *lowering == self.lowering && self.receipt.is_some()
+            }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
@@ -82,7 +158,10 @@ impl GraphProducts for SourceProducts {
             CompileOperation::SafeCheck | CompileOperation::Artifacts { native: false } => {
                 vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
             }
-            CompileOperation::Check { lowering } if *lowering == self.lowering => {
+            CompileOperation::Check { lowering }
+            | CompileOperation::CheckedProducts { lowering, .. }
+                if *lowering == self.lowering =>
+            {
                 vec![self.check.query()]
             }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
@@ -114,6 +193,7 @@ impl GraphProducts for SourceProducts {
         let lower = self.lower.clone();
         let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
+        let receipt = self.receipt.clone();
         let expected = check.query();
         let entry = match &operation {
             CompileOperation::NativeOwnership(request) => request
@@ -249,6 +329,31 @@ impl GraphProducts for SourceProducts {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
                             CompileResult::Check(completed.checked)
+                        }
+                        CompileOperation::CheckedProducts { canonical, .. } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if product.address != expected.address {
+                                return Err(uninstalled());
+                            }
+                            let completed = check.outcome(*product).ok_or_else(|| {
+                                ToolError::Runtime("selected check product is unavailable".into())
+                            })?;
+                            let mut products = receipt
+                                .as_ref()
+                                .ok_or_else(uninstalled)?
+                                .products(&check, *product, &entry)?;
+                            // The digest commits to the full text either way.
+                            if !*canonical {
+                                let mut digest_only = (*products).clone();
+                                digest_only.canonical = None;
+                                products = Arc::new(digest_only);
+                            }
+                            CompileResult::CheckedProducts {
+                                checked: completed.checked,
+                                products,
+                            }
                         }
                         CompileOperation::Tir { .. } => {
                             let [product] = products else {
@@ -399,6 +504,7 @@ impl Plan {
         needs_proofs: bool,
         needs_ownership: bool,
         needs_safe: bool,
+        needs_receipt: bool,
         footprint: FrontInputFootprint,
         run_input_bytes: u64,
         native_catalogue_bytes: u64,
@@ -482,9 +588,11 @@ impl Plan {
         } else {
             slack / 4
         };
+        // A checked receipt is a root output after Check, like Run: it takes
+        // Run's share of the slack and no Run inventory or rows.
         let lower_slack = if needs_ownership {
             slack / 12
-        } else if needs_run {
+        } else if needs_run || needs_receipt {
             slack / 3
         } else {
             slack / 2
@@ -496,7 +604,7 @@ impl Plan {
         };
         let check_slack = if needs_ownership {
             slack / 48
-        } else if needs_run {
+        } else if needs_run || needs_receipt {
             slack / 8
         } else {
             slack - front_slack - lower_slack - growth_slack
@@ -633,7 +741,8 @@ pub(super) fn install(
     toolchain: Option<&Arc<crate::native::Toolchain>>,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
-        CompileOperation::Check { lowering } => (*lowering, false),
+        CompileOperation::Check { lowering }
+        | CompileOperation::CheckedProducts { lowering, .. } => (*lowering, false),
         CompileOperation::Tir { .. } | CompileOperation::NativeOwnership(_) => {
             (LoweringPolicy::Reachable, true)
         }
@@ -738,6 +847,7 @@ pub(super) fn install(
             request.operation,
             CompileOperation::SafeCheck | CompileOperation::Artifacts { .. }
         ),
+        matches!(request.operation, CompileOperation::CheckedProducts { .. }),
         footprint,
         run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
         native_catalogue
@@ -756,6 +866,7 @@ pub(super) fn install(
         transport,
         mut run,
     } = loading.finish(plan.snapshots)?;
+    let mut check = check;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
         error,
@@ -787,6 +898,28 @@ pub(super) fn install(
         .engine
         .front_growth_queries(&program.entry, front.clone(), plan.root, growth, errors)
         .map_err(&query_error)?;
+    // The receipt's headers share the Check partition; their constructor
+    // refuses metadata beyond this split.
+    let receipt = if matches!(request.operation, CompileOperation::CheckedProducts { .. }) {
+        let headers = program
+            .engine
+            .front_checked_signatures_bytes(&front)
+            .map_err(&query_error)?;
+        let headers = check.split(headers).ok_or_else(uninstalled)?;
+        let headers = program
+            .engine
+            .front_checked_signatures(front.clone(), headers)
+            .map_err(&query_error)?;
+        // The receipt has no Run, so its stages draw from Run's partition.
+        let allowance = run.split(run.bytes()).ok_or_else(uninstalled)?;
+        Some(Arc::new(CheckedReceipt {
+            headers,
+            allowance: Mutex::new(Some(allowance)),
+            products: std::sync::OnceLock::new(),
+        }))
+    } else {
+        None
+    };
     let root_package = program.entry.0.package.clone();
     let check = program
         .engine
@@ -1117,6 +1250,7 @@ pub(super) fn install(
         ownership,
         safe,
         export: export_products,
+        receipt,
         front,
         lower,
         check,
