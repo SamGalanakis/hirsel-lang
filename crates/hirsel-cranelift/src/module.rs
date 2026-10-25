@@ -299,32 +299,22 @@ pub(crate) fn emit(
     inputs: &EmitInputs<'_>,
     clif: bool,
     profile: hirsel_lir::debug::Profile<'_>,
-    ownership: bool,
+    ownership: Option<hirsel_lir::ownership_trace::native::Request<'_>>,
 ) -> Emitted<(
     hirsel_lir::stage::ObjectArtifact,
     Option<String>,
     BTreeMap<String, u64>,
 )> {
-    let ownership_plans = if ownership {
+    let ownership_plans = if let Some(ownership) = ownership {
         if inputs.alternate || !inputs.available_externally.is_empty() {
             return Err(CodegenError::Object {
                 message: "ownership tracing with alternate/template code is not implemented".into(),
             });
         }
-        hirsel_lir::ownership_trace::native::local_calls(units)
-            .map_err(|message| CodegenError::Object { message })?;
         Some(
-            units
-                .iter()
-                .map(|unit| {
-                    hirsel_lir::ownership_trace::native::LeafPlan::prepare(unit, inputs.layouts)
-                        .map(|plan| (unit.unit().header.instance, plan))
-                        .map_err(|what| CodegenError::Unsupported {
-                            definition: unit.unit().header.definition.clone(),
-                            what,
-                        })
-                })
-                .collect::<Result<BTreeMap<_, _>, _>>()?,
+            ownership
+                .prepare(units, inputs.layouts)
+                .map_err(|message| CodegenError::Object { message })?,
         )
     } else {
         None
@@ -470,7 +460,7 @@ pub(crate) fn emit(
         .map_err(|message| CodegenError::Object { message })?;
     artifact(file, manifested, inputs, crate::TOOLCHAIN)
         .map(|mut artifact| {
-            if ownership {
+            if ownership.is_some() {
                 artifact.reproducibility.options = hirsel_syntax::ContentHash::of_parts(
                     "hirsel.native-ownership-leaf-options.v1",
                     [
@@ -481,6 +471,16 @@ pub(crate) fn emit(
                     ],
                 );
             }
+            if let Some(fingerprint) = ownership.and_then(|request| request.fingerprint()) {
+                artifact.reproducibility.options = hirsel_syntax::ContentHash::of_parts(
+                    "hirsel.native-ownership-relocated-options.v1",
+                    [
+                        artifact.reproducibility.options.0.as_slice(),
+                        fingerprint.0.as_slice(),
+                    ],
+                );
+            }
+
             (
                 ObjectArtifact {
                     debug: debug_functions,

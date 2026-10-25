@@ -325,3 +325,178 @@ fn ownership_native_equal_pointer_free_resources_have_distinct_real_lifetimes_on
     }
     assert_eq!(traces[0], traces[1]);
 }
+
+fn relocated_plans(
+    program: &support::programs::Program,
+) -> BTreeMap<hirsel_syntax::ContentHash, hirsel_lir::ownership_trace::Plan> {
+    program
+        .units
+        .iter()
+        .map(|unit| {
+            let mut plan = LeafPlan::prepare(unit, &program.table.table)
+                .unwrap()
+                .plan()
+                .clone();
+            for observation in &mut plan.observations {
+                observation.marker.id.0 += 100;
+            }
+            (unit.unit().digest(), plan)
+        })
+        .collect()
+}
+
+#[test]
+fn ownership_relocated_emission_preserves_ids_and_binds_the_object_to_its_plan() {
+    let program = fixture();
+    let inputs = inputs(&program);
+    let units = program.units();
+    let plans = relocated_plans(&program);
+    for backend in ["llvm", "cranelift"] {
+        let emit = |plans: &BTreeMap<_, _>| {
+            if backend == "llvm" {
+                hirsel_llvm::emit_object_relocated_ownership(&units, &inputs, plans).unwrap()
+            } else {
+                hirsel_cranelift::emit_object_relocated_ownership(&units, &inputs, plans).unwrap()
+            }
+        };
+        let ordinary = if backend == "llvm" {
+            hirsel_llvm::emit_object(&units, &inputs).unwrap()
+        } else {
+            hirsel_cranelift::emit_object(&units, &inputs).unwrap()
+        };
+        let object = emit(&plans);
+        let mut other = plans.clone();
+        for plan in other.values_mut() {
+            for observation in &mut plan.observations {
+                observation.marker.id.0 += 100;
+            }
+        }
+        let changed = emit(&other);
+        assert_ne!(
+            object.bytes, changed.bytes,
+            "{backend}: original marker ids must reach emitted hooks"
+        );
+        assert_ne!(
+            object.reproducibility.options,
+            changed.reproducibility.options
+        );
+        assert_ne!(
+            ordinary.reproducibility.options,
+            object.reproducibility.options
+        );
+        assert!(
+            object
+                .imports
+                .iter()
+                .any(|symbol| symbol.name == "hirsel_rt_v2_ownership_event")
+        );
+        let after = if backend == "llvm" {
+            hirsel_llvm::emit_object(&units, &inputs).unwrap()
+        } else {
+            hirsel_cranelift::emit_object(&units, &inputs).unwrap()
+        };
+        assert_eq!(ordinary.bytes, after.bytes, "{backend}: trace-OFF bytes");
+        let ir = if backend == "llvm" {
+            hirsel_llvm::emit_ir_relocated_ownership(&units, &inputs, &plans).unwrap()
+        } else {
+            hirsel_cranelift::emit_clif_relocated_ownership(&units, &inputs, &plans).unwrap()
+        };
+        for observation in plans[&program.units[0].unit().digest()].observations.iter() {
+            let constant = if backend == "llvm" {
+                format!("i32 {}", observation.marker.id.0)
+            } else {
+                format!("iconst.i32 {}", observation.marker.id.0)
+            };
+            assert!(
+                ir.contains(&constant),
+                "{backend}: missing {constant}: {ir}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ownership_relocated_emission_refuses_missing_stale_or_extra_plans_on_both_backends() {
+    let program = fixture();
+    let inputs = inputs(&program);
+    let units = program.units();
+    let original = relocated_plans(&program);
+    for mutation in ["missing", "stale", "extra", "dropped", "forged"] {
+        let mut plans = original.clone();
+        let key = program.units[0].unit().digest();
+        match mutation {
+            "missing" => {
+                plans.remove(&key);
+            }
+            "stale" => plans.get_mut(&key).unwrap().unit = hash("different unit"),
+            "extra" => {
+                plans.insert(hash("foreign unit"), plans[&key].clone());
+            }
+            "dropped" => {
+                plans.get_mut(&key).unwrap().observations.remove(0);
+            }
+            "forged" => {
+                let extra = plans[&key].observations[0].clone();
+                plans.get_mut(&key).unwrap().observations.push(extra);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            hirsel_llvm::emit_object_relocated_ownership(&units, &inputs, &plans).is_err(),
+            "llvm {mutation}"
+        );
+        assert!(
+            hirsel_cranelift::emit_object_relocated_ownership(&units, &inputs, &plans).is_err(),
+            "cranelift {mutation}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "native: executes transported marker hooks on LLVM and Cranelift"]
+fn ownership_relocated_native_execution_reports_the_original_marker_ids() {
+    let program = fixture();
+    let inputs = inputs(&program);
+    let units = program.units();
+    let plans = relocated_plans(&program);
+    let mut outputs = vec![];
+    for backend in ["llvm", "cranelift"] {
+        let object = if backend == "llvm" {
+            hirsel_llvm::emit_object_relocated_ownership(&units, &inputs, &plans).unwrap()
+        } else {
+            hirsel_cranelift::emit_object_relocated_ownership(&units, &inputs, &plans).unwrap()
+        };
+        let dir = support::native::scratch(&format!("ownership-relocated-{backend}"));
+        std::fs::write(
+            dir.join("entries.h"),
+            program.c_call("ownership_leaf", "call_leaf"),
+        )
+        .unwrap();
+        let source = dir.join("ownership.c");
+        std::fs::write(&source, include_str!("../native/ownership.c")).unwrap();
+        let glue = program.glue();
+        let executable = support::native::link(
+            &program.table.target,
+            &dir,
+            &[("unit.o", &object.bytes), ("glue.o", &glue)],
+            &[source],
+        );
+        let output = support::native::run(&program.table.target, &executable);
+        let ids: Vec<_> = output
+            .lines()
+            .filter_map(|line| {
+                let mut words = line.split_whitespace();
+                (words.next() == Some("event"))
+                    .then(|| words.nth(1).unwrap().parse::<u32>().unwrap())
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            (100..106).chain(100..106).collect::<Vec<_>>(),
+            "{backend}: {output}"
+        );
+        assert_eq!(output.lines().count(), 16, "{backend}: {output}");
+        outputs.push(output);
+    }
+    assert_eq!(outputs[0], outputs[1]);
+}

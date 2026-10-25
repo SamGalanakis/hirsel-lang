@@ -293,7 +293,7 @@ pub fn emit_object_profile(
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_object_inner(units, inputs, profile, false)
+    emit_object_inner(units, inputs, profile, None)
 }
 
 /// Emit diagnostic shadow hooks for the supported leaf ownership subset.
@@ -302,14 +302,19 @@ pub fn emit_object_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    emit_object_inner(units, inputs, Profile::default(), true)
+    emit_object_inner(
+        units,
+        inputs,
+        Profile::default(),
+        Some(hirsel_lir::ownership_trace::native::Request::Leaf),
+    )
 }
 
 fn emit_object_inner(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
-    ownership: bool,
+    ownership: Option<hirsel_lir::ownership_trace::native::Request<'_>>,
 ) -> Result<ObjectArtifact, CodegenError> {
     let (bytes, manifested, plan) = lower(
         units,
@@ -356,7 +361,7 @@ fn emit_object_inner(
             ],
         );
     }
-    if ownership {
+    if ownership.is_some() {
         artifact.reproducibility.options = ContentHash::of_parts(
             "hirsel.native-ownership-leaf-options.v1",
             [
@@ -364,6 +369,15 @@ fn emit_object_inner(
                 hirsel_lir::ownership_trace::native::ABI_VERSION
                     .to_le_bytes()
                     .as_slice(),
+            ],
+        );
+    }
+    if let Some(fingerprint) = ownership.and_then(|request| request.fingerprint()) {
+        artifact.reproducibility.options = ContentHash::of_parts(
+            "hirsel.native-ownership-relocated-options.v1",
+            [
+                artifact.reproducibility.options.0.as_slice(),
+                fingerprint.0.as_slice(),
             ],
         );
     }
@@ -381,7 +395,7 @@ pub fn emit_resume_object(
         units,
         inputs,
         Profile::default(),
-        false,
+        None,
         Some(plans),
         |module, machine| {
             optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs), false)
@@ -403,7 +417,7 @@ pub fn emit_optimized_ir(
         units,
         inputs,
         Profile::default(),
-        false,
+        None,
         None,
         |module, machine| {
             optimize(module, machine, inputs.opt, true)?;
@@ -422,7 +436,7 @@ pub fn emit_ir(
         units,
         inputs,
         Profile::default(),
-        false,
+        None,
         None,
         |module, _| Ok(module.text()),
     )
@@ -438,7 +452,42 @@ pub fn emit_ir_ownership(
         units,
         inputs,
         Profile::default(),
-        true,
+        Some(hirsel_lir::ownership_trace::native::Request::Leaf),
+        None,
+        |module, _| Ok(module.text()),
+    )
+    .map(|(text, ..)| text)
+}
+
+/// Emit exactly the plans preserved by earlier compiler passes. No leaf plan
+/// fallback can supply a missing or stale unit in this diagnostic request.
+pub fn emit_object_relocated_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &BTreeMap<ContentHash, hirsel_lir::ownership_trace::Plan>,
+) -> Result<ObjectArtifact, CodegenError> {
+    emit_object_inner(
+        units,
+        inputs,
+        Profile::default(),
+        Some(hirsel_lir::ownership_trace::native::Request::Relocated(
+            plans,
+        )),
+    )
+}
+
+pub fn emit_ir_relocated_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &BTreeMap<ContentHash, hirsel_lir::ownership_trace::Plan>,
+) -> Result<String, CodegenError> {
+    lower(
+        units,
+        inputs,
+        Profile::default(),
+        Some(hirsel_lir::ownership_trace::native::Request::Relocated(
+            plans,
+        )),
         None,
         |module, _| Ok(module.text()),
     )
@@ -450,12 +499,12 @@ fn lower<T>(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
     profile: Profile<'_>,
-    ownership: bool,
+    ownership: Option<hirsel_lir::ownership_trace::native::Request<'_>>,
     resume: Option<&hirsel_lir::continuation::ContinuationPlans>,
     finish: impl FnOnce(&Module<'_>, &TargetMachine) -> Result<T, CodegenError>,
 ) -> Result<(T, Manifested, Option<crate::debug::DebugPlan>), CodegenError> {
     check_loaded()?;
-    let ownership_plans = if ownership {
+    let ownership_plans = if let Some(ownership) = ownership {
         if inputs.alternate || !inputs.available_externally.is_empty() {
             return Err(CodegenError::Unsupported {
                 definition: units
@@ -467,20 +516,10 @@ fn lower<T>(
                 what: "ownership tracing with alternate/template code".into(),
             });
         }
-        hirsel_lir::ownership_trace::native::local_calls(units)
-            .map_err(|what| CodegenError::Glue { what })?;
         Some(
-            units
-                .iter()
-                .map(|unit| {
-                    hirsel_lir::ownership_trace::native::LeafPlan::prepare(unit, inputs.layouts)
-                        .map(|plan| (unit.unit().header.instance, plan))
-                        .map_err(|what| CodegenError::Unsupported {
-                            definition: unit.unit().header.definition.clone(),
-                            what,
-                        })
-                })
-                .collect::<Result<BTreeMap<_, _>, _>>()?,
+            ownership
+                .prepare(units, inputs.layouts)
+                .map_err(|what| CodegenError::Glue { what })?,
         )
     } else {
         None

@@ -25,7 +25,8 @@ use hirsel_syntax::DefPath;
 pub use c_entry::{c_call, c_definition};
 pub use emit::{check_target, compile_ir, emit_ir, emit_object, emit_optimized_ir};
 pub use emit::{
-    emit_glue, emit_ir_ownership, emit_object_ownership, emit_object_profile, emit_resume_object,
+    emit_glue, emit_ir_ownership, emit_ir_relocated_ownership, emit_object_ownership,
+    emit_object_profile, emit_object_relocated_ownership, emit_resume_object,
 };
 pub use hirsel_lir::profile::{ProfileSource, ProfileSources};
 

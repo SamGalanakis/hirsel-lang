@@ -134,7 +134,7 @@ pub fn emit_object(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, Default::default(), false))
+    caught(|| module::emit(units, inputs, false, Default::default(), None))
         .map(|(artifact, _, _)| artifact)
 }
 
@@ -146,7 +146,7 @@ pub fn emit_object_profile(
     inputs: &EmitInputs<'_>,
     profile: hirsel_lir::debug::Profile<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, profile, false)).map(|(artifact, _, _)| artifact)
+    caught(|| module::emit(units, inputs, false, profile, None)).map(|(artifact, _, _)| artifact)
 }
 
 /// The Cranelift IR of every function `emit_object` defines, before compilation, as text:
@@ -155,7 +155,7 @@ pub fn emit_clif(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true, Default::default(), false))
+    caught(|| module::emit(units, inputs, true, Default::default(), None))
         .map(|(_, clif, _)| clif.unwrap_or_default())
 }
 
@@ -165,8 +165,16 @@ pub fn emit_object_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<ObjectArtifact, CodegenError> {
-    caught(|| module::emit(units, inputs, false, Default::default(), true))
-        .map(|(artifact, _, _)| artifact)
+    caught(|| {
+        module::emit(
+            units,
+            inputs,
+            false,
+            Default::default(),
+            Some(hirsel_lir::ownership_trace::native::Request::Leaf),
+        )
+    })
+    .map(|(artifact, _, _)| artifact)
 }
 
 /// Cranelift IR with explicit diagnostic ownership calls.
@@ -174,8 +182,61 @@ pub fn emit_clif_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    caught(|| module::emit(units, inputs, true, Default::default(), true))
-        .map(|(_, clif, _)| clif.unwrap_or_default())
+    caught(|| {
+        module::emit(
+            units,
+            inputs,
+            true,
+            Default::default(),
+            Some(hirsel_lir::ownership_trace::native::Request::Leaf),
+        )
+    })
+    .map(|(_, clif, _)| clif.unwrap_or_default())
+}
+
+/// Emit exactly the plans preserved by earlier compiler passes.
+pub fn emit_object_relocated_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &std::collections::BTreeMap<
+        hirsel_syntax::ContentHash,
+        hirsel_lir::ownership_trace::Plan,
+    >,
+) -> Result<ObjectArtifact, CodegenError> {
+    caught(|| {
+        module::emit(
+            units,
+            inputs,
+            false,
+            Default::default(),
+            Some(hirsel_lir::ownership_trace::native::Request::Relocated(
+                plans,
+            )),
+        )
+    })
+    .map(|(artifact, _, _)| artifact)
+}
+
+pub fn emit_clif_relocated_ownership(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &std::collections::BTreeMap<
+        hirsel_syntax::ContentHash,
+        hirsel_lir::ownership_trace::Plan,
+    >,
+) -> Result<String, CodegenError> {
+    caught(|| {
+        module::emit(
+            units,
+            inputs,
+            true,
+            Default::default(),
+            Some(hirsel_lir::ownership_trace::native::Request::Relocated(
+                plans,
+            )),
+        )
+    })
+    .map(|(_, clif, _)| clif.unwrap_or_default())
 }
 
 /// A panic in Cranelift or in this crate is a refused compilation, never a crash of the
@@ -218,7 +279,7 @@ pub fn emit_ahead_object(
         available_externally: &Default::default(),
         ..inputs.clone()
     };
-    caught(|| module::emit(units, &inputs, false, Default::default(), false))
+    caught(|| module::emit(units, &inputs, false, Default::default(), None))
         .map(|(object, _, frames)| (object, frames))
 }
 

@@ -551,3 +551,67 @@ fn leaf(table: &LayoutTable, id: LayoutId) -> bool {
         _ => false,
     }
 }
+
+/// Explicit diagnostic selection. Ordinary emission passes None and never
+/// prepares plans or computes their fingerprint.
+#[derive(Clone, Copy)]
+pub enum Request<'a> {
+    Leaf,
+    Relocated(&'a BTreeMap<ContentHash, Plan>),
+}
+impl Request<'_> {
+    /// One complete closed set, keyed by current unit digests. Supplying a
+    /// subset must refuse rather than silently synthesizing the missing plans.
+    pub fn prepare(
+        self,
+        units: &[&ValidatedUnit<Ready>],
+        layouts: &LayoutTable,
+    ) -> Result<BTreeMap<ContentHash, LeafPlan>, String> {
+        local_calls(units)?;
+        if let Self::Relocated(plans) = self
+            && plans.len() != units.len()
+        {
+            return Err("ownership emission requires exactly one plan per unit".into());
+        }
+        let mut prepared = BTreeMap::new();
+        for unit in units {
+            let body = unit.unit();
+            let plan = match self {
+                Self::Leaf => LeafPlan::prepare(unit, layouts)?,
+                Self::Relocated(plans) => LeafPlan::from_relocated(
+                    unit,
+                    layouts,
+                    plans
+                        .get(&body.digest())
+                        .ok_or("ownership emission is missing a transported plan")?,
+                )?,
+            };
+            if prepared.insert(body.header.instance, plan).is_some() {
+                return Err("ownership emission has duplicate instance identities".into());
+            }
+        }
+        Ok(prepared)
+    }
+
+    pub fn fingerprint(self) -> Option<ContentHash> {
+        match self {
+            Self::Leaf => None,
+            Self::Relocated(plans) => {
+                let identities: Vec<_> = plans
+                    .iter()
+                    .map(|(unit, plan)| {
+                        (
+                            *unit,
+                            hirsel_codec::digest("hirsel.ownership-plan.v3", "Plan", plan),
+                        )
+                    })
+                    .collect();
+                Some(hirsel_codec::digest(
+                    "hirsel.ownership-relocated-plans.v1",
+                    "Plans",
+                    &identities,
+                ))
+            }
+        }
+    }
+}
