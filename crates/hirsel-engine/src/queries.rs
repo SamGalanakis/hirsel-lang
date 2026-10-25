@@ -203,6 +203,9 @@ pub struct QueryEngine {
     pending_store_checks: BTreeMap<(DefId, QueryKind), persistent::Expected>,
     store_check_spool: std::sync::Weak<persistent::Spool>,
     pub(crate) result_store: Option<Arc<dyn crate::store::ResultStore>>,
+    /// Successful indexing contexts survive source-only carry independently
+    /// of parse product/body tables. FileId identifies an immutable snapshot.
+    pub(crate) indexed_sources: BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     /// Whether V validates what this session lowers; `run_v` is its only reader.
     pub verify: Verify,
     pub(crate) retention: crate::memo::Retention,
@@ -592,6 +595,7 @@ impl QueryEngine {
             pending_store_checks: BTreeMap::new(),
             store_check_spool: std::sync::Weak::new(),
             result_store: None,
+            indexed_sources: BTreeMap::new(),
             verify: Verify::On,
             retention: crate::memo::Retention::Resident,
             hold_bytes,
@@ -2267,6 +2271,8 @@ impl DefinitionQueries for QueryEngine {
         };
         if let Ok(output) = &result {
             self.store_parse_syntax(file, context, output)?;
+            self.indexed_sources
+                .insert(file, (context.clone(), package_environment.clone()));
         }
         self.parsed.insert(
             file,

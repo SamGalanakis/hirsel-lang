@@ -120,26 +120,20 @@ impl QueryEngine {
         if let Some(definitions) = self.catalog.file_definitions(file) {
             return definitions;
         }
-        let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
-            return vec![];
-        };
-        parsed
-            .value
-            .items
-            .iter()
-            .map(|syntax| syntax.item.definition.clone())
+        self.source_items(file)
+            .into_iter()
+            .map(|item| item.definition)
             .collect()
     }
 
     /// Every function of an indexed file, and whether it is an `extern`.
     pub(crate) fn file_functions(&self, file: FileId) -> Vec<(DefPath, bool)> {
-        let Some((_, _, Ok(parsed))) = self.parsed.get(&file) else {
-            return vec![];
+        let syntax: Vec<_> = match self.parsed.get(&file) {
+            Some((_, _, Ok(parsed))) => parsed.value.items.iter().collect(),
+            _ => self.retained_source_syntax(file),
         };
-        parsed
-            .value
-            .items
-            .iter()
+        syntax
+            .into_iter()
             .filter_map(|syntax| {
                 let item = &syntax.item;
                 match &item.kind {
