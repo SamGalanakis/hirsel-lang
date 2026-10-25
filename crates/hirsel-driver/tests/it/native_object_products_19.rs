@@ -105,7 +105,7 @@ pub(super) fn compile_with_context<R>(
 pub(super) fn compile_roots<R>(
     engine: &mut QueryEngine,
     store: Arc<dyn ResultStore>,
-    selected: &[hirsel_syntax::DefPath],
+    source_selection: &[hirsel_syntax::DefPath],
     requested: &[hirsel_syntax::DefPath],
     backend: native::Backend,
     opt: native::OptLevel,
@@ -152,7 +152,7 @@ pub(super) fn compile_roots<R>(
                 anchors: &declarations.source_anchors,
                 signatures: engine.signature_snapshot(),
                 semantic,
-                selected,
+                selected: source_selection,
                 callees: None,
             },
             &original,
@@ -249,7 +249,7 @@ pub(super) fn compile_roots<R>(
         native.clone(),
         source.clone(),
         NativeRootKey {
-            roots: selected.to_vec(),
+            roots: source_selection.to_vec(),
             target_abi: target.digest(),
             policy,
         },
