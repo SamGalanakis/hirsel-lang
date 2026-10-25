@@ -475,6 +475,14 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         flags: Rc::default(),
         flag_phases: Rc::default(),
     };
+    let cleanup_retirements =
+        match crate::invocations::cleanup_retirements(unit, cx.operations, cx.layouts.0) {
+            Ok(retirements) => retirements,
+            Err(message) => {
+                report.add(Site::UNIT, K::Schema(message));
+                BTreeMap::new()
+            }
+        };
     let mut walker = Walker {
         cx,
         facts,
@@ -482,6 +490,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         placed: &placed,
         bases: &bases,
         joined: &joined,
+        cleanup_retirements: &cleanup_retirements,
         report: None,
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
@@ -506,6 +515,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         placed: &placed,
         bases: &bases,
         joined: &joined,
+        cleanup_retirements: &cleanup_retirements,
         report: Some(report),
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
@@ -610,6 +620,7 @@ struct Walker<'w, 'a, S> {
     bases: &'w BTreeMap<ValueId, Vec<ValueId>>,
     /// Per loan, the joined views it covers: they go stale when it ends.
     joined: &'w BTreeMap<LoanId, Vec<ValueId>>,
+    cleanup_retirements: &'w BTreeMap<(BlockId, u32), AddressId>,
     report: Option<&'w mut Report>,
     discharged: BTreeSet<CleanupAnchorId>,
     flat_reaching: BTreeMap<Site, Option<ValueId>>,
@@ -2355,8 +2366,22 @@ impl<S: Stage> Walker<'_, '_, S> {
             | Inst::BindFields { .. }
             | Inst::EndOrigin { .. }
             | Inst::FrameEnter { .. }
-            | Inst::FrameLeave
             | Inst::Unavailable { .. } => {}
+            Inst::FrameLeave => {
+                if let Some(&address) = self
+                    .cleanup_retirements
+                    .get(&(b, site.index.unwrap_or(u32::MAX)))
+                {
+                    if let Some((Root::Slot(slot), mut path)) = self.place(address) {
+                        if !self.covered(slot, &st.slots[slot.index()], &mut path) {
+                            self.err(
+                                site,
+                                K::Schema("finalizer retires before owned descendants".into()),
+                            );
+                        }
+                    }
+                }
+            }
             Inst::Address { address, .. } => {
                 let info = &unit.addresses[address.index()];
                 if let crate::ir::AddressBase::Value(v) = info.base {

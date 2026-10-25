@@ -1418,10 +1418,11 @@ enum Action {
         moved: Vec<u32>,
     },
     /// Run an inline resource's drop body between `FinalizeBegin` and
-    /// `FinalizeEnd`; its fields are later actions.
+    /// `FinalizeEnd`; its activation remains live through owned field cleanup.
     Finalize {
         path: Vec<Step>,
         layout: LayoutId,
+        fields: Vec<Action>,
     },
     /// An intact variant containing inline finalizers needs an active-arm plan.
     Variant {
@@ -1828,7 +1829,11 @@ impl Lowering<'_, '_> {
                 });
                 Ok(at)
             }
-            Action::Finalize { path, layout } => {
+            Action::Finalize {
+                path,
+                layout,
+                fields,
+            } => {
                 let finalizer = self.finalizers.0.get(layout).cloned().ok_or_else(|| {
                     PassError::Unsupported(format!("no drop body instance for {layout:?}"))
                 })?;
@@ -1891,9 +1896,6 @@ impl Lowering<'_, '_> {
                     (!mutable).then(|| self.ed.block(BlockKind::FailureCleanup, &[], anchor));
                 for b in [normal, failed] {
                     let code = &mut self.ed.code[b.index()];
-                    if !mutable {
-                        code.push(Inst::FrameLeave);
-                    }
                     if let Some(loan) = loan {
                         code.push(Inst::EndLoan {
                             loan,
@@ -1928,7 +1930,9 @@ impl Lowering<'_, '_> {
                         .get(&self.ed.unit.pools.values)
                         .unwrap_or(&[])
                         .to_vec();
-                    self.ed.unit.terminators[rejected.index()] =
+                    let rejected_end =
+                        self.finalizer_fields(rejected, fields, site, &rest, false)?;
+                    self.ed.unit.terminators[rejected_end.index()] =
                         Terminator::Jump(self.ed.edge(target, &arguments));
                     let cleanup = self.ed.edge(rejected, &[]);
                     let failure = FailureId(self.ed.unit.tables.failures.len() as u32);
@@ -1954,11 +1958,51 @@ impl Lowering<'_, '_> {
                     normal: Some(into_normal),
                     failure: call_failure,
                 };
-                // After FinalizeEnd the failure path rejoins the chain.
-                self.ed.unit.terminators[failed.index()] = Terminator::Jump(rest.cleanup);
-                Ok(normal)
+                // The body phase ends before fields, but its activation belongs
+                // to the complete resource obligation, including failed cleanup.
+                let mut failed_rest = rest.clone();
+                failed_rest.dispose = PoolRange::EMPTY;
+                let failed = self.finalizer_fields(failed, fields, site, &failed_rest, !mutable)?;
+                let cleanup = extended(self.ed, rest.cleanup, &[]);
+                self.ed.unit.terminators[failed.index()] = Terminator::Jump(cleanup);
+                self.finalizer_fields(normal, fields, site, &rest, !mutable)
             }
         }
+    }
+
+    /// An entered finalizer retires only after all its owned fields, on both
+    /// outcomes. Rejected entry has no activation to retire.
+    fn finalizer_fields(
+        &mut self,
+        at: BlockId,
+        fields: &[Action],
+        site: &Site,
+        rest: &FailureEdge,
+        entered: bool,
+    ) -> Result<BlockId, PassError> {
+        let mut failure = rest.clone();
+        if entered {
+            let retired = self.ed.block(BlockKind::FailureCleanup, &[], rest.anchor);
+            self.ed.code[retired.index()].push(Inst::FrameLeave);
+            let cleanup = extended(self.ed, rest.cleanup, &[]);
+            self.ed.unit.terminators[retired.index()] = Terminator::Jump(cleanup);
+            failure.cleanup = self.ed.edge(retired, &[]);
+        }
+        let local = Site {
+            slot: site.slot,
+            version: site.version,
+            anchor: site.anchor,
+            failure,
+        };
+        // Static field addresses are prepared at entry by `address`; checked
+        // variant paths are prepared in their selected arm, before the parent
+        // finalizer begins. Preparing them here would add a failure path that
+        // retires the activation while its descendants are still owned.
+        let end = self.sequence(at, fields, &local)?;
+        if entered {
+            self.ed.code[end.index()].push(Inst::FrameLeave);
+        }
+        Ok(end)
     }
 
     /// Select an intact variant's active arm. Ordinary variants use a
@@ -2053,12 +2097,6 @@ impl Lowering<'_, '_> {
                     if_active: false,
                 });
                 let mut actions = Vec::new();
-                if record.finalizer.is_some() {
-                    actions.push(Action::Finalize {
-                        path: base_path.clone(),
-                        layout,
-                    });
-                }
                 self.plan_variant_fields(
                     &state,
                     base_path.clone(),
@@ -2066,6 +2104,13 @@ impl Lowering<'_, '_> {
                     variant.ordinal,
                     &mut actions,
                 )?;
+                if record.finalizer.is_some() {
+                    actions = vec![Action::Finalize {
+                        path: base_path.clone(),
+                        layout,
+                        fields: actions,
+                    }];
+                }
                 // A nullary active arm owns no payload; taking and releasing it
                 // empties the storage without reading a nonexistent field.
                 if actions.is_empty() {
@@ -2266,11 +2311,14 @@ impl Lowering<'_, '_> {
     ) -> Result<usize, PassError> {
         let base = self.prepared.len();
         for action in actions {
+            if let Action::Finalize { fields, .. } = action {
+                self.prepare_actions(at, fields, local, retry)?;
+            }
             let (path, layout) = match action {
                 Action::Conditional { .. } => continue,
                 Action::EmptyVariant { .. } => continue,
                 Action::Release { path, layout, .. }
-                | Action::Finalize { path, layout }
+                | Action::Finalize { path, layout, .. }
                 | Action::Variant { path, layout }
                 | Action::Inline { path, layout } => (path, *layout),
             };
@@ -2523,11 +2571,30 @@ impl Lowering<'_, '_> {
                     "a field moved out of a live resource".into(),
                 ));
             }
+            let mut fields = Vec::new();
+            self.plan_fields(s, path.clone(), layout, under, &mut fields)?;
             out.push(Action::Finalize {
-                path: path.clone(),
+                path,
                 layout,
+                fields,
             });
+            return Ok(());
         }
+        self.plan_fields(s, path, layout, under, out)
+    }
+
+    fn plan_fields(
+        &self,
+        s: &crate::insert::SlotState,
+        path: Vec<Step>,
+        layout: LayoutId,
+        under: bool,
+        out: &mut Vec<Action>,
+    ) -> Result<(), PassError> {
+        let record = self
+            .lay
+            .get(layout)
+            .ok_or_else(|| PassError::Malformed(format!("{layout:?} outside the table")))?;
         if record.tag.is_some() {
             return self.plan_variant(s, path, record, out);
         }
@@ -3009,18 +3076,20 @@ mod pending_tests {
             owned_empty: false,
         };
         let variant_state = state.clone();
-        let paths = |actions: &[Action]| {
-            actions
-                .iter()
-                .map(|action| {
-                    let (Action::Release { path, .. } | Action::Finalize { path, .. }) = action
-                    else {
-                        panic!("unexpected {action:?}")
-                    };
-                    path.clone()
-                })
-                .collect::<Vec<_>>()
-        };
+        fn paths_of(actions: &[Action]) -> Vec<Vec<Step>> {
+            let mut paths = Vec::new();
+            for action in actions {
+                match action {
+                    Action::Release { path, .. } => paths.push(path.clone()),
+                    Action::Finalize { path, fields, .. } => {
+                        paths.push(path.clone());
+                        paths.extend(paths_of(fields));
+                    }
+                    _ => panic!("unexpected {action:?}"),
+                }
+            }
+            paths
+        }
         // Inline finalizers are explicit phases: the parent finalizes in place,
         // then each zero-sized child keeps its own obligation in reverse order.
         let mut actions = vec![];
@@ -3031,7 +3100,7 @@ mod pending_tests {
                 .all(|action| matches!(action, Action::Finalize { .. }))
         );
         assert_eq!(
-            paths(&actions),
+            paths_of(&actions),
             [vec![], vec![Step::Field(1)], vec![Step::Field(0)]]
         );
         state
@@ -3040,7 +3109,7 @@ mod pending_tests {
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
         assert_eq!(
-            paths(&actions),
+            paths_of(&actions),
             [vec![Step::Field(1)], vec![Step::Field(0)]]
         );
         let field = lowering.facts.intern(&[Step::Field(1)]);
@@ -3048,7 +3117,7 @@ mod pending_tests {
         state.taken.set(field, Tri::Yes);
         let mut actions = vec![];
         lowering.plan(&state, vec![], parent, &mut actions).unwrap();
-        assert_eq!(paths(&actions), [vec![Step::Field(0)]]);
+        assert_eq!(paths_of(&actions), [vec![Step::Field(0)]]);
         let mut actions = vec![];
         lowering
             .plan_variant_fields(
@@ -3060,7 +3129,7 @@ mod pending_tests {
             )
             .unwrap();
         assert_eq!(
-            paths(&actions),
+            paths_of(&actions),
             [vec![Step::Variant(0, 1)], vec![Step::Variant(0, 0)]]
         );
     }

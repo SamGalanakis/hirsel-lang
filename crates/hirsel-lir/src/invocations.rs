@@ -18,9 +18,35 @@ pub fn check_with_layouts<S: Stage>(
     declarations: &dyn crate::operation::OperationDeclarations,
     layouts: &crate::LayoutTable,
 ) -> Result<(), String> {
+    let targets = cleanup::targets(unit, declarations, layouts, body)?;
     let mut complete = reference.to_vec();
-    complete.extend(cleanup::references(unit, declarations, layouts, body)?);
-    check(unit, &complete, body)
+    complete.extend(targets.iter().map(|target| target.reference.clone()));
+    check_inner(unit, &complete, body, &targets).map(|_| ())
+}
+
+/// Reconstruct cleanup retirement addresses for the independent ownership
+/// walk, which checks that every owned descendant is absent at that point.
+pub(crate) fn cleanup_retirements<S: Stage>(
+    unit: &LirUnit<S>,
+    declarations: &dyn crate::operation::OperationDeclarations,
+    layouts: &crate::LayoutTable,
+) -> Result<BTreeMap<(BlockId, u32), AddressId>, String> {
+    if unit.header.origin == UnitOrigin::Library {
+        return check_library_context(unit, declarations, Some(layouts));
+    }
+    let body = declarations
+        .invocation_body(&unit.header.definition, unit.header.instance)
+        .unwrap_or(0);
+    let targets = cleanup::targets(unit, declarations, layouts, body)?;
+    if targets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let Some(reference) = declarations.invocations(&unit.header.definition) else {
+        return Ok(BTreeMap::new());
+    };
+    let mut complete = reference.to_vec();
+    complete.extend(targets.iter().map(|target| target.reference.clone()));
+    check_inner(unit, &complete, body, &targets)
 }
 
 /// A source call's identity within its independently supplied definition.
@@ -68,6 +94,19 @@ pub fn check<S: Stage>(
     reference: &[ReferenceInvocation],
     body: u32,
 ) -> Result<(), String> {
+    check_inner(unit, reference, body, &[]).map(|_| ())
+}
+
+fn check_inner<S: Stage>(
+    unit: &LirUnit<S>,
+    reference: &[ReferenceInvocation],
+    body: u32,
+    cleanups: &[cleanup::Target],
+) -> Result<BTreeMap<(BlockId, u32), AddressId>, String> {
+    let cleanups: BTreeMap<_, _> = cleanups
+        .iter()
+        .map(|target| (target.identity(), target))
+        .collect();
     if unit
         .tables
         .source_anchors
@@ -118,7 +157,8 @@ pub fn check<S: Stage>(
             .map(|a| (a.body, a.block, a.statement))
             .ok_or("invocation source anchor outside table")
     };
-    let mut incoming = BTreeMap::from([(unit.entry, None)]);
+    let mut retired = BTreeMap::new();
+    let mut incoming = BTreeMap::from([(unit.entry, Vec::new())]);
     let mut pending = VecDeque::from([unit.entry]);
     let edge = |id: EdgeId| {
         unit.tables
@@ -128,13 +168,13 @@ pub fn check<S: Stage>(
             .ok_or("invocation edge outside table")
     };
     while let Some(block) = pending.pop_front() {
-        let mut active = incoming[&block];
+        let mut active = incoming[&block].clone();
         let mut outgoing = Vec::new();
         let instructions = unit.blocks[block.index()]
             .instructions
             .get(&unit.instructions)
             .ok_or("invocation instruction range outside table")?;
-        for instruction in instructions {
+        for (ordinal, instruction) in instructions.iter().enumerate() {
             // An unsuccessful admission has not added its activation.
             if let Some(failure) = instruction.failure() {
                 let cleanup = unit
@@ -143,18 +183,29 @@ pub fn check<S: Stage>(
                     .get(failure.index())
                     .ok_or("invocation failure outside table")?
                     .cleanup;
-                outgoing.push((edge(cleanup)?, active));
+                outgoing.push((edge(cleanup)?, active.clone()));
             }
             match instruction {
                 Inst::FrameEnter { failure } => {
-                    if active.is_some() {
-                        return Err("nested source invocation admission in one unit".into());
+                    let next = identity(unit.tables.failures[failure.index()].anchor)?;
+                    if let Some(parent) = active.last() {
+                        match (cleanups.get(parent), cleanups.get(&next)) {
+                            (Some(parent), Some(child)) if child.descendant_of(parent) => (),
+                            _ => {
+                                return Err(
+                                    "nested invocation is not an owned descendant finalizer".into(),
+                                );
+                            }
+                        }
                     }
-                    active = Some(identity(unit.tables.failures[failure.index()].anchor)?);
+                    active.push(next);
                 }
                 Inst::FrameLeave => {
-                    if active.take().is_none() {
-                        return Err("invocation retirement without admission".into());
+                    let identity = active
+                        .pop()
+                        .ok_or("invocation retirement without admission")?;
+                    if let Some(target) = cleanups.get(&identity) {
+                        retired.insert((block, ordinal as u32), target.address);
                     }
                 }
                 _ => (),
@@ -164,7 +215,7 @@ pub fn check<S: Stage>(
         if matches!(
             terminator,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && active.is_some()
+        ) && !active.is_empty()
         {
             return Err("semantic invocation remains live at unit exit".into());
         }
@@ -176,7 +227,7 @@ pub fn check<S: Stage>(
                 .ok_or("invocation call outside table")?;
             let id = identity(call.anchor)?;
             if let Some(site) = references.get(&id).filter(|site| !site.restart) {
-                if active != site.admitted().then_some(id) {
+                if active.last().copied() != site.admitted().then_some(id) {
                     return Err("language call occurs outside its admitted invocation".into());
                 }
                 if let Some(expected) = &site.callee {
@@ -222,11 +273,14 @@ pub fn check<S: Stage>(
             terminator
                 .normal_edges(&unit.pools)
                 .into_iter()
-                .map(|e| edge(e).map(|b| (b, active)))
+                .map(|e| edge(e).map(|b| (b, active.clone())))
                 .collect::<Result<Vec<_>, _>>()?,
         );
         for failure in terminator.failure_edges(&unit.tables) {
-            outgoing.push((edge(unit.tables.failures[failure.index()].cleanup)?, active));
+            outgoing.push((
+                edge(unit.tables.failures[failure.index()].cleanup)?,
+                active.clone(),
+            ));
         }
         for (target, state) in outgoing {
             match incoming.get(&target) {
@@ -241,7 +295,7 @@ pub fn check<S: Stage>(
             }
         }
     }
-    Ok(())
+    Ok(retired)
 }
 
 hirsel_codec::snapshot_struct!(ReferenceInvocation {
@@ -264,7 +318,7 @@ pub fn check_library_with_declarations<S: Stage>(
     unit: &LirUnit<S>,
     declarations: &dyn crate::operation::OperationDeclarations,
 ) -> Result<(), String> {
-    check_library_context(unit, declarations, None)
+    check_library_context(unit, declarations, None).map(|_| ())
 }
 
 /// Validate typed compiler forwarding with the independently supplied table.
@@ -273,14 +327,14 @@ pub fn check_library_with_layouts<S: Stage>(
     declarations: &dyn crate::operation::OperationDeclarations,
     layouts: &crate::LayoutTable,
 ) -> Result<(), String> {
-    check_library_context(unit, declarations, Some(layouts))
+    check_library_context(unit, declarations, Some(layouts)).map(|_| ())
 }
 
 fn check_library_context<S: Stage>(
     unit: &LirUnit<S>,
     declarations: &dyn crate::operation::OperationDeclarations,
     layouts: Option<&crate::LayoutTable>,
-) -> Result<(), String> {
+) -> Result<BTreeMap<(BlockId, u32), AddressId>, String> {
     let forwarded = if unit.header.definition.is_core("iter.next") {
         Some(iterator_forward(
             unit,
@@ -322,7 +376,7 @@ fn check_library_context<S: Stage>(
     // Cleanup origins are independent obligations even for helpers without a
     // fixed callback recipe (for example owned_cursor_drop).
     let cleanups = layouts
-        .map(|layouts| cleanup::references(unit, declarations, layouts, 0))
+        .map(|layouts| cleanup::targets(unit, declarations, layouts, 0))
         .transpose()?
         .unwrap_or_default();
     if let Some(expected) = expected {
@@ -335,6 +389,17 @@ fn check_library_context<S: Stage>(
             return Err("generated callback recipe invocation coverage differs".into());
         }
     }
+    let targets: BTreeMap<_, _> = cleanups
+        .iter()
+        .map(|target| (target.identity(), target))
+        .collect();
+    let identity = |anchor: SourceAnchorId| {
+        unit.tables
+            .source_anchors
+            .get(anchor.index())
+            .map(|row| (row.body, row.block, row.statement))
+            .ok_or("library invocation source identity")
+    };
     let edge = |id: EdgeId| {
         unit.tables
             .edges
@@ -342,19 +407,22 @@ fn check_library_context<S: Stage>(
             .map(|e| e.target)
             .ok_or_else(|| "library invocation edge outside table".to_owned())
     };
-    let mut states = BTreeMap::from([(unit.entry, (false, false))]);
+    let mut retired = BTreeMap::new();
+    let mut states = BTreeMap::from([(unit.entry, Vec::<((u32, u32, u32), bool)>::new())]);
     let mut pending = VecDeque::from([unit.entry]);
     while let Some(block) = pending.pop_front() {
-        let (mut active, mut dispatched) = states[&block];
+        let mut active = states[&block].clone();
         let mut outgoing = Vec::new();
         let row = unit
             .blocks
             .get(block.index())
             .ok_or("library invocation block")?;
-        for inst in row
+        for (ordinal, inst) in row
             .instructions
             .get(&unit.instructions)
             .ok_or("library invocation instructions")?
+            .iter()
+            .enumerate()
         {
             if let Some(failure) = inst.failure() {
                 let failure = unit
@@ -362,24 +430,35 @@ fn check_library_context<S: Stage>(
                     .failures
                     .get(failure.index())
                     .ok_or("library invocation failure")?;
-                outgoing.push((edge(failure.cleanup)?, (active, dispatched)));
+                outgoing.push((edge(failure.cleanup)?, active.clone()));
             }
             match *inst {
                 Inst::FrameEnter { failure } => {
-                    if active
-                        || unit.tables.failures[failure.index()].rule.as_deref() != Some("LANG-10")
-                    {
+                    if unit.tables.failures[failure.index()].rule.as_deref() != Some("LANG-10") {
                         return Err("invalid library callback admission".into());
                     }
-                    active = true;
-                    dispatched = false;
+                    let next = identity(unit.tables.failures[failure.index()].anchor)?;
+                    if let Some((parent, _)) = active.last() {
+                        match (targets.get(parent), targets.get(&next)) {
+                            (Some(parent), Some(child)) if child.descendant_of(parent) => (),
+                            _ => return Err(
+                                "nested library invocation is not an owned descendant finalizer"
+                                    .into(),
+                            ),
+                        }
+                    }
+                    active.push((next, false));
                 }
                 Inst::FrameLeave => {
-                    if !active || (!dispatched && row.kind != BlockKind::FailureCleanup) {
+                    if active.last().is_none_or(|(_, dispatched)| {
+                        !dispatched && row.kind != BlockKind::FailureCleanup
+                    }) {
                         return Err("library retirement has no callback invocation".into());
                     }
-                    active = false;
-                    dispatched = false;
+                    let (identity, _) = active.pop().unwrap();
+                    if let Some(target) = targets.get(&identity) {
+                        retired.insert((block, ordinal as u32), target.address);
+                    }
                 }
                 _ => (),
             }
@@ -407,28 +486,28 @@ fn check_library_context<S: Stage>(
             if Some(*id) != forwarded
                 && (source_direct
                     || matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
-                    || active && !call.forward_caller)
+                    || !active.is_empty() && !call.forward_caller)
             {
-                if !active || dispatched {
+                if active.last().is_none_or(|(_, dispatched)| *dispatched) {
                     return Err("library callback lacks its own admission".into());
                 }
-                dispatched = true;
+                active.last_mut().unwrap().1 = true;
             }
         }
         if matches!(
             term,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && active
+        ) && !active.is_empty()
         {
             return Err("library callback remains active at exit".into());
         }
         for id in term.normal_edges(&unit.pools) {
-            outgoing.push((edge(id)?, (active, dispatched)));
+            outgoing.push((edge(id)?, active.clone()));
         }
         for failure in term.failure_edges(&unit.tables) {
             outgoing.push((
                 edge(unit.tables.failures[failure.index()].cleanup)?,
-                (active, dispatched),
+                active.clone(),
             ));
         }
         for (target, state) in outgoing {
@@ -444,7 +523,7 @@ fn check_library_context<S: Stage>(
             }
         }
     }
-    Ok(())
+    Ok(retired)
 }
 
 /// Recognize only the canonical forwarding recipe, never an arbitrary helper.
