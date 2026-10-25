@@ -55,17 +55,35 @@ pub(super) fn plain(size: u64) -> crate::Layout {
     }
 }
 
-/// Descriptors 2 (a [tag, value] image), 3 (the mutex wrapper) and 4 (a
-/// one-pointer child environment). Leaked: run tables keep the pointers, and
-/// a finalized image's scope end names its own descriptor.
-pub(super) struct Layouts([&'static crate::Layout; 3]);
+/// Descriptors 2 (a [tag, value] image), 3 (the mutex wrapper), 4 (a
+/// one-pointer child environment) and 5 (an inline value owning one heap
+/// block). Leaked: run tables keep the pointers, and a finalized image's
+/// scope end names its own descriptor.
+pub(super) struct Layouts([&'static crate::Layout; 4]);
 
 impl Layouts {
     pub(super) fn new(image: &'static crate::Layout, wrapper: crate::Layout) -> Self {
+        let release = Box::leak(Box::new(crate::Step {
+            kind: crate::STEP_RELEASE,
+            field: 0,
+            variant: 0,
+            span: 0,
+            offset: 0,
+            stride: 0,
+            count: 0,
+            count_offset: 0,
+            layout: std::ptr::null(),
+        }));
         Self([
             image,
             Box::leak(Box::new(wrapper)),
             Box::leak(Box::new(plain(8))),
+            Box::leak(Box::new(crate::Layout {
+                steps: release,
+                step_count: 1,
+                field_count: 1,
+                ..plain(8)
+            })),
         ])
     }
 
@@ -76,7 +94,7 @@ impl Layouts {
     ) {
         pointers.extend(self.0.iter().map(|&layout| layout as *const _));
         run.config.layouts = pointers.as_ptr();
-        run.config.layout_count = 3;
+        run.config.layout_count = 4;
     }
 }
 
@@ -135,8 +153,8 @@ pub(super) unsafe fn data<'a, T>(env: *mut Header) -> &'a T {
     unsafe { &*crate::alloc::payload(env).cast::<*const T>().read() }
 }
 
-/// Immediate rounds per child inside the measured window: 6 ops each, within
-/// one fresh 128-op quantum.
+/// Immediate rounds per child inside the measured window: 6 ops and a
+/// cleanup each, within one fresh 128-op quantum.
 const ROUNDS: u64 = 20;
 
 struct Window {
@@ -172,6 +190,29 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) -> u64 {
         payload[1] += 1;
         hirsel_rt_v2_mutex_put(ctx, &objects.mutex, payload.as_mut_ptr().cast());
         assert_eq!(payload, [0, 0]);
+        // The body's cleanup: an inline value whose drop frees a heap block
+        // needs no lifecycle administration.
+        let mut owned = [crate::alloc::hirsel_rt_v2_alloc(
+            ctx,
+            4,
+            8,
+            8,
+            crate::alloc::DOMAIN_HEAP,
+            0,
+        )];
+        let mut cleanup = std::mem::MaybeUninit::<crate::finalize::Cleanup>::uninit();
+        assert_eq!(
+            crate::finalize::hirsel_rt_v2_finalize(
+                ctx,
+                5,
+                owned.as_mut_ptr().cast(),
+                std::ptr::null(),
+                cleanup.as_mut_ptr(),
+                0,
+                0,
+            ),
+            STATUS_OK
+        );
         hirsel_rt_v2_channel_send(
             ctx,
             &mut status,

@@ -534,6 +534,16 @@ impl Guard {
     }
 }
 
+/// A semantic entry whose work is the running task's own state: it waits at
+/// the ahead barrier as [`Guard::new`] does, without entering the role. Any
+/// lifecycle work inside it opens its own guard.
+/// # Safety
+/// As for [`Guard::new`].
+#[inline(always)]
+pub(crate) unsafe fn task_owned(ctx: *mut TaskCtx) {
+    unsafe { super::ordered::ahead::barrier(ctx) };
+}
+
 impl Drop for Guard {
     fn drop(&mut self) {
         if self.0.is_null() {

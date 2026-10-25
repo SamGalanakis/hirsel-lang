@@ -1078,6 +1078,8 @@ unsafe fn run_step(
             }
             STEP_RELEASE_ROOT => {
                 let child = at.cast::<*mut Header>().read_unaligned();
+                // A root's last release may defer to its owner's lifecycle.
+                let _role = crate::tasks::role::Guard::new(ctx);
                 if crate::roots::consume(ctx, child) {
                     return child;
                 }

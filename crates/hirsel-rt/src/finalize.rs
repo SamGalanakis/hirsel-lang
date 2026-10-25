@@ -108,6 +108,10 @@ pub(crate) unsafe fn run_close(
 /// Run user or adapter cleanup code shielded (cancellation suppressed) and check its status
 /// protocol: 0, or 1 with a failure recorded; no release work may be left pending.
 fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
+    // The shield is lifecycle state other tasks read: publish it under the
+    // role, which a role-free drain enters only here.
+    // SAFETY: this task is running; no scheduler borrow is live.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let work = ctx.work;
     ctx.shield += 1;
     // SAFETY: this semantic entry owns the role, or W1's run token.
@@ -162,8 +166,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // The drain frees task-owned storage; a step that runs user or adapter
+    // code or releases a root enters the role itself.
     // SAFETY: this semantic entry owns its task until it suspends or returns.
-    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    unsafe { crate::tasks::role::task_owned(ctx) };
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;
