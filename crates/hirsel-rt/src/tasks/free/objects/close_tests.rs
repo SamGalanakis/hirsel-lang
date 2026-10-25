@@ -695,8 +695,7 @@ fn free51_role_free_close_replays_only_the_admitted_cleanup_prefix() {
                     second: false.into(),
                 });
                 let observed = probe.clone();
-                let reclaimed = Arc::new(AtomicBool::new(false));
-                let teardown = reclaimed.clone();
+                let (teardown, reclaimed) = std::sync::mpsc::channel();
                 let mut run = crate::host::BodyRun::new(width, false);
                 run.free = true;
                 run.config.layouts = layouts.as_ptr();
@@ -719,10 +718,12 @@ fn free51_role_free_close_replays_only_the_admitted_cleanup_prefix() {
                 );
                 assert_eq!(probe.first.load(Ordering::Acquire), op > close_op);
                 assert_eq!(probe.second.load(Ordering::Acquire), op > close_op + 1);
-                assert!(
-                    reclaimed.load(Ordering::Acquire),
-                    "cut teardown frees task-owned detached images"
-                );
+                // A stopped BodyRun may return with workers still retaining
+                // the run. Observe the actual image teardown before checking
+                // the completed replay; return timing is not reclamation.
+                reclaimed
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("cut teardown frees task-owned detached images");
                 assert_eq!(replay.finish().unwrap(), expected);
             }
         }

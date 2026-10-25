@@ -7,7 +7,7 @@ use crate::channels::Ring;
 pub(crate) struct Images {
     rings: Vec<Ring>,
     #[cfg(test)]
-    pub(crate) reclaimed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) reclaimed: Option<std::sync::mpsc::Sender<()>>,
 }
 
 impl Images {
@@ -41,7 +41,7 @@ impl Drop for Images {
     fn drop(&mut self) {
         self.rings.clear();
         if let Some(reclaimed) = &self.reclaimed {
-            reclaimed.store(true, std::sync::atomic::Ordering::Release);
+            let _ = reclaimed.send(());
         }
     }
 }
