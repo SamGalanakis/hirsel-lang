@@ -2555,6 +2555,43 @@ fn accepted_ten_thousand_definition_body_edit_reports_actual_index_and_aggregate
 }
 
 #[test]
+fn storage_root_index_follows_unexecuted_calls_across_source_edits() {
+    with_compiler_stack(|| {
+        let plain = "fn callback(root:List[u64])->unique List[u64]{unique root}\nfn unused(mut r:Region[List[u64]]){}\nfn main(){}\n";
+        let sealed = plain.replace(
+            "fn unused(mut r:Region[List[u64]]){}",
+            "fn unused(mut r:Region[List[u64]]){let escaped=region.with(mut r,callback)}",
+        );
+        let mut warm = engine(Arc::new(store::NoneStore));
+        for (source, rejects) in [
+            (plain, false),
+            (&sealed, true),
+            (plain, false),
+            (&sealed, true),
+        ] {
+            let actual = checked(&mut warm, source);
+            let mut cold = engine(Arc::new(store::NoneStore));
+            let expected = checked(&mut cold, source);
+            assert_eq!(diagnostics(&actual), diagnostics(&expected));
+            assert_eq!(actual.completion, expected.completion);
+            assert_eq!(actual.completion, CheckCompletion::Complete);
+            assert_eq!(
+                actual
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.rule.as_str() == "MODE-1"),
+                rejects,
+                "unexecuted source roots still require storage proof: {:?}",
+                diagnostics(&actual)
+            );
+            if !rejects {
+                assert!(actual.diagnostics.is_empty(), "{:?}", diagnostics(&actual));
+            }
+        }
+    });
+}
+
+#[test]
 fn first_failed_manifest_load_keeps_the_invalid_import_as_a_watched_input() {
     with_compiler_stack(|| {
         let fixture = crate::image_fixture::Fixture::new();

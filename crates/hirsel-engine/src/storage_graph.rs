@@ -22,6 +22,13 @@ pub(crate) fn profiles(
 fn derive(
     engine: &mut QueryEngine,
 ) -> Result<(Vec<CallableStorageProfile>, Vec<Diagnostic>), QueryError> {
+    // As in admitted Check's source_rules guard, decide from completed P
+    // call facts. Refresh every pending required source root first: an error
+    // or a newly introduced unexecuted region call cannot look like absence.
+    engine.refresh_source_growth()?;
+    if !engine.source_growth.has_region_calls() {
+        return Ok((vec![], vec![]));
+    }
     let checked = engine.checked_definition_summaries()?;
     if !checked.iter().any(|(_, summary)| {
         summary

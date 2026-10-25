@@ -16,6 +16,7 @@ pub(crate) struct SourceGrowth {
     pending: BTreeMap<DefId, bool>,
     products: BTreeMap<DefId, Box<[GrowthEdge]>>,
     table_calls: BTreeMap<DefId, BTreeSet<DefPath>>,
+    region_calls: BTreeSet<DefId>,
     components: BTreeMap<ContentHash, Vec<EdgeRef>>,
     growing: Vec<EdgeRef>,
     topology_dirty: bool,
@@ -63,9 +64,20 @@ impl SourceGrowth {
         self.roots.remove(&definition);
         self.pending.remove(&definition);
         self.table_calls.remove(&definition);
+        self.region_calls.remove(&definition);
         self.topology_dirty |= self.products.remove(&definition).is_some();
     }
     pub(crate) fn publish(&mut self, definition: DefId, checked: CheckedSummary) {
+        if checked
+            .summary
+            .calls
+            .iter()
+            .any(|call| call.callee.path().is_core("region.with"))
+        {
+            self.region_calls.insert(definition);
+        } else {
+            self.region_calls.remove(&definition);
+        }
         let edges = checked.growth.edges;
         // Positions never decide semantic equality, but always replace the
         // current position product used to render a cached component verdict.
@@ -102,6 +114,9 @@ impl SourceGrowth {
     }
     pub(crate) fn table_calls(&self) -> impl Iterator<Item = &DefPath> {
         self.table_calls.values().flat_map(|calls| calls.iter())
+    }
+    pub(crate) fn has_region_calls(&self) -> bool {
+        !self.region_calls.is_empty()
     }
     pub(crate) fn generation(&self) -> u64 {
         self.generation
