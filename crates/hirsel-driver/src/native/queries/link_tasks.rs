@@ -488,27 +488,30 @@ impl ObjectTaskSnapshot for LinkTasks {
                 .map(|read| super::ready_product(self.store(), *read).map(Arc::new))
                 .collect::<Result<Vec<_>, _>>()?;
             let snapshot = self.root.native.snapshot.store.clone();
-            Ok(Box::new(ObjectQueries::new(
-                snapshot,
-                native,
-                move |key: &LinkKey,
-                      inputs: &LinkInputs,
-                      objects: &[hirsel_lir::stage::ObjectArtifact]| {
-                    if key.address() != plan.input.key.address() {
-                        return Err("native Link executor key changed".into());
-                    }
-                    plan.input.executor.link(
-                        &mut link,
-                        LinkExecution {
-                            key,
-                            inputs,
-                            root: &root,
-                            ready: &readies,
-                            objects,
-                        },
-                    )
-                },
-            )))
+            Ok(Box::new(
+                ObjectQueries::new(
+                    snapshot,
+                    native,
+                    move |key: &LinkKey,
+                          inputs: &LinkInputs,
+                          objects: &[hirsel_lir::stage::ObjectArtifact]| {
+                        if key.address() != plan.input.key.address() {
+                            return Err("native Link executor key changed".into());
+                        }
+                        plan.input.executor.link(
+                            &mut link,
+                            LinkExecution {
+                                key,
+                                inputs,
+                                root: &root,
+                                ready: &readies,
+                                objects,
+                            },
+                        )
+                    },
+                )
+                .with_verification(self.root.native.snapshot.verify_store),
+            ))
         };
         compute().map_err(|e| self.failure(&e))
     }

@@ -54,6 +54,7 @@ pub struct CompilationTasks {
     emission: EmissionOptions,
     backends: Vec<CompilationBackend>,
     query: QueryId,
+    verify_store: hirsel_engine::store::VerifyStore,
     weight: MemoryWeight,
     allowance: Arc<MemoryReservation>,
     dispatch: OnceLock<Dispatch>,
@@ -70,6 +71,31 @@ impl CompilationTasks {
         backends: Vec<CompilationBackend>,
         weight: MemoryWeight,
         allowance: MemoryReservation,
+    ) -> Result<Arc<Self>, String> {
+        Self::new_with_store_verification(
+            instances,
+            arena,
+            source,
+            root,
+            emission,
+            backends,
+            weight,
+            allowance,
+            hirsel_engine::store::VerifyStore::Off,
+        )
+    }
+    /// Explicit object/Link cache verification, captured before dispatch.
+    /// Recompute still requires the same settled native/C dependency scope.
+    pub fn new_with_store_verification(
+        instances: Arc<InstanceTasks>,
+        arena: Arc<ArenaTasks>,
+        source: Arc<NativeLinkSource>,
+        root: NativeRootKey,
+        emission: EmissionOptions,
+        backends: Vec<CompilationBackend>,
+        weight: MemoryWeight,
+        mut allowance: MemoryReservation,
+        verify_store: hirsel_engine::store::VerifyStore,
     ) -> Result<Arc<Self>, String> {
         if root.target_abi != instances.options().target.digest()
             || root.policy != instances.policy()
@@ -102,7 +128,13 @@ impl CompilationTasks {
             kind: COMPILATION_KIND,
             address: Address(ContentHash::of_parts(
                 "hirsel.native.compilation-address.v1",
-                [roots.address.0.0.as_slice(), selection.as_slice()],
+                [
+                    roots.address.0.0.as_slice(),
+                    selection.as_slice(),
+                    &[u8::from(
+                        verify_store == hirsel_engine::store::VerifyStore::Recompute,
+                    )],
+                ],
             )),
         };
         if weight.retained < (std::mem::size_of::<CompilationTask>() + backends.len() * 256) as u64
@@ -118,6 +150,7 @@ impl CompilationTasks {
             emission,
             backends,
             query,
+            verify_store,
             weight,
             allowance: Arc::new(allowance),
             dispatch: OnceLock::new(),
@@ -213,7 +246,8 @@ impl CompilationTasks {
             self.emission.clone(),
             manifest,
             Arc::new(operations),
-        )?;
+        )?
+        .with_store_verification(self.verify_store)?;
         // The returned NativeTasks, snapshot and linker views can outlive this
         // controller. Share each existing charge with their actual data owner;
         // never reserve a second copy or retain a controller back-reference.
