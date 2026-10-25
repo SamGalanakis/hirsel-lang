@@ -196,7 +196,13 @@ fn snapshot_reuses_body_edits_and_tracks_signature_inputs() {
             header.signature(hirsel_syntax::DefId::intern(&entry_path(&context)))
         );
 
-        engine.comptime_limits.call_depth += 1;
+        // The default may be unlimited. Still select a distinct finite input
+        // rather than overflowing while testing snapshot invalidation.
+        engine.comptime_limits.call_depth = engine
+            .comptime_limits
+            .call_depth
+            .checked_add(1)
+            .unwrap_or(32);
         let limits = engine.signature_snapshot();
         assert!(!Arc::ptr_eq(&header, &limits));
         engine.module_inputs_mut().manifest_revision =
