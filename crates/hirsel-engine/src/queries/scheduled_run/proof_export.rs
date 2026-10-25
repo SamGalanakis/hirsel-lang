@@ -29,6 +29,25 @@ impl FrontProofExport {
     pub fn query(&self) -> QueryId {
         self.run.query(&self.entry).expect("captured export entry")
     }
+    /// Export the exact Run behind this completed native source root. The
+    /// producer identity check precedes body decoding and never reselects Run.
+    pub fn input_for_native(
+        &self,
+        native: &FrontNativeQueries,
+        product: ProductRef,
+    ) -> Result<ExportInput, QueryError> {
+        let run = native
+            .export_run(&self.entry)
+            .ok_or(QueryError::NotImplemented)?;
+        if !Arc::ptr_eq(&run, &self.run) {
+            return Err(QueryError::NotImplemented);
+        }
+        self.input(
+            native
+                .completed_run_product(product)
+                .ok_or(QueryError::NotImplemented)?,
+        )
+    }
     /// Complete observed source reads for the selected closure. Exact frozen
     /// header fingerprint coverage is available through headers().
     pub fn reads(&self, product: ProductRef) -> Result<BTreeMap<DefPath, Arc<Reads>>, QueryError> {
@@ -181,20 +200,48 @@ impl QueryEngine {
         headers: Arc<FrontCheckedSignatures>,
         allowance: MemoryReservation,
     ) -> Result<Arc<FrontProofExport>, QueryError> {
-        if !headers.matches(&run.front)
-            || !Arc::ptr_eq(&run.lower.signatures(), &self.signature_inputs())
-        {
-            return Err(QueryError::NotImplemented);
-        }
-        if run.query(entry).is_none() {
-            return Err(QueryError::NotImplemented);
-        }
         let roots: BTreeSet<_> = self
             .item_paths()
             .into_iter()
             .filter(|p| p.0.package == entry.0.package)
             .collect();
         let run = run.with_source_roots(roots.iter().cloned().collect())?;
+        self.capture_proof_export(entry, run, headers, roots, allowance)
+    }
+    /// Attach to native's already selected Run. Its selected roots must cover
+    /// every PS9 entry-package obligation; a subset remains a refusal.
+    pub fn front_proof_export_from_native(
+        &mut self,
+        entry: &DefPath,
+        native: &Arc<FrontNativeQueries>,
+        headers: Arc<FrontCheckedSignatures>,
+        allowance: MemoryReservation,
+    ) -> Result<Arc<FrontProofExport>, QueryError> {
+        let run = native.export_run(entry).ok_or(QueryError::NotImplemented)?;
+        let roots: BTreeSet<_> = self
+            .item_paths()
+            .into_iter()
+            .filter(|p| p.0.package == entry.0.package)
+            .collect();
+        if !roots.iter().all(|path| run.native_roots.contains(path)) {
+            return Err(QueryError::NotImplemented);
+        }
+        self.capture_proof_export(entry, run, headers, roots, allowance)
+    }
+    fn capture_proof_export(
+        &mut self,
+        entry: &DefPath,
+        run: Arc<FrontRunQueries>,
+        headers: Arc<FrontCheckedSignatures>,
+        roots: BTreeSet<DefPath>,
+        allowance: MemoryReservation,
+    ) -> Result<Arc<FrontProofExport>, QueryError> {
+        if !headers.matches(&run.front)
+            || !Arc::ptr_eq(&run.lower.signatures(), &self.signature_inputs())
+            || run.query(entry).is_none()
+        {
+            return Err(QueryError::NotImplemented);
+        }
         let mut executable = BTreeSet::new();
         let mut annotations = BTreeMap::new();
         let mut modules = BTreeMap::new();

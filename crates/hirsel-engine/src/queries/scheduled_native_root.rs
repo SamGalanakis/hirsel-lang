@@ -85,6 +85,19 @@ impl FrontNativeQueries {
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
+    pub(crate) fn export_run(&self, entry: &DefPath) -> Option<Arc<FrontRunQueries>> {
+        (entry == &self.entry).then(|| self.run.clone())
+    }
+    /// The exact completed Run selected by this exact completed native root.
+    /// No source-root selection or new query is performed here.
+    pub fn completed_run_product(&self, product: ProductRef) -> Option<ProductRef> {
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let (selected, _) = completed.as_ref()?;
+        if *selected != product {
+            return None;
+        }
+        self.run.completed_product(self.run.query(&self.entry)?)
+    }
     /// Actual IDs from the Run view after native source-root selection.
     pub fn run_query(&self, path: &DefPath) -> Option<QueryId> {
         self.run.query(path)

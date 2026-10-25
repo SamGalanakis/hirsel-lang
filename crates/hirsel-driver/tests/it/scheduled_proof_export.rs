@@ -2,7 +2,7 @@ use hirsel_driver::*;
 use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
 
-fn export_case(source: &str) {
+fn export_case(source: &str, attach_native: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -109,18 +109,72 @@ fn export_case(source: &str) {
                     errors,
                 )
                 .unwrap();
-            let export = program
-                .engine
-                .front_proof_export(
-                    &program.entry,
-                    run,
-                    headers,
-                    budget.reserve(4 << 20).unwrap(),
+            let mut run = Some(run);
+            let native = if attach_native {
+                let catalogue = program
+                    .engine
+                    .front_native_definition_queries(
+                        &definitions,
+                        front.clone(),
+                        lower.clone(),
+                        weight,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                Some(
+                    program
+                        .engine
+                        .front_native_queries(
+                            FrontNativePlan {
+                                entry: program.entry.clone(),
+                                roots: Vec::new(),
+                                run: run.take().unwrap(),
+                                definitions: catalogue,
+                            },
+                            weight,
+                            budget.reserve(16 << 20).unwrap(),
+                            errors,
+                        )
+                        .unwrap(),
                 )
-                .unwrap();
+            } else {
+                None
+            };
+            let export = if let Some(native) = &native {
+                program
+                    .engine
+                    .front_proof_export_from_native(
+                        &program.entry,
+                        native,
+                        headers,
+                        budget.reserve(4 << 20).unwrap(),
+                    )
+                    .unwrap()
+            } else {
+                let run = run.take().unwrap();
+                program
+                    .engine
+                    .front_proof_export(
+                        &program.entry,
+                        run,
+                        headers,
+                        budget.reserve(4 << 20).unwrap(),
+                    )
+                    .unwrap()
+            };
             runtime
                 .register(FRONT_RUN_KIND, export.run().factory())
                 .unwrap();
+            if let Some(native) = &native {
+                assert_eq!(native.run_query(&program.entry), Some(export.query()));
+                runtime
+                    .register(FRONT_NATIVE_DEFINITION_KIND, native.definition_factory())
+                    .unwrap();
+                runtime
+                    .register(FRONT_NATIVE_ROOT_KIND, native.factory())
+                    .unwrap();
+            }
             let query = export.query();
             let unknown = ProductRef {
                 address: query.address,
@@ -128,12 +182,20 @@ fn export_case(source: &str) {
                 record: errors.protocol,
             };
             assert!(export.input(unknown).is_err());
-            let request = runtime.request(&[query]);
-            let product = runtime.wait(request).unwrap()[0];
+            let request =
+                runtime.request(&[native.as_ref().map_or(query, |native| native.query())]);
+            let completed = runtime.wait(request).unwrap()[0];
+            let product = match &native {
+                Some(native) => native.completed_run_product(completed).unwrap(),
+                None => completed,
+            };
             assert!(export.input(unknown).is_err());
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
-            let input = export.input(product).unwrap();
+            let input = match &native {
+                Some(native) => export.input_for_native(native, completed).unwrap(),
+                None => export.input(product).unwrap(),
+            };
             let actual = hirsel_proof_export::export(&input);
             assert_eq!(lower.work_snapshot(), before_lower);
             assert_eq!(front.work_snapshot(), before_front);
@@ -165,5 +227,14 @@ fn export_case(source: &str) {
 fn source_export_matches_full_ps9_package_closure_private_views_annotations_and_positions() {
     export_case(
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        false,
+    );
+}
+
+#[test]
+fn source_export_shares_exact_native_selected_run_and_completed_originals() {
+    export_case(
+        "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        true,
     );
 }
