@@ -107,6 +107,7 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
                         lower: lower.clone(),
                         growth: growth.clone(),
                         unsafe_ffi: program.unsafe_ffi.clone(),
+                        lint_package: None,
                     },
                     weight,
                     budget.reserve(8 << 20).unwrap(),

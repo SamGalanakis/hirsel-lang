@@ -72,6 +72,7 @@ fn prepared_source_inputs_enforce_exact_caps_and_snapshot_identity_49() {
                     lower: lower.clone(),
                     growth,
                     unsafe_ffi: program.unsafe_ffi.clone(),
+                    lint_package: None,
                 },
                 weight,
                 budget.reserve(16 << 20).unwrap(),

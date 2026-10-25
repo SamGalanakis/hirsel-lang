@@ -64,6 +64,22 @@ fn growth_rejection_withholds_initializers() {
 }
 
 #[test]
+fn dead_error_arms_warn_like_the_package_check() {
+    let source = "type Failure = Used() | Stale()\n\nfn parse() -> Result[u8, Failure] { Error(Used()) }\npub fn main() {}\n";
+    for jobs in [1, 2] {
+        assert_eq!(
+            check_case(source, false, false, jobs, LoweringPolicy::Comptime),
+            1
+        );
+    }
+    let constructed = format!("{source}fn other() -> Result[u8, Failure] {{ Error(Stale()) }}\n");
+    assert_eq!(
+        check_case(&constructed, false, false, 1, LoweringPolicy::Comptime),
+        0
+    );
+}
+
+#[test]
 fn failed_lower_withholds_suffix() {
     for jobs in [1, 2] {
         for policy in [LoweringPolicy::Comptime, LoweringPolicy::Reachable] {
@@ -84,7 +100,7 @@ fn check_case(
     fail_lower: bool,
     jobs: usize,
     policy: LoweringPolicy,
-) {
+) -> usize {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
@@ -156,6 +172,7 @@ fn check_case(
             lower: lower.clone(),
             growth: growth.clone(),
             unsafe_ffi: program.unsafe_ffi.clone(),
+            lint_package: Some(program.entry.0.package.clone()),
         };
         let check = program
             .engine
@@ -201,6 +218,10 @@ fn check_case(
                 "failed earlier Lower withholds suffix"
             );
         }
+        let dead_arms = actual.as_ref().map_or(0, |actual| {
+            let diagnostics = actual.checked.diagnostics.iter();
+            diagnostics.filter(|d| d.rule.as_str() == "LANG-8").count()
+        });
         let expected = program.check(policy);
         match (actual, expected) {
             (Ok(actual), Ok(expected)) => {
@@ -218,5 +239,6 @@ fn check_case(
             ),
         }
         runtime.shutdown();
-    });
+        dead_arms
+    })
 }

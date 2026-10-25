@@ -86,6 +86,7 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
                     lower: lower.clone(),
                     growth: growth.clone(),
                     unsafe_ffi: program.unsafe_ffi.clone(),
+                    lint_package: None,
                 },
                 weight,
                 budget.reserve(8 << 20).unwrap(),

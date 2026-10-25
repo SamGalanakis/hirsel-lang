@@ -113,6 +113,7 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
                             lower: lower.clone(),
                             growth: growth.clone(),
                             unsafe_ffi: program.unsafe_ffi.clone(),
+                            lint_package: None,
                         },
                         weight,
                         budget.reserve(16 << 20).unwrap(),

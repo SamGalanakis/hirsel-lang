@@ -755,6 +755,7 @@ pub(super) fn install(
                 lower: lower.clone(),
                 growth: growth.clone(),
                 unsafe_ffi: program.unsafe_ffi.clone(),
+                lint_package: Some(root_package.clone()),
             },
             plan.root,
             check,

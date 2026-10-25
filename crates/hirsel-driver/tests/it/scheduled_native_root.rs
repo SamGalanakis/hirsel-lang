@@ -82,6 +82,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                             lower: lower.clone(),
                             growth: growth.clone(),
                             unsafe_ffi: program.unsafe_ffi.clone(),
+                            lint_package: None,
                         },
                         weight,
                         budget.reserve(16 << 20).unwrap(),

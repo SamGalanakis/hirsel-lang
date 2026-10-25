@@ -40,32 +40,7 @@ impl QueryEngine {
             errors.extend(inputs.errors);
             constructed.extend(inputs.constructed);
         }
-        let mut warnings = vec![];
-        for (owner, (anchor, names)) in declarations {
-            if !errors.contains(&owner) {
-                continue;
-            }
-            for (index, (name, start, end)) in names.into_iter().enumerate() {
-                let span = Span { anchor, start, end };
-                if constructed.contains(&(owner.clone(), index as u32)) {
-                    continue;
-                }
-                let mut d = Diagnostic::error(
-                    const { RuleId::of("LANG-8") },
-                    span,
-                    format!(
-                        "arm `{name}` of error type `{}` is never constructed in this package",
-                        owner.0.name
-                    ),
-                );
-                d.severity = Severity::Warning;
-                d.notes.push(format!(
-                    "help: remove `{name}` if nothing fails that way any more (callers' matches lose an arm), or construct it where that failure occurs"
-                ));
-                warnings.push(d);
-            }
-        }
-        warnings
+        dead_arm_diagnostics(declarations, &errors, &constructed)
     }
     fn dead_arm_use(&mut self, definition: &DefPath) -> Option<crate::tools::DeadArmUse> {
         let id = DefId::intern(definition);
@@ -91,6 +66,41 @@ impl QueryEngine {
         }
         Some(inputs)
     }
+}
+
+/// LANG-8 warnings for the declared arms no package body constructs, given
+/// the facts of every body in the package. Legacy and S5 checks share this.
+pub(crate) fn dead_arm_diagnostics(
+    declarations: impl IntoIterator<Item = (DefPath, (hirsel_span::Anchor, Vec<(String, u32, u32)>))>,
+    errors: &BTreeSet<DefPath>,
+    constructed: &BTreeSet<(DefPath, u32)>,
+) -> Vec<Diagnostic> {
+    let mut warnings = vec![];
+    for (owner, (anchor, names)) in declarations {
+        if !errors.contains(&owner) {
+            continue;
+        }
+        for (index, (name, start, end)) in names.into_iter().enumerate() {
+            let span = Span { anchor, start, end };
+            if constructed.contains(&(owner.clone(), index as u32)) {
+                continue;
+            }
+            let mut d = Diagnostic::error(
+                const { RuleId::of("LANG-8") },
+                span,
+                format!(
+                    "arm `{name}` of error type `{}` is never constructed in this package",
+                    owner.0.name
+                ),
+            );
+            d.severity = Severity::Warning;
+            d.notes.push(format!(
+                "help: remove `{name}` if nothing fails that way any more (callers' matches lose an arm), or construct it where that failure occurs"
+            ));
+            warnings.push(d);
+        }
+    }
+    warnings
 }
 
 /// The exact H facts used by the package lint, captured before H is released.
