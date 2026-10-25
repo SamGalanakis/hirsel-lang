@@ -1190,11 +1190,8 @@ pub fn read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[u64, Htt
     count = r.remaining
   }
   let data = http_input_contents(r.transport.input)
-  let mut i: u64 = 0
-  while i < count {
-    core@1/list.push(mut out, data[i])
-    i += 1
-  }
+  // The buffered range is already bounded by max and the frame remainder.
+  core@1/bytes.append(mut out, core@1/bytes.slice(data, 0u64, count))
   http_input_consume(mut r.transport.input, count)
   if r.body_kind != 0 {
     r.remaining -= count
