@@ -1838,7 +1838,15 @@ impl Lowering<'_, '_> {
                         address,
                         anchor: site.anchor,
                     });
-                    self.ed.unit.terminators[rejected.index()] = Terminator::Jump(rest.cleanup);
+                    let tail = &self.ed.unit.tables.edges[rest.cleanup.index()];
+                    let target = tail.target;
+                    let arguments = tail
+                        .arguments
+                        .get(&self.ed.unit.pools.values)
+                        .unwrap_or(&[])
+                        .to_vec();
+                    self.ed.unit.terminators[rejected.index()] =
+                        Terminator::Jump(self.ed.edge(target, &arguments));
                     let cleanup = self.ed.edge(rejected, &[]);
                     let failure = FailureId(self.ed.unit.tables.failures.len() as u32);
                     self.ed.unit.tables.failures.push(FailureEdge {
