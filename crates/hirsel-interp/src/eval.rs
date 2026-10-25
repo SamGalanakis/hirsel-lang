@@ -5288,7 +5288,6 @@ fn arena_callback(
         }
         _ => Err(invalid("arena.with callback must be a function")),
     }
-
 }
 /// What a closure call's environment is bounded by, under checked execution.
 fn callee_lifetime(
