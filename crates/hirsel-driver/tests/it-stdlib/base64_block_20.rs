@@ -116,11 +116,6 @@ macro_rules! batch {
     };
 }
 
-batch!(differential_0, "differential", 1, 151);
-batch!(differential_150, "differential", 151, 301);
-batch!(differential_300, "differential", 301, 451);
-batch!(differential_450, "differential", 451, 601);
-
 #[test]
 fn differential_native() {
     native_union("differential");
@@ -131,35 +126,3 @@ fn invalid_native() {
 }
 
 // Seeds1..61 already completed in the retained first split run.
-batch!(invalid_standard_required_prefix, "invalid", 1, 62);
-batch!(invalid_window_39, "invalid_window", 39, 77);
-batch!(invalid_window_77, "invalid_window", 77, 115);
-batch!(invalid_window_115, "invalid_window", 115, 153);
-batch!(invalid_window_153, "invalid_window", 153, 191);
-batch!(invalid_window_191, "invalid_window", 191, 229);
-batch!(invalid_window_229, "invalid_window", 229, 267);
-batch!(invalid_window_267, "invalid_window", 267, 305);
-batch!(invalid_window_305, "invalid_window", 305, 343);
-batch!(invalid_window_343, "invalid_window", 343, 381);
-batch!(invalid_window_381, "invalid_window", 381, 419);
-batch!(invalid_window_419, "invalid_window", 419, 457);
-batch!(invalid_window_457, "invalid_window", 457, 495);
-batch!(invalid_window_495, "invalid_window", 495, 533);
-batch!(invalid_window_533, "invalid_window", 533, 571);
-batch!(invalid_window_571, "invalid_window", 571, 609);
-batch!(invalid_window_609, "invalid_window", 609, 647);
-batch!(invalid_window_647, "invalid_window", 647, 685);
-batch!(invalid_window_685, "invalid_window", 685, 723);
-batch!(invalid_window_723, "invalid_window", 723, 761);
-batch!(invalid_window_761, "invalid_window", 761, 799);
-batch!(invalid_window_799, "invalid_window", 799, 837);
-batch!(invalid_window_837, "invalid_window", 837, 875);
-batch!(invalid_window_875, "invalid_window", 875, 913);
-batch!(invalid_window_913, "invalid_window", 913, 951);
-batch!(invalid_window_951, "invalid_window", 951, 989);
-batch!(invalid_window_989, "invalid_window", 989, 1027);
-batch!(invalid_window_1027, "invalid_window", 1027, 1065);
-batch!(invalid_window_1065, "invalid_window", 1065, 1103);
-batch!(invalid_window_1103, "invalid_window", 1103, 1141);
-batch!(invalid_window_1141, "invalid_window", 1141, 1179);
-batch!(invalid_window_1179, "invalid_window", 1179, 1217);

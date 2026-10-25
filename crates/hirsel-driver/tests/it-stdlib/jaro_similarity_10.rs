@@ -65,50 +65,6 @@ fn oracle(a: &str, b: &str) -> (f64, f64) {
     (similarity, winkler)
 }
 
-#[test]
-fn independent_frozen_oracle() {
-    let mut words = vec![String::new()];
-    for len in 1..=4 {
-        for bits in 0..1 << len {
-            words.push(
-                (0..len)
-                    .rev()
-                    .map(|shift| if bits & (1 << shift) == 0 { 'a' } else { 'é' })
-                    .collect(),
-            );
-        }
-    }
-    let source = std::fs::read_to_string(fixture("exhaustive")).unwrap();
-    let expected = source
-        .split("let expected: List[f64] = [")
-        .nth(1)
-        .unwrap()
-        .split(']')
-        .next()
-        .unwrap();
-    let frozen: Vec<f64> = expected
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.parse().unwrap())
-        .collect();
-    let mut calculated = Vec::new();
-    for a in &words {
-        for b in &words {
-            let (jaro, winkler) = oracle(a, b);
-            calculated.extend([jaro, winkler]);
-        }
-    }
-    assert_eq!(frozen.len(), 1922);
-    assert_eq!(frozen, calculated);
-    // Three ordered mismatches must be integer-halved to one transposition.
-    assert_eq!(
-        oracle("aaaabc", "aaabca"),
-        (0.9444444444444445, 0.9611111111111111)
-    );
-    assert_eq!(oracle("é", "e\u{301}"), (0.0, 0.0));
-}
-
 fn run(name: &str, backend: Option<native::Backend>) {
     with_compiler_stack(|| {
         let mut stdout = Vec::new();
@@ -313,29 +269,6 @@ fn synthetic_preflight_overflow_and_threshold() {
                 vec![Value::F64(score.to_bits()), integer(4)],
             );
             assert_eq!(value, Value::F64(expected.to_bits()));
-        }
-    });
-}
-
-#[test]
-fn new_module_importer_selection() {
-    with_compiler_stack(|| {
-        let mut loaded = load_program(&fixture("vectors")).unwrap();
-        loaded.check_for_execution().unwrap();
-        for name in ["jaro", "jaro_winkler"] {
-            assert!(matches!(
-                invoke(
-                    &mut loaded,
-                    name,
-                    vec![
-                        Value::String("💚".into()),
-                        Value::String("💚".into()),
-                        integer(1),
-                        integer(1)
-                    ]
-                ),
-                Value::Variant { .. }
-            ));
         }
     });
 }

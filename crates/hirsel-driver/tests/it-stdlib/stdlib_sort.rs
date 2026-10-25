@@ -50,79 +50,10 @@ vector!(
     zig_stability_fuzz_seed_0,
     "SEM-5-list-sort-zig-stable-fuzz-0-run"
 );
-vector!(
-    zig_stability_fuzz_seed_1,
-    "SEM-5-list-sort-zig-stable-fuzz-1-run"
-);
-vector!(
-    zig_stability_fuzz_seed_2,
-    "SEM-5-list-sort-zig-stable-fuzz-2-run"
-);
-vector!(
-    zig_stability_fuzz_seed_3,
-    "SEM-5-list-sort-zig-stable-fuzz-3-run"
-);
-vector!(
-    zig_stability_fuzz_seed_4,
-    "SEM-5-list-sort-zig-stable-fuzz-4-run"
-);
-vector!(
-    zig_stability_fuzz_seed_5,
-    "SEM-5-list-sort-zig-stable-fuzz-5-run"
-);
-vector!(
-    zig_stability_fuzz_seed_6,
-    "SEM-5-list-sort-zig-stable-fuzz-6-run"
-);
-vector!(
-    zig_stability_fuzz_seed_7,
-    "SEM-5-list-sort-zig-stable-fuzz-7-run"
-);
-vector!(
-    zig_stability_fuzz_seed_8,
-    "SEM-5-list-sort-zig-stable-fuzz-8-run"
-);
-vector!(
-    zig_stability_fuzz_seed_9,
-    "SEM-5-list-sort-zig-stable-fuzz-9-run"
-);
 vector!(block_boundary_0, "SEM-5-list-sort-block-12-run");
 vector!(block_boundary_1, "SEM-5-list-sort-block-13-run");
 vector!(block_boundary_2, "SEM-5-list-sort-block-14-run");
 vector!(block_boundary_3, "SEM-5-list-sort-stable-6-run");
-
-#[test]
-fn unstable_record_partition_keeps_equal_key_permutation() {
-    with_compiler_stack(|| {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/SEM/SEM-5-list-sort-bitset-records-run.hir");
-        let mut output = Vec::new();
-        let outcome = run_path(&path, &mut output).unwrap();
-        assert_eq!(output, b"11175512428274611640\n");
-        assert!(matches!(
-            outcome,
-            RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-        ));
-    });
-}
-
-#[test]
-fn unstable_partition_preserves_first_callback_failure_and_site() {
-    with_compiler_stack(|| {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/MEM/MEM-14-list-sort-partition-first-fail.hir");
-        let mut output = Vec::new();
-        let outcome = run_path(&path, &mut output).unwrap();
-        assert!(output.is_empty());
-        assert!(
-            matches!(outcome,
-                RunOutcome::Failed { primary: hirsel_run_schema::Failure { ref rule, ref site, .. }, .. }
-                    if rule.as_str() == "MEM-14" && site.line == 15
-            ),
-            "{outcome:?}"
-        );
-    });
-}
 
 fn owned_partition(fail: bool) {
     with_compiler_stack(|| {

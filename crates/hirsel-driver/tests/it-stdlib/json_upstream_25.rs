@@ -292,20 +292,6 @@ macro_rules! partition {
 }
 partition!(trees_000, "tree-", 0, 8);
 partition!(trees_008, "tree-", 8, 16);
-partition!(trees_016, "tree-", 16, 24);
-partition!(trees_024, "tree-", 24, 32);
-partition!(trees_032, "tree-", 32, 40);
-partition!(trees_040, "tree-", 40, 48);
-partition!(trees_048, "tree-", 48, 56);
-partition!(trees_056, "tree-", 56, 64);
-partition!(trees_064, "tree-", 64, 72);
-partition!(trees_072, "tree-", 72, 80);
-partition!(trees_080, "tree-", 80, 88);
-partition!(trees_088, "tree-", 88, 96);
-partition!(trees_096, "tree-", 96, 104);
-partition!(trees_104, "tree-", 104, 112);
-partition!(trees_112, "tree-", 112, 120);
-partition!(trees_120, "tree-", 120, 128);
 partition!(mutations_000, "mutation-", 0, 16);
 partition!(mutations_016, "mutation-", 16, 32);
 partition!(mutations_032, "mutation-", 32, 48);

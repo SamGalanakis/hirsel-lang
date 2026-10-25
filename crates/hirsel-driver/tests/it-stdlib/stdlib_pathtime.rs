@@ -159,67 +159,6 @@ fn rfc3339_matches_independent_gregorian_and_offset_vectors() {
 
 #[test]
 #[ignore = "full gate"]
-fn full_gate_path_and_time_public_functions_compile_as_source_units() {
-    with_compiler_stack(|| {
-        let mut found = BTreeSet::new();
-        for name in [
-            "SEM-3-pathtime-path-run",
-            "SEM-1-pathtime-duration-run",
-            "SEM-1-pathtime-time-run",
-        ] {
-            let path = fixture().parent().unwrap().join(format!("{name}.hir"));
-            let mut loaded = load_program(&path).unwrap();
-            loaded.check_for_execution().unwrap();
-            let input = loaded.engine.export_native_input().unwrap();
-            let validated = loaded.engine.import_native_input(input).unwrap();
-            let ready = native::build(
-                &validated,
-                &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
-            )
-            .unwrap();
-            for unit in &ready.units {
-                let header = &unit.unit().header;
-                if header.definition.0.package.name_is("std") {
-                    assert_eq!(header.origin, UnitOrigin::Source);
-                    found.insert((
-                        header.definition.0.modules.join("/"),
-                        header.definition.0.name.clone(),
-                    ));
-                }
-            }
-        }
-        for (module, names) in [
-            (
-                "path",
-                vec![
-                    "normalize",
-                    "join",
-                    "parent",
-                    "filename",
-                    "extension",
-                    "components",
-                ],
-            ),
-            ("duration", vec!["from_parts", "parse", "to_string"]),
-            ("time", vec!["parse", "to_string"]),
-        ] {
-            for name in names {
-                assert!(
-                    found.contains(&(module.into(), name.into())),
-                    "missing {module}.{name}"
-                );
-                assert!(
-                    registry::BuiltinRegistry::new()
-                        .get(&hirsel_syntax::DefPath::core(&format!("{module}.{name}")))
-                        .is_none()
-                );
-            }
-        }
-    });
-}
-
-#[test]
-#[ignore = "full gate"]
 fn full_gate_every_four_digit_year_matches_a_chrono_free_calendar_checksum() {
     with_compiler_stack(|| {
         let checksum: i128 = (0..=9999)

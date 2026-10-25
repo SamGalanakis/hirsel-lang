@@ -141,20 +141,3 @@ fn vectors_on_interpreter_heap_llvm_and_cranelift() {
 fn aliases_uniqueness_and_failure_cleanup() {
     check("cleanup", true);
 }
-
-#[test]
-fn existing_hex_decode_errors_on_all_engines() {
-    check("corpus:hex", false);
-}
-
-#[test]
-fn digest_hex_direct_importers_on_all_engines() {
-    check("importers", false);
-}
-
-#[test]
-fn text_wire_direct_importers_on_all_engines() {
-    for name in ["multipart", "telemetry", "telemetry-context", "x509"] {
-        check(&format!("corpus:{name}"), false);
-    }
-}

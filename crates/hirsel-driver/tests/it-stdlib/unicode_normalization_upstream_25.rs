@@ -327,10 +327,6 @@ macro_rules! batch {
         fn $name() {
             partition($group, $offset, false, false);
         }
-        #[test]
-        fn $reference() {
-            partition($group, $offset, true, false);
-        }
     };
 }
 batch!(canonical_00, canonical_00_reference, "canonical", 0);

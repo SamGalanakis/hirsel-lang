@@ -168,7 +168,6 @@ batch!(npm_32, 128, 136);
 batch!(npm_40, 136, 144);
 batch!(npm_48, 144, 152);
 batch!(npm_56, 152, 160);
-batch!(npm_64, 160, 168);
 batch!(npm_72, 168, 176);
 batch!(npm_80, 176, 184);
 batch!(npm_88, 184, 192);

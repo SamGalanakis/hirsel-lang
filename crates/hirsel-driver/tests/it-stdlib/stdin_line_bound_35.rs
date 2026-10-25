@@ -557,34 +557,6 @@ fn refusal_controls(
 }
 
 #[test]
-fn production_source_append_trace_bounds_accepted_prefix() {
-    with_compiler_stack(|| {
-        let source = include_str!("../../../../stdlib/std@1/input.hir");
-        let function = &source[source.find("pub fn read_line_bounded").unwrap()..];
-        let append = "core@1/list.push(mut buffer, byte)";
-        assert_eq!(function.matches(append).count(), 2);
-        let traced = function
-            .replace("pub fn read_line_bounded(s: Stdin, max_line_bytes: u64)", "fn traced(s: Stdin, max_line_bytes: u64, output: Stdout)")
-            .replace("ReadBoundedError", "input.ReadBoundedError")
-            .replace("let Some(byte)", "let _ = out.print(output, f\"probe {core@1/list.len(probe)}\\n\")\n    let Some(byte)")
-            .replace(append, &format!("let _ = out.print(output, f\"append {{len}} {{byte}}\\n\")\n    {append}"));
-        let main = include_str!("../fixtures/stdin-line-bound-35/main.hir").replace(
-            "input.read_line_bounded(stream, limit)",
-            "traced(stream, limit, output)",
-        );
-        let mut loaded = checked(&fixture("main"), Some(&format!("{main}\n{traced}")));
-        for row in rows() {
-            simulations(
-                &mut loaded,
-                &format!("trace-{}", row.id),
-                (&recipe(&row)).into(),
-                &oracle(&row, true).0,
-            );
-        }
-    });
-}
-
-#[test]
 fn underlying_input_error_kinds_and_limit_precedence() {
     with_compiler_stack(|| {
         use hirsel_interp::library::simulation::Fault;

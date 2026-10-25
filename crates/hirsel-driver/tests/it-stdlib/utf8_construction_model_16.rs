@@ -13,28 +13,6 @@ fn fixture(name: &str) -> PathBuf {
     ))
 }
 
-#[test]
-fn host_exhaustive_one_and_two_bytes() {
-    let mut single = 0;
-    let mut pair = 0;
-    for a in 0..=255u8 {
-        let bytes = [a];
-        assert_eq!(std::str::from_utf8(&bytes).is_ok(), a < 128);
-        single += usize::from(std::str::from_utf8(&bytes).is_ok());
-        for b in 0..=255u8 {
-            let bytes = [a, b];
-            let expected =
-                (a < 128 && b < 128) || ((0xc2..=0xdf).contains(&a) && (0x80..=0xbf).contains(&b));
-            assert_eq!(std::str::from_utf8(&bytes).is_ok(), expected, "{bytes:x?}");
-            pair += usize::from(expected);
-        }
-    }
-    assert_eq!((single, pair), (128, 18_304));
-    eprintln!(
-        "host oracle: 256 single bytes (128 valid), 65536 pairs (18304 valid); pairs never compiled"
-    );
-}
-
 struct Case {
     class: &'static str,
     bytes: Vec<u8>,

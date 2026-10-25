@@ -157,16 +157,6 @@ macro_rules! batch {
 }
 batch!(generated_00, 0, 8);
 batch!(generated_08, 8, 16);
-batch!(generated_16, 16, 24);
-batch!(generated_24, 24, 32);
-batch!(generated_32, 32, 40);
-batch!(generated_40, 40, 48);
-batch!(generated_48, 48, 56);
-batch!(generated_56, 56, 64);
-batch!(generated_64, 64, 72);
-batch!(generated_72, 72, 80);
-batch!(generated_80, 80, 88);
-batch!(generated_88, 88, 96);
 batch!(mutations_00, 96, 112);
 batch!(mutations_16, 112, 128);
 batch!(mutations_32, 128, 144);

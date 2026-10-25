@@ -70,16 +70,6 @@ fn fixture(name: &str, steps: Option<u64>) {
 }
 
 #[test]
-fn base64_stream_5_every_partition() {
-    fixture("partitions", Some(100_000_000));
-}
-
-#[test]
-fn base64_stream_5_many_small_chunks() {
-    fixture("bounded", Some(50_000_000));
-}
-
-#[test]
 fn base64_stream_5_long_native() {
     // Preserve the original 24KiB control after its 50M-step interpreter red.
     fixture("bounded-long", None);

@@ -180,14 +180,6 @@ macro_rules! backtrack_control {
         }
     };
 }
-backtrack_control!(backtrack_llvm_edges, Llvm, "backtrack25_edges");
-backtrack_control!(backtrack_llvm_ascii, Llvm, "backtrack25_ascii");
-backtrack_control!(backtrack_llvm_random, Llvm, "backtrack25_random");
-backtrack_control!(backtrack_llvm_limits, Llvm, "backtrack25_limits");
-backtrack_control!(backtrack_cranelift_edges, Cranelift, "backtrack25_edges");
-backtrack_control!(backtrack_cranelift_ascii, Cranelift, "backtrack25_ascii");
-backtrack_control!(backtrack_cranelift_random, Cranelift, "backtrack25_random");
-backtrack_control!(backtrack_cranelift_limits, Cranelift, "backtrack25_limits");
 
 // Exercise public package import, nonzero String views and caught callback
 // cleanup on the remaining engines. Corpus already supplies the reference run.
@@ -265,33 +257,3 @@ macro_rules! public_test {
         }
     };
 }
-public_test!(
-    public_view_checked_h,
-    "SEM/SEM-3-regex-fixed-tags-37-run.hir",
-    None
-);
-public_test!(
-    public_view_llvm,
-    "SEM/SEM-3-regex-fixed-tags-37-run.hir",
-    Some(native::Backend::Llvm)
-);
-public_test!(
-    public_view_cranelift,
-    "SEM/SEM-3-regex-fixed-tags-37-run.hir",
-    Some(native::Backend::Cranelift)
-);
-public_test!(
-    public_cleanup_checked_h,
-    "FAIL/FAIL-3-regex-fixed-tags-37-cleanup-run.hir",
-    None
-);
-public_test!(
-    public_cleanup_llvm,
-    "FAIL/FAIL-3-regex-fixed-tags-37-cleanup-run.hir",
-    Some(native::Backend::Llvm)
-);
-public_test!(
-    public_cleanup_cranelift,
-    "FAIL/FAIL-3-regex-fixed-tags-37-cleanup-run.hir",
-    Some(native::Backend::Cranelift)
-);

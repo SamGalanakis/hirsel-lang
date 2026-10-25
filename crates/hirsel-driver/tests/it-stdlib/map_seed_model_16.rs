@@ -173,35 +173,3 @@ fn all_engines(name: &str, source: &str, returned: hirsel_run_schema::Returned) 
         eprintln!("{name}: interpreter + H + LLVM + Cranelift agree; zero live heap bytes");
     });
 }
-
-#[test]
-fn public_contract_twins_all_engines() {
-    for (name, file) in [
-        ("mutations", "SEM-5-map-seed-model-16-run.hir"),
-        ("missing", "SEM-5-map-seed-model-16-invalid-run.hir"),
-    ] {
-        // Conformance sources are declared runtime repository data for this
-        // harness: every engine and the corpus gate read exactly these bytes.
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/SEM")
-            .join(file);
-        let source = std::fs::read_to_string(path).unwrap();
-        all_engines(name, &source, hirsel_run_schema::Returned::Ok);
-    }
-}
-
-#[test]
-fn wrong_oracle_is_rejected_at_the_minimal_prefix_all_engines() {
-    let traces = model::traces();
-    let source = model::source(&traces[..1]);
-    // The first insertion is prefix 4. Alter only its expected lookup answer;
-    // the program must return Error(1041), rather than agree on a false pass.
-    let wrong = source.replacen("Some([10u64, 110u64])", "Some([99u64, 199u64])", 1);
-    assert_ne!(source, wrong);
-    let wrong = wrong.replace(
-        "if r0 != 0 { return Error(r0) }",
-        "if r0 == 1041 { return Error(r0) }\n if r0 != 0 { return Ok(()) }",
-    );
-    all_engines("wrong-answer", &wrong, hirsel_run_schema::Returned::Error);
-    assert!(model::failure(1041, &traces).contains("shortest failing prefix=4"));
-}

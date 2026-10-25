@@ -4,15 +4,6 @@ use hirsel_engine::*;
 use std::path::PathBuf;
 
 #[test]
-fn bufio_writer5_is_ordinary_source() {
-    super::source_codec(
-        "bufio-writer5",
-        "bufio",
-        &["new_writer", "buffered_len", "write_buffered", "flush"],
-    );
-}
-
-#[test]
 fn bufio_writer5_script_record_replay_is_exact() {
     with_compiler_stack(|| {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

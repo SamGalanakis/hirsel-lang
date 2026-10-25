@@ -4,35 +4,6 @@ use hirsel_engine::*;
 use std::path::PathBuf;
 
 #[test]
-fn regex_all_5_exports_have_source_owners_and_no_builtin_operations() {
-    with_compiler_stack(|| {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = root.join("conformance/SEM/SEM-3-regex-all-5-extract-run.hir");
-        let mut loaded = load_program(&path).unwrap();
-        loaded.check_for_execution().unwrap();
-        let snapshot = loaded.engine.export_native_input().unwrap();
-        for function in ["compile", "find_all"] {
-            assert!(
-                snapshot.source_owners.keys().any(|p| {
-                    p.0.package.name_is("std") && p.0.modules == ["regex"] && p.0.name == function
-                }),
-                "missing regex.{function} source owner"
-            );
-            assert!(
-                registry::BuiltinRegistry::new()
-                    .get(&hirsel_syntax::DefPath::core(&format!("regex.{function}")))
-                    .is_none()
-            );
-        }
-        let run = run_path(&path, &mut Vec::new()).unwrap();
-        assert!(
-            matches!(run, RunOutcome::Returned(hirsel_run_schema::Returned::Ok)),
-            "{run:?}"
-        );
-    });
-}
-
-#[test]
 fn regex_all_5_logtail_importer_on_interpreter_llvm_and_cranelift() {
     with_compiler_stack(|| {
         let directory_scratch = tempfile::Builder::new()

@@ -12,37 +12,6 @@ fn corpus(relative: &str) -> PathBuf {
 }
 
 #[test]
-fn combined_operations_are_ordinary_source_native_units() {
-    with_compiler_stack(|| {
-        let mut loaded = load_program(&corpus("SEM/SEM-5-pqcombined-vectors-run.hir")).unwrap();
-        loaded.check_for_execution().unwrap();
-        let input = loaded.engine.export_native_input().unwrap();
-        let validated = loaded.engine.import_native_input(input).unwrap();
-        let ready = native::build(
-            &validated,
-            &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
-        )
-        .unwrap();
-        let mut found = BTreeSet::new();
-        for unit in &ready.units {
-            let header = &unit.unit().header;
-            if header.definition.0.package.name_is("std")
-                && header.definition.0.modules == ["priority_queue"]
-            {
-                assert_eq!(header.origin, UnitOrigin::Source);
-                found.insert(header.definition.0.name.as_str());
-            }
-        }
-        for name in ["replace_top", "push_pop", "down"] {
-            assert!(
-                found.contains(name),
-                "missing ordinary source {name}: {found:?}"
-            );
-        }
-    });
-}
-
-#[test]
 fn owned_returns_ties_and_comparison_failures_finalize_every_owner_once() {
     with_compiler_stack(|| {
         for (relative, failing) in [

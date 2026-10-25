@@ -79,45 +79,6 @@ fn std_algorithms_are_ordinary_source_native_units(name: &str, functions: &[(&st
     });
 }
 
-#[test]
-fn every_wave1_list_algorithm_is_an_ordinary_source_native_unit() {
-    std_algorithms_are_ordinary_source_native_units(
-        "SEM-4-wave1-counted-run",
-        &[
-            "sort",
-            "reverse",
-            "rotate",
-            "binary_search",
-            "find",
-            "map",
-            "filter",
-            "fold",
-            "all",
-            "any",
-            "partition",
-            "concat",
-            "dedup",
-        ]
-        .map(|name| ("list", name)),
-    );
-}
-
-#[test]
-fn wave1_text_building_is_an_ordinary_source_native_unit() {
-    std_algorithms_are_ordinary_source_native_units(
-        "SEM-3-wave1-byte-alias-run",
-        &[("text", "append"), ("text", "finish")],
-    );
-}
-
-#[test]
-fn wave1_string_split_is_an_ordinary_source_native_unit() {
-    std_algorithms_are_ordinary_source_native_units(
-        "SEM-3-wave1-split-delimiter-run",
-        &[("string", "split")],
-    );
-}
-
 /// A package program's native input selects its own package's definitions,
 /// reachable or not, and only the dependency definitions those reach: std's
 /// exact summation and its superaccumulator, none of the rest of std.

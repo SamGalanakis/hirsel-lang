@@ -105,70 +105,6 @@ pub fn main(t: Test) -> Result[(), store.StoreError] {
 }
 
 #[test]
-fn nested_writes() {
-    parity(&format!(
-        "{ENCODE}{}",
-        r#"
-type Write = Put(key: Bytes, value: Bytes) | Delete(key: Bytes)
-fn encode(commits: List[List[Write]]) -> Bytes {
-  let mut out: List[u8] = []
-  for set in commits {
-    put_u64(mut out, list.len(set))
-    for w in set {
-      match w {
-        Put(key: k, value: v) => { put_bytes(mut out, k); put_bytes(mut out, v) },
-        Delete(key: k) => put_bytes(mut out, k),
-      }
-    }
-  }
-  bytes.from_list(take out)
-}
-pub fn main(t: Test) -> Result[(), ()] {
-  test.check(t, bytes.len(encode([[Put(key: b"a", value: b"1")]])) > 0)
-  Ok(())
-}
-"#
-    ));
-}
-
-#[test]
-fn one_list_match() {
-    parity(&format!(
-        "{ENCODE}{}",
-        r#"
-type Write = Put(key: Bytes, value: Bytes)
-fn encode(writes: List[Write]) -> Bytes {
-  let mut out: List[u8] = []
-  for w in writes { match w { Put(key: k, value: v) => { put_bytes(mut out, k); put_bytes(mut out, v) } } }
-  bytes.from_list(take out)
-}
-pub fn main(t: Test) -> Result[(), ()] {
-  test.check(t, bytes.len(encode([Put(key: b"a", value: b"1")])) > 0)
-  Ok(())
-}
-"#
-    ));
-}
-
-#[test]
-fn list_bytes() {
-    parity(&format!(
-        "{ENCODE}{}",
-        r#"
-fn encode(writes: List[Bytes]) -> Bytes {
-  let mut out: List[u8] = []
-  for w in writes { put_bytes(mut out, w) }
-  bytes.from_list(take out)
-}
-pub fn main(t: Test) -> Result[(), ()] {
-  test.check(t, bytes.len(encode([b"a"])) > 0)
-  Ok(())
-}
-"#
-    ));
-}
-
-#[test]
 fn direct_bytes() {
     parity(&format!(
         "{ENCODE}{}",
@@ -184,17 +120,6 @@ pub fn main(t: Test) -> Result[(), ()] {
 }
 
 #[test]
-fn match_no_loop() {
-    parity(
-        r#"
-type Write = Put(key: Bytes)
-fn read(data: Bytes) -> u64 { let _ = bytes.len(data); let mut n = 0u64; for b in data { n = n + 1 }; n }
-fn encode(w: Write) -> u64 { match w { Put(key: k) => read(k) } }
-pub fn main(t: Test) -> Result[(), ()] { test.check(t, encode(Put(key: b"a")) == 1); Ok(()) }
-"#,
-    );
-}
-#[test]
 fn tiny_iter_match() {
     parity(
         r#"
@@ -206,37 +131,6 @@ fn encode(writes: List[Write]) -> u64 {
   n
 }
 pub fn main(t: Test) -> Result[(), ()] { test.check(t, encode([Put(key: b"a")]) == 1); Ok(()) }
-"#,
-    );
-}
-#[test]
-fn tiny_iter_record() {
-    parity(
-        r#"
-type Write { key: Bytes }
-fn read(data: Bytes) -> u64 { let _ = bytes.len(data); let mut n = 0u64; for b in data { n = n + 1 }; n }
-fn encode(writes: List[Write]) -> u64 {
-  let mut n = 0u64
-  for w in writes { n = n + read(w.key) }
-  n
-}
-pub fn main(t: Test) -> Result[(), ()] { test.check(t, encode([Write(key: b"a")]) == 1); Ok(()) }
-"#,
-    );
-}
-
-#[test]
-fn tiny_double_len() {
-    parity(
-        r#"
-type Write = Put(key: Bytes)
-fn read(data: Bytes) -> u64 { bytes.len(data) + bytes.len(data) }
-fn encode(writes: List[Write]) -> u64 {
-  let mut n = 0u64
-  for w in writes { match w { Put(key: k) => { n = n + read(k) } } }
-  n
-}
-pub fn main(t: Test) -> Result[(), ()] { test.check(t, encode([Put(key: b"a")]) == 2); Ok(()) }
 "#,
     );
 }

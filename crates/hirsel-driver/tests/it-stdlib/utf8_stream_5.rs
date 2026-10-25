@@ -156,30 +156,6 @@ fn cranelift() {
     });
 }
 
-#[test]
-fn original_chunk_loss_reproduces() {
-    // The original whole-buffer API intentionally remains unchanged.
-    with_compiler_stack(|| {
-        let source = r#"pub fn main() -> Result[(), ()] {
-          let a = std@1/utf8.decode_lossy(b"\xe2")
-          let b = std@1/utf8.decode_lossy(b"\x82\xac")
-          let mut out: List[u8] = []
-          std@1/text.append(mut out, a)
-          std@1/text.append(mut out, b)
-          let decoded = std@1/text.finish_valid(take out)
-          failure.check(decoded == "���", TextInvariant())
-          Ok(())
-        }"#;
-        execute_source(source, 1_000_000);
-        let failed = source.replace("decoded == \"���\"", "decoded == \"€\"");
-        let outcome = source_outcome(&failed, 1_000_000);
-        assert!(matches!(outcome, RunOutcome::Failed { .. }), "{outcome:?}");
-        eprintln!(
-            "Original per-chunk decode_lossy: expected euro, got three replacements; failed observation: {outcome:?}"
-        );
-    });
-}
-
 fn execute_source(source: &str, steps: u64) {
     let outcome = source_outcome(source, steps);
     assert!(

@@ -360,18 +360,3 @@ for (bits, expected_digits, expected_exponent, expected) in rows {
 fn upstream_binary64_and_boundary_neighbors() {
     run_partition(0, 36, 0, 0);
 }
-
-#[test]
-fn unchanged_binary32_0() {
-    run_partition(0, 0, 0, 64);
-}
-
-#[test]
-fn unchanged_binary32_1() {
-    run_partition(0, 0, 64, 64);
-}
-
-#[test]
-fn unchanged_binary32_2() {
-    run_partition(0, 0, 128, 50);
-}

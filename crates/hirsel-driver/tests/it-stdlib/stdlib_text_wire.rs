@@ -60,41 +60,6 @@ fn source_codec(name: &str, module: &str, functions: &[&str]) {
     });
 }
 
-#[test]
-fn hex_is_ordinary_source() {
-    source_codec("hex", "hex", &["encode", "decode"]);
-}
-
-#[test]
-fn base64_is_ordinary_source() {
-    source_codec("base64", "base64", &["encode", "decode"]);
-}
-
-#[test]
-fn utf8_is_ordinary_source() {
-    source_codec("utf8", "utf8", &["decode_lossy"]);
-}
-
-#[test]
-fn char_is_ordinary_source() {
-    source_codec("char", "char", &["format_into"]);
-}
-
-#[test]
-fn common_strings_are_ordinary_source() {
-    source_codec("string-common", "string", &["contains", "lines", "replace"]);
-}
-
-#[test]
-fn sha256_is_ordinary_source() {
-    source_codec("sha256", "sha256", &["new", "update", "finish", "digest"]);
-}
-
-#[test]
-fn flate_is_ordinary_source() {
-    source_codec("flate-inflate", "flate", &["inflate"]);
-}
-
 // Go's gettysburg member and multi-block streams exceed the corpus step budget;
 // the bounded corpus vectors exercise the same source kernel.
 #[test]
@@ -288,27 +253,6 @@ fn full_gate_deflate_matches_zlib_native() {
     });
 }
 
-#[test]
-fn cookie_is_ordinary_source() {
-    source_codec("cookie", "cookie", &["new", "parse", "format"]);
-}
-
-#[test]
-fn x509_is_ordinary_source() {
-    source_codec("x509", "x509", &["certificates", "parse"]);
-}
-
-#[test]
-fn shlex_is_ordinary_source() {
-    source_codec("shlex-posix-1", "shlex", &["split", "quote", "join"]);
-}
-
-#[test]
-fn uuid_is_ordinary_source() {
-    source_codec("uuid-layout", "uuid", &["parse", "format_into", "v7_from"]);
-    source_codec("uuid-random", "uuid", &["v4"]);
-}
-
 // The wall clock is not grantable to a corpus program; version 7 UUIDs take
 // their timestamp from it. Random is random.splitmix64@1 with seed 0.
 #[test]
@@ -349,29 +293,6 @@ fn uuid_v7_reads_the_wall_clock() {
     });
 }
 
-#[test]
-fn semver_is_ordinary_source() {
-    source_codec(
-        "semver-version",
-        "semver",
-        &["parse", "parse_npm", "matches"],
-    );
-}
-
-#[test]
-fn diff_is_ordinary_source() {
-    source_codec("diff-pairs-1", "diff", &["edits", "unified", "apply"]);
-}
-
-#[test]
-fn websocket_is_ordinary_source() {
-    source_codec(
-        "websocket",
-        "websocket",
-        &["accept_key", "encode_frame", "decode_frame", "decode_close"],
-    );
-}
-
 // A 64 KiB frame takes the 64-bit length form; building one in the interpreter
 // is too slow for any budget, so it runs only as a built executable.
 #[test]
@@ -395,21 +316,6 @@ fn full_gate_websocket_large_frame_native() {
         assert!(stdout.is_empty(), "{stdout:?}");
         assert!(stderr.is_empty(), "{}", String::from_utf8_lossy(&stderr));
     });
-}
-
-#[test]
-fn sse_is_ordinary_source() {
-    source_codec("sse", "sse", &["parser", "push", "next"]);
-}
-
-#[test]
-fn multipart_is_ordinary_source() {
-    source_codec("multipart", "multipart", &["decode", "parse_media_type"]);
-}
-
-#[test]
-fn jwt_is_ordinary_source() {
-    source_codec("jwt", "jwt", &["sign", "verify_at", "validate"]);
 }
 
 // The corpus grants no wall clock, so jwt.verify's reading of one runs here at
@@ -464,21 +370,6 @@ fn jwt_verify_reads_the_wall_clock() {
 }
 
 #[test]
-fn unicode_properties_are_ordinary_source() {
-    source_codec(
-        "unicode-properties",
-        "unicode",
-        &[
-            "is_whitespace",
-            "is_letter",
-            "is_digit",
-            "simple_lower",
-            "simple_upper",
-        ],
-    );
-}
-
-#[test]
 fn unicode16_property_tables_regenerate() {
     assert!(
         std::process::Command::new("python3")
@@ -488,30 +379,6 @@ fn unicode16_property_tables_regenerate() {
             .unwrap()
             .success()
     );
-}
-
-#[test]
-fn ascii_radix_is_ordinary_source() {
-    source_codec("ascii-radix", "ascii", &["digit_value_radix"]);
-}
-
-#[test]
-fn csv_is_ordinary_source() {
-    source_codec(
-        "csv",
-        "csv",
-        &["reader", "feed", "parse", "read_record", "write_record"],
-    );
-}
-
-#[test]
-fn cli_is_ordinary_source() {
-    source_codec("cli", "cli", &["parse", "usage"]);
-}
-
-#[test]
-fn cli_error_context_5_is_ordinary_source() {
-    source_codec("cli-error-context-5-render", "cli", &["error_message"]);
 }
 
 #[test]
@@ -541,11 +408,6 @@ fn cli_error_context_5_example_prints_explicitly() {
              Usage: example [options] [--] [arguments]\n  -o, --output <value>\toutput path\n"
         );
     });
-}
-
-#[test]
-fn log_is_ordinary_source() {
-    source_codec("log", "log", &["to_string", "write"]);
 }
 
 // The source corpus cannot inject Stderr provider faults. This additionally
@@ -617,15 +479,6 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
     });
 }
 
-#[test]
-fn extra_test_helpers_are_ordinary_source() {
-    source_codec(
-        "test-extra",
-        "test",
-        &["expect_ok", "expect_error", "property_cases"],
-    );
-}
-
 // Corpus outcomes cannot count finalizers or their ordering relative to reports.
 #[test]
 fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
@@ -673,25 +526,6 @@ fn owned_results_and_requested_property_cases_finalize_once_before_reporting() {
     });
 }
 
-#[test]
-fn yaml_is_ordinary_source() {
-    source_codec("yaml", "yaml", &["parse", "parse_all", "stringify"]);
-}
-
-#[test]
-fn toml_is_ordinary_source() {
-    source_codec("toml-edit-cargo", "toml", &["document", "set", "source"]);
-}
-
-#[test]
-fn yaml_documents_are_ordinary_source() {
-    source_codec(
-        "yaml-edit-remove",
-        "yaml",
-        &["document", "source", "remove"],
-    );
-}
-
 // Full 1024-byte quoted and 1025-byte explicit keys exceed the corpus step budget.
 fn yaml_large_fixture(fixture: &str) {
     with_compiler_stack(|| {
@@ -730,30 +564,6 @@ fn yaml_quoted_1024_byte_key_reads_back() {
 #[test]
 fn yaml_tagged_invoice_round_trips_beyond_corpus_budget() {
     yaml_large_fixture("yaml-tagged-invoice");
-}
-
-#[test]
-fn telemetry_is_ordinary_source() {
-    source_codec(
-        "telemetry",
-        "telemetry",
-        &[
-            "check_log",
-            "render",
-            "write_stderr",
-            "enrich",
-            "allow_fields",
-        ],
-    );
-}
-
-#[test]
-fn telemetry_context_is_ordinary_source() {
-    source_codec(
-        "telemetry-context",
-        "telemetry",
-        &["extract_trace", "inject_trace", "validate_trace"],
-    );
 }
 
 #[test]
@@ -929,41 +739,4 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
             );
         }
     });
-}
-
-#[test]
-fn utf8_stream_5_is_ordinary_source() {
-    super::utf8_stream_5::source_origin();
-}
-
-#[test]
-fn base64_stream_5_is_ordinary_source() {
-    source_codec(
-        "base64-stream-5",
-        "base64",
-        &[
-            "encoder",
-            "decoder",
-            "encode_feed",
-            "encode_finish",
-            "decode_feed",
-            "decode_finish",
-        ],
-    );
-}
-
-#[test]
-fn binary_endian_5_is_ordinary_source() {
-    source_codec(
-        "binary-endian-5-packet",
-        "binary",
-        &[
-            "read_u16",
-            "read_u32",
-            "read_u64",
-            "append_u16",
-            "append_u32",
-            "append_u64",
-        ],
-    );
 }

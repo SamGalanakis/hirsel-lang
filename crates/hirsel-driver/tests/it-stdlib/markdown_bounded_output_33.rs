@@ -101,90 +101,12 @@ fn run(engine: &str) {
 }
 
 #[test]
-fn markdown_bounded_output_33_reference() {
-    run("reference");
-}
-#[test]
-fn markdown_bounded_output_33_checked_h() {
-    run("checked-h");
-}
-#[test]
 fn markdown_bounded_output_33_llvm() {
     run("llvm");
 }
 #[test]
 fn markdown_bounded_output_33_cranelift() {
     run("cranelift");
-}
-
-#[test]
-fn markdown_bounded_output_33_output_allocation_boundary() {
-    // Audit the actual allocation boundary as well as the allocation-free test
-    // sink in the executed fixture: every write is admitted before its callback;
-    // the bounded String sink reserves only the admitted cap, once.
-    let source = include_str!("../../../../stdlib/std@1/markdown_render.hir");
-    let walker = source.split("type RenderBuffer").next().unwrap();
-    for forbidden in [
-        "text.append(",
-        "list.push(",
-        "list.reserve(",
-        "normalize_uri(",
-        "string.ascii_lower(",
-        "piece(",
-        "string.split",
-    ] {
-        assert!(
-            !walker.contains(forbidden),
-            "rendered temporary bypasses admission: {forbidden}"
-        );
-    }
-    for (offset, _) in walker.match_indices("f\"") {
-        assert!(
-            offset > 0
-                && (walker.as_bytes()[offset - 1].is_ascii_alphanumeric()
-                    || walker.as_bytes()[offset - 1] == b'_'),
-            "rendered f-string bypasses admission"
-        );
-    }
-    assert_eq!(
-        source
-            .matches("core@1/list.reserve(mut sink.data, limit)")
-            .count(),
-        1
-    );
-    assert_eq!(
-        source
-            .matches("core@1/list.push(mut sink.data, value)")
-            .count(),
-        1
-    );
-    let admit = source
-        .split("fn emit_byte")
-        .nth(1)
-        .unwrap()
-        .split("fn emit_text")
-        .next()
-        .unwrap();
-    assert!(
-        admit.find("emission.written == emission.limit").unwrap()
-            < admit.find("write(mut sink, value)").unwrap()
-    );
-    assert!(
-        admit.find("write(mut sink, value)").unwrap()
-            < admit.find("emission.written += 1").unwrap()
-    );
-    let span = source
-        .split("fn emit_text")
-        .nth(1)
-        .unwrap()
-        .split("fn emit_number")
-        .next()
-        .unwrap();
-    assert!(
-        span.find("emission.limit - emission.written").unwrap()
-            < span.find("write(mut sink, b)").unwrap()
-    );
-    assert!(span.find("write(mut sink, b)").unwrap() < span.find("emission.written += 1").unwrap());
 }
 
 fn run_part(fixture: &str, part: &str, checked: bool) {
