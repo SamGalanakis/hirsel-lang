@@ -392,7 +392,9 @@ fn admitted_lower_depth_matches_scalar_after_warm_constant_dependencies() {
 #[test]
 fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
     use hirsel_engine::*;
-    with_compiler_stack(|| {
+    // Retention is debited by each actual settled outcome, so the allowance
+    // that holds exactly the entry's outcome is measured in a fresh probe.
+    fn demand(extra: Option<u64>, spare_refused: bool) -> u64 {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path, "pub fn spare()->u8{1u8}\npub fn main()->u8{2u8}\n").unwrap();
@@ -431,7 +433,7 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
             )
             .unwrap();
         let inventory = FrontLowerQueries::input_bytes(&definitions).unwrap();
-        let slot = FrontLowerQueries::output_bytes(weight).unwrap();
+        let extra = extra.unwrap_or_else(|| FrontLowerQueries::output_bytes(weight).unwrap());
         let lower = program
             .engine
             .front_lower_queries(
@@ -439,7 +441,7 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
                 front.clone(),
                 weight,
                 32,
-                budget.reserve(inventory + slot).unwrap(),
+                budget.reserve(inventory + extra).unwrap(),
                 errors,
             )
             .unwrap();
@@ -454,19 +456,32 @@ fn admitted_lower_reserves_outputs_only_for_demanded_definitions() {
         let product = runtime.wait(request).unwrap()[0];
         assert!(lower.outcome(product).is_some());
         assert_eq!(lower.work(&program.entry).lowerings, 1);
-        assert_eq!(lower.work(&spare).lowerings, 0);
-        let request = runtime.request(&[lower.query(&spare).unwrap()]);
-        assert_eq!(runtime.wait(request).unwrap_err(), errors.resource);
         assert_eq!(
             lower.work(&spare).lowerings,
             0,
-            "exhaustion refuses before transformation"
+            "an undemanded definition is never lowered"
         );
+        let charged = lower.retained_bytes() - inventory;
+        assert!(charged > 0 && charged <= extra);
+        if spare_refused {
+            let request = runtime.request(&[lower.query(&spare).unwrap()]);
+            assert_eq!(runtime.wait(request).unwrap_err(), errors.resource);
+            assert_eq!(
+                lower.retained_bytes() - inventory,
+                charged,
+                "a refused outcome is not retained"
+            );
+        }
         runtime.shutdown();
         assert!(
             lower.outcome(product).is_some(),
             "held outputs survive worker shutdown with allowance owned"
         );
+        charged
+    }
+    with_compiler_stack(|| {
+        let charged = demand(None, false);
+        assert_eq!(demand(Some(charged), true), charged);
     });
 }
 
