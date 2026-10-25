@@ -5150,4 +5150,4 @@ mod free_policy_tests {
 
 #[cfg(test)]
 #[path = "tasks/runtime50/modules.rs"]
-mod runtime50;
+pub(crate) mod runtime50;

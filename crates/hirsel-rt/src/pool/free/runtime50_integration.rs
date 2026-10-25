@@ -82,6 +82,15 @@ fn runtime50_full_protocol_integration() {
         permit_waits,
         shrink_drains,
         stopped_mutex_owner,
+        concrete_reuse,
+        retained_reuse: _,
+        deferred_until_save,
+        loans,
+        home_reentry,
+        home_refused,
+        role_waits,
+        cancel_at_registration,
+        stale_notices,
     } = total.clone();
     let cells = [
         ("wake before save", wake_before_save),
@@ -117,6 +126,14 @@ fn runtime50_full_protocol_integration() {
         ("permit wait", permit_waits),
         ("shrink drain", shrink_drains),
         ("mutex payload held through the stop", stopped_mutex_owner),
+        ("concrete slot reuse", concrete_reuse),
+        ("delivery deferred until save", deferred_until_save),
+        ("home loan under the role", loans),
+        ("home re-enters the caller's role", home_reentry),
+        ("home idle claim refused", home_refused),
+        ("role wait behind a loan", role_waits),
+        ("cancel at registration", cancel_at_registration),
+        ("stale cancellation notice", stale_notices),
     ];
     let missing: Vec<_> = cells.iter().filter(|c| c.1 == 0).map(|c| c.0).collect();
     assert!(missing.is_empty(), "uncovered vectors: {missing:?}");

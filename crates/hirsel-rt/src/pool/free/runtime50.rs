@@ -21,7 +21,9 @@
 use super::super::dispatch_tests::{Topology, topology};
 use super::super::*;
 use crate::readiness::{Readiness, WaitSource};
-use hirsel_free::cancel::Flag;
+use crate::tasks::registry::{TaskKey, TaskLease};
+use crate::tasks::role::Role;
+use crate::tasks::runtime50::hooks::Rows;
 use hirsel_free::claim::{Arbiter, Claim, Request, Requests};
 use hirsel_free::mutex::{Acquired, Permit as ObjectPermit};
 use hirsel_free::pending::Pending;
@@ -47,9 +49,21 @@ pub(super) enum Entry {
     },
     Yield {
         task: u32,
-        generation: u32,
+        generation: u64,
         op: usize,
         site: &'static str,
+    },
+    /// The dispatched token's concrete registry row.
+    Selected {
+        task: u32,
+        slot: u32,
+        generation: u64,
+    },
+    /// A scheduler-role, home or permit transition at `site`, and the
+    /// holder it leaves (a role owner word, or a worker for permits).
+    Handoff {
+        site: &'static str,
+        owner: Option<u64>,
     },
 }
 
@@ -168,10 +182,18 @@ enum Op {
     Yield,
     Lock,
     Unlock,
-    Host { shielded: bool },
-    Sleep { domain: usize, after: u64 },
+    Host {
+        shielded: bool,
+    },
+    Sleep {
+        domain: usize,
+        after: u64,
+    },
     Dup,
     Release,
+    /// A synchronous home bridge while the task holds the scheduler role
+    /// (`call_home_in`): home serves it by re-entering the caller's role.
+    Loan,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,14 +243,20 @@ enum Stage {
 struct Job {
     request: Arc<Request<Handle>>,
     slot: u32,
-    generation: u32,
+    key: TaskKey,
+    /// The request's lease on its destination row (`host::jobs::Owned`).
+    _destination: TaskLease,
     shielded: bool,
     stage: Stage,
 }
 
 struct Task {
+    /// The driver's lineage index: the frame image's task and the mutex
+    /// waiter id. Each generation of the lineage is a concrete registry row.
     slot: u32,
-    generation: u32,
+    key: TaskKey,
+    /// Which generation of its lineage, from 0.
+    ordinal: u32,
     frame: Arc<Frame>,
     script: Vec<Op>,
     pc: usize,
@@ -236,16 +264,26 @@ struct Task {
     /// A wake that found the segment running, before its idle save.
     remembered: bool,
     log: Arc<TaskLog>,
-    cancel: Flag,
     wait: Option<Wait>,
+    /// A completion the save gate held back: the frame had not acknowledged
+    /// its save, so the policy may not resume the row. The idle save's
+    /// after-save callback delivers it.
+    deferred: Option<(Mail, bool)>,
     job: Option<u64>,
     mail: Option<Mail>,
     mutex_queued: bool,
     pending: Pending<usize>,
     handles: Vec<Handle>,
     reuse: u32,
-    /// The reused row's next generation and its first queue token.
-    successor: Option<(Box<Task>, Queued<Image>)>,
+    /// The lineage's next generation, registered by this one's end phase
+    /// and spawned into a concrete row once this one retired.
+    successor: Option<Successor>,
+}
+
+struct Successor {
+    script: Vec<Op>,
+    log: Arc<TaskLog>,
+    reuse: u32,
 }
 
 struct Slot {
@@ -265,6 +303,14 @@ pub(super) struct Config {
     scripts: Option<&'static [&'static [Op]]>,
     /// A domain's clock steps only after this many of its timers were armed.
     hold_clock: u64,
+    pub(super) mutant: Option<Mutant>,
+}
+
+/// A deliberate protocol defect; the run reports what it broke.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Mutant {
+    /// Lineage 0's first generation never acknowledges a save.
+    MissingSaveAck,
 }
 
 impl Config {
@@ -276,6 +322,7 @@ impl Config {
             stop: seed % 2 == 0,
             scripts: None,
             hold_clock: 0,
+            mutant: None,
         }
     }
 
@@ -297,6 +344,7 @@ impl Config {
             stop: false,
             scripts: Some(&[SLEEP, SLEEP]),
             hold_clock: 2,
+            mutant: None,
         }
     }
 }
@@ -337,6 +385,18 @@ pub(super) struct Coverage {
     pub(super) permit_waits: u64,
     pub(super) shrink_drains: u64,
     pub(super) stopped_mutex_owner: u64,
+    /// A successor took its predecessor's retired slot at a later generation.
+    pub(super) concrete_reuse: u64,
+    /// A successor took another slot: the retired one still had an owner.
+    pub(super) retained_reuse: u64,
+    pub(super) deferred_until_save: u64,
+    pub(super) loans: u64,
+    pub(super) home_reentry: u64,
+    pub(super) home_refused: u64,
+    /// A role-needing transition waited while a loan held the role.
+    pub(super) role_waits: u64,
+    pub(super) cancel_at_registration: u64,
+    pub(super) stale_notices: u64,
 }
 
 impl Coverage {
@@ -377,12 +437,24 @@ impl Coverage {
             contraction_while_held,
             permit_waits,
             shrink_drains,
-            stopped_mutex_owner
+            stopped_mutex_owner,
+            concrete_reuse,
+            retained_reuse,
+            deferred_until_save,
+            loans,
+            home_reentry,
+            home_refused,
+            role_waits,
+            cancel_at_registration,
+            stale_notices
         );
     }
 }
 
 pub(super) struct Outcome {
+    /// Lineages left unfinished: whether a completion waited on the save
+    /// gate, and whether the row's frame had acknowledged its save.
+    pub(super) stranded: Vec<(u32, bool, bool)>,
     pub(super) transcript: Vec<Entry>,
     pub(super) projection: String,
     pub(super) divergence: Option<Divergence>,
@@ -394,6 +466,12 @@ struct World {
     c: Controller,
     config: Config,
     execs: Topology,
+    /// The concrete registry: every generation's row, key and subscriptions.
+    rows: Rows,
+    /// The concrete scheduler role.
+    role: Role,
+    /// The worker whose home loan holds the role, and whether home served it.
+    loan: Option<(usize, bool)>,
     arbiter: Arbiter,
     requests: Requests<Handle>,
     tasks: Vec<Task>,
@@ -430,6 +508,14 @@ fn with_exec<R>(exec: &Arc<Exec>, f: impl FnOnce() -> R) -> R {
         result
     })
 }
+
+/// A task's role owner word: even and nonzero, like a context address.
+fn role_owner(t: usize) -> usize {
+    (t + 1) << 4
+}
+
+/// Host request tokens, as the concurrent service tags its own.
+const HOST: u64 = 1 << 63;
 
 const ENTERED: u8 = 0;
 const DONE: u8 = 1;
@@ -474,7 +560,7 @@ fn release(
 fn script(c: &mut Controller) -> Vec<Op> {
     let mut script = Vec::new();
     for _ in 0..2 + c.random("script-len", 4) {
-        match c.random("script-op", 7) {
+        match c.random("script-op", 8) {
             0 => script.push(Op::Compute),
             1 => script.push(Op::Yield),
             2 => script.extend([Op::Lock, Op::Yield, Op::Unlock]),
@@ -486,6 +572,7 @@ fn script(c: &mut Controller) -> Vec<Op> {
                 after: c.random("after", 3),
             }),
             5 => script.extend([Op::Dup, Op::Release]),
+            6 => script.push(Op::Loan),
             _ => script.extend([Op::Lock, Op::Unlock]),
         }
     }
@@ -494,7 +581,14 @@ fn script(c: &mut Controller) -> Vec<Op> {
 }
 
 /// A fresh row generation and its first queue token (`frame::prepared`).
-fn prepare(slot: u32, generation: u32, script: Vec<Op>, reuse: u32) -> (Task, Queued<Image>) {
+fn prepare(
+    slot: u32,
+    key: TaskKey,
+    ordinal: u32,
+    script: Vec<Op>,
+    log: Arc<TaskLog>,
+    reuse: u32,
+) -> (Task, Queued<Image>) {
     let (notification, queued) = frame::prepared(Image {
         ctx: std::ptr::null_mut(),
         task: slot,
@@ -509,15 +603,16 @@ fn prepare(slot: u32, generation: u32, script: Vec<Op>, reuse: u32) -> (Task, Qu
     });
     let task = Task {
         slot,
-        generation,
+        key,
+        ordinal,
         frame,
         script,
         pc: 0,
         custody: Custody::Queued,
         remembered: false,
-        log: TaskLog::new(vec![slot, generation]),
-        cancel: Flag::default(),
+        log,
         wait: None,
+        deferred: None,
         job: None,
         mail: None,
         mutex_queued: false,
@@ -584,12 +679,18 @@ impl World {
             .collect();
         let mut firsts = Vec::new();
         let mut tasks = Vec::new();
+        let mut rows = Rows::new();
+        let role = Role::default();
+        role.enable();
         for slot in 0..config.tasks {
             let script = match config.scripts {
                 Some(scripts) => scripts[slot as usize].to_vec(),
                 None => script(&mut c),
             };
-            let (task, queued) = prepare(slot, 0, script, config.reuse);
+            let key = rows.spawn(slot);
+            let log = TaskLog::new(vec![slot, 0]);
+            let (task, queued) = prepare(slot, key, 0, script, log, config.reuse);
+            rows.attach(key, task.frame.clone());
             tasks.push(task);
             firsts.push(queued);
         }
@@ -597,6 +698,9 @@ impl World {
             c,
             config,
             execs,
+            rows,
+            role,
+            loan: None,
             arbiter: Arbiter::new(true, usize::from(WIDTH)),
             requests: Requests::default(),
             tasks,
@@ -700,16 +804,24 @@ impl World {
             .collect()
     }
 
-    fn events(&self) -> Vec<u32> {
+    fn events(&mut self) -> Vec<u32> {
         let queued = self.dispatch().queued.load(Ordering::SeqCst) != 0;
         let mut events = Vec::new();
         for (w, slot) in self.slots.iter().enumerate() {
-            let enabled = if slot.leaving.is_some() {
-                true
-            } else if slot.active.is_some() {
-                !slot.permit_wait || self.execs.permits.available() > 0
-            } else {
-                queued
+            // An idle save and a segment's operation take the role; while a
+            // loan holds it they wait. Search and permits never take it.
+            let needs_role = slot.leaving.is_some() || (slot.active.is_some() && !slot.permit_wait);
+            let enabled = match self.loan {
+                Some((loaner, served)) if loaner == w => served,
+                Some(_) if needs_role => {
+                    self.coverage.role_waits += 1;
+                    false
+                }
+                _ if slot.leaving.is_some() => true,
+                _ if slot.active.is_some() => {
+                    !slot.permit_wait || self.execs.permits.available() > 0
+                }
+                _ => queued,
             };
             if enabled {
                 events.push(w as u32);
@@ -732,6 +844,12 @@ impl World {
                 events.push(3 << 24 | domain as u32);
             }
         }
+        if self.rows.notices() > 0 {
+            events.push(4 << 24);
+        }
+        if matches!(self.loan, Some((_, false))) {
+            events.push(5 << 24);
+        }
         events
     }
 
@@ -749,9 +867,27 @@ impl World {
             let arg = (event & 0xff_ffff) as usize;
             match event >> 24 {
                 0 => self.worker(arg),
-                1 => self.claim(arg as u64),
-                2 => self.complete(arg as u64),
-                _ => self.clock(arg),
+                5 => self.serve_loan(),
+                home => {
+                    // Home's merges take the role by its nonblocking idle claim.
+                    if !self.role.driven_try_idle() {
+                        self.coverage.home_refused += 1;
+                        let owner = self.role.driven_owner().map(|o| o as u64);
+                        self.c.push(Entry::Handoff {
+                            site: "home-refused",
+                            owner,
+                        });
+                    } else {
+                        self.handoff("home", Some(Role::IDLE));
+                        match home {
+                            1 => self.claim(arg as u64),
+                            2 => self.complete(arg as u64),
+                            3 => self.clock(arg),
+                            _ => self.cancellations(),
+                        }
+                        self.release(Role::IDLE);
+                    }
+                }
             }
             if self.c.diverged() {
                 break;
@@ -766,7 +902,8 @@ impl World {
         match self.c.random("inject", 40) {
             0 if !self.stopped => self.flush(),
             1 if self.config.stop && !self.stopped && self.step > 8 => self.stop(),
-            2 => {
+            // Another task's cancellation runs under its own role entry.
+            2 if self.loan.is_none() => {
                 let slot = self.c.random("cancel", tasks) as usize;
                 self.cancel(slot);
             }
@@ -811,9 +948,61 @@ impl World {
             self.search(w);
         } else if self.slots[w].permit_wait {
             self.acquire(w);
+        } else if let Some((_, served)) = self.loan.take_if(|l| l.0 == w) {
+            // The bridge returned: its caller leaves the role it held.
+            assert!(served);
+            let t = self.running(w);
+            self.tasks[t].pc += 1;
+            self.release(role_owner(t));
         } else {
+            // One semantic entry: the operation holds the role throughout.
+            let owner = role_owner(self.running(w));
+            self.role.driven_enter(owner);
+            self.handoff("enter", Some(owner));
             self.operate(w);
+            if self.loan.is_none() {
+                self.release(owner);
+            }
         }
+    }
+
+    fn handoff(&mut self, site: &'static str, owner: Option<usize>) {
+        self.c.push(Entry::Handoff {
+            site,
+            owner: owner.map(|o| o as u64),
+        });
+    }
+
+    fn release(&mut self, owner: usize) {
+        assert!(
+            self.role.driven_release(owner),
+            "{owner:#x} did not hold the role"
+        );
+        self.handoff("release", None);
+    }
+
+    /// Home serves the loan: it re-enters its caller's role without an
+    /// acquisition and reads the caller's row, as `call_home_in` does.
+    fn serve_loan(&mut self) {
+        let (w, served) = self.loan.as_mut().unwrap();
+        assert!(!*served);
+        *served = true;
+        let t = self.slots[*w].active.as_ref().unwrap().0.value().task as usize;
+        let owner = role_owner(t);
+        let before = self.role.acquisitions();
+        self.role.driven_enter(owner);
+        assert_eq!(
+            self.role.acquisitions(),
+            before,
+            "re-entry is no acquisition"
+        );
+        assert!(
+            !self.role.driven_try_idle(),
+            "home's idle claim waits for the loan"
+        );
+        assert!(self.rows.live(self.tasks[t].key));
+        self.coverage.home_reentry += 1;
+        self.handoff("home-reenter", Some(owner));
     }
 
     fn acquire(&mut self, w: usize) {
@@ -823,10 +1012,12 @@ impl World {
                 self.coverage.permit_waits += 1;
             }
             slot.permit_wait = true;
+            self.handoff("permit-wait", Some(w));
             return;
         }
         assert!(self.execs.permits.acquire(&slot.exec, None, None).is_ok());
         slot.permit_wait = false;
+        self.handoff("permit", Some(w));
     }
 
     /// pool::free::next, then resume's token start and stop check.
@@ -852,7 +1043,13 @@ impl World {
             "an old generation's token reached a worker"
         );
         assert_eq!(task.custody, Custody::Queued, "dispatch duplicated custody");
+        assert!(self.rows.live(task.key), "a token outlived its row");
         self.c.observe("dispatch", runnable, Some(slot));
+        self.c.push(Entry::Selected {
+            task: slot,
+            slot: task.key.slot,
+            generation: task.key.generation,
+        });
         if self.stopped {
             drop(running);
             drop(lease);
@@ -876,7 +1073,7 @@ impl World {
         let task = &self.tasks[t];
         self.c.push(Entry::Yield {
             task: task.slot,
-            generation: task.generation,
+            generation: task.key.generation,
             op: task.pc,
             site,
         });
@@ -895,32 +1092,58 @@ impl World {
         self.slots[w].leaving = Some(Leave::Complete);
     }
 
-    /// pool::free::saved: the idle continuation after the switch.
+    /// pool::free::saved: the idle continuation after the switch. Its
+    /// after-save callback runs under the role's idle guard.
     fn idle_save(&mut self, w: usize) {
         let leaving = self.slots[w].leaving.take().unwrap();
         let (running, frame, lease) = self.slots[w].active.take().unwrap();
         let exec = self.slots[w].exec.clone();
         self.execs.permits.release(&exec);
+        self.handoff("permit-release", Some(w));
         let t = running.value().task as usize;
+        let key = self.tasks[t].key;
+        self.role.driven_idle();
+        self.handoff("idle", Some(Role::IDLE));
         match leaving {
             Leave::Complete => {
                 drop(running);
+                // after_save(completed): the save acknowledgement, then the
+                // policy retires the row. Its slot waits for every owner.
+                frame.mark_saved();
+                self.rows.retire(key);
+                assert!(!self.rows.live(key));
+                self.release(Role::IDLE);
                 exec.busy.store(false, Ordering::SeqCst);
                 drop(lease);
+                drop(frame);
                 self.tasks[t].custody = Custody::Done;
                 // Completion invalidates every later wake of this generation.
                 assert!(self.tasks[t].frame.notification.notify().is_none());
                 self.coverage.completed_wake_inert += 1;
-                if let Some((next, queued)) = self.tasks[t].successor.take() {
-                    let old = std::mem::replace(&mut self.tasks[t], *next);
-                    self.stale.push(old.frame.notification.clone());
-                    self.coverage.reused_rows += 1;
-                    self.publish_first(t, queued);
+                if let Some(next) = self.tasks[t].successor.take() {
+                    self.spawn_successor(t, next);
                 }
             }
             Leave::Suspend { yielded, .. } => {
                 frame.owner.store(owner_word(Owner::Any), Ordering::Release);
-                frame.mark_saved();
+                let unacknowledged = self.config.mutant == Some(Mutant::MissingSaveAck)
+                    && t == 0
+                    && self.tasks[t].ordinal == 0;
+                if !unacknowledged {
+                    frame.mark_saved();
+                }
+                // after_save re-polls what the save gate deferred. The frame
+                // is still running, so the wake is remembered for the save.
+                if self.rows.saved(key)
+                    && let Some((mail, host)) = self.tasks[t].deferred.take()
+                {
+                    if host {
+                        self.rows.host_done(key);
+                    }
+                    self.tasks[t].mail = Some(mail);
+                    self.notify(t);
+                }
+                self.release(Role::IDLE);
                 let remembered = std::mem::take(&mut self.tasks[t].remembered);
                 let queued = running.save(yielded);
                 assert_eq!(
@@ -947,6 +1170,29 @@ impl World {
                 }
             }
         }
+    }
+
+    /// The lineage's next generation takes a concrete row: its
+    /// predecessor's slot at a later generation once no owner retains it.
+    fn spawn_successor(&mut self, t: usize, next: Successor) {
+        let old = self.tasks[t].key;
+        let ordinal = self.tasks[t].ordinal + 1;
+        let (task, queued) = prepare(t as u32, old, ordinal, next.script, next.log, next.reuse);
+        let previous = std::mem::replace(&mut self.tasks[t], task);
+        self.stale.push(previous.frame.notification.clone());
+        drop(previous);
+        let key = self.rows.spawn(t as u32);
+        assert!(!self.rows.live(old), "a retired key names a later occupant");
+        if key.slot == old.slot {
+            assert!(key.generation > old.generation);
+            self.coverage.concrete_reuse += 1;
+        } else if self.rows.retained().contains(&old.slot) {
+            self.coverage.retained_reuse += 1;
+        }
+        self.tasks[t].key = key;
+        self.rows.attach(key, self.tasks[t].frame.clone());
+        self.coverage.reused_rows += 1;
+        self.publish_first(t, queued);
     }
 
     /// One operation of the running segment.
@@ -996,6 +1242,11 @@ impl World {
                 }
             }
             Op::Host { shielded } => self.host(w, t, index, shielded),
+            Op::Loan => {
+                self.loan = Some((w, false));
+                self.coverage.loans += 1;
+                self.handoff("loan", Some(role_owner(t)));
+            }
             Op::Sleep { domain, after } => self.sleep(w, t, index, domain, after),
             Op::Dup => {
                 let section = section!(self, w);
@@ -1043,6 +1294,7 @@ impl World {
                 return self.terminate(w);
             }
             let section = section!(self, w);
+            let canceled = self.rows.canceled(self.tasks[t].key);
             let task = &mut self.tasks[t];
             let id = task.job.take().unwrap();
             match mail {
@@ -1055,7 +1307,7 @@ impl World {
                         Some(handle) => task.handles.push(handle),
                         None => self.coverage.failed_calls += 1,
                     }
-                    if shielded && task.cancel.cause().is_some() {
+                    if shielded && canceled {
                         self.coverage.shielded_delivery += 1;
                     }
                 }
@@ -1066,13 +1318,9 @@ impl World {
             task.pc += 1;
             return;
         }
-        if self.tasks[t].wait.is_some() {
+        if self.tasks[t].wait.is_some() || self.tasks[t].deferred.is_some() {
             self.coverage.spurious_repark += 1;
             return self.leave(w, false, "host-repark");
-        }
-        if !shielded && self.tasks[t].cancel.cause().is_some() {
-            self.tasks[t].pc += 1;
-            return;
         }
         let section = section!(self, w);
         let id = self.next_id + 1;
@@ -1086,15 +1334,34 @@ impl World {
             },
         );
         assert_eq!(request.state(), Claim::Prepared);
-        let task = &mut self.tasks[t];
-        effect(&section, &task.log, index, Phase::Entered, ENTERED);
+        let key = self.tasks[t].key;
+        effect(&section, &self.tasks[t].log, index, Phase::Entered, ENTERED);
+        // Parking subscribes the request to the task's cancellation, with
+        // the post-registration recheck.
+        let registration = self.rows.host_wait(key, HOST | id, shielded);
+        assert_eq!(registration.key, key);
+        if registration.canceled.is_some() {
+            // Canceled before it parked: the owner withdraws its own
+            // Prepared request, which no home can have claimed.
+            assert!(!shielded && request.withdraw());
+            assert!(self.withdrawn.insert(id));
+            self.requests.retire(id);
+            self.rows.host_done(key);
+            self.coverage.cancel_at_registration += 1;
+            effect(&section, &self.tasks[t].log, index, Phase::Done, DONE);
+            self.tasks[t].pc += 1;
+            return;
+        }
         drop(section);
+        let destination = self.rows.lease(key);
+        let task = &mut self.tasks[t];
         self.jobs.insert(
             id,
             Job {
                 request,
                 slot: task.slot,
-                generation: task.generation,
+                key,
+                _destination: destination,
                 shielded,
                 stage: Stage::Posted,
             },
@@ -1102,6 +1369,24 @@ impl World {
         task.wait = Some(Wait::Host(id));
         task.job = Some(id);
         self.leave(w, false, "host");
+    }
+
+    /// The policy's delivery of an ended wait. A parked row whose frame has
+    /// not acknowledged its save is not resumable (`readiness::saved`): the
+    /// completion waits for the idle save's after-save callback.
+    fn deliver(&mut self, t: usize, mail: Mail) {
+        let key = self.tasks[t].key;
+        let host = matches!(self.tasks[t].wait.take(), Some(Wait::Host(_)));
+        if !self.rows.saved(key) {
+            assert!(self.tasks[t].deferred.replace((mail, host)).is_none());
+            self.coverage.deferred_until_save += 1;
+            return;
+        }
+        if host {
+            self.rows.host_done(key);
+        }
+        self.tasks[t].mail = Some(mail);
+        self.notify(t);
     }
 
     fn sleep(&mut self, w: usize, t: usize, index: u64, domain: usize, after: u64) {
@@ -1112,11 +1397,11 @@ impl World {
             self.tasks[t].pc += 1;
             return;
         }
-        if self.tasks[t].wait.is_some() {
+        if self.tasks[t].wait.is_some() || self.tasks[t].deferred.is_some() {
             self.coverage.spurious_repark += 1;
             return self.leave(w, false, "timer-repark");
         }
-        if self.tasks[t].cancel.cause().is_some() {
+        if self.rows.canceled(self.tasks[t].key) {
             self.tasks[t].pc += 1;
             return;
         }
@@ -1150,9 +1435,13 @@ impl World {
         }
         let successor = (task.reuse > 0).then(|| {
             let script = script(&mut self.c);
-            let (next, queued) = prepare(task.slot, task.generation + 1, script, task.reuse - 1);
-            section.register(&next.log);
-            (Box::new(next), queued)
+            let log = TaskLog::new(vec![task.slot, task.ordinal + 1]);
+            section.register(&log);
+            Successor {
+                script,
+                log,
+                reuse: task.reuse - 1,
+            }
         });
         for (root, n) in task.pending.take() {
             release(
@@ -1227,16 +1516,14 @@ impl World {
         }
         let job = self.jobs.get_mut(&id).unwrap();
         let t = job.slot as usize;
-        let task = &mut self.tasks[t];
         assert_eq!(
-            task.generation, job.generation,
+            self.tasks[t].key, job.key,
             "a completion reached a reused row"
         );
-        assert_eq!(task.wait, Some(Wait::Host(id)));
-        task.wait = None;
-        task.mail = Some(Mail::Result(handle));
+        assert!(self.rows.live(job.key));
+        assert_eq!(self.tasks[t].wait, Some(Wait::Host(id)));
         job.stage = Stage::Returned;
-        self.notify(t);
+        self.deliver(t, Mail::Result(handle));
     }
 
     /// Housekeeping by steps: one domain's scheduling point, or its clock
@@ -1275,9 +1562,7 @@ impl World {
             assert!(at <= self.domains[domain].virtual_time().unwrap());
             ats.push(at);
             self.domains[domain].finish(token);
-            self.tasks[t].wait = None;
-            self.tasks[t].mail = Some(Mail::Due);
-            self.notify(t);
+            self.deliver(t, Mail::Due);
         }
         ats.sort_unstable();
         if ats.windows(2).any(|pair| pair[0] == pair[1]) {
@@ -1285,42 +1570,56 @@ impl World {
         }
     }
 
+    /// A cancellation through the concrete row: its host subscription
+    /// queues a notice for home's merge; a timer wait exits at once.
     fn cancel(&mut self, t: usize) {
-        if self.tasks[t].custody == Custody::Done || !self.tasks[t].cancel.cancel(1) {
+        let key = self.tasks[t].key;
+        if !self.rows.live(key) || !self.rows.cancel(key) {
             return;
         }
         match self.tasks[t].wait {
             Some(Wait::Host(id)) => {
-                let Some(job) = self.jobs.get(&id) else {
-                    // Swept or quarantined at the stop; its row never runs again.
-                    assert!(self.stopped);
-                    return;
-                };
-                if job.shielded {
+                if self.jobs.get(&id).is_some_and(|job| job.shielded) {
                     self.coverage.shield_kept_request += 1;
-                } else if job.stage == Stage::Posted && job.request.withdraw() {
-                    // Exactly one of the home's claim and this withdraw wins.
-                    assert!(self.withdrawn.insert(id));
-                    self.requests.retire(id);
-                    self.jobs.remove(&id);
-                    self.tasks[t].wait = None;
-                    self.tasks[t].mail = Some(Mail::Canceled);
-                    self.coverage.cancel_withdrew += 1;
-                    self.notify(t);
-                } else {
-                    self.coverage.claim_beat_cancel += 1;
                 }
             }
             Some(Wait::Timer { domain, token, .. }) => {
                 // The timer exits: a later clock step never reports it.
                 self.domains[domain].finish(token);
-                self.tasks[t].wait = None;
-                self.tasks[t].mail = Some(Mail::Canceled);
                 self.coverage.timer_exit += 1;
-                self.notify(t);
+                self.deliver(t, Mail::Canceled);
             }
             // Mutex take is not a cancellation point (CONC-3).
             Some(Wait::Mutex) | None => {}
+        }
+    }
+
+    /// Home drains the notices addressed to host requests. The concrete
+    /// registration check drops one after delivery, retry or row reuse.
+    fn cancellations(&mut self) {
+        let queued = self.rows.notices();
+        let tokens = self.rows.host_cancellations(HOST, HOST);
+        self.coverage.stale_notices += (queued - tokens.len()) as u64;
+        if self.stopped {
+            // The stop's sweep already decided every request.
+            return;
+        }
+        for token in tokens {
+            let id = token & !HOST;
+            let job = &self.jobs[&id];
+            let t = job.slot as usize;
+            assert_eq!(self.tasks[t].key, job.key);
+            assert!(!job.shielded, "a shielded wait is not canceled");
+            if job.stage == Stage::Posted && job.request.withdraw() {
+                // Exactly one of the home's claim and this withdraw wins.
+                assert!(self.withdrawn.insert(id));
+                self.requests.retire(id);
+                self.jobs.remove(&id);
+                self.coverage.cancel_withdrew += 1;
+                self.deliver(t, Mail::Canceled);
+            } else {
+                self.coverage.claim_beat_cancel += 1;
+            }
         }
     }
 
@@ -1395,7 +1694,24 @@ impl World {
             if let Custody::Running(w) = task.custody {
                 assert!(self.slots[w].active.is_some());
             }
+            // A token discarded after the stop never retires its row.
+            if task.custody != Custody::Done || !self.stopped {
+                assert_eq!(
+                    self.rows.live(task.key),
+                    task.custody != Custody::Done,
+                    "a lineage's current generation is exactly its live row"
+                );
+            }
         }
+        // One role owner: between transitions only a loan's caller holds it.
+        let loaner = self.loan.map(|(w, _)| {
+            role_owner(self.slots[w].active.as_ref().unwrap().0.value().task as usize)
+        });
+        assert_eq!(
+            self.role.driven_owner(),
+            loaner,
+            "the role outlived its entry"
+        );
         let held = self
             .slots
             .iter()
@@ -1424,6 +1740,8 @@ impl World {
         if divergence.is_none() {
             if self.stopped {
                 assert!(self.arbiter.gate().unwrap().stopped());
+            } else if self.config.mutant.is_some() {
+                // The defect's report: what it stranded.
             } else {
                 for task in &self.tasks {
                     assert_eq!(task.custody, Custody::Done, "task {} stranded", task.slot);
@@ -1434,6 +1752,7 @@ impl World {
                 assert_eq!(self.mutex_owner, None);
                 assert!(self.jobs.is_empty());
                 assert_eq!(self.quarantined, 0);
+                assert_eq!(self.loan, None);
             }
             assert_eq!(self.dispatch().queued.load(Ordering::SeqCst), 0);
         }
@@ -1446,11 +1765,23 @@ impl World {
             let _ = writeln!(
                 self.projection,
                 "task {} gen {} {:?} pc {}",
-                task.slot, task.generation, task.custody, task.pc
+                task.slot, task.ordinal, task.custody, task.pc
             );
         }
         // Teardown: running owners complete, queued tokens are discarded,
         // parked rows and undelivered mail are reclaimed.
+        let stranded = self
+            .tasks
+            .iter()
+            .filter(|task| task.custody != Custody::Done)
+            .map(|task| {
+                (
+                    task.slot,
+                    task.deferred.is_some(),
+                    self.rows.saved(task.key),
+                )
+            })
+            .collect();
         let reclaimable = self.handles.len() as u64 - self.closed - self.quarantined;
         for slot in &mut self.slots {
             slot.active = None;
@@ -1504,6 +1835,7 @@ impl World {
             assert_eq!(decided, buffers, "every request was claimed or withdrawn");
         }
         Outcome {
+            stranded,
             first_uncontrolled: c.first_uncontrolled,
             transcript: c.transcript,
             projection,
@@ -1555,6 +1887,14 @@ fn runtime50_composed_seed_transcript() {
                     .transcript
                     .iter()
                     .any(|e| matches!(e, Entry::Random { .. }))
+                && first
+                    .transcript
+                    .iter()
+                    .any(|e| matches!(e, Entry::Selected { .. }))
+                && first
+                    .transcript
+                    .iter()
+                    .any(|e| matches!(e, Entry::Handoff { site: "idle", .. }))
         );
         entries += first.transcript.len();
         projections.insert(first.projection);
@@ -1613,7 +1953,10 @@ fn runtime50_composed_ownership_cut_matrix() {
     {
         let execs = topology(1);
         let exec = execs.compute.lock().unwrap().active[0].clone();
-        let (task, first) = prepare(0, 0, Vec::new(), 0);
+        let mut rows = Rows::new();
+        let key = rows.spawn(0);
+        let (task, first) = prepare(0, key, 0, Vec::new(), TaskLog::new(vec![0, 0]), 0);
+        rows.attach(key, task.frame.clone());
         let lease = || Lease::new(&execs.dispatch.get().unwrap().count);
         publish(
             &execs,
@@ -1661,7 +2004,7 @@ fn runtime50_composed_ownership_cut_matrix() {
             0
         );
         // Row reuse: the old generation's notification stays inert.
-        let (reused, queued) = prepare(0, 1, Vec::new(), 0);
+        let (reused, queued) = prepare(0, key, 1, Vec::new(), TaskLog::new(vec![0, 1]), 0);
         assert!(task.frame.notification.notify().is_none());
         drop(queued.start());
         assert!(reused.frame.notification.notify().is_none());
@@ -1717,4 +2060,43 @@ fn runtime50_composed_ownership_cut_matrix() {
     let missing: Vec<_> = cells.iter().filter(|c| c.1 == 0).map(|c| c.0).collect();
     assert!(missing.is_empty(), "uncovered matrix cells: {missing:?}");
     assert!(stops > SEEDS);
+}
+
+#[test]
+fn runtime50_missing_save_ack_makes_resumption_impossible() {
+    // Lineage 0's first generation parks without acknowledging its save.
+    // Every completion addressed to it waits on the concrete save gate and
+    // is never delivered: the row stays live, unsaved and unfinished.
+    let (mut gated, mut runs) = (0, 0);
+    for seed in 0..SEEDS {
+        let config = Config {
+            stop: false,
+            mutant: Some(Mutant::MissingSaveAck),
+            ..Config::of(seed)
+        };
+        let outcome = run(config, None, None);
+        let Some(&(_, deferred, saved)) = outcome.stranded.iter().find(|s| s.0 == 0) else {
+            continue;
+        };
+        runs += 1;
+        if deferred {
+            assert!(
+                !saved,
+                "seed {seed}: a deferred completion's row acknowledged its save"
+            );
+            gated += 1;
+        }
+        // The same seed without the defect finishes every lineage.
+        let positive = run(
+            Config {
+                stop: false,
+                ..Config::of(seed)
+            },
+            None,
+            None,
+        );
+        assert!(positive.stranded.is_empty(), "seed {seed}");
+    }
+    assert!(gated > 0, "no completion reached the unacknowledged row");
+    eprintln!("RUNTIME50 missing save ack: {runs} stranded runs, {gated} with a gated completion");
 }

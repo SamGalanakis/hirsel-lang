@@ -172,6 +172,43 @@ impl Role {
     }
 }
 
+/// The deterministic runtime driver's adapter: one thread fires every
+/// transition, so an acquisition that would wait is a driver error, never a
+/// schedule. Each call is the production predicate transition.
+#[cfg(test)]
+impl Role {
+    pub(crate) const IDLE: usize = IDLE_OWNER;
+
+    pub(crate) fn driven_owner(&self) -> Option<usize> {
+        *self.owner.lock().unwrap()
+    }
+
+    /// A task's semantic entry (`enter`), or its owner's re-entry.
+    pub(crate) fn driven_enter(&self, task: usize) {
+        let owner = self.driven_owner();
+        assert!(
+            owner.is_none_or(|owner| owner == task),
+            "{task:#x} would wait for {owner:?}"
+        );
+        self.acquire(task);
+    }
+
+    /// The idle callback's guard (`IdleGuard::new`).
+    pub(crate) fn driven_idle(&self) {
+        assert_eq!(self.driven_owner(), None, "an idle callback would wait");
+        self.acquire_idle();
+    }
+
+    /// Home's nonblocking idle claim (`IdleGuard::try_new`).
+    pub(crate) fn driven_try_idle(&self) -> bool {
+        self.try_acquire_idle()
+    }
+
+    pub(crate) fn driven_release(&self, owner: usize) -> bool {
+        self.release_with(owner, || {})
+    }
+}
+
 thread_local! {
     /// Whether this thread is inside a [`with_role`] closure. A table borrow
     /// is lexical and non-suspending: every host, user, home-call and fiber
