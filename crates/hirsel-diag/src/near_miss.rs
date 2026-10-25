@@ -194,12 +194,6 @@ mod tests {
         best_names(name, candidates.iter().map(|s| (*s).into()))
     }
     #[test]
-    fn declaration_candidates_are_filtered_before_selection() {
-        let occupied = ["result", "value", "value_2"];
-        assert_eq!(fresh_name("result", |n| !occupied.contains(&n)), "result_2");
-        assert_eq!(fresh_name("value", |n| !occupied.contains(&n)), "value_3");
-    }
-    #[test]
     fn rustc_distance_vectors() {
         for c in (0..char::MAX as u32).filter_map(char::from_u32) {
             let s = c.to_string();

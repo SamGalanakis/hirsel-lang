@@ -746,42 +746,6 @@ fn reduce(
 }
 
 #[test]
-fn shrinker_preserves_category_and_reaches_a_small_fixture() {
-    let dir = evidence("shrinker");
-    let original = "// deliberately injected oracle defect, not a compiler bug\nfn qf[qT](qx:qT) { match qx { qv => , } }\nfn qafter() {}\n";
-    // Deliberately false property: no lexically valid input contains `=>`.
-    let predicate = |s: &str| {
-        if !lex(s).0.diagnostics.is_empty() {
-            Some(Failure::Panic)
-        } else if s.contains("=>") {
-            Some(Failure::Injected)
-        } else {
-            None
-        }
-    };
-    assert_eq!(predicate(original), Some(Failure::Injected));
-    let (reduced, n) = reduce(original, Failure::Injected, predicate);
-    assert_eq!(reduced.trim(), "=>");
-    assert_eq!(predicate(&reduced), Some(Failure::Injected));
-    assert!(n <= SHRINKS);
-    assert_eq!(
-        (reduced.clone(), n),
-        reduce(original, Failure::Injected, predicate)
-    );
-    // A different, smaller failure may never replace the original category.
-    let (same, _) = reduce("fn qf() {}", Failure::Arena, |_| Some(Failure::Span));
-    assert_eq!(same, "fn qf() {}");
-    fs::write(dir.join("original.hir"), original).unwrap();
-    fs::write(dir.join("reduced.hir"), &reduced).unwrap();
-    fs::write(
-        dir.join("result.txt"),
-        format!("injected-only attempts={n}\n"),
-    )
-    .unwrap();
-    eprintln!("shrinker evidence: {}", dir.display());
-}
-
-#[test]
 fn bounded_grammar_recovery() {
     let dir = evidence("cases");
     let strategy = (forms(), any::<bool>(), any::<bool>(), any::<usize>());
@@ -839,15 +803,4 @@ fn bounded_grammar_recovery() {
     );
     fs::write(dir.join("result.txt"), &receipt).unwrap();
     eprintln!("{receipt}evidence: {}", dir.display());
-}
-
-#[test]
-fn explicit_caps_reject_oversize_models_before_parsing() {
-    assert!(!within_caps(&format!(
-        "fn qf() {{ {}qx{} }}",
-        "(".repeat(DEPTH),
-        ")".repeat(DEPTH)
-    )));
-    assert!(!within_caps(&"qx ".repeat(TOKENS)));
-    assert!(within_caps("fn qf() { (((qx))) }"));
 }

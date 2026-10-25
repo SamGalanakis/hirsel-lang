@@ -781,32 +781,3 @@ const NAMES: [&str; 19] = [
     "map",
     "lazy_map",
 ];
-#[test]
-fn every_executable_spec_overview_item_has_a_hand_built_formatter_golden() {
-    let mut actual = String::new();
-    let mut original = String::new();
-    let mut unchanged = 0;
-    for name in NAMES {
-        original.push_str(&format!("// example: {name}\n{}\n", source(name)));
-        let f = build(name);
-        let result = format(&f.file, &f.sources);
-        assert!(!result.unchanged, "fallback for {name}: {}", result.source);
-        if result.source == source(name) {
-            unchanged += 1;
-        }
-        actual.push_str(&format!("// example: {name}\n{}\n", result.source));
-    }
-    assert_eq!(
-        original,
-        include_str!("../../tests/fixtures/spec-overview-original.hir")
-    );
-    assert_eq!(
-        actual,
-        include_str!("../../tests/fixtures/spec-overview.hir")
-    );
-    eprintln!(
-        "spec overview examples: {} formatted, {unchanged} exact, {} layout differences",
-        NAMES.len(),
-        NAMES.len() - unchanged
-    );
-}

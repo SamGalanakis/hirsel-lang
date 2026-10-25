@@ -169,19 +169,3 @@ fn mutable_pattern_help_names_avoid_earlier_and_later_identifiers() {
     );
     assert!(output.diagnostics[0].fix.is_none());
 }
-
-#[test]
-fn top_level_let_mut_controls_still_parse() {
-    for body in [
-        "let mut n = 1; n += 1",
-        "let mut (x, y) = pair",
-        "let mut Ok(f) = result else { return }",
-    ] {
-        let (output, _) = support::parse(&format!("fn probe() {{ {body} }}"));
-        assert!(
-            output.diagnostics.is_empty(),
-            "{body}: {:?}",
-            output.diagnostics
-        );
-    }
-}

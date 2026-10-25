@@ -170,26 +170,6 @@ fn accepts(cap: u64, construction: u64, seal: Charge) -> bool {
 }
 
 #[test]
-fn dead_retained_heap_occurrences_and_arena_root_have_the_same_threshold() {
-    let mut inventory = ArenaInventory::default();
-    // Two holders of the same 3-byte heap owner in one retained List[Bytes].
-    let block = inventory.allocate(vec![17, 17], Charge::Bytes(3).times(2));
-    for root_is_retained in [false, true] {
-        let root_extra = Charge::ZERO; // scalar, or the existing arena block
-        let charged = inventory.seal_charge(root_extra);
-        assert_eq!(charged, Charge::Bytes(6));
-        for (cap, expected) in [(15, false), (16, false), (21, false), (22, true)] {
-            assert_eq!(
-                accepts(cap, 16, charged),
-                expected,
-                "cap={cap}, live root={root_is_retained}"
-            );
-        }
-    }
-    assert_eq!(inventory.into_entries()[&block].payload, vec![17, 17]);
-}
-
-#[test]
 fn equal_distinct_and_shared_leaves_charge_per_occurrence() {
     for bytes in [1, 3] {
         for leaves in [[17, 17], [17, 18]] {

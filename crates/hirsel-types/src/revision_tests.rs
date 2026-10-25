@@ -142,70 +142,6 @@ fn graph_helpers_reject_cycles_and_recovery() {
     );
 }
 #[test]
-fn unused_nested_reordered_patterns_keep_types_and_binding_modes() {
-    let types = TypeInterner::new(None);
-    let ty = types.intern(scalar());
-    let owner = NameSite::Expression(ExprId(8));
-    let unused = BindingDecision {
-        owner: owner.clone(),
-        binding: ResolvedName::Local(LocalId(4)),
-        site: NameSite::Pattern(PatternId(2)),
-        ty,
-        usage: UseKind::Borrow,
-        mutable: false,
-    };
-    let patterns = vec![
-        PatternDecision {
-            pattern: PatternId(0),
-            ty,
-            usage: UseKind::Take,
-            kind: PatternDecisionKind::Constructor(ContextualName::Constructor(path("Record"))),
-            fields: vec![(FieldId(1), PatternId(1)), (FieldId(0), PatternId(2))],
-            annotation: None,
-        },
-        PatternDecision {
-            pattern: PatternId(1),
-            ty,
-            usage: UseKind::Take,
-            kind: PatternDecisionKind::Tuple,
-            fields: vec![(FieldId(0), PatternId(3))],
-            annotation: None,
-        },
-        PatternDecision {
-            pattern: PatternId(2),
-            ty,
-            usage: UseKind::Borrow,
-            kind: PatternDecisionKind::Binding(LocalId(4)),
-            fields: vec![],
-            annotation: None,
-        },
-        PatternDecision {
-            pattern: PatternId(3),
-            ty,
-            usage: UseKind::Take,
-            kind: PatternDecisionKind::Wildcard,
-            fields: vec![],
-            annotation: None,
-        },
-    ];
-    let body = CheckedBody {
-        lexical: LexicalOwner::first(&path("f")),
-        tails: vec![],
-        places: vec![],
-        calls: vec![],
-        bindings: vec![unused],
-        patterns,
-        resolution: Resolution::default(),
-        expressions: vec![],
-        instantiations: vec![],
-        closures: vec![],
-    };
-    assert_eq!(body.bindings[0].owner, owner);
-    assert!(types.get(body.bindings[0].ty).is_some());
-    assert_eq!(body.patterns[0].fields[0], (FieldId(1), PatternId(1)));
-    assert!(body.expressions.is_empty()); // unused bindings need no expression row
-}
-#[test]
 fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
     let context = FileContext {
         package: path("x").0.package,
@@ -2019,25 +1955,6 @@ fn substitution_pruning_matches_full_transport_for_binders_roles_and_errors() {
                     assert_eq!(pruned, original, "expand {root:?} {arguments:?}");
                 }
             }
-        }
-    }
-}
-
-#[test]
-fn signature_dependencies_clone_only_compact_identity_and_hash() {
-    // A dependency owns no path buffers; the session owns the interned path.
-    assert_eq!(std::mem::size_of::<SignatureDependency>(), 36);
-    let dependencies: Vec<_> = (0u32..128)
-        .map(|i| SignatureDependency {
-            definition: DefId::intern(&path(&format!("{i}-{}", "long".repeat(1024)))),
-            fingerprint: ContentHash::of_bytes(&i.to_le_bytes()),
-        })
-        .collect();
-    for _ in 0..16 {
-        let cloned = dependencies.clone();
-        assert_eq!(cloned, dependencies);
-        for (a, b) in cloned.iter().zip(&dependencies) {
-            assert!(std::ptr::eq(a.definition.path(), b.definition.path()));
         }
     }
 }

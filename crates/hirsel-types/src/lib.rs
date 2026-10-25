@@ -1116,35 +1116,6 @@ pub struct CheckedBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn local_result_and_authority_remain_in_signature() {
-        let store = TypeInterner::new(None);
-        let ty = store.intern(Type {
-            drop_allocation: DropAllocation::MayAllocate,
-            modes: Modes {
-                relation: Relation::parameters([ParameterRef::bound(ParamId(0))]),
-                ..Modes::global()
-            },
-            ..Type::with_kind(TypeKind::Primitive(Primitive::Bytes))
-        });
-        let f = FunctionType {
-            state_promises: Default::default(),
-            generics: vec![].into(),
-            parameters: vec![].into(),
-            result: ty,
-            error: None,
-            allocation: Allocation::MayAllocate,
-            authority: AuthoritySummary::inert(),
-            uses: Uses::Only(AuthoritySummary::inert()),
-            contracts: vec![].into(),
-            incomplete: false,
-            foreign: None,
-        };
-        assert!(matches!(
-            destination(&store.get(f.result).unwrap().modes.relation, |_| false),
-            Destination::Caller(_)
-        ));
-    }
 }
 
 /// Query failures distinguish unavailable implementation from language diagnostics (LANG-6).

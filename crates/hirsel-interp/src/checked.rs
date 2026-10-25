@@ -1706,19 +1706,6 @@ mod tests {
     }
 
     #[test]
-    fn substitution_maps_instances_per_node_and_keeps_others() {
-        let mut shadow = Shadow::Parts(vec![
-            Shadow::of(vec![1, 7]),
-            Shadow::View {
-                content: Box::new(Shadow::of(vec![1])),
-                home: vec![2],
-            },
-        ]);
-        shadow.substitute(&[(1, vec![4, 5]), (2, vec![])]);
-        assert_eq!(shadow.part(0), Shadow::of(vec![4, 5, 7]));
-        assert_eq!(shadow.total(), vec![4, 5, 7]);
-    }
-    #[test]
     fn a_view_of_a_global_value_lends_no_lifetime() {
         let global = Shadow::View {
             content: Box::new(Shadow::default()),

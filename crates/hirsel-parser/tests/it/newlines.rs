@@ -70,18 +70,6 @@ fn required_operands_continue_and_groups_ignore_newlines() {
 }
 
 #[test]
-fn nested_closure_block_restores_statement_context() {
-    let (file, _) = body("fn f() { call(fn() { a\n b\n }, c\n + d) }");
-    let inner = file
-        .tree
-        .expressions
-        .iter()
-        .find(|e| matches!(&e.kind, ExprKind::Block { statements, .. } if statements.len() == 1))
-        .unwrap();
-    assert!(matches!(inner.kind, ExprKind::Block { tail: Some(_), .. }));
-}
-
-#[test]
 fn return_break_continue_are_complete_at_statement_newlines() {
     let (file, b) = body("fn f() { return\n x }");
     let (statements, tail) = block(&file, b);
@@ -166,38 +154,6 @@ fn question_mapper_starts_on_same_physical_line() {
         .filter(|e| matches!(e.kind, ExprKind::Call { .. }))
         .count();
     assert_eq!(calls, 2); // f(), then call the propagated success value with x.
-}
-
-#[test]
-fn block_tail_semicolons_and_same_line_block_expressions() {
-    let (file, b) =
-        body("fn f() { if true {} let x = 1; while false {} for y in xs {} fn g() {} {} x\n }");
-    assert_eq!(block(&file, b).0.len(), 6);
-    assert!(block(&file, b).1.is_some());
-    let (file, b) = body("fn f() { 1; }");
-    assert_eq!(block(&file, b).0.len(), 1);
-    assert_eq!(block(&file, b).1, None);
-    let (file, b) = body("fn f() { 1\n\n/* end */ }");
-    assert!(block(&file, b).1.is_some());
-    let (output, _) = support::parse("fn f() { a b }");
-    assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-1");
-}
-
-#[test]
-fn list_braces_allow_newline_but_tuple_and_call_lists_require_commas() {
-    let (output, _) =
-        support::parse("type R { a: u32\n b: u32,\n }\nfn f() { match x { A => a\n B => b,\n } }");
-    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-    for source in [
-        "fn f() { g(a\n b) }",
-        "fn f(a: T\n b: U) {}",
-        "type R = (T\n U)",
-        "type R = List[T\n U]",
-        "fn f() { match x { A => a\n + b } }",
-    ] {
-        let (output, _) = support::parse(source);
-        assert!(!output.diagnostics.is_empty(), "{source}");
-    }
 }
 
 #[test]

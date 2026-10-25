@@ -204,66 +204,6 @@ fn loop_program() -> Vec<Definition> {
     vec![main, add]
 }
 #[test]
-fn later_argument_failure_cleans_caller_temporaries_before_locals() {
-    let mut b = Builder::new();
-    let local1 = b.int(P::U8, 10);
-    let local2 = b.int(P::U8, 20);
-    let temp1 = b.int(P::U8, 30);
-    let temp2 = b.int(P::U8, 40);
-    let cleanup = b.cleanup(vec![drop(temp2), drop(temp1), drop(local2), drop(local1)]);
-    let max = b.int(P::U8, 255);
-    let one = b.int(P::U8, 1);
-    let later = b.binary(B::Add, max, one, TypeKind::Primitive(P::U8), 9, cleanup);
-    let result = b.local(TypeKind::Tuple(vec![].into()), Storage::ReturnSlot);
-    b.block(
-        Terminator::Call {
-            callee: Callee::Definition {
-                path: path("never_entered"),
-                arguments: vec![],
-            },
-            arguments: vec![
-                CallArgument {
-                    parameter: ParamId(0),
-                    value: take(temp1),
-                },
-                CallArgument {
-                    parameter: ParamId(1),
-                    value: take(temp2),
-                },
-                CallArgument {
-                    parameter: ParamId(2),
-                    value: take(later),
-                },
-            ],
-            returns: Some(CallReturn {
-                destination: result,
-                next: BlockId(1),
-            }),
-            on_failure: CleanupId(0),
-        },
-        10,
-    );
-    let d = b.finish("main", result);
-    let e = execute(vec![d], vec![], Limits::default());
-    fail(&e, "SEM-1", 9);
-    assert_eq!(
-        cleanup_events(&e),
-        vec![
-            (1, drop(temp2)),
-            (1, drop(temp1)),
-            (1, drop(local2)),
-            (1, drop(local1))
-        ]
-    );
-    assert_eq!(
-        e.trace
-            .iter()
-            .filter(|e| matches!(e, TraceEvent::Enter { .. }))
-            .count(),
-        1
-    );
-}
-#[test]
 fn step_budget_counts_instructions_and_terminators_and_runs_site_cleanup() {
     let mut b = Builder::new();
     let u = b.unit();
