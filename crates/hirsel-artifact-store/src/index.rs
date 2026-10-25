@@ -350,48 +350,58 @@ fn compaction_scratch(layers: &[Descriptor]) -> Option<u64> {
 // construction; no Git implementation code is copied. Already-sorted checked
 // Hirsel layers permit one retained head per layer instead of fanout sorting.
 struct MergedEntries<'a> {
-    layers: &'a [Layer],
-    positions: [usize; MAX_LAYERS],
-    heads: [Option<Entry>; MAX_LAYERS],
+    heads: [Option<format::Cursor<'a>>; MAX_LAYERS],
 }
 impl<'a> MergedEntries<'a> {
     fn new(layers: &'a [Layer]) -> io::Result<Self> {
-        let mut result = Self {
-            layers,
-            positions: [0; MAX_LAYERS],
-            heads: [None; MAX_LAYERS],
-        };
-        for (i, layer) in layers.iter().enumerate() {
-            result.heads[i] = Some(layer.entry(0).ok_or_else(invalid)?);
+        let mut heads = [const { None }; MAX_LAYERS];
+        for (head, layer) in heads.iter_mut().zip(layers) {
+            *head = Some(format::Cursor::first(layer)?);
         }
-        Ok(result)
+        Ok(Self { heads })
+    }
+    fn step(&mut self) -> io::Result<Option<Entry>> {
+        // One comparison per live head selects the minimum and every layer
+        // holding that key. Strict Less keeps the newest layer on ties.
+        let mut best = None;
+        let mut equal = 0u8;
+        for i in 0..MAX_LAYERS {
+            let Some(head) = &self.heads[i] else {
+                continue;
+            };
+            let order = match best.and_then(|b: usize| self.heads[b].as_ref()) {
+                Some(b) => head.order(b),
+                None => std::cmp::Ordering::Less,
+            };
+            match order {
+                std::cmp::Ordering::Less => {
+                    best = Some(i);
+                    equal = 1 << i;
+                }
+                std::cmp::Ordering::Equal => equal |= 1 << i,
+                std::cmp::Ordering::Greater => {}
+            }
+        }
+        let Some(best) = best else {
+            return Ok(None);
+        };
+        let entry = self.heads[best].as_mut().ok_or_else(invalid)?.entry()?;
+        // Advance only the layers that held the emitted key.
+        while equal != 0 {
+            let i = equal.trailing_zeros() as usize;
+            equal &= equal - 1;
+            let head = self.heads[i].as_mut().ok_or_else(invalid)?;
+            if !head.advance()? {
+                self.heads[i] = None;
+            }
+        }
+        Ok(Some(entry))
     }
 }
 impl Iterator for MergedEntries<'_> {
     type Item = io::Result<Entry>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut best: Option<Entry> = None;
-        for entry in self.heads.iter().flatten() {
-            // Strict comparison retains chronological precedence on ties.
-            if best.is_none_or(|b| entry.key < b.key) {
-                best = Some(*entry);
-            }
-        }
-        let best = best?;
-        for (i, layer) in self.layers.iter().enumerate() {
-            if self.heads[i].is_some_and(|e| e.key == best.key) {
-                self.positions[i] += 1;
-                self.heads[i] = if self.positions[i] < layer.rows() {
-                    match layer.entry(self.positions[i]) {
-                        Some(entry) => Some(entry),
-                        None => return Some(Err(invalid())),
-                    }
-                } else {
-                    None
-                };
-            }
-        }
-        Some(Ok(best))
+        self.step().transpose()
     }
 }
 

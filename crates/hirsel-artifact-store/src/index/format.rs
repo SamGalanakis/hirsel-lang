@@ -200,8 +200,19 @@ impl Plane {
     fn at(self, logical: usize) -> usize {
         self.start + (logical / BLOCK) * STRIDE + logical % BLOCK
     }
-    #[inline]
-    fn write(self, output: &mut [u8], mut offset: usize, mut bytes: &[u8]) {
+    /// Fixed-size fields inside one block are the common path; keep it inline
+    /// in the generic replayed encoder.
+    #[inline(always)]
+    fn write(self, output: &mut [u8], offset: usize, bytes: &[u8]) {
+        if offset % BLOCK + bytes.len() <= BLOCK {
+            let physical = self.at(offset);
+            output[physical..physical + bytes.len()].copy_from_slice(bytes);
+        } else {
+            self.write_split(output, offset, bytes);
+        }
+    }
+    #[inline(never)]
+    fn write_split(self, output: &mut [u8], mut offset: usize, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             let n = bytes.len().min(BLOCK - offset % BLOCK);
             let physical = self.at(offset);
@@ -466,6 +477,7 @@ impl Layer {
             + self.blocks.capacity()
             + self.buckets.capacity()) as u64
     }
+    #[cfg(test)]
     pub(super) fn rows(&self) -> usize {
         self.rows
     }
@@ -543,10 +555,15 @@ impl Layer {
     }
     #[inline]
     pub(super) fn key(&self, row: usize) -> Option<Key> {
+        decode_key(self.key_bytes(row)?)
+    }
+    #[inline]
+    fn key_bytes(&self, row: usize) -> Option<[u8; 33]> {
         if row >= self.rows {
             return None;
         }
-        decode_key(self.read(2, row.checked_mul(33)?)?)
+        let bytes: [u8; 33] = self.read(2, row.checked_mul(33)?)?;
+        (bytes[0] <= KeyKind::Association as u8).then_some(bytes)
     }
     fn validate_bucket(&self, b: usize) -> bool {
         let status = &self.buckets[b];
@@ -585,16 +602,34 @@ impl Layer {
         })
     }
     fn location(&self, row: usize) -> Option<Location> {
+        self.location_with(row, &mut None)
+    }
+    /// `segment` retains the last decoded dictionary row; a run of rows from
+    /// one pack reads and checks its 32-byte ID once.
+    #[inline]
+    fn location_with(
+        &self,
+        row: usize,
+        segment: &mut Option<(u32, ContentHash)>,
+    ) -> Option<Location> {
         if row >= self.rows {
             return None;
         }
         let bytes = self.read::<12>(3, row.checked_mul(12)?)?;
-        let segment = u32_at(&bytes, 0)? as usize;
-        if segment >= self.segments {
-            return None;
-        }
+        let index = u32_at(&bytes, 0)?;
+        let id = match *segment {
+            Some((cached, id)) if cached == index => id,
+            _ => {
+                if index as usize >= self.segments {
+                    return None;
+                }
+                let id = ContentHash(self.read(4, (index as usize).checked_mul(32)?)?);
+                *segment = Some((index, id));
+                id
+            }
+        };
         let location = Location {
-            segment: ContentHash(self.read(4, segment.checked_mul(32)?)?),
+            segment: id,
             offset: u32_at(&bytes, 4)?.checked_mul(8)?,
             len: u32_at(&bytes, 8)?,
         };
@@ -651,5 +686,60 @@ impl Layer {
             }
         }
         Ok(())
+    }
+}
+
+/// One checked current row of a layer for k-way merges (git midx-write.c:226-256
+/// retains one decoded entry per source). Heads compare canonical key bytes;
+/// only the emitted row decodes its locator, and a run of rows from one pack
+/// reuses its dictionary ID. Shadowed rows are still read and their blocks
+/// checked; `validate_all` has checked every locator before any merge.
+pub(super) struct Cursor<'a> {
+    layer: &'a Layer,
+    row: usize,
+    key: [u8; 33],
+    segment: Option<(u32, ContentHash)>,
+}
+impl<'a> Cursor<'a> {
+    /// Canonical layouts never hold zero rows.
+    pub(super) fn first(layer: &'a Layer) -> io::Result<Self> {
+        Ok(Self {
+            layer,
+            row: 0,
+            key: layer.key_bytes(0).ok_or_else(invalid)?,
+            segment: None,
+        })
+    }
+    /// Key order: kind byte, then digest, exactly as `Key`'s derived order.
+    #[inline]
+    pub(super) fn order(&self, other: &Self) -> std::cmp::Ordering {
+        for i in (0..32).step_by(8) {
+            let a = u64::from_be_bytes(self.key[i..i + 8].try_into().unwrap());
+            let b = u64::from_be_bytes(other.key[i..i + 8].try_into().unwrap());
+            if a != b {
+                return a.cmp(&b);
+            }
+        }
+        self.key[32].cmp(&other.key[32])
+    }
+    #[inline]
+    pub(super) fn entry(&mut self) -> io::Result<Entry> {
+        Ok(Entry {
+            key: decode_key(self.key).ok_or_else(invalid)?,
+            location: self
+                .layer
+                .location_with(self.row, &mut self.segment)
+                .ok_or_else(invalid)?,
+        })
+    }
+    /// Advances past the current row; `false` once the layer is exhausted.
+    #[inline]
+    pub(super) fn advance(&mut self) -> io::Result<bool> {
+        self.row += 1;
+        if self.row == self.layer.rows {
+            return Ok(false);
+        }
+        self.key = self.layer.key_bytes(self.row).ok_or_else(invalid)?;
+        Ok(true)
     }
 }
