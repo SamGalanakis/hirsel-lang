@@ -1,0 +1,77 @@
+// rule: MODE-1
+// expect: run
+// stdout: ok
+// Field helpers returning `Result[.., Problem] in row` compose inside a
+// loop; a unique copy of the nested text escapes (policy-evaluator-33).
+type Problem = Shape | Duplicate
+
+fn object(v: json.Value) -> Result[Map[String, json.Value], Problem] in v uses {} {
+  let Object(row) = v else {
+    return Error(Shape())
+  }
+  Ok(row)
+}
+
+fn field(row: Map[String, json.Value], key: String) -> Result[json.Value, Problem] in row uses {} {
+  match map.get(row, key) {
+    Some(v) => Ok(take v),
+    None() => Error(Shape()),
+  }
+}
+
+fn array(v: json.Value) -> Result[List[json.Value], Problem] in v uses {} {
+  let Array(items) = v else {
+    return Error(Shape())
+  }
+  Ok(items)
+}
+
+fn owners(value: json.Value) -> Result[unique List[String], Problem] uses {} {
+  let items = array(value)?
+  let mut output: List[String] = []
+  for item in items {
+    let outer = object(item)?
+    let resource_value = field(outer, "resource")?
+    let row = object(resource_value)?
+    let Text(s) = field(row, "owner")? else {
+      return Error(Shape())
+    }
+    let name = unique s
+    for earlier in output {
+      if earlier == name {
+        return Error(Duplicate())
+      }
+    }
+    list.push(mut output, take name)
+  }
+  Ok(take output)
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let Ok(value) = json.parse(
+    "[{\"resource\":{\"owner\":\"ann\"}},{\"resource\":{\"owner\":\"bo\"}}]"
+  ) else {
+    return Ok(())
+  }
+  let Ok(dup) = json.parse(
+    "[{\"resource\":{\"owner\":\"ann\"}},{\"resource\":{\"owner\":\"ann\"}}]"
+  ) else {
+    return Ok(())
+  }
+  let ok = match owners(value) {
+    Ok(names) => list.len(names) == 2 && names[0] == "ann" && names[1] == "bo",
+    Error(_) => false,
+  } && match owners(dup) {
+    Error(Duplicate()) => true,
+    _ => false,
+  }
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

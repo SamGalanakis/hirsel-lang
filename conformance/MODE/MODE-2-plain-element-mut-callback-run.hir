@@ -1,0 +1,32 @@
+// rule: MODE-2
+// expect: run
+// stdout: ok
+// A plain element lent by `mut` to a callback cannot gain a counted alias,
+// so the taken list it belongs to is handed back unique (event-window-39).
+fn advance(take xs: unique List[u64], change: fn(mut u64) -> () uses {}) -> unique List[
+  u64
+] uses {} {
+  let mut owned = take xs
+  change(mut owned[0])
+  take owned
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let xs: unique List[u64] = [1u64, 5u64]
+  let received = advance(
+    take xs,
+    fn(mut x: u64) -> () uses {} {
+      x = x + 1
+    }
+  )
+  let ok = list.len(received) == 2 && received[0] == 2 && received[1] == 5
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

@@ -1,0 +1,49 @@
+// rule: CAP-1
+// expect: run
+// stdout: ok
+// boundary: an owned generic loop is within its uses restriction when it
+// selects the source, bounds the element inert, or reads by index.
+fn selected[T: plain](take xs: unique List[T]) -> unique List[T] uses {xs} {
+  let mut out: List[T] = []
+  for item in take xs {
+    list.push(mut out, item)
+  }
+  take out
+}
+
+fn inert[T: plain + inert](take xs: unique List[T]) -> unique List[T] uses {} {
+  let mut out: List[T] = []
+  for item in take xs {
+    list.push(mut out, item)
+  }
+  take out
+}
+
+fn indexed[T: plain](take xs: unique List[T]) -> unique List[T] uses {} {
+  let mut out: List[T] = []
+  for i in 0u64..list.len(xs) {
+    list.push(mut out, xs[i])
+  }
+  take out
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let a: unique List[u64] = [1u64, 2u64]
+  let b: unique List[u64] = [3u64]
+  let c: unique List[u64] = [4u64, 5u64, 6u64]
+  let sa = selected(take a)
+  let sb = inert(take b)
+  let sc = indexed(take c)
+  let ok = list.len(sa) == 2 && sa[1] == 2 && list.len(sb) == 1 && sb[0] == 3 && list.len(
+    sc
+  ) == 3 && sc[2] == 6
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

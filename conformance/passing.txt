@@ -63,6 +63,8 @@ conformance/CAP/CAP-1-file-list-recursive-authority-ok.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-bad.hir
 conformance/CAP/CAP-1-file-set-permissions-authority-ok.hir
 conformance/CAP/CAP-1-file-walk-steps-run.hir
+conformance/CAP/CAP-1-generic-owned-loop-uses-bad.hir
+conformance/CAP/CAP-1-generic-owned-loop-uses-run.hir
 conformance/CAP/CAP-1-hello-web-scripted-run.hir
 conformance/CAP/CAP-1-host-inputs-run.hir
 conformance/CAP/CAP-1-listen-not-granted-run.hir
@@ -3142,6 +3144,8 @@ conformance/MODE/MODE-1-named-bare-local-result-bad.hir
 conformance/MODE/MODE-1-named-bare-local-result-ok.hir
 conformance/MODE/MODE-1-nested-borrow-global-bad.hir
 conformance/MODE/MODE-1-nested-borrow-global-ok.hir
+conformance/MODE/MODE-1-nested-result-field-loop-escape-bad.hir
+conformance/MODE/MODE-1-nested-result-field-loop-run.hir
 conformance/MODE/MODE-1-new-source-reception-live-bad.hir
 conformance/MODE/MODE-1-new-source-reception-live-used-bad.hir
 conformance/MODE/MODE-1-new-source-reception-ok.hir
@@ -3371,6 +3375,7 @@ conformance/MODE/MODE-2-copy-temporary-aliased-ok.hir
 conformance/MODE/MODE-2-counted-constant-deep-copy-unique-ok.hir
 conformance/MODE/MODE-2-counted-constant-read-unique-bad.hir
 conformance/MODE/MODE-2-counted-copy-ends-unique-bad.hir
+conformance/MODE/MODE-2-counted-element-mut-callback-bad.hir
 conformance/MODE/MODE-2-counted-element-write-copy-unique-bad.hir
 conformance/MODE/MODE-2-counted-element-write-take-unique-bad.hir
 conformance/MODE/MODE-2-counted-record-field-write-unique-bad.hir
@@ -3546,6 +3551,7 @@ conformance/MODE/MODE-2-plain-copy-map-run.hir
 conformance/MODE/MODE-2-plain-copy-nested-run.hir
 conformance/MODE/MODE-2-plain-copy-outlive-run.hir
 conformance/MODE/MODE-2-plain-copy-string-run.hir
+conformance/MODE/MODE-2-plain-element-mut-callback-run.hir
 conformance/MODE/MODE-2-plain-fresh-closure-result-run.hir
 conformance/MODE/MODE-2-plain-inline-element-write-unique-ok.hir
 conformance/MODE/MODE-2-plain-inline-mut-then-consume-run.hir

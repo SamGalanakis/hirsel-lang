@@ -1,0 +1,32 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 11
+// twin: MODE/MODE-2-plain-element-mut-callback-run.hir
+// A counted element lent by `mut` may receive a share, which ends the
+// owner's uniqueness.
+fn advance(take xs: unique List[String], change: fn(mut String) -> () uses {}) -> unique List[
+  String
+] uses {} {
+  let mut owned = take xs
+  change(mut owned[0])
+  take owned
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let xs: unique List[String] = ["a", "b"]
+  let received = advance(
+    take xs,
+    fn(mut x: String) -> () uses {} {
+      x = "c"
+    }
+  )
+  let ok = list.len(received) == 2 && received[0] == "c"
+  let _ = out.print(
+    io.stdout(rt)?,
+    if ok {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  )
+  Ok(())
+}

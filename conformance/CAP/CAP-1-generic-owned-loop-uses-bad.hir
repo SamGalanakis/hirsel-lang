@@ -1,0 +1,18 @@
+// rule: CAP-1
+// expect: reject CAP-1 at line 8
+// twin: CAP/CAP-1-generic-owned-loop-uses-run.hir
+// plain does not imply inert: consuming an owned generic list charges
+// its elements' authority, which `uses {}` excludes (event-window-39).
+fn keep[T: plain](take xs: unique List[T]) -> unique List[T] uses {} {
+  let mut out: List[T] = []
+  for item in take xs {
+    list.push(mut out, item)
+  }
+  take out
+}
+
+pub fn main() -> Result[(), u64] {
+  let xs: unique List[u64] = [1u64]
+  let received = keep(take xs)
+  Ok(())
+}
