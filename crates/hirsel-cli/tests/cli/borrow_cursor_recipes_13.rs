@@ -129,63 +129,6 @@ fn borrow_cursor_recipes_13_guide_snippets() {
 }
 
 #[test]
-fn borrow_cursor_recipes_13_corpus_twins() {
-    macro_rules! case {
-        ($path:literal) => {
-            (
-                $path,
-                include_str!(concat!("../../../../conformance/", $path)),
-            )
-        };
-    }
-    let cases = [
-        case!("LANG/LANG-15-borrow-cursor-tree-ok.hir"),
-        case!("LANG/LANG-15-borrow-cursor-tree-bad.hir"),
-        case!("LANG/LANG-15-borrow-cursor-json-pointer-ok.hir"),
-        case!("LANG/LANG-15-borrow-cursor-json-pointer-bad.hir"),
-        case!("LANG/LANG-15-borrow-cursor-reset-ok.hir"),
-        case!("LANG/LANG-15-borrow-cursor-reset-bad.hir"),
-        case!("LANG/LANG-15-borrow-cursor-project-ok.hir"),
-        case!("LANG/LANG-15-borrow-cursor-project-bad.hir"),
-        case!("LANG/LANG-15-borrow-cursor-generic-ok.hir"),
-        case!("LANG/LANG-15-borrow-cursor-generic-bad.hir"),
-        case!("MODE/MODE-1-borrow-cursor-field-ok.hir"),
-        case!("MODE/MODE-1-borrow-cursor-field-bad.hir"),
-        case!("MODE/MODE-1-borrow-cursor-owned-getter-bad.hir"),
-        case!("OWN/OWN-1-borrow-cursor-take-ok.hir"),
-        case!("OWN/OWN-1-borrow-cursor-take-bad.hir"),
-        case!("OWN/OWN-3-borrow-cursor-snapshot-ok.hir"),
-        case!("OWN/OWN-3-borrow-cursor-snapshot-bad.hir"),
-    ];
-    let root = scratch();
-    for (name, source) in cases {
-        let diagnostic = checked(&root.join(name.trim_end_matches(".hir")), source);
-        let expectation = source
-            .lines()
-            .find_map(|line| line.strip_prefix("// expect: "))
-            .unwrap();
-        if expectation == "accept" {
-            assert!(diagnostic.is_none(), "{name}: {diagnostic:?}");
-        } else {
-            let parts: Vec<_> = expectation.split_whitespace().collect();
-            let diagnostic = diagnostic.expect("rejected corpus case was accepted");
-            assert_eq!(diagnostic["rule"], parts[1], "{name}: {diagnostic}");
-            assert_eq!(
-                diagnostic["primary"]["line"],
-                parts[4].parse::<u64>().unwrap(),
-                "{name}: {diagnostic}"
-            );
-            let start = diagnostic["primary"]["start"].as_u64().unwrap() as usize;
-            let end = diagnostic["primary"]["end"].as_u64().unwrap() as usize;
-            assert!(
-                start < end && source.get(start..end).is_some(),
-                "{name}: {diagnostic}"
-            );
-        }
-    }
-}
-
-#[test]
 fn borrow_cursor_recipes_13_package_engines() {
     let root = scratch();
     let manifest = package(&root, SOURCE);

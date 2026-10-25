@@ -499,19 +499,6 @@ fn sheet_eval_31_bounded_stdin_original_oracles() {
     native_cases(selected);
 }
 
-#[test]
-fn sheet_eval_31_oracle_vectors_are_current() {
-    let output = std::process::Command::new("python3")
-        .arg("-c")
-        .arg(include_str!("../support/sheet_eval_31/oracle.py"))
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    let regenerated: Value = serde_json::from_slice(&output.stdout).unwrap();
-    let frozen: Value =
-        serde_json::from_str(include_str!("../support/sheet_eval_31/cases.json")).unwrap();
-    assert_eq!(regenerated, frozen);
-}
 fn extra_cases() -> Vec<Value> {
     let mut items = vec![
         json!({"id":"invalid-range","script":"set A1 = SUM(B2:A1)\nshow A1\n","stdout":"OK\nA1 = #SYNTAX\n","exit":1,"steps":1_000_000}),

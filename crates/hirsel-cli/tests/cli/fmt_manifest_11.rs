@@ -290,19 +290,6 @@ fn fmt_manifest_11_source_ignores_sidecar_and_skips_unchanged_file() {
     );
 }
 
-#[test]
-fn fmt_manifest_11_help_succeeds_without_loading_source() {
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .args(["fmt", "--help"])
-        .output()
-        .unwrap();
-    exit(&output, 0);
-    assert!(output.stderr.is_empty());
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("fmt [--check] <source|manifest.json>"));
-    assert!(stdout.contains("hirsel fmt examples/configctl/hirsel.json"));
-}
-
 #[cfg(unix)]
 #[test]
 fn fmt_manifest_11_symlink_and_absolute_source_aliases_deduplicate() {

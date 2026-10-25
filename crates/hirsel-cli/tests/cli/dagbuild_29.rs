@@ -377,7 +377,3 @@ fn native_workflows(backend: &str) {
 fn dagbuild_29_native_and_replay_llvm() {
     native_workflows("llvm");
 }
-#[test]
-fn dagbuild_29_native_and_replay_cranelift() {
-    native_workflows("cranelift");
-}

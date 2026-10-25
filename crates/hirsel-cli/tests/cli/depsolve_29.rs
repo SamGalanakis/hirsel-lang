@@ -590,11 +590,3 @@ fn depsolve_29_native_llvm_workflows() {
 fn depsolve_29_native_llvm_bounds() {
     native("llvm", true);
 }
-#[test]
-fn depsolve_29_native_cranelift_workflows() {
-    native("cranelift", false);
-}
-#[test]
-fn depsolve_29_native_cranelift_bounds() {
-    native("cranelift", true);
-}

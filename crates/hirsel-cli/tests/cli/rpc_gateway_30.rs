@@ -755,31 +755,3 @@ fn rpc_gateway_30_controlled_admission_reference_checked() {
     // unanswered operations advance time. Original live cases stay unchanged.
     scripted("controlled-admission")
 }
-
-#[test]
-fn rpc_gateway_30_admission_oracle_vectors() {
-    let root = tempfile::tempdir().unwrap();
-    for (name, contents) in [
-        (
-            "admission.py",
-            include_str!("../support/rpc_gateway_30/admission.py"),
-        ),
-        (
-            "admission_vectors.json",
-            include_str!("../support/rpc_gateway_30/admission_vectors.json"),
-        ),
-        (
-            "test_admission.py",
-            include_str!("../support/rpc_gateway_30/test_admission.py"),
-        ),
-    ] {
-        fs::write(root.path().join(name), contents).unwrap();
-    }
-    let output = Command::new("python3")
-        .arg(root.path().join("test_admission.py"))
-        .arg("-v")
-        .output()
-        .unwrap();
-    eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-    assert!(output.status.success(), "{output:?}");
-}

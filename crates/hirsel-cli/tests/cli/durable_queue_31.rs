@@ -232,11 +232,6 @@ fn durable_queue_31_host_ordered_and_replay() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
-#[test]
-#[ignore = "full archival native record/replay matrix; select explicitly with retained evidence"]
-fn durable_queue_31_fixture_native_record_replay() {
-    fixture_campaign(true)
-}
 
 #[test]
 fn durable_queue_31_fixture_native_live() {

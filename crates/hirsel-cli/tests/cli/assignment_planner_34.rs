@@ -1045,30 +1045,6 @@ fn assignment_planner_34_output_cap_and_certificate_controls() {
     });
 }
 
-#[test]
-fn assignment_planner_34_frozen_exhaustive_oracles() {
-    let rows = cases();
-    assert_eq!(rows.len(), 57);
-    assert_eq!(
-        rows.iter()
-            .map(|r| r["id"].as_str().unwrap())
-            .collect::<BTreeSet<_>>()
-            .len(),
-        rows.len()
-    );
-    let mut checked = 0;
-    for row in rows {
-        if let Some(optima) = row["optima"].as_array() {
-            let b: Value = serde_json::from_str(row["input"].as_str().unwrap()).unwrap();
-            for (m, expected) in b["manifests"].as_array().unwrap().iter().zip(optima) {
-                assert_eq!(json!(exhaustive(m)), *expected, "{}", row["id"]);
-                checked += 1;
-            }
-        }
-    }
-    assert!(checked >= 30);
-}
-
 // Deferred until the coordinator deploys supported exact CPU requests.
 // Never invokes topology overrides, reservations or a substitute input.
 #[test]

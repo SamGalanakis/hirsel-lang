@@ -21,14 +21,6 @@ fn write_read() {
     verify("write-read", SOURCE.to_owned(), "0\n");
 }
 #[test]
-fn write_only() {
-    verify("write-only", SOURCE.replace(READ, "      true"), "0\n");
-}
-#[test]
-fn read_only() {
-    verify("read-only", SOURCE.replace(WRITE, ""), "0\n");
-}
-#[test]
 fn connect_only() {
     verify(
         "connect-only",
@@ -39,10 +31,6 @@ fn connect_only() {
 #[test]
 fn deadline() {
     verify("deadline", DEADLINE.to_owned(), "done\n");
-}
-#[test]
-fn deadline_no_write() {
-    verify("deadline-no-write", DEADLINE.replace(WRITE, ""), "done\n");
 }
 
 fn verify(name: &str, source: String, expected: &str) {

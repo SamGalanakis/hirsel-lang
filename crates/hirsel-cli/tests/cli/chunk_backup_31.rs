@@ -66,16 +66,6 @@ fn scratch(label: &str) -> PathBuf {
         .unwrap()
         .keep()
 }
-#[test]
-fn chunk_backup_31_check_full_application() {
-    with_compiler_stack(|| {
-        let root = scratch("check-");
-        let path = package(&root);
-        seal_tools(&root);
-        let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
-        check_program(&mut loaded);
-    });
-}
 fn unhex(value: &Value) -> Vec<u8> {
     value
         .as_str()

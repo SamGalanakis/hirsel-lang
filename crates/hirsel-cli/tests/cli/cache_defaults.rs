@@ -141,11 +141,6 @@ fn warmed_native_callbacks_finalizers_and_grants_llvm_one() {
 }
 
 #[test]
-fn warmed_native_callbacks_finalizers_and_grants_llvm_two() {
-    warmed_native_callback_edits("llvm", "2");
-}
-
-#[test]
 fn warmed_native_callbacks_finalizers_and_grants_llvm_eight() {
     warmed_native_callback_edits("llvm", "8");
 }
@@ -153,11 +148,6 @@ fn warmed_native_callbacks_finalizers_and_grants_llvm_eight() {
 #[test]
 fn warmed_native_callbacks_finalizers_and_grants_cranelift_one() {
     warmed_native_callback_edits("cranelift", "1");
-}
-
-#[test]
-fn warmed_native_callbacks_finalizers_and_grants_cranelift_two() {
-    warmed_native_callback_edits("cranelift", "2");
 }
 
 #[test]

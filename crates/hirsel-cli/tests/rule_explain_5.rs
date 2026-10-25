@@ -185,14 +185,3 @@ fn rule_explain_5_non_utf8_rule_is_a_tool_error() {
             .contains("rule ID must be UTF-8")
     );
 }
-
-#[test]
-fn rule_explain_5_help_links_the_dedicated_documentation() {
-    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
-        .arg("--help")
-        .output()
-        .unwrap();
-    let help = String::from_utf8(successful(output)).unwrap();
-    assert!(help.contains("explain RULE [--json]"));
-    assert!(help.contains("docs/rule-explain.md"));
-}

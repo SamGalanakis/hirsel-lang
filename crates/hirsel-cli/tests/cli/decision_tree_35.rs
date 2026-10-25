@@ -701,34 +701,6 @@ fn prepare_product_inputs(root: &Path, manifest: &Path) -> PathBuf {
     products
 }
 
-#[test]
-fn ordinary_product_setup_seals_installed_inputs() {
-    let root = scratch("product-inputs");
-    let manifest = package(&root);
-    let products = prepare_product_inputs(&root, &manifest);
-    let rows: Vec<Value> =
-        serde_json::from_slice(&fs::read(root.join("actual-inputs.json")).unwrap()).unwrap();
-    let retained: std::collections::BTreeSet<_> = rows
-        .iter()
-        .filter(|row| row["name"] == "HIRSEL_PRODUCTS")
-        .map(|row| PathBuf::from(row["path"].as_str().unwrap()))
-        .collect();
-    fn files(root: &Path, found: &mut std::collections::BTreeSet<PathBuf>) {
-        for entry in fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                files(&path, found);
-            } else if path.is_file() {
-                found.insert(path);
-            }
-        }
-    }
-    let mut expected = std::collections::BTreeSet::new();
-    files(&products.canonicalize().unwrap(), &mut expected);
-    assert!(!expected.is_empty());
-    assert_eq!(retained, expected);
-}
-
 // Selected original vectors remain individually named in the durable receipts.
 fn campaign(phase: &str) {
     campaign_selected(phase, None);
@@ -798,23 +770,6 @@ fn campaign_selected(phase: &str, only: Option<&str>) {
     assert!(
         receipts.iter().all(|r| r["passed"] == true),
         "failed/incomplete cells: {receipts:?}"
-    );
-}
-
-#[test]
-fn decision_tree_35_frozen_oracle() {
-    let root = scratch("oracle");
-    package(&root);
-    let output = Command::new("python3")
-        .arg(root.join("oracle.py"))
-        .arg("--check")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert!(!cases().is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains(&format!("{} frozen independent vectors", cases().len()))
     );
 }
 

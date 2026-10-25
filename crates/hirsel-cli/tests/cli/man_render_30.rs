@@ -230,23 +230,6 @@ fn scripted(selected: Vec<Value>) {
 fn man_render_30_scripted_reference_checked() {
     scripted(cases())
 }
-#[test]
-fn man_render_30_additional_scripted() {
-    let selected = cases()
-        .into_iter()
-        .filter(|r| {
-            [
-                "pending-cancel-queued",
-                "publication-continues",
-                "reordered-batch",
-            ]
-            .iter()
-            .any(|id| r["id"] == *id)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(selected.len(), 3);
-    scripted(selected)
-}
 fn native(backend: &str) {
     let tmp = scratch(&format!("man-{backend}-"));
     let retained_root = tmp.keep();

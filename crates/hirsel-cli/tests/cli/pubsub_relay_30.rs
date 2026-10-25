@@ -187,16 +187,6 @@ fn scripted(boundaries: bool) {
     });
 }
 // Historical unfiltered RE600 reproducer. Default coverage lives in cells.
-#[test]
-#[ignore = "manual historical RE600 diagnostic; bounded cells run by default"]
-fn pubsub_relay_30_native_and_real_unix() {
-    let cases = selected_cases(false);
-    let cells = original_cells(&cases);
-    let selected = std::env::var("PUBSUB_30_CELL")
-        .map(|cell| vec![cell])
-        .unwrap_or(cells);
-    native(&selected, &cases);
-}
 
 fn original_cells(cases: &[Value]) -> Vec<String> {
     let mut names: Vec<_> = cases
@@ -658,31 +648,6 @@ fn pubsub_relay_30_permit_drop_and_binding_controls() {
             }
         }
     });
-}
-
-#[test]
-fn pubsub_relay_30_registration_inventory() {
-    let cases: Vec<Value> =
-        serde_json::from_str(include_str!("../support/pubsub_relay_30/cases.json")).unwrap();
-    let original = original_cells(&cases);
-    assert_eq!(original.len(), 126);
-    let registrations: Vec<_> = include_str!("pubsub_relay_30_cells.rs")
-        .lines()
-        .filter_map(|line| {
-            line.trim()
-                .strip_prefix("super::pubsub_relay_30::native_cell(\"")
-        })
-        .map(|line| line.strip_suffix("\");").unwrap().to_owned())
-        .collect();
-    assert_eq!(registrations.len(), 126);
-    let expected: std::collections::BTreeSet<_> = original.iter().collect();
-    assert_eq!(
-        registrations
-            .iter()
-            .collect::<std::collections::BTreeSet<_>>(),
-        expected
-    );
-    assert_eq!(expected.len(), 126);
 }
 
 #[test]

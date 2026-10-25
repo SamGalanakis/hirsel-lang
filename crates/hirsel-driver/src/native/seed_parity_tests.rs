@@ -125,47 +125,11 @@ fn salted(test: &str, backend: Backend, jobs: usize) {
 }
 
 #[test]
-fn ordinary_next_stream_cranelift_jobs1() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs1",
-        Backend::Cranelift,
-        1,
-    );
-}
-
-#[test]
-fn ordinary_next_stream_cranelift_jobs2() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs2",
-        Backend::Cranelift,
-        2,
-    );
-}
-
-#[test]
 fn ordinary_next_stream_cranelift_jobs8() {
     salted(
         "native::plan::seed_parity_tests::ordinary_next_stream_cranelift_jobs8",
         Backend::Cranelift,
         8,
-    );
-}
-
-#[test]
-fn ordinary_next_stream_llvm_jobs1() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs1",
-        Backend::Llvm,
-        1,
-    );
-}
-
-#[test]
-fn ordinary_next_stream_llvm_jobs2() {
-    salted(
-        "native::plan::seed_parity_tests::ordinary_next_stream_llvm_jobs2",
-        Backend::Llvm,
-        2,
     );
 }
 

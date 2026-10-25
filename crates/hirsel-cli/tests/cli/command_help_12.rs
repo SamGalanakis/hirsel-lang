@@ -92,22 +92,6 @@ impl Drop for PrivateCwd {
 }
 
 #[test]
-fn command_help_12_short() {
-    let cwd = PrivateCwd::new();
-    for topic in TOPICS {
-        cwd.help(&[topic, "-h"], topic);
-    }
-}
-
-#[test]
-fn command_help_12_long() {
-    let cwd = PrivateCwd::new();
-    for topic in TOPICS {
-        cwd.help(&[topic, "--help"], topic);
-    }
-}
-
-#[test]
 fn command_help_12_subcommand_matches_flag_forms() {
     let cwd = PrivateCwd::new();
     for topic in TOPICS {

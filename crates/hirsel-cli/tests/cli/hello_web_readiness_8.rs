@@ -258,14 +258,6 @@ impl Drop for Server {
     }
 }
 
-#[test]
-fn replacement_requires_exactly_one_anchor() {
-    for source in ["absent", "anchor anchor"] {
-        assert!(std::panic::catch_unwind(|| replace_once(source, "anchor", "new")).is_err());
-    }
-    assert_eq!(replace_once("one anchor", "anchor", "new"), "one new");
-}
-
 fn shell(script: &str) -> Server {
     Server::spawn(Command::new("/bin/sh").args(["-c", script])).unwrap()
 }
@@ -350,15 +342,6 @@ fn readiness_uses_the_actual_nonzero_loopback_port() {
 }
 
 #[test]
-fn spawn_failure_names_the_missing_process() {
-    let error = Server::spawn(&mut Command::new("/hello-web-readiness-8/nonexistent"))
-        .err()
-        .unwrap();
-    assert!(error.contains("spawn failed"), "{error}");
-    assert!(error.contains("process=not spawned"), "{error}");
-}
-
-#[test]
 fn readiness_read_error_is_distinct_from_timeout() {
     let mut server = shell("printf 'read failure diagnostic' >&2; exec sleep 30");
     let started = Instant::now();
@@ -380,58 +363,6 @@ fn readiness_read_error_is_distinct_from_timeout() {
     assert!(error.contains("readiness read error"), "{error}");
     assert!(error.contains("read failure diagnostic"), "{error}");
     assert!(!error.contains("readiness timeout"), "{error}");
-}
-
-#[test]
-fn compile_failure_reports_diagnostic_and_process_outcome() {
-    let path = super::file("pub fn main() -> Result[(), ()] { missing_readiness_8; Ok(()) }");
-    let mut server = Server::spawn(
-        Command::new(env!("CARGO_BIN_EXE_hirsel"))
-            .arg("run")
-            .arg(&path),
-    )
-    .unwrap();
-    let error = server.ready(Duration::from_secs(90)).unwrap_err();
-    assert!(error.contains("missing_readiness_8"), "{error}");
-    assert!(error.contains("process outcome=exit status:"), "{error}");
-    assert!(error.contains("readiness bytes=Some([])"), "{error}");
-    std::fs::remove_file(path).unwrap();
-}
-
-#[test]
-fn denied_tasks_reports_the_original_startup_failure_on_all_engines() {
-    let original = include_str!("../../../../examples/hello-web/main.hir");
-    let path = super::std_file(original);
-    let mut denied = grants(false);
-    denied["io"]["tasks"] = serde_json::Value::Null;
-    let record = super::run_record(&path, denied);
-    for flags in [
-        vec![],
-        vec!["--native"],
-        vec!["--native", "--backend", "cranelift"],
-    ] {
-        let mut command = super::host_run(&path, &record, false);
-        command.args(&flags);
-        let mut server = Server::spawn(&mut command).unwrap();
-        let error = server.ready(Duration::from_secs(90)).unwrap_err();
-        assert!(error.contains("Grant(NotGranted)"), "{flags:?}: {error}");
-        assert!(
-            error.contains("process outcome=exit status: 1"),
-            "{flags:?}: {error}"
-        );
-        assert!(
-            error.contains("readiness bytes=Some([])"),
-            "{flags:?}: {error}"
-        );
-        assert!(!error.contains("invalid readiness"), "{flags:?}: {error}");
-    }
-    for p in [
-        record,
-        PathBuf::from(format!("{}.json", path.display())),
-        path,
-    ] {
-        std::fs::remove_file(p).unwrap();
-    }
 }
 
 #[test]

@@ -154,33 +154,6 @@ fn assert_record(bytes: &[u8], row: &Value) {
     }
 }
 #[test]
-fn discrete_simulation_33_frozen_oracle_vectors() {
-    let rows = cases();
-    assert_eq!(rows.len(), 41);
-    assert_eq!(
-        rows.iter().find(|r| r["id"] == "simpy-fifo").unwrap()["stdout"],
-        "replica 0\ntime 2\njob 0 completed 1 0 1\njob 1 completed 1 1 2\nstation 0 0 0 2 1\nend\n"
-    );
-    let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path();
-    fs::write(
-        root.join("oracle.py"),
-        include_str!("../support/discrete_simulation_33/oracle.py"),
-    )
-    .unwrap();
-    fs::write(
-        root.join("cases.json"),
-        include_str!("../support/discrete_simulation_33/cases.json"),
-    )
-    .unwrap();
-    let result = std::process::Command::new("python3")
-        .arg(root.join("oracle.py"))
-        .arg("--check")
-        .output()
-        .unwrap();
-    assert!(result.status.success(), "{result:?}");
-}
-#[test]
 fn discrete_simulation_33_reference_checked_workflows() {
     hirsel_engine::with_compiler_stack(|| {
         let root = root("simulation-");

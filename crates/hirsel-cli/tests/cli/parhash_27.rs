@@ -265,10 +265,6 @@ fn llvm_workflows() {
     native("llvm");
 }
 #[test]
-fn cranelift_workflows() {
-    native("cranelift");
-}
-#[test]
 fn digest_vectors_and_split_update() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("vectors");

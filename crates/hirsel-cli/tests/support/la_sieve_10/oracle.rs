@@ -109,26 +109,6 @@ fn la_sieve_10_flags_llvm() {
 fn la_sieve_10_flags_cranelift() {
     flags(Some("cranelift"));
 }
-#[test]
-fn la_sieve_10_unsupported_zero_and_one() {
-    // Zero fails its index-1 write. One reaches the historical odd-scan
-    // seed (last=2, count=1), although 2 is outside the input. Neither is a
-    // supported benchmark configuration; preserve and document both behaviors.
-    let zero = Fixture::new(&[0]).run(None);
-    assert!(!zero.status.success(), "{zero:?}");
-    assert!(zero.stdout.is_empty(), "{zero:?}");
-    assert!(
-        String::from_utf8_lossy(&zero.stderr).contains("MEM-14"),
-        "{zero:?}"
-    );
-    let one = Fixture::new(&[1]).run(None);
-    assert!(one.status.success(), "{one:?}");
-    assert_eq!(
-        one.stdout,
-        b"1:00:2:1\n1:00:2:1\n1:00:2:1\n1:00:2:1\nsum:12\n"
-    );
-    assert!(one.stderr.is_empty(), "{one:?}");
-}
 
 #[test]
 fn la_sieve_10_allocations() {

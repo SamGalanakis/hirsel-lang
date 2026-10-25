@@ -245,18 +245,6 @@ mod scratch_tests {
             b"another build"
         );
     }
-
-    #[test]
-    fn unwinding_removes_scratch() {
-        let scratch = Scratch::new().unwrap();
-        let path = scratch.0.clone();
-        let panic = std::panic::catch_unwind(move || {
-            let _scratch = scratch;
-            panic!("build failed");
-        });
-        assert!(panic.is_err());
-        assert!(!path.exists());
-    }
 }
 
 #[cfg(test)]

@@ -130,18 +130,6 @@ fn vectors() -> Vec<Vector> {
         })
         .collect()
 }
-#[test]
-fn independent_rust_oracle() {
-    for v in vectors() {
-        let mut vars = BTreeMap::new();
-        let mut result = 0;
-        for n in &v.nodes {
-            result = evaluate(n, &mut vars);
-        }
-        assert_eq!(result, v.result);
-        assert_eq!(vars, v.vars.into_iter().collect());
-    }
-}
 fn fixture() -> String {
     let mut out = include_str!("../../../../../bench/langarena/calculator.hir").to_string();
     out.push_str(

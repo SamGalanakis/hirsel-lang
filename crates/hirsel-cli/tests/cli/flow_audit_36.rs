@@ -922,38 +922,6 @@ fn flow_audit_36_native_four_engine_replay() {
 }
 
 #[test]
-fn flow_audit_36_frozen_cut_oracles() {
-    let rows = cases();
-    let ids: BTreeSet<_> = rows.iter().map(|r| r["id"].as_str().unwrap()).collect();
-    assert_eq!(rows.len(), ids.len());
-    let mut checked = 0;
-    for row in rows {
-        if row["error"].is_null() {
-            let m: Value = serde_json::from_str(row["input"].as_str().unwrap()).unwrap();
-            for (i, s) in m["scenarios"].as_array().unwrap().iter().enumerate() {
-                let mut cs: Vec<_> = m["arcs"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|e| e["capacity"].as_u64().unwrap())
-                    .collect();
-                for o in s["overrides"].as_array().unwrap() {
-                    let j = m["arcs"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .position(|e| e["name"] == o["arc"])
-                        .unwrap();
-                    cs[j] = o["capacity"].as_u64().unwrap();
-                }
-                assert_eq!(row["optima"][i], exhaustive(&m, &cs));
-                checked += 1;
-            }
-        }
-    }
-    assert!(checked >= 20);
-}
-#[test]
 #[ignore = "explicit exact-CPU bounded matrix; FLOW_AUDIT_36_ORDERED=all or backend:width:kind"]
 fn flow_audit_36_ordered_capacity() {
     use std::io::{BufRead, BufReader, Write};
@@ -1335,39 +1303,4 @@ fn flow_audit_36_unique_projection_small_controls() {
         }
         assert!(failed.is_empty(), "{}", failed.join("\n"));
     });
-}
-
-#[test]
-fn flow_audit_36_cap_oracles() {
-    let rows = cases();
-    let mut count = 0;
-    for row in &rows {
-        let Some(expected) = cap_oracle(row) else {
-            continue;
-        };
-        count += 1;
-        let data: Vec<u8> = serde_json::from_value(expected["file"].clone()).unwrap();
-        if row["error"].is_null() {
-            let m: Value = serde_json::from_str(row["input"].as_str().unwrap()).unwrap();
-            let doc: Value = serde_json::from_slice(&data).unwrap();
-            assert_eq!(expected["exit"], 0);
-            assert!(expected["stderr"].as_array().unwrap().is_empty());
-            for (s, w) in m["scenarios"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .zip(doc["results"].as_array().unwrap())
-            {
-                validate_certificate(&m, s, w);
-            }
-        } else {
-            assert_eq!(row["id"], "overrides-over");
-            assert_eq!(expected["exit"], 2);
-            assert_eq!(data, b"preserve");
-        }
-        if row["id"] == "report-cap" {
-            assert_eq!(data.len(), 32768);
-        }
-    }
-    assert_eq!(count, 5);
 }

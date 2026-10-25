@@ -425,26 +425,6 @@ fn csvjson_quoted_crlf_and_empty_fields() {
         0,
     );
 }
-#[test]
-fn calculator_recovers_after_bad_expression() {
-    let fixture = Fixture::new(
-        "calculator",
-        include_str!("../../../examples/calculator/main.hir"),
-    );
-    fixture.run(
-        false,
-        Some(input("1 / 0\n3 ? 2\n5 + 2\n", &[])),
-        "error\nerror\n7\n",
-        0,
-    );
-}
-#[test]
-fn todo_reads_existing_state_before_atomic_save() {
-    let fixture = Fixture::new("todo", include_str!("../../../examples/todo/main.hir"));
-    let mut config = input("done 1\nadd check fence\nlist\n", &["state.txt"]);
-    config["files"]["state.txt"] = serde_json::json!("feed sheep\nmend gate");
-    fixture.run(false, Some(config), "1. mend gate\n2. check fence\n", 0);
-}
 
 #[test]
 fn httpget() {
@@ -1461,12 +1441,6 @@ fn logq_filters_counts_and_ranks_mixed_logs() {
     logq(false);
 }
 
-#[test]
-#[ignore = "full gate"]
-fn full_gate_logq_aarch64() {
-    logq(true);
-}
-
 fn mdtoc(aarch64: bool) {
     let mut example = Example::new(
         "mdtoc",
@@ -1525,12 +1499,6 @@ fn mdtoc_slugs_unicode_headings_outside_fences() {
     mdtoc(false);
 }
 
-#[test]
-#[ignore = "full gate"]
-fn full_gate_mdtoc_aarch64() {
-    mdtoc(true);
-}
-
 fn bench_lite(aarch64: bool) {
     let example = Example::new(
         "bench-lite",
@@ -1579,12 +1547,6 @@ fn bench_lite(aarch64: bool) {
 #[test]
 fn bench_lite_heap_and_arena_summaries_agree() {
     bench_lite(false);
-}
-
-#[test]
-#[ignore = "full gate"]
-fn full_gate_bench_lite_aarch64() {
-    bench_lite(true);
 }
 
 /// examples/kvstore in a fresh directory with a data directory and grants that

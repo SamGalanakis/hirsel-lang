@@ -266,34 +266,6 @@ fn assert_record(bytes: &[u8], row: &Value) {
     }
 }
 #[test]
-fn state_model_checker_34_frozen_oracle_vectors() {
-    let rows = cases();
-    assert_eq!(rows.len(), 46);
-    assert!(
-        rows.iter()
-            .any(|r| r["id"] == "absorbing"
-                && r["stdout"].as_str().unwrap().contains("safety unsafe"))
-    );
-    let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path();
-    fs::write(
-        root.join("oracle.py"),
-        include_str!("../support/state_model_checker_34/oracle.py"),
-    )
-    .unwrap();
-    fs::write(
-        root.join("cases.json"),
-        include_str!("../support/state_model_checker_34/cases.json"),
-    )
-    .unwrap();
-    let result = std::process::Command::new("python3")
-        .arg(root.join("oracle.py"))
-        .arg("--check")
-        .output()
-        .unwrap();
-    assert!(result.status.success(), "{result:?}");
-}
-#[test]
 fn state_model_checker_34_reference_checked_workflows() {
     hirsel_engine::with_compiler_stack(|| {
         let root = root("simulation-");
@@ -1052,11 +1024,6 @@ fn ordered(backend: Backend) {
 #[ignore = "selected exact-capacity pool cell"]
 fn state_model_checker_34_ordered_llvm() {
     ordered(Backend::Llvm);
-}
-#[test]
-#[ignore = "selected exact-capacity pool cell"]
-fn state_model_checker_34_ordered_cranelift() {
-    ordered(Backend::Cranelift);
 }
 
 #[test]

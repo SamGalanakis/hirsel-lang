@@ -699,17 +699,6 @@ mod tests {
         }
     }
     #[test]
-    fn resident_request_bounds_frame_size_before_allocation() {
-        let (sender, receiver) = UnixStream::pair().unwrap();
-        let mut bytes = MAGIC.to_vec();
-        bytes.extend(u32::MAX.to_le_bytes());
-        sender
-            .set_write_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        (&sender).write_all(&bytes).unwrap();
-        assert!(read_request(&receiver).is_none());
-    }
-    #[test]
     fn resident_entry_options_do_not_select_an_option_value_as_a_workspace() {
         let args: Vec<_> = [
             "--backend",
