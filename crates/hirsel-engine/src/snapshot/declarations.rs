@@ -17,6 +17,7 @@ use hirsel_syntax::{ItemKind, PackageId, TypeBody, Visibility};
 use hirsel_types::{DeclarationSite, DefinitionMetadata, Metadata};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
+mod retained;
 
 /// The explicit build inputs of module resolution, beside the indexed items.
 #[derive(Clone, Debug, Default)]
