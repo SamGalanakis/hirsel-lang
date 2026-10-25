@@ -100,6 +100,7 @@ pub(super) fn objects(
     program: &ReadyProgram,
     backend: super::emit::Backend,
     opt: hirsel_lir::emission::OptLevel,
+    measurement: bool,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     let plans = plans(program);
     if !plans.resumable() {
@@ -131,7 +132,7 @@ pub(super) fn objects(
         tracking: program.tracking(),
         foreign: &program.foreign_dispatch,
         opt,
-        measurement: false,
+        measurement,
         fuel: program.fuel,
         verify_backend: program.validation == super::stages::Validation::EveryStage,
     };
