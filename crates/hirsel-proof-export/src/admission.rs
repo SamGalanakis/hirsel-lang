@@ -41,6 +41,19 @@ impl WireShape {
             unloaded: self.unloaded || other.unloaded,
         })
     }
+    fn upper_max(self, other: Self) -> Self {
+        Self {
+            types: self.types.max(other.types),
+            spans: self.spans.max(other.spans),
+            syntax: std::array::from_fn(|i| self.syntax[i].max(other.syntax[i])),
+            paths: self.paths.max(other.paths),
+            path_bytes: self.path_bytes.max(other.path_bytes),
+            max_path_bytes: self.max_path_bytes.max(other.max_path_bytes),
+            path_iter_bytes: self.path_iter_bytes.max(other.path_iter_bytes),
+            bytes: self.bytes.max(other.bytes),
+            unloaded: self.unloaded || other.unloaded,
+        }
+    }
     fn text_upper(self) -> Option<usize> {
         // Sizing emits zero for all u32 table positions. Real positions use at
         // most ten decimal digits, so add the other nine per occurrence.
@@ -237,6 +250,9 @@ fn path_len(path: &DefPath) -> Option<usize> {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct BuildTablesLayout {
     pub retained_sections: u64,
+    /// Subtotals of retained_sections, for physical admission diagnosis.
+    pub retained_obligation_bytes: u64,
+    pub retained_location_bytes: u64,
     pub annotation_workspace: u64,
     pub context_workspace: u64,
     pub section_workspace: u64,
@@ -434,9 +450,12 @@ fn build_tables_layout(
     }
     let edges = types.types;
     let mut data = WireShape::default();
+    let mut largest_section = WireShape::default();
     let mut weight = Bytes::default();
     let mut largest_text = 0usize;
     let mut largest_tables = 0usize;
+    let mut retained_obligation_bytes = 0usize;
+    let mut retained_location_bytes = 0usize;
     let mut max_path = 0usize;
     let mut max_path_clone = 0usize;
     for (path, section) in &input.signatures {
@@ -452,18 +471,20 @@ fn build_tables_layout(
             |n, module| n.checked_add(module.len()),
         )?;
         max_path_clone = max_path_clone.max(clone_bytes);
+        let mut section_shape = shape_captured(&section.dependencies, input, 0, captured)?;
         for signature in std::iter::once(&section.public).chain(section.owner_view.as_ref()) {
-            data = data.add(shape_captured(signature, input, 0, captured)?)?;
+            section_shape = section_shape.add(shape_captured(signature, input, 0, captured)?)?;
             if let SignatureKind::Function(function) = &signature.kind {
                 max_contracts = max_contracts.max(function.contracts.len());
             }
         }
-    }
-    for section in input.signatures.values() {
-        data = data.add(shape_captured(&section.dependencies, input, 0, captured)?)?;
+        data = data.add(section_shape)?;
+        largest_section = largest_section.upper_max(section_shape);
     }
     for value in input.constants.values() {
-        data = data.add(shape_captured(value, input, 0, captured)?)?;
+        let own = shape_captured(value, input, 0, captured)?;
+        data = data.add(own)?;
+        largest_section = largest_section.upper_max(own);
     }
     weight.rows::<crate::DefinitionSection>(input.definitions.len())?;
     weight.rows::<crate::SignatureSection>(input.signatures.len())?;
@@ -493,6 +514,7 @@ fn build_tables_layout(
             return None;
         }
         data = data.add(own)?;
+        largest_section = largest_section.upper_max(own);
         // Definition's TypeTable is nested two levels in its digest preimage.
         // The count, tags, separators and closing node fit this fixed header.
         let text = own
@@ -504,11 +526,23 @@ fn build_tables_layout(
         }
         largest_text = largest_text.max(text);
         let mut instructions = 0usize;
-        let mut blocks = 0usize;
         let mut places = 0usize;
         let mut uses = 0usize;
         let mut projections = 0usize;
         let mut calls = 0usize;
+        let mut checks = 0usize;
+        let mut arithmetic = 0usize;
+        let mut failures = 0usize;
+        let mut call_clauses = 0usize;
+        let mut projected = 0usize;
+        let owner_contracts = input
+            .signatures
+            .get(definition.path.path())
+            .and_then(|s| match &s.public.kind {
+                SignatureKind::Function(f) => Some(f.contracts.len()),
+                _ => None,
+            })
+            .unwrap_or(0);
         let mut max_rule = 6usize; // built-in FACT-1, MEM-13/14 and SEM-1
         let mut map_rows = 0usize;
         for body in &definition.bodies {
@@ -518,37 +552,86 @@ fn build_tables_layout(
                 .checked_add(body.rvalues.len())?;
             for place in &body.places {
                 projections = projections.checked_add(place.projection.len())?;
+                projected = projected
+                    .checked_add(usize::from((0..place.projection.len()).any(|i| {
+                        matches!(place.projection.get(i), Some(Projection::Index(_)))
+                    })))?
+                    .checked_add(usize::from((0..place.projection.len()).any(|i| {
+                        matches!(
+                            place.projection.get(i),
+                            Some(Projection::VariantField { .. })
+                        )
+                    })))?;
             }
             for block in &body.blocks {
-                blocks = blocks.checked_add(1)?;
                 uses = uses.checked_add(terminator_uses(&block.terminator)?)?;
-                if matches!(block.terminator, Terminator::Call { .. }) {
+                if let Terminator::Call { callee, .. } = &block.terminator {
                     calls = calls.checked_add(1)?;
+                    let function = match callee {
+                        Callee::Definition { path, .. } => {
+                            input
+                                .signatures
+                                .get(path)
+                                .and_then(|s| match &s.public.kind {
+                                    SignatureKind::Function(f) => Some(f),
+                                    _ => None,
+                                })
+                        }
+                        Callee::Indirect { value, .. } => body
+                            .places
+                            .get(value.place.0 as usize)
+                            .and_then(|p| input.types.get_if_loaded(p.ty))
+                            .and_then(|row| match &row.kind {
+                                hirsel_types::TypeKind::Function(f) => Some(f),
+                                _ => None,
+                            }),
+                    };
+                    if let Some(function) = function {
+                        call_clauses = call_clauses.checked_add(
+                            function
+                                .contracts
+                                .iter()
+                                .filter(|c| c.kind == hirsel_syntax::ContractKind::Requires)
+                                .count(),
+                        )?;
+                    }
                 }
                 if let Terminator::Fail { rule, .. } = &block.terminator {
+                    failures = failures.checked_add(1)?;
                     max_rule = max_rule.max(rule.as_str().len());
                 }
                 for instruction in &block.instructions {
                     instructions = instructions.checked_add(1)?;
                     uses = uses.checked_add(instruction_uses(body, &instruction.kind)?)?;
                     if let InstructionKind::Check { rule, .. } = &instruction.kind {
+                        checks = checks.checked_add(1)?;
                         max_rule = max_rule.max(rule.as_str().len());
+                    }
+                    if let InstructionKind::Assign { value, .. } = &instruction.kind
+                        && body.rvalues.get(value.0 as usize).is_some_and(|value| {
+                            crate::obligations::checked_arithmetic(&input.types, body, value)
+                        })
+                    {
+                        arithmetic = arithmetic.checked_add(1)?;
                     }
                 }
             }
         }
-        let call_clauses = calls.checked_mul(max_contracts)?;
-        let projected = places.checked_mul(2)?;
-        let obligations = instructions
-            .checked_add(blocks)?
+        // Count only semantic obligation sources. A projected place can have
+        // one index and one variant obligation, independent of use count.
+        let direct = checks.checked_add(arithmetic)?.checked_add(failures)?;
+        let obligations = direct
             .checked_add(call_clauses)?
             .checked_add(projected)?
-            .checked_add(max_contracts)?;
-        let sites = instructions
-            .checked_mul(2)?
-            .checked_add(blocks)?
+            .checked_add(owner_contracts)?;
+        let projected_sites = if projected == 0 {
+            0
+        } else {
+            uses.checked_mul(2)?
+        };
+        let sites = direct
             .checked_add(call_clauses)?
-            .checked_add(uses.checked_mul(2)?)?;
+            .checked_add(projected_sites)?;
         let mut tables = Bytes::default();
         tables.rows::<(ObligationId, Vec<Site>, crate::Detail)>(obligations)?;
         tables.rows::<crate::Obligation>(obligations)?;
@@ -595,6 +678,7 @@ fn build_tables_layout(
         )?;
         largest_tables = largest_tables.max(tables.0);
         // Retained per-definition location/reference/operation/obligation rows.
+        let before_locations = weight.0;
         weight.rows::<Location>(own.spans.checked_add(section_types.spans)?)?;
         weight.add(
             own.spans
@@ -604,6 +688,8 @@ fn build_tables_layout(
         weight.rows::<hirsel_types::SignatureDependency>(
             own.paths.checked_add(section_types.paths)?,
         )?;
+        retained_location_bytes =
+            retained_location_bytes.checked_add(weight.0.checked_sub(before_locations)?)?;
         // Only these rows survive section_owned. Contract/projected/canonical
         // hash tables, counters and checksum vectors drop before the next body.
         let mut retained = Bytes::default();
@@ -612,6 +698,7 @@ fn build_tables_layout(
         retained.rows::<DefPath>(calls)?;
         retained.add(obligations.checked_mul(max_rule)?.checked_mul(2)?)?;
         retained.add(path_copies.checked_mul(path_clone.checked_add(size_of::<DefPath>())?)?)?;
+        retained_obligation_bytes = retained_obligation_bytes.checked_add(retained.0)?;
         weight.add(retained.0)?;
     }
     if data.unloaded {
@@ -656,7 +743,14 @@ fn build_tables_layout(
             .checked_mul(max_path.checked_mul(2)?.checked_add(96)?)?,
     )?;
     let annotation_workspace = weight.0.checked_sub(retained_sections)?;
-    let context = contexts(data.add(types)?, type_rows, edges, max_module_bytes)?;
+    // collect/end_section resets location/syntax/reference tables between
+    // output sections. Only one section and a nested table probe overlap.
+    let context = contexts(
+        largest_section.add(types)?,
+        type_rows,
+        edges,
+        max_module_bytes,
+    )?;
     let mut digest_workspace = Bytes::default();
     // encode_with_output_limit constructs the trailing digest in a second
     // Writer and wraps it with newlines before appending it to the main text.
@@ -669,6 +763,8 @@ fn build_tables_layout(
     digest_workspace.add(largest_text.checked_mul(3)?.max(8))?;
     Some(BuildTablesLayout {
         retained_sections: retained_sections.try_into().ok()?,
+        retained_obligation_bytes: retained_obligation_bytes.try_into().ok()?,
+        retained_location_bytes: retained_location_bytes.try_into().ok()?,
         annotation_workspace: annotation_workspace.try_into().ok()?,
         context_workspace: context.try_into().ok()?,
         section_workspace: largest_tables.try_into().ok()?,
@@ -1150,6 +1246,77 @@ pub(crate) mod tests {
             "the producer's per-body closure must cover every emitted type edge"
         );
         assert_eq!(sizing.allocations, 0);
+    }
+
+    #[test]
+    fn construction_cardinality_counts_obligations_and_reuses_per_section_contexts() {
+        let mut context_sizes = Vec::new();
+        for width in [1, 4, 16] {
+            let mut input = construction_input(4);
+            let original = (**input.definitions.values().next().unwrap()).clone();
+            let original_signature = input.signatures.values().next().unwrap().clone();
+            input.definitions.clear();
+            input.signatures.clear();
+            for i in 0..width {
+                let mut path = input.header.entry.clone();
+                path.0.name = format!("body{i:02}");
+                let mut definition = original.clone();
+                definition.path = DefId::intern(&path);
+                for body in &mut definition.bodies {
+                    body.parameter_scope = hirsel_syntax::LexicalOwner::first(&path)
+                        .site(hirsel_syntax::NameSite::Item);
+                }
+                let mut signature = original_signature.clone();
+                signature.path = path.clone();
+                signature.public.definition = definition.path;
+                input.signatures.insert(path.clone(), signature);
+                input.definitions.insert(path, Arc::new(definition));
+            }
+            let scalar = crate::export(&input);
+            let locator = input.locator.clone();
+            let capture = capture_types(&input, capture_types_bytes(&input).unwrap()).unwrap();
+            let (layout, sizing) = measured(|| build_owned_tables_layout(&input, 0, &capture));
+            let layout = layout.unwrap();
+            assert_eq!(sizing.allocations, 0);
+            let (built, actual) = measured(|| crate::build_owned(input));
+            let built = built.unwrap();
+            assert!(built.skipped.is_empty(), "{:?}", built.skipped);
+            assert!(
+                actual.peak as u64 <= layout.total().unwrap(),
+                "width {width}: {} {layout:?}",
+                actual.peak
+            );
+            assert_eq!(crate::encode(&built, &locator), scalar);
+            context_sizes.push(layout.context_workspace);
+        }
+        assert!(
+            context_sizes.windows(2).all(|pair| pair[0] == pair[1]),
+            "identical sequential sections reuse one context: {context_sizes:?}"
+        );
+        let input = construction_input(4);
+        let capture = capture_types(&input, capture_types_bytes(&input).unwrap()).unwrap();
+        let base = build_owned_tables_layout(&input, 0, &capture).unwrap();
+        let mut input = construction_input(4);
+        let body = &mut Arc::get_mut(input.definitions.values_mut().next().unwrap())
+            .unwrap()
+            .bodies[0];
+        body.blocks[0]
+            .instructions
+            .extend((0..64).map(|_| Instruction {
+                kind: InstructionKind::StorageLive(LocalId(0)),
+                span: Span::default(),
+                on_failure: CleanupId(0),
+            }));
+        let capture = capture_types(&input, capture_types_bytes(&input).unwrap()).unwrap();
+        let extra = build_owned_tables_layout(&input, 0, &capture).unwrap();
+        assert_eq!(
+            base.retained_obligation_bytes, extra.retained_obligation_bytes,
+            "storage-live instructions do not produce obligations or projected-place sites"
+        );
+        let (built, actual) = measured(|| crate::build_owned(input));
+        let built = built.unwrap();
+        assert!(built.skipped.is_empty());
+        assert!(actual.peak as u64 <= extra.total().unwrap());
     }
 
     #[test]
