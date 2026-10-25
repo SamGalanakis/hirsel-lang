@@ -1,7 +1,9 @@
 //! Immutable session views for S1 body demands. Tables are borrowed, never
 //! cloned into workers. Ordinary misses use the existing frozen P task, and
 //! complete products return for deterministic serial publication.
-use super::worker::{Requirement, SelectionEvent, TaskBody, TaskInputs, TaskWorker, TirSource};
+use super::worker::{
+    CachedLowering, Requirement, SelectionEvent, TaskBody, TaskInputs, TaskWorker, TirSource,
+};
 use super::*;
 use crate::memo::{DepthEvidence, MemoGraph};
 use crate::snapshot::SourceContext;
@@ -581,10 +583,7 @@ impl TirSource for FrozenSource<'_> {
             .then(|| self.constants.get(path).cloned())
             .flatten()
     }
-    fn cached_lowering(
-        &self,
-        path: &DefPath,
-    ) -> Option<(QueryOutput<DefinitionRef>, Reads, DepthEvidence<Span>)> {
+    fn cached_lowering(&self, path: &DefPath) -> Option<CachedLowering> {
         if let Some(entry) = self
             .lowered
             .get(&DefId::intern(path))
@@ -596,7 +595,16 @@ impl TirSource for FrozenSource<'_> {
                 DepthEvidence::leaf(crate::memo::dependency_limit(self.inputs.limits.call_depth))
             });
             if depth.limit() == crate::memo::dependency_limit(self.inputs.limits.call_depth) {
-                return Some(((*output).clone(), entry.reads().clone(), depth));
+                return Some(CachedLowering {
+                    output: (*output).clone(),
+                    reads: entry.reads().clone(),
+                    depth,
+                    verification: entry
+                        .verification
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .clone(),
+                });
             }
         }
         None

@@ -55,6 +55,15 @@ pub(crate) struct TaskBody {
     pub(crate) dependencies: Vec<SignatureDependency>,
 }
 
+/// A current retained source result, including V's local weak capability.
+#[derive(Clone)]
+pub(super) struct CachedLowering {
+    pub(super) output: QueryOutput<DefinitionRef>,
+    pub(super) reads: Reads,
+    pub(super) depth: DepthEvidence<Span>,
+    pub(super) verification: Option<Arc<hirsel_validate::VerifiedDefinition>>,
+}
+
 /// Immutable source inputs, with task-local requests supplied explicitly.
 /// A source may compute a demanded body through immutable phase handles; it
 /// must return its complete read record on failure as well as on success.
@@ -90,10 +99,7 @@ pub(crate) trait TirSource: Sync {
     fn cached_constant(&self, _: &DefPath) -> Option<EvaluatedConstant> {
         None
     }
-    fn cached_lowering(
-        &self,
-        _: &DefPath,
-    ) -> Option<(QueryOutput<DefinitionRef>, Reads, DepthEvidence<Span>)> {
+    fn cached_lowering(&self, _: &DefPath) -> Option<CachedLowering> {
         None
     }
     fn constant_instance(
@@ -1057,6 +1063,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         &mut self,
         path: &DefPath,
         definition: &DefinitionRef,
+        verification: Option<Arc<hirsel_validate::VerifiedDefinition>>,
     ) -> Result<
         (
             Option<hirsel_validate::AcceptedArtifact>,
@@ -1073,6 +1080,20 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         FrozenProvider::new(&inputs.snapshot, path.0.package.clone(), &mut reads)
             .validation_universe();
         self.merge(&reads.finish().expect("one immutable validation universe"));
+        if let Some(verification) = verification.filter(|evidence| {
+            evidence.holds(
+                definition,
+                inputs.snapshot.types(),
+                inputs.snapshot.source_verification_policy(),
+                inputs
+                    .snapshot
+                    .validation(&definition.path.path().0.package),
+            )
+        }) {
+            let acceptance = verification.accepted_artifact();
+            self.record_acceptance(acceptance.clone());
+            return Ok((acceptance, Some(verification)));
+        }
         let _time = timings::phase(Phase::Verify);
         let (report, ran, acceptance, verification) = inputs
             .snapshot
@@ -1115,9 +1136,15 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         ),
         QueryError,
     > {
-        if let Some((output, reads, depth)) = self.source.cached_lowering(path) {
+        if let Some(CachedLowering {
+            output,
+            reads,
+            depth,
+            verification,
+        }) = self.source.cached_lowering(path)
+        {
             self.merge(&reads);
-            let (_, verification) = self.validate_lowered(path, &output.value)?;
+            let (_, verification) = self.validate_lowered(path, &output.value, verification)?;
             self.stack
                 .replay_requests(&depth)
                 .map_err(|site| self.overflow(site))?;
@@ -1189,7 +1216,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 &signature,
             )?;
             let definition = Arc::new(output.value);
-            let (acceptance, verification) = worker.validate_lowered(path, &definition)?;
+            let (acceptance, verification) = worker.validate_lowered(path, &definition, None)?;
             if has_errors(&output.diagnostics) {
                 return Err(QueryError::Diagnostics(output.diagnostics));
             }
@@ -1419,8 +1446,15 @@ mod tests {
     struct Source {
         inputs: TaskInputs,
         bodies: BTreeMap<DefPath, Arc<TaskBody>>,
+        cached: Option<CachedLowering>,
     }
     impl TirSource for Source {
+        fn cached_lowering(&self, path: &DefPath) -> Option<CachedLowering> {
+            self.cached
+                .as_ref()
+                .filter(|hit| hit.output.value.path.path() == path)
+                .cloned()
+        }
         fn inputs(&self) -> &TaskInputs {
             &self.inputs
         }
@@ -1598,8 +1632,85 @@ mod tests {
                 lower_budget: 1 << 20,
             },
             bodies,
+            cached: None,
         }
     }
+
+    fn cached_source() -> Source {
+        let mut source = source("fn helper()->(){()}\n", 8);
+        source.inputs.lower_budget = 0;
+        let shared = TaskShared::new(S1Coordinator::new());
+        let mut worker = TaskWorker::new(&source, &shared);
+        let product = worker.lower_root(&path("helper"));
+        let (output, depth, verification) = product.result.unwrap();
+        assert_eq!(
+            worker.lower_work[&DefId::intern(&path("helper"))].validation_runs,
+            1
+        );
+        assert!(verification.is_some());
+        assert_eq!(worker.lowered.stats().bytes, 0);
+        drop(worker);
+        source.cached = Some(CachedLowering {
+            output,
+            depth,
+            verification,
+            reads: product.reads,
+        });
+        source
+    }
+
+    #[test]
+    fn cached_lowering_reuses_only_current_local_v_evidence() {
+        crate::with_compiler_stack(|| {
+            let source = cached_source();
+            let expected = source.cached.as_ref().unwrap();
+            let shared = TaskShared::new(S1Coordinator::new());
+            let mut worker = TaskWorker::new(&source, &shared);
+            let product = worker.lower_root(&path("helper"));
+            let (output, depth, verification) = product.result.unwrap();
+            assert!(Arc::ptr_eq(&output.value, &expected.output.value));
+            assert_eq!(
+                worker
+                    .lower_work
+                    .get(&DefId::intern(&path("helper")))
+                    .map_or(0, |work| work.validation_runs),
+                0,
+                "a current local V capability must avoid duplicate validation"
+            );
+            assert!(Arc::ptr_eq(
+                verification.as_ref().unwrap(),
+                expected.verification.as_ref().unwrap()
+            ));
+            assert_eq!(product.reads, expected.reads);
+            assert_eq!(depth, expected.depth);
+            assert_eq!(worker.lowered.stats().bytes, 0);
+        });
+    }
+
+    #[test]
+    fn cached_lowering_missing_or_wrong_body_evidence_runs_v() {
+        crate::with_compiler_stack(|| {
+            for wrong_body in [false, true] {
+                let mut source = cached_source();
+                let hit = source.cached.as_mut().unwrap();
+                if wrong_body {
+                    hit.output.value = Arc::new((*hit.output.value).clone());
+                } else {
+                    hit.verification = None;
+                }
+                let shared = TaskShared::new(S1Coordinator::new());
+                let mut worker = TaskWorker::new(&source, &shared);
+                let product = worker.lower_root(&path("helper"));
+                assert!(product.result.unwrap().2.is_some());
+                assert_eq!(
+                    worker.lower_work[&DefId::intern(&path("helper"))].validation_runs,
+                    1
+                );
+                assert_eq!(worker.lowered.stats().bytes, 0);
+            }
+        });
+    }
+
     #[test]
     fn compact_root_facts_release_tir_before_the_next_worker_task() {
         crate::with_compiler_stack(|| {
