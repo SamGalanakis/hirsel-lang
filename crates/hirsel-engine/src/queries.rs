@@ -1480,8 +1480,13 @@ impl QueryEngine {
         let entry = match cached {
             Some(entry) if self.memo_valid(definition, &entry, text) => entry,
             _ => {
+                // An unavailable phase performs no transformation. Preserve
+                // earlier Check/signature diagnostics without counting a Modes
+                // recomputation or opening a memo that cannot be produced.
+                let Some(adapter) = self.adapters.modes.clone() else {
+                    return self.missing(QueryKind::Modes);
+                };
                 self.start(definition, QueryKind::Modes)?;
-                let adapter = self.adapters.modes.clone();
                 let mut products = PhaseProducts::default();
                 let previous = self.checked.get(&id).cloned();
                 let reads = previous
@@ -1500,17 +1505,14 @@ impl QueryEngine {
                     groups: BTreeMap::new(),
                 };
                 let (types, memo) = (recorder.engine.types.clone(), recorder.engine.memo.clone());
-                let result = match adapter {
-                    Some(adapter) => adapter.check_modes(
-                        &types,
-                        &memo,
-                        Arc::new(checked.value.clone()),
-                        &signature.value,
-                        &mut products,
-                        &mut recorder,
-                    ),
-                    None => recorder.engine.missing(QueryKind::Modes),
-                };
+                let result = adapter.check_modes(
+                    &types,
+                    &memo,
+                    Arc::new(checked.value.clone()),
+                    &signature.value,
+                    &mut products,
+                    &mut recorder,
+                );
                 recorder.observed.products = Arc::new(products);
                 let observed = recorder.observed;
                 let reads = recorder.reads;

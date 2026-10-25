@@ -1129,6 +1129,17 @@ impl QueryEngine {
         *current = Some((store, records.clone()));
         Some(records)
     }
+    /// A staged declaration template was prepared in this exact base context.
+    /// Revalidating its old source body cannot redo private preparation of the
+    /// registration. A changed universe must demand that preparation again.
+    fn load_staged_lower_receipt(
+        &mut self,
+        subject: ContentHash,
+    ) -> Option<hirsel_validate::ExecutionReceipt> {
+        let cache = self.result_store.as_ref()?.verifier()?;
+        let snapshot = self.signature_snapshot();
+        cache.execution(subject, |package| snapshot.validation_input_digest(package))
+    }
     fn load_execution_receipt(
         &mut self,
         subject: ContentHash,
@@ -2199,7 +2210,8 @@ impl QueryEngine {
         {
             return None;
         }
-        if crate::comptime::has_staged_reads(&record.output.value) {
+        let staged = crate::comptime::has_staged_reads(&record.output.value);
+        if staged {
             self.load_registrations(path)?;
             if !self.valid_staged_lowering(path, &record.output.value) {
                 return None;
@@ -2208,9 +2220,13 @@ impl QueryEngine {
         let acceptance =
             if self.verify == Verify::On && self.lower_requires_execution(path, &variant.reads) {
                 let key = self.store_key(path, QueryKind::Lower)?;
-                let Some(receipt) =
-                    self.load_execution_receipt(evaluation_subject(&key, &variant.payload))
-                else {
+                let subject = evaluation_subject(&key, &variant.payload);
+                let receipt = if staged {
+                    self.load_staged_lower_receipt(subject)
+                } else {
+                    self.load_execution_receipt(subject)
+                };
+                let Some(receipt) = receipt else {
                     // A body product does not supply private execution authority.
                     // Retain only existing mode inputs for the required replay.
                     self.restore_execution_dependencies(&variant.reads);
