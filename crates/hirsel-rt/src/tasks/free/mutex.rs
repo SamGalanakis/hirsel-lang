@@ -105,6 +105,9 @@ pub(super) fn notify(ctx: *mut TaskCtx, task: u32) {
     });
 }
 
+/// `true` means the take left its stack in its replay wait; its wake
+/// reissues `mutex.with`, whose body begins with it.
+///
 /// # Safety
 /// The role is held; payload is a writable None carrier and out writable.
 pub(crate) unsafe fn take(
@@ -112,9 +115,15 @@ pub(crate) unsafe fn take(
     word: u64,
     payload: *mut u8,
     out: *mut u32,
-) -> Stopped<()> {
-    super::record::begin(ctx);
-    unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+) -> Stopped<bool> {
+    let reissued = crate::tasks::compact::waited(ctx);
+    if !reissued {
+        super::record::begin(ctx);
+    }
+    let handle = (crate::free::MUTEX, word);
+    if unsafe { super::replay::wait_object_leaving(ctx, handle, reissued) }? {
+        return Ok(true);
+    }
     let me = role::with_role(ctx, |s| {
         let me = s.current;
         s.task(me).retried = false;
@@ -195,7 +204,7 @@ pub(crate) unsafe fn take(
             Acquired::Payload | Acquired::Dead => {
                 unsafe { out.write(u32::from(result == Acquired::Dead)) };
                 role::with_role(ctx, |s| s.task(me).retried = false);
-                return unsafe { try_yield(&mut *ctx) };
+                return unsafe { try_yield(&mut *ctx) }.map(|()| false);
             }
         }
     }

@@ -156,19 +156,23 @@ fn core_ops(name: &str) -> Option<&'static [&'static str]> {
 
 /// The resume point's hints for boundary operation `definition`: whether a
 /// task that is not the Ordered head is logged for it (every op it performs
-/// is class D) or may commit it early (every op is in §4.1 E or class D).
+/// is class D) or may commit it early (every op is in §4.1 E or class D),
+/// and whether its first op may leave its stack ([`leaves_at_boundary`]).
 /// Physical only; they decide no observation.
 pub fn resume_hint(definition: &DefPath) -> u32 {
-    use crate::runtime_abi::{RESUME_EARLY, RESUME_LOGGED};
+    use crate::runtime_abi::{RESUME_EARLY, RESUME_LEAVES, RESUME_LOGGED};
     use hirsel_rt_operations::descriptors::{self as d, Class};
+    let mut hint = 0;
+    if leaves_at_boundary(definition) {
+        hint |= RESUME_LEAVES;
+    }
     let Some(ops) = core_name(definition).and_then(|name| core_ops(&name)) else {
-        return 0;
+        return hint;
     };
     if ops.is_empty() {
-        return 0;
+        return hint;
     }
     let logged = |op: &&str| d::op_descriptor(op).is_some_and(|o| o.class() == Class::D);
-    let mut hint = 0;
     if ops.iter().all(logged) {
         hint |= RESUME_LOGGED;
     }
@@ -178,19 +182,38 @@ pub fn resume_hint(definition: &DefPath) -> u32 {
     hint
 }
 
-/// Runtime entries that may return `STATUS_SUSPENDED` from inside their
-/// operation's library body. The rule: a library operation whose only effect
-/// begins at this runtime entry, so reissuing the whole body from its
-/// boundary repeats nothing. The library body returns the status to its
-/// boundary call, which saves the frame and reissues the body on the wake;
-/// the runtime checks the rule itself (an entry leaves only as the first op
-/// begun since its resume point).
+/// Boundary operations whose first op may leave its stack in its Free
+/// replay wait and return `STATUS_SUSPENDED`, for the boundary call to
+/// reissue the whole operation (`RESUME_LEAVES`). The rule: the operation's
+/// only effect begins at that op's runtime entry, so the reissue repeats
+/// nothing. The runtime checks the rest itself: the op leaves only as the
+/// first begun since a resume point that carries the hint.
 ///
-/// Only `channel.send` qualifies today: its body builds `Some(message)` in a
-/// stack slot and calls this entry, and its Free replay version wait is the
-/// only wait an entry can leave from. `channel.receive` and the mutex
-/// operations join by the same rule once their waits can leave.
-const LEAVES_IN_LIBRARY: &[&str] = &["$intrinsic.ChannelSend"];
+/// - `channel.send`: its body builds `Some(message)` in a stack slot and calls
+///   `$intrinsic.ChannelSend` ([`LEAVES_IN_LIBRARY`]).
+/// - `sender.dup`: the runtime entry itself; it has no library body.
+/// - `mutex.with`: its body builds a `None` slot and calls
+///   `$intrinsic.MutexTake` ([`LEAVES_IN_LIBRARY`]). The body's put and kill
+///   follow the take and the callback, so they never leave.
+///
+/// A channel or mutex close never leaves: it runs inside a release walk
+/// (`finalize::run_close`), which has no boundary call to reissue.
+const LEAVES_AT_BOUNDARY: &[&str] = &["channel.send", "sender.dup", "mutex.with"];
+
+/// Whether boundary operation `definition`'s first op may leave its stack
+/// ([`LEAVES_AT_BOUNDARY`]).
+pub fn leaves_at_boundary(definition: &DefPath) -> bool {
+    core_name(definition).is_some_and(|name| LEAVES_AT_BOUNDARY.contains(&name.as_str()))
+}
+
+/// Runtime entries that may return `STATUS_SUSPENDED` from inside their
+/// operation's library body, which returns the status to its boundary call
+/// unchanged; the boundary saves the frame and reissues the body on the wake.
+/// Each is the first effect of a [`LEAVES_AT_BOUNDARY`] operation's body:
+/// `$intrinsic.ChannelSend` of `channel.send`'s, `$intrinsic.MutexTake` of
+/// `mutex.with`'s. `channel.receive` joins by the same rule once its wait can
+/// leave.
+const LEAVES_IN_LIBRARY: &[&str] = &["$intrinsic.ChannelSend", "$intrinsic.MutexTake"];
 
 /// Whether a call of operation `definition` outside a boundary returns
 /// `STATUS_SUSPENDED` to its caller ([`LEAVES_IN_LIBRARY`]).

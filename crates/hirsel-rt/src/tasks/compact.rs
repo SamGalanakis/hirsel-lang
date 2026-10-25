@@ -148,13 +148,23 @@ pub(crate) fn held(ctx: *mut TaskCtx) -> bool {
     })
 }
 
+/// The op count a resume point starts: 0 when its boundary's operation can
+/// leave from its first op (`RESUME_LEAVES`), else saturated, so no op
+/// before the next such point is ever its first. A task starts saturated:
+/// ops begun before its first resume point, such as those of a closure
+/// some library body runs, have no boundary call to reissue.
+pub(crate) fn point(leaves: bool) -> u32 {
+    if leaves { 0 } else { u32::MAX }
+}
+
 /// Whether the running op's replay wait can leave its stack: the task runs
-/// a compact frame bound by its entry, can leave its stack, and began no op
-/// since its resume point but this one. The op then parks logically and
-/// returns `STATUS_SUSPENDED`, which its library body (`channel.send`'s)
-/// returns to the boundary call; the wake activates the frame, which
-/// reissues that call (Go's `gopark` parks the goroutine, not its caller's
-/// stack, `proc.go:457-492`).
+/// a compact frame bound by its entry, can leave its stack, its resume
+/// point's operation can leave (`RESUME_LEAVES`), and it began no op since
+/// that point but this one. The op then parks logically and returns
+/// `STATUS_SUSPENDED` to the boundary call, directly or through its library
+/// body (`channel.send`'s, `mutex.with`'s); the wake activates the frame,
+/// which reissues that call (Go's `gopark` parks the goroutine, not its
+/// caller's stack, `proc.go:457-492`).
 ///
 /// # Safety
 /// The running task holds the role inside an op of its boundary call.

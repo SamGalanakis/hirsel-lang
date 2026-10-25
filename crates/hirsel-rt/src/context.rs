@@ -185,8 +185,9 @@ pub struct TaskCtx {
     /// for its version: the reissued op resumes the wait after its entry
     /// (`compact::wait`).
     pub(crate) wait_left: bool,
-    /// Free ops begun since the task's last resume point: an op that leaves
-    /// from its library body is that boundary's first, so the reissued body
+    /// Free ops begun since the task's last resume point whose operation can
+    /// leave ([`crate::tasks::compact::point`]; saturated otherwise): an op
+    /// that leaves is that boundary's first, so the reissued operation
     /// repeats no effect (`compact::can_wait`).
     pub(crate) point_ops: u32,
     /// Private execution ownership; never part of the compiled context view.
@@ -489,7 +490,7 @@ impl TaskCtx {
             test_host_tail: false,
             native_host_result: None,
             wait_left: false,
-            point_ops: 0,
+            point_ops: u32::MAX,
             replay_host: None,
             ordered_charge_trace: Default::default(),
             activations: Default::default(),

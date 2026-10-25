@@ -4306,8 +4306,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_sender_dup(
         return STATUS_OK;
     }
     if free::enabled(ctx) {
-        unsafe { crate::stop::check(ctx, free::channel::dup(ctx, sender.read(), out)) };
-        return STATUS_OK;
+        let left = unsafe { crate::stop::check(ctx, free::channel::dup(ctx, sender.read(), out)) };
+        return if left {
+            crate::STATUS_SUSPENDED
+        } else {
+            STATUS_OK
+        };
     }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.
@@ -4687,8 +4691,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
-    // SAFETY: caller contract; a resolved available take needs no role.
-    if let Some(result) = unsafe { free::objects::mutex_take(ctx, mutex_word(m), payload, out) } {
+    // SAFETY: caller contract; a resolved available take needs no role. A
+    // reissued take continues its replay wait under the role.
+    if !unsafe { (*ctx).wait_left }
+        && let Some(result) = unsafe { free::objects::mutex_take(ctx, mutex_word(m), payload, out) }
+    {
         return unsafe { free::objects::finish(ctx, result) };
     }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
@@ -4702,8 +4709,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_take(
         return STATUS_OK;
     }
     if free::mutex::live(ctx) {
-        unsafe { crate::stop::check(ctx, free::mutex::take(ctx, word, payload, out)) };
-        return STATUS_OK;
+        let left = unsafe { crate::stop::check(ctx, free::mutex::take(ctx, word, payload, out)) };
+        return if left {
+            crate::STATUS_SUSPENDED
+        } else {
+            STATUS_OK
+        };
     }
     let free = crate::free::enter(ctx, Phase::Entered);
     let mut entered = false;

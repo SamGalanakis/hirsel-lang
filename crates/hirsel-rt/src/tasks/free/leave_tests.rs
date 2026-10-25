@@ -1,7 +1,9 @@
 //! A replay wait leaves its stack only from the first op its compact frame
-//! began since its resume point (`compact::can_wait`): a library body that
-//! made an effect before the send keeps its stack, since reissuing the body
-//! from its boundary would repeat that effect.
+//! began since a resume point whose operation can leave (`RESUME_LEAVES`,
+//! `compact::can_wait`): a library body that made an effect before the op
+//! keeps its stack, since reissuing the body from its boundary would repeat
+//! that effect, and so does an op with no such point to reissue from (one
+//! before the task's first resume point, or under `task.isolate`'s).
 use super::*;
 use std::sync::Mutex;
 
@@ -17,17 +19,29 @@ unsafe extern "C" fn dispatcher(
     frame: *mut u8,
 ) -> u8 {
     unsafe {
+        // Before any resume point: no boundary call to reissue.
+        record::begin(ctx);
+        PROBES.lock().unwrap().push(compact::can_wait(ctx));
         frame.cast::<u32>().write(1);
         // Free proceeds in place: nothing waits at this boundary.
         assert_eq!(
-            crate::continuation::hirsel_rt_v2_resume_point(ctx, frame, 1),
+            crate::continuation::hirsel_rt_v2_resume_point(ctx, frame, 1 | crate::RESUME_LEAVES),
             0
         );
-        // The send's own begin: its wait may leave from the saved frame.
+        // The op's own begin: its wait may leave from the saved frame.
         record::begin(ctx);
         PROBES.lock().unwrap().push(compact::can_wait(ctx));
         // An effect began before this one in the same body: reissuing the
         // body would repeat it, so the wait keeps its stack.
+        record::begin(ctx);
+        PROBES.lock().unwrap().push(compact::can_wait(ctx));
+        // A boundary whose operation cannot leave (`task.isolate`'s runs its
+        // callback first): the callback's first op keeps its stack.
+        frame.cast::<u32>().write(2);
+        assert_eq!(
+            crate::continuation::hirsel_rt_v2_resume_point(ctx, frame, 2),
+            0
+        );
         record::begin(ctx);
         PROBES.lock().unwrap().push(compact::can_wait(ctx));
         let mut slot = [1_u64, 42];
@@ -115,5 +129,5 @@ fn a_replay_wait_leaves_only_as_the_first_op_since_its_resume_point() {
         },
     );
     assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
-    assert_eq!(*PROBES.lock().unwrap(), [true, false]);
+    assert_eq!(*PROBES.lock().unwrap(), [false, true, false, false]);
 }

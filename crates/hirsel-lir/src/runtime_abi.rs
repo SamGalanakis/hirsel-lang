@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 68;
+pub const ABI_VERSION: u32 = 69;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -58,8 +58,12 @@ pub const RESUME_LOGGED: u32 = 1 << 31;
 /// Set when every op the boundary's operation performs commits early (§4.1 E) or is
 /// logged: a non-head proceeds when nothing ahead of it can refuse the early commit.
 pub const RESUME_EARLY: u32 = 1 << 30;
-/// Both resume hints.
-pub const RESUME_HINTS: u32 = RESUME_LOGGED | RESUME_EARLY;
+/// Set when the boundary's operation may leave its stack from its first op
+/// (`continuation::leaves_at_boundary`, runtime ABI 69): only then may that op's wait
+/// return `STATUS_SUSPENDED` for the boundary call to reissue.
+pub const RESUME_LEAVES: u32 = 1 << 29;
+/// Every resume hint.
+pub const RESUME_HINTS: u32 = RESUME_LOGGED | RESUME_EARLY | RESUME_LEAVES;
 /// Bytes of a resumable frame's header: the u32 resume state and a reserved u32.
 pub const RESUME_FRAME_HEADER_BYTES: u64 = 8;
 /// Launch uses a separate channel from language failure.

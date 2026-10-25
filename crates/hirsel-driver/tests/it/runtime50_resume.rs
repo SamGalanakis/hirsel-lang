@@ -738,7 +738,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 
 /// The most stacks suspended children held at once: a child holds its stack
 /// from a `hold` until its next `resume`. Task row 0 is the root.
-fn peak_held(trace: &[Line]) -> usize {
+pub(crate) fn peak_held(trace: &[Line]) -> usize {
     let mut held = std::collections::BTreeSet::new();
     let mut peak = 0;
     for (kind, task, ..) in trace {

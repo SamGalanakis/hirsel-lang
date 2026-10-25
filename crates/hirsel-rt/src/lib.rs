@@ -148,7 +148,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 68;
+pub const ABI_VERSION: u32 = 69;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library
@@ -166,6 +166,9 @@ pub const RESUME_LOGGED: u32 = 1 << 31;
 /// Set when a non-head may commit the boundary's operation early
 /// (`hirsel_lir::runtime_abi::RESUME_EARLY`).
 pub const RESUME_EARLY: u32 = 1 << 30;
+/// Set when the boundary's operation may leave its stack from its first op
+/// (`hirsel_lir::runtime_abi::RESUME_LEAVES`).
+pub const RESUME_LEAVES: u32 = 1 << 29;
 
 /// Report a broken runtime invariant and abort. Never a language failure.
 #[cold]
