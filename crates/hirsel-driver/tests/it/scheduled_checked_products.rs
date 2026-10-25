@@ -20,6 +20,16 @@ fn products_case_full_admission(
     admitted: bool,
     finish: bool,
 ) {
+    products_case_with_ownership(source, failed_front, failed_lower, admitted, finish, false);
+}
+fn products_case_with_ownership(
+    source: &str,
+    failed_front: bool,
+    failed_lower: bool,
+    admitted: bool,
+    finish: bool,
+    consuming: bool,
+) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -241,7 +251,8 @@ fn products_case_full_admission(
             );
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
-            let owned = if admitted {
+            let input_reserved_before = budget.reserved();
+            let mut owned = if admitted {
                 let before_reads = counted.reads.load(Ordering::Relaxed);
                 let required = scope
                     .checked_product_input_bytes(&headers, &program.entry)
@@ -279,7 +290,111 @@ fn products_case_full_admission(
             } else {
                 None
             };
-            let actual_products = if finish {
+            let expected_input = owned
+                .as_ref()
+                .map(|input| hirsel_proof_export::export(input.input()));
+            if consuming {
+                let scratch = scope
+                    .lowered()
+                    .iter()
+                    .filter(|p| !scope.failed_lowered().contains(*p))
+                    .map(|p| lower.settled_definition_decode_layout(p).unwrap().transient)
+                    .max()
+                    .unwrap_or(0);
+                assert!(scratch > 0);
+                let total = scope
+                    .checked_product_input_bytes(&headers, &program.entry)
+                    .unwrap();
+                assert_eq!(
+                    budget.reserved() - input_reserved_before,
+                    total - scratch,
+                    "decoded originals retain their storage; one decode workspace is released"
+                );
+            }
+            let actual_products = if consuming {
+                let input = owned.as_ref().unwrap();
+                let pointers = input
+                    .input()
+                    .definitions
+                    .iter()
+                    .map(|(path, definition)| (path.clone(), definition.bodies.as_ptr() as usize))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let needed = input.type_capture_bytes().unwrap();
+                let prepared = input
+                    .clone()
+                    .capture_types_with_allowance(budget.reserve(needed).unwrap())
+                    .unwrap();
+                let build_bytes = prepared.owned_build_bytes().unwrap();
+                let before = counted.reads.load(Ordering::Relaxed);
+                assert_eq!(prepared.owned_build_bytes().unwrap(), build_bytes);
+                assert_eq!(counted.reads.load(Ordering::Relaxed), before);
+                assert!(
+                    prepared
+                        .build_owned_with_allowance(budget.reserve(build_bytes - 1).unwrap())
+                        .is_err()
+                );
+                let prepared = input
+                    .clone()
+                    .capture_types_with_allowance(budget.reserve(needed).unwrap())
+                    .unwrap();
+                assert!(
+                    prepared
+                        .build_owned_with_allowance(budget.reserve(build_bytes).unwrap())
+                        .is_err(),
+                    "shared input cannot transfer its payload reservation"
+                );
+                let prepared = owned
+                    .take()
+                    .unwrap()
+                    .capture_types_with_allowance(budget.reserve(needed).unwrap())
+                    .unwrap();
+                let reserved = budget.reserved();
+                let built = prepared
+                    .build_owned_with_allowance(budget.reserve(build_bytes).unwrap())
+                    .unwrap();
+                assert_eq!(
+                    budget.reserved(),
+                    reserved + build_bytes,
+                    "transfer the retained input charge without a second payload grant"
+                );
+                for definition in &built.export().definitions {
+                    assert_eq!(
+                        pointers[&definition.path],
+                        definition.tir.bodies.as_ptr() as usize
+                    );
+                }
+                let output_bytes = built.output_bytes().unwrap();
+                let receipt_bytes = built.checked_products_bytes().unwrap();
+                assert!(
+                    built
+                        .checked_products_with_allowances(
+                            budget.reserve(output_bytes - 1).unwrap(),
+                            budget.reserve(receipt_bytes).unwrap()
+                        )
+                        .is_err()
+                );
+                assert!(
+                    built
+                        .checked_products_with_allowances(
+                            budget.reserve(output_bytes).unwrap(),
+                            budget.reserve(receipt_bytes - 1).unwrap()
+                        )
+                        .is_err()
+                );
+                let products = built
+                    .checked_products_with_allowances(
+                        budget.reserve(output_bytes).unwrap(),
+                        budget.reserve(receipt_bytes).unwrap(),
+                    )
+                    .unwrap();
+                let reserved = budget.reserved();
+                drop(built);
+                assert!(
+                    budget.reserved() < reserved,
+                    "the finished receipt releases moved input and construction storage"
+                );
+                products
+            } else if finish {
                 let owned = owned.as_ref().unwrap().clone();
                 let needed = owned.type_capture_bytes().unwrap();
                 assert!(
@@ -330,9 +445,9 @@ fn products_case_full_admission(
             } else {
                 Arc::new(scope.checked_products(&headers, &program.entry).unwrap())
             };
-            if let Some(owned) = &owned {
+            if let Some(expected) = &expected_input {
                 assert_eq!(
-                    Some(hirsel_proof_export::export(owned.input()).as_str()),
+                    Some(expected.as_str()),
                     actual_products.canonical.as_deref()
                 );
             }
@@ -450,4 +565,16 @@ fn completed_checked_receipt_admission_preserves_scalar_bytes_reads_digest_and_d
 #[test]
 fn completed_checked_receipt_admission_preserves_failed_front_negative_reads() {
     products_case_full_admission("pub fn main()->u8{missing}", true, false, true, true);
+}
+
+#[test]
+fn consuming_checked_construction_transfers_original_storage_and_preserves_scalar_receipt() {
+    products_case_with_ownership(
+        "pub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nconst A:u8=comptime 1u8; const B:u8=comptime 2u8; pub fn main()->u8{A+B}",
+        false,
+        false,
+        true,
+        true,
+        true,
+    );
 }

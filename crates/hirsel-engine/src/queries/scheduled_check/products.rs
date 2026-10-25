@@ -50,6 +50,22 @@ impl AdmittedProofInput for FrontCheckedInput {
     fn export_clone_bytes(&self) -> u64 {
         self._allowance.bytes()
     }
+    fn into_owned(self: Rc<Self>) -> Result<OwnedProofInput, QueryError> {
+        let this = Rc::try_unwrap(self).map_err(|_| {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "checked input ownership".into(),
+                message: "input must be uniquely owned before moving its payloads".into(),
+            })
+        })?;
+        Ok(OwnedProofInput {
+            input: this.input,
+            source: OwnedProofSource {
+                _proof: None,
+                checked: Some((this._scope, this._headers)),
+            },
+            allowance: this._allowance,
+        })
+    }
     fn checked_receipt(&self) -> Option<(&FrontCheckScope, &FrontCheckedSignatures)> {
         Some((&self._scope, &self._headers))
     }
@@ -63,6 +79,15 @@ impl FrontCheckScope {
         headers: &FrontCheckedSignatures,
         entry: &DefPath,
     ) -> Result<u64, QueryError> {
+        self.checked_product_input_layout(headers, entry)?
+            .total()
+            .ok_or(QueryError::NotImplemented)
+    }
+    fn checked_product_input_layout(
+        &self,
+        headers: &FrontCheckedSignatures,
+        entry: &DefPath,
+    ) -> Result<DefinitionDecodeLayout, QueryError> {
         if !headers.matches(&self.owner().plan.front) {
             return Err(QueryError::NotImplemented);
         }
@@ -94,10 +119,12 @@ impl FrontCheckScope {
                 .and_then(|n| n.checked_add(lower.settled_constant_selection_bytes(path).ok()?))
                 .ok_or(QueryError::NotImplemented)?;
         }
-        required
-            .checked_add(transient)
-            .and_then(|n| n.checked_add(weight.bytes()))
-            .ok_or(QueryError::NotImplemented)
+        Ok(DefinitionDecodeLayout {
+            retained: required
+                .checked_add(weight.bytes())
+                .ok_or(QueryError::NotImplemented)?,
+            transient,
+        })
     }
     /// N-1 refuses before original body I/O. The returned wrapper owns the
     /// complete scope, captured headers and every decoded input allocation.
@@ -105,9 +132,10 @@ impl FrontCheckScope {
         self: &Arc<Self>,
         headers: Arc<FrontCheckedSignatures>,
         entry: &DefPath,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
     ) -> Result<FrontCheckedInput, QueryError> {
-        if self.checked_product_input_bytes(&headers, entry)? > allowance.bytes() {
+        let layout = self.checked_product_input_layout(&headers, entry)?;
+        if layout.total().ok_or(QueryError::NotImplemented)? > allowance.bytes() {
             return Err(QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "checked product input admission".into(),
                 message: "original decode/clone buffers exceed caller admission".into(),
@@ -118,7 +146,9 @@ impl FrontCheckScope {
             input,
             _scope: self.clone(),
             _headers: headers,
-            _allowance: allowance,
+            _allowance: allowance
+                .split(layout.retained)
+                .ok_or(QueryError::NotImplemented)?,
         })
     }
     /// Format already settled ordinary obligations in the caller's admitted
