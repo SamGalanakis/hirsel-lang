@@ -5,7 +5,7 @@ use hirsel_lir::ir::*;
 use hirsel_lir::ownership_trace::*;
 use hirsel_lir::stage::Rc;
 
-fn fixture() -> (LirUnit<Rc>, Plan) {
+fn fixture_with_table() -> (LirUnit<Rc>, Plan, hirsel_lir::layout_types::LayoutTable) {
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
     let value = t.owned(l::BLK);
     t.param(value);
@@ -85,6 +85,11 @@ fn fixture() -> (LirUnit<Rc>, Plan) {
         },
     });
     let plan = Plan::new(&unit, observations);
+    (unit, plan, table)
+}
+
+fn fixture() -> (LirUnit<Rc>, Plan) {
+    let (unit, plan, _) = fixture_with_table();
     (unit, plan)
 }
 
@@ -496,4 +501,172 @@ fn ownership_trace_same_address_number_cannot_hide_a_changed_owner() {
         check_transform(&unit, &plan, &after, &output, Some(&recipe(&plan, &output))).unwrap_err(),
         Error::IdentityRewrite(MarkerId(1))
     );
+}
+
+#[test]
+fn ownership_trace_elide_emits_a_recipe_even_without_a_rewrite() {
+    let (unit, input, table) = fixture_with_table();
+    let ordinary = hirsel_rc::elide::elide(unit.clone(), &table).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::elide::elide_observed(unit.clone(), &table, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    assert_eq!(recipe.relocations.len(), input.observations.len());
+    check_transform(&unit, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+#[test]
+fn ownership_trace_elide_uses_the_actual_editor_block_compaction() {
+    let (mut unit, mut input, table) = fixture_with_table();
+    unit.blocks.insert(
+        0,
+        Block {
+            kind: BlockKind::Body,
+            parameters: PoolRange::EMPTY,
+            instructions: PoolRange::EMPTY,
+            anchor: SourceAnchorId(0),
+        },
+    );
+    unit.terminators.insert(0, Terminator::Unreachable);
+    unit.entry.0 += 1;
+    for edge in &mut unit.tables.edges {
+        edge.target.0 += 1;
+    }
+    for observation in &mut input.observations {
+        match &mut observation.point {
+            Point::Instruction { block, .. } | Point::Return(block) => block.0 += 1,
+            Point::Entry => (),
+            other => panic!("unexpected fixture point: {other:?}"),
+        }
+    }
+    input.unit = unit.digest();
+    check(&unit, &input).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::elide::elide_observed(unit.clone(), &table, &input).unwrap();
+    assert_eq!(after.entry, ENTRY);
+    assert_eq!(output.observations.len(), input.observations.len());
+    assert_ne!(input.observations, output.observations);
+    check_transform(&unit, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+fn elision_fixture(
+    observe_copy: bool,
+) -> (
+    LirUnit<Rc>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+    LirUnit<Rc>,
+) {
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
+    let value = t.owned(l::BLK);
+    t.param(value);
+    let slot = t.slot(l::BLK, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[support::Undo::Release(value)]);
+    let version = t.store(ENTRY, address, value, slot);
+    let copied = t.owned(l::BLK);
+    let cleanup = t.cleanup(&[support::Undo::Drop(slot)]);
+    let failure = t.failure(cleanup);
+    t.builder.push(
+        ENTRY,
+        Inst::Copy {
+            result: copied,
+            address,
+            reaching: version,
+            failure,
+        },
+    );
+    let taken = t.read(ENTRY, address, version, ReadMode::Take, None);
+    t.release(ENTRY, taken, &[copied]);
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, Some(copied));
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
+        .unwrap()
+        .into_raw();
+    let ordinary = hirsel_rc::elide::elide(unit.clone(), &table).unwrap();
+    let violations = hirsel_lir::validate::check(&ordinary, &inputs);
+    assert!(
+        violations.is_empty(),
+        "ordinary elision must remain valid: {violations:?}"
+    );
+    assert!(
+        ordinary.instructions.len() < unit.instructions.len(),
+        "the fixture must exercise a real elision"
+    );
+    let site = unit.tables.source_anchors[0].site;
+    let point = if observe_copy {
+        Point::Instruction {
+            block: ENTRY,
+            index: unit.blocks[0]
+                .instructions
+                .get(&unit.instructions)
+                .unwrap()
+                .iter()
+                .position(|instruction| matches!(instruction, Inst::Copy { .. }))
+                .unwrap() as u32,
+            moment: Moment::After,
+        }
+    } else {
+        Point::Entry
+    };
+    let marker = if observe_copy {
+        ObserveOwnership {
+            id: MarkerId(0),
+            site,
+            kind: Kind::Create,
+            token: Location::Value(copied),
+            owner: Location::Value(copied),
+        }
+    } else {
+        ObserveOwnership {
+            id: MarkerId(0),
+            site,
+            kind: Kind::Move,
+            token: Location::Parameter(0),
+            owner: Location::Value(value),
+        }
+    };
+    let plan = Plan::new(&unit, vec![Observation { point, marker }]);
+    (unit, plan, table, ordinary)
+}
+
+#[test]
+fn ownership_trace_elide_preserves_unaffected_identity_during_a_real_elision() {
+    let (before, input, table, ordinary) = elision_fixture(false);
+    let (after, output, recipe) =
+        hirsel_rc::elide::elide_observed(before.clone(), &table, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    check_transform(&before, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+#[test]
+fn ownership_trace_elide_refuses_to_silently_delete_an_observed_copy() {
+    let (before, input, table, _) = elision_fixture(true);
+    let error = hirsel_rc::elide::elide_observed(before, &table, &input).unwrap_err();
+    assert!(error.contains("observed marker MarkerId(0)"), "{error}");
+    assert!(error.contains("explicit semantic transport"), "{error}");
 }

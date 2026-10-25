@@ -28,16 +28,136 @@ use hirsel_lir::stage::Rc;
 pub fn elide(unit: LirUnit<Rc>, table: &LayoutTable) -> Result<LirUnit<Rc>, PassError> {
     let facts = Facts::new(&unit, table);
     let mut ed = Editor::new(unit);
+    match rewrite(&mut ed, &facts, table, |_, _, _| {
+        Ok::<_, std::convert::Infallible>(())
+    }) {
+        Ok(()) => Ok(ed.finish()),
+        Err(never) => match never {},
+    }
+}
+
+fn rewrite<E>(
+    ed: &mut Editor<Rc>,
+    facts: &Facts,
+    table: &LayoutTable,
+    mut record: impl FnMut(usize, usize, usize) -> Result<(), E>,
+) -> Result<(), E> {
     for b in 0..ed.code.len() {
         let mut i = 0;
         while i + 2 < ed.code[b].len() {
-            if let Some(replacement) = cancel(&ed, &facts, table, &ed.code[b][i..i + 3]) {
+            if let Some(replacement) = cancel(ed, facts, table, &ed.code[b][i..i + 3]) {
+                record(b, i, replacement.len())?;
                 ed.code[b].splice(i..i + 3, replacement);
             }
             i += 1;
         }
     }
-    Ok(ed.finish())
+    Ok(())
+}
+
+/// Run the same elisions with explicit instruction origins and the editor's
+/// actual compaction maps. This staged trace adapter refuses an elision that
+/// touches an observed transition; it never invents a replacement observation.
+/// Value-identity rewrites still require a future checked transport rule.
+pub fn elide_observed(
+    unit: LirUnit<Rc>,
+    table: &LayoutTable,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Rc>,
+        hirsel_lir::ownership_trace::Plan,
+        hirsel_lir::ownership_trace::Recipe,
+    ),
+    String,
+> {
+    use hirsel_lir::ir::{BlockId, EdgeId};
+    use hirsel_lir::ownership_trace::{self as trace, Point, Relocation};
+    trace::check(&unit, input).map_err(|error| error.to_string())?;
+    let before = unit.clone();
+    let facts = Facts::new(&unit, table);
+    let mut ed = Editor::new(unit);
+    let mut origins: Vec<Vec<Option<u32>>> = ed
+        .code
+        .iter()
+        .map(|code| (0..code.len()).map(|i| Some(i as u32)).collect())
+        .collect();
+    rewrite(&mut ed, &facts, table, |b, i, replacement_len| {
+        let origins = &mut origins[b];
+        for observation in &input.observations {
+            if let Point::Instruction { block, index, .. } = observation.point
+                && block == BlockId(b as u32)
+                && origins[i..i + 3].contains(&Some(index))
+            {
+                return Err(format!(
+                    "ownership trace: elision of observed marker {:?} needs an explicit semantic transport",
+                    observation.marker.id
+                ));
+            }
+        }
+        origins.splice(i..i + 3, std::iter::repeat_n(None, replacement_len));
+        Ok(())
+    })?;
+    let (after, (blocks, edges)) =
+        ed.finish_reporting(|blocks, edges| (blocks.to_vec(), edges.to_vec()));
+    let mut output = input.clone();
+    let mut relocations = vec![];
+    for observation in &mut output.observations {
+        let remap_block = |block: BlockId| {
+            blocks
+                .get(block.index())
+                .copied()
+                .flatten()
+                .ok_or_else(|| format!("ownership trace: removed observed block {block:?}"))
+        };
+        observation.point =
+            match observation.point {
+                Point::Instruction {
+                    block,
+                    index,
+                    moment,
+                } => {
+                    let relocated = origins[block.index()]
+                        .iter()
+                        .position(|origin| *origin == Some(index))
+                        .ok_or_else(|| {
+                            format!(
+                                "ownership trace: lost instruction for marker {:?}",
+                                observation.marker.id
+                            )
+                        })?;
+                    Point::Instruction {
+                        block: remap_block(block)?,
+                        index: relocated as u32,
+                        moment,
+                    }
+                }
+                Point::Entry => Point::Entry,
+                Point::Edge(edge) => Point::Edge(EdgeId(
+                    edges.get(edge.index()).copied().flatten().ok_or_else(|| {
+                        format!("ownership trace: removed observed edge {edge:?}")
+                    })?,
+                )),
+                Point::CallEntered(block) => Point::CallEntered(remap_block(block)?),
+                Point::CallReturned(block) => Point::CallReturned(remap_block(block)?),
+                Point::Return(block) => Point::Return(remap_block(block)?),
+            };
+        relocations.push(Relocation {
+            id: observation.marker.id,
+            point: observation.point,
+            token: observation.marker.token,
+            owner: observation.marker.owner,
+        });
+    }
+    output.unit = after.digest();
+    let recipe = trace::Recipe {
+        before: input.unit,
+        after: output.unit,
+        relocations,
+    };
+    trace::check_transform(&before, input, &after, &output, Some(&recipe))
+        .map_err(|error| error.to_string())?;
+    Ok((after, output, recipe))
 }
 
 /// `copy` of (a part of) a slot, then insertion's release of that slot.

@@ -1116,7 +1116,17 @@ impl<S: Stage> Editor<S> {
     }
 
     /// Flatten the blocks and drop what the rewrite left unreachable or unnamed.
-    pub fn finish(mut self) -> LirUnit<S> {
+    pub fn finish(self) -> LirUnit<S> {
+        self.finish_reporting(|_, _| ()).0
+    }
+
+    /// Diagnostic callers retain the exact block/edge compaction performed by
+    /// this editor. Ordinary callers instantiate a zero-sized report and do
+    /// not clone either map. Instruction origins belong to the rewriting pass.
+    pub(crate) fn finish_reporting<R>(
+        mut self,
+        report: impl FnOnce(&[Option<BlockId>], &[Option<u32>]) -> R,
+    ) -> (LirUnit<S>, R) {
         let n = self.unit.blocks.len();
         let succ = |unit: &LirUnit<S>, code: &[Vec<Inst>], b: usize| -> Vec<BlockId> {
             let mut out = Vec::new();
@@ -1303,7 +1313,8 @@ impl<S: Stage> Editor<S> {
         self.unit.instructions = instructions;
         compact_values(&mut self.unit);
         prune_anchors(&mut self.unit);
-        self.unit
+        let report = report(&block_map, &edge_map);
+        (self.unit, report)
     }
 }
 

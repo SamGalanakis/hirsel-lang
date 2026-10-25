@@ -846,6 +846,7 @@ dependencies = [
  "hirsel-guard",
  "hirsel-layout",
  "hirsel-lir",
+ "hirsel-rc",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",
