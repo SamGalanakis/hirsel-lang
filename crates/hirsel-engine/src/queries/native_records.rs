@@ -120,6 +120,19 @@ impl NativeRecords {
         self.records
             .encode_record(value, |anchor| source.record_owner(anchor))
     }
+    /// Canonical ordinary bytes and pre-admission for outer record decoding.
+    /// The caller must add its typed payload's physical layout bound.
+    pub fn encode_with_decode_bytes<T: Serialize>(
+        &self,
+        source: &(impl NativeRecordSource + ?Sized),
+        value: &T,
+    ) -> Option<(Vec<u8>, u64)> {
+        if !Arc::ptr_eq(&self.types, source.record_types()) {
+            return None;
+        }
+        self.records
+            .encode_record_with_decode_bytes(value, |anchor| source.record_owner(anchor))
+    }
     pub fn decode<T: DeserializeOwned>(
         &self,
         source: &(impl NativeRecordSource + ?Sized),

@@ -12,7 +12,21 @@ use std::{alloc::Layout, collections::HashSet};
 /// Shared allocations are charged once within this artifact, conservatively
 /// again if another hold also retains them. No allocator-specific size classes.
 pub(crate) fn retained_tir_bytes(definition: &Definition) -> u64 {
-    let mut weight = Weight::default();
+    tir_bytes(definition, Weight::default())
+}
+
+/// Archive decoding recreates shared rows at every serialized occurrence.
+/// Count each occurrence independently instead of assuming source Arc sharing.
+pub(crate) fn decoded_tir_bytes(definition: &Definition) -> u64 {
+    tir_bytes(
+        definition,
+        Weight {
+            count_shared_repeats: true,
+            ..Weight::default()
+        },
+    )
+}
+fn tir_bytes(definition: &Definition, mut weight: Weight) -> u64 {
     weight.add(arc_bytes(definition));
     let Definition {
         caller_bodies,
@@ -178,10 +192,14 @@ fn arc_bytes<T: ?Sized>(value: &T) -> usize {
 pub(crate) struct Weight {
     pub(crate) bytes: u64,
     shared: HashSet<usize>,
+    count_shared_repeats: bool,
 }
 impl Weight {
+    fn first(&mut self, identity: usize) -> bool {
+        self.count_shared_repeats || self.shared.insert(identity)
+    }
     pub(crate) fn allocation(&mut self, identity: usize, bytes: usize) -> bool {
-        if identity != 0 && !self.shared.insert(identity) {
+        if identity != 0 && !self.first(identity) {
             return false;
         }
         self.add(bytes);
@@ -310,13 +328,13 @@ impl Weight {
         }
     }
     fn read_log(&mut self, value: &std::sync::Arc<SharedPath<hirsel_types::DependencyRead>>) {
-        if !self.shared.insert(std::sync::Arc::as_ptr(value) as usize) {
+        if !self.first(std::sync::Arc::as_ptr(value) as usize) {
             return;
         }
         self.add(arc_bytes(&**value));
         let mut path = &**value;
         while let Some(identity) = path.node_identity() {
-            if !self.shared.insert(identity) {
+            if !self.first(identity) {
                 break;
             }
             self.add(path.node_allocation_bytes());
@@ -359,19 +377,19 @@ impl Weight {
         }
     }
     fn arc_slice<T>(&mut self, value: &std::sync::Arc<[T]>) {
-        if self.shared.insert(value.as_ptr() as usize) {
+        if self.first(value.as_ptr() as usize) {
             self.add(arc_bytes(&**value));
         }
     }
     fn shared_slice<T>(&mut self, value: &SharedSlice<T>) {
         let identity = value.storage_identity();
-        if identity != 0 && self.shared.insert(identity) {
+        if identity != 0 && self.first(identity) {
             self.add(arc_bytes(value.as_slice()));
         }
     }
     fn shared_values<T>(&mut self, value: &SharedSlice<T>, mut visit: impl FnMut(&mut Self, &T)) {
         let identity = value.storage_identity();
-        if identity != 0 && self.shared.insert(identity) {
+        if identity != 0 && self.first(identity) {
             self.add(arc_bytes(value.as_slice()));
             for element in value {
                 visit(self, element);
@@ -400,7 +418,7 @@ impl Weight {
         }
     }
     pub(crate) fn signature(&mut self, value: &hirsel_types::SignatureRef) {
-        if !self.shared.insert(std::sync::Arc::as_ptr(value) as usize) {
+        if !self.first(std::sync::Arc::as_ptr(value) as usize) {
             return;
         }
         self.add(arc_bytes(&**value));
@@ -533,7 +551,7 @@ impl Weight {
     }
     fn path<T>(&mut self, mut value: &SharedPath<T>) {
         while let Some(identity) = value.node_identity() {
-            if !self.shared.insert(identity) {
+            if !self.first(identity) {
                 break;
             }
             self.add(value.node_allocation_bytes());
@@ -1141,5 +1159,31 @@ mod tests {
         let before = retained_tir_bytes(&definition);
         definition.bodies[0].matches[0].patterns.clear();
         assert_eq!(before - retained_tir_bytes(&definition), 32_768);
+    }
+    #[test]
+    fn decoded_tir_counts_each_serialized_shared_path_occurrence() {
+        let mut value = definition();
+        let mut path = SharedPath::default();
+        path.push(Projection::Field(0));
+        path.push(Projection::Field(1));
+        let row = Place {
+            root: LocalId(0),
+            loan: None,
+            ty: value.bodies[0].result,
+            projection: path,
+            binding: None,
+        };
+        value.bodies[0].places = vec![row.clone(), row];
+        let retained = retained_tir_bytes(&value);
+        let decoded = decoded_tir_bytes(&value);
+        assert!(
+            decoded > retained,
+            "a decoder cannot assume the original persistent sharing"
+        );
+        let copied = value.clone();
+        // Vec::clone discards the fixture's deliberately reserved spare rows.
+        // A decoded body fits within the original producer's captured bound.
+        assert!(decoded_tir_bytes(&copied) <= decoded);
+        assert!(decoded_tir_bytes(&copied) > retained_tir_bytes(&copied));
     }
 }
