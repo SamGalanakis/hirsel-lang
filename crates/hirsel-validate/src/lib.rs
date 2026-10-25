@@ -560,7 +560,7 @@ fn validate_input(
         },
     ));
     if errors.is_empty() {
-        match invocations::coverage(t, definition, signatures) {
+        match invocations::coverage_with_declarations(t, definition, signatures, &declarations) {
             Ok(coverage) => {
                 for (body, block, _, restart) in coverage {
                     if restart

@@ -20,8 +20,19 @@ pub(crate) fn coverage(
     definition: &Definition,
     reader: &Reader<'_>,
 ) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {
-    let declarations = typing::declaration_tables(types, definition, &reader)
+    let declarations = typing::declaration_tables(types, definition, reader)
         .ok_or("invalid invocation type declarations")?;
+    coverage_with_declarations(types, definition, reader, &declarations)
+}
+
+/// Full V already derived this exact immutable definition's lexical binders.
+/// Standalone coverage still obtains its own independently checked declarations.
+pub(crate) fn coverage_with_declarations(
+    types: &TypeInterner,
+    definition: &Definition,
+    reader: &Reader<'_>,
+    declarations: &[hirsel_types::GenericDeclarations],
+) -> Result<Vec<(u32, u32, u32, bool)>, &'static str> {
     let mut result = Vec::new();
     for (body_id, body) in definition.bodies.iter().enumerate() {
         let property = |ty, counted| {
