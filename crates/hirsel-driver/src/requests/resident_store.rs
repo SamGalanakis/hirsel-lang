@@ -22,6 +22,7 @@ const SLOT_CHARGE: u64 = 192;
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum Key {
     Result(ContentHash),
+    Content(ContentHash),
     VerifierRow(ContentHash),
     VerifierContent(ContentHash),
 }
@@ -209,6 +210,19 @@ impl ResultStore for ResidentStore {
     fn put(&self, key: &EntryKey, value: &[u8]) {
         self.bounded.put_bytes(Key::Result(key.0), value);
     }
+    /// Retained best-effort for later revisions, but never claimed: a request
+    /// keeps its own transport copy, since this bound may drop or evict
+    /// content that the request has still to read.
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        let reference = domain.reference(bytes)?;
+        self.bounded
+            .put_bytes(Key::Content(reference.output.0), bytes);
+        None
+    }
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        let bytes = self.bounded.get_bytes(Key::Content(reference.output.0))?;
+        (reference.domain.reference(&bytes)? == reference).then_some(bytes)
+    }
     fn name(&self) -> &'static str {
         "resident@1"
     }
@@ -295,6 +309,22 @@ mod tests {
         assert!(store.get(&key(1)).is_some());
         assert!(store.get(&key(2)).is_none());
         assert_eq!(budget.reserved(), SLOTS + 10 + PAYLOAD_CHARGE);
+    }
+
+    #[test]
+    fn resident_store_retains_product_content_without_claiming_request_transport() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), 1 << 16);
+        let domain = Domain { kind: 1, schema: 1 };
+        assert_eq!(store.put_content(domain, b"product"), None);
+        let reference = domain.reference(b"product").unwrap();
+        assert_eq!(&store.get_content(reference).unwrap()[..], b"product");
+        let request = hirsel_engine::store::RequestStore::new(
+            Arc::new(store),
+            budget.reserve(1 << 12).unwrap(),
+        );
+        let fresh = request.put_content(domain, b"in flight").unwrap();
+        assert_eq!(&request.get_content(fresh).unwrap()[..], b"in flight");
     }
 
     #[test]
