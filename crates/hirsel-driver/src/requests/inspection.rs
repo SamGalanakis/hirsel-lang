@@ -168,6 +168,8 @@ pub(super) struct SourceInspection {
 }
 struct Previous {
     store_adoptions: u64,
+    /// Cumulative front refusals and memo operations already reported.
+    refusals: (MemoStats, u64),
     counts: BTreeMap<DefPath, Counters>,
     initial: Option<RequestWork>,
     stats: Option<MemoStats>,
@@ -213,6 +215,7 @@ impl GraphMeter {
             hold_bytes,
             previous: Mutex::new(Previous {
                 store_adoptions: 0,
+                refusals: Default::default(),
                 counts: BTreeMap::new(),
                 initial: Some(source.initial),
                 stats: Some(source.stats),
@@ -260,12 +263,52 @@ impl GraphMeter {
                     .ok_or_else(unavailable)
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        self.ledger.add(&delta, previous.stats.as_ref())?;
+        // Front refusals are this graph's invalidations; S0's own stats and
+        // touched rows are reported once, with the graph's first request.
+        let (refusals, operations) = self.front.refusal_stats();
+        let mut stats = previous.stats.take().unwrap_or_default();
+        stats.invalidated_text = refusals
+            .invalidated_text
+            .checked_sub(previous.refusals.0.invalidated_text)
+            .and_then(|delta| stats.invalidated_text.checked_add(delta))
+            .ok_or_else(unavailable)?;
+        for ((total, now), before) in stats
+            .invalidated
+            .iter_mut()
+            .zip(refusals.invalidated)
+            .zip(previous.refusals.0.invalidated)
+        {
+            *total = now
+                .checked_sub(before)
+                .and_then(|delta| total.checked_add(delta))
+                .ok_or_else(unavailable)?;
+        }
+        self.ledger.add(&delta, Some(&stats))?;
+        let operation_delta = operations
+            .checked_sub(previous.refusals.1)
+            .ok_or_else(unavailable)?;
+        previous.refusals = (refusals, operations);
+        let first = previous.initial.is_some();
         let adoptions = self.front.store_adoptions();
         let adoption_delta = adoptions
             .checked_sub(previous.store_adoptions)
             .ok_or_else(unavailable)?;
         let mut work = previous.initial.take().unwrap_or_default();
+        work.memo_operations = work
+            .memo_operations
+            .checked_add(operation_delta)
+            .ok_or_else(unavailable)?;
+        if first {
+            // Every front and Lower memo this graph adopted, refused and
+            // recomputed, or computed: a full rescan touches each demanded one.
+            let mut touched: std::collections::BTreeSet<MemoKey> =
+                std::mem::take(&mut work.touched_memos)
+                    .into_iter()
+                    .collect();
+            touched.extend(self.front.memo_snapshot().into_iter().map(|(key, _)| key));
+            touched.extend(self.lower.memo_snapshot().into_iter().map(|(key, _)| key));
+            work.touched_memos = touched.into_iter().collect();
+        }
         work.store_adoptions = work
             .store_adoptions
             .checked_add(adoption_delta)
