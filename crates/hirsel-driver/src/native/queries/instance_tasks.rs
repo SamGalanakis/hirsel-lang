@@ -278,6 +278,7 @@ impl InstanceTasks {
             &output.templates,
             &output.operation_freedom,
             &output.emission,
+            &output.discharge,
         ))
         .map_err(|e| e.to_string())?;
         let bytes = ordinary
@@ -462,6 +463,20 @@ impl InstanceTasks {
             .collect::<Result<Vec<_>, String>>()?;
         outputs.sort_by(|a, b| a.0.canonical_cmp(&b.0));
         Ok(outputs)
+    }
+    /// Actual independently compared check removals for this complete native
+    /// discovery. Ordinary per-instance facts cannot certify a partial graph.
+    pub fn discharged(
+        &self,
+        settled: ProductRef,
+    ) -> Result<hirsel_lir::discharge::Discharge, String> {
+        let completed = self.completed_instances(settled)?;
+        super::discharge::complete(
+            &self.options.discharge,
+            completed
+                .iter()
+                .map(|(key, output)| (key.instance.definition(), &output.discharge)),
+        )
     }
 }
 
@@ -742,6 +757,17 @@ impl DiscoveryTask {
             return Ok(None);
         }
         let result = (|| {
+            // A source definition's licensed sites may span several bodies.
+            // Only the complete fixed point can prove none were missed.
+            let entries = self.tasks.entries();
+            let facts = entries
+                .iter()
+                .map(|entry| {
+                    let output = entry.output.get().ok_or("discovery output is unfinished")?;
+                    Ok((entry.key.instance.definition(), &output.discharge))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            super::discharge::complete(&self.tasks.options.discharge, facts)?;
             let mut rows = self
                 .tasks
                 .entries()

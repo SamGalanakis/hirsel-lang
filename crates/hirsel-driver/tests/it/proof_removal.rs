@@ -911,3 +911,173 @@ fn settled_original_assessment_binds_exported_bodies_without_a_native_snapshot()
         );
     });
 }
+
+#[test]
+fn native_discovery_reports_actual_removals_on_cold_and_body_free_fresh_hits() {
+    use hirsel_driver::native::queries::{
+        INSTANCE_KIND,
+        declarations::NativeDeclarations,
+        instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
+        source_inputs::NativeInstanceInputs,
+    };
+    use hirsel_engine::runtime::*;
+    use std::sync::{Arc, atomic::Ordering};
+    with_compiler_stack(|| {
+        let text = sidecar(BUMP, &[(ENSURES, "proved"), (OVERFLOW, "proved")], |_| {});
+        let evidence = Evidence {
+            records: parse_sidecar(&text).unwrap(),
+            trusted: vec![Checker::parse("prover@1").unwrap()],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn store::ResultStore> =
+            Arc::new(store::DirStore::new(dir.path().to_path_buf()));
+        let mut expected = None;
+        for mode in 0..3 {
+            let mut producer = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone());
+            let file = producer.sources.add("bump.hir", BUMP.into()).unwrap();
+            let checked = check_progress(&mut producer, file, &default_context()).unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let entry = entry_path(&default_context());
+            let export = hirsel_proof_export::build(&producer.proof_export_input(&entry).unwrap());
+            let mut cache = NativeDiscoveryCache::new(producer.types().clone(), store.clone());
+            let declarations = NativeDeclarations::collect(&mut producer, &mut cache, &[]).unwrap();
+            let paths = declarations
+                .context
+                .sources
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            let original = producer
+                .native_original_reader(&paths, store.clone())
+                .unwrap();
+            let proofs = Proofs::assess_original(&export, &original, &evidence).unwrap();
+            assert!(!proofs.discharge.is_empty());
+            let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+            options.discharge = proofs.discharge.clone();
+            options.validation = hirsel_driver::native::Validation::Ready;
+            if mode == 2 {
+                // This licensed site never becomes a native check. Discovery
+                // must refuse before exposing any completed report product.
+                options.discharge.0.values_mut().next().unwrap().insert(
+                    hirsel_lir::discharge::Discharged {
+                        body: u32::MAX,
+                        block: 0,
+                        statement: 0,
+                        form: hirsel_lir::discharge::Form::Integer,
+                    },
+                );
+            }
+            if mode == 0 {
+                // Compare against the established batch validator/report only
+                // as a test oracle. It is dropped before new native demand.
+                let input = producer.export_native_input().unwrap();
+                let validated = producer.import_native_input(input).unwrap();
+                let ready = build(&validated, &options).unwrap();
+                expected = Some((ready.discharged.clone(), proofs.report(&ready)));
+            }
+            let inputs = NativeInstanceInputs::from_products(declarations, original).unwrap();
+            drop(cache);
+            drop(producer);
+            let runtime_bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + (64 << 20);
+            let budget = ProcessBudget::new(runtime_bytes + (32 << 20));
+            let tasks = InstanceTasks::new(
+                inputs,
+                store.clone(),
+                options,
+                hirsel_syntax::ContentHash::of_bytes(b"actual native proof removals"),
+                MemoryWeight {
+                    scratch: 16 << 20,
+                    retained: 1 << 20,
+                    stack: 0,
+                },
+                budget.reserve(32 << 20).unwrap(),
+            )
+            .unwrap();
+            let denied = tasks.failure("proof discovery runtime refusal");
+            let errors = RuntimeErrors {
+                resource: denied,
+                cycle: denied,
+                cancelled: denied,
+                protocol: denied,
+                panicked: denied,
+            };
+            let mut runtime = AdmittedRuntime::new(
+                hirsel_intern::jobs::Jobs::new(1),
+                budget.reserve(runtime_bytes).unwrap(),
+                errors,
+            )
+            .unwrap();
+            let trace = hirsel_lir::construction::ValueTrace::default();
+            struct Traced(
+                Arc<InstanceTaskFactory>,
+                hirsel_lir::construction::ValueTrace,
+            );
+            struct Task(Box<dyn QueryTask>, hirsel_lir::construction::ValueTrace);
+            impl QueryFactory for Traced {
+                fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, store::Reference> {
+                    Ok(Box::new(Task(self.0.create(id)?, self.1.clone())))
+                }
+            }
+            impl QueryTask for Task {
+                fn id(&self) -> QueryId {
+                    self.0.id()
+                }
+                fn weight(&self) -> MemoryWeight {
+                    self.0.weight()
+                }
+                fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+                    let _observe = self.1.enter();
+                    self.0.poll(cx)
+                }
+            }
+            let factory = Arc::new(Traced(
+                Arc::new(InstanceTaskFactory::new(tasks.clone())),
+                trace.clone(),
+            ));
+            for kind in [INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+                runtime.register(kind, factory.clone()).unwrap();
+            }
+            let request = runtime.request(&[tasks.discovery_id()]);
+            let result = runtime.wait(request);
+            if mode == 2 {
+                let error = result.unwrap_err();
+                let message = store.get_content(error).unwrap();
+                assert!(
+                    String::from_utf8_lossy(&message)
+                        .contains("accepted discharge has no native check"),
+                    "{}",
+                    String::from_utf8_lossy(&message)
+                );
+                continue;
+            }
+            let settled = result.unwrap_or_else(|error| {
+                panic!(
+                    "{}",
+                    String::from_utf8_lossy(&store.get_content(error).unwrap())
+                )
+            })[0];
+            let actual = tasks.discharged(settled).unwrap();
+            assert_eq!(&actual, &expected.as_ref().unwrap().0);
+            assert_eq!(
+                proofs.report_discharged(&actual),
+                expected.as_ref().unwrap().1
+            );
+            assert!(
+                tasks
+                    .discharged(ProductRef {
+                        action: store::Action(Default::default()),
+                        ..settled
+                    })
+                    .is_err()
+            );
+            if mode == 1 {
+                assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
+                assert_eq!(trace.totals(), Default::default());
+            } else {
+                assert!(tasks.imports.load(Ordering::Relaxed) > 0);
+            }
+        }
+    });
+}

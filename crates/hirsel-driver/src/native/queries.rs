@@ -6,6 +6,7 @@ pub use hirsel_rc::arena_credit::equations::LocalArenaEquations;
 use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
+pub mod discharge;
 pub mod graph;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;

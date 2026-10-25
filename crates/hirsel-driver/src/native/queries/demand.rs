@@ -14,7 +14,7 @@ use hirsel_lir::{
 };
 use hirsel_rc::instance::{InstanceId, Instances, SelectionRead};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const SOURCE_RECIPE: Domain = Domain {
     kind: 0x4e00_0016,
@@ -79,6 +79,7 @@ struct Discovery {
     templates: super::optimizer::TemplateFacts,
     operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
     emission: super::emission::EmissionFacts,
+    discharge: super::discharge::NativeDischargeFacts,
 }
 
 /// The descriptor returned after one demand has been admitted by actual C or
@@ -93,6 +94,7 @@ pub struct DiscoveredInstance {
     pub templates: super::optimizer::TemplateFacts,
     pub operation_freedom: hirsel_rc::closure_calls::OperationFreedom,
     pub emission: super::emission::EmissionFacts,
+    pub discharge: super::discharge::NativeDischargeFacts,
     /// Independent original plan selections, re-derived before C on every hit.
     pub adapters: Vec<hirsel_lir::ir::Symbol>,
 }
@@ -510,7 +512,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v8",
+            "hirsel.native.demand-import-action.v9",
             [bytes.as_slice()],
         )))
     }
@@ -525,7 +527,8 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 7
+        if discovery.schema != 8
+            || !discovery.discharge.canonical()
             || !discovery.emission.canonical()
             || !discovery.operation_freedom.canonical()
             || !discovery.templates.canonical()
@@ -569,6 +572,7 @@ impl DemandInstances {
             templates: discovery.templates,
             operation_freedom: discovery.operation_freedom,
             emission: discovery.emission,
+            discharge: discovery.discharge,
             adapters,
         });
         self.completed
@@ -737,8 +741,8 @@ impl DemandInstances {
             &mut layouts,
         )
         .map_err(|e| e.to_string())?;
-        if let Some(discharged) = &imported.discharged {
-            let removed = hirsel_lir::validate::validate_discharge(
+        let removed = if let Some(discharged) = &imported.discharged {
+            hirsel_lir::validate::validate_discharge(
                 &discharged.reference,
                 &discharged.discharged,
                 options
@@ -746,15 +750,10 @@ impl DemandInstances {
                     .sites(&discharged.definition)
                     .ok_or("missing discharge plan")?,
             )
-            .map_err(|e| format!("native discharge: {e:?}"))?;
-            if options
-                .discharge
-                .sites(&discharged.definition)
-                .is_some_and(|sites| !sites.is_subset(&removed))
-            {
-                return Err("accepted discharge has no native check".into());
-            }
-        }
+            .map_err(|e| format!("native discharge: {e:?}"))?
+        } else {
+            BTreeSet::new()
+        };
         for request in imported.required {
             hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
                 .map_err(|e| format!("native library registration: {e:?}"))?;
@@ -888,7 +887,7 @@ impl DemandInstances {
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 7,
+                schema: 8,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
                 callees,
@@ -900,6 +899,7 @@ impl DemandInstances {
                     &unit, &table,
                 ),
                 emission: super::emission::EmissionFacts::extract(&unit, []),
+                discharge: super::discharge::NativeDischargeFacts::checked(&removed),
             })
             .map_err(|e| e.to_string())?,
         )?;
