@@ -276,6 +276,24 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                 records.encode(&program.engine, &actual.output.value),
                 records.encode(&program.engine, &scalar.value)
             );
+            let analyzed = program.engine.mode_definition(&program.entry).unwrap();
+            let declared = lower.signature(&program.entry).unwrap();
+            let expected = program
+                .engine
+                .prepare_comptime(&analyzed.value, &declared)
+                .unwrap();
+            assert!(!expected.materialized.is_empty());
+            let expected_materialized = records
+                .encode(&program.engine, &expected.materialized)
+                .unwrap();
+            assert_eq!(
+                records
+                    .encode(&program.engine, &actual.materialized)
+                    .unwrap(),
+                expected_materialized,
+                "provider substitutions preserve scalar values and expression identities"
+            );
+            let detached_source = NativeRecordContext::capture(&program.engine);
             assert_eq!(actual.body.domain, NATIVE_ORIGINAL_BODY);
             let native = program
                 .engine
@@ -301,6 +319,16 @@ fn admitted_lower_saved_work_and_native_metadata_survive_dependency_suspension()
                 "real dependency suspension occurred"
             );
             runtime.shutdown();
+            drop(runtime);
+            drop(program);
+            let detached = lower.outcome(products[0]).unwrap();
+            assert_eq!(
+                records
+                    .encode(&detached_source, &detached.materialized)
+                    .unwrap(),
+                expected_materialized,
+                "the original substitution archive decodes after engine and runtime release"
+            );
         }
     });
 }
