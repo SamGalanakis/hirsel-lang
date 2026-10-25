@@ -135,7 +135,7 @@ impl Observer {
         outcome: &str,
         cut: &BTreeMap<Vec<u32>, Progress>,
     ) -> crate::projection::Projection {
-        crate::projection::Projection::new(outcome, cut, &self.0.lock().unwrap())
+        crate::projection::Projection::new(outcome, cut, self.0.lock().unwrap().iter())
     }
 }
 

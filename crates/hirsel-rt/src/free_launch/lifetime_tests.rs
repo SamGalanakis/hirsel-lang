@@ -124,7 +124,7 @@ fn internal_failure_replay_abandons_live_storage_and_normal_failed_root_keeps_ex
                 let mut old = hirsel_free::tape::header(&old_binding);
                 old.extend_from_slice(&tape_bytes[offset..]);
                 assert_eq!(
-                    Session::replay(&old).err().unwrap(),
+                    Session::replay(&old, false).err().unwrap(),
                     "unsupported Free admission binding"
                 );
                 // Previous ABI tapes refuse before root or host execution.
@@ -139,7 +139,7 @@ fn internal_failure_replay_abandons_live_storage_and_normal_failed_root_keeps_ex
                     let mut old = hirsel_free::tape::header(&binding);
                     old.extend_from_slice(&tape_bytes[offset..]);
                     assert_eq!(
-                        Session::replay(&old).err().unwrap(),
+                        Session::replay(&old, false).err().unwrap(),
                         "Free recording runtime ABI version mismatch"
                     );
                 }

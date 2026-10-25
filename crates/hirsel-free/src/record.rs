@@ -196,6 +196,7 @@ pub fn put_varint(out: &mut impl Out, mut value: u128) {
 }
 
 /// A cursor over encoded bytes.
+#[derive(Clone)]
 pub struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -208,11 +209,13 @@ impl<'a> Reader<'a> {
     pub fn done(&self) -> bool {
         self.at == self.bytes.len()
     }
+    #[inline]
     pub fn byte(&mut self) -> Result<u8, String> {
         let byte = *self.bytes.get(self.at).ok_or("truncated record")?;
         self.at += 1;
         Ok(byte)
     }
+    #[inline]
     pub fn varint(&mut self) -> Result<u128, String> {
         let mut value = 0u128;
         let mut shift = 0;
@@ -228,12 +231,15 @@ impl<'a> Reader<'a> {
             shift += 7;
         }
     }
+    #[inline]
     pub fn u64(&mut self) -> Result<u64, String> {
         u64::try_from(self.varint()?).map_err(|_| "value out of range".into())
     }
+    #[inline]
     pub fn u32(&mut self) -> Result<u32, String> {
         u32::try_from(self.varint()?).map_err(|_| "value out of range".into())
     }
+    #[inline]
     pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
         let end = self
             .at
@@ -324,17 +330,56 @@ impl Encoder {
 
 /// Decode one task's whole log.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
-    let mut reader = Reader::new(bytes);
-    let mut op = 0u64;
-    let mut out = Vec::new();
-    while !reader.done() {
+    Decoder::new(bytes).collect()
+}
+
+/// One task's log, decoded a record at a time from borrowed bytes. A decoder resumes at any
+/// record boundary it reported ([`Decoder::at`]), so a reader can retain the bytes and decode
+/// only the records it needs; after an error it yields nothing more.
+#[derive(Clone)]
+pub struct Decoder<'a> {
+    reader: Reader<'a>,
+    op: u64,
+}
+
+impl<'a> Decoder<'a> {
+    pub fn new(bytes: &'a [u8]) -> Decoder<'a> {
+        Decoder::at(bytes, Resume::default())
+    }
+
+    /// Resume at a boundary an earlier decoder of the same bytes reported.
+    pub fn at(bytes: &'a [u8], resume: Resume) -> Decoder<'a> {
+        Decoder {
+            reader: Reader {
+                bytes,
+                at: resume.at,
+            },
+            op: resume.op,
+        }
+    }
+
+    /// Where the next record starts: its offset, and the op its delta is coded against.
+    pub fn resume(&self) -> Resume {
+        Resume {
+            at: self.reader.at,
+            op: self.op,
+        }
+    }
+
+    #[inline]
+    fn record(&mut self) -> Result<Record, String> {
+        let reader = &mut self.reader;
         let tag = reader.byte()?;
         let small = match u64::from(tag >> 4) {
             15 => reader.u64()?.checked_add(15).ok_or("value out of range")?,
             small => small,
         };
-        op = op.checked_add(reader.u64()?).ok_or("op out of range")?;
-        out.push(match tag & 15 {
+        let op = self
+            .op
+            .checked_add(reader.u64()?)
+            .ok_or("op out of range")?;
+        self.op = op;
+        Ok(match tag & 15 {
             GAP if small > 0 => Record::Gap {
                 op,
                 sub: reader.u32()?,
@@ -381,9 +426,38 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
             BLOCKED if small == 0 => Record::Blocked { op },
             READY if small == 0 => Record::Ready { op },
             kind => return Err(format!("bad record kind {kind} (value {small})")),
-        });
+        })
     }
-    Ok(out)
+}
+
+/// A record boundary in a task's log.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Resume {
+    at: usize,
+    op: u64,
+}
+
+impl Resume {
+    /// The byte offset of the boundary.
+    pub fn offset(&self) -> usize {
+        self.at
+    }
+}
+
+impl Iterator for Decoder<'_> {
+    type Item = Result<Record, String>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Result<Record, String>> {
+        if self.reader.done() {
+            return None;
+        }
+        let record = self.record();
+        if record.is_err() {
+            self.reader.at = self.reader.bytes.len();
+        }
+        Some(record)
+    }
 }
 
 /// Owner-local check cursor. A changed cancellation names its check, so a

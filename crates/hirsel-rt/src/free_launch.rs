@@ -79,7 +79,9 @@ impl Session {
         }
     }
 
-    pub(crate) fn replay(bytes: &[u8]) -> Result<Self, String> {
+    /// Admit a replay of `bytes`; only an `observe`d one keeps the events of the
+    /// projection [`Session::finish_replay`] reports.
+    pub(crate) fn replay(bytes: &[u8], observe: bool) -> Result<Self, String> {
         header(bytes)?;
         let tape = hirsel_free::tape::parse(bytes)?;
         let (_, namespace_coupled) = binding(&tape.binding)?;
@@ -89,7 +91,7 @@ impl Session {
             validate_root_outcome(&tape, &terminal)?;
             validate_receipt(&tape, &end.outcome)?;
         }
-        let driver = replay::Replay::new(bytes).map_err(|e| e.to_string())?;
+        let driver = replay::Replay::open(bytes, observe).map_err(|e| e.to_string())?;
         Ok(Self::Replay {
             driver,
             end: tape.end.map(|e| e.outcome),
@@ -163,9 +165,9 @@ impl Session {
         };
         // This is the same strict consume-every-record/progress-at-cut check
         // used by the runtime replay proofs, before restoring the public outcome.
-        let projection = driver.finish().map_err(|e| e.to_string())?;
+        let projection = driver.check().map_err(|e| e.to_string())?;
         if let Some(report) = report {
-            report.write(&projection)?;
+            report.write(&projection.ok_or("Free projection report of an unobserved replay")?)?;
         }
         end.as_deref().map(terminal).transpose()
     }
@@ -316,7 +318,10 @@ fn validate_root_outcome(
     tape: &hirsel_free::tape::Tape,
     terminal: &Terminal,
 ) -> Result<(), String> {
-    use hirsel_free::{phase::Phase, record::Record};
+    use hirsel_free::{
+        phase::Phase,
+        record::{Decoder, Record},
+    };
     let Terminal::Outcome(outcome @ (RunOutcome::Returned(_) | RunOutcome::Failed { .. })) =
         terminal
     else {
@@ -328,13 +333,18 @@ fn validate_root_outcome(
     if progress.op == 0 || progress.phase != Phase::Done {
         return Err(differs());
     }
-    let records = hirsel_free::record::decode(tape.logs.get(&path).ok_or_else(differs)?)?;
-    let mut observations = records.iter().filter_map(|record| match record {
-        Record::Observation { op, bytes } if *op == progress.op => Some(bytes),
-        _ => None,
-    });
-    let bytes = observations.next().ok_or_else(differs)?;
-    if observations.next().is_some() || decode::<RunOutcome>(bytes)? != *outcome {
+    let mut observations = Vec::new();
+    for record in Decoder::new(tape.logs.get(&path).ok_or_else(differs)?) {
+        if let Record::Observation { op, bytes } = record?
+            && op == progress.op
+        {
+            observations.push(bytes);
+        }
+    }
+    let [bytes] = observations.as_slice() else {
+        return Err(differs());
+    };
+    if decode::<RunOutcome>(bytes)? != *outcome {
         return Err(differs());
     }
     Ok(())
@@ -360,7 +370,10 @@ pub(crate) fn terminal_bytes<T: Wire>(
 // The cut itself names every admitted request state. Check the persisted
 // receipt independently before any replay code starts, including stopped waits.
 fn validate_receipt(tape: &hirsel_free::tape::Tape, text: &str) -> Result<(), String> {
-    use hirsel_free::{phase::Phase, record::Record};
+    use hirsel_free::{
+        phase::Phase,
+        record::{Decoder, Record},
+    };
     let (kind, bytes) = terminal_payload(text)?;
     if !kind.ends_with("-v2") {
         return Ok(());
@@ -372,24 +385,29 @@ fn validate_receipt(tape: &hirsel_free::tape::Tape, text: &str) -> Result<(), St
     };
     let mut expected: Receipt = Default::default();
     for (path, log) in &tape.logs {
-        let records = hirsel_free::record::decode(log)?;
-        for record in &records {
-            if let Record::Prepared { op, id } = record {
-                if records
-                    .iter()
-                    .any(|r| matches!(r, Record::Completion { op: done, .. } if done == op))
-                {
-                    continue;
+        let mut prepared = Vec::new();
+        let mut completed = std::collections::BTreeSet::new();
+        for record in Decoder::new(log) {
+            match record? {
+                Record::Prepared { op, id } => prepared.push((op, id)),
+                Record::Completion { op, .. } => {
+                    completed.insert(op);
                 }
-                let progress = tape.cut.get(path).ok_or("request absent from cut")?;
-                if progress.op != *op {
-                    return Err("unfinished request before another operation".into());
-                }
-                if progress.phase == Phase::Entered {
-                    expected.0.push(*id);
-                } else {
-                    expected.1.push(*id);
-                }
+                _ => {}
+            }
+        }
+        for (op, id) in prepared {
+            if completed.contains(&op) {
+                continue;
+            }
+            let progress = tape.cut.get(path).ok_or("request absent from cut")?;
+            if progress.op != op {
+                return Err("unfinished request before another operation".into());
+            }
+            if progress.phase == Phase::Entered {
+                expected.0.push(id);
+            } else {
+                expected.1.push(id);
             }
         }
     }

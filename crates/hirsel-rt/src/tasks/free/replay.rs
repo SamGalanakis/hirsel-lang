@@ -54,9 +54,16 @@ pub(crate) struct Replay {
 }
 
 impl Replay {
+    /// An observed replay: its [`Replay::finish`] returns the projection.
+    #[cfg(test)]
     pub(crate) fn new(tape: &[u8]) -> Result<Arc<Self>, Diverged> {
+        Self::open(tape, true)
+    }
+
+    /// Only an `observe`d replay keeps the events of its projection.
+    pub(crate) fn open(tape: &[u8], observe: bool) -> Result<Arc<Self>, Diverged> {
         let tape = hirsel_free::tape::parse(tape).map_err(Diverged)?;
-        let shared = Shared::new(&tape)?;
+        let shared = Shared::open(&tape, observe)?;
         let mut paths: Vec<Vec<u32>> = shared.cut().keys().cloned().collect();
         paths.push(Vec::new());
         let tasks = paths
@@ -122,9 +129,16 @@ impl Replay {
         });
     }
 
-    /// The terminal check: every started task consumed its stream and reached
-    /// its cut. Called once, after every task stopped.
+    /// The terminal check of an observed replay, and its projection.
+    #[cfg(test)]
     pub(crate) fn finish(&self) -> Result<Projection, Diverged> {
+        Ok(self.check()?.expect("an observed replay"))
+    }
+
+    /// The terminal check: every started task consumed its stream and reached
+    /// its cut; an observed replay also returns its projection. Called once,
+    /// after every task stopped.
+    pub(crate) fn check(&self) -> Result<Option<Projection>, Diverged> {
         assert!(
             !self.finished.swap(true, Ordering::AcqRel),
             "one replay finish"

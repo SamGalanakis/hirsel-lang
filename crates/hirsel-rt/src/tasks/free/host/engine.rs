@@ -48,7 +48,7 @@ impl Codec {
         let Some(bytes) = &io.free_tape else {
             return Ok(None);
         };
-        crate::free_launch::Session::replay(bytes)?;
+        crate::free_launch::Session::replay(bytes, false)?;
         let tape = hirsel_free::tape::parse(bytes)?;
         let (header, namespace_coupled) = crate::free_launch::binding(&tape.binding)?;
         let initial_env = header
@@ -375,7 +375,7 @@ pub fn linked_recording(bytes: &[u8]) -> Result<crate::launch::Recording, String
     use super::requests::Authority;
     use hirsel_free::record::Record;
     let mut header = crate::free_launch::header(bytes)?;
-    let _validated = crate::free_launch::Session::replay(bytes)?;
+    let _validated = crate::free_launch::Session::replay(bytes, false)?;
     let tape = hirsel_free::tape::parse(bytes)?;
     let mut events = Vec::new();
     for (path, log) in &tape.logs {

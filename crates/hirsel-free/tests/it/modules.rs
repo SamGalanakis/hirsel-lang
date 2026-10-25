@@ -3,6 +3,7 @@ mod concurrent;
 mod executor;
 mod executors;
 mod gate;
+mod replay51;
 mod runtime50;
 mod schedule;
 mod traces;

@@ -794,55 +794,58 @@ fn serial_callbacks_with_local_cursors() {
     let live = Projection::new("returned", &cut.progress, &events);
     let marked = Arc::try_unwrap(recorder).ok().unwrap().into_sink();
 
-    let shared = Shared::new(&tape::parse(&marked.bytes).unwrap()).unwrap();
-    shared.gate("package:7");
-    let mut root = shared.cursor(&[]);
-    root.publish(done(1)).unwrap();
-    let permit = Arc::new(std::sync::Mutex::new(()));
-    let pending = Arc::new(AtomicUsize::new(0));
-    let replayers: Vec<_> = (0..TASKS as u32)
-        .map(|id| {
-            let mut cursor = shared.cursor(&[id]);
-            let (permit, gate, pending) = (permit.clone(), gate.clone(), pending.clone());
-            std::thread::spawn(move || {
-                assert!(cursor.starts());
-                for op in 1..=2 * ROUNDS {
-                    let outcome = if op % 2 == 1 {
-                        "gate enter"
-                    } else {
-                        "gate leave"
-                    };
-                    loop {
-                        let held = permit.lock().unwrap();
-                        match cursor.admission(op, 0, &gate).unwrap() {
-                            Admission::Ready => {
-                                cursor.touch(op, 0, &gate, outcome).unwrap();
-                                cursor.publish(done(op)).unwrap();
-                                break;
-                            }
-                            Admission::Pending(token) => {
-                                // Pending owns no permit: release it, then wait for the token.
-                                drop(held);
-                                pending.fetch_add(1, Ordering::Relaxed);
-                                while !token.ready() {
-                                    std::thread::yield_now();
+    // Observed or not, the replay consumes every record and reaches every cut.
+    for observe in [true, false] {
+        let shared = Shared::open(&tape::parse(&marked.bytes).unwrap(), observe).unwrap();
+        shared.gate("package:7");
+        let mut root = shared.cursor(&[]);
+        root.publish(done(1)).unwrap();
+        let permit = Arc::new(std::sync::Mutex::new(()));
+        let pending = Arc::new(AtomicUsize::new(0));
+        let replayers: Vec<_> = (0..TASKS as u32)
+            .map(|id| {
+                let mut cursor = shared.cursor(&[id]);
+                let (permit, gate, pending) = (permit.clone(), gate.clone(), pending.clone());
+                std::thread::spawn(move || {
+                    assert!(cursor.starts());
+                    for op in 1..=2 * ROUNDS {
+                        let outcome = if op % 2 == 1 {
+                            "gate enter"
+                        } else {
+                            "gate leave"
+                        };
+                        loop {
+                            let held = permit.lock().unwrap();
+                            match cursor.admission(op, 0, &gate).unwrap() {
+                                Admission::Ready => {
+                                    cursor.touch(op, 0, &gate, outcome).unwrap();
+                                    cursor.publish(done(op)).unwrap();
+                                    break;
+                                }
+                                Admission::Pending(token) => {
+                                    // Pending owns no permit: release it, then wait for the token.
+                                    drop(held);
+                                    pending.fetch_add(1, Ordering::Relaxed);
+                                    while !token.ready() {
+                                        std::thread::yield_now();
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                cursor
+                    cursor
+                })
             })
-        })
-        .collect();
-    let cursors: Vec<_> = replayers.into_iter().map(|t| t.join().unwrap()).collect();
-    assert!(
-        pending.load(Ordering::Relaxed) > 0,
-        "some callback waited for its predecessor"
-    );
-    let mut all = vec![(&root, done(1))];
-    all.extend(cursors.iter().map(|cursor| (cursor, done(2 * ROUNDS))));
-    assert_eq!(shared.finish(all).unwrap(), live);
+            .collect();
+        let cursors: Vec<_> = replayers.into_iter().map(|t| t.join().unwrap()).collect();
+        assert!(
+            pending.load(Ordering::Relaxed) > 0,
+            "some callback waited for its predecessor"
+        );
+        let mut all = vec![(&root, done(1))];
+        all.extend(cursors.iter().map(|cursor| (cursor, done(2 * ROUNDS))));
+        assert_eq!(shared.finish(all).unwrap(), observe.then(|| live.clone()));
+    }
 }
 
 #[test]

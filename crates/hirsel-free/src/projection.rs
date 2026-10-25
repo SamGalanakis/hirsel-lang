@@ -95,10 +95,10 @@ pub struct Projection {
 
 impl Projection {
     /// The projection of the `events` that `cut` admits.
-    pub fn new(
+    pub fn new<'e>(
         outcome: &str,
         cut: &BTreeMap<Vec<u32>, Progress>,
-        events: &[Stamped],
+        events: impl IntoIterator<Item = &'e Stamped>,
     ) -> Projection {
         let mut projection = Projection {
             outcome: outcome.into(),

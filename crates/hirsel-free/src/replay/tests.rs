@@ -58,6 +58,7 @@ fn shared(keys: &[&[bool]]) -> Shared {
         })
         .collect();
     Shared {
+        observe: true,
         end: None,
         cut: BTreeMap::new(),
         keys: (0..keys.len()).map(|key| format!("key/{key}")).collect(),

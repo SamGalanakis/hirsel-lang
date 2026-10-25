@@ -2119,7 +2119,10 @@ pub(crate) unsafe fn execute(
                 .free_tape
                 .take()
                 .ok_or("tasks.free@1 requires a Free phase tape")?;
-            free_session = Some(crate::free_launch::Session::replay(&bytes)?);
+            free_session = Some(crate::free_launch::Session::replay(
+                &bytes,
+                free_projection.is_some(),
+            )?);
         } else if io.free_tape.is_some() {
             return Err("Free phase tape requires tasks.free@1".into());
         }

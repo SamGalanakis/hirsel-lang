@@ -2,7 +2,10 @@
 //!
 //! - **Validation.** [`Shared::new`] decodes every task's stream once and checks it before any
 //!   task runs: every record decodes, names an op the task's cut admits and a key the tape
-//!   names; key epochs are consistent across streams. A malformed tape is refused here.
+//!   names; key epochs are consistent across streams. A malformed tape is refused here. It
+//!   keeps each stream's checked bytes and record count, not its records: a [`Cursor`] decodes
+//!   records only as its admitted phases ask for them and drops each once consumed, so the
+//!   decoded records alive at any time are those of the tasks' active ops.
 //! - **Admission.** A task runs only up to its progress in the tape's cut (the terminal cut,
 //!   or a truncated tape's last flush). The engine asks [`Cursor::admits`] before each phase
 //!   and parks the task for good when it is not admitted: at (k, done) it parks once op k
@@ -23,7 +26,9 @@
 //!   drops the registrations of waits that never became ready.
 //! - **Substitution.** Loads, `await_any`, thaws, cancellation checks, `scope_until`, host
 //!   observations and completions take their recorded outcomes; no host call is made.
-//! - **Finish.** At the end every record is consumed, or the replay [`Diverged`].
+//! - **Finish.** At the end every record is consumed, or the replay [`Diverged`]. An observed
+//!   replay ([`Shared::open`]) also stamps each phase's effects and returns their
+//!   [`Projection`]; an unobserved one builds no events.
 //!
 //! Each task's [`Cursor`] is owner-local: it moves with its task and needs no lock, so an
 //! ordinary phase touches only its own cursor and the atomic version cell of the object it
@@ -40,8 +45,9 @@
 use crate::keys::KeyEpochs;
 use crate::phase::Progress;
 use crate::projection::{Event, Observed, Projection, Stamped};
-use crate::record::{CheckIndex, ObjectId, Record, decode};
+use crate::record::{CheckIndex, Decoder, ObjectId, Record, Resume};
 use crate::tape::{End, Tape};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -57,9 +63,12 @@ impl std::fmt::Display for Diverged {
     }
 }
 
-/// One task's immutable recorded stream and its cut.
+/// One task's immutable recorded stream: its checked bytes, how many records they hold, and
+/// its cut.
+#[derive(Default)]
 struct Stream {
-    records: Box<[Record]>,
+    bytes: Box<[u8]>,
+    len: usize,
     cut: Option<Progress>,
 }
 
@@ -189,6 +198,7 @@ pub enum Admission {
 /// What every replayed task shares: the validated streams (immutable) and the synchronised
 /// administration.
 pub struct Shared {
+    observe: bool,
     end: Option<End>,
     cut: BTreeMap<Vec<u32>, Progress>,
     keys: Vec<String>,
@@ -208,60 +218,62 @@ struct Keys {
 }
 
 impl Shared {
-    /// Validate `tape` and decode its streams; a malformed tape is refused before any task
-    /// runs.
+    /// [`Shared::open`] an observed replay.
     pub fn new(tape: &Tape) -> Result<Arc<Shared>, Diverged> {
+        Shared::open(tape, true)
+    }
+
+    /// Validate `tape` and keep its checked streams; a malformed tape is refused before any
+    /// task runs. Every stream is checked from the tape's borrowed bytes before any is copied.
+    /// Only an `observe`d replay keeps the events its projection is built from.
+    pub fn open(tape: &Tape, observe: bool) -> Result<Arc<Shared>, Diverged> {
         let mut epochs = vec![KeyEpochs::default(); tape.keys.len()];
-        let mut streams = HashMap::new();
+        let mut checked = Vec::with_capacity(tape.logs.len());
         for (path, bytes) in &tape.logs {
-            let records = decode(bytes).map_err(|e| Diverged(format!("task {path:?}: {e}")))?;
-            let cut = tape.cut.get(path).copied().ok_or_else(|| {
+            let cut = tape.cut.get(path).copied();
+            let mut last: HashMap<u32, u64> = HashMap::new();
+            // A stream that does not decode is refused as such, before a refusal of one of
+            // its records.
+            let mut refused = None;
+            let mut len = 0;
+            for record in Decoder::new(bytes) {
+                let record = record.map_err(|e| Diverged(format!("task {path:?}: {e}")))?;
+                len += 1;
+                if refused.is_none()
+                    && let Some(cut) = cut
+                {
+                    refused = check(path, cut, &record, &mut last, &mut epochs).err();
+                }
+            }
+            let cut = cut.ok_or_else(|| {
                 Diverged(format!(
                     "task {path:?} has records but no progress in the cut"
                 ))
             })?;
-            let mut last: HashMap<u32, u64> = HashMap::new();
-            for record in &records {
-                if record.op() > cut.op {
-                    return Err(Diverged(format!(
-                        "task {path:?} records op {} past its cut {cut}",
-                        record.op()
-                    )));
-                }
-                if let Record::Key {
-                    key, shared, gap, ..
-                } = *record
-                {
-                    let epochs = epochs
-                        .get_mut(key as usize)
-                        .ok_or(Diverged(format!("unnamed key {key}")))?;
-                    let epoch = last
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(0)
-                        .checked_add(gap)
-                        .ok_or_else(|| Diverged(format!("key {key} epoch overflows")))?;
-                    last.insert(key, epoch);
-                    epochs.member(epoch, shared).map_err(Diverged)?;
-                }
+            if let Some(refusal) = refused {
+                return Err(refusal);
             }
-            streams.insert(
-                path.clone(),
-                Arc::new(Stream {
-                    records: records.into(),
-                    cut: Some(cut),
-                }),
-            );
+            checked.push((path, bytes, len, cut));
+        }
+        let mut streams = HashMap::with_capacity(tape.cut.len());
+        for (path, bytes, len, cut) in checked {
+            let stream = Stream {
+                bytes: bytes.as_slice().into(),
+                len,
+                cut: Some(cut),
+            };
+            streams.insert(path.clone(), Arc::new(stream));
         }
         for (path, progress) in &tape.cut {
             streams.entry(path.clone()).or_insert_with(|| {
                 Arc::new(Stream {
-                    records: Box::default(),
                     cut: Some(*progress),
+                    ..Stream::default()
                 })
             });
         }
         Ok(Arc::new(Shared {
+            observe,
             end: tape.end.clone(),
             cut: tape.cut.clone(),
             keys: tape.keys.clone(),
@@ -293,18 +305,13 @@ impl Shared {
     /// The owner-local cursor of `task`. A task absent from the tape gets an empty cursor,
     /// which the cut never admits.
     pub fn cursor(self: &Arc<Shared>, task: &[u32]) -> Cursor {
-        let stream = self.streams.get(task).cloned().unwrap_or_else(|| {
-            Arc::new(Stream {
-                records: Box::default(),
-                cut: None,
-            })
-        });
+        let stream = self.streams.get(task).cloned().unwrap_or_default();
         Cursor {
             shared: self.clone(),
             path: task.to_vec(),
-            taken: vec![false; stream.records.len()].into(),
-            first: 0,
-            remaining: stream.records.len(),
+            window: RefCell::default(),
+            remaining: stream.len,
+            observe: self.observe,
             stream,
             last: HashMap::new(),
             epochs: HashMap::new(),
@@ -413,13 +420,14 @@ impl Shared {
     }
 
     /// Finish: every cursor consumed its records and reached its cut (`cursors` holds every
-    /// started task's cursor; an unstarted one has nothing to consume).
+    /// started task's cursor; an unstarted one has nothing to consume). An observed replay
+    /// returns its projection.
     pub fn finish<'c>(
         &self,
         cursors: impl IntoIterator<Item = (&'c Cursor, Progress)>,
-    ) -> Result<Projection, Diverged> {
+    ) -> Result<Option<Projection>, Diverged> {
         self.end_subscriptions();
-        let mut events = Vec::new();
+        let mut finished = Vec::new();
         let mut reached: BTreeMap<&[u32], Progress> = BTreeMap::new();
         for (cursor, at) in cursors {
             if let Some(record) = cursor.unconsumed() {
@@ -430,13 +438,13 @@ impl Shared {
                 )));
             }
             reached.insert(&cursor.path, at);
-            events.extend_from_slice(&cursor.events);
+            finished.push(cursor);
         }
         for (path, stream) in &self.streams {
-            if !stream.records.is_empty() && !reached.contains_key(path.as_slice()) {
+            if stream.len != 0 && !reached.contains_key(path.as_slice()) {
                 return Err(Diverged(format!(
                     "task {path:?} left {} records unconsumed",
-                    stream.records.len()
+                    stream.len
                 )));
             }
         }
@@ -452,7 +460,118 @@ impl Shared {
             }
         }
         let outcome = self.end.as_ref().map_or("truncated", |end| &end.outcome);
-        Ok(Projection::new(outcome, &self.cut, &events))
+        Ok(self.observe.then(|| {
+            let events = finished.iter().flat_map(|cursor| &cursor.events);
+            Projection::new(outcome, &self.cut, events)
+        }))
+    }
+}
+
+/// One record of a stream, checked by [`Shared::open`].
+fn check(
+    path: &[u32],
+    cut: Progress,
+    record: &Record,
+    last: &mut HashMap<u32, u64>,
+    epochs: &mut [KeyEpochs],
+) -> Result<(), Diverged> {
+    if record.op() > cut.op {
+        return Err(Diverged(format!(
+            "task {path:?} records op {} past its cut {cut}",
+            record.op()
+        )));
+    }
+    if let Record::Key {
+        key, shared, gap, ..
+    } = *record
+    {
+        let epochs = epochs
+            .get_mut(key as usize)
+            .ok_or(Diverged(format!("unnamed key {key}")))?;
+        let epoch = last
+            .get(&key)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(gap)
+            .ok_or_else(|| Diverged(format!("key {key} epoch overflows")))?;
+        last.insert(key, epoch);
+        epochs.member(epoch, shared).map_err(Diverged)?;
+    }
+    Ok(())
+}
+
+/// A cursor's decoded records, each with whether it was consumed: from the first unconsumed
+/// one through the first of an op later than any asked for, or the stream's last. A record is
+/// decoded once, when an op at or past its own is asked for, and dropped once it and every
+/// record before it are consumed (at the latest by the next decode).
+#[derive(Default)]
+struct Window {
+    /// The window is `records[first..]`; the consumed records before `first` are dropped
+    /// when the window empties or decodes past them.
+    records: Vec<(Record, bool)>,
+    first: usize,
+    /// Where decoding resumes past the window.
+    next: Resume,
+}
+
+impl Window {
+    /// Decode every record of ops up to `op` from the stream's checked `bytes`.
+    #[inline(always)]
+    fn extend(&mut self, bytes: &[u8], op: u64) {
+        if self.records.last().is_none_or(|(r, _)| r.op() <= op) && self.next.offset() < bytes.len()
+        {
+            self.decode(bytes, op);
+        }
+    }
+
+    #[inline(never)]
+    fn decode(&mut self, bytes: &[u8], op: u64) {
+        self.records.drain(..self.first);
+        self.first = 0;
+        let mut decoder = Decoder::at(bytes, self.next);
+        for record in decoder.by_ref() {
+            let record = record.expect("a checked stream decodes");
+            let past = record.op() > op;
+            self.records.push((record, false));
+            if past {
+                break;
+            }
+        }
+        self.next = decoder.resume();
+    }
+
+    /// The first unconsumed record.
+    fn front(&self) -> Option<&Record> {
+        self.records.get(self.first).map(|(r, _)| r)
+    }
+
+    /// The unconsumed records of op `op`, by index.
+    #[inline]
+    fn of(&self, op: u64) -> impl Iterator<Item = (usize, &Record)> {
+        let first = self.first;
+        self.records[first..]
+            .iter()
+            .enumerate()
+            .take_while(move |(_, (r, _))| r.op() <= op)
+            .filter(move |(_, (r, taken))| !taken && r.op() == op)
+            .map(move |(i, (r, _))| (first + i, r))
+    }
+
+    /// Consume the record at `at`.
+    #[inline]
+    fn consume(&mut self, at: usize) {
+        self.records[at].1 = true;
+        while self
+            .records
+            .get(self.first)
+            .is_some_and(|&(_, taken)| taken)
+        {
+            self.first += 1;
+        }
+        if self.first == self.records.len() {
+            self.records.clear();
+            self.first = 0;
+        }
     }
 }
 
@@ -462,10 +581,10 @@ pub struct Cursor {
     shared: Arc<Shared>,
     path: Vec<u32>,
     stream: Arc<Stream>,
-    taken: Box<[bool]>,
-    /// The first record not yet consumed.
-    first: usize,
+    window: RefCell<Window>,
     remaining: usize,
+    /// Whether this replay keeps its effects (`staged` and `events` stay empty otherwise).
+    observe: bool,
     last: HashMap<ObjectId, u64>,
     /// This task's previous epoch on each key, as its records advance.
     epochs: HashMap<u32, u64>,
@@ -487,33 +606,37 @@ impl Cursor {
         &self.shared
     }
 
-    fn unconsumed(&self) -> Option<&Record> {
-        (self.remaining != 0).then(|| &self.stream.records[self.first])
+    /// How many records this cursor holds decoded: its window over the stream.
+    pub fn decoded(&self) -> usize {
+        let window = self.window.borrow();
+        window.records.len() - window.first
     }
 
-    /// The unconsumed records of op `op`, by index.
-    fn of(&self, op: u64) -> impl Iterator<Item = (usize, &Record)> {
-        self.stream.records[self.first..]
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (self.first + i, r))
-            .take_while(move |(_, r)| r.op() <= op)
-            .filter(move |&(i, r)| r.op() == op && !self.taken[i])
+    fn unconsumed(&self) -> Option<Record> {
+        if self.remaining == 0 {
+            return None;
+        }
+        let mut window = self.window.borrow_mut();
+        // The window's first record is unconsumed.
+        window.extend(&self.stream.bytes, 0);
+        window.front().cloned()
     }
 
     /// Take the first unconsumed record of op `op` that `pick` accepts.
     fn take<T>(&mut self, op: u64, mut pick: impl FnMut(&Record) -> Option<T>) -> Option<T> {
-        let (at, value) = self.of(op).find_map(|(i, r)| pick(r).map(|v| (i, v)))?;
-        self.taken[at] = true;
+        let window = self.window.get_mut();
+        window.extend(&self.stream.bytes, op);
+        let (at, value) = window.of(op).find_map(|(i, r)| pick(r).map(|v| (i, v)))?;
+        window.consume(at);
         self.remaining -= 1;
-        while self.first < self.taken.len() && self.taken[self.first] {
-            self.first += 1;
-        }
         Some(value)
     }
 
+    /// The first unconsumed record of op `op` that `pick` accepts, left unconsumed.
     fn peek<T>(&self, op: u64, pick: impl Fn(&Record) -> Option<T>) -> Option<T> {
-        self.of(op).find_map(|(_, r)| pick(r))
+        let mut window = self.window.borrow_mut();
+        window.extend(&self.stream.bytes, op);
+        window.of(op).find_map(|(_, r)| pick(r))
     }
 
     fn substitute<T>(
@@ -547,12 +670,19 @@ impl Cursor {
             .write()
             .unwrap()
             .insert(object.clone(), Arc::new(Version::new(1)));
-        self.staged.push(Event::Versioned {
+        self.stage(|| Event::Versioned {
             object,
             version: 1,
             sub: 0,
             outcome: "create".into(),
         });
+    }
+
+    /// Stage an effect of the current phase, if this replay is observed.
+    fn stage(&mut self, event: impl FnOnce() -> Event) {
+        if self.observe {
+            self.staged.push(event());
+        }
     }
 
     fn required(&self, op: u64, sub: u32, object: &ObjectId) -> u64 {
@@ -592,7 +722,7 @@ impl Cursor {
         sub: u32,
         object: &ObjectId,
         outcome: &str,
-    ) -> Result<Event, Diverged> {
+    ) -> Result<Option<Event>, Diverged> {
         let cell = self.shared.object(object)?;
         let required = self.required(op, sub, object);
         if !cell.advance(required, &self.shared.visits, &mut self.wakes) {
@@ -611,12 +741,12 @@ impl Cursor {
                 self.last.insert(object.clone(), version);
             }
         }
-        Ok(Event::Versioned {
+        Ok(self.observe.then(|| Event::Versioned {
             object: object.clone(),
             version,
             sub,
             outcome: outcome.into(),
-        })
+        }))
     }
 
     /// Apply an enabled sub-event.
@@ -628,7 +758,7 @@ impl Cursor {
         outcome: &str,
     ) -> Result<(), Diverged> {
         let event = self.apply(op, sub, object, outcome)?;
-        self.staged.push(event);
+        self.staged.extend(event);
         Ok(())
     }
 
@@ -642,16 +772,16 @@ impl Cursor {
         outcome: &str,
     ) -> Result<(), Diverged> {
         let event = self.apply(op, sub, object, outcome)?;
-        self.events.push(Stamped {
+        self.events.extend(event.map(|event| Stamped {
             task: self.path.clone(),
             progress: Progress::new(op, crate::phase::Phase::Done),
             event,
-        });
+        }));
         Ok(())
     }
 
     pub fn receive(&mut self, object: &ObjectId, outcome: &str) {
-        self.staged.push(Event::Received {
+        self.stage(|| Event::Received {
             object: object.clone(),
             outcome: outcome.into(),
         });
@@ -662,7 +792,7 @@ impl Cursor {
             Record::Load { bits, .. } => Some(bits),
             _ => None,
         })?;
-        self.staged.push(Event::Observed(Observed::Load(bits)));
+        self.stage(|| Event::Observed(Observed::Load(bits)));
         Ok(bits)
     }
 
@@ -671,7 +801,7 @@ impl Cursor {
             Record::AwaitAny { index, .. } => Some(index),
             _ => None,
         })?;
-        self.staged.push(Event::Observed(Observed::AwaitAny(index)));
+        self.stage(|| Event::Observed(Observed::AwaitAny(index)));
         Ok(index)
     }
 
@@ -689,7 +819,7 @@ impl Cursor {
             Record::Thaw { ok, .. } => Some(ok),
             _ => None,
         })?;
-        self.staged.push(Event::Observed(Observed::Thaw(ok)));
+        self.stage(|| Event::Observed(Observed::Thaw(ok)));
         Ok(ok)
     }
 
@@ -705,8 +835,7 @@ impl Cursor {
         let expired = self
             .take(op, |r| matches!(r, Record::Expired { .. }).then_some(()))
             .is_some();
-        self.staged
-            .push(Event::Observed(Observed::Expired(expired)));
+        self.stage(|| Event::Observed(Observed::Expired(expired)));
         expired
     }
 
@@ -738,8 +867,7 @@ impl Cursor {
             self.canceled = cause;
         }
         let observed = self.canceled;
-        self.staged
-            .push(Event::Observed(Observed::Cancel(observed)));
+        self.stage(|| Event::Observed(Observed::Cancel(observed)));
         observed
     }
 
@@ -795,11 +923,13 @@ impl Cursor {
                 })?;
             let epoch = self.epochs.get(&key).copied().unwrap_or(0) + gap;
             self.epochs.insert(key, epoch);
-            self.staged.push(Event::Key {
-                key: self.shared.keys[key as usize].clone(),
-                epoch,
-                index,
-            });
+            if self.observe {
+                self.staged.push(Event::Key {
+                    key: self.shared.keys[key as usize].clone(),
+                    epoch,
+                    index,
+                });
+            }
             positions.push(crate::recorder::Position { key, epoch });
         }
         Ok(positions)
@@ -817,7 +947,7 @@ impl Cursor {
     }
 
     pub fn output(&mut self, sink: &str, epoch: u64, bytes: &[u8]) {
-        self.staged.push(Event::Output {
+        self.stage(|| Event::Output {
             sink: sink.into(),
             epoch,
             bytes: bytes.to_vec(),
@@ -1088,12 +1218,13 @@ impl Replayer {
     pub fn finish(self, at: &BTreeMap<Vec<u32>, Progress>) -> Result<Projection, Diverged> {
         let mut cursors: Vec<_> = self.cursors.values().collect();
         cursors.sort_by(|a, b| a.path.cmp(&b.path));
-        self.shared.finish(cursors.into_iter().map(|cursor| {
+        let projection = self.shared.finish(cursors.into_iter().map(|cursor| {
             (
                 cursor,
                 at.get(&cursor.path).copied().unwrap_or(Progress::START),
             )
-        }))
+        }))?;
+        Ok(projection.expect("a Replayer observes"))
     }
 }
 
