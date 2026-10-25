@@ -282,6 +282,15 @@ impl Builder<'_, '_> {
             let ended: Vec<u32> = incoming.difference(&needed_in[block]).copied().collect();
             let mut content = entry[block].clone().unwrap();
             let cursors = self.cursor_holders(&content);
+            // A loop body's iteration charge stays its first instruction (CT-4);
+            // edge loan ends are mechanical and follow it.
+            let charged = matches!(
+                instructions.first().map(|i| &i.kind),
+                Some(InstructionKind::Charge(_))
+            );
+            if charged {
+                output.push(instructions[0].clone());
+            }
             for &loan in ended.iter().rev() {
                 self.retire_cursors(&mut output, &cursors, loan, span, entry_failure);
                 output.push(Instruction {
@@ -321,7 +330,9 @@ impl Builder<'_, '_> {
                 } else {
                     self.retirement_cleanup(&instruction)
                 };
-                output.push(instruction);
+                if !(charged && index == 0) {
+                    output.push(instruction);
+                }
                 for loan in ended.iter().rev() {
                     self.retire_cursors(
                         &mut output,

@@ -155,7 +155,7 @@ fn the_hash_is_a_pinned_function_of_content() {
         // even this scalar body's empty cursor list enters the canonical text.
         // Undoing both changes reproduces the previous 4f584c19... pin.
         // 2a938017 bumped TIR 10 -> 11; 4a539389 bumped it to 12 for invocation proofs.
-        const PINNED: &str = "bf5d2b8f363f802368b6267c8a545a20293bb4dc9eb95a4d994dfcde88b49513";
+        const PINNED: &str = "0ec81729cc602e38102f05a6b55d4d9a6499da22973c433ef19283db0ca32182";
         let hash = hashes("fn f(x: u64) -> u64 { x + 1u64 }\n", &["f"])[0];
         let text: String = hash.0.iter().map(|b| format!("{b:02x}")).collect();
         assert!(
