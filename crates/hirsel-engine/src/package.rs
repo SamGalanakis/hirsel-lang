@@ -94,6 +94,11 @@ pub(crate) fn load_package_declarations(
         .iter()
         .map(|(id, p)| (id.clone(), p.exposures.clone()))
         .collect();
+    engine.declarations.inputs_mut().package_dependencies = graph
+        .packages
+        .iter()
+        .map(|(id, p)| (id.clone(), p.dependencies.clone()))
+        .collect();
     let mut files = Vec::new();
     let mut assigned = BTreeSet::new();
     for selected in graph.packages.values() {
@@ -585,6 +590,11 @@ pub(crate) fn load_program_inputs(
             .packages
             .iter()
             .map(|(id, p)| (id.clone(), p.exposures.clone()))
+            .collect();
+        inputs.package_dependencies = graph
+            .packages
+            .iter()
+            .map(|(id, p)| (id.clone(), p.dependencies.clone()))
             .collect();
         inputs.signature_metadata.unsafe_ffi = unsafe_ffi_metadata;
     }

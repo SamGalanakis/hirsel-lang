@@ -25,6 +25,9 @@ pub struct ModuleInputs {
     pub exposures: Vec<DependencyExposure>,
     /// Ordinary dependency heads scoped to their importing package.
     pub package_exposures: BTreeMap<PackageId, Vec<DependencyExposure>>,
+    /// Complete selected direct dependencies, including unexposed packages.
+    /// V uses the transitive closure, independently of source lookup aliases.
+    pub package_dependencies: BTreeMap<PackageId, Vec<PackageId>>,
     pub signature_metadata: Metadata,
     pub manifest_revision: ContentHash,
 }

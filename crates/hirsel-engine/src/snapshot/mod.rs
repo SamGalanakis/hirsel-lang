@@ -50,6 +50,7 @@ struct ValidationCandidates {
 }
 struct ValidationState {
     views: Arc<ViewTable>,
+    bases: BTreeMap<PackageId, Arc<ViewTable>>,
     packages: BTreeMap<PackageId, PackageViews>,
     validated: ValidatedSignatures,
 }
@@ -63,6 +64,7 @@ pub(crate) struct LookupInput {
     pub builtins: std::collections::BTreeSet<DefId>,
     pub candidates: DefMap<ContentHash>,
     pub failed: DefMap<Option<ContentHash>>,
+    pub package_dependencies: BTreeMap<PackageId, Vec<PackageId>>,
 }
 const _: () = {
     const fn shared<T: Send + Sync>() {}
@@ -155,6 +157,56 @@ impl SignatureSnapshot {
                 &mut validated,
                 old,
             ));
+            // Dependency packages cannot observe their importers. Keep every
+            // selected dependency and registry row in each actual V universe,
+            // including valid rows, private replacements and heap/error inputs.
+            // Explicit snapshots without a complete loader graph retain the
+            // full-world contract rather than guessing package visibility.
+            let mut bases = BTreeMap::new();
+            let builtins: std::collections::BTreeSet<_> = self
+                .lookup
+                .registry
+                .signatures()
+                .map(|s| s.definition.path().0.package.clone())
+                .collect();
+            for package in self.lookup.package_dependencies.keys() {
+                let mut visible = builtins.clone();
+                let mut pending = vec![package.clone()];
+                let mut complete = true;
+                while let Some(next) = pending.pop() {
+                    if !visible.insert(next.clone()) {
+                        continue;
+                    }
+                    let Some(dependencies) = self.lookup.package_dependencies.get(&next) else {
+                        complete = false;
+                        break;
+                    };
+                    pending.extend(dependencies.iter().cloned());
+                }
+                if !complete {
+                    continue;
+                }
+                let base = if views
+                    .views()
+                    .iter()
+                    .all(|v| visible.contains(&v.d.path().0.package))
+                {
+                    views.clone()
+                } else {
+                    Arc::new(ViewTable::new(
+                        t,
+                        views
+                            .views()
+                            .iter()
+                            .filter(|v| visible.contains(&v.d.path().0.package))
+                            .map(|v| v.signature().clone()),
+                        previous.and_then(|p| p.bases.get(package)).map(Arc::as_ref),
+                        &mut validated,
+                        old,
+                    ))
+                };
+                bases.insert(package.clone(), base);
+            }
             let mut owned: BTreeMap<PackageId, Vec<View>> = BTreeMap::new();
             for (d, view) in &self.private {
                 let package = &d.path().0.package;
@@ -169,14 +221,16 @@ impl SignatureSnapshot {
             let packages = owned
                 .into_iter()
                 .map(|(package, replaced)| {
+                    let base = bases.get(&package).unwrap_or(&views).clone();
                     (
                         package,
-                        PackageViews::new(t, views.clone(), replaced, &mut validated, old),
+                        PackageViews::new(t, base, replaced, &mut validated, old),
                     )
                 })
                 .collect();
             Arc::new(ValidationState {
                 views,
+                bases,
                 packages,
                 validated,
             })
@@ -365,7 +419,7 @@ impl SignatureSnapshot {
         let state = self.validation_state();
         match state.packages.get(package) {
             Some(views) => views,
-            None => &*state.views,
+            None => &**state.bases.get(package).unwrap_or(&state.views),
         }
     }
     /// The complete input of a package's base V universe. Artifact overlays
@@ -374,7 +428,11 @@ impl SignatureSnapshot {
         let state = self.validation_state();
         match state.packages.get(package) {
             Some(views) => views.input_digest(),
-            None => state.views.input_digest(),
+            None => state
+                .bases
+                .get(package)
+                .unwrap_or(&state.views)
+                .input_digest(),
         }
     }
     /// `package`'s universe with `signature` in place of its declared view:
@@ -388,7 +446,7 @@ impl SignatureSnapshot {
             Some(views) => views.replace(t, signature, &mut store, Some(&state.validated)),
             None => PackageViews::new(
                 t,
-                state.views.clone(),
+                state.bases.get(package).unwrap_or(&state.views).clone(),
                 [View::new(t, signature, None)],
                 &mut store,
                 Some(&state.validated),
@@ -470,6 +528,7 @@ impl QueryEngine {
         self.snapshot_epoch = self.snapshot_epoch.next();
         let previous = self.snapshot.as_ref().map(|(_, s)| s.clone());
         let lookup = LookupInput {
+            package_dependencies: self.declarations.inputs().package_dependencies.clone(),
             manifest: ContentHash::of_parts(
                 "hirsel.provider.registry.v1",
                 [
@@ -603,6 +662,107 @@ mod tests {
             },
             fingerprint: ContentHash::of_bytes(name.as_bytes()),
         })
+    }
+
+    #[test]
+    fn package_validation_universes_cover_selected_dependencies_without_importers() {
+        let types = TypeInterner::new(None);
+        let dependency = PackageId {
+            name: "dependency".into(),
+            version: "1".into(),
+        };
+        let middle = PackageId {
+            name: "middle".into(),
+            version: "1".into(),
+        };
+        let application = PackageId {
+            name: "application".into(),
+            version: "1".into(),
+        };
+        let row = |package: &PackageId, name: &str, primitive| {
+            let mut row = (*constant(&types, name, primitive)).clone();
+            let mut path = row.definition.path().clone();
+            path.0.package = package.clone();
+            row.definition = DefId::intern(&path);
+            Arc::new(row)
+        };
+        let dep = row(&dependency, "Dep", hirsel_types::Primitive::U64);
+        let mid = row(&middle, "Mid", hirsel_types::Primitive::U64);
+        let app = row(&application, "App", hirsel_types::Primitive::U64);
+        let core = constant(&types, "Core", hirsel_types::Primitive::U64);
+        let dependencies = BTreeMap::from([
+            (dependency.clone(), vec![]),
+            (middle.clone(), vec![dependency.clone()]),
+            (application.clone(), vec![middle.clone()]),
+        ]);
+        let snapshot = |dep: SignatureRef, extra: Option<SignatureRef>, dependencies| {
+            let rows = [core.clone(), dep, mid.clone(), app.clone()]
+                .into_iter()
+                .chain(extra);
+            SignatureSnapshot::build(
+                Revision::FIRST,
+                types.clone(),
+                rows.map(|row| (row.definition, Ok(row))),
+                [],
+                None,
+            )
+            .with_lookup(LookupInput {
+                package_dependencies: dependencies,
+                ..Default::default()
+            })
+        };
+        let first = snapshot(dep.clone(), None, dependencies.clone());
+        assert!(first.validation(&dependency).view(app.definition).is_none());
+        assert!(first.validation(&middle).view(dep.definition).is_some());
+        assert!(
+            first
+                .validation(&dependency)
+                .view(core.definition)
+                .is_some()
+        );
+        let extra = row(&application, "Extra", hirsel_types::Primitive::U8);
+        let added = snapshot(dep.clone(), Some(extra.clone()), dependencies.clone());
+        assert_eq!(
+            first.validation_input_digest(&dependency),
+            added.validation_input_digest(&dependency)
+        );
+        assert_eq!(
+            first.validation_input_digest(&middle),
+            added.validation_input_digest(&middle)
+        );
+        assert_ne!(
+            first.validation_input_digest(&application),
+            added.validation_input_digest(&application)
+        );
+        let mut changed = (*dep).clone();
+        changed.kind = SignatureKind::Const {
+            ty: types.intern(Type::with_kind(TypeKind::Primitive(
+                hirsel_types::Primitive::U8,
+            ))),
+            generics: Default::default(),
+        };
+        assert_eq!(
+            changed.fingerprint, dep.fingerprint,
+            "producer fingerprints do not confer V authority"
+        );
+        let changed = snapshot(Arc::new(changed), Some(extra), dependencies.clone());
+        for package in [&dependency, &middle, &application] {
+            assert_ne!(
+                added.validation_input_digest(package),
+                changed.validation_input_digest(package),
+                "a valid changed selected row invalidates its complete universe"
+            );
+        }
+        let mut incomplete = dependencies;
+        incomplete.remove(&dependency);
+        let incomplete = snapshot(dep, None, incomplete);
+        assert!(
+            incomplete
+                .validation(&middle)
+                .view(app.definition)
+                .is_some(),
+            "incomplete package inputs retain full-world validation"
+        );
     }
 
     /// Receipt observation uses a settled immutable row without touching its
