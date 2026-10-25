@@ -429,11 +429,20 @@ fn native_cases(selected: Vec<Value>) {
                         "SHEET_UNRUN_REPLAY {id} reference/checked-h: original16M Steps, see FRICTION.md"
                     );
                 } else {
-                    let ordinary =
-                        hirsel_driver::replay_observations(&path, tape, fixture.steps).unwrap();
-                    let checked =
-                        hirsel_driver::replay_observations_checked(&path, tape, fixture.steps)
-                            .unwrap();
+                    let ordinary = hirsel_driver::replay_loaded_observations(
+                        &mut loaded,
+                        tape,
+                        fixture.steps,
+                        false,
+                    )
+                    .unwrap();
+                    let checked = hirsel_driver::replay_loaded_observations(
+                        &mut loaded,
+                        tape,
+                        fixture.steps,
+                        true,
+                    )
+                    .unwrap();
                     assert!(ordinary.equivalent(&checked));
                     assert_eq!(ordinary.output, original.output);
                     assert_eq!(ordinary.exit_code, original.exit_code);
