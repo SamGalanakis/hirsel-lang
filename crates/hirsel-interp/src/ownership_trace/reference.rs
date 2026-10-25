@@ -1395,12 +1395,14 @@ impl Observer for Resources {
                     (&destination, &displaced, outgoing, false),
                     (&from, &destination, incoming, copy),
                 ] {
-                    let moved = self.tracker.move_tree(&context, source, target);
-                    if let Some(tokens) = self.checked(moved)
-                        && tokens.len() as u64 != expected
-                    {
-                        self.unsupported("replacement lineage inventory differs");
-                        return;
+                    if expected != 0 {
+                        let moved = self.tracker.move_tree(&context, source, target);
+                        if let Some(tokens) = self.checked(moved)
+                            && tokens.len() as u64 != expected
+                        {
+                            self.unsupported("replacement lineage inventory differs");
+                            return;
+                        }
                     }
                     self.move_borrows(source, target, copy);
                 }

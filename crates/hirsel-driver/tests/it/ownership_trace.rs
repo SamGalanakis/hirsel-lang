@@ -1094,3 +1094,40 @@ fn mixed_captures(t: Test) {
         2,
     );
 }
+
+#[test]
+fn ownership_replacement_empty_scalar_updates_preserve_a_live_resource() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn scalar_updates(t: Test) {
+  let token = Token()
+  let mut count = 1u64
+  count = count + 1u64
+  let old = replace(mut count, count + 1u64)
+  test.check(t, old == 2u64 && count == 3u64)
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_replacement_empty_variants_transfer_only_the_actual_resource() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn optional_updates(t: Test) {
+  let mut slot: Option[Token] = None()
+  let empty = replace(mut slot, Some(Token()))
+  let full = replace(mut slot, None())
+  test.check(t, match empty { None() => true, Some(value) => false })
+}
+"#,
+        1,
+    );
+}
