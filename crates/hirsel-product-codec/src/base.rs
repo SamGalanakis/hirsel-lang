@@ -16,10 +16,16 @@ pub struct BaseIndex {
     /// complete row equality, including every edge, decides interner identity.
     candidates: Vec<(u64, u32)>,
 }
-fn label(row: &Type) -> Option<u64> {
-    let (bytes, _) = hirsel_types::with_table_collection(|| bincode::serialize(row));
+fn label(row: &impl Serialize) -> Option<u64> {
+    // bincode::serialize visits every row twice to size its allocation. The
+    // writer API emits the same bytes directly, with one table-collection pass.
+    let (bytes, _) = hirsel_types::with_table_collection(|| {
+        let mut bytes = Vec::new();
+        bincode::serialize_into(&mut bytes, row).ok()?;
+        Some(bytes)
+    });
     let mut hash = IdHash::default();
-    hash.write(&bytes.ok()?);
+    hash.write(&bytes?);
     Some(hash.finish())
 }
 impl BaseIndex {
@@ -160,6 +166,47 @@ mod tests {
     use hirsel_artifact_store::{Bytes, Domain, Memory, Reference};
     use hirsel_types::TypeKind;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn row_label_visits_the_serialized_row_once() {
+        struct Row {
+            value: Type,
+            visits: std::cell::Cell<u32>,
+        }
+        impl Serialize for Row {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                self.visits.set(self.visits.get() + 1);
+                self.value.serialize(serializer)
+            }
+        }
+        let types = TypeInterner::new(None);
+        let unit = types.intern(Type::unit());
+        for value in [
+            Type::unit(),
+            Type::with_kind(TypeKind::Box(unit)),
+            Type::with_kind(TypeKind::Tuple(vec![unit, unit].into())),
+        ] {
+            let row = Row {
+                value,
+                visits: std::cell::Cell::new(0),
+            };
+            let bytes = hirsel_types::with_table_collection(|| bincode::serialize(&row.value))
+                .0
+                .unwrap();
+            let mut expected = IdHash::default();
+            expected.write(&bytes);
+            assert_eq!(
+                label(&row),
+                Some(expected.finish()),
+                "existing labels stay exact"
+            );
+            assert_eq!(
+                row.visits.get(),
+                1,
+                "labeling needs no serialized-size pass"
+            );
+        }
+    }
 
     #[derive(Default)]
     struct Counted {
