@@ -283,8 +283,10 @@ fn ordered_concurrent_saved_cancellation_validates_authority_without_retrying_th
 
 #[test]
 fn ordered_concurrent_external_stop_wakes_the_driver_and_reclaims_the_saved_request_once() {
+    let barrier = Arc::new(std::sync::Barrier::new(2));
     let host = Arc::new(Host {
         never_ready: true,
+        stop_barrier: Some(barrier.clone()),
         ..Default::default()
     });
     let setup = host.clone();
@@ -293,14 +295,12 @@ fn ordered_concurrent_external_stop_wakes_the_driver_and_reclaims_the_saved_requ
     run.concurrent_adapter = Some(host.clone());
     unsafe { run.use_physical_dispatch() };
     let control = run.control();
-    let seen = host.clone();
     let stopper = std::thread::spawn(move || {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while seen.parked.load(Ordering::Acquire) == 0 {
-            assert!(std::time::Instant::now() < until);
-            std::thread::yield_now();
-        }
+        // Registration precedes physical save. Stop only once the home wait
+        // owns a saved request, so the zero-pending assertion has its premise.
+        barrier.wait();
         control.stop();
+        barrier.wait();
     });
     let outcome = run.run(
         move |ctx| init(ctx, &setup, hirsel_run_config::Reorder::Auto, false),
