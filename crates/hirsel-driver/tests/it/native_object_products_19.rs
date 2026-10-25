@@ -26,6 +26,7 @@ pub(super) struct Objects {
     pub hits: usize,
     pub products: Vec<(CodegenKey, ProductRef)>,
     pub ready_transformations: u64,
+    pub ready_products: Vec<ProductRef>,
 }
 
 pub(super) fn compile(
@@ -325,6 +326,7 @@ pub(super) fn compile_with_context<R>(
                 .into_iter()
                 .zip(selected[..count].iter().copied())
                 .collect(),
+            ready_products: ready.to_vec(),
             ready_transformations: native
                 .ready_transformations
                 .load(std::sync::atomic::Ordering::Relaxed),

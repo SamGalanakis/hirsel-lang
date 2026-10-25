@@ -171,7 +171,16 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 let after_warm = calls();
                 assert_eq!(warm.hits, cold.objects.len());
                 assert_eq!(warm.objects, cold.objects);
-                assert_eq!(warm.ready_transformations, 0);
+                assert_eq!(
+                    warm.ready_transformations,
+                    0,
+                    "jobs={workers}: changed Ready outputs: {:?}",
+                    cold.ready_products
+                        .iter()
+                        .zip(&warm.ready_products)
+                        .filter(|(a, b)| a != b)
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(store.fragment_puts.load(Ordering::Relaxed), puts);
                 assert_eq!(after_warm.1, after.1, "Ready hit lowered a unit");
                 assert_eq!(
