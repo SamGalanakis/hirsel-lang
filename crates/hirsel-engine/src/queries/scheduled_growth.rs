@@ -47,12 +47,14 @@ impl FrontGrowthQueries {
     /// Bounded root subscriptions and immutable path/anchor inventory. Body
     /// outputs are owned by FrontBodyQueries, rather than charged once again
     /// as an arbitrary body-size allowance for every growth subscription.
-    pub fn input_bytes(definitions: &[DefPath], weight: MemoryWeight) -> Option<u64> {
+    /// The runtime separately owns the live task frame; it is not an input
+    /// allocation to subtract again from this producer's output grant.
+    pub fn input_bytes(definitions: &[DefPath], _weight: MemoryWeight) -> Option<u64> {
         let slot = (std::mem::size_of::<QueryId>()
             + std::mem::size_of::<Option<Result<ProductRef, Reference>>>()
             + std::mem::size_of::<DefPath>()
             + 128) as u64;
-        definitions.iter().try_fold(weight.retained, |total, path| {
+        definitions.iter().try_fold(0u64, |total, path| {
             total.checked_add(slot.checked_add(bincode::serialized_size(path).ok()?)?)
         })
     }

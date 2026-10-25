@@ -46,10 +46,11 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
                     stack: 0,
                 };
                 let errors = crate::scheduled_front::errors();
-                let mut runtime = AdmittedRuntime::new(
+                let mut runtime = AdmittedRuntime::with_query_capacity(
                     hirsel_intern::jobs::Jobs::new(jobs),
                     budget.reserve(512 << 20).unwrap(),
                     errors,
+                    definitions.len() + 1,
                 )
                 .unwrap();
                 let front = program
@@ -105,6 +106,95 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
                     "global growth plus every required source root, including unexecuted grow"
                 );
                 runtime.shutdown();
+            }
+        }
+    });
+}
+
+#[test]
+fn growth_output_admission_does_not_spend_its_grant_on_the_runtime_frame() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.hir");
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&source,"fn leaf[T:copyable](x:T)->T{x}\nfn relay[T:copyable](x:T)->T{leaf(x)}\npub fn main(){}\n").unwrap();
+        std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"growth","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        for jobs in [1, 2] {
+            for output_bytes in [1, 16 << 10] {
+                let mut program = COMPILER
+                    .with_config(CompileConfig {
+                        store: Arc::new(MemStore::default()),
+                        ..Default::default()
+                    })
+                    .with_owned_engines()
+                    .load_program(&manifest)
+                    .unwrap();
+                let definitions = program.engine.front_source_roots();
+                let budget = ProcessBudget::new(1 << 30);
+                let errors = crate::scheduled_front::errors();
+                let weight = MemoryWeight {
+                    retained: 16 << 10,
+                    scratch: 8 << 20,
+                    stack: 0,
+                };
+                let mut runtime = AdmittedRuntime::new(
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                    budget.reserve(512 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+                let front = program
+                    .engine
+                    .front_body_queries(
+                        &definitions,
+                        weight,
+                        budget.reserve(8 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let inputs =
+                    FrontGrowthQueries::input_bytes(&definitions, MemoryWeight::default()).unwrap();
+                let growth = program
+                    .engine
+                    .front_growth_queries(
+                        &program.entry,
+                        front.clone(),
+                        weight,
+                        budget.reserve(inputs + output_bytes).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+                runtime
+                    .register(FRONT_GROWTH_KIND, growth.factory())
+                    .unwrap();
+                let request = runtime.request(&[growth.query()]);
+                let result = runtime.wait(request);
+                let held = if output_bytes == 1 {
+                    assert_eq!(result.unwrap_err(), errors.resource);
+                    None
+                } else {
+                    let products = result.unwrap();
+                    let output = growth.outcome(products[0]).unwrap();
+                    assert!(output.diagnostics.is_empty());
+                    assert!(
+                        !output.growth.edges.is_empty(),
+                        "actual generic calls must reach Growth"
+                    );
+                    assert_eq!(runtime.stats().claims, definitions.len() as u64 + 1);
+                    Some(output.clone())
+                };
+                assert_eq!(front.live_body_count(), 0);
+                runtime.shutdown();
+                drop(runtime);
+                drop(program);
+                drop(front);
+                drop(growth);
+                if held.is_some() {
+                    assert!(budget.reserved() > 0);
+                }
+                drop(held);
+                assert_eq!(budget.reserved(), 0);
             }
         }
     });
