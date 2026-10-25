@@ -569,6 +569,140 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     order
 }
 
+/// Tokio's `tests/sync_mutex.rs` vectors on the Free mutex ABI:
+/// straight_execution, readiness and mutex_fifo_with_coop_budget (Tokio
+/// ce685ee6, lines 21-63 and 184-205). Tokio's mutex_coop_drop_after_take_permit
+/// has no counterpart here: a Hirsel take is not a cancellation point, and a
+/// registered waiter leaves its queue only by death, which the custody matrix
+/// covers.
+struct Vectors {
+    mutex: AtomicU64,
+    /// Waiter labels in acquisition order.
+    order: Mutex<Vec<u64>>,
+    /// The highest label whose hold the root has observed.
+    observed: AtomicU64,
+}
+
+/// Take, log `label`, hold until the root has seen this hold, then put.
+unsafe fn hold(ctx: *mut TaskCtx, shared: &Vectors, label: u64) {
+    let handle = shared.mutex.load(Ordering::Acquire);
+    let mut payload = [0u64; 2];
+    let mut status = 99;
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
+    assert_eq!((status, payload[0]), (0, 1));
+    shared.order.lock().unwrap().push(label);
+    wait_until("the root observes this hold", || {
+        shared.observed.load(Ordering::Acquire) >= label
+    });
+    unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
+}
+
+/// Tokio's t_a: spends its whole cooperative budget, then locks.
+unsafe extern "C" fn spent_waiter(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    let shared = unsafe { data::<Vectors>(env) };
+    while unsafe { crate::pool::free::proceed(ctx) } {}
+    unsafe { hold(ctx, shared, 1) };
+    STATUS_OK
+}
+
+/// Tokio's t_b: locks with a fresh budget, after t_a registered.
+unsafe extern "C" fn fresh_waiter(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    unsafe { hold(ctx, data::<Vectors>(env), 2) };
+    STATUS_OK
+}
+
+#[test]
+fn tokio_sync_mutex_vectors() {
+    if !isolated("tokio_sync_mutex_vectors", "HIRSEL_TOKIO_SYNC_MUTEX") {
+        return;
+    }
+    let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
+    for recorded in [false, true] {
+        let recording = recorded.then(|| record::Recording::new(b"tokio sync_mutex", false));
+        let install = recording.clone();
+        let shared = Arc::new(Vectors {
+            mutex: AtomicU64::new(0),
+            order: Mutex::default(),
+            observed: AtomicU64::new(0),
+        });
+        let body = shared.clone();
+        let mut run = crate::host::BodyRun::new(4, false);
+        run.free = true;
+        let mut pointers = Vec::new();
+        layouts.install(&mut run, &mut pointers);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                super::super::enable(ctx);
+                if let Some(recording) = &install {
+                    recording.root(ctx);
+                }
+            },
+            move |ctx| unsafe {
+                let shared = &*body;
+                let handle = mutex(ctx, 100);
+                shared.mutex.store(handle, Ordering::Release);
+                let word = mutex_word(&handle);
+                let mut payload = [0u64; 2];
+                let mut status = 99;
+                // straight_execution: every lock is ready at once and sees
+                // the previous guard's write; once the lease is resolved, a
+                // ready lock and its unlock take no role.
+                crate::pool::free::renew(ctx);
+                for (round, (seen, write)) in
+                    [(100, 99), (99, 98), (98, 98)].into_iter().enumerate()
+                {
+                    let before = role::thread_acquisitions();
+                    hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+                    assert_eq!((status, payload), (0, [1, seen]));
+                    payload[1] = write;
+                    hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                    assert_eq!(payload, [0, 0]);
+                    if round > 0 {
+                        assert_eq!(role::thread_acquisitions(), before, "round {round}");
+                    }
+                }
+                // readiness and mutex_fifo_with_coop_budget: with the guard
+                // held, a waiter that spent its budget registers first and a
+                // fresh one second. The unlock serves the first; the second
+                // is not served while the first holds.
+                hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+                assert_eq!((status, payload), (0, [1, 98]));
+                let mut scope = 0;
+                hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+                let data = (shared as *const Vectors).cast();
+                spawn(ctx, &scope, spent_waiter, data);
+                wait_until("the spent waiter registers", || waiting(ctx, word) == 1);
+                spawn(ctx, &scope, fresh_waiter, data);
+                wait_until("the fresh waiter registers", || waiting(ctx, word) == 2);
+                hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                wait_until("the unlock serves the oldest waiter", || {
+                    !shared.order.lock().unwrap().is_empty()
+                });
+                assert_eq!(*shared.order.lock().unwrap(), [1]);
+                assert_eq!(waiting(ctx, word), 1, "the fresh waiter still waits");
+                shared.observed.store(1, Ordering::Release);
+                wait_until("the first put serves the fresh waiter", || {
+                    shared.order.lock().unwrap().len() == 2
+                });
+                assert_eq!(*shared.order.lock().unwrap(), [1, 2]);
+                shared.observed.store(2, Ordering::Release);
+                hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+                // Both guards wrote nothing: the payload is unchanged.
+                hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+                assert_eq!((status, payload), (0, [1, 98]));
+                hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK), "recorded {recorded}");
+        assert_eq!(outcome.pending, 0);
+        if let Some(recording) = recording {
+            recording.recorder.stop("returned", None).unwrap().unwrap();
+        }
+    }
+}
+
 /// Messages one sender sends to one receiver that parks before each.
 const WAKES: u64 = 3;
 
