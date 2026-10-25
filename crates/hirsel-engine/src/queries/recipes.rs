@@ -145,6 +145,11 @@ pub(crate) fn offer(
                     let names = path.segments.iter().map(|s| s.as_str()).collect::<Vec<_>>();
                     matches!(names.as_slice(), ["task", "async" | "spawn" | "select" | "await"])
                 }
+                ExprKind::Field { base, field } => {
+                    matches!(field.as_str(), "async" | "spawn" | "select" | "await")
+                        && matches!(&tree.expressions[base.0 as usize].kind,
+                            ExprKind::Path(path) if path.segments.len() == 1 && path.segments[0].as_str() == "task")
+                }
                 _ => false,
             });
             if !task_boundary {
