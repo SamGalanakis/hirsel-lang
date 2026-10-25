@@ -128,6 +128,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let place = self.stack(layout)?;
         self.store(self.value_shape(value)?, self.get(value)?, place);
+        if live == MaskRef::All && glue::covered(self.inputs.layouts, layout) {
+            // Plain inline values need no finalization frame. In particular, erased
+            // slice owners decrement shared counts before their last-credit fallback.
+            // Programs with finalizers or partial masks still use the runtime below.
+            let record = self.layout(layout)?;
+            let scope = glue::Scope::of(layout);
+            let code = self.const_u64(self.cleanup_code(anchor)?);
+            let status = self.drop_glue(code, |walk| {
+                walk.steps(&scope, place.ptr, place.align, &record.drop)
+            })?;
+            return self.status_guard(status, failure);
+        }
         let descriptor = self.descriptor(layout)?;
         let mask = self.live_mask(live)?;
         let code = self.cleanup_code(anchor)?;
