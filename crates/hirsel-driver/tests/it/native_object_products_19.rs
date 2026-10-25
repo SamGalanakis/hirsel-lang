@@ -1,0 +1,275 @@
+//! Original object-control vectors over actual native continuations. The two
+//! runtimes settle source discovery and then the immutable native snapshot;
+//! no legacy Ready/object controller or test implementation supplies products.
+use hirsel_driver::{COMPILER_IDENTITY, native};
+use hirsel_engine::{runtime::*, store::ResultStore, *};
+use hirsel_syntax::ContentHash;
+use native::{
+    object_queries::{CodegenKey, ObjectTaskFactory, fragment_product, load_object},
+    queries::{
+        self, NativeRootKey, NativeRoots,
+        arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
+        declarations::NativeDeclarations,
+        instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
+        products::{EmissionOptions, NativeSnapshot},
+        root_tasks::{NativeRootFactory, NativeRootTasks},
+        source_inputs::NativeInstanceInputs,
+        tasks::{CodegenTasks, NativeTaskFactory, NativeTasks},
+    },
+    root_source::{NativeLinkFacts, NativeLinkSource},
+};
+use std::{collections::BTreeMap, sync::Arc};
+
+pub(super) struct Objects {
+    pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
+    pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
+    pub hits: usize,
+}
+
+pub(super) fn compile(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+) -> Objects {
+    let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
+    let mut declarations = NativeDeclarations::collect(engine, &mut cache, &[]).unwrap();
+    let paths = declarations
+        .context
+        .sources
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    let original = engine
+        .native_original_reader(&paths, store.clone())
+        .unwrap();
+    for (path, source) in &mut declarations.sources {
+        source.lower = original
+            .input(path)
+            .and_then(|(output, _, _, _)| output.cloned());
+    }
+    let entry = entry_path(&default_context());
+    let semantic = Arc::new(
+        engine
+            .native_semantic_program(declarations.roots.definitions.clone())
+            .unwrap(),
+    );
+    let entries = declarations
+        .context
+        .sources
+        .iter()
+        .filter(|(path, _)| {
+            matches!(&declarations.program.signatures[*path].kind,
+            hirsel_types::SignatureKind::Function(function) if function.generics.is_empty())
+        })
+        .map(|(path, source)| (path.clone(), source.entry.0))
+        .collect::<BTreeMap<_, _>>();
+    let source = Arc::new(
+        NativeLinkSource::from_settled(
+            NativeLinkFacts {
+                program: &declarations.program,
+                operations: Arc::new(declarations.program.operation_registry()),
+                roots: &declarations.roots,
+                declarations: &declarations.sources,
+                entries: &entries,
+                anchors: &declarations.source_anchors,
+                signatures: engine.signature_snapshot(),
+                semantic,
+                selected: std::slice::from_ref(&entry),
+                callees: None,
+            },
+            &original,
+        )
+        .unwrap(),
+    );
+    let manifest = declarations.manifest().unwrap();
+    let emission = EmissionOptions::request(
+        declarations.program.input.clone(),
+        opt,
+        debug,
+        source.foreign_dispatch(),
+        true,
+        false,
+        false,
+    );
+    let inputs = NativeInstanceInputs::from_products(declarations, original).unwrap();
+    let policy = ContentHash::of_bytes(b"original native object controls");
+    let target = options.target.clone();
+    let runtime_bytes = (jobs.get() as u64)
+        .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
+        .unwrap()
+        + (64 << 20);
+    let budget = ProcessBudget::new(runtime_bytes + (192 << 20));
+    let weight = MemoryWeight {
+        retained: 1 << 20,
+        scratch: 16 << 20,
+        stack: 0,
+    };
+    let instances = InstanceTasks::new(
+        inputs,
+        store.clone(),
+        options.clone(),
+        policy,
+        weight,
+        budget.reserve(64 << 20).unwrap(),
+    )
+    .unwrap();
+    let arenas = ArenaTasks::new(
+        instances.clone(),
+        store.clone(),
+        0,
+        weight,
+        budget.reserve(64 << 20).unwrap(),
+    )
+    .unwrap();
+    let denied = instances.failure("original native object control resource refusal");
+    let errors = RuntimeErrors {
+        resource: denied,
+        cycle: denied,
+        cancelled: denied,
+        protocol: denied,
+        panicked: denied,
+    };
+    let mut discovery =
+        AdmittedRuntime::new(jobs, budget.reserve(runtime_bytes).unwrap(), errors).unwrap();
+    let factory = Arc::new(InstanceTaskFactory::new(instances.clone()));
+    for kind in [queries::INSTANCE_KIND, INSTANCE_INPUT_KIND, DISCOVERY_KIND] {
+        discovery.register(kind, factory.clone()).unwrap();
+    }
+    let factory = Arc::new(ArenaTaskFactory::new(arenas.clone()));
+    for kind in [
+        queries::ARENA_CANDIDATES_KIND,
+        queries::ARENA_CHOSEN_KIND,
+        ARENA_GRAPH_KIND,
+    ] {
+        discovery.register(kind, factory.clone()).unwrap();
+    }
+    let request = discovery.request(&[instances.discovery_id(), arenas.query_id()]);
+    let selected = discovery.wait(request).unwrap_or_else(|error| {
+        panic!(
+            "{}",
+            String::from_utf8_lossy(&store.get_content(error).unwrap())
+        )
+    });
+    let completed = instances.completed_instances(selected[0]).unwrap();
+    let operations = instances.source_operations(selected[0]).unwrap();
+    let snapshot = NativeSnapshot::new(
+        store.clone(),
+        instances.products(selected[0]).unwrap(),
+        arenas.graph(selected[1]).unwrap(),
+        options,
+        emission,
+        manifest,
+        Arc::new(operations),
+    )
+    .unwrap();
+    let native = NativeTasks::new(snapshot, weight).unwrap();
+    let roots = NativeRootTasks::new(
+        native.clone(),
+        source.clone(),
+        NativeRootKey {
+            roots: vec![entry],
+            target_abi: target.digest(),
+            policy,
+        },
+        weight,
+    )
+    .unwrap();
+    let keys = completed
+        .iter()
+        .map(|(owner, _)| CodegenKey {
+            owner: owner.clone(),
+            backend: backend.name().into(),
+            backend_version: ContentHash::of_bytes(&COMPILER_IDENTITY),
+            target_features: target.digest(),
+            profile_options: ContentHash::of_bytes(format!("{opt:?}/{debug}").as_bytes()),
+            runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
+        })
+        .collect::<Vec<_>>();
+    let previous = keys
+        .iter()
+        .map(|key| store.lookup_product(key.address()))
+        .collect::<Vec<_>>();
+    let objects = CodegenTasks::new(native.clone(), keys.clone(), weight).unwrap();
+    drop(discovery);
+    let mut runtime =
+        AdmittedRuntime::new(jobs, budget.reserve(runtime_bytes).unwrap(), errors).unwrap();
+    let factory = Arc::new(NativeTaskFactory::new(native));
+    for kind in [
+        queries::INSTANCE_KIND,
+        queries::ARENA_CANDIDATES_KIND,
+        queries::ARENA_CHOSEN_KIND,
+        queries::READY_KIND,
+    ] {
+        runtime.register(kind, factory.clone()).unwrap();
+    }
+    runtime
+        .register(
+            queries::ROOT_KIND,
+            Arc::new(NativeRootFactory::new(roots.clone())),
+        )
+        .unwrap();
+    runtime
+        .register(
+            native::object_queries::CODEGEN_KIND,
+            Arc::new(ObjectTaskFactory::new(objects)),
+        )
+        .unwrap();
+    let requests = keys
+        .iter()
+        .map(CodegenKey::query_id)
+        .chain(keys.iter().map(|key| key.owner.ready_query_id()))
+        .chain(std::iter::once(roots.query_id()))
+        .collect::<Vec<_>>();
+    let request = runtime.request(&requests);
+    let selected = runtime.wait(request).unwrap_or_else(|error| {
+        panic!(
+            "{}",
+            String::from_utf8_lossy(&store.get_content(error).unwrap())
+        )
+    });
+    let count = keys.len();
+    let hits = previous
+        .iter()
+        .zip(&selected[..count])
+        .filter(|(old, now)| {
+            old.as_ref()
+                .is_some_and(|old| old.action == now.action && old.reference == now.record)
+        })
+        .count();
+    let artifacts = selected[..count]
+        .iter()
+        .map(|product| {
+            load_object(
+                store.as_ref(),
+                fragment_product(store.as_ref(), *product).unwrap().object,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let ready = &selected[count..count * 2];
+    let (mut products, root) = roots.products(selected[count * 2], ready).unwrap();
+    let readies = ready
+        .iter()
+        .map(|product| queries::ready_product(store.as_ref(), *product).map(Arc::new))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let summaries = products
+        .with_link_context(&root, &readies, |program| {
+            assert!(
+                program.units.is_empty(),
+                "fragment checks reconstructed Ready bodies"
+            );
+            Ok(program.summaries.clone())
+        })
+        .unwrap();
+    assert_eq!(summaries.len(), artifacts.len());
+    Objects {
+        summaries,
+        objects: artifacts,
+        hits,
+    }
+}

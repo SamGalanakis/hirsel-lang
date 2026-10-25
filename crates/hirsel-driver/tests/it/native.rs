@@ -1587,44 +1587,42 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
 
 #[test]
 fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
-    use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects};
-    use hirsel_lir::objects::{NoObjects, SimObjects};
+    use hirsel_driver::native::{self, Backend, OptLevel, Options};
+    use hirsel_engine::store::{MemStore, ResultStore};
     use std::sync::Arc;
     with_compiler_stack(|| {
         let source = "type Tree = Leaf | Branch(left: box Tree, right: box Tree)\nfn leaf()->box Tree { box Leaf() }\nfn empty()->List[(u64,u64)] { [] }\npub fn main()->Result[(),()] { let xs=empty(); let tree=leaf(); failure.check(list.len(xs)==0u64, Arithmetic()); Ok(()) }\n";
-        let compile =
-            |text: &str, store: Arc<dyn hirsel_lir::objects::ObjectStore>, backend, opt| {
-                let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-                let file = engine.sources.add("statics.hir", text.into()).unwrap();
-                let output = check_progress(&mut engine, file, &default_context()).unwrap();
-                assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-                let input = engine.export_native_input().unwrap();
-                let input = engine.import_native_input(input).unwrap();
-                let mut options = Options::new(x86());
-                options.objects = Some(UnitObjects {
-                    store,
-                    backend,
-                    opt,
-                    debug: false,
-                    fuel: false,
-                    jobs: hirsel_intern::jobs::Jobs::ONE,
-                    byte_budget: None,
-                });
-                native::build(&input, &options).unwrap()
-            };
+        let compile = |text: &str, store: Arc<dyn ResultStore>, backend, opt| {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                .with_result_store(store.clone());
+            let file = engine.sources.add("statics.hir", text.into()).unwrap();
+            let output = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+            let input = engine.export_native_input().unwrap();
+            let _validated = engine.import_native_input(input).unwrap();
+            crate::native_object_products_19::compile(
+                &mut engine,
+                store,
+                backend,
+                opt,
+                Options::new(x86()),
+                false,
+                hirsel_intern::jobs::Jobs::ONE,
+            )
+        };
         let decoy = format!("fn aaa()->(bool,u32) {{ (true,0u32) }}\n{source}");
         for (backend, opt) in [
             (Backend::Cranelift, OptLevel::None),
             (Backend::Llvm, OptLevel::None),
             (Backend::Llvm, OptLevel::Default),
         ] {
-            let a = compile(source, Arc::new(NoObjects), backend, opt);
-            let b = compile(&decoy, Arc::new(NoObjects), backend, opt);
-            let objects = |ready: &native::ReadyProgram| {
+            let a = compile(source, Arc::new(MemStore::default()), backend, opt);
+            let b = compile(&decoy, Arc::new(MemStore::default()), backend, opt);
+            let objects = |ready: &crate::native_object_products_19::Objects| {
                 ready
                     .summaries
                     .iter()
-                    .zip(&ready.unit_objects.as_ref().unwrap().objects)
+                    .zip(&ready.objects)
                     .map(|(s, o)| ((s.definition.clone(), s.instance), o.clone()))
                     .collect::<std::collections::BTreeMap<_, _>>()
             };
@@ -1639,10 +1637,10 @@ fn intrinsic_static_objects_survive_unrelated_layouts_and_import_replay() {
                     shifted[key].imports
                 );
             }
-            let store = Arc::new(SimObjects::default());
+            let store = Arc::new(MemStore::default());
             compile(source, store.clone(), backend, opt);
             let replay = compile(&decoy, store, backend, opt);
-            assert!(replay.unit_objects.as_ref().unwrap().hits > 0);
+            assert!(replay.hits > 0);
             assert_eq!(objects(&replay), shifted, "{backend:?} {opt:?}: replay");
         }
     });
