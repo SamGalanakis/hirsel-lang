@@ -162,7 +162,10 @@ fn ready_case_policy(
                     Err(error) => error,
                     Ok(_) => panic!("shared native Instance policy was mutated"),
                 };
-                assert!(error.contains("shared before store verification binding"), "{error}");
+                assert!(
+                    error.contains("shared before store verification binding"),
+                    "{error}"
+                );
             }
             let factory = Arc::new(InstanceTaskFactory::new(tasks.clone()));
             let main = tasks
@@ -359,7 +362,10 @@ fn ready_case_policy(
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));
                 if verify_store == store::VerifyStore::Recompute {
-                    assert_eq!(tasks.imports.load(Ordering::Relaxed), completed.len() as u64);
+                    assert_eq!(
+                        tasks.imports.load(Ordering::Relaxed),
+                        completed.len() as u64
+                    );
                     assert!(tasks.source_body_demands.load(Ordering::Relaxed) > 0);
                     assert_ne!(trace.totals(), Default::default());
                 } else {
