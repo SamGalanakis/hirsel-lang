@@ -1526,8 +1526,8 @@ fn original_callable_owners_std_container() {
 
 #[test]
 fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() {
-    use hirsel_driver::native::{self, Backend, OptLevel, Options, UnitObjects, Validation};
-    use hirsel_lir::objects::{NoObjects, ObjectStore, SimObjects};
+    use hirsel_driver::native::{self, Backend, OptLevel, Options, Validation};
+    use hirsel_engine::store::{MemStore, ResultStore, VerifyStore};
     use std::sync::Arc;
     with_compiler_stack(|| {
         // Keep the caller's text and positions fixed. Only its copied callee changes.
@@ -1538,38 +1538,74 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
         assert_ne!(original.reference, edited.reference);
         for jobs in [1, 2, 8] {
             for validation in [Validation::Ready, Validation::EveryStage] {
-                let store = Arc::new(SimObjects::default());
-                let build = |checked: &Checked, store: Arc<dyn ObjectStore>| {
+                let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                let dir = scratch(&format!("copied-edit-{jobs}-{validation:?}"));
+                let tools = Toolchain::in_tree_diagnostic(&dir, &[&x86()]).unwrap();
+                let compile = |text: &str, store: Arc<dyn ResultStore>, link: bool| {
+                    let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                        .with_result_store(store.clone());
+                    engine.verify_store = match validation {
+                        Validation::Ready => VerifyStore::Off,
+                        Validation::EveryStage => VerifyStore::Recompute,
+                    };
+                    let checked = checked_in(&mut engine, text);
                     let mut options = Options::new(x86());
                     options.validation = validation;
-                    options.objects = Some(UnitObjects {
+                    crate::native_object_products_19::compile_with_context(
+                        &mut engine,
                         store,
-                        backend: Backend::Llvm,
-                        opt: OptLevel::Default,
-                        debug: false,
-                        fuel: false,
-                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
-                        byte_budget: None,
-                    });
-                    native::build(&checked.validated, &options).unwrap()
-                };
-                let old = build(&original, store.clone());
-                let warm = build(&original, store.clone());
-                assert_eq!(
-                    warm.unit_objects.as_ref().unwrap().hits,
-                    old.summaries.len()
-                );
-                let rebuilt = build(&edited, store.clone());
-                let fresh = build(&edited, Arc::new(NoObjects));
-                let artifacts = |ready: &native::ReadyProgram| {
-                    (
-                        ready.summaries.clone(),
-                        ready.unit_objects.as_ref().unwrap().objects.clone(),
+                        &checked.entry,
+                        Backend::Llvm,
+                        OptLevel::Default,
+                        options,
+                        false,
+                        hirsel_intern::jobs::Jobs::new(jobs),
+                        |ready, artifacts| {
+                            link.then(|| {
+                                let registry =
+                                    hirsel_lir::descriptor_registry::DescriptorRegistry::new(
+                                        &ready.table,
+                                        &ready.finalizers,
+                                    );
+                                let mut objects = artifacts.to_vec();
+                                objects.push(
+                                    native::emit_glue(ready, Backend::Llvm, &registry).unwrap(),
+                                );
+                                let exe = native::link_objects(
+                                    ready,
+                                    &checked.entry,
+                                    &objects,
+                                    &tools,
+                                    &dir,
+                                )
+                                .unwrap();
+                                let bytes = std::fs::read(&exe).unwrap();
+                                let launched =
+                                    native::launch(&exe, &ready.target, &tools, &dir, true)
+                                        .unwrap();
+                                let actual = native::observe(
+                                    &launched,
+                                    ready,
+                                    &native::Sites::new(checked.validated.snapshot()),
+                                )
+                                .unwrap();
+                                assert_eq!(actual, edited.reference);
+                                bytes
+                            })
+                        },
                     )
+                };
+                let (old, _) = compile(before, store.clone(), false);
+                let (warm, _) = compile(before, store.clone(), false);
+                assert_eq!(warm.hits, old.summaries.len());
+                let (rebuilt, rebuilt_exe) = compile(&after, store, true);
+                let (fresh, fresh_exe) = compile(&after, Arc::new(MemStore::default()), true);
+                let artifacts = |ready: &crate::native_object_products_19::Objects| {
+                    (ready.summaries.clone(), ready.objects.clone())
                 };
                 assert_eq!(artifacts(&old), artifacts(&warm));
                 assert_eq!(artifacts(&rebuilt), artifacts(&fresh));
-                let owner = |ready: &native::ReadyProgram| {
+                let owner = |ready: &crate::native_object_products_19::Objects| {
                     ready
                         .summaries
                         .iter()
@@ -1583,40 +1619,10 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                     "caller changed"
                 );
                 assert_ne!(
-                    old.unit_objects.as_ref().unwrap().objects[old_owner],
-                    rebuilt.unit_objects.as_ref().unwrap().objects[new_owner],
+                    old.objects[old_owner], rebuilt.objects[new_owner],
                     "stale copied callee"
                 );
-                let dir = scratch(&format!("copied-edit-{jobs}-{validation:?}"));
-                let tools = Toolchain::in_tree_diagnostic(&dir, &[&rebuilt.target]).unwrap();
-                let mut executable = None;
-                for ready in [&rebuilt, &fresh] {
-                    let objects = native::emit_backend_objects(
-                        ready,
-                        Backend::Llvm,
-                        OptLevel::Default,
-                        Partition::Singleton,
-                        false,
-                        None,
-                    )
-                    .unwrap();
-                    let exe =
-                        native::link_objects(ready, &edited.entry, &objects, &tools, &dir).unwrap();
-                    let bytes = std::fs::read(&exe).unwrap();
-                    if let Some(expected) = &executable {
-                        assert_eq!(&bytes, expected);
-                    } else {
-                        executable = Some(bytes);
-                    }
-                    let launched = native::launch(&exe, &ready.target, &tools, &dir, true).unwrap();
-                    let actual = native::observe(
-                        &launched,
-                        ready,
-                        &native::Sites::new(edited.validated.snapshot()),
-                    )
-                    .unwrap();
-                    assert_eq!(actual, edited.reference);
-                }
+                assert_eq!(rebuilt_exe.unwrap(), fresh_exe.unwrap());
             }
         }
     });

@@ -57,18 +57,79 @@ pub(super) fn compile_entry(
     debug: bool,
     jobs: hirsel_intern::jobs::Jobs,
 ) -> Objects {
+    compile_with_context(
+        engine,
+        store,
+        entry,
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        |_, _| (),
+    )
+    .0
+}
+
+pub(super) fn compile_with_context<R>(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    entry: &hirsel_syntax::DefPath,
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
+    let verification = engine.verify_store;
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
     let mut declarations = NativeDeclarations::collect(engine, &mut cache, &[]).unwrap();
-    let paths = declarations
+    let preliminary = engine
+        .native_semantic_program(declarations.roots.definitions.clone())
+        .unwrap();
+    let mut paths = declarations
         .context
         .sources
         .keys()
         .cloned()
-        .collect::<Vec<_>>();
+        .collect::<std::collections::BTreeSet<_>>();
+    paths.extend(
+        preliminary
+            .source_bindings()
+            .map(|(path, _, _)| path.clone()),
+    );
+    // Semantic revisions also bind compile-time generators. Retain their source
+    // declarations/anchors without registering them as runtime instances.
+    let mut link_declarations = declarations.sources.clone();
+    let mut link_anchors = declarations.source_anchors.clone();
+    for path in &paths {
+        if link_declarations.contains_key(path) {
+            continue;
+        }
+        let product = cache.definition(engine, path, &paths).unwrap();
+        link_anchors.insert(
+            path.clone(),
+            product.contracts.as_ref().map_or_else(
+                || vec![product.source.source.syntax.anchor],
+                |contracts| contracts.source_anchors.clone(),
+            ),
+        );
+        declarations
+            .program
+            .signatures
+            .insert(path.clone(), product.source.signature.clone());
+        link_declarations.insert(path.clone(), product.source);
+    }
     let original = engine
-        .native_original_reader(&paths, store.clone())
+        .native_original_reader(&paths.into_iter().collect::<Vec<_>>(), store.clone())
         .unwrap();
     for (path, source) in &mut declarations.sources {
+        source.lower = original
+            .input(path)
+            .and_then(|(output, _, _, _)| output.cloned());
+    }
+    for (path, source) in &mut link_declarations {
         source.lower = original
             .input(path)
             .and_then(|(output, _, _, _)| output.cloned());
@@ -94,9 +155,9 @@ pub(super) fn compile_entry(
                 program: &declarations.program,
                 operations: Arc::new(declarations.program.operation_registry()),
                 roots: &declarations.roots,
-                declarations: &declarations.sources,
+                declarations: &link_declarations,
                 entries: &entries,
-                anchors: &declarations.source_anchors,
+                anchors: &link_anchors,
                 signatures: engine.signature_snapshot(),
                 semantic,
                 selected: std::slice::from_ref(entry),
@@ -137,6 +198,8 @@ pub(super) fn compile_entry(
         weight,
         budget.reserve(64 << 20).unwrap(),
     )
+    .unwrap()
+    .with_store_verification(verification)
     .unwrap();
     let arenas = ArenaTasks::new(
         instances.clone(),
@@ -186,6 +249,8 @@ pub(super) fn compile_entry(
         manifest,
         Arc::new(operations),
     )
+    .unwrap()
+    .with_store_verification(verification)
     .unwrap();
     let native = NativeTasks::new(snapshot, weight).unwrap();
     let roots = NativeRootTasks::new(
@@ -278,21 +343,24 @@ pub(super) fn compile_entry(
         .map(|product| queries::ready_product(store.as_ref(), *product).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let summaries = products
+    let (summaries, output) = products
         .with_link_context(&root, &readies, |program| {
             assert!(
                 program.units.is_empty(),
                 "fragment checks reconstructed Ready bodies"
             );
-            Ok(program.summaries.clone())
+            Ok((program.summaries.clone(), use_context(program, &artifacts)))
         })
         .unwrap();
     assert_eq!(summaries.len(), artifacts.len());
-    Objects {
-        summaries,
-        objects: artifacts,
-        hits,
-    }
+    (
+        Objects {
+            summaries,
+            objects: artifacts,
+            hits,
+        },
+        output,
+    )
 }
 
 #[test]
