@@ -30,9 +30,135 @@ pub struct FrontProofInput {
     _owner: Arc<FrontProofExport>,
     _allowance: MemoryReservation,
 }
+/// A complete canonical export with construction working admission retained.
+/// It borrows no mutable compiler and cannot request another source product.
+pub struct FrontBuiltProof {
+    export: hirsel_proof_export::Export,
+    input: Rc<FrontProofInput>,
+    _allowance: MemoryReservation,
+}
+/// Portable canonical bytes keep only their actual output allocation charged,
+/// including through detached clones. Neither source nor native authority is
+/// supplied by these bytes.
+#[derive(Clone)]
+pub struct FrontProofText {
+    text: Arc<str>,
+    owner: Arc<MemoryReservation>,
+}
+impl FrontProofText {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    pub fn retained_bytes(&self) -> u64 {
+        self.owner.bytes()
+    }
+    pub fn into_parts(self) -> (Arc<str>, Arc<dyn Send + Sync>) {
+        (self.text, self.owner)
+    }
+}
+fn arc_layout<T>() -> Option<usize> {
+    Some(
+        std::alloc::Layout::new::<[usize; 2]>()
+            .extend(std::alloc::Layout::new::<T>())
+            .ok()?
+            .0
+            .pad_to_align()
+            .size(),
+    )
+}
 impl FrontProofInput {
     pub fn input(&self) -> &ExportInput {
         &self.input
+    }
+    /// Table-free inspection of the actual canonical fields. Source producers
+    /// have already materialized every type their headers/originals name.
+    pub fn build_bytes(&self) -> Result<u64, QueryError> {
+        let module = self
+            ._owner
+            .modules
+            .values()
+            .map(String::len)
+            .max()
+            .unwrap_or(0);
+        let tables = hirsel_proof_export::build_tables_bytes(&self.input, module)
+            .ok_or(QueryError::NotImplemented)?;
+        // The input reservation covers all prospective owned input payloads;
+        // cloning them for Export needs one additional independently held copy.
+        tables
+            .checked_add(self._allowance.bytes())
+            .and_then(|n| n.checked_add(size_of::<FrontBuiltProof>() as u64))
+            .ok_or(QueryError::NotImplemented)
+    }
+    pub fn build_with_allowance(
+        self: Rc<Self>,
+        allowance: MemoryReservation,
+    ) -> Result<FrontBuiltProof, QueryError> {
+        if self.build_bytes()? > allowance.bytes() {
+            return Err(operational("PS9 construction buffers exceed admission"));
+        }
+        let export = hirsel_proof_export::build(&self.input);
+        if !export.skipped.is_empty() {
+            return Err(operational(
+                "PS9 construction refused an incomplete definition section",
+            ));
+        }
+        Ok(FrontBuiltProof {
+            export,
+            input: self,
+            _allowance: allowance,
+        })
+    }
+}
+impl FrontBuiltProof {
+    pub fn export(&self) -> &hirsel_proof_export::Export {
+        &self.export
+    }
+    pub fn encoded_bytes(&self) -> Result<usize, QueryError> {
+        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.locator)
+            .ok_or(QueryError::NotImplemented)
+    }
+    /// Encoding's String and the final Arc overlap until conversion completes.
+    /// The unused temporary part of this admission is released before return.
+    pub fn output_bytes(&self) -> Result<u64, QueryError> {
+        let bytes = self.encoded_bytes()?;
+        let metadata = 2 * size_of::<usize>()
+            + arc_layout::<MemoryReservation>().ok_or(QueryError::NotImplemented)?
+            + size_of::<FrontProofText>();
+        bytes
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(metadata))
+            .and_then(|n| n.try_into().ok())
+            .ok_or(QueryError::NotImplemented)
+    }
+    pub fn encode_with_allowance(
+        &self,
+        mut allowance: MemoryReservation,
+    ) -> Result<FrontProofText, QueryError> {
+        let needed = self.output_bytes()?;
+        if needed > allowance.bytes() {
+            return Err(operational("PS9 canonical output buffers exceed admission"));
+        }
+        let length = self.encoded_bytes()?;
+        let text = hirsel_proof_export::encode_with_output_limit(
+            &self.export,
+            &self.input.input.locator,
+            length,
+        )
+        .ok_or(QueryError::NotImplemented)?;
+        let canonical: Arc<str> = Arc::from(text.as_str());
+        drop(text);
+        let retained = needed
+            .checked_sub(length as u64)
+            .ok_or(QueryError::NotImplemented)?;
+        let owner = Arc::new(
+            allowance
+                .split(retained)
+                .ok_or(QueryError::NotImplemented)?,
+        );
+        Ok(FrontProofText {
+            text: canonical,
+            owner,
+        })
     }
 }
 impl FrontProofExport {
