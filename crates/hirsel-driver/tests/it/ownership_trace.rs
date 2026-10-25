@@ -1272,3 +1272,56 @@ fn optional_payload(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_native_call_inputs_borrowed_resource_retains_its_original_lifetime() {
+    observed_native_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn inspect(token: Token) -> u64 {
+  let owned = Token(value: 7u64)
+  token.value + owned.value
+}
+pub fn main() -> Result[(), ()] {
+  let held = Token(value: 7u64)
+  let answer = inspect(held)
+  if answer == 14u64 { Ok(()) } else { Error(()) }
+}
+"#,
+        2,
+        true,
+    );
+}
+
+#[test]
+fn ownership_native_call_inputs_owned_transport_remains_explicitly_refused() {
+    hirsel_engine::with_compiler_stack(|| {
+        use hirsel_driver::native::{self, Backend, OptLevel, Options, Sites, TargetSpec};
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("main.hir");
+        std::fs::write(&source, "resource type Token {}\ndrop(x) {}\nfn relay(take token: Token) -> Token { take token }\npub fn main() -> Result[(), ()] { let first = Token()\n let last = relay(take first)\n Ok(()) }\n").unwrap();
+        let mut loaded = hirsel_driver::load_program(&source).unwrap();
+        loaded.check_for_execution().unwrap();
+        let input = loaded.engine.export_native_input().unwrap();
+        let checked = loaded.engine.import_native_input(input).unwrap();
+        let ready = native::build(
+            &checked,
+            &Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let sites = Sites::new(checked.snapshot());
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            let error = native::ownership_trace::emit_leaf(
+                &ready,
+                &loaded.entry,
+                &sites,
+                backend,
+                OptLevel::None,
+            )
+            .err()
+            .expect("owned call inputs and returns need their own committed transport");
+            assert!(error.message.contains("owned"), "{backend:?}: {error}");
+        }
+    });
+}
