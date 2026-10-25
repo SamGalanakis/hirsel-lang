@@ -44,12 +44,14 @@ impl QueryContext for Pending {
 }
 #[test]
 fn native_ready_tasks_validate_cold_and_fresh_snapshots_with_current_source_invocations() {
-    ready_case("fn other()->u64{9u64}\npub fn main()->u64{7u64}", false);
-}
-#[test]
-fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
     ready_case(
-        r#"
+        "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+        false,
+        false,
+        false,
+    );
+}
+const ADAPTER_SOURCE: &str = r#"
 fn other(x:u64)->u64 { 10u64/x }
 pub fn main()->Result[(),()] {
  let mut s:Set[String]=set.empty()
@@ -58,11 +60,45 @@ pub fn main()->Result[(),()] {
  let f=other
  let _=f(2u64)
  Ok(())
-}"#,
-        true,
+}"#;
+#[test]
+fn native_ready_tasks_preserve_actual_materialized_adapter_inventory_on_cold_and_fresh_reads() {
+    ready_case(ADAPTER_SOURCE, true, false, false);
+}
+#[test]
+fn native_ready_tasks_refuse_missing_independent_adapter_inventory_before_materialization() {
+    ready_case(ADAPTER_SOURCE, true, true, false);
+}
+#[test]
+fn every_stage_recomputes_instance_and_ready_hits_in_fresh_snapshots() {
+    for validation in [native::Validation::Ready, native::Validation::EveryStage] {
+        ready_case_policy(
+            "fn other()->u64{9u64}\npub fn main()->u64{7u64}",
+            false,
+            false,
+            false,
+            validation,
+        );
+    }
+}
+
+pub(super) fn ready_case(source: &str, adapter: bool, missing_inventory: bool, assemble: bool) {
+    ready_case_policy(
+        source,
+        adapter,
+        missing_inventory,
+        assemble,
+        native::Validation::Ready,
     );
 }
-fn ready_case(source: &str, adapter: bool) {
+
+fn ready_case_policy(
+    source: &str,
+    adapter: bool,
+    missing_inventory: bool,
+    assemble: bool,
+    validation: native::Validation,
+) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -70,6 +106,9 @@ fn ready_case(source: &str, adapter: bool) {
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let policy =
             hirsel_syntax::ContentHash::of_bytes(b"native demand task current source control");
+        let mut options = native::Options::new(target.clone());
+        options.validation = validation;
+        let recompute = validation == native::Validation::EveryStage;
         let mut expected = None;
         for fresh in [false, true] {
             let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
@@ -122,7 +161,7 @@ fn ready_case(source: &str, adapter: bool) {
             let tasks = InstanceTasks::new(
                 inputs,
                 store.clone(),
-                native::Options::new(target.clone()),
+                options.clone(),
                 policy,
                 MemoryWeight {
                     scratch: 16 << 20,
@@ -202,7 +241,7 @@ fn ready_case(source: &str, adapter: bool) {
             })[0];
             let graph = arenas.graph(arena_output).unwrap();
             assert!(!graph.candidates.is_empty() && !graph.chosen.is_empty());
-            let operations = Arc::new(tasks.source_operations(discovery_output).unwrap());
+            let mut operations = tasks.source_operations(discovery_output).unwrap();
             assert_eq!(
                 operations
                     .invocation_bodies
@@ -224,12 +263,16 @@ fn ready_case(source: &str, adapter: bool) {
                     "canonical ABI actuals must come from the independent source planner"
                 );
             }
+            if missing_inventory {
+                operations.pretransfer_adapters.clear();
+            }
             let products = tasks.products(discovery_output).unwrap();
+            let before_snapshot = trace.totals();
             let snapshot = NativeSnapshot::new(
                 store.clone(),
                 products,
                 graph,
-                native::Options::new(target.clone()),
+                options.clone(),
                 EmissionOptions::request(
                     input,
                     hirsel_lir::emission::OptLevel::None,
@@ -240,9 +283,29 @@ fn ready_case(source: &str, adapter: bool) {
                     false,
                 ),
                 manifest,
-                operations,
-            )
-            .unwrap();
+                Arc::new(operations),
+            );
+            if missing_inventory {
+                let Err(error) = snapshot else {
+                    panic!("snapshot accepted a missing independent adapter inventory");
+                };
+                assert!(
+                    error.contains("lost an independently planned adapter"),
+                    "{error}"
+                );
+                assert_eq!(
+                    trace.totals(),
+                    before_snapshot,
+                    "missing inventory must fail before native materialization"
+                );
+                if fresh {
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                    assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
+                    assert_eq!(trace.totals(), Default::default());
+                }
+                continue;
+            }
+            let snapshot = snapshot.unwrap();
             drop(runtime);
             let ready_tasks = NativeTasks::new(
                 snapshot.clone(),
@@ -271,6 +334,32 @@ fn ready_case(source: &str, adapter: bool) {
             ] {
                 ready_runtime.register(kind, ready_factory.clone()).unwrap();
             }
+            if assemble {
+                for (key, _) in tasks.completed_instances(result[0]).unwrap() {
+                    let request = ready_runtime.request(&[key.ready_query_id()]);
+                    ready_runtime.wait(request).unwrap_or_else(|error| {
+                        panic!(
+                            "cross-owner Ready {}: {}",
+                            key.instance.definition(),
+                            String::from_utf8_lossy(&store.get_content(error).unwrap()),
+                        )
+                    });
+                }
+                use native::queries::NativeProducts;
+                let mut products = native::queries::products::DemandProducts::new(snapshot.clone());
+                let selected = tasks
+                    .completed_instances(result[0])
+                    .unwrap()
+                    .iter()
+                    .map(|(key, _)| products.ready(key).unwrap())
+                    .collect::<Vec<_>>();
+                products
+                    .with_ready(&selected, |units, _| {
+                        assert!(!units.is_empty());
+                        Ok(())
+                    })
+                    .unwrap();
+            }
             let selected = ready_runtime.request(&[main.ready_query_id()]);
             let ready = ready_runtime.wait(selected).unwrap_or_else(|error| {
                 panic!(
@@ -284,7 +373,7 @@ fn ready_case(source: &str, adapter: bool) {
             if adapter && !fresh {
                 assert!(transformations > 0);
             } else {
-                assert_eq!(transformations, u64::from(!fresh));
+                assert_eq!(transformations, u64::from(!fresh || recompute));
             }
             assert_eq!(snapshot.ready_materializations(), 0);
             let completed = tasks.completed_instances(result[0]).unwrap();
@@ -302,9 +391,18 @@ fn ready_case(source: &str, adapter: bool) {
                 .collect::<Vec<_>>();
             if fresh {
                 assert_eq!(expected.as_ref(), Some(&outputs));
-                assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
-                assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
-                assert_eq!(trace.totals(), Default::default());
+                if recompute {
+                    assert_eq!(
+                        tasks.imports.load(Ordering::Relaxed),
+                        completed.len() as u64
+                    );
+                    assert!(tasks.source_body_demands.load(Ordering::Relaxed) > 0);
+                    assert_ne!(trace.totals(), Default::default());
+                } else {
+                    assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
+                    assert_eq!(tasks.source_body_demands.load(Ordering::Relaxed), 0);
+                    assert_eq!(trace.totals(), Default::default());
+                }
             } else {
                 assert_eq!(
                     tasks.imports.load(Ordering::Relaxed),
