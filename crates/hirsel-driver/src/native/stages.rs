@@ -684,32 +684,14 @@ pub(super) fn build_program_roots(
     let _interval = timings::interval(Interval::Units);
     let target = &options.target;
     let import = timings::phase(Phase::Import);
-    let mut imports;
-    let mut none = hirsel_rc::import::NoImports;
-    let cache: &mut dyn hirsel_rc::import::ImportCache = match &options.objects {
-        Some(objects) => {
-            imports = super::import_cache::Imports::new(
-                objects.store.as_ref(),
-                target,
-                program.types.clone(),
-                options.validation == Validation::EveryStage,
-            );
-            &mut imports
-        }
-        None => &mut none,
-    };
-    let mut scoped = super::import_cache::Scoped {
-        inner: cache,
-        enabled: options.scoped_specialization,
-    };
-    let mut lowered = hirsel_rc::import::lower_cached_with_roots(
+    let mut lowered = hirsel_rc::import::lower_with_roots(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
             enabled: options.flat_walk,
         },
         &options.discharge,
-        &mut scoped,
+        options.scoped_specialization,
         roots,
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;

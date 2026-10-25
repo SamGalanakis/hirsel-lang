@@ -490,3 +490,40 @@ fn demand_import_every_stage_reimports_warm_products() {
         assert_eq!(forced.2, 0);
     });
 }
+
+/// Exact former wire vectors remain negative inputs at the replacement boundary.
+pub(crate) fn assert_retired_import_payloads(payloads: &[Vec<u8>]) {
+    with_compiler_stack(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(FaultStore {
+            rehash: true,
+            inner: store::DirStore::new(dir.path().join("products")),
+            seen: Default::default(),
+            damaged: Default::default(),
+        });
+        let source = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(3u64)}";
+        let expected = import(source, store.clone()).0;
+        let reference = *store
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r.domain == native::queries::instance::INSTANCE_RECORD_DOMAIN)
+            .unwrap();
+        for payload in payloads {
+            store
+                .damaged
+                .lock()
+                .unwrap()
+                .insert(reference.output.0, payload.clone());
+            let rebuilt = import(source, store.clone());
+            assert_eq!(rebuilt.0, expected);
+            assert_eq!(
+                rebuilt.1, 1,
+                "a retired wire payload must miss rather than be accepted"
+            );
+            assert!(store.damaged.lock().unwrap().is_empty());
+        }
+        assert_eq!(import(source, store).1, 0);
+    });
+}

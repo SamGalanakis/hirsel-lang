@@ -290,6 +290,40 @@ impl SourceRecipe {
     }
 }
 
+/// Canonical callable metadata for a library recipe, independent of a
+/// program-local ABI row or any import-effects journal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+enum RecipeShape {
+    Definition,
+    Closure,
+    IterNext,
+    IterDrop,
+    Foreign,
+}
+impl From<hirsel_lir::abi_types::CallableShape> for RecipeShape {
+    fn from(shape: hirsel_lir::abi_types::CallableShape) -> Self {
+        use hirsel_lir::abi_types::CallableShape as S;
+        match shape {
+            S::Definition => Self::Definition,
+            S::Closure => Self::Closure,
+            S::IterNext => Self::IterNext,
+            S::IterDrop => Self::IterDrop,
+            S::Foreign => Self::Foreign,
+        }
+    }
+}
+impl From<RecipeShape> for hirsel_lir::abi_types::CallableShape {
+    fn from(shape: RecipeShape) -> Self {
+        match shape {
+            RecipeShape::Definition => Self::Definition,
+            RecipeShape::Closure => Self::Closure,
+            RecipeShape::IterNext => Self::IterNext,
+            RecipeShape::IterDrop => Self::IterDrop,
+            RecipeShape::Foreign => Self::Foreign,
+        }
+    }
+}
+
 /// One native library request, with the captured environment named by content
 /// rather than a requiring unit's transient LayoutId. This is discovery data;
 /// the query owner must accept the requiring product and current read witnesses
@@ -302,7 +336,7 @@ pub struct LibraryRecipe {
     body: u32,
     actuals: Actuals,
     callable: hirsel_types::TypeId,
-    shape: hirsel_rc::effects::Shape,
+    shape: RecipeShape,
     environment: Option<hirsel_syntax::ContentHash>,
     finalizer: bool,
 }

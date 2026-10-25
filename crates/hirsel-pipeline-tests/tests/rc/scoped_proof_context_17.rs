@@ -2,21 +2,8 @@
 //! Capture ordering/recursive vectors follow Goose 8511ae34
 //! codegen_frames.h:115–154 and funval_body_captures.goose:32–89.
 use crate::rc_support::*;
-use hirsel_rc::import::{CachedImport, ImportCache, Lowered};
-use hirsel_rc::instance::{InstanceId, Instances, Program};
-struct Heap;
-impl ImportCache for Heap {
-    fn enabled(&self) -> bool {
-        false
-    }
-    fn scoped_specialization(&self) -> bool {
-        false
-    }
-    fn get(&mut self, _: &Program, _: &Instances, _: InstanceId) -> Option<CachedImport> {
-        None
-    }
-    fn put(&mut self, _: InstanceId, _: Result<CachedImport, String>) {}
-}
+use hirsel_rc::import::Lowered;
+use hirsel_rc::instance::Program;
 
 fn source(body: &str, declarations: &str) -> String {
     format!(
@@ -28,12 +15,13 @@ fn lower(p: &Program, enabled: bool) -> Lowered {
     if enabled {
         hirsel_rc::import::lower(p, &target()).unwrap()
     } else {
-        hirsel_rc::import::lower_cached(
+        hirsel_rc::import::lower_with_roots(
             p,
             &target(),
             &Default::default(),
             &Default::default(),
-            &mut Heap,
+            false,
+            &[],
         )
         .unwrap()
     }

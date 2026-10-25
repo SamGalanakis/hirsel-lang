@@ -17,7 +17,6 @@ mod exit_report;
 mod file_digest;
 mod foreign;
 mod heap;
-mod import_cache;
 mod kit;
 mod link;
 pub mod object_queries;

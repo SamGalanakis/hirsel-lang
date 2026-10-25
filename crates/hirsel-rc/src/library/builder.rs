@@ -63,9 +63,6 @@ pub trait Layouts {
     ) -> Result<LayoutId, LayoutError>;
     /// The sequence a flat list builder appends `element`'s encoding to.
     fn flat_builder(&mut self, element: LayoutId) -> Result<LayoutId, LayoutError>;
-    /// A library instance is about to be requested: a recorder notes it
-    /// (`crate::effects`).
-    fn request(&mut self, _request: &Request) {}
 }
 
 impl Layouts for LayoutBuilder<'_> {
@@ -259,7 +256,6 @@ impl<'a> Cx<'a> {
     /// A body's requirements are exactly the requests its builder makes.
     pub fn require(&mut self, request: Request) -> R<Direct> {
         let path = request.path.clone();
-        self.layouts.request(&request);
         let instance = super::instantiate(self.layouts, self.instances, request)?;
         Ok(Direct {
             symbol: Symbol {

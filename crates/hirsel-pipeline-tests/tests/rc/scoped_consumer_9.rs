@@ -1,27 +1,16 @@
 use crate::rc_support::*;
-use hirsel_rc::import::{CachedImport, ImportCache, Lowered};
-use hirsel_rc::instance::{InstanceId, Instances, Program};
-struct Heap;
-impl ImportCache for Heap {
-    fn enabled(&self) -> bool {
-        false
-    }
-    fn scoped_specialization(&self) -> bool {
-        false
-    }
-    fn get(&mut self, _: &Program, _: &Instances, _: InstanceId) -> Option<CachedImport> {
-        None
-    }
-    fn put(&mut self, _: InstanceId, _: Result<CachedImport, String>) {}
-}
+use hirsel_rc::import::Lowered;
+use hirsel_rc::instance::Program;
+
 pub(crate) fn lower_disabled(source: &str) -> (Program, Lowered) {
     let p = compile(source);
-    let l = hirsel_rc::import::lower_cached(
+    let l = hirsel_rc::import::lower_with_roots(
         &p,
         &target(),
         &Default::default(),
         &Default::default(),
-        &mut Heap,
+        false,
+        &[],
     )
     .unwrap();
     assert!(violations(&p, &l).is_empty());
