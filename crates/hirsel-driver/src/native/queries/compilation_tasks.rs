@@ -371,6 +371,14 @@ impl CompilationTasks {
     pub fn roots(&self, compilation: ProductRef) -> Result<Arc<NativeRootTasks>, String> {
         Ok(self.selected(compilation)?.roots.clone())
     }
+    /// Actual independently validated removals from the exact discovery read
+    /// by this completed compilation. The requested plan supplies no report.
+    pub fn discharged(
+        &self,
+        compilation: ProductRef,
+    ) -> Result<hirsel_lir::discharge::Discharge, String> {
+        self.instances.discharged(self.selected(compilation)?.discovery)
+    }
     /// Body-free execution metadata of this exact completed compilation's
     /// settled Link scope. No dependency query or current-association lookup
     /// supplies a missing read, and Link hits expose the same admitted metadata.
