@@ -94,6 +94,11 @@ enum TextOutput {
         limit: usize,
         overflow: bool,
     },
+    ExactArc {
+        bytes: std::sync::Arc<[u8]>,
+        written: usize,
+        overflow: bool,
+    },
     Count {
         bytes: Option<usize>,
         last: Option<char>,
@@ -105,6 +110,7 @@ impl TextOutput {
             Self::Empty => true,
             Self::Text(s) => s.is_empty(),
             Self::Limited { text, .. } => text.is_empty(),
+            Self::ExactArc { written, .. } => *written == 0,
             Self::Count { bytes, .. } => *bytes == Some(0),
         }
     }
@@ -113,6 +119,10 @@ impl TextOutput {
             Self::Empty => false,
             Self::Text(s) => s.ends_with(c),
             Self::Limited { text, .. } => text.ends_with(c),
+            Self::ExactArc { bytes, written, .. } => {
+                let mut encoded = [0; 4];
+                bytes[..*written].ends_with(c.encode_utf8(&mut encoded).as_bytes())
+            }
             Self::Count { last, .. } => *last == Some(c),
         }
     }
@@ -121,10 +131,19 @@ impl TextOutput {
         match self {
             Self::Text(s) => s.capacity(),
             Self::Limited { text, .. } => text.capacity(),
+            Self::ExactArc { bytes, .. } => bytes.len(),
             _ => 0,
         }
     }
     fn hex(&mut self, bytes: &[u8]) {
+        if matches!(self, Self::ExactArc { .. }) {
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            for byte in bytes {
+                let pair = [HEX[usize::from(byte >> 4)], HEX[usize::from(byte & 15)]];
+                self.push_str(std::str::from_utf8(&pair).unwrap());
+            }
+            return;
+        }
         match self {
             Self::Empty => {
                 let mut s = String::new();
@@ -132,6 +151,7 @@ impl TextOutput {
                 *self = Self::Text(s);
             }
             Self::Text(s) => push_hex(s, bytes),
+            Self::ExactArc { .. } => unreachable!(),
             Self::Limited {
                 text,
                 limit,
@@ -172,6 +192,19 @@ impl TextOutput {
                 *self = Self::Text(text.into());
             }
             Self::Text(s) => s.push_str(text),
+            Self::ExactArc {
+                bytes,
+                written,
+                overflow,
+            } => match written.checked_add(text.len()) {
+                Some(end) if !*overflow && end <= bytes.len() => {
+                    std::sync::Arc::get_mut(bytes).expect("writer owns its output exclusively")
+                        [*written..end]
+                        .copy_from_slice(text.as_bytes());
+                    *written = end;
+                }
+                _ => *overflow = true,
+            },
             Self::Limited {
                 text: output,
                 limit,
@@ -258,6 +291,72 @@ impl<C> Writer<C> {
             ..Self::with_context(context)
         })
     }
+    /// Emit directly into the final, exact-sized Arc allocation. The caller
+    /// counts the complete framing first; either overflow or underfill refuses
+    /// finish_arc_checked, so unwritten zeros cannot escape as canonical text.
+    pub fn with_exact_arc(context: C, length: usize) -> Option<Self> {
+        use std::alloc::Layout;
+        Layout::new::<[usize; 2]>()
+            .extend(Layout::array::<u8>(length).ok()?)
+            .ok()?;
+        // Rust alloc/sync.rs:1315 new_zeroed_slice. Every u8 bit pattern is
+        // valid, so the zeroed allocation is fully initialized immediately.
+        let bytes = unsafe { std::sync::Arc::<[u8]>::new_zeroed_slice(length).assume_init() };
+        Some(Self {
+            out: TextOutput::ExactArc {
+                bytes,
+                written: 0,
+                overflow: false,
+            },
+            ..Self::with_context(context)
+        })
+    }
+    /// Borrow the already emitted UTF-8 prefix, for hashing framing without an
+    /// independent text copy. Counting writers have no materialized prefix.
+    pub fn written_text(&self) -> Option<&str> {
+        match &self.out {
+            TextOutput::Empty => Some(""),
+            TextOutput::Text(text) => Some(text),
+            TextOutput::Limited { text, overflow, .. } => (!overflow).then_some(text),
+            TextOutput::ExactArc {
+                bytes,
+                written,
+                overflow,
+            } => {
+                if *overflow {
+                    None
+                } else {
+                    std::str::from_utf8(&bytes[..*written]).ok()
+                }
+            }
+            TextOutput::Count { .. } => None,
+        }
+    }
+    /// Append caller-supplied canonical framing without adding separators.
+    pub fn append_raw(&mut self, text: &str) {
+        self.out.push_str(text);
+    }
+    pub fn finish_arc_checked(self) -> (Option<std::sync::Arc<str>>, C) {
+        let text = match self.out {
+            TextOutput::ExactArc {
+                bytes,
+                written,
+                overflow,
+            } if !overflow && written == bytes.len() => {
+                if std::str::from_utf8(&bytes).is_err() {
+                    return (None, self.context);
+                }
+                // Reverse of Rust alloc/sync.rs:4128 From<Arc<str>> for
+                // Arc<[u8]>. UTF-8 was checked; str and [u8] share their
+                // allocation layout and length metadata. No payload is copied.
+                Some(unsafe {
+                    std::sync::Arc::from_raw(std::sync::Arc::into_raw(bytes) as *const str)
+                })
+            }
+            _ => None,
+        };
+        (text, self.context)
+    }
     /// Count a node at an already opened canonical nesting depth. No output
     /// prefix is allocated; separators inside the node use the usual emitter.
     pub fn counting_at_depth(context: C, depth: usize) -> Self {
@@ -271,6 +370,9 @@ impl<C> Writer<C> {
             TextOutput::Empty => Some(0),
             TextOutput::Text(s) => Some(s.len()),
             TextOutput::Limited { text, overflow, .. } => (!*overflow).then_some(text.len()),
+            TextOutput::ExactArc {
+                written, overflow, ..
+            } => (!*overflow).then_some(*written),
             TextOutput::Count { bytes, .. } => *bytes,
         }
     }
@@ -289,6 +391,7 @@ impl<C> Writer<C> {
             match self.out {
                 TextOutput::Text(s) => Some(s),
                 TextOutput::Limited { text, overflow, .. } => (!overflow).then_some(text),
+                TextOutput::ExactArc { .. } => None,
                 _ => Some(String::new()),
             },
             self.context,
@@ -1502,4 +1605,31 @@ mod tests {
         }
         assert!(Writer::with_output_limit((), usize::MAX).is_none());
     }
+}
+#[test]
+fn exact_arc_writer_matches_scalar_utf8_hex_and_refuses_underfill_or_overflow() {
+    fn write(w: &mut Writer) {
+        w.open("Exact");
+        w.text("\" \\ \n λ 🐑");
+        w.bytes(&[0, 1, 127, 255]);
+        w.int(i128::MIN);
+        w.open("Nested");
+        w.uint(u128::MAX);
+        w.close();
+        w.close();
+    }
+    let mut scalar = Writer::default();
+    write(&mut scalar);
+    let expected = scalar.finish().0;
+    for length in 0..=expected.len() + 1 {
+        let mut writer = Writer::with_exact_arc((), length).unwrap();
+        write(&mut writer);
+        assert_eq!(writer.out.capacity(), length);
+        let result = writer.finish_arc_checked().0;
+        assert_eq!(
+            result.as_deref(),
+            (length == expected.len()).then_some(expected.as_str())
+        );
+    }
+    assert!(Writer::with_exact_arc((), usize::MAX).is_none());
 }
