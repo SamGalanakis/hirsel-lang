@@ -2262,6 +2262,39 @@ impl Lowering<'_, '_> {
                 value: argument,
             }],
         );
+        // This call implements a cleanup action, rather than the source
+        // invocation whose failure eventually reached that action. Keep the
+        // cleanup's body and diagnostic span, but use the non-source block
+        // namespace so independent invocation coverage cannot confuse them.
+        let cleanup = self
+            .ed
+            .unit
+            .tables
+            .cleanup_anchors
+            .get(site.anchor.index())
+            .ok_or_else(|| PassError::Malformed("drop body has no cleanup anchor".into()))?;
+        let origin = hirsel_lir::ir::SourceAnchor {
+            body: cleanup.body,
+            block: u32::MAX,
+            statement: site.anchor.0,
+            site: cleanup.site,
+        };
+        let anchor = match self
+            .ed
+            .unit
+            .tables
+            .source_anchors
+            .iter()
+            .position(|a| a == &origin)
+        {
+            Some(index) => hirsel_lir::ir::SourceAnchorId(index as u32),
+            None => {
+                let anchor =
+                    hirsel_lir::ir::SourceAnchorId(self.ed.unit.tables.source_anchors.len() as u32);
+                self.ed.unit.tables.source_anchors.push(origin);
+                anchor
+            }
+        };
         let id = CallId(self.ed.unit.tables.calls.len() as u32);
         self.ed.unit.tables.calls.push(CallSite {
             receipts: None,
@@ -2274,7 +2307,7 @@ impl Lowering<'_, '_> {
             result: None,
             destination: None,
             declared: crate::import::CALL_EFFECTS,
-            anchor: site.failure.anchor,
+            anchor,
         });
         Ok(id)
     }
