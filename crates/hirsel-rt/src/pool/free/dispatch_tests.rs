@@ -25,6 +25,7 @@ pub(super) fn topology(width: u16) -> Topology {
         searcher: AtomicUsize::new(0),
         after_search: Mutex::new(None),
         before_save: Default::default(),
+        before_idle: Default::default(),
         after_compact: Default::default(),
     };
     let cell = std::sync::OnceLock::new();

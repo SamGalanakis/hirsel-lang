@@ -1742,15 +1742,14 @@ pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, key: registry:
     true
 }
 
-/// A stale token's dispatch returned a frame to Saved unstarted (`resumed`
-/// false) and nothing else is queued on it. Its task's save deferred the quiet
-/// verdict to that remembered wake (`Frame::quiet`), so take it here: without
-/// this recheck a run whose every task is parked waits forever instead of
-/// reporting Blocked.
+/// A physical notification token became idle after its scheduler save callback,
+/// or a stale wake returned unstarted. Recheck only after that transition: two
+/// concurrent save callbacks can each see the other's still-running token and
+/// defer CONC-8, leaving no later semantic operation to publish Blocked.
 /// # Safety
 /// The caller is on an idle stack and holds no role or runtime borrow; its
 /// dispatch still holds the frame's Lease, whose drop wakes home.
-pub(crate) unsafe fn returned_unstarted(run: *mut crate::context::RunShared) {
+pub(crate) unsafe fn saved_idle(run: *mut crate::context::RunShared) {
     let _role = unsafe { role::IdleGuard::idle(run) };
     if unsafe { (*run).control.stopped().is_some() } {
         return;

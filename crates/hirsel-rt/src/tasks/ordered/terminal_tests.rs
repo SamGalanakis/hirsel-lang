@@ -1141,7 +1141,65 @@ fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() 
                             }
                             crate::pool::start(ctx, width, true);
                             crate::pool::free::enable(ctx);
+                            let forced_saves = Arc::new(AtomicU64::new(0));
+                            let observed_saves = forced_saves.clone();
                             let entry: crate::stop::Entry = Box::new(move |ctx, _| {
+                                // Force overlapping final saves: hold the first child
+                                // after its scheduler callback until every waiter has
+                                // saved. Every old callback must defer to this token;
+                                // the transition to idle must then recheck CONC-8.
+                                if children && width > 1 && jitter {
+                                    let (notify_saved, receive) = std::sync::mpsc::channel();
+                                    let receive = std::sync::Mutex::new(receive);
+                                    let sent = AtomicBool::new(false);
+                                    let run_address = (*ctx).run_ptr() as usize;
+                                    let held = AtomicBool::new(false);
+                                    let observed_saves = observed_saves.clone();
+                                    crate::pool::free::test_before_idle(ctx, move |task| {
+                                        let run = run_address as *mut crate::context::RunShared;
+                                        let (parked, all_saved) = {
+                                            let _guard = role::IdleGuard::new(run);
+                                            let s = (*(*run).tasks.get()).as_deref().unwrap();
+                                            let parked = s.tasks[task as usize]
+                                                .as_ref()
+                                                .is_some_and(|row| {
+                                                    matches!(
+                                                        row.wait,
+                                                        Some(
+                                                            Wait::Receive { .. }
+                                                                | Wait::Exit { .. }
+                                                        )
+                                                    )
+                                                });
+                                            let all_saved = s.tasks.iter().flatten().count() == 3
+                                                && s.tasks
+                                                    .iter()
+                                                    .flatten()
+                                                    .all(|row| row.state == State::Parked)
+                                                && s.tasks
+                                                    .iter()
+                                                    .enumerate()
+                                                    .filter(|(_, row)| row.is_some())
+                                                    .all(|(task, _)| {
+                                                        readiness::saved(s, task as u32)
+                                                    });
+                                            (parked, all_saved)
+                                        };
+                                        // This hook follows check_quiet and runs outside
+                                        // its role. No old save callback can see the held
+                                        // child's notification idle before its verdict.
+                                        if all_saved && !sent.swap(true, Ordering::SeqCst) {
+                                            observed_saves.fetch_or(2, Ordering::SeqCst);
+                                            notify_saved.send(()).unwrap();
+                                        }
+                                        if task == 1 && parked && !held.swap(true, Ordering::SeqCst)
+                                        {
+                                            observed_saves.fetch_or(1, Ordering::SeqCst);
+                                            receive.lock().unwrap().recv_timeout(std::time::Duration::from_secs(5))
+                                                .expect("all final waiters must save before the held token becomes idle");
+                                        }
+                                    });
+                                }
                                 let mut scope = 0;
                                 if children {
                                     assert_eq!(
@@ -1196,11 +1254,6 @@ fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() 
                                             STATUS_OK
                                         );
                                     } else {
-                                        if jitter {
-                                            for _ in 0..17 {
-                                                std::thread::yield_now();
-                                            }
-                                        }
                                         let mut status = u32::MAX;
                                         let mut slot = [0u64; 2];
                                         hirsel_rt_v2_channel_receive(
@@ -1214,11 +1267,6 @@ fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() 
                                     }
                                 }
                                 if children {
-                                    if jitter {
-                                        for _ in 0..17 {
-                                            std::thread::yield_now();
-                                        }
-                                    }
                                     hirsel_rt_v2_task_scope_exit(
                                         ctx,
                                         if known_site { 0 } else { 17 },
@@ -1229,22 +1277,42 @@ fn canonical_blocked_cut_uses_logical_wait_targets_after_every_frame_is_saved() 
                                 }
                                 unreachable!("fully blocked tree cannot return");
                             });
+                            let control = crate::host::RunControl::from_inner(
+                                (*ctx).run_ref().control.clone(),
+                            );
+                            let (done, finished) = std::sync::mpsc::channel();
+                            let watchdog = std::thread::spawn(move || {
+                                if finished
+                                    .recv_timeout(std::time::Duration::from_secs(5))
+                                    .is_err()
+                                {
+                                    control.stop();
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
                             let outcome =
                                 crate::stop::run_root(ctx, crate::stop::LaunchFrame::bare(entry));
                             let Err(Stop::Blocked(raw)) = outcome else {
                                 panic!("{outcome:?}")
                             };
                             assert_eq!(raw.len(), if children { 3 } else { 1 });
-                            let until =
-                                std::time::Instant::now() + std::time::Duration::from_secs(5);
-                            while crate::pool::busy((*ctx).run_ref()) != 0 {
-                                assert!(
-                                    std::time::Instant::now() < until,
-                                    "blocked cut did not save"
-                                );
-                                std::thread::yield_now();
-                            }
                             (*ctx).abandon();
+                            assert_eq!(crate::pool::busy((*ctx).run_ref()), 0);
+                            if children && width > 1 && jitter {
+                                assert_eq!(
+                                    forced_saves.load(Ordering::SeqCst),
+                                    3,
+                                    "both sides of the forced idle handoff executed"
+                                );
+                            }
+                            let _ = done.send(());
+                            assert!(
+                                watchdog.join().unwrap(),
+                                "blocked cut watchdog: {children}/{known_site}/{width}/{reorder:?}/{jitter}"
+                            );
+
                             let s = (*(*(*ctx).run_ptr()).tasks.get()).as_deref().unwrap();
                             assert!(
                                 s.tasks

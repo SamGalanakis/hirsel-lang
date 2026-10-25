@@ -144,6 +144,8 @@ pub(super) struct Dispatch {
     after_search: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     before_save: std::sync::OnceLock<Box<dyn Fn(u32, bool) + Send + Sync>>,
+    #[cfg(test)]
+    before_idle: std::sync::OnceLock<Box<dyn Fn(u32) + Send + Sync>>,
     /// Observes each compact leave's released stack: its task, the stack's
     /// context slot, and whether the idle worker's pool now holds it.
     #[cfg(test)]
@@ -167,6 +169,26 @@ pub(crate) unsafe fn test_before_save(
             .get()
             .unwrap()
             .before_save
+            .set(Box::new(hook))
+            .is_ok()
+    );
+}
+
+/// Install a per-run observer between scheduler save publication and the
+/// physical token's transition to idle. It runs outside the scheduler role.
+/// # Safety
+/// As for [`test_before_save`].
+#[cfg(test)]
+pub(crate) unsafe fn test_before_idle(
+    ctx: *mut TaskCtx,
+    hook: impl Fn(u32) + Send + Sync + 'static,
+) {
+    assert!(
+        execs(ctx)
+            .dispatch
+            .get()
+            .unwrap()
+            .before_idle
             .set(Box::new(hook))
             .is_ok()
     );
@@ -258,6 +280,8 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
                 after_search: Mutex::new(None),
                 #[cfg(test)]
                 before_save: Default::default(),
+                #[cfg(test)]
+                before_idle: Default::default(),
                 #[cfg(test)]
                 after_compact: Default::default(),
                 count: Arc::new(Count {
@@ -824,6 +848,9 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             let queued = frame.placement.leave(running, left, || unsafe {
                 crate::tasks::after_save(run, task, false)
             });
+            if queued.is_none() {
+                unsafe { crate::tasks::saved_idle(run) };
+            }
             if queued.is_some() {
                 let owner = route(execs, &frame, word_owner(frame.placement.owner()));
                 frame.placement.set_owner(owner_word(owner));
@@ -852,7 +879,18 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             #[cfg(feature = "diagnostic")]
             crate::compact_trace::held(task.slot);
             unsafe { crate::tasks::after_save(run, task, false) };
+            #[cfg(test)]
+            if let Some(hook) = execs
+                .dispatch
+                .get()
+                .and_then(|dispatch| dispatch.before_idle.get())
+            {
+                hook(task.slot);
+            }
             let queued = running.save(yielded);
+            if queued.is_none() {
+                unsafe { crate::tasks::saved_idle(run) };
+            }
             let _activity = execs.activity.lock().unwrap();
             exec.busy.store(false, Ordering::SeqCst);
             if let Some(queued) = queued {
@@ -1099,7 +1137,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                     true,
                 ),
                 frame::Returned::Idle(quiet) => {
-                    quiet.take(|| crate::tasks::returned_unstarted(run));
+                    quiet.take(|| crate::tasks::saved_idle(run));
                     drop(lease);
                 }
             }
