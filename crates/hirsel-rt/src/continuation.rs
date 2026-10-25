@@ -12,7 +12,9 @@
 //! `rayon-core/src/join/mod.rs:132-185`: the owner never resumes storage it
 //! already handed off).
 //!
-//! A resumable task body runs through [`hirsel_rt_v2_resume_run`]. Under the
+//! A resumable task body runs through [`hirsel_rt_v2_resume_run`]. It saves
+//! only at a boundary where the task would wait (see
+//! [`hirsel_rt_v2_resume_point`]). Under the
 //! shared physical dispatcher a saved compact frame has exactly one owner, the
 //! dispatcher, and no stack: its task's stack goes back to its worker after
 //! the unwind, and any worker activates it on a stack of its own (Rayon join's
@@ -20,6 +22,8 @@
 //! runs it once, wherever). Stackful fibers keep their own switch until the
 //! dispatcher's saved-fiber cutover (S2), so only tests save a `Fiber` here.
 #![cfg_attr(not(test), allow(dead_code))]
+
+use crate::RESUME_AHEAD;
 
 /// The resume point of a stackful frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -171,32 +175,28 @@ impl Custody {
     }
 }
 
-/// Whether resumable frames save at every resume point (the published form),
-/// under `HIRSEL_RT_RESUME_SAVE` or `HIRSEL_RT_MIGRATE`; otherwise each
-/// boundary proceeds in place (the local form).
-fn saving() -> bool {
-    static SAVING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *SAVING.get_or_init(|| {
-        std::env::var_os("HIRSEL_RT_RESUME_SAVE").is_some()
-            || std::env::var_os("HIRSEL_RT_MIGRATE").is_some()
-    })
-}
-
-/// A resumable frame reached a boundary with its state materialized. The
-/// decision is physical: it adds no operation, charge or observation.
+/// A resumable frame reached a boundary with its state materialized. It
+/// saves exactly when the task would wait here before issuing the boundary's
+/// operation, or is published to another worker (forced migration); otherwise
+/// the operation proceeds in place on this stack. `state` carries
+/// [`RESUME_AHEAD`] when a non-head can issue the operation. The decision is
+/// physical: it adds no operation, charge or observation (Tokio's harness goes
+/// idle only on `Pending`, `runtime/task/harness.rs:193-231`; Go parks only at
+/// `gopark`, `runtime/proc.go:457-492`).
 ///
 /// # Safety
 /// `frame` is the running task's live resumable frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
-    _ctx: *mut crate::TaskCtx,
+    ctx: *mut crate::TaskCtx,
     frame: *mut u8,
     state: u32,
 ) -> u8 {
-    if unsafe { frame.cast::<u32>().read() } != state {
+    if unsafe { frame.cast::<u32>().read() } != state & !RESUME_AHEAD {
         crate::fault("a resume point before its state was recorded");
     }
-    u8::from(saving())
+    // SAFETY: compiled code calls this at a boundary of the running task.
+    u8::from(unsafe { crate::tasks::compact::parks(ctx, state & RESUME_AHEAD != 0) })
 }
 
 /// A resumable body's dispatcher: its task entry's arguments and its frame.

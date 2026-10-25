@@ -359,6 +359,26 @@ impl<P, R> Frontier<P, R> {
         row.state = State::Running(worker);
     }
 
+    /// A running task whose saved frame left its worker's stack is adopted by
+    /// another worker. Its turn, log, fuel and queue position are unchanged:
+    /// only the physical owner of its claim moves.
+    pub fn moved(&mut self, task: TaskId, worker: u16) {
+        let row = self.tasks.get_mut(&task).expect("a live task");
+        assert!(
+            matches!(row.state, State::Running(_)),
+            "only a running claim moves"
+        );
+        row.state = State::Running(worker);
+    }
+
+    /// Whether an offer from non-head `task` can be accepted now rather than
+    /// returned Full (`offer`).
+    pub(crate) fn accepts(&self, task: TaskId) -> bool {
+        !self.stopped
+            && self.polling.is_none()
+            && self.tasks[&task].log.len() <= usize::from(self.policy.run_ahead)
+    }
+
     /// Apply M0b's measured fallback. Neither this nor placement can relax E.
     pub fn tune(&mut self, sample: AutoSample) {
         self.auto = multicore_policy::reorder(sample);

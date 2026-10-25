@@ -47,17 +47,7 @@ pub fn runtime_identity() -> ContentHash {
 /// transitions; any other core runtime entry by its locality. Everything else
 /// defers to its Ready body.
 pub fn classify(definition: &DefPath) -> Option<CalleeClass> {
-    let path = &definition.0;
-    if !path.package.package_is("core", "1") {
-        return None;
-    }
-    let name = path
-        .modules
-        .iter()
-        .chain(std::iter::once(&path.name))
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join(".");
+    let name = hirsel_lir::continuation::core_name(definition)?;
     let point = |ops: &[&str]| {
         ops.iter().any(|op| {
             d::op_descriptor(op)

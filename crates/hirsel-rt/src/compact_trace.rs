@@ -4,7 +4,11 @@
 //! leave appends `leave <task> <state> <worker> <pooled>` once its idle worker
 //! has taken back the stack the frame left (`pooled` is 1 when that worker's
 //! pool holds it), and each activation appends `activate <task> <state>
-//! <worker>` when a worker lends the frame a stack. `<task>` is the row index,
+//! <worker>` when a worker lends the frame a stack. A task that suspends on its
+//! own stack appends `hold <task> <worker>` once saved, and `resume <task>
+//! <worker>` when a worker switches back into a saved stack (a task's first
+//! start included), so a reader bounds the stacks suspended tasks hold
+//! (Go's `TestStackMem`, `runtime/stack_test.go:24-79`). `<task>` is the row index,
 //! `<state>` the frame's saved state and `<worker>` the compute index, or
 //! `home`. The trace is physical: no canonical event, tape entry or
 //! observation depends on it.
@@ -48,4 +52,14 @@ pub(crate) fn left(task: u32, state: u32, pooled: bool) {
 /// A worker lent a compact frame a stack.
 pub(crate) fn activated(task: u32, state: u32) {
     line(format_args!("activate {task} {state} {}", worker()));
+}
+
+/// A task suspended on its own stack, which it keeps.
+pub(crate) fn held(task: u32) {
+    line(format_args!("hold {task} {}", worker()));
+}
+
+/// A worker switched back into a task's saved stack.
+pub(crate) fn resumed(task: u32) {
+    line(format_args!("resume {task} {}", worker()));
 }

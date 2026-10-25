@@ -50,6 +50,11 @@ pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
 /// its live state is materialized at the frame header's state and the boundary call
 /// has not run. Only continuation alternates and their callers see it.
 pub const STATUS_SUSPENDED: u8 = 4;
+/// Set in `hirsel_rt_v2_resume_point`'s state argument when the boundary's operation can
+/// be issued by a task that is not the Ordered head without waiting for it (every op it
+/// performs commits early or is logged). A physical hint: without it the runtime assumes
+/// the operation waits, which changes no observation.
+pub const RESUME_AHEAD: u32 = 1 << 31;
 /// Bytes of a resumable frame's header: the u32 resume state and a reserved u32.
 pub const RESUME_FRAME_HEADER_BYTES: u64 = 8;
 /// Launch uses a separate channel from language failure.
@@ -568,7 +573,8 @@ pub enum RuntimeEntry {
     ReceiptRetain,
     ReceiptRelease,
     /// A resumable frame reached a boundary with its live state materialized: proceed
-    /// with the boundary call (0) or return `STATUS_SUSPENDED` (1).
+    /// with the boundary call (0) or return `STATUS_SUSPENDED` (1). The state argument
+    /// carries [`RESUME_AHEAD`] for an operation a non-head can issue.
     ResumePoint,
     /// A resumable task body: run its dispatcher over an owned compact frame, saving and
     /// resuming the frame at each `STATUS_SUSPENDED`, until it returns.

@@ -294,6 +294,12 @@ pub(crate) fn enabled(run: &RunShared) -> bool {
         .is_some_and(|execs| execs.dispatch.get().is_some())
 }
 
+/// Whether every suspension publishes its frame to another worker (the
+/// forced-migration test seam: `Host::with_workers` and `BodyRun::new`).
+pub(crate) fn migrating(run: &RunShared) -> bool {
+    run.execs.as_deref().is_some_and(|execs| execs.migrate)
+}
+
 pub(super) fn pending(execs: &Execs) -> bool {
     execs
         .dispatch
@@ -843,6 +849,8 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             image.sp = unsafe { (*image.ctx).task_sp };
             frame.placement.set_owner(owner_word(owner));
             let task = image.task;
+            #[cfg(feature = "diagnostic")]
+            crate::compact_trace::held(task);
             unsafe { crate::tasks::after_save(run, task, false) };
             let queued = running.save(yielded);
             let _activity = execs.activity.lock().unwrap();
@@ -1114,6 +1122,8 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             );
             crate::tasks::compact::activate(run, task, stack)
         } else {
+            #[cfg(feature = "diagnostic")]
+            crate::compact_trace::resumed(task);
             sp
         };
         TaskCtx::switch_in(ctx, exec.worker.get());

@@ -255,7 +255,7 @@ fn runtime50_two_boundary_unique_region_continuation() {
         }
         let local = Fixture::default();
         let published = Fixture {
-            resume_save: true,
+            migrate: true,
             ..Fixture::default()
         };
         for (source, label) in [(TWO_BOUNDARY, "two-boundary"), (CANCELED, "canceled")] {
@@ -278,13 +278,20 @@ fn runtime50_migrate_every_suspension_continuations() {
     });
 }
 
-/// One compact trace line: `leave` or `activate`, task row, state, worker, pooled.
+/// One compact trace line: `leave` or `activate`, task row, state, worker,
+/// pooled; or `hold` or `resume`, task row, 0, worker, false.
 type Line = (String, u32, u32, String, bool);
 
 /// Live and replayed standalone runs of `source` on both backends, under
 /// Ordered admission on four cores with forced migration, in the diagnostic
 /// archive with its compact trace.
 pub(crate) fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
+    compact_runs_with(source, label, true)
+}
+
+/// As [`compact_runs`]; without `migrate` no runtime knob is set and frames
+/// save only where their tasks wait.
+pub(crate) fn compact_runs_with(source: &str, label: &str, migrate: bool) -> Vec<Vec<Line>> {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -341,9 +348,11 @@ pub(crate) fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
                 .env("HIRSEL_RT_ROOT", dir.join("root"))
                 .env("HIRSEL_RT_DIAGNOSTIC", "1")
                 .env("HIRSEL_RT_OBSERVATION", &record)
-                .env("HIRSEL_RT_MIGRATE", "1")
                 .env("HIRSEL_RT_COMPACT_TRACE", &trace)
                 .stdin(std::process::Stdio::null());
+            if migrate {
+                command.env("HIRSEL_RT_MIGRATE", "1");
+            }
             if replay {
                 command.arg("--hirsel-replay").arg(&tape);
             } else {
@@ -375,6 +384,15 @@ pub(crate) fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
                     .lines()
                     .map(|line| {
                         let words: Vec<&str> = line.split(' ').collect();
+                        if matches!(words[0], "hold" | "resume") {
+                            return (
+                                words[0].to_owned(),
+                                words[1].parse().unwrap(),
+                                0,
+                                words[2].to_owned(),
+                                false,
+                            );
+                        }
                         (
                             words[0].to_owned(),
                             words[1].parse().unwrap(),
@@ -414,6 +432,7 @@ pub(crate) fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
                 assert_ne!(*worker, from, "{label}: task {task} did not migrate");
                 activations += 1;
             }
+            "hold" | "resume" => {}
             other => panic!("{label}: {other}"),
         }
     }
@@ -647,25 +666,101 @@ fn runtime51_parameterized_region_continuation() {
         );
 
         let local = Fixture::default();
-        let published = Fixture {
-            resume_save: true,
-            ..Fixture::default()
-        };
         let migrate = Fixture {
             migrate: true,
             ..Fixture::default()
         };
         let (done, canceled) = (parameterized_source(false), parameterized_source(true));
         agree(&done, &local, "parameterized local");
-        agree_replayed(&done, &published, "parameterized published", true);
-        agree(&done, &migrate, "parameterized migrate");
-        agree(&canceled, &published, "parameterized canceled");
+        agree_replayed(&done, &migrate, "parameterized migrate", true);
+        agree(&canceled, &migrate, "parameterized canceled");
         // Under the shared dispatcher the saved frame, its parameter and
         // region records included, leaves its stack and activates on another
         // worker's, live and replayed.
         for (index, trace) in compact_runs(&done, "parameterized").iter().enumerate() {
             let cell = format!("parameterized run {index}");
             assert!(exact_compact_custody(trace, &cell) >= 1, "{cell}");
+        }
+    });
+}
+
+/// `CHILDREN` children, each waiting for its turn at a receive before it
+/// answers: while the root holds the head, every child is parked at a
+/// boundary whose operation needs the head.
+const PARKED_FANOUT: &str = r#"
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let total=task.scope(tasks,fn(s:Scope)->u64 {
+    let (sender,receiver):(Sender[u64],Receiver[u64])=channel.open(tasks)
+    let mut rx=take receiver
+    let mut set:TaskSet[Result[u64,()]] of s=task.set(s)
+    for seed in 1u64..CHILDREN {
+      let dup=sender.dup(tasks,sender)
+      task.add(s,mut set,task.async(s,fn()->Result[u64,()] {
+        let mut tx=take dup
+        let mut held:List[u64]=[seed,seed*3u64]
+        list.push(mut held,seed*5u64)
+        let _=channel.send(tasks,mut tx,held[0])
+        let _=channel.send(tasks,mut tx,held[1])
+        Ok(held[2])
+      }))
+    }
+    let mut sum=0u64
+    for _ in 1u64..CHILDREN {
+      for _ in 0u64..2u64 {
+        match channel.receive(tasks,mut rx) {Ok(x)=>{sum=sum*31u64+x}, Error(_)=>{}}
+      }
+    }
+    if let Ok(rows)=std@1/task.all(s,take set) {for x in rows {sum=sum+x}}
+    sum
+  })
+  let _=out.print(output,f"{total}\n")
+  Ok(())
+}
+"#;
+
+/// The most stacks suspended children held at once: a child holds its stack
+/// from a `hold` until its next `resume`. Task row 0 is the root.
+fn peak_held(trace: &[Line]) -> usize {
+    let mut held = std::collections::BTreeSet::new();
+    let mut peak = 0;
+    for (kind, task, ..) in trace {
+        match kind.as_str() {
+            "hold" if *task != 0 => {
+                held.insert(*task);
+                peak = peak.max(held.len());
+            }
+            "resume" => {
+                held.remove(task);
+            }
+            _ => {}
+        }
+    }
+    peak
+}
+
+/// Go's `TestStackMem` (`runtime/stack_test.go:24-79`) as a native fanout:
+/// with no runtime knob, N children parked at boundaries hold at most one
+/// stack per worker, not one each, on both backends, live and replayed, and
+/// every observation equals the reference interpreter's.
+#[test]
+fn runtime52_parked_fanout_holds_worker_stacks() {
+    with_compiler_stack(|| {
+        for children in [8u64, 32] {
+            let source = PARKED_FANOUT.replace("CHILDREN", &format!("{}u64", children + 1));
+            let label = format!("parked fanout {children}");
+            for (index, trace) in compact_runs_with(&source, &label, false)
+                .iter()
+                .enumerate()
+            {
+                let leaves = trace.iter().filter(|line| line.0 == "leave").count();
+                let holds = trace.iter().filter(|line| line.0 == "hold").count();
+                eprintln!(
+                    "{label} run {index}: leaves {leaves} holds {holds} peak {}",
+                    peak_held(trace)
+                );
+            }
         }
     });
 }

@@ -127,6 +127,51 @@ pub const FRAME_HEADER_BYTES: u64 = 8;
 /// Larger live images stay stackful: the frame must stay compact.
 pub const MAX_FRAME_BYTES: u64 = 4096;
 
+/// The dotted name of a `core@1` definition (`channel.send`), the key of the
+/// runtime's reviewed operation descriptors; None outside `core@1`.
+pub fn core_name(definition: &DefPath) -> Option<String> {
+    let path = &definition.0;
+    if !path.package.package_is("core", "1") {
+        return None;
+    }
+    Some(
+        path.modules
+            .iter()
+            .chain(std::iter::once(&path.name))
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join("."),
+    )
+}
+
+/// The reviewed ops a `core@1` operation or runtime entry performs.
+fn core_ops(name: &str) -> Option<&'static [&'static str]> {
+    use hirsel_rt_operations::descriptors as d;
+    if let Some((_, ops)) = d::REGISTRY.iter().find(|(n, _)| *n == name) {
+        return Some(ops);
+    }
+    let symbol = format!("hirsel_rt_v2_{}", name.replace('.', "_"));
+    d::entry_descriptor(&symbol).map(|entry| entry.ops)
+}
+
+/// Whether a task that is not the Ordered head can issue the boundary
+/// operation `definition` without first waiting for the head: every op it
+/// performs commits early (§4.1 E) or is logged (class D). The emitters pass
+/// it to the resume point as [`crate::runtime_abi::RESUME_AHEAD`]; it is a
+/// physical hint and decides no observation.
+pub fn issues_ahead(definition: &DefPath) -> bool {
+    use hirsel_rt_operations::descriptors::{self as d, Class};
+    core_name(definition)
+        .and_then(|name| core_ops(&name))
+        .is_some_and(|ops| {
+            !ops.is_empty()
+                && ops.iter().all(|op| {
+                    d::E.contains(op)
+                        || d::op_descriptor(op).is_some_and(|o| o.class() == Class::D)
+                })
+        })
+}
+
 /// What a call does to its caller's continuation, as the runtime's reviewed
 /// operation descriptors classify it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

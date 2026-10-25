@@ -8,8 +8,10 @@
 //! [`entry`] continues the dispatcher at the saved state and then ends the
 //! task exactly as the task entry does.
 //!
-//! The leave is physical. Ordered keeps the task's turn, log and queue
-//! position and selects the saved frame as it selects any; Free keeps the row
+//! A frame saves only where its task would wait or is published to another
+//! worker ([`parks`]). The leave is physical. Ordered keeps the task's turn,
+//! log and queue position and selects the saved frame as it selects any (a
+//! published non-head by its moved claim); Free keeps the row
 //! ready and remembers the task's own notification until the save, as its
 //! physical migration does. No operation, charge or observation is added.
 //!
@@ -28,18 +30,15 @@ use crate::context::RunShared;
 #[repr(C, align(64))]
 pub(super) struct ContextHome(std::cell::UnsafeCell<std::mem::MaybeUninit<TaskCtx>>);
 
-/// Whether the running task can leave its stack at this resume point. If it
-/// can, its logical policy records the physical leave, and the caller must
-/// leave: Ordered marks the frame saving, Free remembers its own wake.
-///
-/// A task leaves only from the stack its task entry started (not one lent by
-/// its parent), owned by any compute worker, outside callbacks and private
-/// ahead execution. Every other chain keeps the general stackful path.
+/// Whether the running task, at a resume point, can leave its stack at all:
+/// only from the stack its task entry started (not one lent by its parent),
+/// owned by any compute worker, outside callbacks and private ahead
+/// execution. Every other chain (unknown, foreign, pinned) keeps the general
+/// stackful path.
 ///
 /// # Safety
-/// The running task holds the role at a resume point of the body its task
-/// entry called.
-pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
+/// The running task is at a resume point of the body its task entry called.
+unsafe fn movable(ctx: *mut TaskCtx) -> bool {
     // SAFETY: caller contract.
     unsafe {
         if !crate::pool::free::enabled((*ctx).run_ref())
@@ -51,7 +50,7 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
         }
     }
     let ordered = ordered::engine::on(ctx);
-    let movable = role::with_role(ctx, |s| {
+    role::with_role(ctx, |s| {
         let me = s.current;
         let row = s.task(me);
         row.scope.is_some()
@@ -65,12 +64,46 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
                 Logical::Free(_) => !ordered,
                 Logical::Cooperative => false,
             }
-    });
-    if !movable {
+    })
+}
+
+/// Whether the running task saves its frame at this resume point: it is
+/// published to another worker (forced migration, which saves every frame,
+/// in place where it cannot leave), or it can leave its stack and would wait
+/// here before issuing the boundary's operation (Ordered: it is not a ready
+/// head, and the operation needs the head or the frontier takes no offer from
+/// it now). `ahead` says a non-head can issue the operation. Free waits only
+/// inside its operations, so a Free frame saves only when published. Reads
+/// only; the save itself is [`leave`].
+///
+/// # Safety
+/// The running task is at a resume point of the body its task entry called.
+pub(crate) unsafe fn parks(ctx: *mut TaskCtx, ahead: bool) -> bool {
+    // SAFETY: caller contract.
+    if crate::pool::free::migrating(unsafe { (*ctx).run_ref() }) {
+        return true;
+    }
+    // SAFETY: caller contract.
+    (unsafe { movable(ctx) }) && ordered::engine::on(ctx) && ordered::engine::waits(ctx, ahead)
+}
+
+/// Whether the running task can leave its stack at this resume point. If it
+/// can, its logical policy records the physical leave, and the caller must
+/// leave: Ordered marks the frame saving (a wait resumes at head; a published
+/// frame keeps its claim and may move on before it), Free remembers its own
+/// wake.
+///
+/// # Safety
+/// The running task holds the role at a resume point of the body its task
+/// entry called.
+pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: caller contract.
+    if !unsafe { movable(ctx) } {
         return false;
     }
-    if ordered {
-        ordered::engine::transfer(ctx);
+    if ordered::engine::on(ctx) {
+        let published = crate::pool::free::migrating(unsafe { (*ctx).run_ref() });
+        ordered::engine::transfer(ctx, !published);
     } else {
         // SAFETY: the role is held and no table borrow survives this call.
         unsafe {

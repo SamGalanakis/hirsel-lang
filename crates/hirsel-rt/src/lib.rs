@@ -159,6 +159,9 @@ pub const STATUS_EXHAUSTED: u8 = 2;
 pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
 /// A resumable continuation alternate saved its frame at a boundary whose call has not run.
 pub const STATUS_SUSPENDED: u8 = 4;
+/// Set in a resume point's state when a non-head can issue the boundary's operation
+/// (`hirsel_lir::runtime_abi::RESUME_AHEAD`).
+pub const RESUME_AHEAD: u32 = 1 << 31;
 
 /// Report a broken runtime invariant and abort. Never a language failure.
 #[cold]

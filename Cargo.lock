@@ -887,6 +887,7 @@ dependencies = [
  "hirsel-layout",
  "hirsel-lir",
  "hirsel-rc",
+ "hirsel-rt-operations",
  "hirsel-span",
  "hirsel-syntax",
  "hirsel-tir",

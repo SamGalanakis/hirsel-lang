@@ -56,6 +56,9 @@ pub(crate) struct Driver {
     /// A park/holding/end boundary cannot poll slots before its physical save.
     pub(super) poll_after_save: Option<TaskId>,
     return_after_save: Option<TaskId>,
+    /// Non-head frames that left their stacks while their claim was running
+    /// and may be adopted without waiting for head (a moved claim).
+    moved: BTreeSet<TaskId>,
     pub(super) carriers: BTreeMap<(crate::ordered::objects::Kind, u64), super::engine::Carrier>,
 }
 
@@ -95,6 +98,7 @@ impl Driver {
             },
             poll_after_save: None,
             return_after_save: None,
+            moved: BTreeSet::new(),
             carriers: BTreeMap::new(),
         }
     }
@@ -141,8 +145,10 @@ impl Driver {
                 continue;
             };
             let state = frontier.state(task);
+            let claimable = matches!(state, State::Queued | State::Ahead)
+                || (matches!(state, State::Running(_)) && self.moved.contains(&task));
             if matches!(state, State::Parked | State::Holding | State::Done)
-                || (task != head && (head_only || !matches!(state, State::Queued | State::Ahead)))
+                || (task != head && (head_only || !claimable))
             {
                 continue;
             }
@@ -154,12 +160,16 @@ impl Driver {
 
     /// The shared dispatch token exclusively owns this frame before the claim.
     /// A head with a pending log resumes its boundary to absorb that log first.
+    /// A moved frame's running claim passes to `worker`.
     pub(crate) fn claimed(&mut self, task: TaskId, worker: u16) {
         let execution = self.execution.get_mut(&task).expect("a dispatched task");
         assert_eq!(*execution, Execution::Selected);
         *execution = Execution::Running;
         let frontier = self.frontier.as_mut().expect("restored frontier");
-        if matches!(frontier.state(task), State::Queued | State::Ahead) {
+        let moved = self.moved.remove(&task);
+        if moved && matches!(frontier.state(task), State::Running(_)) {
+            frontier.moved(task, worker);
+        } else if matches!(frontier.state(task), State::Queued | State::Ahead) {
             frontier.start(task, worker);
         } else {
             assert_eq!(
@@ -219,6 +229,16 @@ impl Driver {
         let execution = self.execution.get_mut(&task).expect("a live task");
         assert_eq!(*execution, Execution::Running);
         *execution = Execution::Saving { head_only };
+    }
+
+    /// A compact frame leaves its stack (`engine::transfer`). A frame that
+    /// waits for head resumes only at head; a published one keeps its running
+    /// claim, which the next worker adopts by [`Driver::claimed`].
+    pub(super) fn left(&mut self, task: TaskId, head_only: bool) {
+        self.suspending(task, head_only);
+        if !head_only {
+            self.moved.insert(task);
+        }
     }
 
     pub(super) fn is_finishing(&self, task: TaskId) -> bool {

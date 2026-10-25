@@ -498,7 +498,7 @@ fn poll(ctx: *mut TaskCtx) -> Stopped<()> {
     Ok(())
 }
 
-fn notify(ctx: *mut TaskCtx) {
+pub(super) fn notify(ctx: *mut TaskCtx) {
     let selected = with_driver(ctx, |d| d.select());
     if selected.is_empty() {
         return;
@@ -581,14 +581,37 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     }
 }
 
+/// Whether the running task would wait at a boundary before it could issue
+/// the boundary's operation. A head waits only for a physical save or a
+/// retirement poll; a non-head waits for the head unless it can issue the
+/// operation ahead (`ahead`) and the frontier takes an offer from it now.
+/// Reads only: no claim, charge or event.
+pub(crate) fn waits(ctx: *mut TaskCtx, ahead: bool) -> bool {
+    with_current_driver(ctx, |task, driver| {
+        let head_wait = driver.awaiting_save || driver.host_poll || driver.poll_deferred();
+        let Some(frontier) = driver.frontier.as_ref() else {
+            return false;
+        };
+        if frontier.is_stopped() {
+            return false;
+        }
+        if frontier.head() == Some(task) {
+            head_wait
+        } else {
+            !ahead || !frontier.accepts(task)
+        }
+    })
+}
+
 /// A compact frame leaves its stack at a resume point (`tasks::compact`): a
 /// physical save with no semantic scheduling point. The task keeps its turn,
-/// log and queue position; the driver selects its saved frame as any other,
-/// so a non-head task continues once its frontier state permits a claim.
-pub(crate) fn transfer(ctx: *mut TaskCtx) {
+/// log and queue position. A frame that waits resumes once it is head
+/// (`head_only`); a published one keeps its claim and is adopted by the next
+/// worker without waiting for head (the driver's moved claim).
+pub(crate) fn transfer(ctx: *mut TaskCtx, head_only: bool) {
     with_current_driver(ctx, |task, driver| {
         driver.enter(task, crate::pool::compute_index().unwrap_or(0));
-        driver.suspending(task, false);
+        driver.left(task, head_only);
     });
 }
 

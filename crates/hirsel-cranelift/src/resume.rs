@@ -6,7 +6,8 @@
 //! frame; state 0 stores the parameters once. At each boundary the alternate
 //! materializes the state's live values and writes the state into the frame
 //! header before anything else: an operation boundary then asks
-//! `hirsel_rt_v2_resume_point` whether to suspend, and a resumable callee runs
+//! `hirsel_rt_v2_resume_point` whether to suspend (telling it whether a
+//! non-head can issue the operation), and a resumable callee runs
 //! through its own dispatcher in its nested frame. State k reloads its values
 //! and reissues its boundary call, so no executed work is repeated.
 use crate::function::{FnEmitter, Place, flags};
@@ -17,11 +18,12 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_name,
+    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, issues_ahead,
+    resume_name,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
-use hirsel_lir::runtime_abi::{RuntimeEntry, STATUS_SUSPENDED};
+use hirsel_lir::runtime_abi::{RESUME_AHEAD, RuntimeEntry, STATUS_SUSPENDED};
 use hirsel_lir::stage::{ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
 
 pub(crate) struct Resume<'a> {
@@ -231,10 +233,15 @@ impl FnEmitter<'_, '_, '_> {
         }
         if !resuming {
             self.materialize(state)?;
+            let hint = if issues_ahead(&state.boundary.operation) {
+                RESUME_AHEAD
+            } else {
+                0
+            };
             let number = self
                 .b
                 .ins()
-                .iconst(types::I32, i64::from(state.target.state));
+                .iconst(types::I32, i64::from(state.target.state | hint));
             let decided = self.rt1(RuntimeEntry::ResumePoint, &[self.context, frame, number])?;
             let (suspended, proceed) = (self.b.create_block(), self.b.create_block());
             self.b.set_cold_block(suspended);
