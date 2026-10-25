@@ -5,7 +5,13 @@ use hirsel_lir::ownership_trace::{self as trace, Plan, Point};
 
 pub(super) trait Reporter {
     type Output;
+    fn edge(&mut self, _old: EdgeId, _new: EdgeId) -> Result<(), PassError> {
+        Ok(())
+    }
     fn finalizer_edge(&mut self, _old: EdgeId, _block: BlockId) -> Result<(), PassError> {
+        Ok(())
+    }
+    fn inserted(&mut self, _insertions: &[(BlockId, usize)]) -> Result<(), PassError> {
         Ok(())
     }
     fn prelude(&mut self, _ed: &Editor<Ready>) -> Result<(), PassError> {
@@ -41,12 +47,14 @@ impl Reporter for NoObservations {
 pub(super) struct Observations {
     plan: Plan,
     versions: Option<(LirUnit<Ready>, Plan)>,
+    edges: BTreeMap<EdgeId, EdgeId>,
 }
 impl Observations {
     pub(super) fn new(plan: &Plan) -> Self {
         Self {
             plan: plan.clone(),
             versions: None,
+            edges: BTreeMap::new(),
         }
     }
 }
@@ -63,10 +71,51 @@ fn refused(message: impl std::fmt::Display) -> PassError {
 }
 impl Reporter for Observations {
     type Output = Plan;
+    fn edge(&mut self, old: EdgeId, new: EdgeId) -> Result<(), PassError> {
+        if let Some(previous) = self.edges.get(&old) {
+            if *previous != new {
+                return Err(refused(
+                    "shared observed edge has several flag replacements",
+                ));
+            }
+            return Ok(());
+        }
+        let mut observed = false;
+        for row in &mut self.plan.observations {
+            if row.point == Point::Edge(old) {
+                row.point = Point::Edge(new);
+                observed = true;
+            }
+        }
+        if observed {
+            self.edges.insert(old, new);
+        }
+        Ok(())
+    }
     fn finalizer_edge(&mut self, old: EdgeId, block: BlockId) -> Result<(), PassError> {
         for row in &mut self.plan.observations {
             if row.point == Point::Edge(old) {
                 row.point = Point::FinalizerDrop { block };
+            }
+        }
+        Ok(())
+    }
+    fn inserted(&mut self, insertions: &[(BlockId, usize)]) -> Result<(), PassError> {
+        for row in &mut self.plan.observations {
+            let at = match &mut row.point {
+                Point::Instruction { block, index, .. } | Point::ReleaseDrop { block, index } => {
+                    Some((block, index))
+                }
+                _ => None,
+            };
+            if let Some((block, index)) = at {
+                for &(at_block, at_index) in insertions {
+                    if *block == at_block && *index as usize >= at_index {
+                        *index = index
+                            .checked_add(1)
+                            .ok_or_else(|| refused("flag insertion index overflow"))?;
+                    }
+                }
             }
         }
         Ok(())

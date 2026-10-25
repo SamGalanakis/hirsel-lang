@@ -263,7 +263,7 @@ fn lower_reporting<S: Stage, R: Reporter>(
     // sharing the final result. Ready validation still re-derives its own facts.
     let inputs = join_versions(&mut ed, &mut facts, lay, false)?;
     let before_flags = instruction_states_from(&ed, &facts, lay, false, inputs);
-    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, index, &before_flags)? {
+    let drops: Vec<_> = match join_flags(&mut ed, &facts, lay, index, &before_flags, &mut report)? {
         None => before_flags
             .into_iter()
             .map(|(b, i, st)| (b, i, st, Flags::new()))
@@ -937,12 +937,13 @@ fn inline_part_layout(
     Ok(Some(layout))
 }
 
-fn join_flags(
+fn join_flags<R: Reporter>(
     ed: &mut Editor<Ready>,
     facts: &Facts,
     lay: Lay<'_>,
     index: &hirsel_lir::LayoutIndex<'_>,
     drops: &[(BlockId, usize, State)],
+    report: &mut R,
 ) -> Result<Option<BTreeMap<(BlockId, usize), Flags>>, PassError> {
     // Each flagged part with its layout. A flag is true exactly when its part
     // still owns content (LIR revision 13): a part whose remaining fields are
@@ -999,6 +1000,7 @@ fn join_flags(
     };
     let yes = constant(true);
     let no = constant(false);
+    report.inserted(&[(ed.unit.entry, 0), (ed.unit.entry, 0)])?;
     type Shape = BTreeMap<Part, Tri>;
     let shape = |st: &State| -> Shape {
         wanted
@@ -1120,7 +1122,9 @@ fn join_flags(
                         .keys()
                         .map(|p| argument(p, state, here))
                         .collect::<Result<Vec<_>, _>>()?;
-                    let cleanup = extended(ed, cleanup, &extra);
+                    let extended = extended(ed, cleanup, &extra);
+                    report.edge(cleanup, extended)?;
+                    let cleanup = extended;
                     let mut copy = ed.unit.tables.failures[failure.index()].clone();
                     copy.cleanup = cleanup;
                     ed.unit.tables.failures.push(copy);
@@ -1140,7 +1144,9 @@ fn join_flags(
                 .keys()
                 .map(|p| argument(p, state, &current))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(extended(ed, e, &extra))
+            let extended = extended(ed, e, &extra);
+            report.edge(e, extended)?;
+            Ok(extended)
         })?;
     }
     Ok(Some(flags))
@@ -1602,6 +1608,15 @@ impl Lowering<'_, '_> {
         })?;
         if whole_finalizer {
             report.finalizer_edge(site.failure.cleanup, b)?;
+        } else if let Some(hirsel_lir::ownership_trace::Point::ReleaseDrop { block, index }) =
+            release
+        {
+            if let Inst::Release { failure, .. } = self.ed.code[block.index()][index as usize] {
+                report.edge(
+                    site.failure.cleanup,
+                    self.ed.unit.tables.failures[failure.index()].cleanup,
+                )?;
+            }
         }
         self.ed.code[at.index()].extend(tail);
         self.ed.unit.terminators[at.index()] = terminator;
@@ -1652,7 +1667,14 @@ impl Lowering<'_, '_> {
             index: i,
             tail: after,
             start: 0,
-            replacement: None,
+            // This is the existing live branch of the same conditional
+            // semantic drop. Its next splice transports the original marker
+            // to the checked release/finalizer commit, never the bypass.
+            replacement: Some(hirsel_lir::ownership_trace::Point::Instruction {
+                block: full,
+                index: 0,
+                moment: hirsel_lir::ownership_trace::Moment::IfLive,
+            }),
             insertions: &[],
         })?;
         self.drop(full, 0, &there, flags, report)

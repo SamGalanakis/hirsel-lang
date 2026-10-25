@@ -1,6 +1,6 @@
 //! Native emission of leaf ownership transitions. This staged adapter accepts
-//! whole local storage and owned direct arguments/results within a checked
-//! closed diagnostic call graph; captures, joins, nested
+//! whole local storage, owned direct calls and disjoint join transfers within
+//! a checked closed call graph; captures, nested
 //! ownership and compound operations fail closed. It supplies Ready-local
 //! coverage, not the still-required earlier compiler-pass transport proof.
 use super::*;
@@ -169,17 +169,6 @@ impl LeafPlan {
             }
         }
         for (b, block) in unit.blocks.iter().enumerate() {
-            if block
-                .parameters
-                .get(&unit.pools.values)
-                .unwrap_or(&[])
-                .iter()
-                .any(|&v| owned(v))
-            {
-                return Err(
-                    "native ownership tracing: owned join transport is not implemented".into(),
-                );
-            }
             let b = BlockId(b as u32);
             for (index, inst) in block
                 .instructions
@@ -276,13 +265,23 @@ impl LeafPlan {
                         )?;
                     }
                     Inst::Drop {
-                        address,
-                        if_live: false,
-                        ..
+                        address, if_live, ..
                     } => {
+                        if if_live && !source_only {
+                            return Err("native ownership tracing: conditional Drop has not reached a checked cleanup commit".into());
+                        }
+                        let point = if if_live {
+                            Point::Instruction {
+                                block: b,
+                                index: index as u32,
+                                moment: Moment::IfLive,
+                            }
+                        } else {
+                            before
+                        };
                         let layout = unit.types[unit.addresses[address.index()].ty.index()].layout;
                         push(
-                            before,
+                            point,
                             Kind::Drop,
                             Location::Address(address),
                             Location::Address(address),
@@ -390,6 +389,52 @@ impl LeafPlan {
                     )?;
                 }
                 _ => (),
+            }
+        }
+        for edge_id in super::check::used_edges(unit) {
+            let edge = unit
+                .tables
+                .edges
+                .get(edge_id.index())
+                .ok_or("ownership edge is missing")?;
+            let arguments = edge
+                .arguments
+                .get(&unit.pools.values)
+                .ok_or("ownership edge has no arguments")?;
+            let parameters = unit.blocks[edge.target.index()]
+                .parameters
+                .get(&unit.pools.values)
+                .ok_or("ownership edge has no parameters")?;
+            if arguments.len() != parameters.len() {
+                return Err("ownership edge arity differs".into());
+            }
+            let transfers = arguments
+                .iter()
+                .copied()
+                .zip(parameters.iter().copied())
+                .filter(|&(_, to)| owned(to))
+                .collect::<Vec<_>>();
+            if transfers.iter().any(|&(from, to)| {
+                transfers
+                    .iter()
+                    .any(|&(other, _)| other == to && other != from)
+            }) {
+                return Err(
+                    "native ownership tracing: parallel owned edge cycle needs temporary custody"
+                        .into(),
+                );
+            }
+            for (from, to) in transfers {
+                if !owned(from) || layout(from) != layout(to) {
+                    return Err("ownership edge changes owned representation".into());
+                }
+                push(
+                    Point::Edge(edge_id),
+                    Kind::Move,
+                    Location::Value(from),
+                    Location::Value(to),
+                    layout(from),
+                )?;
             }
         }
         let plan = Plan::new(unit, observations);

@@ -178,6 +178,30 @@ pub(super) fn parameter_address<S>(
     None
 }
 
+/// Pooled edge rows can outlive their last CFG reference. They are metadata,
+/// not executed transfers, and cannot be used as ownership observations.
+pub(super) fn used_edges<S>(unit: &LirUnit<S>) -> std::collections::BTreeSet<EdgeId> {
+    let mut edges = std::collections::BTreeSet::new();
+    for term in &unit.terminators {
+        edges.extend(term.normal_edges(&unit.pools));
+        for failure in term.failure_edges(&unit.tables) {
+            if let Some(failure) = unit.tables.failures.get(failure.index()) {
+                edges.insert(failure.cleanup);
+            }
+        }
+    }
+    for block in &unit.blocks {
+        for inst in block.instructions.get(&unit.instructions).unwrap_or(&[]) {
+            if let Some(failure) = inst.failure()
+                && let Some(failure) = unit.tables.failures.get(failure.index())
+            {
+                edges.insert(failure.cleanup);
+            }
+        }
+    }
+    edges
+}
+
 fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
     use Kind::{Create, Drop, Move};
     use Location::{Address, Capture, EnvironmentCapture, Field, Parameter, Return, Value};
@@ -305,23 +329,14 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                     same(Drop, Value(value))
                 }
                 (
-                    Inst::Drop {
-                        address,
-                        if_live: false,
-                        ..
-                    },
+                    Inst::Drop { address, if_live: false, .. },
                     Moment::Before,
-                )
-                | (
-                    Inst::Drop {
-                        address,
-                        if_live: true,
-                        ..
-                    },
+                ) | (
+                    Inst::Drop { address, if_live: true, .. },
                     Moment::IfLive,
                 ) => same(Drop, Address(address)),
                 (Inst::FinalizeEnd { address, .. }, Moment::After) => same(Drop, Address(address)),
-                // Conditional Drop, Replace, generic runtime operations and other
+                // Replace, generic runtime operations and other
                 // compound transitions need their own explicit commit recipe.
                 // Never accept them as "close enough" to a supported transition.
                 _ => false,
@@ -357,6 +372,9 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
             same(Drop, Address(address)) && super::finalizer::exits(unit, block, address).is_some()
         }
         Point::Edge(id) => {
+            if !used_edges(unit).contains(&id) {
+                return Err(Error::InvalidPoint(m.id));
+            }
             let edge = unit
                 .tables
                 .edges

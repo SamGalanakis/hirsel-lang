@@ -2535,3 +2535,46 @@ fn ownership_trace_finalizer_failure_join_keeps_one_id_and_checks_both_exit_argu
         );
     }
 }
+
+#[test]
+fn ownership_trace_edge_observation_cannot_use_an_unreferenced_pool_row() {
+    let (mut unit, plan) = fixture();
+    let row = &plan.observations[1].marker;
+    let Location::Value(value) = row.token else {
+        unreachable!()
+    };
+    let target = BlockId(unit.blocks.len() as u32);
+    let parameters = PoolRange::push(&mut unit.pools.values, [value]);
+    unit.blocks.push(Block {
+        kind: BlockKind::Body,
+        parameters,
+        instructions: PoolRange::EMPTY,
+        anchor: SourceAnchorId(0),
+    });
+    unit.terminators.push(Terminator::Return(Some(value)));
+    let arguments = PoolRange::push(&mut unit.pools.values, [value]);
+    let id = EdgeId(unit.tables.edges.len() as u32);
+    unit.tables.edges.push(Edge { target, arguments });
+    let marker = ObserveOwnership {
+        id: MarkerId(99),
+        site: unit.tables.source_anchors[0].site,
+        kind: Kind::Move,
+        token: Location::Value(value),
+        owner: Location::Value(value),
+    };
+    let plan = Plan::new(
+        &unit,
+        vec![Observation {
+            point: Point::Edge(id),
+            marker,
+        }],
+    );
+    assert_eq!(
+        check(&unit, &plan).unwrap_err(),
+        Error::InvalidPoint(MarkerId(99))
+    );
+    // The same table row becomes an executed transfer only with a CFG edge.
+    unit.terminators[ENTRY.index()] = Terminator::Jump(id);
+    let plan = Plan::new(&unit, plan.observations);
+    check(&unit, &plan).unwrap();
+}

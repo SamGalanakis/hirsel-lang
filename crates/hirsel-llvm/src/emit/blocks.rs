@@ -208,7 +208,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     }
 
     /// Branches from the current block along `edge`.
-    pub(super) fn jump(&self, edge: EdgeId) -> Emitted {
+    pub(super) fn jump(&mut self, edge: EdgeId) -> Emitted {
+        self.ownership_point(hirsel_lir::ownership_trace::Point::Edge(edge))?;
         let edge = self.edge(edge)?;
         self.incoming(edge, self.builder.current())?;
         self.builder.br(self.blocks[edge.target.index()]);
@@ -217,10 +218,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// A block that takes `edge` from a multi-way branch: the target itself when the edge
     /// passes no values, else a fresh block carrying the arguments.
-    pub(super) fn edge_block(&self, edge: EdgeId) -> Emitted<BasicBlock<'m>> {
+    pub(super) fn edge_block(&mut self, edge: EdgeId) -> Emitted<BasicBlock<'m>> {
         let e = self.edge(edge)?;
         let carries = self.phis[e.target.index()].iter().any(Option::is_some);
-        if !carries {
+        let observed = self.ownership.is_some_and(|plan| {
+            plan.at_point(hirsel_lir::ownership_trace::Point::Edge(edge))
+                .next()
+                .is_some()
+        });
+        if !carries && !observed {
             return Ok(self.blocks[e.target.index()]);
         }
         let here = self.builder.current();

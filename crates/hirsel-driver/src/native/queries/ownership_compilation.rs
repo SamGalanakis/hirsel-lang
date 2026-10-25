@@ -75,6 +75,10 @@ impl OwnershipCompilation {
             completed: OnceLock::new(),
         }))
     }
+    /// Reopen the bounded diagnostic of an actual native dependency.
+    pub fn failure(&self, reference: Reference) -> Option<String> {
+        self.instances.failure_message(reference)
+    }
     pub fn query_id(&self) -> QueryId {
         self.query
     }

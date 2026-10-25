@@ -1482,6 +1482,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     /// Branches from the current block along `edge`.
     pub(crate) fn jump(&mut self, edge: EdgeId) -> Emitted {
+        self.ownership_point(hirsel_lir::ownership_trace::Point::Edge(edge))?;
         let edge = self.edge(edge)?;
         let args = self.edge_args(edge)?;
         let target = self.blocks[edge.target.index()];
@@ -1500,7 +1501,12 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let carries = self.params[e.target.index()]
             .iter()
             .any(|p| !matches!(p, Param::None));
-        if !carries {
+        let observed = self.ownership.is_some_and(|plan| {
+            plan.at_point(hirsel_lir::ownership_trace::Point::Edge(edge))
+                .next()
+                .is_some()
+        });
+        if !carries && !observed {
             return Ok(self.blocks[e.target.index()]);
         }
         let block = self.b.create_block();

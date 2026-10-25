@@ -1348,3 +1348,23 @@ pub fn main() -> Result[(), ()] {
         2,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn ownership_native_owned_join_keeps_selected_branch_token_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn choose(flag: bool, take first: Token, take second: Token) -> Token {
+  if flag { take first } else { take second }
+}
+pub fn main() -> Result[(), ()] {
+  let left = choose(true, Token(value: 7u64), Token(value: 7u64))
+  let right = choose(false, Token(value: 7u64), Token(value: 7u64))
+  Ok(())
+}
+"#,
+        4,
+    );
+}
