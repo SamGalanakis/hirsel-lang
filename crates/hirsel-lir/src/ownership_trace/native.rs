@@ -654,3 +654,28 @@ impl Request<'_> {
         }
     }
 }
+
+/// Rebind an already transported plan when independently checked local units
+/// enter a shared emission layout table. Numeric table selectors may change;
+/// complete canonical body/layout/ABI content and every marker must agree.
+/// This grants no source or ordinary C authority and never enumerates new ids.
+pub fn rebind_plan(
+    before: &ValidatedUnit<Ready>,
+    before_inputs: &crate::validate::Inputs<'_>,
+    after: &ValidatedUnit<Ready>,
+    after_inputs: &crate::validate::Inputs<'_>,
+    plan: &Plan,
+) -> Result<Plan, String> {
+    LeafPlan::from_relocated(before, before_inputs.layouts, plan)?;
+    let (_, source) = crate::products::LayoutClosure::capture(before, before_inputs, &[])?;
+    let (_, bound) = crate::products::LayoutClosure::capture(after, after_inputs, &[])?;
+    if source != bound {
+        return Err("ownership binding changed canonical body, layout or ABI content".into());
+    }
+    let rebound = Plan {
+        unit: after.unit().digest(),
+        ..plan.clone()
+    };
+    LeafPlan::from_relocated(after, after_inputs.layouts, &rebound)?;
+    Ok(rebound)
+}

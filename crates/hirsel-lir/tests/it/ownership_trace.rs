@@ -2171,3 +2171,91 @@ fn ownership_trace_value_producer_refuses_unimplemented_owned_entry_transport() 
     let error = native::LeafPlan::prepare_value(&unit, &table).unwrap_err();
     assert!(error.contains("owned entry transport"), "{error}");
 }
+
+fn native_plan_binding_case(corrupt_body: bool) {
+    use hirsel_lir::{
+        products::{Binding, LayoutClosure},
+        stage::Ready,
+    };
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let original = native_semantic_plan(&before);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (ready, plan, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &original).unwrap();
+    let ready = checked_native_fixture(ready, &table);
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let operations = support::registry();
+    let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
+        "hirsel_rt_op".into(),
+    ));
+    let source_inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let (closure, body) = LayoutClosure::capture(&ready, &source_inputs, &[]).unwrap();
+    let binding = Binding::new(&target, &[&closure]).unwrap();
+    let mut rebound = binding.materialize::<Ready>(&body).unwrap();
+    if corrupt_body {
+        let integer = rebound
+            .tables
+            .constants
+            .iter_mut()
+            .find_map(|constant| {
+                if let ConstantValue::Integer(value) = &mut constant.value {
+                    Some(value)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        *integer ^= 1;
+    }
+    let bound_inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &binding.table,
+        manifest: &manifest,
+    };
+    let rebound = hirsel_lir::validate::validate_ready(rebound, &bound_inputs).unwrap();
+    if corrupt_body {
+        let error = native::rebind_plan(&ready, &source_inputs, &rebound, &bound_inputs, &plan)
+            .unwrap_err();
+        assert!(error.contains("changed canonical body"), "{error}");
+    } else {
+        assert_ne!(ready.unit().digest(), rebound.unit().digest());
+        let relocated =
+            native::rebind_plan(&ready, &source_inputs, &rebound, &bound_inputs, &plan).unwrap();
+        assert_eq!(relocated.observations, plan.observations);
+        assert_eq!(relocated.unit, rebound.unit().digest());
+        let commits = check(rebound.unit(), &relocated)
+            .unwrap()
+            .commits(rebound.unit(), MarkerId(102))
+            .unwrap();
+        assert_eq!(
+            commits.len(),
+            3,
+            "all physical finalizer exits retain the same id"
+        );
+        let mut missing = plan.clone();
+        missing.observations.pop();
+        assert!(
+            native::rebind_plan(&ready, &source_inputs, &rebound, &bound_inputs, &missing).is_err()
+        );
+    }
+}
+
+#[test]
+fn ownership_trace_native_binding_preserves_original_ids_and_every_finalizer_commit() {
+    native_plan_binding_case(false);
+}
+
+#[test]
+fn ownership_trace_native_binding_refuses_a_different_independently_checked_body() {
+    native_plan_binding_case(true);
+}
