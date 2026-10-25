@@ -210,13 +210,24 @@ impl FrontPreparedProof {
     /// Construction tables only: unique input payloads move under their
     /// existing reservation instead of requiring a second payload grant.
     pub fn owned_build_bytes(&self) -> Result<u64, QueryError> {
-        hirsel_proof_export::build_owned_tables_bytes(
+        self.owned_build_layout()?
+            .total()
+            .ok_or(QueryError::NotImplemented)
+    }
+    /// Inspect the actual retained sections and independent construction
+    /// workspaces without decoding originals or querying a provider.
+    pub fn owned_build_layout(&self) -> Result<hirsel_proof_export::BuildTablesLayout, QueryError> {
+        let mut layout = hirsel_proof_export::build_owned_tables_layout(
             self.input.export_input(),
             self.input.export_module_bytes(),
             &self.types,
         )
-        .and_then(|n| n.checked_add(size_of::<FrontBuiltProof>() as u64))
-        .ok_or(QueryError::NotImplemented)
+        .ok_or(QueryError::NotImplemented)?;
+        layout.retained_sections = layout
+            .retained_sections
+            .checked_add(size_of::<FrontBuiltProof>() as u64)
+            .ok_or(QueryError::NotImplemented)?;
+        Ok(layout)
     }
     /// Consume this preparation and its sole input reference. Shared inputs
     /// refuse before export construction; successful exports retain all source
