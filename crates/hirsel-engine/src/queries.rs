@@ -419,6 +419,24 @@ impl QueryEngine {
     pub fn indexed_definitions(&self) -> Vec<DefPath> {
         self.source_paths()
     }
+    /// Physical backing of the materialized item index, excluding source text,
+    /// header products and session interners. Source-only revision owners add
+    /// their independently measured source/header/read-index components.
+    /// This visits immutable capacities without parsing or querying a provider.
+    pub fn indexed_syntax_bytes(&self) -> Option<u64> {
+        let mut metadata = crate::NativeMetadataWeight::default();
+        metadata.tree::<DefPath, Vec<Arc<ItemSyntax>>>(self.items.len());
+        let mut payload = 0u64;
+        for (path, candidates) in &self.items {
+            metadata.path(path);
+            metadata.flat_vec(candidates);
+            for syntax in candidates {
+                payload =
+                    payload.checked_add(crate::memo::retained::retained_syntax_bytes(syntax))?;
+            }
+        }
+        payload.checked_add(metadata.bytes())
+    }
     /// Every indexed source definition.
     pub(crate) fn item_paths(&self) -> Vec<DefPath> {
         self.source_paths()
