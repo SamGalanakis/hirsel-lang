@@ -271,6 +271,23 @@ impl DemandProducts {
             selected: BTreeMap::new(),
         }
     }
+
+    /// Explicit diagnostic consumer. A cached ordinary Ready body cannot supply
+    /// the initial Value observations or its checked pass transport chain.
+    pub fn observe(
+        &mut self,
+        key: &InstanceAddress,
+    ) -> Result<super::ready::ObservedReady, String> {
+        self.local.observe(
+            &self.snapshot.instances,
+            key,
+            &self.snapshot.arena,
+            &self.snapshot.options,
+            self.snapshot.context,
+            self.snapshot.emission.debug,
+            &self.snapshot.environment(),
+        )
+    }
 }
 
 /// Read-only object-task access restricted to the Ready products actually

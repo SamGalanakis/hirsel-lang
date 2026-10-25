@@ -1257,6 +1257,19 @@ impl Expander<'_, '_, '_> {
             InstanceRole::Closure { .. } => {}
             _ => self.follow(&path, &actuals, None)?,
         }
+        // A demanded source instance has no program-wide nominal seed. Its
+        // concrete local types still require the same finalizers and private
+        // representation dependencies as whole-program expansion. Discover
+        // them from the original body, without loading their implementations.
+        let local_types = body
+            .locals
+            .iter()
+            .map(|local| {
+                substitute(types, &self.program.memo, local.ty, &actuals, false)
+                    .map_err(|e| InstanceError::Substitution(path.clone(), e))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.local_nominals(local_types)?;
         // Whole-program expansion seeded nongeneric callees in advance. A
         // demanded instance must register those ordinary calls/references from
         // its own body, without loading any callee implementation.
@@ -1351,6 +1364,61 @@ impl Expander<'_, '_, '_> {
             self.out
                 .direct_calls
                 .insert((id, hirsel_tir::BlockId(b as u32)), bound);
+        }
+        Ok(())
+    }
+
+    fn local_nominals(&mut self, mut pending: Vec<TypeId>) -> Result<(), InstanceError> {
+        let program = self.program;
+        let mut seen = std::collections::HashSet::new();
+        while let Some(ty) = pending.pop() {
+            if !seen.insert(ty) {
+                continue;
+            }
+            let Some(row) = program.types.get(ty) else {
+                return Err(InstanceError::Malformed(
+                    "missing local nominal type".into(),
+                ));
+            };
+            pending.extend(row.kind.value_parts());
+            let TypeKind::Named {
+                definition,
+                arguments,
+            } = &row.kind
+            else {
+                continue;
+            };
+            // Lexical generic callable carriers can contain unbound body
+            // actuals. Their selected concrete instances discover those later.
+            if hirsel_types::mentions_parameter(&program.types, ty) {
+                continue;
+            }
+            let path = definition.path();
+            let actuals = callee_actuals(
+                &program.types,
+                &program.memo,
+                program.binders.get(path).copied(),
+                arguments,
+                &Actuals::none(),
+                false,
+                path,
+            )?;
+            self.nominal(path, actuals.clone())?;
+            let shape = match self.layouts.owners().nominals.get(definition) {
+                Some(hirsel_layout::layout::OwnerRepresentation::Defined(record)) => {
+                    Some(record.private_shape)
+                }
+                _ => match &self.signature(path)?.kind {
+                    SignatureKind::Type(declaration) => declaration.representation,
+                    _ => None,
+                },
+            };
+            if let Some(shape) = shape {
+                pending.push(
+                    substitute(&program.types, &program.memo, shape, &actuals, true)
+                        .map_err(|e| InstanceError::Substitution(path.clone(), e))?,
+                );
+            }
         }
         Ok(())
     }

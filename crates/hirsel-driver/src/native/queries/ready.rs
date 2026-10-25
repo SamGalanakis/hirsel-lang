@@ -66,6 +66,16 @@ pub struct ReadyMiss<'a> {
     pub debug: bool,
     pub optimizer_reads: Vec<ProductRef>,
 }
+/// Explicit diagnostic output. Only `unit` carries ordinary C acceptance;
+/// plans and recipes are observations and are rechecked before native emission.
+pub struct ObservedReady {
+    pub unit: ValidatedUnit<Ready>,
+    pub layouts: hirsel_lir::LayoutTable,
+    pub initial: hirsel_lir::ownership_trace::Plan,
+    pub plan: hirsel_lir::ownership_trace::Plan,
+    pub recipes: Vec<hirsel_lir::ownership_trace::Recipe>,
+    pub source_action: Action,
+}
 #[derive(Default, Debug)]
 pub struct ReadyQueryCounts {
     pub hits: u64,
@@ -231,14 +241,7 @@ impl ReadyQueries {
         self.native.read(&accepted, environment.target)
     }
 
-    /// One actual local miss and final C. No proof is inferred from the input
-    /// references, the pass outputs, or a producer's supplied summary.
-    pub fn publish_from_value(
-        &mut self,
-        key: &InstanceAddress,
-        action: Action,
-        miss: ReadyMiss<'_>,
-    ) -> Result<(ValidatedUnit<Ready>, Arc<ReadyProduct>), String> {
+    fn check_miss(&self, key: &InstanceAddress, miss: &ReadyMiss<'_>) -> Result<(), String> {
         if !key.instance.is_same_or_derived_from(miss.source.origin())
             || miss.value.header.definition != *key.instance.definition()
             || miss.value.header.instance != key.instance.digest()
@@ -259,6 +262,84 @@ impl ReadyQueries {
                 return Err("unsettled or duplicate Ready optimizer dependency".into());
             }
         }
+        Ok(())
+    }
+
+    /// Selected diagnostic production, before ordinary Ready caching or object
+    /// emission. Never reconstruct observations from an already rewritten body.
+    /// This does not publish an ordinary Ready hit or a success association.
+    pub fn observe_from_value(
+        &mut self,
+        key: &InstanceAddress,
+        source_action: Action,
+        miss: ReadyMiss<'_>,
+    ) -> Result<ObservedReady, String> {
+        self.check_miss(key, &miss)?;
+        let inputs = miss.inputs;
+        let value = hirsel_lir::validate::validate_value(miss.value, inputs)
+            .map_err(|rejected| format!("ownership Value refused: {:?}", rejected.violations))?;
+        let initial =
+            hirsel_lir::ownership_trace::native::LeafPlan::prepare_value(&value, inputs.layouts)?;
+        let facts = miss.source.local(miss.options.regions);
+        self.counts.transformations += 1;
+        let lowered = hirsel_rc::observed::lower_validated(
+            value.unit().clone(),
+            &initial,
+            inputs,
+            &hirsel_rc::observed::Options {
+                placement: &facts.placement,
+                proofs: &facts.proofs,
+                elide: miss.options.elide,
+                reuse: &hirsel_rc::reuse::Options {
+                    reuse: miss.options.reuse,
+                },
+                finalizers: miss.finalizers,
+            },
+        )?;
+        self.counts.validations += 1;
+        let (unit, output) = self
+            .native
+            .validate_output(
+                ContentHash::of_parts(
+                    "hirsel.native.ownership-ready-validation.v1",
+                    [
+                        key.address(READY_KIND).0.0.as_slice(),
+                        source_action.0.0.as_slice(),
+                    ],
+                ),
+                key.policy,
+                lowered.unit,
+                inputs,
+                miss.additional_abis,
+            )
+            .map_err(|rejected| format!("ownership Ready refused: {:?}", rejected.violations))?;
+        output.ok_or("ownership Ready transport failed")?;
+        crate::native::emit::check_unit_runtime_calls(unit.unit(), inputs.layouts, inputs.manifest)
+            .map_err(|error| error.to_string())?;
+        hirsel_lir::ownership_trace::native::LeafPlan::from_relocated(
+            &unit,
+            inputs.layouts,
+            &lowered.plan,
+        )?;
+        Ok(ObservedReady {
+            unit,
+            layouts: inputs.layouts.clone(),
+            initial,
+            plan: lowered.plan,
+            recipes: lowered.recipes,
+            source_action,
+        })
+    }
+
+    /// One actual local miss and final C. No proof is inferred from the input
+    /// references, the pass outputs, or a producer's supplied summary.
+    pub fn publish_from_value(
+        &mut self,
+        key: &InstanceAddress,
+        action: Action,
+        miss: ReadyMiss<'_>,
+    ) -> Result<(ValidatedUnit<Ready>, Arc<ReadyProduct>), String> {
+        self.check_miss(key, &miss)?;
         let inputs = miss.inputs;
         let environment = NativeEnvironment {
             target: inputs.target,

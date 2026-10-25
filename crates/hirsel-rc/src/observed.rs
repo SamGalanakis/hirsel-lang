@@ -30,8 +30,49 @@ pub fn lower(
     index: &hirsel_lir::LayoutIndex<'_>,
     options: &Options<'_>,
 ) -> Result<Lowered, String> {
+    lower_with_checks(unit, input, index, options, None)
+}
+
+/// The diagnostic query path checks ordinary Value and intermediate stages as
+/// well as each observation recipe. These checks grant the side table no C
+/// authority; the enclosing producer still validates its final Ready output.
+pub fn lower_validated(
+    unit: LirUnit<Value>,
+    input: &Plan,
+    inputs: &hirsel_lir::validate::Inputs<'_>,
+    options: &Options<'_>,
+) -> Result<Lowered, String> {
+    let validation = hirsel_lir::validate::ValidationContext::new(inputs);
+    lower_with_checks(unit, input, validation.index(), options, Some(inputs))
+}
+
+fn checked<S: hirsel_lir::stage::Stage>(
+    unit: LirUnit<S>,
+    inputs: Option<&hirsel_lir::validate::Inputs<'_>>,
+) -> Result<LirUnit<S>, String> {
+    if let Some(inputs) = inputs {
+        hirsel_lir::validate::validate(unit.clone(), inputs).map_err(|error| {
+            format!(
+                "ownership trace stage {:?}: {:?}",
+                S::KIND,
+                error.violations
+            )
+        })?;
+    }
+    Ok(unit)
+}
+
+fn lower_with_checks(
+    unit: LirUnit<Value>,
+    input: &Plan,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    options: &Options<'_>,
+    inputs: Option<&hirsel_lir::validate::Inputs<'_>>,
+) -> Result<Lowered, String> {
+    let unit = checked(unit, inputs)?;
     let table = index.table();
     let (unit, plan, placement) = placement::place_observed(unit, table, options.placement, input)?;
+    let unit = checked(unit, inputs)?;
     let mut recipes = vec![placement];
     let (unit, plan, insertion) = insert::insert_observed(unit, table, options.proofs, &plan)?;
     recipes.extend(insertion);
@@ -40,8 +81,10 @@ pub fn lower(
     } else {
         crate::observation::identity(&unit, &plan, unit.clone())?
     };
+    let unit = checked(unit, inputs)?;
     recipes.push(elision);
     let (unit, plan, reuse) = reuse::reuse_observed(unit, options.reuse, index, &plan)?;
+    let unit = checked(unit, inputs)?;
     recipes.extend(reuse);
     let (unit, plan, ready) = ready::ready_observed(unit, options.finalizers, index, &plan)?;
     recipes.extend(ready);

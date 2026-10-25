@@ -136,6 +136,67 @@ impl LocalReadyQueries {
         debug: bool,
         environment: &NativeEnvironment<'_>,
     ) -> Result<Arc<ReadyProduct>, String> {
+        self.with_value(
+            instances,
+            key,
+            arena,
+            options,
+            emission_context,
+            debug,
+            environment,
+            Some(|product| product),
+            |queries, key, action, miss| {
+                queries
+                    .publish_from_value(key, action, miss)
+                    .map(|(_, product)| product)
+            },
+        )
+    }
+
+    /// Explicit diagnostic demand using the same settled instances, arena
+    /// selection, source facts and local Value materialization as ordinary Ready.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe(
+        &mut self,
+        instances: &DemandInstances,
+        key: &InstanceAddress,
+        arena: &SettledArenaGraph,
+        options: &crate::native::Options,
+        emission_context: Reference,
+        debug: bool,
+        environment: &NativeEnvironment<'_>,
+    ) -> Result<super::ready::ObservedReady, String> {
+        self.with_value(
+            instances,
+            key,
+            arena,
+            options,
+            emission_context,
+            debug,
+            environment,
+            None,
+            |queries, key, action, miss| queries.observe_from_value(key, action, miss),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_value<R>(
+        &mut self,
+        instances: &DemandInstances,
+        key: &InstanceAddress,
+        arena: &SettledArenaGraph,
+        options: &crate::native::Options,
+        emission_context: Reference,
+        debug: bool,
+        environment: &NativeEnvironment<'_>,
+        cached: Option<fn(Arc<ReadyProduct>) -> R>,
+        lower: impl FnOnce(
+            &mut ReadyQueries,
+            &InstanceAddress,
+            Action,
+            ReadyMiss<'_>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
         if options.target.digest() != key.target_abi
             || environment.target.digest() != key.target_abi
             || emission_context.domain != EMISSION_CONTEXT_DOMAIN
@@ -251,8 +312,11 @@ impl LocalReadyQueries {
         let environment = &scoped;
         let recompute = self.verify_store == VerifyStore::Recompute
             || options.validation == crate::native::Validation::EveryStage;
-        if !recompute && let Some(hit) = self.queries.lookup(key, action, environment) {
-            return Ok(hit);
+        if !recompute
+            && let Some(cached) = cached
+            && let Some(hit) = self.queries.lookup(key, action, environment)
+        {
+            return Ok(cached(hit));
         }
         if recompute {
             self.queries.counts.misses += 1;
@@ -345,7 +409,8 @@ impl LocalReadyQueries {
             manifest: environment.manifest,
             discharge: environment.discharge,
         };
-        let (_, product) = self.queries.publish_from_value(
+        lower(
+            &mut self.queries,
             key,
             action,
             ReadyMiss {
@@ -360,7 +425,6 @@ impl LocalReadyQueries {
                 debug,
                 optimizer_reads: vec![],
             },
-        )?;
-        Ok(product)
+        )
     }
 }

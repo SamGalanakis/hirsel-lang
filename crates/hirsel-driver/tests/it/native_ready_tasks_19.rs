@@ -106,6 +106,32 @@ pub(super) fn ready_case(source: &str, adapter: bool, missing_inventory: bool, a
     );
 }
 
+#[test]
+fn ownership_ready_query_keeps_value_identities_and_refuses_stale_dependencies() {
+    ready_case_inner(
+        "resource type Token { value:u64 }\ndrop(x) {}\nfn other()->u64{9u64}\npub fn main()->u64{let first=Token(value:7u64)\nlet second=take first\n7u64}",
+        false,
+        false,
+        false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        1,
+    );
+}
+
+#[test]
+fn ownership_query_root_waits_for_dependencies_and_revalidates_selected_outputs() {
+    ready_case_inner(
+        "resource type Token { value:u64 }\ndrop(x) {}\nfn other()->u64{9u64}\npub fn main()->u64{let first=Token(value:7u64)\nlet second=take first\n7u64}",
+        false,
+        false,
+        false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        2,
+    );
+}
+
 fn ready_case_policy(
     source: &str,
     adapter: bool,
@@ -113,6 +139,27 @@ fn ready_case_policy(
     assemble: bool,
     validation: native::Validation,
     verify_store: store::VerifyStore,
+) {
+    ready_case_inner(
+        source,
+        adapter,
+        missing_inventory,
+        assemble,
+        validation,
+        verify_store,
+        0,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ready_case_inner(
+    source: &str,
+    adapter: bool,
+    missing_inventory: bool,
+    assemble: bool,
+    validation: native::Validation,
+    verify_store: store::VerifyStore,
+    ownership: u8,
 ) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
@@ -174,6 +221,12 @@ fn ready_case_policy(
             let budget = ProcessBudget::new(runtime_bytes + (32 << 20));
             let trace = hirsel_lir::construction::ValueTrace::default();
             let _observe = trace.enter();
+            let mut instance_allowance = budget.reserve(16 << 20).unwrap();
+            let mut diagnostic_allowance = if ownership >= 2 {
+                Some(instance_allowance.split(2 << 20).unwrap())
+            } else {
+                None
+            };
             let tasks = InstanceTasks::new(
                 inputs,
                 store.clone(),
@@ -184,7 +237,7 @@ fn ready_case_policy(
                     retained: 1 << 20,
                     stack: 0,
                 },
-                budget.reserve(16 << 20).unwrap(),
+                instance_allowance,
             )
             .unwrap()
             .with_store_verification(verify_store)
@@ -335,6 +388,82 @@ fn ready_case_policy(
                 continue;
             }
             let snapshot = snapshot.unwrap();
+            if ownership == 1 {
+                use hirsel_lir::ownership_trace::{Kind, native::LeafPlan};
+                use native::queries::{NativeProducts, products::DemandProducts};
+                let mut products = DemandProducts::new(snapshot.clone());
+                // Settle an ordinary Ready hit first: it must never replace
+                // the Value producer and every checked diagnostic recipe.
+                let ordinary = products.ready(main).unwrap();
+                let observed = products.observe(main).unwrap();
+                assert!(!observed.initial.observations.is_empty());
+                assert_eq!(observed.recipes.len(), 10);
+                assert_eq!(observed.recipes[0].before, observed.initial.unit);
+                assert_eq!(
+                    observed.recipes.last().unwrap().after,
+                    observed.unit.unit().digest()
+                );
+                for recipes in observed.recipes.windows(2) {
+                    assert_eq!(recipes[0].after, recipes[1].before);
+                }
+                let markers = |plan: &hirsel_lir::ownership_trace::Plan| {
+                    plan.observations
+                        .iter()
+                        .map(|row| (row.marker.id, row.marker.kind, row.marker.site))
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(markers(&observed.initial), markers(&observed.plan));
+                assert!(
+                    observed
+                        .initial
+                        .observations
+                        .iter()
+                        .any(|row| row.marker.kind == Kind::Create)
+                );
+                assert!(
+                    observed
+                        .initial
+                        .observations
+                        .iter()
+                        .any(|row| row.marker.kind == Kind::Move)
+                );
+                assert!(
+                    observed
+                        .initial
+                        .observations
+                        .iter()
+                        .any(|row| row.marker.kind == Kind::Drop)
+                );
+                LeafPlan::from_relocated(&observed.unit, &observed.layouts, &observed.plan)
+                    .unwrap();
+                let mut dropped = observed.plan.clone();
+                dropped.observations.pop();
+                assert!(
+                    LeafPlan::from_relocated(&observed.unit, &observed.layouts, &dropped).is_err()
+                );
+                // Diagnostic work must not replace the ordinary success association.
+                assert_eq!(products.ready(main).unwrap().product, ordinary.product);
+                let mut stale = main.clone();
+                stale.policy = hirsel_syntax::ContentHash::of_bytes(b"stale diagnostic selection");
+                assert!(products.observe(&stale).is_err());
+                let mut forged = observed.plan.clone();
+                forged.observations[0].marker.id = hirsel_lir::ownership_trace::MarkerId(999_999);
+                assert!(
+                    hirsel_lir::ownership_trace::check_transform(
+                        observed.unit.unit(),
+                        &observed.plan,
+                        observed.unit.unit(),
+                        &forged,
+                        Some(&hirsel_lir::ownership_trace::Recipe {
+                            before: observed.plan.unit,
+                            after: forged.unit,
+                            relocations: Vec::new(),
+                        }),
+                    )
+                    .is_err()
+                );
+                continue;
+            }
             drop(runtime);
             let ready_tasks = NativeTasks::new(
                 snapshot.clone(),
@@ -362,6 +491,71 @@ fn ready_case_policy(
                 READY_KIND,
             ] {
                 ready_runtime.register(kind, ready_factory.clone()).unwrap();
+            }
+            if ownership == 2 {
+                use native::queries::ownership_tasks::{
+                    OWNERSHIP_READY_KIND, OWNERSHIP_ROOT_KIND, OwnershipTasks,
+                };
+                let roots = OwnershipTasks::new(
+                    ready_tasks.clone(),
+                    MemoryWeight {
+                        scratch: 16 << 20,
+                        retained: 1 << 20,
+                        stack: 0,
+                    },
+                    diagnostic_allowance.take().unwrap(),
+                )
+                .unwrap();
+                let factory = roots.factory();
+                let mut pending = factory.create(roots.query_id()).unwrap();
+                assert!(matches!(pending.poll(&mut Pending), QueryPoll::Waiting(_)));
+                assert_eq!(roots.transformations.load(Ordering::Relaxed), 0);
+                let mut invalid = roots.query_id();
+                invalid.kind = READY_KIND;
+                assert!(factory.create(invalid).is_err());
+                for kind in [OWNERSHIP_READY_KIND, OWNERSHIP_ROOT_KIND] {
+                    ready_runtime.register(kind, factory.clone()).unwrap();
+                }
+                let selected = ready_runtime.request(&[roots.query_id()]);
+                let root = ready_runtime.wait(selected).unwrap_or_else(|error| {
+                    panic!(
+                        "ownership root: {}",
+                        String::from_utf8_lossy(&store.get_content(error).unwrap())
+                    )
+                })[0];
+                let outputs = roots.outputs(root).unwrap();
+                assert_eq!(
+                    outputs.len(),
+                    tasks.completed_instances(discovery_output).unwrap().len()
+                );
+                assert_eq!(
+                    roots.transformations.load(Ordering::Relaxed),
+                    outputs.len() as u64
+                );
+                let mut total = 0;
+                let before = roots.transformations.load(Ordering::Relaxed);
+                for output in &outputs {
+                    let observed = roots.materialize(*output).unwrap();
+                    assert_eq!(observed.recipes.len(), 10);
+                    total += observed.initial.observations.len();
+                    let mut wrong = *output;
+                    wrong.action = store::Action(hirsel_syntax::ContentHash::of_bytes(
+                        b"forged ownership completion",
+                    ));
+                    assert!(roots.materialize(wrong).is_err());
+                }
+                assert!(total >= 3, "actual resource create, move and drop");
+                assert_eq!(
+                    roots.transformations.load(Ordering::Relaxed),
+                    before,
+                    "readiness cannot lower again"
+                );
+                let mut wrong = root;
+                wrong.action = store::Action(hirsel_syntax::ContentHash::of_bytes(
+                    b"stale ownership root",
+                ));
+                assert!(roots.outputs(wrong).is_err());
+                continue;
             }
             if assemble {
                 for (key, _) in tasks.completed_instances(result[0]).unwrap() {

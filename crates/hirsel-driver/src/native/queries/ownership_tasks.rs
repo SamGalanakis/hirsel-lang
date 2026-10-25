@@ -1,0 +1,408 @@
+//! Opt-in diagnostic roots over the same settled instance/arena dependencies
+//! as ordinary Ready. No ordinary request installs or polls these producers.
+use super::{products::DemandProducts, ready::ObservedReady, tasks::NativeTasks, *};
+use hirsel_engine::{
+    runtime::*,
+    store::{Action, Address, Domain},
+};
+use hirsel_lir::{
+    ir::LirUnit,
+    ownership_trace::{Plan, Recipe},
+    stage::Ready,
+};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::Poll,
+};
+
+pub const OWNERSHIP_READY_KIND: u32 = 0x4e00_002b;
+pub const OWNERSHIP_ROOT_KIND: u32 = 0x4e00_002c;
+const UNIT: Domain = Domain {
+    kind: OWNERSHIP_READY_KIND,
+    schema: 1,
+};
+const ROOT: Domain = Domain {
+    kind: OWNERSHIP_ROOT_KIND,
+    schema: 1,
+};
+struct Payload {
+    body: LirUnit<Ready>,
+    layouts: hirsel_lir::LayoutTable,
+    initial: Plan,
+    plan: Plan,
+    recipes: Vec<Recipe>,
+}
+hirsel_codec::snapshot_struct!(Payload {
+    body,
+    layouts,
+    initial,
+    plan,
+    recipes
+});
+struct Request {
+    owner: InstanceAddress,
+    query: QueryId,
+    reads: Vec<(QueryId, Reference)>,
+    completed: OnceLock<ProductRef>,
+}
+/// Compact request/completion records only. Diagnostic bodies and side tables
+/// live in the selected result store; C authority is never serialized.
+pub struct OwnershipTasks {
+    native: Arc<NativeTasks>,
+    requests: BTreeMap<ContentHash, Request>,
+    root: QueryId,
+    weight: MemoryWeight,
+    completed: OnceLock<ProductRef>,
+    _allowance: MemoryReservation,
+    pub transformations: AtomicU64,
+}
+impl OwnershipTasks {
+    pub fn new(
+        native: Arc<NativeTasks>,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+    ) -> Result<Arc<Self>, String> {
+        let mut requests = BTreeMap::new();
+        for owner in native.snapshot.owners.values() {
+            let query = QueryId {
+                kind: OWNERSHIP_READY_KIND,
+                address: owner.address(OWNERSHIP_READY_KIND),
+            };
+            let reads = native.ownership_reads(owner)?;
+            requests.insert(
+                query.address.0,
+                Request {
+                    owner: owner.clone(),
+                    query,
+                    reads,
+                    completed: OnceLock::new(),
+                },
+            );
+        }
+        if requests.is_empty() {
+            return Err("empty ownership diagnostic closure".into());
+        }
+        let mut copied = hirsel_engine::NativeMetadataWeight::default();
+        copied.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
+        copied.map(&requests, |w, _, request| {
+            w.path(request.owner.instance.definition());
+            w.add(request.owner.instance.encoding().len());
+            w.flat_vec(&request.reads);
+        });
+        if copied.bytes() > allowance.bytes()
+            || requests.values().any(|request| {
+                (std::mem::size_of::<Task>()
+                    + request.reads.len() * std::mem::size_of::<(QueryId, Reference)>())
+                    as u64
+                    > weight.retained
+            })
+            || (std::mem::size_of::<Task>() + requests.len() * std::mem::size_of::<QueryId>())
+                as u64
+                > weight.retained
+        {
+            return Err("ownership diagnostic metadata exceeds original admission".into());
+        }
+        let selection = requests.keys().copied().collect::<Vec<_>>();
+        let root = QueryId {
+            kind: OWNERSHIP_ROOT_KIND,
+            address: Address(hirsel_codec::digest(
+                "hirsel.native.ownership-root.v1",
+                "Units",
+                &selection,
+            )),
+        };
+        Ok(Arc::new(Self {
+            native,
+            requests,
+            root,
+            weight,
+            completed: OnceLock::new(),
+            _allowance: allowance,
+            transformations: AtomicU64::new(0),
+        }))
+    }
+    pub fn query_id(&self) -> QueryId {
+        self.root
+    }
+    pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
+        Arc::new(Factory(self.clone()))
+    }
+    pub fn unit_queries(&self) -> Vec<QueryId> {
+        self.requests
+            .values()
+            .map(|request| request.query)
+            .collect()
+    }
+    fn publish(
+        &self,
+        query: QueryId,
+        domain: Domain,
+        bytes: &[u8],
+        selected: &OnceLock<ProductRef>,
+    ) -> Result<ProductRef, String> {
+        let store = &self.native.snapshot.store;
+        let record = store
+            .put_content(domain, bytes)
+            .ok_or("ownership diagnostic transport exhausted")?;
+        if domain.reference(bytes) != Some(record) {
+            return Err("ownership diagnostic content differs".into());
+        }
+        let product = ProductRef {
+            address: query.address,
+            action: Action(ContentHash::of_parts(
+                "hirsel.native.ownership-action.v1",
+                [query.address.0.0.as_slice(), record.output.0.0.as_slice()],
+            )),
+            record,
+        };
+        if let Some(previous) = selected.get() {
+            if *previous != product {
+                return Err("ownership diagnostic completion changed".into());
+            }
+        } else {
+            selected
+                .set(product)
+                .map_err(|_| "ownership diagnostic published twice")?;
+        }
+        store.associate_product(product.address, product.action, product.record);
+        Ok(product)
+    }
+    /// Only the exact output of this producer's selected root is admitted.
+    /// Content references alone never authorize a missing diagnostic result.
+    pub fn outputs(&self, root: ProductRef) -> Result<Vec<ProductRef>, String> {
+        if self.completed.get() != Some(&root) {
+            return Err("ownership root has not completed this selection".into());
+        }
+        let outputs = self
+            .requests
+            .values()
+            .map(|request| {
+                request
+                    .completed
+                    .get()
+                    .copied()
+                    .ok_or("ownership unit has not completed".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected = serde_json::to_vec(
+            &outputs
+                .iter()
+                .map(|p| (p.address.0, p.action.0, p.record))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|e| e.to_string())?;
+        let bytes = self
+            .native
+            .snapshot
+            .store
+            .get_content(root.record)
+            .ok_or("missing ownership root")?;
+        if bytes.as_ref() != expected || ROOT.reference(&bytes) != Some(root.record) {
+            return Err("ownership root descriptor differs".into());
+        }
+        Ok(outputs)
+    }
+    /// Reopen one selected diagnostic output and independently revalidate C.
+    /// This performs no source, import or lowering work and grants recipes no
+    /// semantic authority. A caller cannot substitute an ordinary Ready hit.
+    pub fn materialize(&self, product: ProductRef) -> Result<ObservedReady, String> {
+        let request = self
+            .requests
+            .get(&product.address.0)
+            .ok_or("unselected ownership unit")?;
+        if request.completed.get() != Some(&product) {
+            return Err("ownership unit completion differs".into());
+        }
+        let snapshot = &self.native.snapshot;
+        let environment = snapshot.environment();
+        snapshot.instances.admitted(&request.owner, &environment)?;
+        let bytes = snapshot
+            .store
+            .get_content(product.record)
+            .ok_or("missing ownership diagnostic unit")?;
+        if UNIT.reference(&bytes) != Some(product.record) {
+            return Err("ownership diagnostic unit content differs".into());
+        }
+        let (
+            Payload {
+                body,
+                layouts,
+                initial,
+                plan,
+                recipes,
+            },
+            source_action,
+        ): (Payload, ContentHash) =
+            hirsel_codec::from_text(std::str::from_utf8(&bytes).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("ownership diagnostic decode: {e:?}"))?;
+        let source_action = Action(source_action);
+        let declarations = snapshot
+            .instances
+            .operations(&request.owner, &environment)?;
+        let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+        let operations = super::instance_operations::InstanceOperations {
+            declarations: &declarations,
+            all_sources: false,
+            source: (!owner.templates.library).then_some((
+                request.owner.instance.definition(),
+                request.owner.instance.digest(),
+            )),
+            pretransfer: Some(super::instance_operations::bind_pretransfer(
+                &declarations,
+                &layouts,
+                environment.target,
+            )?),
+        };
+        let inputs = hirsel_lir::validate::Inputs {
+            memo: Default::default(),
+            target: environment.target,
+            layouts: &layouts,
+            operations: &operations,
+            manifest: environment.manifest,
+            discharge: environment.discharge,
+        };
+        let unit = hirsel_lir::validate::validate_ready(body, &inputs)
+            .map_err(|e| format!("ownership diagnostic C: {:?}", e.violations))?;
+        hirsel_lir::ownership_trace::native::LeafPlan::from_relocated(&unit, &layouts, &plan)?;
+        Ok(ObservedReady {
+            unit,
+            layouts,
+            initial,
+            plan,
+            recipes,
+            source_action,
+        })
+    }
+}
+struct Factory(Arc<OwnershipTasks>);
+impl QueryFactory for Factory {
+    fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if query != self.0.root
+            && !self
+                .0
+                .requests
+                .get(&query.address.0)
+                .is_some_and(|request| request.query == query)
+        {
+            return Err(self
+                .0
+                .native
+                .failure("unregistered ownership diagnostic query"));
+        }
+        Ok(Box::new(Task {
+            owner: self.0.clone(),
+            query,
+            terminal: None,
+        }))
+    }
+}
+struct Task {
+    owner: Arc<OwnershipTasks>,
+    query: QueryId,
+    terminal: Option<Result<ProductRef, Reference>>,
+}
+impl QueryTask for Task {
+    fn id(&self) -> QueryId {
+        self.query
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.owner.weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if self.terminal.is_none() {
+            match self.advance(cx) {
+                Ok(Err(waiting)) => return QueryPoll::Waiting(waiting),
+                Ok(Ok(product)) => self.terminal = Some(Ok(product)),
+                Err(error) => self.terminal = Some(Err(error)),
+            }
+        }
+        match self.terminal.unwrap() {
+            Ok(product) => QueryPoll::Complete(product),
+            Err(error) => QueryPoll::Failed(error),
+        }
+    }
+}
+impl Task {
+    fn advance(
+        &self,
+        cx: &mut dyn QueryContext,
+    ) -> Result<Result<ProductRef, Vec<QueryId>>, Reference> {
+        let owner = &self.owner;
+        let fail = |error: String| owner.native.failure(&error);
+        let root = self.query == owner.root;
+        let request = owner.requests.get(&self.query.address.0);
+        let reads = if root {
+            owner
+                .unit_queries()
+                .into_iter()
+                .map(|query| (query, None))
+                .collect::<Vec<_>>()
+        } else {
+            request
+                .unwrap()
+                .reads
+                .iter()
+                .map(|(query, record)| (*query, Some(*record)))
+                .collect()
+        };
+        let mut waiting = Vec::new();
+        let mut outputs = Vec::new();
+        for (query, expected) in reads {
+            match cx.read(query) {
+                Poll::Pending => waiting.push(query),
+                Poll::Ready(Err(error)) => return Err(error),
+                Poll::Ready(Ok(product))
+                    if product.address == query.address
+                        && expected.is_none_or(|record| record == product.record) =>
+                {
+                    outputs.push(product)
+                }
+                _ => {
+                    return Err(fail(
+                        "ownership dependency changed within immutable snapshot".into(),
+                    ));
+                }
+            }
+        }
+        if !waiting.is_empty() {
+            return Ok(Err(waiting));
+        }
+        if root {
+            let bytes = serde_json::to_vec(
+                &outputs
+                    .iter()
+                    .map(|p| (p.address.0, p.action.0, p.record))
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|e| fail(e.to_string()))?;
+            owner
+                .publish(self.query, ROOT, &bytes, &owner.completed)
+                .map(Ok)
+                .map_err(fail)
+        } else {
+            let request = request.unwrap();
+            let mut products = DemandProducts::new(owner.native.snapshot.clone());
+            let observed = products.observe(&request.owner).map_err(fail)?;
+            owner.transformations.fetch_add(
+                products.local.queries.counts.transformations,
+                Ordering::Relaxed,
+            );
+            let payload = Payload {
+                body: observed.unit.unit().clone(),
+                layouts: observed.layouts,
+                initial: observed.initial,
+                plan: observed.plan,
+                recipes: observed.recipes,
+            };
+            let bytes = hirsel_codec::to_text(&(payload, observed.source_action.0));
+            owner
+                .publish(self.query, UNIT, bytes.as_bytes(), &request.completed)
+                .map(Ok)
+                .map_err(fail)
+        }
+    }
+}

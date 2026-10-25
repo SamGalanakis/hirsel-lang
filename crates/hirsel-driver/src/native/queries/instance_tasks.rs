@@ -232,7 +232,12 @@ impl InstanceTasks {
         for (id, input, charge, entry) in entries {
             if let Some(previous) = registry.entries.get(&id) {
                 if previous.key != entry.key || previous.request != entry.request {
-                    return Err("inconsistent native request registration".into());
+                    return Err(format!(
+                        "inconsistent native request registration for {}: previous={:?}, requested={:?}",
+                        entry.key.instance.definition(),
+                        previous.request,
+                        entry.request,
+                    ));
                 }
                 continue;
             }

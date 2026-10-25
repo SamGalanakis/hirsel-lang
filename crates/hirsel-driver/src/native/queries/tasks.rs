@@ -187,6 +187,16 @@ impl NativeTasks {
             ready_transformations: AtomicU64::new(0),
         }))
     }
+    pub(super) fn ownership_reads(
+        &self,
+        owner: &InstanceAddress,
+    ) -> Result<Vec<(QueryId, Reference)>, String> {
+        let request = self
+            .requests
+            .get(&id(owner.ready_query_id()))
+            .ok_or("ownership diagnostic has no settled Ready dependency plan")?;
+        Ok(request.reads.clone())
+    }
     pub fn failure(&self, message: &str) -> hirsel_engine::store::Reference {
         self.snapshot
             .store

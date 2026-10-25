@@ -410,6 +410,7 @@ pub mod instance_tasks;
 pub mod link_tasks;
 pub mod local;
 pub mod optimizer;
+pub mod ownership_tasks;
 pub mod products;
 pub mod ready;
 pub mod ready_source;

@@ -127,10 +127,10 @@ impl OperationDeclarations for InstanceOperations<'_> {
         self.declarations.invocations(definition)
     }
     fn invocation_body(&self, definition: &DefPath, instance: ContentHash) -> Option<u32> {
-        if !self.all_sources {
-            self.source
-                .filter(|(selected, id)| *selected == definition && *id == instance)?;
-        }
+        // The owner's call inventory above remains scoped. A synthesized
+        // cleanup call separately checks its target's exact independently
+        // selected body against the layout's declared finalizer. Filtering
+        // those identities to the caller hides a required C dependency.
         self.declarations.invocation_body(definition, instance)
     }
     fn derive(
