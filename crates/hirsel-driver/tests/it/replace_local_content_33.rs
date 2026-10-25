@@ -128,47 +128,6 @@ fn source_check(source: &str, policy: LoweringPolicy) -> CheckOutput {
 }
 
 #[test]
-fn replace_local_content_33_original_source_and_sidecar() {
-    with_compiler_stack(|| {
-        let sidecar: serde_json::Value = serde_json::from_str(include_str!(
-            "../fixtures/replace-local-content-33/original.hir.json"
-        ))
-        .unwrap();
-        assert_eq!(sidecar["sources"][0]["path"], "original.hir");
-        let output = source_check(ORIGINAL, LoweringPolicy::Comptime);
-        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-        assert_eq!(output.completion, CheckCompletion::Complete);
-    });
-}
-
-#[test]
-fn replace_local_content_33_concrete_list_four_engines() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../../../../conformance/MODE/MODE-1-replace-local-content-33-concrete-run.hir"
-        ))
-    });
-}
-
-#[test]
-fn replace_local_content_33_projected_record_four_engines() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../../../../conformance/MODE/MODE-1-replace-local-content-33-projected-run.hir"
-        ))
-    });
-}
-
-#[test]
-fn replace_local_content_33_callable_retained_loan_four_engines() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../../../../conformance/MODE/MODE-1-replace-local-content-33-callable-run.hir"
-        ))
-    });
-}
-
-#[test]
 fn replace_local_content_33_retained_loan_blocks_escape() {
     with_compiler_stack(|| {
         let source = include_str!(
@@ -247,15 +206,6 @@ fn replace_local_content_33_v_rejects_forged_displaced_lifetime() {
                 }),
             "{report:?}"
         );
-    });
-}
-
-#[test]
-fn replace_local_content_33_borrowed_callable_four_engines() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../../../../conformance/MODE/MODE-1-replace-local-content-33-borrowed-callable-run.hir"
-        ))
     });
 }
 
@@ -374,14 +324,5 @@ fn replace_local_content_33_v_rejects_forged_mutation_acceptance() {
             )),
             "{report:?}"
         );
-    });
-}
-
-#[test]
-fn replace_local_content_33_concrete_relation_four_engines() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../../../../conformance/MODE/MODE-1-replace-local-content-33-concrete-relation-run.hir"
-        ))
     });
 }

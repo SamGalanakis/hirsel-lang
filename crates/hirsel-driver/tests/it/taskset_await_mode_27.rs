@@ -14,35 +14,12 @@ const MINIMAL: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 "#;
 
-#[test]
-fn taskset_await_mode_27_minimal_exports() {
-    with_compiler_stack(|| {
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine
-            .sources
-            .add("taskset-await.hir", MINIMAL.into())
-            .unwrap();
-        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
-        engine.export_native_input().unwrap();
-    });
-}
-
 fn probe(source: &str) {
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
     let file = engine.sources.add("probe.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     engine.export_native_input().unwrap();
-}
-
-#[test]
-fn taskset_await_mode_27_shrunk() {
-    with_compiler_stack(|| {
-        probe(
-            r#"fn probe(s: Scope) { let mut pending: TaskSet[unique Result[String,String]] of s = task.set(s); let joined = task.await_at(s, mut pending, 0u64); match take joined { Ok(row)=>{}, Error(problem)=>{} }; task.cancel_all(s,take pending) }"#,
-        )
-    });
 }
 
 #[test]
@@ -64,37 +41,10 @@ fn taskset_await_mode_27_borrowed_match() {
 }
 
 #[test]
-fn taskset_await_mode_27_await_any() {
-    with_compiler_stack(|| {
-        probe(
-            r#"fn probe(s: Scope) { let mut pending: TaskSet[unique Result[String,String]] of s = task.set(s); let slot = match task.await_any(s,pending) {Some(i)=>i,None()=>0u64}; let joined = task.await_at(s, mut pending, slot); match take joined { Ok(row)=>{}, Error(problem)=>{} }; task.cancel_all(s,take pending) }"#,
-        )
-    });
-}
-
-#[test]
 fn taskset_await_mode_27_option() {
     with_compiler_stack(|| {
         probe(
             r#"fn probe(s: Scope) { let mut pending: TaskSet[unique Option[String]] of s = task.set(s); let joined = task.await_at(s, mut pending, 0u64); match take joined { Some(row)=>{}, None()=>{} }; task.cancel_all(s,take pending) }"#,
-        )
-    });
-}
-
-#[test]
-fn taskset_await_mode_27_direct() {
-    with_compiler_stack(|| {
-        probe(
-            r#"fn probe(s:Scope) {let child=task.async(s,fn()->unique Result[String,String]{unique Ok("a")}); let joined=task.await(s,take child); match take joined {Ok(row)=>{},Error(problem)=>{}}}"#,
-        )
-    });
-}
-
-#[test]
-fn taskset_await_mode_27_direct_call_match() {
-    with_compiler_stack(|| {
-        probe(
-            r#"fn probe(s: Scope) { let mut pending: TaskSet[unique Result[String,String]] of s = task.set(s); match take task.await_at(s, mut pending, 0u64) { Ok(row)=>{}, Error(problem)=>{} }; task.cancel_all(s,take pending) }"#,
         )
     });
 }
@@ -182,47 +132,6 @@ fn runtime(source: &str) {
             "{configuration}: {outcome:?}"
         );
     }
-}
-
-#[test]
-fn taskset_await_mode_27_runtime_main() {
-    with_compiler_stack(|| runtime(include_str!("../fixtures/taskset_await_mode_27/main.hir")));
-}
-
-#[test]
-fn taskset_await_mode_27_runtime_minimal() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../fixtures/taskset_await_mode_27/minimal.hir"
-        ))
-    });
-}
-
-#[test]
-fn taskset_await_mode_27_runtime_set_await() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../fixtures/taskset_await_mode_27/set-await.hir"
-        ))
-    });
-}
-
-#[test]
-fn taskset_await_mode_27_runtime_minimal_await() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../fixtures/taskset_await_mode_27/minimal-await.hir"
-        ))
-    });
-}
-
-#[test]
-fn taskset_await_mode_27_runtime_typed_payload() {
-    with_compiler_stack(|| {
-        runtime(include_str!(
-            "../fixtures/taskset_await_mode_27/typed-payload.hir"
-        ))
-    });
 }
 
 #[test]

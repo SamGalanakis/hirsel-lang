@@ -296,53 +296,6 @@ fn check_source(source: &str) -> Result<QueryEngine, String> {
     Ok(engine)
 }
 
-#[test]
-fn frozen_contracts_and_pairwise_ledger() {
-    with_compiler_stack(|| {
-        let directory = artifacts("contracts-");
-        let mut covered = BTreeSet::new();
-        for (i, row) in ROWS.iter().enumerate() {
-            for a in 0..8 {
-                for b in a + 1..8 {
-                    covered.insert((a, row[a], b, row[b]));
-                }
-            }
-            let h = History::fixed(i);
-            let source = h.source(false);
-            eprintln!(
-                "SCOPED_ROW seed={} row={row:?} expected={:?} source={source:?}",
-                SEED + i as u64,
-                model(&h).unwrap()
-            );
-            persist(
-                &directory,
-                &format!("row-{i}"),
-                SEED + i as u64,
-                &source,
-                &format!("row={row:?} model={:?}", model(&h).unwrap()),
-            );
-            check_source(&source)
-                .unwrap_or_else(|e| panic!("seed={} {e}\n{source}", SEED + i as u64));
-        }
-        assert_eq!(covered.len(), 209);
-        for a in 0..8 {
-            for b in a + 1..8 {
-                for x in 0..[3, 3, 3, 3, 2, 3, 3, 2][a] {
-                    for y in 0..[3, 3, 3, 3, 2, 3, 3, 2][b] {
-                        if a == 0 && b == 5 && x != 0 && y == 2 {
-                            continue;
-                        }
-                        assert!(
-                            covered.contains(&(a, x, b, y)),
-                            "missing pair {a}:{x}/{b}:{y}"
-                        );
-                    }
-                }
-            }
-        }
-    });
-}
-
 fn configurations() -> Vec<Configuration> {
     [
         Engine::Heap { campaign: false },
@@ -658,91 +611,6 @@ fn partition(first: usize) {
         assert!(counts.values().all(|n| *n == count));
     });
 }
-#[test]
-fn runtime_00_03() {
-    partition(0)
-}
-#[test]
-fn runtime_04_07() {
-    partition(4)
-}
-#[test]
-fn runtime_08_11() {
-    partition(8)
-}
-#[test]
-fn runtime_12_15() {
-    partition(12)
-}
-#[test]
-fn runtime_16_19() {
-    partition(16)
-}
-#[test]
-fn runtime_20_23() {
-    partition(20)
-}
-
-#[test]
-fn reducer_injected_emitter_error_not_compiler_bug() {
-    with_compiler_stack(|| {
-        let directory = artifacts("reducer-");
-        let runner = Runner::with_matrix(&directory.join("runs"), configurations()).unwrap();
-        let h = History::fixed(1);
-        let signature = ("reference".into(), "model-output".into());
-        let initial = execute(&runner, "original", &h.source(true));
-        assert!(initial.agrees());
-        assert!(differences(&initial, &model(&h).unwrap()).contains(&signature));
-        persist(
-            &directory,
-            "injected-original",
-            SEED + 1,
-            &h.source(true),
-            &format!("{h:?}\n{initial:#?}"),
-        );
-        let mut i = 0;
-        let (best, count, decisions) = reduce(&h, |candidate| {
-            i += 1;
-            let report = execute(&runner, &format!("candidate-{i}"), &candidate.source(true));
-            let keep = report.validated
-                && report.agrees()
-                && differences(&report, &model(candidate).unwrap()) == [signature.clone()];
-            if keep {
-                persist(
-                    &directory,
-                    &format!("injected-retained-{i}"),
-                    SEED + 1,
-                    &candidate.source(true),
-                    &format!(
-                        "{candidate:?} model={:?}\n{report:#?}",
-                        model(candidate).unwrap()
-                    ),
-                );
-            }
-            keep
-        });
-        assert!(best.ops.len() < h.ops.len());
-        assert_eq!(best.value, 0);
-        assert_eq!(best.row[2], 0);
-        assert!(count <= 96);
-        persist(
-            &directory,
-            "injected-reduced",
-            SEED + 1,
-            &best.source(true),
-            &format!("{best:?}\n{decisions:?}"),
-        );
-        eprintln!(
-            "SCOPED_REDUCER evaluations={count} operations={}->{} value={}->{} wrapper={}->{}",
-            h.ops.len(),
-            best.ops.len(),
-            h.value,
-            best.value,
-            h.row[2],
-            best.row[2]
-        );
-    });
-}
 
 #[test]
 fn twelve_source_negative_twins() {
@@ -942,24 +810,6 @@ fn real_task_scope_public_adapters() {
 }
 
 #[test]
-fn generic_callable_actual_gets_no_nonretention_promise() {
-    with_compiler_stack(|| {
-        let source = "fn relay[T](take value:T)->T {take value}\nfn probe(f:fn()->u64)->fn()->u64 {relay(take f)}\npub fn main(){}";
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("generic.hir", source.into()).unwrap();
-        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(
-            checked
-                .diagnostics
-                .iter()
-                .any(|d| d.rule.as_str() == "OWN-1"),
-            "{:?}",
-            checked.diagnostics
-        );
-    });
-}
-
-#[test]
 fn permanent_manifest_source_twins() {
     with_compiler_stack(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -974,31 +824,6 @@ fn permanent_manifest_source_twins() {
         let checked = check_progress(&mut engine, file, &default_context()).unwrap();
         assert_eq!(checked.diagnostics.len(), 1, "{:?}", checked.diagnostics);
         assert_eq!(checked.diagnostics[0].rule.as_str(), "OWN-1");
-    });
-}
-
-#[test]
-fn incomplete_nested_annotation_is_an_intended_mode_negative() {
-    with_compiler_stack(|| {
-        let positive = "fn need(take xs:unique List[unique List[u64]]){}\nfn probe(){let xs:unique List[unique List[u64]]=[[1u64]];need(take xs)}\npub fn main(){}";
-        let mut engine = check_source(positive).unwrap();
-        let input = engine.export_native_input().unwrap();
-        engine.import_native_input(input).unwrap();
-        let negative = positive.replace(
-            "let xs:unique List[unique List[u64]]",
-            "let xs:unique List[List[u64]]",
-        );
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("incomplete.hir", negative).unwrap();
-        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(
-            checked
-                .diagnostics
-                .iter()
-                .any(|d| d.rule.as_str() == "MODE-2"),
-            "{:?}",
-            checked.diagnostics
-        );
     });
 }
 

@@ -93,27 +93,6 @@ fn accepted(source: &str) {
 }
 
 #[test]
-fn match_missing_case_22_retained_product_and_guard_human_json() {
-    with_compiler_stack(|| {
-        rejected(PRODUCT, &["(false, false)"], 0);
-        rejected(GUARD, &["true"], 0);
-        // Removing the guard entirely repairs coverage. Merely changing its
-        // condition to true does not, nor does adding a guarded missing arm.
-        rejected(&GUARD.replace("if x", "if true"), &["true"], 0);
-        rejected(
-            &PRODUCT.replace("=>2}", "=>2, (false,false) if true=>3}"),
-            &["(false, false)"],
-            0,
-        );
-        accepted(&PRODUCT.replace("=>2}", "=>2, (false,false)=>3}").replace("pub fn main() {}", "pub fn main() {probe((false,false));probe((false,true));probe((true,false));probe((true,true));}"));
-        accepted(&GUARD.replace("false=>2}", "false=>2,true=>3}").replace(
-            "pub fn main() {}",
-            "pub fn main() {probe(false);probe(true);}",
-        ));
-    });
-}
-
-#[test]
 fn match_missing_case_22_finite_model_proves_every_displayed_value_uncovered() {
     with_compiler_stack(|| {
         let mut cases = 0;

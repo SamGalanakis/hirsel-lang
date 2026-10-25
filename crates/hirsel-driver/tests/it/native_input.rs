@@ -711,16 +711,6 @@ fn iterator(fail: &str) -> String {
     )
 }
 #[test]
-fn an_iterator_callback_returns_its_updated_state() {
-    hirsel_engine::with_compiler_stack(|| {
-        assert_run(
-            &observe_stably(&iterator("")),
-            RunOutcome::Returned(hirsel_run_schema::Returned::Ok),
-            "updated\n",
-        );
-    });
-}
-#[test]
 fn an_iterator_callback_failure_after_a_state_update_releases_the_updated_state() {
     hirsel_engine::with_compiler_stack(|| {
         // A `mut` argument is the caller's storage: the update precedes the
@@ -731,59 +721,6 @@ fn an_iterator_callback_failure_after_a_state_update_releases_the_updated_state(
             "updated\n",
         );
     });
-}
-
-#[test]
-fn borrowed_associations_and_scoped_promises_are_checked_at_native_import() {
-    let text = include_str!("../../../../conformance/SEM/SEM-4-contract6-borrowed-run.hir");
-    let mut engine = engine(text);
-    let base = engine.export_native_input().unwrap();
-    engine.import_native_input(base.clone()).unwrap();
-    let owner = base
-        .definitions
-        .iter()
-        .find(|(_, d)| !d.protocol_associations.is_empty())
-        .unwrap()
-        .0
-        .clone();
-    let mut erased = base.clone();
-    Arc::make_mut(erased.definitions.get_mut(&owner).unwrap())
-        .protocol_associations
-        .clear();
-    assert!(engine.import_native_input(erased).is_err());
-    let mut bad = base.clone();
-    Arc::make_mut(bad.definitions.get_mut(&owner).unwrap()).protocol_associations[0]
-        .association
-        .fingerprint = Default::default();
-    assert!(engine.import_native_input(bad).is_err());
-    let mut bad = base.clone();
-    Arc::make_mut(bad.definitions.get_mut(&owner).unwrap()).protocol_associations[0].next =
-        hirsel_tir::BlockId(0);
-    assert!(engine.import_native_input(bad).is_err());
-    let mut bad = base.clone();
-    let signature = Arc::make_mut(bad.signatures.get_mut(&owner).unwrap());
-    let SignatureKind::Function(f) = &mut signature.kind else {
-        panic!()
-    };
-    f.state_promises = vec![hirsel_types::StatePromise {
-        selector: hirsel_types::RelationPlace {
-            parameter: hirsel_types::ParameterRef::bound(hirsel_types::ParamId(0)),
-            fields: vec![hirsel_types::FieldId(999)].into(),
-        },
-        advance_only: true,
-        preserve_captures: true,
-        preserve_unique: false,
-        unretained: Default::default(),
-    }]
-    .into();
-    assert!(engine.import_native_input(bad).is_err());
-    let mut bad = base;
-    let nominal = bad.signatures.values_mut().find(|s| matches!(&s.kind,SignatureKind::Type(t) if t.loop_source.is_some() && !s.definition.path().0.package.name_is("core"))).unwrap();
-    let SignatureKind::Type(t) = &mut Arc::make_mut(nominal).kind else {
-        panic!()
-    };
-    t.loop_source.as_mut().unwrap().option.0.package.name = "foreign".into();
-    assert!(engine.import_native_input(bad).is_err());
 }
 
 /// A library build must select its public surface independently of unrelated

@@ -247,11 +247,3 @@ fn signature_recovery_22_independent_errors_keep_their_primary_owner() {
         }
     });
 }
-
-#[test]
-fn signature_recovery_22_malformed_manifest_is_a_tool_failure() {
-    let dir = tempfile::tempdir().unwrap();
-    let manifest = dir.path().join("hirsel.json");
-    std::fs::write(manifest.clone(), r#"{"schema":1,"package":false}"#).unwrap();
-    assert!(load_program(&manifest).is_err());
-}

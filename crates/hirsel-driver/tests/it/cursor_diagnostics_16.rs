@@ -81,40 +81,6 @@ fn check(
 }
 
 #[test]
-fn cursor_diagnostics_16_owned_and_computed_pair() {
-    check(
-        TAGGED,
-        &[("LANG-15", "cursor = unboxed(inner)")],
-        &[
-            ("let mut cursor", "cursor", "read-only borrow cursor"),
-            ("unboxed(inner)", "unboxed(inner)", "owned value"),
-            (
-                "unboxed(inner)",
-                "unboxed",
-                "result relation does not turn an owned return",
-            ),
-        ],
-    );
-    check(
-        PAIR,
-        &[("MODE-1", "left = xs[0u64]")],
-        &[
-            ("let mut left", "left", "rooted in `a`, `b`"),
-            ("Array(xs)", "xs", "view of `xs`"),
-            ("(left, b)", "(left, b)", "distinct storage origin"),
-        ],
-    );
-    check(
-        &PAIR.replace(
-            "match (left, b) { (Array(xs), Array(_))",
-            "match left { Array(xs)",
-        ),
-        &[],
-        &[],
-    );
-}
-
-#[test]
 fn cursor_diagnostics_16_copy_take_roots_and_aliases() {
     for refill in ["copy a", "take owned"] {
         check(

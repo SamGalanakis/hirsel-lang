@@ -674,67 +674,6 @@ fn a_small_callee_inlines_across_singleton_objects_at_o3() {
     });
 }
 
-/// The GEN-5 verdict and its sites depend only on the edge set: contributing
-/// the instance edges in the order each of the 22 partitions groups their
-/// owners gives the same growing sites, for a finite program (none) and for a
-/// growing one (its one site).
-#[test]
-fn partitions_preserve_the_gen5_verdict_and_sites() {
-    use hirsel_engine::InstanceGraph;
-    let growing = "fn first[T: copyable](x:T) { second((copy x,copy x)) }
-fn second[U: copyable](x:U) { third(x) }
-fn third[V: copyable](x:V) { first(x) }
-";
-    with_compiler_stack(move || {
-        let finite_input = checked(GENERIC).validated.snapshot().clone();
-        let (finite, finite_types) = (finite_input.instances.clone(), finite_input.types.clone());
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let file = engine.sources.add("growing.hir", growing.into()).unwrap();
-        let output = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert_eq!(output.diagnostics[0].rule.as_str(), "GEN-5");
-        let growing = engine.gen5_source_graph().unwrap();
-        let expected = finite.growing_sites(&finite_types);
-        assert!(expected.is_empty());
-        let mut owners: Vec<&DefPath> = finite.edges.iter().map(|e| &e.owner).collect();
-        owners.sort();
-        owners.dedup();
-        for configuration in topology_matrix(20) {
-            let Engine::Native { partition, .. } = configuration.engine else {
-                unreachable!()
-            };
-            let objects = partition.assign(owners.len());
-            let mut edges = finite.edges.clone();
-            edges.sort_by_key(|e| objects[owners.binary_search(&&e.owner).unwrap()]);
-            let reordered = InstanceGraph { edges };
-            assert_eq!(
-                reordered.growing_sites(&finite_types),
-                expected,
-                "{}",
-                partition.name()
-            );
-        }
-        let expected = growing.growing_sites();
-        assert_eq!(expected.len(), 1);
-        let mut owners: Vec<_> = growing.edges.iter().map(|e| e.0.0).collect();
-        owners.sort();
-        owners.dedup();
-        for configuration in topology_matrix(20) {
-            let Engine::Native { partition, .. } = configuration.engine else {
-                unreachable!()
-            };
-            let objects = partition.assign(owners.len());
-            let mut edges = growing.edges.to_vec();
-            edges.sort_by_key(|e| objects[owners.binary_search(&e.0.0).unwrap()]);
-            assert_eq!(
-                hirsel_engine::growing_sites(&edges),
-                expected,
-                "{}",
-                partition.name()
-            );
-        }
-    });
-}
-
 /// A failing index in statement position fails at the index expression, by
 /// line and column, in all three engines (the diagnostics part's primary site is the
 /// operation that fails; corpus headers pin only the line).

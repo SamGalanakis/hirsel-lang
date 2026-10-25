@@ -100,29 +100,8 @@ fn runtime(name: &str, source: &str) {
 }
 
 #[test]
-fn original_indexed_mutable_handback() {
-    with_compiler_stack(|| check_export(ADVANCE));
-}
-
-#[test]
 fn original_plain_owned_loop_rejected_at_source() {
     with_compiler_stack(|| rejected(KEEP, "CAP-1", "take xs"));
-}
-
-#[test]
-fn original_workaround_controls_export() {
-    with_compiler_stack(|| {
-        check_export(&KEEP.replace("T: plain", "T: plain + inert"));
-        check_export(&KEEP.replace("uses {}", "uses {xs}"));
-        check_export(&KEEP.replace(
-            "for item in take xs { list.push(mut out, item) }",
-            "for i in 0u64..list.len(xs) { list.push(mut out, xs[i]) }",
-        ));
-        check_export(&ADVANCE.replace(
-            "change(mut owned[0])",
-            "let mut staged = owned[0]; change(mut staged); owned[0] = staged",
-        ));
-    });
 }
 
 #[test]

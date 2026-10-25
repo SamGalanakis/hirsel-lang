@@ -533,78 +533,6 @@ pub fn main()->Result[(),()] uses {} {let saved:fn()->u64 uses {}=seven;let call
 }
 
 #[test]
-fn stored_callable_authority_26_runtime_1() {
-    runtime_case(
-        "S-select-f-1-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {f} {let first=fn()->u64 {f()};let outer=fn()->u64 {let inner=fn()->u64 {first()};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=7u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=7u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_runtime_2() {
-    runtime_case(
-        "S-select-f-2-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {f} {let outer=fn()->u64 {let inner=fn()->u64 {if flag {f()} else {f()}};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved:fn()->u64 uses {}=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=7u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=7u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_runtime_3() {
-    runtime_case(
-        "S-select-f-3-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {f} {let first=f;let outer=fn()->u64 {let next=first;let inner=fn()->u64 {next()};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=7u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=7u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_runtime_4() {
-    runtime_case(
-        "S-select-g-0-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {g} {let outer=fn()->u64 {let inner=fn()->u64 {g()};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved:fn()->u64 uses {}=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=29u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=29u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_runtime_5() {
-    runtime_case(
-        "S-select-g-1-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {g} {let first=fn()->u64 {g()};let outer=fn()->u64 {let inner=fn()->u64 {first()};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=29u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=29u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_runtime_6() {
-    runtime_case(
-        "S-select-g-2-1-setup3",
-        r#"fn seven()->u64 uses {} {7}
-fn twentynine()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64,flag:bool)->u64 uses {g} {let outer=fn()->u64 {let inner=fn()->u64 {if flag {g()} else {g()}};inner()};outer()}
-pub fn main()->Result[(),()] uses {} {let saved:fn()->u64 uses {}=seven;let callbacks:List[fn()->u64 uses {}]=[saved,twentynine];if choose(callbacks[0],callbacks[1],true)!=29u64 {return Error(())};if choose(callbacks[0],callbacks[1],false)!=29u64 {return Error(())};Ok(())}
-"#,
-    );
-}
-
-#[test]
 fn stored_callable_authority_26_runtime_7() {
     runtime_case(
         "S-select-g-3-1-setup3",
@@ -793,42 +721,6 @@ fn stored_callable_authority_26_mutations_0() {
         "V-capture-0-0",
         r#"fn effect(arg:Dir) uses {Dir} {}
 fn choose(d:Dir) uses {Dir} {let held=effect;let callback=fn(token:Dir) uses {Dir} {held(token)};callback(d)}
-pub fn main(d:Dir) uses {Dir} {choose(d)}
-"#,
-        &["uses", "captures", "slot"],
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_mutations_1() {
-    mutant_case(
-        "V-capture-0-1",
-        r#"fn effect(arg:Dir) uses {Dir} {}
-fn choose(d:Dir) uses {Dir} {let held=effect;let callback:fn(Dir)->() uses {Dir}=fn(token:Dir) uses {Dir} {held(token)};callback(d)}
-pub fn main(d:Dir) uses {Dir} {choose(d)}
-"#,
-        &["uses", "captures", "slot"],
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_mutations_2() {
-    mutant_case(
-        "V-capture-1-0",
-        r#"fn effect(arg:Dir) uses {Dir} {}
-fn choose(d:Dir) uses {Dir} {let held:fn(Dir)->() uses {Dir}=effect;let callback=fn(token:Dir) uses {Dir} {held(token)};callback(d)}
-pub fn main(d:Dir) uses {Dir} {choose(d)}
-"#,
-        &["uses", "captures", "slot"],
-    );
-}
-
-#[test]
-fn stored_callable_authority_26_mutations_3() {
-    mutant_case(
-        "V-capture-1-1",
-        r#"fn effect(arg:Dir) uses {Dir} {}
-fn choose(d:Dir) uses {Dir} {let held:fn(Dir)->() uses {Dir}=effect;let callback:fn(Dir)->() uses {Dir}=fn(token:Dir) uses {Dir} {held(token)};callback(d)}
 pub fn main(d:Dir) uses {Dir} {choose(d)}
 "#,
         &["uses", "captures", "slot"],

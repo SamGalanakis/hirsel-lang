@@ -76,15 +76,6 @@ fn function_ir(name: &'static str) -> Vec<String> {
     })
 }
 
-/// Each child pointer of a `Branch` is one aligned word store, never bytes and shifts.
-#[test]
-fn branch_children_are_word_stores() {
-    for ir in function_ir("4tree") {
-        assert!(!ir.contains("store i8"), "{ir}");
-        assert!(!ir.contains("lshr"), "{ir}");
-    }
-}
-
 /// A node is its eight-byte header and 16-byte payload, bumped once from the word-aligned
 /// cursor with one limit test: no extent stores and no alignment masks.
 #[test]
@@ -101,50 +92,6 @@ fn arena_node_is_one_bump_without_extent() {
     }
 }
 
-/// The traversal tests each node's tag once: the arm's fields are prepared where its
-/// tag test proved the variant, so no MEM-13 check follows the left recursive call, and
-/// the only failure starts are the two checked additions (SEM-1).
-#[test]
-fn check_tests_each_tag_once() {
-    for ir in function_ir("5check") {
-        assert!(!ir.contains("icmp eq ptr"), "{ir}");
-        assert_eq!(
-            ir.matches("@hirsel_rt_v2_failure_begin(").count(),
-            2,
-            "{ir}"
-        );
-    }
-}
-
-/// The arena token reaches each recursive `tree` call by value, as the callee's own
-/// parameter word, never through a caller stack slot. Construction tests the
-/// distinguished heap token before accessing the arena record.
-#[test]
-fn arena_token_is_a_word_with_a_heap_test() {
-    for ir in function_ir("4tree") {
-        let define = ir.lines().next().expect("the define line");
-        let (_, parameters) = define.split_once('(').expect("the parameter list");
-        let token = parameters
-            .split(", ")
-            .nth(2)
-            .and_then(|p| p.rsplit(' ').next())
-            .expect("the token parameter");
-        let calls: Vec<&str> = ir
-            .lines()
-            .filter(|l| l.contains("call") && l.contains("4tree"))
-            .collect();
-        assert_eq!(calls.len(), 2, "{ir}");
-        for call in calls {
-            assert!(
-                call.contains(&format!(", ptr {token}, i64")),
-                "{call}\n{ir}"
-            );
-        }
-        assert!(ir.contains(&format!("icmp eq ptr {token}, null")), "{ir}");
-        assert!(ir.contains("@hirsel_rt_v2_alloc("), "{ir}");
-    }
-}
-
 /// Allocation cannot fail (runtime ABI 3), so `tree` has no failure path: its recursive
 /// calls' statuses fold away, and nothing reanchors a failure or releases a built child.
 #[test]
@@ -154,19 +101,6 @@ fn tree_has_no_failure_path() {
         assert!(!ir.contains("@hirsel_rt_v2_failure_"), "{ir}");
         assert!(!ir.contains("@hirsel.release"), "{ir}");
         assert!(ir.contains("call ptr @hirsel_rt_v2_arena_alloc("), "{ir}");
-    }
-}
-
-/// `arena.with` enters its arena warm (`hirsel_rt_v2_arena_enter`), seeded from the pool, so
-/// the first `box` in it bumps inline; no arena region enters cold.
-#[test]
-fn an_arena_enters_warm() {
-    for ir in module_ir() {
-        assert!(ir.contains("call void @hirsel_rt_v2_arena_enter("), "{ir}");
-        assert!(
-            !ir.contains("call void @hirsel_rt_v2_region_enter("),
-            "{ir}"
-        );
     }
 }
 

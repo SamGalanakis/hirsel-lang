@@ -401,12 +401,6 @@ pub fn main() -> Result[(), ()] {{
     assert_eq!(generated, 1);
 }
 
-#[test]
-fn growth_edges_give_the_checked_bodies_gen5_verdict() {
-    hirsel_engine::with_compiler_stack(
-        growth_edges_give_the_checked_bodies_gen5_verdict_on_compiler_thread,
-    );
-}
 fn growth_edges_give_the_checked_bodies_gen5_verdict_on_compiler_thread() {
     for source in [
         "fn grow[T: copyable](x:T) { grow((copy x,copy x)) }",

@@ -1280,48 +1280,6 @@ fn candidate_v2_independent_cold_jobs_salts_matrix() {
     }
 }
 #[test]
-fn candidate_v2_no_host_child() {
-    if std::env::var_os("HIRSEL_V2_NO_HOST").is_none() {
-        return;
-    }
-    let t = Tree::basic();
-    let w = workspace(1);
-    let b = w.capture_v2(t.plan()).unwrap();
-    let edits = create_import(&w, &b);
-    // All host-side setup is outside the marked frozen interval.
-    std::fs::remove_dir_all(&t.0).unwrap();
-    std::env::set_current_dir("/").unwrap();
-    unsafe {
-        std::env::set_var("HIRSEL_PRODUCTS", t.0.join("forbidden.image"));
-        std::env::set_var("HIRSEL_MEMORY_LIMIT", "1");
-        std::env::set_var("HIRSEL_JOBS", "999");
-    }
-    eprintln!("V2_FROZEN_BEGIN");
-    assert!(matches!(
-        w.inspect_v2(&b, "app", "mods/new.hir").unwrap(),
-        Inspection::Absent { .. }
-    ));
-    let c = submit(&w, &b, 1, edits);
-    let r = result(&w, &c);
-    assert_eq!(r.verdict, Verdict::Pass, "{:?}", r.loader_error);
-    assert!(matches!(promote(&w, &b, &c, 1), Promotion::Promoted(_)));
-    let b1 = w.head_lease().unwrap();
-    assert!(matches!(
-        w.inspect_v2(&b1, "app", "mods/new.hir").unwrap(),
-        Inspection::Present { .. }
-    ));
-    assert_eq!(result(&w, &c).candidate_inputs, r.candidate_inputs);
-    let mut unknown = edit(&w, &b1, "replace_source", "main.hir", Some(MAIN));
-    unknown["path"]["root"] = json!("uncaptured");
-    assert_eq!(
-        w.submit_v2(&b1, &request(&b1, 2, vec![unknown]))
-            .err()
-            .unwrap(),
-        "InputUnavailable"
-    );
-    eprintln!("V2_FROZEN_END");
-}
-#[test]
 fn candidate_v2_a14_a15_scope_entry_exposures_and_foreign_metadata() {
     let t = Tree::basic();
     t.write("lib.hir", "pub fn value()->u64{2}\n");

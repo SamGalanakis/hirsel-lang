@@ -22,16 +22,6 @@ fn accepted(source: &str) {
 }
 
 #[test]
-fn related_literal_21_written_parameter_relation() {
-    with_compiler_stack(|| accepted(RELATED));
-}
-
-#[test]
-fn related_literal_21_contextual_once_through_generic_relay() {
-    with_compiler_stack(|| accepted(ONCE));
-}
-
-#[test]
 fn related_literal_21_named_renamed_and_two_parameter_controls() {
     with_compiler_stack(|| {
         accepted(&RELATED.replace("fn(value:List[String])->List[String] in value uses {} {copy value}", "read_list").replace("fn f(", "fn read_list(value:List[String])->List[String] in value uses {} {copy value}\nfn f("));

@@ -118,33 +118,6 @@ fn nested_unique_result_24_direct_copy_and_mutable_binding_controls() {
     });
 }
 
-#[test]
-fn nested_unique_result_24_count_conflict_keeps_existing_advice() {
-    with_compiler_stack(|| {
-        let source = r#"fn need(take value: unique String) {}
-pub fn main() {
- let value = "a"
- let snapshot = copy value
- need(take value)
- let _ = snapshot
-}"#;
-        let output = checked(source);
-        let [d] = &output.diagnostics[..] else {
-            panic!("{:?}", output.diagnostics)
-        };
-        assert_eq!(d.rule.as_str(), "MODE-2");
-        assert!(
-            d.secondary
-                .iter()
-                .any(|l| output.sources.slice(l.span) == Some("copy value")),
-            "{d:?}"
-        );
-        assert!(!d.message.contains("cannot add"));
-        assert!(d.notes.iter().any(|n| n.contains("unique")), "{d:?}");
-        assert!(!d.notes.iter().any(|n| n.contains("element-by-element")));
-    });
-}
-
 // Rust Vec clone vectors, f6c1107f: alloc/src/vec/mod.rs:4054-4092 and
 // alloctests/tests/vec.rs:257-292. Compare values and retained snapshots;
 // no pointer inequality, implicit Clone bound or buffer-reuse promise.

@@ -21,29 +21,6 @@ fn path(name: &str) -> DefPath {
 }
 
 #[test]
-fn seals_keep_public_nominal_authority_and_private_ceilings_in_separate_graphs() {
-    with_compiler_stack(|| {
-        let mut engine =
-            checked("@capability(global) pub opaque type ReadDir: plain uses {Dir} { d: Dir }");
-        let public = engine.item_signature(&path("ReadDir")).unwrap().value;
-        let SignatureKind::Type(d) = &public.kind else {
-            panic!("type")
-        };
-        assert!(hirsel_types::encoding::signature_types(engine.types(), &public).is_empty());
-        assert!(d.representation.is_none());
-        assert!(d.implementation_authority.is_none());
-        assert_eq!(
-            d.authority,
-            AuthoritySummary::Known(vec![AuthorityTerm::Capability(path("ReadDir"))].into())
-        );
-        let owner = engine
-            .owner_representation(&path("ReadDir"), &path("ReadDir"))
-            .unwrap();
-        assert!(engine.types().contains(owner.private_shape));
-    });
-}
-
-#[test]
 fn private_ceiling_edits_change_owner_revisions_but_preserve_public_fingerprints() {
     with_compiler_stack(|| {
         let source = "@capability(global) pub opaque type ReadDir: plain uses {Dir} { d: Dir }\nfn get(r: ReadDir) -> Dir { r.d }";

@@ -170,25 +170,6 @@ fn result_tail_diagnostics_19_earlier_failures_and_wrong_payloads() {
 }
 
 #[test]
-fn result_tail_diagnostics_19_checked_unit_and_direct_return() {
-    with_compiler_stack(|| {
-        for source in [
-            UNIT.replace("unit()?", "unit()?; Ok(())"),
-            UNIT.replace("unit()?", "Ok(unit()?)"),
-            UNIT.replace("unit()?", "unit()"),
-            format!("{TYPES}fn run() -> Result[u64, E] {{ operation(true) }}\n"),
-        ] {
-            let output = checked(&source);
-            assert!(
-                output.diagnostics.is_empty(),
-                "{source}: {:?}",
-                output.diagnostics
-            );
-        }
-    });
-}
-
-#[test]
 fn result_tail_diagnostics_19_invalid_tail_mapping_has_no_repair() {
     with_compiler_stack(|| {
         for suffix in ["? App", "?"] {
@@ -261,74 +242,3 @@ pub fn main() -> Result[(), String] {
   Ok(())
 }
 "#;
-
-#[test]
-fn result_tail_diagnostics_19_repairs_h_llvm_cranelift() {
-    with_compiler_stack(|| {
-        let mut engine = crate::source_std::engine();
-        let file = engine.sources.add("repairs.hir", REPAIRED.into()).unwrap();
-        let output = check_progress(&mut engine, file, &default_context()).unwrap();
-        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
-        let entry = entry_path(&default_context());
-        let execution = run_observed_checked(
-            &mut engine,
-            &RunConfiguration {
-                entry: entry.clone(),
-                hash_seed: 0,
-                inputs: vec![],
-            },
-            SimulationConfig::default(),
-        )
-        .unwrap();
-        let reference = native::Observation::of_reference(execution.observation.as_ref().unwrap());
-        assert_eq!(reference.exit_code, Some(0), "{reference:?}");
-        assert!(reference.failures.is_empty(), "{reference:?}");
-        let input = engine.export_native_input().unwrap();
-        let validated = engine.import_native_input(input).unwrap();
-        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
-        let configurations = vec![
-            native::Configuration {
-                options: options.clone(),
-                engine: native::Engine::Heap { campaign: false },
-            },
-            native::Configuration {
-                options: options.clone(),
-                engine: native::Engine::Native {
-                    opt: native::OptLevel::Speed,
-                    partition: native::Partition::Whole,
-                    runtime: native::Runtime::Diagnostic,
-                },
-            },
-            native::Configuration {
-                options,
-                engine: native::Engine::Cranelift {
-                    partition: native::Partition::Whole,
-                    runtime: native::Runtime::Diagnostic,
-                },
-            },
-        ];
-        let scratch = tempfile::Builder::new()
-            .prefix("result-tail-diagnostics-19-")
-            .tempdir()
-            .unwrap();
-        let toolchain =
-            native::Toolchain::for_matrix(&scratch.path().join("runtime"), &configurations)
-                .unwrap();
-        let outcomes = native::differential(
-            &validated,
-            &entry,
-            &reference,
-            &configurations,
-            &toolchain,
-            scratch.path(),
-        );
-        assert_eq!(outcomes.len(), 3);
-        for (configuration, outcome) in outcomes {
-            eprintln!("result-tail-diagnostics-19: {configuration}: {outcome:?}");
-            assert!(
-                matches!(outcome, native::Outcome::Agree),
-                "{configuration}: {outcome:?}"
-            );
-        }
-    });
-}

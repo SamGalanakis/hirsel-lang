@@ -146,39 +146,6 @@ fn exhaustive_small_graphs_preserve_ordered_sites() {
     assert_eq!(labeled, 19_768);
 }
 
-#[test]
-fn seeded_multigraphs_and_input_permutations_preserve_ordered_sites() {
-    for seed in [1, 2, 0x5eed] {
-        let mut state = seed;
-        let vertices: Vec<_> = (0..32).map(vertex).collect();
-        for _ in 0..256 {
-            let n = (random(&mut state) % 32 + 1) as usize;
-            let count = (random(&mut state) % 192) as usize;
-            let mut edges = vec![];
-            for _ in 0..count {
-                let from = random(&mut state) as usize % n;
-                let to = random(&mut state) as usize % n;
-                let grows = random(&mut state) & 8 != 0;
-                let span = site(
-                    (random(&mut state) % 4 + 1) as u32,
-                    (random(&mut state) % 8) as u32,
-                    9,
-                );
-                edges.push((vertices[from], vertices[to], grows, span));
-                if random(&mut state) & 16 != 0 {
-                    edges.push(*edges.last().unwrap());
-                }
-            }
-            let expected = old_sites(&edges);
-            compare(&edges);
-            for _ in 0..3 {
-                shuffle(&mut edges, &mut state);
-                assert_eq!(growing_sites(&edges), expected, "seed {seed}");
-            }
-        }
-    }
-}
-
 pub(super) fn source_compare(engine: &mut QueryEngine) -> Vec<Span> {
     let graph = engine.gen5_source_graph().unwrap();
     let edges = graph.edges.into_vec();

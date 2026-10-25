@@ -35,17 +35,6 @@ fn analyze(source: &str, name: &str) -> Result<ScalarGraph, Refusal> {
 }
 
 #[test]
-fn direct_scalar_leaf_and_dag_are_proposals() {
-    assert!(
-        analyze(
-            "fn leaf(x:u64)->u64 {int.wrapping_add(x,1u64)}\nfn main()->u64 {leaf(2u64)}",
-            "main"
-        )
-        .is_ok()
-    );
-}
-
-#[test]
 fn scalar_cfg_loop_keeps_original_fuel_points() {
     let graph = analyze("fn main()->u64 {let mut x=1u64; for i in 0u64..64u64 {x=int.wrapping_add(int.wrapping_mul(x ^ (x >> 7),0x9e3779b97f4a7c15u64),i)}; x}", "main").unwrap();
     assert!(

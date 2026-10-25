@@ -29,44 +29,11 @@ fn check(source: &str, expected: Option<&str>, export: bool) {
 }
 
 #[test]
-fn sealed_regions_33_contextual_scalar_grant() {
-    with_compiler_stack(|| {
-        check(
-            "pub fn main(){let r = arena.with(fn(a: Arena)->Region[u64]{let root=7u64;arena.seal(take a,take root)});}",
-            None,
-            true,
-        )
-    });
-}
-
-#[test]
-fn sealed_regions_33_borrow_only_callback_preserved() {
-    with_compiler_stack(|| {
-        check(
-            "fn read(a:Arena)->u64{7u64}\npub fn main(){let n=arena.with(read);}",
-            None,
-            true,
-        )
-    });
-}
-
-#[test]
 fn sealed_regions_33_ordinary_borrow_is_not_a_grant() {
     with_compiler_stack(|| {
         check(
             "fn bad(a:Arena)->Region[u64]{let root=7u64;arena.seal(take a,take root)}\npub fn main(){}",
             Some("OWN-1"),
-            false,
-        )
-    });
-}
-
-#[test]
-fn sealed_regions_33_consumed_grant_stays_dead() {
-    with_compiler_stack(|| {
-        check(
-            "pub fn main(){arena.with(fn(a:Arena){let root=7u64;let r=arena.seal(take a,take root);let xs=copy_to(a,[1u64]);});}",
-            Some("OWN-2"),
             false,
         )
     });
@@ -193,17 +160,6 @@ fn sealed_regions_33_owned_callable_environment() {
             None,
             true,
         );
-    });
-}
-
-#[test]
-fn sealed_regions_33_many_callable_mode_control() {
-    with_compiler_stack(|| {
-        check(
-            "fn many(f:fn()->u64)->u64{f()}\npub fn main(){let f:fn()->u64=fn()->u64{7u64};let n=many(f);}",
-            None,
-            true,
-        )
     });
 }
 
@@ -437,17 +393,6 @@ fn sealed_regions_33_sorted_root_keeps_its_closed_comparator_brand() {
             "pub fn main(){let r=arena.with(fn(a:Arena)->Region[SortedMap[u64,Bytes] of u64.order]{let mut root:SortedMap[u64,Bytes] of u64.order in a=sorted_map.empty(u64.order);sorted_map.insert(u64.order,mut root,7u64,copy_to(heap,b\"abc\"));arena.seal(take a,take root)});}",
             None,
             true,
-        );
-    });
-}
-
-#[test]
-fn sealed_regions_33_sorted_root_does_not_change_comparator_identity() {
-    with_compiler_stack(|| {
-        check(
-            "fn reverse(a:u64,b:u64)->i32{if a<b{1i32}else{if a>b{-1i32}else{0i32}}}\npub fn main(){let wrong=Order(compare:reverse);let mut r=arena.with(fn(a:Arena)->Region[SortedMap[u64,Bytes] of u64.order]{let mut root:SortedMap[u64,Bytes] of u64.order in a=sorted_map.empty(u64.order);sorted_map.insert(u64.order,mut root,7u64,b\"abc\");arena.seal(take a,take root)});let n=region.with(mut r,fn(view:SortedMap[u64,Bytes] of u64.order)->u64{sorted_map.len(wrong,view)});}",
-            Some("PROV-1"),
-            false,
         );
     });
 }

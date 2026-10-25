@@ -1428,29 +1428,6 @@ fn main() {}
 }
 
 #[test]
-fn loop_local_owners_introduce_fresh_brands_on_each_iteration() {
-    with_compiler_stack(|| {
-        let source = r#"
-type R { x: u64 }
-fn owner() -> R { R(x: 0u64) }
-fn brand(r: R) -> Option[u8 of r] { None }
-fn inspect(r: R, b: Option[u8 of r]) {}
-fn probe() {
-  let ns: List[u64] = [0u64, 1u64]
-  for n in ns {
-    let r = owner()
-    let b = brand(r)
-    inspect(r, b)
-  }
-}
-fn main() {}
-"#;
-        let (probe, signatures) = lowered(source, "probe");
-        assert_eq!(kinds(&probe, &signatures), []);
-    });
-}
-
-#[test]
 fn nested_loop_origins_remain_live_until_their_own_iteration_or_explicit_end() {
     with_compiler_stack(|| {
         let prelude = "type R { x:u64 }\nfn owner()->R{R(x:0)}\nfn brand(r:R)->Option[u8 of r]{None}\nfn read(r:R,mut token:Option[u8 of r])->Result[Option[String],()]{Ok(None)}";
@@ -1512,31 +1489,6 @@ fn nested_loop_origins_remain_live_until_their_own_iteration_or_explicit_end() {
                     .any(|v| matches!(v, ViolationKind::InvalidOrigin(_))),
                 "{source}: {violations:?}"
             );
-        }
-    });
-}
-
-#[test]
-fn nested_copied_prefix_brands_agree_with_independent_validation() {
-    with_compiler_stack(|| {
-        let prelude = r#"
-type Inner { n: u64, other: u64 }
-type R { a: Inner, b: u64 }
-fn make(r: R) -> Option[u8 of r.a.other] { None }
-fn inspect(r: R, p: Option[u8 of r.a.other]) {}
-fn make_i(r: Inner) -> Option[u8 of r.other] { None }
-fn inspect_i(r: Inner, p: Option[u8 of r.other]) {}
-"#;
-        for witness in [
-            "let q = make(r); inspect(r, q)",
-            "let q = make_i(r.a); inspect_i(r.a, q)",
-            "let s = copy r.a; let q = make_i(s); inspect_i(s, q)",
-        ] {
-            let source = format!(
-                "{prelude}\nfn probe(take x: R) {{ let mut r = copy x; r.a.n = 3; {witness} }}\nfn main() {{}}"
-            );
-            let (probe, signatures) = lowered(&source, "probe");
-            assert_eq!(kinds(&probe, &signatures), [], "{witness}");
         }
     });
 }

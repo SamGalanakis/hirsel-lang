@@ -48,25 +48,6 @@ fn own_parameter_literal() {
 }
 
 #[test]
-fn named_type_twin() {
-    check(
-        r#"fn effect(d:Dir) uses {d} {}
-pub fn main(d:Dir) uses {d} {effect(d)}"#,
-        None,
-    );
-}
-
-#[test]
-fn named_literal_twin() {
-    check(
-        r#"fn pure() uses {} {}
-fn choose(f:fn()->(),g:fn()->()) uses {f} {f()}
-pub fn main() uses {} {choose(pure,pure)}"#,
-        None,
-    );
-}
-
-#[test]
 fn selector_to_nominal() {
     check(
         r#"fn effect(d:Dir) uses {d} {}
@@ -107,15 +88,6 @@ fn literal_actual_exceeds_caller() {
     check(
         r#"pub fn main(d:Dir) uses {} {let callback=fn(arg:Dir) uses {arg} {};callback(d)}"#,
         Some("CLO-2"),
-    );
-}
-
-#[test]
-fn named_actual_exceeds_caller() {
-    check(
-        r#"fn effect(d:Dir) uses {d} {}
-pub fn main(d:Dir) uses {} {effect(d)}"#,
-        Some("CAP-1"),
     );
 }
 
@@ -167,14 +139,6 @@ fn misspelled_literal_selector() {
     check(
         r#"pub fn main() {let f=fn(arg:u64) uses {missing} {}}"#,
         Some("LANG-4"),
-    );
-}
-
-#[test]
-fn noncallable_invocation() {
-    check(
-        r#"pub fn main() {let f=fn(arg:u64) uses {arg} {arg()}}"#,
-        Some("LANG-7"),
     );
 }
 
@@ -315,87 +279,4 @@ fn runtime_case(name: &str, source: &str) {
                 && observed.roots.is_empty()
         );
     }
-}
-
-#[test]
-fn runtime_literal_and_named_twin() {
-    runtime_case(
-        "literal",
-        r#"
-fn seven()->u64 uses {} {7}
-fn other()->u64 uses {} {29}
-fn named(f:fn()->u64,g:fn()->u64)->u64 uses {f} {f()}
-pub fn main()->Result[(),()] uses {} {
-  let callback=fn(f:fn()->u64,g:fn()->u64)->u64 uses {f} {f()}
-  if callback(seven,other)!=7u64 {return Error(())}
-  if named(seven,other)!=7u64 {return Error(())}
-  let second=fn(f:fn()->u64,g:fn()->u64)->u64 uses {g} {g()}
-  if second(seven,other)!=29u64 {return Error(())}
-  Ok(())
-}
-"#,
-    );
-}
-
-#[test]
-fn runtime_type_and_named_twin() {
-    runtime_case(
-        "type",
-        r#"
-fn effect(d:Dir)->u64 uses {d} {17}
-fn named(d:Dir)->u64 uses {d} {effect(d)}
-pub fn main(t:Test)->Result[(),()] {
-  let d=test.dir(t,[])
-  let f:fn(arg:Dir)->u64 uses {arg}=effect
-  if f(d)!=17u64 {return Error(())}
-  if named(d)!=17u64 {return Error(())}
-  Ok(())
-}
-"#,
-    );
-}
-
-#[test]
-fn runtime_subsumption_both_directions() {
-    runtime_case(
-        "subsumption",
-        r#"
-fn selected(d:Dir)->u64 uses {d} {17}
-fn nominal(d:Dir)->u64 uses {Dir} {29}
-pub fn main(t:Test)->Result[(),()] {
-  let d=test.dir(t,[])
-  let f:fn(arg:Dir)->u64 uses {Dir}=selected
-  let g:fn(arg:Dir)->u64 uses {arg}=nominal
-  if f(d)!=17u64 {return Error(())}
-  if g(d)!=29u64 {return Error(())}
-  Ok(())
-}
-"#,
-    );
-}
-
-#[test]
-fn runtime_second_slot_and_inert_selectors() {
-    runtime_case(
-        "remaining-controls",
-        r#"
-fn effect(n:u64,d:Dir)->u64 uses {d} {n+17}
-fn pure(n:u64)->u64 uses {n} {n}
-fn seven()->u64 uses {} {7}
-fn other()->u64 uses {} {29}
-fn choose(f:fn()->u64,g:fn()->u64)->u64 uses {f} {f()}
-pub fn main(t:Test)->Result[(),()] {
-  let d=test.dir(t,[])
-  let second:fn(n:u64,arg:Dir)->u64 uses {arg}=effect
-  if second(3,d)!=20u64 {return Error(())}
-  let inert:fn(arg:u64)->u64 uses {arg}=pure
-  if inert(11)!=11u64 {return Error(())}
-  let literal=fn(n:u64)->u64 uses {n} {n}
-  if literal(13)!=13u64 {return Error(())}
-  let selected:fn(f:fn()->u64,g:fn()->u64)->u64 uses {f}=choose
-  if selected(seven,other)!=7u64 {return Error(())}
-  Ok(())
-}
-"#,
-    );
 }

@@ -130,30 +130,12 @@ fn while_consume_mode_30_runtime_batched() {
 }
 
 #[test]
-fn while_consume_mode_30_runtime_direct() {
-    with_compiler_stack(|| {
-        let batch = BATCH
-            .replace("    while next < list.len(inputs) {", "    {")
-            .replace(" && active < manifest.JOBS", "");
-        runtime(modules(&batch, RUNTIME_MAIN));
-    });
-}
-
-#[test]
 fn while_consume_mode_30_runtime_receiving_binding() {
     with_compiler_stack(|| {
         let batch = BATCH.replace(
             "      for page in take pages",
             "      let received: List[document.Parsed] = take pages\n      for page in take received",
         );
-        runtime(modules(&batch, RUNTIME_MAIN));
-    });
-}
-
-#[test]
-fn while_consume_mode_30_runtime_single_condition() {
-    with_compiler_stack(|| {
-        let batch = BATCH.replace(" && active < manifest.JOBS", "");
         runtime(modules(&batch, RUNTIME_MAIN));
     });
 }

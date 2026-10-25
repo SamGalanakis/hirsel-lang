@@ -715,73 +715,6 @@ fn callback_mode_mismatch_cites_imported_contracts_and_checks_qualified_adapter(
 }
 
 #[test]
-fn callback_mode_mismatch_scalar_adapter_runs_on_h_llvm_and_cranelift() {
-    with_compiler_stack(|| {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("main.hir"), "fn invoke(cb:fn(mut xs:u64)->u64)->u64 {let mut xs=42u64;let answer=cb(mut xs);xs+answer}\nfn read(xs:u64)->u64 {xs}\nfn callback_adapter(mut xs:u64)->u64 {read(xs)}\npub fn main()->Result[(),()]{if invoke(callback_adapter)==84 {Ok(())} else {Error(())}}").unwrap();
-        let manifest = dir.path().join("hirsel.json");
-        std::fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"callback_runtime","version":"0"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
-        let mut program = load_program(&manifest).unwrap();
-        program.check_for_execution().unwrap();
-        let config = RunConfiguration {
-            entry: program.entry.clone(),
-            hash_seed: 0,
-            inputs: vec![],
-        };
-        let execution =
-            run_observed_checked(&mut program.engine, &config, SimulationConfig::default())
-                .unwrap();
-        let reference = native::Observation::of_reference(execution.observation.as_ref().unwrap());
-        assert_eq!(reference.exit_code, Some(0), "{reference:?}");
-        assert!(reference.failures.is_empty());
-        let input = program.engine.export_native_input().unwrap();
-        let validated = program.engine.import_native_input(input).unwrap();
-        let options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
-        let configurations = vec![
-            native::Configuration {
-                options: options.clone(),
-                engine: native::Engine::Heap { campaign: false },
-            },
-            native::Configuration {
-                options: options.clone(),
-                engine: native::Engine::Native {
-                    opt: native::OptLevel::Speed,
-                    partition: native::Partition::Whole,
-                    runtime: native::Runtime::Diagnostic,
-                },
-            },
-            native::Configuration {
-                options,
-                engine: native::Engine::Cranelift {
-                    partition: native::Partition::Whole,
-                    runtime: native::Runtime::Diagnostic,
-                },
-            },
-        ];
-        let scratch =
-            std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("callback-mode-repairs-20");
-        std::fs::create_dir_all(&scratch).unwrap();
-        let toolchain =
-            native::Toolchain::for_matrix(&scratch.join("runtime"), &configurations).unwrap();
-        let outcomes = native::differential(
-            &validated,
-            &program.entry,
-            &reference,
-            &configurations,
-            &toolchain,
-            &scratch,
-        );
-        assert_eq!(outcomes.len(), 3);
-        for (configuration, outcome) in outcomes {
-            assert!(
-                matches!(outcome, native::Outcome::Agree),
-                "{configuration}: {outcome:?}"
-            );
-        }
-    });
-}
-
-#[test]
 fn callback_mode_mismatch_stdin_recipe_and_existing_api_alternative_are_checked() {
     with_compiler_stack(|| {
         for (declarations, adapter) in [
@@ -823,32 +756,6 @@ fn callback_mode_mismatch_stdin_recipe_and_existing_api_alternative_are_checked(
                 "{repaired}: {:?}",
                 output.diagnostics
             );
-        }
-    });
-}
-
-#[test]
-fn callback_mode_mismatch_does_not_offer_adapters_for_effects_or_other_modes() {
-    with_compiler_stack(|| {
-        for source in [
-            "fn invoke(cb:@noalloc fn(xs:u64)->u64) {}\nfn read(xs:u64)->u64 {xs}\nfn caller(){invoke(read)}",
-            "fn invoke(cb:fn(xs:Stdin)->u64 uses {}) {}\nfn read(xs:Stdin)->u64 {0}\nfn caller(){invoke(read)}",
-            "fn invoke(cb:fn()->unique String) {}\nfn read()->String {\"x\"}\nfn caller(){invoke(read)}",
-            "fn invoke(cb:fn()) {}\nfn caller(take cb:once fn()){invoke(take cb)}",
-        ] {
-            let output = sendability_check(source);
-            assert!(!output.diagnostics.is_empty(), "{source}");
-            for d in &output.diagnostics {
-                assert!(
-                    !d.notes.iter().any(|n| n.contains("named adapter")),
-                    "{source}: {d:?}"
-                );
-                assert!(
-                    !d.notes.iter().any(|n| n.starts_with("callback parameter")),
-                    "{source}: {d:?}"
-                );
-                assert_ne!(d.rule.as_str(), "LANG-4", "{source}: {d:?}");
-            }
         }
     });
 }

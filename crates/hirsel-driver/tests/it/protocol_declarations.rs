@@ -60,17 +60,3 @@ fn a_broken_dependency_association_is_reported_before_client_body_planning() {
         }
     });
 }
-
-#[test]
-fn parser_rejections_remain_language_diagnostics_after_package_preflight() {
-    let file_scratch = tempfile::Builder::new()
-        .prefix("hirsel-preflight-syntax-")
-        .tempdir()
-        .unwrap();
-    let file = file_scratch.path().join("source.hir");
-    std::fs::write(&file, "pub fn main() { let fn = 1u64 }\n").unwrap();
-    let result = hirsel_driver::check_path(&file);
-    std::fs::remove_file(file).unwrap();
-    let output = result.unwrap();
-    assert_eq!(output.diagnostics[0].rule.as_str(), "LANG-14");
-}

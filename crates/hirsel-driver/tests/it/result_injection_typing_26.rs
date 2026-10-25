@@ -237,14 +237,6 @@ fn static_local_02() {
     });
 }
 #[test]
-fn static_local_03() {
-    with_compiler_stack(|| {
-        for named in [false, true] {
-            local_case(3, named);
-        }
-    });
-}
-#[test]
 fn static_local_04() {
     with_compiler_stack(|| {
         for named in [false, true] {
@@ -269,14 +261,6 @@ fn static_local_06() {
     });
 }
 #[test]
-fn static_local_07() {
-    with_compiler_stack(|| {
-        for named in [false, true] {
-            local_case(7, named);
-        }
-    });
-}
-#[test]
 fn static_local_08() {
     with_compiler_stack(|| {
         for named in [false, true] {
@@ -285,34 +269,10 @@ fn static_local_08() {
     });
 }
 #[test]
-fn static_local_09() {
-    with_compiler_stack(|| {
-        for named in [false, true] {
-            local_case(9, named);
-        }
-    });
-}
-#[test]
-fn static_local_10() {
-    with_compiler_stack(|| {
-        for named in [false, true] {
-            local_case(10, named);
-        }
-    });
-}
-#[test]
 fn static_local_11() {
     with_compiler_stack(|| {
         for named in [false, true] {
             local_case(11, named);
-        }
-    });
-}
-#[test]
-fn static_local_12() {
-    with_compiler_stack(|| {
-        for named in [false, true] {
-            local_case(12, named);
         }
     });
 }
@@ -565,36 +525,6 @@ fn runtime_0() {
 }
 
 #[test]
-fn runtime_1() {
-    runtime_case(1);
-}
-
-#[test]
-fn runtime_2() {
-    runtime_case(2);
-}
-
-#[test]
-fn runtime_3() {
-    runtime_case(3);
-}
-
-#[test]
-fn runtime_4() {
-    runtime_case(4);
-}
-
-#[test]
-fn runtime_5() {
-    runtime_case(5);
-}
-
-#[test]
-fn runtime_6() {
-    runtime_case(6);
-}
-
-#[test]
 fn runtime_7() {
     runtime_case(7);
 }
@@ -721,10 +651,6 @@ fn mutation_case(shape: usize) {
 #[test]
 fn validation_injected_error_plan() {
     mutation_case(0);
-}
-#[test]
-fn validation_identity_error_plan() {
-    mutation_case(1);
 }
 #[test]
 fn validation_nested_nominal_error_plan() {

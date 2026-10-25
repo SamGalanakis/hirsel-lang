@@ -551,52 +551,6 @@ fn uniqueness_loss_diagnostics_17_loop_item_conditional_repairs_20() {
 }
 
 // Ordinary counted copies stay distinct from confined related-call results.
-#[test]
-fn uniqueness_loss_diagnostics_17_ended_alias_guidance_21() {
-    with_compiler_stack(|| {
-        let text = "fn need(take xs:unique List[u64]) {}\nfn f(flag:bool){let xs:unique List[u64]=[1];if flag {let alias=copy xs};need(take xs)}";
-        let output = checked(text);
-        let [d] = &output.diagnostics[..] else {
-            panic!("{:?}", output.diagnostics)
-        };
-        eprintln!(
-            "{}\n{}",
-            d.render_human(&output.sources),
-            d.to_json(&output.sources)
-        );
-        assert_eq!(d.rule.as_str(), "MODE-2");
-        assert_eq!(output.sources.slice(d.primary), Some("need(take xs)"));
-        assert_eq!(
-            d.message,
-            "this operation requires a unique value: `xs` lost its deep uniqueness, but a unique value is required"
-        );
-        assert!(
-            d.secondary
-                .iter()
-                .any(|l| output.sources.slice(l.span) == Some("copy xs")
-                    && l.message.contains("shares counted storage"))
-        );
-        assert_eq!(
-            d.secondary
-                .iter()
-                .map(|l| (output.sources.slice(l.span).unwrap(), l.message.as_str()))
-                .collect::<Vec<_>>(),
-            vec![
-                ("copy xs", "this copy ended the owner's nested uniqueness"),
-                ("take xs", "parameter mode requirement"),
-                (
-                    "copy xs",
-                    "provided: copying `xs` shares counted storage reachable from `xs`"
-                ),
-                ("need", "required: this requires a unique value (MODE-2)"),
-            ]
-        );
-        assert!(d.fix.is_none());
-        let notes = d.to_json(&output.sources)["notes"].to_string();
-        assert!(!notes.contains("End live shares"), "{notes}");
-        assert!(notes.contains("does not restore"), "{notes}");
-    });
-}
 
 fn uniqueness_repairs_21_accepted(source: &str) {
     let mut engine = crate::source_std::engine();

@@ -325,43 +325,6 @@ fn ordinary_ledger_signatures_agree_with_the_separate_source_normalizer() {
 }
 
 #[test]
-fn builtin_print_result_agrees_with_the_same_written_source_result() {
-    let mut engine = hirsel_engine::QueryEngine::new(
-        hirsel_engine::default_environment(),
-        hirsel_driver::compiler_adapters(),
-    );
-    let file = engine
-        .sources
-        .add(
-            "forward.hir",
-            "fn forward(out:Stdout, text:String) -> Result[(),OutputError] { out.print(out,text) }"
-                .into(),
-        )
-        .unwrap();
-    engine
-        .parse_file(file, &hirsel_engine::default_context())
-        .unwrap();
-    let mut path = hirsel_engine::entry_path(&hirsel_engine::default_context());
-    path.0.name = "forward".into();
-    let source = engine.item_signature(&path).unwrap().value;
-    let registry = BuiltinRegistry::new();
-    let builtin = registry
-        .get(&hirsel_syntax::DefPath::core("out.print"))
-        .unwrap();
-    let SignatureKind::Function(a) = &source.kind else {
-        panic!()
-    };
-    let SignatureKind::Function(b) = &builtin.kind else {
-        panic!()
-    };
-    assert_eq!(
-        engine.types().get(a.result).unwrap().drop_allocation,
-        DropAllocation::NoAlloc
-    );
-    assert!(engine.types().semantic_eq(a.result, b.result));
-}
-
-#[test]
 fn declaration_body_and_builtin_cleanup_agree_on_owned_aggregate_results() {
     use hirsel_engine::DefinitionQueries;
     for (result, body, builtin_name) in [

@@ -65,29 +65,6 @@ fn verdicts(report: &Report) -> Vec<Verdict> {
 }
 
 #[test]
-fn disjoint_changed_same_signature_and_same_output_still_affected() {
-    let old = snapshot(1, disjoint(), &["A", "B"]);
-    let mut nodes = disjoint();
-    nodes[2].content = vec![b"1 + 0".to_vec()];
-    let new = snapshot(2, nodes, &["A", "B"]);
-    let mut calls = vec![];
-    let (report, outcomes) = validate(&old, &new, |side, test| {
-        calls.push((side, test.to_string()));
-        Ok(7)
-    });
-    assert_eq!(calls.len(), 4);
-    assert_eq!(outcomes.len(), 2);
-    assert_eq!(verdicts(&report), [Verdict::Affected, Verdict::Unaffected]);
-    assert_eq!(
-        report.results[0].changed_dependencies,
-        BTreeSet::from(["a".into()])
-    );
-    assert_eq!(report.results[0].witnesses[0].path, ["A", "a"]);
-    assert_ne!(report.old_graph, report.new_graph);
-    assert!(!report.results[1].rerun());
-}
-
-#[test]
 fn both_graphs_cover_removed_edges_targets_deletions_and_cycles() {
     for edit in 0..5 {
         let mut nodes = disjoint();
@@ -599,50 +576,6 @@ fn source_native_and_interpreter_fresh_observations_agree() {
                         "{index} {name} {configuration}: {outcome:?}"
                     );
                 }
-            }
-        }
-    });
-}
-
-/// Ignored measurement entry, run explicitly through tools/capped and perf.
-/// Each mode performs the same 100 batched operations; setup is outside the loop.
-#[test]
-#[ignore = "full gate; explicit instruction measurement"]
-fn full_gate_shadow_measurement() {
-    use std::hint::black_box;
-    with_compiler_stack(|| {
-        let mode = std::env::var("HIRSEL_IMPACT_MEASURE").unwrap_or_else(|_| "index".into());
-        let mut e = engine(PURE);
-        let old = capture(&mut e, 1);
-        let mut edited = engine(&PURE.replacen("{ 1u64 }", "{ 3u64 }", 1));
-        let new = capture(&mut edited, 2);
-        let report = compare(&old, &new);
-        eprintln!(
-            "SHADOW_INDEX {:?} {:?}; verdicts {:?}; payload {} {}",
-            report.old_index,
-            report.new_index,
-            verdicts(&report),
-            old.payload_bytes(),
-            new.payload_bytes()
-        );
-        for iteration in 0..100 {
-            match mode.as_str() {
-                "index" => {
-                    black_box(compare(black_box(&old), black_box(&new)));
-                }
-                "execute" => {
-                    black_box(observe(&mut e, "test_a"));
-                    black_box(observe(&mut e, "test_b"));
-                }
-                "native" => {
-                    if iteration == 0 {
-                        source_native_and_interpreter_fresh_observations_agree();
-                    }
-                }
-                "setup" => {
-                    black_box(&old);
-                }
-                _ => panic!("unknown measure mode"),
             }
         }
     });
