@@ -127,8 +127,15 @@ fn scope_case(source: &str, failed_front: bool, failed_lower: bool) {
                     .completed_scope(product, budget.reserve(0).unwrap())
                     .is_err()
             );
+            let required = check.completed_scope_bytes(product).unwrap();
+            assert!(check.completed_scope_bytes(unknown).is_err());
+            assert!(
+                check
+                    .completed_scope(product, budget.reserve(required - 1).unwrap())
+                    .is_err()
+            );
             let scope = check
-                .completed_scope(product, budget.reserve(1 << 20).unwrap())
+                .completed_scope(product, budget.reserve(required).unwrap())
                 .unwrap();
             assert!(!scope.reads().is_empty());
             assert!(scope.reads().values().all(|r| !r.is_empty()));

@@ -57,6 +57,56 @@ impl FrontCheckedSignatures {
     }
 }
 impl QueryEngine {
+    /// Header-capture hold including construction metadata, without body
+    /// checking, Lower, body decode or constructing the retained input table.
+    pub fn front_checked_signatures_bytes(
+        &mut self,
+        front: &Arc<FrontBodyQueries>,
+    ) -> Result<u64, QueryError> {
+        let snapshot = front.signatures();
+        if !Arc::ptr_eq(&snapshot, &self.signature_inputs())
+            || !self.generated.is_empty()
+            || !self.staged_constants.is_empty()
+            || !self.staged_values.is_empty()
+        {
+            return Err(QueryError::NotImplemented);
+        }
+        let paths: BTreeSet<_> = self
+            .source_paths()
+            .into_iter()
+            .chain(self.builtins.keys().cloned())
+            .chain(
+                self.registry
+                    .signatures()
+                    .map(|s| s.definition.path().clone()),
+            )
+            .collect();
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<FrontCheckedSignatures>() + 2 * size_of::<usize>());
+        weight.tree::<DefPath, Input>(paths.len());
+        weight.add(self.environment.compiler_version.capacity());
+        let registrations = self.checked_registration_records();
+        weight.vec(&registrations, |w, row| w.add(row.capacity()));
+        let mut owned = crate::memo::retained::Weight::default();
+        for path in paths {
+            let id = DefId::intern(&path);
+            if !snapshot.signature(id).is_some_and(|s| s.is_ok()) {
+                let Some(signature) = self.builtins.get(&path) else {
+                    continue;
+                };
+                owned.signature(signature);
+            }
+            weight.path(&path);
+            weight.flat_vec(&self.signature_coverage(&path)?);
+        }
+        if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
+            return Err(QueryError::NotImplemented);
+        }
+        weight
+            .bytes()
+            .checked_add(owned.bytes)
+            .ok_or(QueryError::NotImplemented)
+    }
     /// Capture the exact header and private-view inputs while S0 still owns the
     /// loader. Failed signatures stay absent, as in ordinary checked_products;
     /// the completed Check scope separately retains their failure reads.
@@ -72,6 +122,9 @@ impl QueryEngine {
                     .into(),
             })
         };
+        if self.front_checked_signatures_bytes(&front)? > allowance.bytes() {
+            return Err(invalid());
+        }
         let snapshot = front.signatures();
         if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
             return Err(invalid());

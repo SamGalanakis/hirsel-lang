@@ -33,24 +33,18 @@ impl FrontCheckScope {
     }
 }
 impl FrontCheckQueries {
-    /// Scope is minted only for this root's exact completed descriptor. The
-    /// caller reserves its inspection buffers separately from producer memory.
-    pub fn completed_scope(
-        self: &Arc<Self>,
-        product: ProductRef,
-        allowance: MemoryReservation,
-    ) -> Result<FrontCheckScope, QueryError> {
+    /// Admission for the exact completed scope, without decoding a body or
+    /// copying read rows. It includes transient union buffers as well as hold.
+    pub fn completed_scope_bytes(&self, product: ProductRef) -> Result<u64, QueryError> {
         let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
         let (selected, data) = completed.as_ref().ok_or(QueryError::NotImplemented)?;
         if *selected != product || data.checked.completion != CheckCompletion::Complete {
             return Err(QueryError::NotImplemented);
         }
-        let missing = || {
-            QueryError::Operational(hirsel_types::OperationalFailure {
-                operation: "completed check scope".into(),
-                message: "missing complete settled read evidence or scope allowance".into(),
-            })
-        };
+        self.scope_bytes(data)
+    }
+    fn scope_bytes(&self, data: &Data) -> Result<u64, QueryError> {
+        let missing = || QueryError::NotImplemented;
         // Pre-admit every prospective map/set row and copied read buffer.
         // Front reads remain shared, but charging them as well is conservative.
         let mut weight = crate::NativeMetadataWeight::default();
@@ -106,7 +100,27 @@ impl FrontCheckQueries {
                     .ok_or_else(missing)?,
             );
         }
-        if weight.bytes() > allowance.bytes() {
+        Ok(weight.bytes())
+    }
+    /// Scope is minted only for this root's exact completed descriptor. The
+    /// caller reserves its inspection buffers separately from producer memory.
+    pub fn completed_scope(
+        self: &Arc<Self>,
+        product: ProductRef,
+        allowance: MemoryReservation,
+    ) -> Result<FrontCheckScope, QueryError> {
+        let completed = self.completed.lock().unwrap_or_else(|e| e.into_inner());
+        let (selected, data) = completed.as_ref().ok_or(QueryError::NotImplemented)?;
+        if *selected != product || data.checked.completion != CheckCompletion::Complete {
+            return Err(QueryError::NotImplemented);
+        }
+        let missing = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "completed check scope".into(),
+                message: "missing complete settled read evidence or scope allowance".into(),
+            })
+        };
+        if self.scope_bytes(data)? > allowance.bytes() {
             return Err(missing());
         }
         let mut scope = FrontCheckScope {
