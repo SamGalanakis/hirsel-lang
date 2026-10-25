@@ -276,6 +276,16 @@ mod tests {
                     "const value:u8=1u8;\n".repeat(paths.len()),
                 )
                 .unwrap();
+            engine.indexed_sources.insert(
+                file,
+                (
+                    FileContext {
+                        package: path.0.package.clone(),
+                        modules: path.0.modules.clone(),
+                    },
+                    engine.environment.clone(),
+                ),
+            );
             let anchor = engine.sources.item_anchor(file, 0);
             let span = Span {
                 anchor,
