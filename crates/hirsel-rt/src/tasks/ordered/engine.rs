@@ -505,13 +505,13 @@ fn notify(ctx: *mut TaskCtx) {
     }
     let mut batch = unsafe { crate::pool::free::ReadyBatch::new((*ctx).run_ptr()) };
     for id in selected {
-        let task = id as u32;
+        let key = super::super::TaskKey::from_word(id);
         let owner = role::with_role(ctx, |s| {
-            let row = s.task(task);
-            assert_eq!(row.generation, (id >> 32) as u32);
-            row.owner
+            super::ahead::physical(s, key)
+                .unwrap_or_else(|| crate::fault("a selected task's key is stale"))
+                .owner
         });
-        unsafe { batch.schedule(task, owner) };
+        unsafe { batch.schedule(key, owner) };
     }
 }
 

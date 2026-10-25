@@ -208,9 +208,10 @@ pub(crate) unsafe fn receive(
         let (cell, me, owner) = unsafe {
             role::with_held(ctx, |s| {
                 let me = s.current;
+                let key = s.key(me);
                 let row = s.task(me);
                 let owner = if row.pinned { Owner::Any } else { row.owner };
-                (s.channels.payload(channel), me, owner)
+                (s.channels.payload(channel), key, owner)
             })
         };
         super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
@@ -218,7 +219,7 @@ pub(crate) unsafe fn receive(
         // visible takes the oldest token.
         let mut token = { unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) } };
         let mut state = cell.lock();
-        state.drop_token(me);
+        state.drop_token(me.slot);
         let mut result = None;
         super::record::track(ctx, cell.object.get());
         let publication = if cause.is_some() || cell.ready(&state) {
@@ -272,8 +273,8 @@ pub(crate) unsafe fn receive(
         };
         if result.is_none() {
             match token.take() {
-                Some(token) => state.keep_token(me, token),
-                None => state.keep_tokenless(me),
+                Some(token) => state.keep_token(me.slot, token),
+                None => state.keep_tokenless(me.slot),
             }
         }
         drop(state);

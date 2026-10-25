@@ -34,6 +34,14 @@ pub(crate) struct ScopeKey {
 }
 
 impl TaskKey {
+    /// Row `slot` at its row `generation`.
+    pub(crate) fn new(slot: u32, generation: u32) -> Self {
+        Self {
+            slot,
+            generation: u64::from(generation),
+        }
+    }
+
     /// The run-local Task word: generation above slot. Row generations stay
     /// within 32 bits, so the word round-trips.
     pub(crate) fn word(self) -> u64 {

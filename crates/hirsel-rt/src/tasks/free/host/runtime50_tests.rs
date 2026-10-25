@@ -280,7 +280,11 @@ unsafe fn spawn(ctx: *mut TaskCtx, body: Body) {
         let mut row = crate::tasks::Task::new(1, child_ctx, None, path, None);
         row.stack = Some(stack);
         s.tasks.push(Some(row));
-        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+        crate::pool::free::schedule_saved(
+            (*ctx).run_ptr(),
+            crate::tasks::scheduler(ctx).key(id),
+            Owner::Any,
+        );
     }
 }
 

@@ -5,6 +5,7 @@
 //! Rayon join's unwind path (ee0a00bd, join/mod.rs:180-196), adoption waits for
 //! that owner to save before transferring the storage it may still reference.
 
+use super::super::registry::TaskKey;
 use super::super::{Logical, Scheduler, Task, handle};
 use crate::continuation::{Custody, PrivateSave, SavedFiber};
 use crate::{TaskCtx, budget::stretch::Stretch};
@@ -90,19 +91,33 @@ pub(crate) fn private(ctx: *mut TaskCtx) -> bool {
     }
 }
 
-/// The role is held. A private lookup is confined to physical dispatch and
-/// never falls through to Scheduler::task for an unpublished identity.
-pub(crate) fn physical(s: &mut Scheduler, index: u32) -> &mut Task {
-    let reserved =
-        matches!(&s.logical, Logical::Ordered(driver) if driver.reserved.contains_key(&index));
-    if reserved {
-        let Logical::Ordered(driver) = &mut s.logical else {
-            unreachable!()
-        };
-        &mut driver.reserved.get_mut(&index).unwrap().task
-    } else {
-        s.task(index)
+/// The role is held. The task `key` names for physical dispatch: its private
+/// reservation, or its published row, either only at `key`'s generation
+/// (slotmap `SlotMap::contains_key`/`get`, basic.rs:363-368, 700-705). A
+/// stale key resolves to nothing; no lookup reaches Scheduler::task.
+pub(crate) fn physical(s: &mut Scheduler, key: TaskKey) -> Option<&mut Task> {
+    if let Logical::Ordered(driver) = &mut s.logical
+        && let Some(reserved) = driver.reserved.get_mut(&key.slot)
+    {
+        return (u64::from(reserved.task.generation) == key.generation)
+            .then_some(&mut *reserved.task);
     }
+    s.tasks
+        .get_mut(key.slot as usize)?
+        .as_mut()
+        .filter(|row| u64::from(row.generation) == key.generation)
+}
+
+/// The private reservation at `index`, which the caller knows is owned.
+fn reservation(s: &mut Scheduler, index: u32) -> &mut Task {
+    let Logical::Ordered(driver) = &mut s.logical else {
+        unreachable!("ahead custody belongs to Ordered execution")
+    };
+    &mut driver
+        .reserved
+        .get_mut(&index)
+        .expect("an owned reservation")
+        .task
 }
 
 /// A queued private notification can outlive promotion. It is then merely a
@@ -139,7 +154,7 @@ pub(crate) fn restore_reserved_custody(scheduler: &mut Scheduler) {
 
 /// Request acknowledgement, without touching the running owner's fuel word.
 pub(crate) fn can_promote(s: &mut Scheduler, index: u32) -> bool {
-    let row = physical(s, index);
+    let row = reservation(s, index);
     if row.dispatch.as_ref().is_none_or(|frame| frame.is_saved()) {
         return true;
     }
@@ -183,10 +198,11 @@ pub(crate) fn take(s: &mut Scheduler, index: u32) -> Task {
 /// Idle only, after the exclusive physical owner acknowledged its save.
 pub(crate) fn after_save(
     s: &mut Scheduler,
-    index: u32,
+    key: TaskKey,
     completed: bool,
     stopped: bool,
-) -> Option<Vec<(u32, crate::pool::Owner)>> {
+) -> Option<Vec<(TaskKey, crate::pool::Owner)>> {
+    let index = key.slot;
     if !matches!(&s.logical, Logical::Ordered(d) if d.reserved.contains_key(&index)) {
         return None;
     }
@@ -194,7 +210,10 @@ pub(crate) fn after_save(
         !completed || stopped,
         "an unpublished child cannot complete logically"
     );
-    if let Some(frame) = &physical(s, index).dispatch {
+    if let Some(frame) = &physical(s, key)
+        .unwrap_or_else(|| crate::fault("a saved reservation's key is stale"))
+        .dispatch
+    {
         frame.mark_saved();
     }
     if stopped {
@@ -209,9 +228,10 @@ pub(crate) fn after_save(
         selected
             .into_iter()
             .map(|id| {
-                let row = s.task(id as u32);
-                assert_eq!(row.generation, (id >> 32) as u32);
-                (id as u32, row.owner)
+                let key = TaskKey::from_word(id);
+                let row = physical(s, key)
+                    .unwrap_or_else(|| crate::fault("a selected task's key is stale"));
+                (key, row.owner)
             })
             .collect(),
     )

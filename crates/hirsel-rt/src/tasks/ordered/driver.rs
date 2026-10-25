@@ -273,7 +273,7 @@ pub(crate) fn after_save(
     completed: bool,
     host_timers: bool,
     pool_available: bool,
-) -> Vec<(u32, crate::pool::Owner)> {
+) -> Vec<(super::super::TaskKey, crate::pool::Owner)> {
     // The generation is part of the logical identity, even if the runtime
     // later recycles this native row index for a different child.
     let id = super::super::handle(task, s.task(task).generation);
@@ -317,13 +317,10 @@ pub(crate) fn after_save(
     selected
         .into_iter()
         .map(|id| {
-            let task = id as u32;
-            assert_eq!(
-                s.task(task).generation,
-                (id >> 32) as u32,
-                "selected stale task identity"
-            );
-            (task, s.task(task).owner)
+            let key = super::super::TaskKey::from_word(id);
+            let row = super::ahead::physical(s, key)
+                .unwrap_or_else(|| crate::fault("selected stale task identity"));
+            (key, row.owner)
         })
         .collect()
 }
@@ -568,6 +565,48 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+    }
+
+    /// A private reservation has no published row: physical dispatch finds
+    /// it by key, at its own generation only, and never reaches the row
+    /// table's vacant slot (`Scheduler::task` would fault there).
+    #[test]
+    fn a_reserved_identity_resolves_by_key_without_the_row_table() {
+        use super::super::super::{Logical, Scheduler, Task, TaskKey};
+        use super::super::ahead::{Reserved, physical};
+        let mut s = Scheduler::default();
+        s.tasks = vec![
+            Some(Task::new(1, std::ptr::null_mut(), None, vec![], None)),
+            Some(Task::new(2, std::ptr::null_mut(), Some(0), vec![0], None)),
+            None,
+        ];
+        let mut driver = driver();
+        driver.reserved.insert(
+            2,
+            Reserved {
+                task: Box::new(Task::new(7, std::ptr::null_mut(), Some(0), vec![1], None)),
+            },
+        );
+        s.logical = Logical::Ordered(driver);
+        let reserved = physical(&mut s, TaskKey::new(2, 7)).expect("the reservation");
+        assert_eq!((reserved.generation, &reserved.path[..]), (7, &[1][..]));
+        // A stale or future generation of the reserved slot names nothing,
+        // and neither falls through to the vacant published row.
+        assert!(physical(&mut s, TaskKey::new(2, 6)).is_none());
+        assert!(physical(&mut s, TaskKey::new(2, 8)).is_none());
+        assert!(s.tasks[2].is_none());
+        // Published rows resolve only at their generation; past the table, nothing.
+        assert_eq!(physical(&mut s, TaskKey::new(1, 2)).unwrap().path, vec![0]);
+        assert!(physical(&mut s, TaskKey::new(1, 1)).is_none());
+        assert!(physical(&mut s, TaskKey::new(9, 1)).is_none());
+        // Promotion moves the reservation into its row: the same key now
+        // names the published row.
+        let Logical::Ordered(driver) = &mut s.logical else {
+            unreachable!()
+        };
+        let task = *driver.reserved.remove(&2).unwrap().task;
+        s.tasks[2] = Some(task);
+        assert_eq!(physical(&mut s, TaskKey::new(2, 7)).unwrap().path, vec![1]);
     }
 
     #[test]

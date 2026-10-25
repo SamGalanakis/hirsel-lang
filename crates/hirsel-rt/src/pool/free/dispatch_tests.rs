@@ -62,7 +62,7 @@ fn segment(execs: &Execs, task: u32) -> Saved {
     // These owned queue images are never resumed or dereferenced.
     let (notification, queued) = frame::prepared(Image {
         ctx: std::ptr::null_mut(),
-        task,
+        task: TaskKey::new(task, 1),
         sp: std::ptr::null_mut(),
     });
     Saved {
@@ -102,7 +102,16 @@ fn publication_before_the_park_lock_is_retained_by_the_epoch() {
     let inbox = exec.inbox.lock().unwrap();
     assert_ne!(exec.ready_epoch.load(Ordering::Acquire), epoch);
     drop(inbox);
-    assert_eq!(next(&execs, &exec).unwrap().queued.start().value().task, 7);
+    assert_eq!(
+        next(&execs, &exec)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        7
+    );
     assert_eq!(
         execs.dispatch.get().unwrap().queued.load(Ordering::SeqCst),
         0
@@ -133,7 +142,16 @@ fn publication_while_subscribing_to_the_bell_wakes_the_parked_worker() {
         drop(inbox);
         publisher.join().unwrap();
     });
-    assert_eq!(next(&execs, &exec).unwrap().queued.start().value().task, 8);
+    assert_eq!(
+        next(&execs, &exec)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        8
+    );
 }
 
 #[test]
@@ -184,7 +202,7 @@ fn concurrent_claims_consume_each_ready_reservation_once() {
                     tasks
                         .lock()
                         .unwrap()
-                        .push(saved.queued.start().value().task);
+                        .push(saved.queued.start().value().task.slot);
                     exec.busy.store(false, Ordering::SeqCst);
                 }
                 cancel_search(execs, exec);
@@ -211,7 +229,16 @@ fn a_local_idle_continuation_needs_no_sleeper_but_home_publication_does() {
         e.set(std::ptr::null());
     });
     assert_eq!(epochs(&execs), 0);
-    assert_eq!(next(&execs, &exec).unwrap().queued.start().value().task, 11);
+    assert_eq!(
+        next(&execs, &exec)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        11
+    );
     exec.busy.store(false, Ordering::SeqCst);
     publish(&execs, segment(&execs, 12), false, true);
     assert_eq!(
@@ -219,7 +246,16 @@ fn a_local_idle_continuation_needs_no_sleeper_but_home_publication_does() {
         1,
         "home cannot run a wider compute continuation"
     );
-    assert_eq!(next(&execs, &exec).unwrap().queued.start().value().task, 12);
+    assert_eq!(
+        next(&execs, &exec)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        12
+    );
 }
 
 #[test]
@@ -247,7 +283,15 @@ fn the_last_searcher_rechecks_a_publication_which_suppressed_its_wake() {
         );
         barrier.wait();
         assert_eq!(
-            reader.join().unwrap().unwrap().queued.start().value().task,
+            reader
+                .join()
+                .unwrap()
+                .unwrap()
+                .queued
+                .start()
+                .value()
+                .task
+                .slot,
             99
         );
     });
@@ -272,7 +316,16 @@ fn forced_migration_publishes_to_other_workers_even_for_one_continuation() {
         "the forced-migration peer must be notified"
     );
     let peer = execs.compute.lock().unwrap().active[1].clone();
-    assert_eq!(next(&execs, &peer).unwrap().queued.start().value().task, 13);
+    assert_eq!(
+        next(&execs, &peer)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        13
+    );
 }
 
 fn exec(execs: &Execs, index: usize) -> Arc<Exec> {
@@ -310,7 +363,7 @@ fn start(saved: Saved) -> Started {
     } = saved;
     let running = queued.start();
     Started {
-        task: running.value().task,
+        task: running.value().task.slot,
         chained,
         running,
         frame,

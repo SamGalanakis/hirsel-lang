@@ -131,11 +131,12 @@ pub(crate) unsafe fn take(
         let mut token = if entered {
             None
         } else {
-            let owner = role::with_role(ctx, |s| {
+            let (key, owner) = role::with_role(ctx, |s| {
+                let key = s.key(me);
                 let row = s.task(me);
-                if row.pinned { Owner::Any } else { row.owner }
+                (key, if row.pinned { Owner::Any } else { row.owner })
             });
-            unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) }
+            unsafe { crate::pool::free::token((*ctx).run_ptr(), key, owner) }
         };
         unsafe { role::release(ctx) };
         let mut state = cell.lock();
@@ -535,7 +536,11 @@ mod tests {
                             let mut row = Task::new(1, child_ctx, None, vec![id], None);
                             row.stack = Some(stack);
                             s.tasks.push(Some(row));
-                            crate::pool::free::schedule_saved((*ctx).run_ptr(), task, Owner::Any);
+                            crate::pool::free::schedule_saved(
+                                (*ctx).run_ptr(),
+                                crate::tasks::scheduler(ctx).key(task),
+                                Owner::Any,
+                            );
                             scheduler(ctx).sync.mutex(word)
                         };
                         // Wait for queue registration, not stack save. A put

@@ -174,7 +174,11 @@ fn native_sends_keep_images_and_gap_projections_in_the_same_fifo_order() {
                         let mut row = Task::new(1, child_ctx, None, path, None);
                         row.stack = Some(stack);
                         s.tasks.push(Some(row));
-                        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                        crate::pool::free::schedule_saved(
+                            (*ctx).run_ptr(),
+                            crate::tasks::scheduler(ctx).key(id),
+                            Owner::Any,
+                        );
                     }
                 }
                 // Cancellation must neither reject sends nor add a check to

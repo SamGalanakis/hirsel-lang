@@ -93,16 +93,16 @@ pub(super) unsafe fn publish_ready(s: &mut Scheduler, run: *mut crate::context::
     unsafe { schedule_ready(run, take_ready(s)) };
 }
 
-fn take_ready(s: &mut Scheduler) -> Vec<(u32, Owner)> {
+fn take_ready(s: &mut Scheduler) -> Vec<(TaskKey, Owner)> {
     std::mem::take(&mut s.runnable)
         .into_iter()
-        .map(|task| (task, s.task(task).owner))
+        .map(|task| (s.key(task), s.task(task).owner))
         .collect()
 }
 
 /// # Safety
 /// The role owns run's tables; the caller's table borrow has ended.
-unsafe fn schedule_ready(run: *mut crate::context::RunShared, ready: Vec<(u32, Owner)>) {
+unsafe fn schedule_ready(run: *mut crate::context::RunShared, ready: Vec<(TaskKey, Owner)>) {
     if ready.is_empty() {
         return;
     }
@@ -185,8 +185,9 @@ pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
 pub(super) unsafe fn migrate(ctx: &mut TaskCtx) {
     let (me, owner, last) = role::with_role(ctx, |s| {
         let me = s.current;
+        let key = s.key(me);
         let row = s.task(me);
-        (me, row.owner, row.last)
+        (key, row.owner, row.last)
     });
     if crate::pool::target(ctx, owner, last).is_some() {
         unsafe {
@@ -217,7 +218,7 @@ pub(super) unsafe fn after_save(
     task: u32,
     completed: bool,
     pool_available: bool,
-) -> Vec<(u32, Owner)> {
+) -> Vec<(TaskKey, Owner)> {
     if let Some(Some(row)) = s.tasks.get(task as usize) {
         if completed && row.finishing {
             let row = s.task(task);
@@ -257,11 +258,7 @@ pub(super) unsafe fn after_save(
         }
     }
     unsafe { super::readiness::poll_free_with_pool(s, pool_available) };
-    let ready = std::mem::take(&mut s.runnable);
-    ready
-        .into_iter()
-        .map(|task| (task, s.task(task).owner))
-        .collect()
+    take_ready(s)
 }
 
 /// CONC-8 requires every logical task to be blocked and every physical image

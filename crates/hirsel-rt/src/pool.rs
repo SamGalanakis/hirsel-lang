@@ -1405,7 +1405,7 @@ fn resize(ctx: *mut TaskCtx) {
 ///
 /// # Safety
 /// The run has compute workers and has not started.
-pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
+pub(crate) unsafe fn start_root(run: *mut RunShared, task: crate::tasks::registry::TaskKey) {
     // SAFETY: caller contract.
     let execs = unsafe { (*(*run).execs.get()).as_deref() }
         .unwrap_or_else(|| fault("a run without workers"));
@@ -1414,7 +1414,13 @@ pub(crate) unsafe fn start_root(run: *mut RunShared, task: u32) {
         unsafe { free::schedule_saved(run, task, Owner::Any) };
         return;
     }
-    execs.compute.lock().unwrap().active[0].post(Post::Run { task, permit: true }, None);
+    execs.compute.lock().unwrap().active[0].post(
+        Post::Run {
+            task: task.slot,
+            permit: true,
+        },
+        None,
+    );
 }
 
 /// The home thread's service loop at width > 1: it runs home intervals, the Io binding's

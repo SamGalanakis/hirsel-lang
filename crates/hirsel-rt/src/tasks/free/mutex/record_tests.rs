@@ -559,7 +559,11 @@ fn waiting_native_mutex_keeps_one_ordinal_and_replays_both_cuts() {
                     let mut row = Task::new(1, child_ctx, None, vec![0], None);
                     row.stack = Some(stack);
                     s.tasks.push(Some(row));
-                    crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                    crate::pool::free::schedule_saved(
+                        (*ctx).run_ptr(),
+                        crate::tasks::scheduler(ctx).key(id),
+                        Owner::Any,
+                    );
                     scheduler(ctx).sync.mutex(mutex_word(&handle))
                 };
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(2);

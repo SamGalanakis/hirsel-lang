@@ -844,7 +844,7 @@ fn a_stale_wake_returned_unstarted_still_reaches_the_quiet_verdict() {
                 let me = s.current;
                 let row = s.task(me);
                 let owner = if row.pinned { Owner::Any } else { row.owner };
-                crate::pool::free::token((*ctx).run_ptr(), me, owner)
+                crate::pool::free::token((*ctx).run_ptr(), s.key(me), owner)
             })
             .expect("physical dispatch");
             crate::pool::free::notify((*ctx).run_ptr(), &token);

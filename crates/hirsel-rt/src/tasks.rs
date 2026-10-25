@@ -66,6 +66,7 @@ use crate::fiber::{self, Stack};
 use crate::pool::Owner;
 use crate::stop::{Stop, Stopped};
 use crate::{Header, STATUS_FAILURE, STATUS_OK, fault};
+use registry::TaskKey;
 
 /// A spawned task's entry: the unit-result case of cross-unit ABI 3. It has
 /// no value word, so it returns bare status rather than a scalar result pair.
@@ -382,6 +383,11 @@ impl Scheduler {
             slot,
             generation: u64::from(row.generation),
         })
+    }
+    /// Live row `index`'s key, as the policy that owns it names it to dispatch.
+    pub(crate) fn key(&self, index: u32) -> registry::TaskKey {
+        self.task_key(index)
+            .unwrap_or_else(|| fault("a key of a vacant task row"))
     }
     /// The row `key` names while it is live; never a later occupant.
     pub(crate) fn live_task(&self, key: registry::TaskKey) -> Option<u32> {
@@ -1542,13 +1548,13 @@ pub(crate) unsafe fn from_home(ctx: &mut TaskCtx) {
 /// # Safety
 /// `ctx` is the run's root context; the run has compute workers and has not started.
 pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
-    let root = role::with_role(ctx, |t| t.task(ROOT).ctx);
+    let (root, key) = role::with_role(ctx, |t| (t.task(ROOT).ctx, t.key(ROOT)));
     unsafe { (*root).task_sp = sp };
     // SAFETY: caller contract.
     unsafe {
         (*ctx).switch_out();
         role::release(ctx);
-        crate::pool::start_root((*ctx).run_ptr(), ROOT);
+        crate::pool::start_root((*ctx).run_ptr(), key);
     }
 }
 
@@ -1632,23 +1638,41 @@ pub(crate) unsafe fn resume_row(
     (ctx, unsafe { (*ctx).task_sp })
 }
 
-/// Stable physical-dispatch identity. The caller already owns the scheduler
-/// role; acquiring a different task's role here would deadlock a notifier.
+/// Stable physical-dispatch identity: the frame and context of the task
+/// `key` names, or `None` when the key is stale. The caller already owns the
+/// scheduler role; acquiring a different task's role here would deadlock a
+/// notifier.
 ///
 /// # Safety
-/// The run/task are live and the caller owns its role or root admission.
+/// The run is live and the caller owns its role or root admission.
 pub(crate) unsafe fn dispatch_frame(
     run: *mut crate::context::RunShared,
-    task: u32,
-) -> (
+    key: registry::TaskKey,
+) -> Option<(
     &'static mut Option<std::sync::Arc<crate::pool::free::Frame>>,
     *mut TaskCtx,
-) {
+)> {
     unsafe {
         let s = (*(*run).tasks.get()).as_deref_mut().unwrap();
-        let task = ordered::ahead::physical(s, task);
-        (&mut task.dispatch, task.ctx)
+        let task = ordered::ahead::physical(s, key)?;
+        Some((&mut task.dispatch, task.ctx))
     }
+}
+
+/// Whether published row `task`'s frame is saved (`pool::free::is_saved`).
+/// # Safety
+/// The caller owns the role; `task` is a live row it has just read.
+pub(crate) unsafe fn frame_saved(run: *mut crate::context::RunShared, task: u32) -> bool {
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    s.task(task)
+        .dispatch
+        .as_ref()
+        .is_none_or(|frame| frame.is_saved())
+}
+
+/// The running task's key.
+pub(crate) fn running_key(ctx: *mut TaskCtx) -> registry::TaskKey {
+    role::with_role(ctx, |t| t.key(t.current))
 }
 
 pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
@@ -1667,13 +1691,13 @@ pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
 /// The idle claimant owns the scheduler role and the exclusive saved image.
 pub(crate) unsafe fn record_dispatch(
     run: *mut crate::context::RunShared,
-    task: u32,
+    task: registry::TaskKey,
     here: Option<u16>,
 ) {
     let run = unsafe { &*run };
     let s = unsafe { (*run.tasks.get()).as_deref_mut().unwrap() };
     record_worker(
-        ordered::ahead::physical(s, task),
+        ordered::ahead::physical(s, task).unwrap_or_else(|| fault("a claimed frame's row left")),
         here,
         run.worker_metrics.as_deref(),
     );
@@ -1683,12 +1707,16 @@ pub(crate) unsafe fn record_dispatch(
 /// waiter without its logical unpark. Its dispatch ends that object wait here,
 /// under the role it takes to start the task, as the policy's unpark would;
 /// the waiter's loop checks its condition again. `false`: the task is parked
-/// on a wait no object wake ends, so a stale token woke it and the caller
-/// returns its frame unstarted.
+/// on a wait no object wake ends, so a stale token woke it, or `key` no
+/// longer names its slot's row, and the caller returns its frame unstarted.
 /// # Safety
-/// The caller holds the scheduler role and is starting `task`.
-pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) -> bool {
+/// The caller holds the scheduler role and is starting `key`'s frame.
+pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, key: registry::TaskKey) -> bool {
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut().unwrap() };
+    if ordered::ahead::physical(s, key).is_none() {
+        return false;
+    }
+    let task = key.slot;
     if !matches!(s.logical, Logical::Free(_)) {
         return true;
     }
@@ -1745,7 +1773,11 @@ pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {
 /// The calling idle worker retains the run and no role/runtime borrow. A
 /// completed image was invalidated before this call; a suspended image is
 /// still owned by its idle continuation until this callback returns.
-pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, completed: bool) {
+pub(crate) unsafe fn after_save(
+    run: *mut crate::context::RunShared,
+    key: registry::TaskKey,
+    completed: bool,
+) {
     // SAFETY: the worker stays busy and retains its Lease throughout this
     // guard; it cannot be reclaimed even if a callback vacates this task.
     let _role = unsafe { role::IdleGuard::idle(run) };
@@ -1754,7 +1786,17 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
         let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
             return;
         };
-        if let Some(ready) = ordered::ahead::after_save(s, task, completed, unsafe {
+        // The saved frame pins its slot (`registry::TaskSlots::retire`): a
+        // later occupant here is a broken retirement, not a stale wake.
+        if s.tasks
+            .get(key.slot as usize)
+            .and_then(Option::as_ref)
+            .is_some_and(|row| u64::from(row.generation) != key.generation)
+        {
+            fault("a saved frame's slot was reused before its save");
+        }
+        let task = key.slot;
+        if let Some(ready) = ordered::ahead::after_save(s, key, completed, unsafe {
             (*run).control.stopped().is_some()
         }) {
             let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
@@ -1815,7 +1857,7 @@ pub(crate) unsafe fn after_save(run: *mut crate::context::RunShared, task: u32, 
     } {
         unsafe { crate::pool::wake_home(run) };
     }
-    unsafe { free::check_quiet(run, Some(task)) };
+    unsafe { free::check_quiet(run, Some(key.slot)) };
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits
@@ -2676,17 +2718,19 @@ unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
 }
 
 /// The fiber entry of every spawned task, with its own context.
+/// Its argument is the task's key word ([`registry::TaskKey::word`]).
 unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let ctx = ctx.cast::<TaskCtx>();
-    let index = task as usize as u32;
+    let key = registry::TaskKey::from_word(task as usize as u64);
+    let index = key.slot;
     // SAFETY: this new fiber owns its stable task context.
     let _role = unsafe { role::Guard::physical(ctx) };
     // SAFETY: the task's context lies at the top of this stack and is bound to its worker.
     recycle(unsafe { &mut *ctx });
     free::replay::start(ctx);
-    let Some((code, environment, operation_site)) =
-        role::with_role(ctx, |t| ordered::ahead::physical(t, index).code.take())
-    else {
+    let Some((code, environment, operation_site)) = role::with_role(ctx, |t| {
+        ordered::ahead::physical(t, key).and_then(|row| row.code.take())
+    }) else {
         fault("a task started without code");
     };
     #[cfg(feature = "measurement")]
@@ -3242,7 +3286,11 @@ unsafe fn spawn_child(
         task.priority = s.schedule.admit();
         unsafe {
             (*child).task_id = index;
-            (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
+            (*child).task_sp = stack.prepare(
+                task_entry,
+                child.cast(),
+                handle(index, generation) as usize as *mut u8,
+            );
         }
         task.stack = Some(stack);
         let path = task.path.clone();
@@ -5193,7 +5241,11 @@ mod free_policy_tests {
                         let mut row = Task::new(1, child, None, vec![index], None);
                         row.stack = Some(stack);
                         s.tasks.push(Some(row));
-                        crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any);
+                        crate::pool::free::schedule_saved(
+                            (*ctx).run_ptr(),
+                            crate::tasks::scheduler(ctx).key(index),
+                            Owner::Any,
+                        );
                     }
                     role::release(ctx);
                 }

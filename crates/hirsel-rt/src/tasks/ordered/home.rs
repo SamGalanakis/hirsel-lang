@@ -1,6 +1,6 @@
 //! Home-only continuations of saved retirement polls and idle host readiness.
 //! Adapter calls retain no Scheduler, Frontier or parked TaskCtx borrow.
-use super::super::{Logical, Scheduler, Wait, handle, readiness, role};
+use super::super::{Logical, Scheduler, TaskKey, Wait, handle, readiness, role};
 use crate::{context::RunShared, stop::Stopped};
 use std::sync::atomic::Ordering;
 
@@ -201,9 +201,11 @@ fn complete(s: &mut Scheduler, run: *mut RunShared, retiring: bool) {
     }
     let mut batch = unsafe { crate::pool::free::ReadyBatch::new(run) };
     for id in selected {
-        let task = id as u32;
-        let owner = s.task(task).owner;
-        unsafe { batch.schedule(task, owner) };
+        let key = TaskKey::from_word(id);
+        let owner = super::ahead::physical(s, key)
+            .unwrap_or_else(|| crate::fault("a selected task's key is stale"))
+            .owner;
+        unsafe { batch.schedule(key, owner) };
     }
 }
 

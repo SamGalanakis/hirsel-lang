@@ -214,7 +214,11 @@ pub(crate) unsafe fn spawn_certified(
             (*child).roots.trace_creator.path = path.clone();
             (*child).ordered_charge_trace.enable();
         }
-        (*child).task_sp = stack.prepare(task_entry, child.cast(), index as usize as *mut u8);
+        (*child).task_sp = stack.prepare(
+            task_entry,
+            child.cast(),
+            handle(index, generation) as usize as *mut u8,
+        );
     }
     let wide = unsafe {
         (*ctx)
@@ -349,7 +353,13 @@ pub(crate) unsafe fn spawn_certified(
     // A committed spawn has already moved out of the private owner map.
     // Only an owned unpublished frame can be advertised by this path.
     if engine::with_driver(ctx, |d| d.reserved.contains_key(&index)) {
-        unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any) };
+        unsafe {
+            crate::pool::free::schedule_saved(
+                (*ctx).run_ptr(),
+                TaskKey::new(index, generation),
+                Owner::Any,
+            )
+        };
     }
     unsafe { out.write(word) };
     Ok(STATUS_OK)

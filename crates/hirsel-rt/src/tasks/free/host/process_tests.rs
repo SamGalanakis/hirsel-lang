@@ -177,7 +177,11 @@ unsafe fn spawn_writer(ctx: *mut TaskCtx, probe: &Arc<Probe>) {
         let mut row = crate::tasks::Task::new(1, child_ctx, None, path, None);
         row.stack = Some(stack);
         s.tasks.push(Some(row));
-        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+        crate::pool::free::schedule_saved(
+            (*ctx).run_ptr(),
+            crate::tasks::scheduler(ctx).key(id),
+            Owner::Any,
+        );
     }
 }
 fn process_request(process: u64, directory: u64) -> Request {

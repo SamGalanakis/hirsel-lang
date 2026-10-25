@@ -293,7 +293,11 @@ fn native_host_epochs_release_workers_and_end_before_readiness_attempts() {
                         let mut row = crate::tasks::Task::new(1, child_ctx, None, path, None);
                         row.stack = Some(stack);
                         s.tasks.push(Some(row));
-                        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                        crate::pool::free::schedule_saved(
+                            (*ctx).run_ptr(),
+                            crate::tasks::scheduler(ctx).key(id),
+                            Owner::Any,
+                        );
                     }
                     crate::stop::check(
                         ctx,
@@ -1068,7 +1072,11 @@ fn replay_epoch_tape(bytes: &[u8], expected: &hirsel_free::projection::Projectio
                     let mut row = crate::tasks::Task::new(1, child_ctx, None, path, None);
                     row.stack = Some(stack);
                     s.tasks.push(Some(row));
-                    crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                    crate::pool::free::schedule_saved(
+                        (*ctx).run_ptr(),
+                        crate::tasks::scheduler(ctx).key(id),
+                        Owner::Any,
+                    );
                 }
                 let completion = crate::stop::check(
                     ctx,

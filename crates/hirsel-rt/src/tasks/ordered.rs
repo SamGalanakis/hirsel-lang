@@ -8,6 +8,8 @@ pub(crate) mod ahead;
 mod commit_tests;
 #[cfg(test)]
 mod compact_tests;
+#[cfg(test)]
+mod dispatch_key_tests;
 pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;

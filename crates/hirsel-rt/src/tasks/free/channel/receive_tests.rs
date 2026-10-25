@@ -406,7 +406,11 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
                         let mut row = Task::new(1, child_ctx, None, vec![0], None);
                         row.stack = Some(stack);
                         s.tasks.push(Some(row));
-                        crate::pool::free::schedule_saved((*ctx).run_ptr(), id, Owner::Any);
+                        crate::pool::free::schedule_saved(
+                            (*ctx).run_ptr(),
+                            crate::tasks::scheduler(ctx).key(id),
+                            Owner::Any,
+                        );
                         (id, channel)
                     };
                     tests::wait_until(|| unsafe {

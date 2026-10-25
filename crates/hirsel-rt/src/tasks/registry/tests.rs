@@ -89,7 +89,7 @@ fn runtime50_task_slot_reuse_waits_for_save_and_leases() {
         let mut lease = None;
         match owner {
             Owner::Active | Owner::Saved => {
-                let f = crate::pool::free::Frame::unpublished(victim, false);
+                let f = crate::pool::free::Frame::unpublished(old, false);
                 if matches!(owner, Owner::Saved) {
                     f.mark_saved();
                 }
@@ -291,4 +291,158 @@ fn keys_round_trip_through_run_local_words() {
     let scope_key = s.scope_key(scope).unwrap();
     assert_eq!(ScopeKey::from_word(scope_key.word()), scope_key);
     assert_eq!(s.scope_handle(scope_key.word()), scope);
+}
+
+/// SplitMix64, the operation stream for the model tests below.
+struct Mix(u64);
+
+impl Mix {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+}
+
+/// slotmap's `qc_slotmap_equiv_hashmap` (src/basic.rs:1542-1615 at slotmap
+/// 1.0.7), over task rows: insert, remove, access and the stale wake against
+/// a map oracle keyed by unique ids. Physical dispatch's key lookup
+/// (`ahead::physical`, which `dispatch_frame` uses) must agree with the
+/// oracle, and every key ever removed must stay dead after its slot's reuse.
+/// A removal may retain its frame, as an unsaved or queued owner does, so a
+/// slot is reused only after its owner leaves. Quickcheck is replaced by
+/// seeded sequences; serde round trips have no counterpart.
+#[test]
+fn task_keys_agree_with_a_map_oracle_through_insert_remove_reuse_and_stale_wakes() {
+    use super::super::ordered::ahead::physical;
+    use std::collections::HashMap;
+    let mut reuses = 0;
+    let mut stale_wakes = 0;
+    for seed in 0..64 {
+        let mut mix = Mix(seed);
+        let mut s = Scheduler::default();
+        let mut oracle: HashMap<u32, u32> = HashMap::new();
+        let mut keys: Vec<(u32, TaskKey)> = Vec::new();
+        let mut dead: Vec<TaskKey> = Vec::new();
+        let mut held: Vec<Arc<crate::pool::free::Frame>> = Vec::new();
+        let mut unique = 0;
+        for _ in 0..256 {
+            let (op, val) = (mix.next() % 5, mix.next() as u32);
+            match op {
+                // Insert.
+                0 | 1 => {
+                    let fresh = s.tasks.len();
+                    let (slot, generation) = s.take_task_slot();
+                    let key = TaskKey::new(slot, generation);
+                    if (slot as usize) < fresh {
+                        reuses += 1;
+                        assert!(
+                            dead.iter()
+                                .any(|old| old.slot == slot && old.generation < key.generation),
+                            "a reused slot advances its generation"
+                        );
+                    }
+                    assert!(!dead.contains(&key), "a removed key was handed out again");
+                    let mut row =
+                        Task::new(generation, std::ptr::null_mut(), None, vec![val], None);
+                    row.dispatch = Some(crate::pool::free::Frame::unpublished(key, true));
+                    assert!(s.tasks[slot as usize].replace(row).is_none());
+                    oracle.insert(unique, val);
+                    keys.push((unique, key));
+                    unique += 1;
+                }
+                // Remove; a fifth of removals leave a frame owner behind.
+                2 => {
+                    if keys.is_empty() {
+                        continue;
+                    }
+                    let (id, key) = keys.swap_remove(val as usize % keys.len());
+                    let slot = s.live_task(key).expect("an oracle key is live");
+                    if val % 5 == 0 {
+                        held.push(s.task(slot).dispatch.clone().unwrap());
+                    }
+                    let row = s.retire_task(slot);
+                    assert_eq!(row.path, vec![oracle.remove(&id).unwrap()]);
+                    dead.push(key);
+                    // Owners leave in arbitrary order.
+                    if !held.is_empty() && val % 3 == 0 {
+                        drop(held.swap_remove(val as usize % held.len()));
+                    }
+                }
+                // Access.
+                3 => {
+                    if keys.is_empty() {
+                        continue;
+                    }
+                    let (id, key) = keys[val as usize % keys.len()];
+                    let row = physical(&mut s, key).expect("a live key resolves");
+                    assert_eq!(row.path, vec![oracle[&id]]);
+                    assert_eq!(s.live_task(key), Some(key.slot));
+                }
+                // A late wake with a removed key.
+                _ => {
+                    if dead.is_empty() {
+                        continue;
+                    }
+                    let old = dead[val as usize % dead.len()];
+                    assert!(physical(&mut s, old).is_none(), "a stale key resolved");
+                    assert_eq!(s.live_task(old), None);
+                    let occupant = s.task_key(old.slot);
+                    assert_ne!(occupant, Some(old));
+                    if let Some(occupant) = occupant {
+                        assert!(occupant.generation > old.generation);
+                    }
+                    stale_wakes += 1;
+                }
+            }
+        }
+        let mut live: Vec<u32> = keys
+            .iter()
+            .map(|&(_, key)| physical(&mut s, key).unwrap().path[0])
+            .collect();
+        let mut expected: Vec<u32> = oracle.into_values().collect();
+        live.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(live, expected);
+        assert_eq!(
+            s.tasks.iter().flatten().count(),
+            keys.len(),
+            "every row is an oracle entry"
+        );
+    }
+    assert!(
+        reuses > 1000 && stale_wakes > 1000,
+        "{reuses} {stale_wakes}"
+    );
+}
+
+/// The same oracle over a small generation limit: a slot whose generation is
+/// exhausted is never handed out again, and no (slot, generation) repeats.
+#[test]
+fn exhausted_generations_refuse_reuse_against_a_map_oracle() {
+    let mut issued = std::collections::HashSet::new();
+    for seed in 0..64 {
+        let mut mix = Mix(seed);
+        let mut slots = Slots::<4>::default();
+        let mut live: Vec<(u32, u32)> = Vec::new();
+        let mut len = 0;
+        issued.clear();
+        for _ in 0..512 {
+            let val = mix.next() as usize;
+            if live.is_empty() || mix.next() % 2 == 0 {
+                let (slot, generation) = slots.take(len);
+                if slot as usize == len {
+                    len += 1;
+                }
+                assert!((1..=4).contains(&generation));
+                assert!(issued.insert((slot, generation)), "a key was issued twice");
+                live.push((slot, generation));
+            } else {
+                let (slot, generation) = live.swap_remove(val % live.len());
+                slots.release(slot, generation);
+            }
+        }
+    }
 }

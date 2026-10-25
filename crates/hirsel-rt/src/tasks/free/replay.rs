@@ -243,12 +243,13 @@ impl std::task::Wake for Wake {
 /// The running task's registration for a replay dependency: its row and that
 /// row's generation, and its role-free wake.
 fn subscriber(ctx: *mut TaskCtx) -> Subscriber {
-    let (me, waiter, owner) = role::with_role(ctx, |s| {
+    let (me, owner) = role::with_role(ctx, |s| {
         let me = s.current;
         let row = s.task(me);
         let owner = if row.pinned { Owner::Any } else { row.owner };
-        (me, u64::from(row.generation) << 32 | u64::from(me), owner)
+        (TaskKey::new(me, row.generation), owner)
     });
+    let waiter = me.word();
     let run = unsafe { (*ctx).run_ptr() };
     let token = unsafe { crate::pool::free::token(run, me, owner) }
         .expect("native replay runs under physical dispatch");

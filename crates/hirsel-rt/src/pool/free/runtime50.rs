@@ -737,9 +737,11 @@ fn prepare(
     log: Arc<TaskLog>,
     reuse: u32,
 ) -> (Task, Queued<Image>) {
+    // The model's image names its lineage, not a registry row: `rows` holds
+    // the concrete keys, and generation 0 is never a row's.
     let (notification, queued) = frame::prepared(Image {
         ctx: std::ptr::null_mut(),
-        task: slot,
+        task: TaskKey::new(slot, 0),
         sp: std::ptr::null_mut(),
     });
     let frame = Arc::new(Frame {
@@ -1203,7 +1205,7 @@ impl World {
         let (w, served) = self.loan.as_mut().unwrap();
         assert!(!*served);
         *served = true;
-        let t = self.slots[*w].active.as_ref().unwrap().0.value().task as usize;
+        let t = self.slots[*w].active.as_ref().unwrap().0.value().task.slot as usize;
         let owner = role_owner(t);
         let before = self.role.acquisitions();
         self.role.driven_enter(owner);
@@ -1252,7 +1254,7 @@ impl World {
             return;
         };
         let running = queued.start();
-        let slot = running.value().task;
+        let slot = running.value().task.slot;
         let task = &mut self.tasks[slot as usize];
         assert!(
             Arc::ptr_eq(&frame, &task.frame),
@@ -1281,7 +1283,7 @@ impl World {
     }
 
     fn running(&self, w: usize) -> usize {
-        self.slots[w].active.as_ref().unwrap().0.value().task as usize
+        self.slots[w].active.as_ref().unwrap().0.value().task.slot as usize
     }
 
     fn leave(&mut self, w: usize, yielded: bool, site: &'static str) {
@@ -1316,7 +1318,7 @@ impl World {
         let exec = self.slots[w].exec.clone();
         self.execs.permits.release(&exec);
         self.handoff("permit-release", Some(w));
-        let t = running.value().task as usize;
+        let t = running.value().task.slot as usize;
         let key = self.tasks[t].key;
         self.role.driven_idle();
         self.handoff("idle", Some(Role::IDLE));
@@ -2040,7 +2042,7 @@ impl World {
         );
         for (w, slot) in self.slots.iter().enumerate() {
             if let Some((running, frame, _)) = &slot.active {
-                let task = &self.tasks[running.value().task as usize];
+                let task = &self.tasks[running.value().task.slot as usize];
                 assert_eq!(task.custody, Custody::Running(w));
                 assert!(Arc::ptr_eq(frame, &task.frame));
             }
@@ -2060,7 +2062,7 @@ impl World {
         }
         // One role owner: between transitions only a loan's caller holds it.
         let loaner = self.loan.map(|(w, _)| {
-            role_owner(self.slots[w].active.as_ref().unwrap().0.value().task as usize)
+            role_owner(self.slots[w].active.as_ref().unwrap().0.value().task.slot as usize)
         });
         assert_eq!(
             self.role.driven_owner(),

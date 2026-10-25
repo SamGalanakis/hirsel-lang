@@ -10,9 +10,11 @@ use hirsel_free::frame::{self, Notification, Queued, Running};
 use hirsel_free::schedule::Budget;
 use hirsel_free::work::{Ready, Source, Worker as ReadyWorker};
 
+use crate::tasks::registry::TaskKey;
+
 struct Image {
     ctx: *mut TaskCtx,
-    task: u32,
+    task: TaskKey,
     sp: *mut u8,
 }
 
@@ -55,7 +57,7 @@ impl Frame {
 
     /// A frame never published to a worker, for registry ownership tests.
     #[cfg(test)]
-    pub(crate) fn unpublished(task: u32, saved: bool) -> Arc<Self> {
+    pub(crate) fn unpublished(task: TaskKey, saved: bool) -> Arc<Self> {
         let (notification, queued) = frame::prepared(Image {
             ctx: std::ptr::null_mut(),
             task,
@@ -78,11 +80,10 @@ impl Frame {
 /// Parked or Holding alone is insufficient: its old worker may still be saving.
 ///
 /// # Safety
-/// The caller holds the scheduler role; the task row is live.
+/// The caller holds the scheduler role; `task` is a live published row,
+/// which the caller has just read under that role.
 pub(crate) unsafe fn is_saved(run: *mut RunShared, task: u32) -> bool {
-    let (slot, _) = unsafe { crate::tasks::dispatch_frame(run, task) };
-    slot.as_ref()
-        .is_none_or(|frame| frame.saved.load(Ordering::Acquire))
+    unsafe { crate::tasks::frame_saved(run, task) }
 }
 
 struct Count {
@@ -323,7 +324,7 @@ pub(crate) unsafe fn recycle_stack(stack: Stack) {
 /// child may save/migrate that stack; its return restores the parent's image.
 /// # Safety
 /// The caller owns the role and current image; neither row is published elsewhere.
-pub(crate) unsafe fn lend(ctx: *mut TaskCtx, task: u32) {
+pub(crate) unsafe fn lend(ctx: *mut TaskCtx, task: TaskKey) {
     unsafe {
         let me = own_exec();
         assert!(!me.is_null());
@@ -337,11 +338,12 @@ pub(crate) unsafe fn lend(ctx: *mut TaskCtx, task: u32) {
 
 /// Notify a task selected by the logical policy. A running notification
 /// never publishes: its idle continuation does that after saving the stack.
+/// A stale `task` (its row retired, its slot perhaps reused) is dropped.
 ///
 /// # Safety
-/// The caller holds the run's scheduler role (or is admitting its root). The
-/// task row/context is live; its stack stays allocated until completion.
-pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner) {
+/// The caller holds the run's scheduler role (or is admitting its root). A
+/// live row's stack stays allocated until completion.
+pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: TaskKey, owner: Owner) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
     if let Some(saved) = unsafe { admit(run, execs, task, owner) } {
         // A notifier can keep executing indefinitely after this op. Work
@@ -351,12 +353,14 @@ pub(crate) unsafe fn schedule_saved(run: *mut RunShared, task: u32, owner: Owner
 }
 
 /// Transfer one notification into queue ownership, or latch it on a running
-/// image. `None` means the task's idle save, or an earlier wake, publishes.
+/// image. `None` means the task's idle save, or an earlier wake, publishes,
+/// or that `task` is stale: a generation mismatch neither notifies nor
+/// exposes the slot's current frame (slotmap `SlotMap::get`, basic.rs:700-705).
 /// # Safety
 /// As for [`schedule_saved`].
-unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> Option<Saved> {
+unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner) -> Option<Saved> {
     // SAFETY: the role owns this task lookup. No borrow survives publication.
-    let (slot, ctx) = unsafe { crate::tasks::dispatch_frame(run, task) };
+    let (slot, ctx) = unsafe { crate::tasks::dispatch_frame(run, task) }?;
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
     unsafe {
         if let Some(frame) = slot {
@@ -381,7 +385,7 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> 
                 saved: AtomicBool::new(true),
                 left: AtomicUsize::new(0),
                 #[cfg(feature = "free-qualification")]
-                stop_before_start: task == 1 && dispatch.queued_stop_witness.is_some(),
+                stop_before_start: task.slot == 1 && dispatch.queued_stop_witness.is_some(),
             });
             *slot = Some(frame.clone());
             Some(Saved {
@@ -413,12 +417,13 @@ pub(crate) struct Token {
 /// The running task's wake token, or `None` without physical dispatch.
 /// # Safety
 /// The caller holds the run's scheduler role; `task` is its running task.
-pub(crate) unsafe fn token(run: *mut RunShared, task: u32, owner: Owner) -> Option<Token> {
+pub(crate) unsafe fn token(run: *mut RunShared, task: TaskKey, owner: Owner) -> Option<Token> {
     if !enabled(unsafe { &*run }) {
         return None;
     }
     // SAFETY: the role owns this task lookup.
-    let (slot, _) = unsafe { crate::tasks::dispatch_frame(run, task) };
+    let (slot, _) = unsafe { crate::tasks::dispatch_frame(run, task) }
+        .unwrap_or_else(|| fault("a wake token for a stale task key"));
     slot.as_ref().map(|frame| Token {
         frame: frame.clone(),
         owner: owner_word(owner),
@@ -489,7 +494,7 @@ impl ReadyBatch {
     ///
     /// # Safety
     /// As for [`schedule_saved`].
-    pub(crate) unsafe fn schedule(&mut self, task: u32, owner: Owner) {
+    pub(crate) unsafe fn schedule(&mut self, task: TaskKey, owner: Owner) {
         let execs = unsafe { &*self.execs };
         if let Some(saved) = unsafe { admit(self.run, execs, task, owner) } {
             self.push(saved);
@@ -764,7 +769,10 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
         .get()
         .and_then(|dispatch| dispatch.before_save.get())
     {
-        hook(running.value().task, matches!(leaving, Leave::Complete));
+        hook(
+            running.value().task.slot,
+            matches!(leaving, Leave::Complete),
+        );
     }
     match leaving {
         Leave::Complete => {
@@ -797,12 +805,12 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
                     .get()
                     .and_then(|dispatch| dispatch.after_compact.get())
                 {
-                    hook(task, released, pooled);
+                    hook(task.slot, released, pooled);
                 }
                 #[cfg(feature = "diagnostic")]
                 // SAFETY: the idle worker owns this saved image exclusively.
                 crate::compact_trace::left(
-                    task,
+                    task.slot,
                     unsafe { (*ctx).compact.as_ref() }.map_or(0, |compact| compact.state()),
                     pooled,
                 );
@@ -1073,12 +1081,12 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
     // acquisition protects moving metadata; the continuation acquires it again.
     unsafe {
         crate::tasks::role::enter(ctx);
-        debug_assert_eq!((*ctx).task_id, task);
-        if !crate::tasks::ordered::ahead::dispatch_ready(ctx) || !crate::tasks::resumed(run, task) {
+        debug_assert_eq!((*ctx).task_id, task.slot);
+        if !crate::tasks::resumed(run, task) || !crate::tasks::ordered::ahead::dispatch_ready(ctx) {
             // Promotion may precede the claim of the reservation's original
             // physical queue token. It must not claim an unselected logical
             // row; nor may a stale object token start a row parked on another
-            // wait. No task code or context switch has run: return the exact
+            // wait, nor an image whose key no longer names its slot's row. No task code or context switch has run: return the exact
             // image to Saved, without a semantic save callback. The role
             // excludes selection until the token's save is published.
             let queued = running.save(false);
@@ -1115,7 +1123,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             let stack = (*exec.worker.get()).idle_stacks.take();
             #[cfg(feature = "diagnostic")]
             crate::compact_trace::activated(
-                task,
+                task.slot,
                 (*ctx).compact.as_ref().map_or(0, |compact| compact.state()),
             );
             crate::tasks::compact::activate(run, task, stack)
@@ -1163,7 +1171,11 @@ mod tests {
                     unsafe {
                         crate::tasks::role::enter(ctx);
                         assert!(!is_saved((*ctx).run_ptr(), (*ctx).task_id));
-                        schedule_saved((*ctx).run_ptr(), (*ctx).task_id, Owner::Any);
+                        schedule_saved(
+                            (*ctx).run_ptr(),
+                            crate::tasks::scheduler(ctx).key((*ctx).task_id),
+                            Owner::Any,
+                        );
                         assert!(!is_saved((*ctx).run_ptr(), (*ctx).task_id));
                         suspend_current(ctx, false);
                         assert!(!is_saved((*ctx).run_ptr(), (*ctx).task_id));

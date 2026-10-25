@@ -31,20 +31,23 @@ pub(super) unsafe fn flush(ctx: *mut TaskCtx) {
     role::admit(ctx);
     let stack = unsafe { (*ctx).worker().idle_stacks.take() };
     let target = stack.context();
-    unsafe {
+    let key = unsafe {
         role::with_held(ctx, |s| {
+            let key = s.key(child);
             let row = s.task(child);
             let owned = row
                 .inline_context
                 .take()
                 .expect("unpublished child context");
             target.write((*owned).into_inner());
-            (*target).task_sp = stack.prepare(task_entry, target.cast(), child as usize as *mut u8);
+            (*target).task_sp =
+                stack.prepare(task_entry, target.cast(), key.word() as usize as *mut u8);
             row.ctx = target;
             row.stack = Some(stack);
+            key
         })
     };
-    unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), child, Owner::Any) };
+    unsafe { crate::pool::free::schedule_saved((*ctx).run_ptr(), key, Owner::Any) };
 }
 
 /// # Safety
@@ -55,26 +58,37 @@ pub(super) unsafe fn run(
     child: u32,
     result: Option<(*mut u8, u64)>,
 ) -> Stopped<()> {
-    let (parent, target, code, environment, site) = role::with_role(ctx, |s| {
-        let parent = s.current;
-        let frame = s.task(parent).dispatch.clone();
-        s.task(parent).state = State::Parked;
-        if let Some((slot, size)) = result {
-            s.task(parent).wait = Some(Wait::Join { child, slot, size });
-        }
-        let row = s.task(child);
-        row.inline_result = result;
-        row.inline_running = true;
-        row.dispatch = frame;
-        let (code, environment, site) = row.code.take().expect("an unstarted fast child");
-        (parent, row.ctx, code, environment, site)
-    });
+    let (parent, parent_key, child_key, target, code, environment, site) =
+        role::with_role(ctx, |s| {
+            let parent = s.current;
+            let parent_key = s.key(parent);
+            let child_key = s.key(child);
+            let frame = s.task(parent).dispatch.clone();
+            s.task(parent).state = State::Parked;
+            if let Some((slot, size)) = result {
+                s.task(parent).wait = Some(Wait::Join { child, slot, size });
+            }
+            let row = s.task(child);
+            row.inline_result = result;
+            row.inline_running = true;
+            row.dispatch = frame;
+            let (code, environment, site) = row.code.take().expect("an unstarted fast child");
+            (
+                parent,
+                parent_key,
+                child_key,
+                row.ctx,
+                code,
+                environment,
+                site,
+            )
+        });
     // No runtime borrow crosses user code. The physical image changes before
     // the child can suspend; a saved child never publishes the parent twice.
     unsafe {
         (*ctx).switch_out();
         role::release(ctx);
-        crate::pool::free::lend(target, child);
+        crate::pool::free::lend(target, child_key);
         TaskCtx::switch_in(target, (*ctx).worker_ptr());
         role::enter(target);
         (*target).role_depth = 1;
@@ -103,7 +117,7 @@ pub(super) unsafe fn run(
         let worker = (*target).worker_ptr();
         (*target).switch_out();
         role::release(target);
-        crate::pool::free::lend(ctx, parent);
+        crate::pool::free::lend(ctx, parent_key);
         TaskCtx::switch_in(ctx, worker);
         role::enter(ctx);
     }

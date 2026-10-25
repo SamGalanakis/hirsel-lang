@@ -74,7 +74,8 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
     } else {
         // SAFETY: the role is held and no table borrow survives this call.
         unsafe {
-            crate::pool::free::schedule_saved((*ctx).run_ptr(), (*ctx).task_id, Owner::Any);
+            let me = super::running_key(ctx);
+            crate::pool::free::schedule_saved((*ctx).run_ptr(), me, Owner::Any);
         }
     }
     true
@@ -87,12 +88,13 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
 /// # Safety
 /// The calling idle worker owns `task`'s exclusive Running image, whose leave
 /// switched away from its stack for good, and holds no role.
-pub(crate) unsafe fn saved(run: *mut RunShared, task: u32) -> (*mut TaskCtx, Stack) {
+pub(crate) unsafe fn saved(run: *mut RunShared, task: TaskKey) -> (*mut TaskCtx, Stack) {
     // SAFETY: the worker stays busy and retains its lease meanwhile.
     let _role = unsafe { role::IdleGuard::new(run) };
     // SAFETY: IdleGuard exclusively owns the role-protected rows.
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut() }.expect("a run with tasks");
-    let row = s.task(task);
+    let row = ordered::ahead::physical(s, task)
+        .unwrap_or_else(|| fault("a compact leave of a stale task key"));
     let stack = row
         .stack
         .take()
@@ -120,10 +122,11 @@ pub(crate) unsafe fn saved(run: *mut RunShared, task: u32) -> (*mut TaskCtx, Sta
 ///
 /// # Safety
 /// The caller holds the role for `task`, whose exclusive saved image it owns.
-pub(crate) unsafe fn activate(run: *mut RunShared, task: u32, stack: Stack) -> *mut u8 {
+pub(crate) unsafe fn activate(run: *mut RunShared, task: TaskKey, stack: Stack) -> *mut u8 {
     // SAFETY: the role exclusively owns the rows.
     let s = unsafe { (*(*run).tasks.get()).as_deref_mut() }.expect("a run with tasks");
-    let row = s.task(task);
+    let row = ordered::ahead::physical(s, task)
+        .unwrap_or_else(|| fault("a compact activation of a stale task key"));
     assert!(row.context_home.is_some(), "a compact frame off its home");
     let ctx = row.ctx;
     let sp = stack.prepare(entry, ctx.cast(), std::ptr::null_mut());

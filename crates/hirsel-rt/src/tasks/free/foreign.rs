@@ -66,7 +66,11 @@ mod tests {
         let owner = Owner::Compute(to.expose_provenance());
         scheduler(ctx).task(unsafe { (*ctx).task_id }).owner = owner;
         unsafe {
-            crate::pool::free::schedule_saved((*ctx).run_ptr(), (*ctx).task_id, owner);
+            crate::pool::free::schedule_saved(
+                (*ctx).run_ptr(),
+                crate::tasks::scheduler(ctx).key((*ctx).task_id),
+                owner,
+            );
             super::super::suspend(&mut *ctx, true);
         }
         scheduler(ctx).task(unsafe { (*ctx).task_id }).owner = Owner::Any;
@@ -78,7 +82,11 @@ mod tests {
         // Apply width changes before saving: retirement must wait for C.
         let _ = crate::pool::target(ctx, owner, None);
         unsafe {
-            crate::pool::free::schedule_saved((*ctx).run_ptr(), (*ctx).task_id, owner);
+            crate::pool::free::schedule_saved(
+                (*ctx).run_ptr(),
+                crate::tasks::scheduler(ctx).key((*ctx).task_id),
+                owner,
+            );
             super::super::suspend(&mut *ctx, true);
         }
     }

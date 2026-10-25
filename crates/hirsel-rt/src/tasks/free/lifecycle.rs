@@ -500,8 +500,11 @@ pub(crate) unsafe fn spawn(
     unsafe {
         if let Some(stack) = &stack {
             child_ctx.write(TaskCtx::new((*ctx).worker_ptr(), (*ctx).run_ptr()));
-            (*child_ctx).task_sp =
-                stack.prepare(task_entry, child_ctx.cast(), index as usize as *mut u8);
+            (*child_ctx).task_sp = stack.prepare(
+                task_entry,
+                child_ctx.cast(),
+                handle(index, generation) as usize as *mut u8,
+            );
         }
         (*child_ctx).task_id = index;
     }
@@ -556,7 +559,11 @@ pub(crate) unsafe fn spawn(
         } else if fast {
             super::spawn::run(ctx, index, None)?;
         } else {
-            crate::pool::free::schedule_saved((*ctx).run_ptr(), index, Owner::Any);
+            crate::pool::free::schedule_saved(
+                (*ctx).run_ptr(),
+                TaskKey::new(index, generation),
+                Owner::Any,
+            );
         }
         try_yield(&mut *ctx)
     }
