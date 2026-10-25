@@ -1,0 +1,156 @@
+//! Compact frames under the shared physical dispatcher (resume-dispatch-51).
+//!
+//! A resumable task body saved at a resume point can leave its stack for
+//! good: `pool::free::leave_compact` switches away, and the idle continuation
+//! moves the task's context to a stable home ([`saved`]) and gives the stack
+//! back to its worker. The dispatcher owns the saved frame alone until some
+//! worker claims it and lends it a stack of its own ([`activate`]), on which
+//! [`entry`] continues the dispatcher at the saved state and then ends the
+//! task exactly as the task entry does.
+//!
+//! The leave is physical. Ordered keeps the task's turn, log and queue
+//! position and selects the saved frame as it selects any; Free keeps the row
+//! ready and remembers the task's own notification until the save, as its
+//! physical migration does. No operation, charge or observation is added.
+//!
+//! Rayon join's ownership (`rayon-core/src/join/mod.rs:132-165`) is the model:
+//! the job is pushed once, popped once by whichever worker finds it, and its
+//! result is published only after it ran. Hirsel adds the custody step Rayon
+//! does not need: the frame is published only after the leaving worker has
+//! acknowledged its save, and the stack is reused only after that unwind.
+
+use super::*;
+use crate::context::RunShared;
+
+/// A context's stable home once its first stack is gone. The context is
+/// destroyed in place, as one lying at a stack's top is; dropping the home
+/// only frees its memory.
+#[repr(C, align(64))]
+pub(super) struct ContextHome(std::cell::UnsafeCell<std::mem::MaybeUninit<TaskCtx>>);
+
+/// Whether the running task can leave its stack at this resume point. If it
+/// can, its logical policy records the physical leave, and the caller must
+/// leave: Ordered marks the frame saving, Free remembers its own wake.
+///
+/// A task leaves only from the stack its task entry started (not one lent by
+/// its parent), owned by any compute worker, outside callbacks and private
+/// ahead execution. Every other chain keeps the general stackful path.
+///
+/// # Safety
+/// The running task holds the role at a resume point of the body its task
+/// entry called.
+pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: caller contract.
+    unsafe {
+        if !crate::pool::free::enabled((*ctx).run_ref())
+            || (*ctx).callback_depth != 0
+            || (*ctx).ahead.is_some()
+            || !(*ctx).ahead_physical.is_null()
+        {
+            return false;
+        }
+    }
+    let ordered = ordered::engine::on(ctx);
+    let movable = role::with_role(ctx, |s| {
+        let me = s.current;
+        let row = s.task(me);
+        row.scope.is_some()
+            && row.stack.is_some()
+            && !row.inline_running
+            && row.inline_context.is_none()
+            && row.owner == Owner::Any
+            && !row.pinned
+            && match s.logical {
+                Logical::Ordered(_) => ordered,
+                Logical::Free(_) => !ordered,
+                Logical::Cooperative => false,
+            }
+    });
+    if !movable {
+        return false;
+    }
+    if ordered {
+        ordered::engine::transfer(ctx);
+    } else {
+        // SAFETY: the role is held and no table borrow survives this call.
+        unsafe {
+            crate::pool::free::schedule_saved((*ctx).run_ptr(), (*ctx).task_id, Owner::Any);
+        }
+    }
+    true
+}
+
+/// The idle continuation of a compact leave, after the switch away from the
+/// task's stack: the context moves once to its stable home, and the stack is
+/// returned for the caller to give back to its worker.
+///
+/// # Safety
+/// The calling idle worker owns `task`'s exclusive Running image, whose leave
+/// switched away from its stack for good, and holds no role.
+pub(crate) unsafe fn saved(run: *mut RunShared, task: u32) -> (*mut TaskCtx, Stack) {
+    // SAFETY: the worker stays busy and retains its lease meanwhile.
+    let _role = unsafe { role::IdleGuard::new(run) };
+    // SAFETY: IdleGuard exclusively owns the role-protected rows.
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut() }.expect("a run with tasks");
+    let row = s.task(task);
+    let stack = row
+        .stack
+        .take()
+        .unwrap_or_else(|| fault("a compact leave without its task's stack"));
+    if row.context_home.is_none() {
+        let home = Box::new(ContextHome(std::cell::UnsafeCell::new(
+            std::mem::MaybeUninit::uninit(),
+        )));
+        let to = home.0.get().cast::<TaskCtx>();
+        // SAFETY: the context at the stack's top is the task's alone while
+        // its image is Running; no pointer into it survives this move but the
+        // row's, rebound here, and the image's, which the caller rebinds.
+        // Every heap view it carries is rebound at its next activation.
+        unsafe { to.copy_from_nonoverlapping(row.ctx, 1) };
+        row.ctx = to;
+        row.context_home = Some(home);
+    }
+    // SAFETY: as above; the old stack pointer names a stack that is gone.
+    unsafe { (*row.ctx).task_sp = std::ptr::null_mut() };
+    (row.ctx, stack)
+}
+
+/// Lend `stack` to `task`'s compact frame, which the calling worker claimed:
+/// the stack pointer that starts [`entry`] on it.
+///
+/// # Safety
+/// The caller holds the role for `task`, whose exclusive saved image it owns.
+pub(crate) unsafe fn activate(run: *mut RunShared, task: u32, stack: Stack) -> *mut u8 {
+    // SAFETY: the role exclusively owns the rows.
+    let s = unsafe { (*(*run).tasks.get()).as_deref_mut() }.expect("a run with tasks");
+    let row = s.task(task);
+    assert!(row.context_home.is_some(), "a compact frame off its home");
+    let ctx = row.ctx;
+    let sp = stack.prepare(entry, ctx.cast(), std::ptr::null_mut());
+    // SAFETY: the claimed task's context is exclusively the claimant's.
+    unsafe { (*ctx).task_sp = sp };
+    assert!(
+        row.stack.replace(stack).is_none(),
+        "a compact frame on two stacks"
+    );
+    sp
+}
+
+/// The fiber entry of a compact frame on a lent stack: the rest of its body
+/// from the saved state, then the task entry's suffix.
+unsafe extern "C" fn entry(ctx: *mut u8, _: *mut u8) -> ! {
+    let ctx = ctx.cast::<TaskCtx>();
+    // SAFETY: this lent fiber owns its task's stable context.
+    let _role = unsafe { role::Guard::physical(ctx) };
+    recycle(unsafe { &mut *ctx });
+    #[cfg(feature = "measurement")]
+    profile::resume(ctx);
+    // SAFETY: the dispatcher claimed this frame for this activation.
+    let (mut status, environment, site) = unsafe { crate::continuation::resume_compact(ctx) };
+    let index = unsafe { (*ctx).task_id };
+    unsafe { ordered::ahead::barrier(ctx) };
+    status |= unsafe {
+        crate::release::release_block(&mut *ctx, environment, std::ptr::null(), site, site)
+    };
+    unsafe { complete(&mut *ctx, index, status) }
+}

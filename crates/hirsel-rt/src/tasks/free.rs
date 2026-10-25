@@ -222,6 +222,7 @@ pub(super) unsafe fn after_save(
                 // this callback, and its last runtime frame consumed ctx state.
                 unsafe {
                     std::ptr::drop_in_place(row.ctx);
+                    drop(row.context_home.take());
                     crate::pool::free::recycle_stack(stack);
                 }
             }

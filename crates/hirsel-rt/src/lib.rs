@@ -90,6 +90,8 @@ mod free;
 pub mod free_driver;
 /// Engine-facing production Free replay using the native host codec.
 pub use tasks::free::host::engine as free_replay;
+#[cfg(feature = "diagnostic")]
+mod compact_trace;
 mod free_launch;
 mod heaps;
 pub mod host;

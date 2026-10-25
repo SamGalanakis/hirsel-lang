@@ -12,9 +12,13 @@
 //! `rayon-core/src/join/mod.rs:132-185`: the owner never resumes storage it
 //! already handed off).
 //!
-//! A resumable task body runs through [`hirsel_rt_v2_resume_run`]; stackful
-//! fibers keep their own switch until the dispatcher's saved-fiber cutover
-//! (S2), so only tests save a `Fiber` here.
+//! A resumable task body runs through [`hirsel_rt_v2_resume_run`]. Under the
+//! shared physical dispatcher a saved compact frame has exactly one owner, the
+//! dispatcher, and no stack: its task's stack goes back to its worker after
+//! the unwind, and any worker activates it on a stack of its own (Rayon join's
+//! stolen job, `rayon-core/src/join/mod.rs:132-165`: whoever pops the job
+//! runs it once, wherever). Stackful fibers keep their own switch until the
+//! dispatcher's saved-fiber cutover (S2), so only tests save a `Fiber` here.
 #![cfg_attr(not(test), allow(dead_code))]
 
 /// The resume point of a stackful frame.
@@ -199,10 +203,36 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
 pub type ResumeDispatcher =
     unsafe extern "C" fn(*mut crate::TaskCtx, *mut crate::Header, u64, u64, *mut u8) -> u8;
 
+/// The task entry's arguments a resumable body's dispatcher continues with.
+#[derive(Clone, Copy)]
+struct Body {
+    dispatcher: ResumeDispatcher,
+    environment: *mut crate::Header,
+    caller_site: u64,
+    operation_site: u64,
+}
+
+/// A compact frame saved off every stack: its exclusive continuation, which
+/// the shared dispatcher owns until one activation takes it, and its body.
+pub(crate) struct Compact {
+    owner: Continuation,
+    body: Body,
+}
+
+impl Compact {
+    /// The state the saved frame resumes at.
+    #[cfg(feature = "diagnostic")]
+    pub(crate) fn state(&self) -> u32 {
+        match &self.owner {
+            Continuation::Saved(SavedRepr::Resumable(frame)) => frame.state(),
+            _ => crate::fault("a compact frame not saved"),
+        }
+    }
+}
+
 /// A resumable task body. Its dispatcher starts at state 0 of a fresh owned
 /// frame; each `STATUS_SUSPENDED` unwinds the compiled stack to this owner,
-/// which saves the frame (its header names the next state), activates it and
-/// continues the dispatcher at that state.
+/// which saves the frame (its header names the next state).
 ///
 /// # Safety
 /// As for the task entry it replaces; `dispatcher` is the body's compiled
@@ -218,20 +248,63 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
 ) -> u8 {
     // SAFETY: this physical entry owns its task between compiled segments.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    let mut frame = OwnedResumeFrame::new(bytes);
     let mut owner = Continuation::Fresh;
     owner.start();
+    let body = Body {
+        dispatcher,
+        environment,
+        caller_site,
+        operation_site,
+    };
+    // SAFETY: caller contract; the task entry called this body.
+    unsafe { drive(ctx, body, owner, OwnedResumeFrame::new(bytes)) }
+}
+
+/// Continue the compact frame the shared dispatcher activated on a stack it
+/// lent this task: its exact saved state, never its entry. Returns the body's
+/// status, environment and site for the task entry's suffix.
+///
+/// # Safety
+/// The task's compact entry, holding the role, on its lent stack.
+pub(crate) unsafe fn resume_compact(ctx: *mut crate::TaskCtx) -> (u8, *mut crate::Header, u64) {
+    let Some(compact) = (unsafe { (*ctx).compact.take() }) else {
+        crate::fault("a compact entry without its saved frame");
+    };
+    let Compact { mut owner, body } = *compact;
+    let SavedRepr::Resumable(frame) = owner.activate() else {
+        crate::fault("a compact entry activated a stackful frame");
+    };
+    // SAFETY: caller contract.
+    let status = unsafe { drive(ctx, body, owner, frame) };
+    (status, body.environment, body.operation_site)
+}
+
+/// Run `body`'s dispatcher over the Active owner's frame until it completes.
+/// Each suspension saves the frame. The shared dispatcher then takes the
+/// saved frame off this stack when the task can leave it (the stack goes back
+/// to its worker), else the frame activates again here. Either way the
+/// boundary it resumes at is the one suspension: a save is physical, adding no
+/// operation or scheduling point.
+///
+/// # Safety
+/// `ctx`'s task entry called this body, which holds the role at depth one.
+unsafe fn drive(
+    ctx: *mut crate::TaskCtx,
+    body: Body,
+    mut owner: Continuation,
+    mut frame: OwnedResumeFrame,
+) -> u8 {
     loop {
         let status = {
             // SAFETY: no scheduler borrow survives the call into compiled code.
             let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
             // SAFETY: caller contract; the frame is exclusively this body's.
             unsafe {
-                dispatcher(
+                (body.dispatcher)(
                     ctx,
-                    environment,
-                    caller_site,
-                    operation_site,
+                    body.environment,
+                    body.caller_site,
+                    body.operation_site,
                     frame.as_mut_ptr(),
                 )
             }
@@ -243,10 +316,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
         if frame.state() == 0 {
             crate::fault("a resumable frame suspended at its entry");
         }
-        // A save is physical: it adds no operation or scheduling point. The
-        // boundary the frame resumes at suspends, and may move the task, as
-        // its operation always does.
         owner.save(SavedRepr::Resumable(frame));
+        // SAFETY: caller contract; at a resume point no runtime borrow, wait
+        // or address into this stack is live, and its frames own no Drop value.
+        if unsafe { crate::tasks::compact::leave(ctx) } {
+            unsafe { crate::pool::free::leave_compact(ctx, Box::new(Compact { owner, body })) }
+        }
         let SavedRepr::Resumable(saved) = owner.activate() else {
             crate::fault("a resumable frame changed representation while saved");
         };

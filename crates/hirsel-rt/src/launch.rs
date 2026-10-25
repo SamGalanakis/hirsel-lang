@@ -17,7 +17,9 @@
 //! absent, the root Io grants no mount and no projection),
 //! `HIRSEL_RT_DIAGNOSTIC` (poisoning and header checks; with it, in the diagnostic archive,
 //! `HIRSEL_RT_TRACE_ROOTS` names a file receiving every live `Shared` root's count at every
-//! scheduling point, `crate::root_trace`, and `HIRSEL_RT_COUNT_MAX` sets the run's count bound,
+//! scheduling point, `crate::root_trace`, `HIRSEL_RT_COMPACT_TRACE` names a file receiving
+//! every compact frame's leave and activation, `crate::compact_trace`, and
+//! `HIRSEL_RT_COUNT_MAX` sets the run's count bound,
 //! `Config::count_max`, so roots reach the exact overflow table) and `HIRSEL_RT_OBSERVATION` (a file
 //! that receives the observation record below), `HIRSEL_RT_TAPE` (a file that receives the
 //! real Io completion tape) and `HIRSEL_RT_REPLAY` (a recorded tape: Io is then the
@@ -2442,6 +2444,13 @@ pub(crate) unsafe fn execute(
     if let Some(path) = std::env::var_os("HIRSEL_RT_TRACE_ROOTS") {
         match prepare_tool_file(std::path::Path::new(&path)) {
             Ok(file) => crate::root_trace::open(file),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    #[cfg(feature = "diagnostic")]
+    if let Some(path) = std::env::var_os("HIRSEL_RT_COMPACT_TRACE") {
+        match prepare_tool_file(std::path::Path::new(&path)) {
+            Ok(file) => crate::compact_trace::open(file),
             Err(error) => return Err(error.to_string()),
         }
     }

@@ -581,6 +581,17 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
     }
 }
 
+/// A compact frame leaves its stack at a resume point (`tasks::compact`): a
+/// physical save with no semantic scheduling point. The task keeps its turn,
+/// log and queue position; the driver selects its saved frame as any other,
+/// so a non-head task continues once its frontier state permits a claim.
+pub(crate) fn transfer(ctx: *mut TaskCtx) {
+    with_current_driver(ctx, |task, driver| {
+        driver.enter(task, crate::pool::compute_index().unwrap_or(0));
+        driver.suspending(task, false);
+    });
+}
+
 /// Move the current head to its required host/compute owner without a
 /// semantic scheduling point. The shared dispatcher transfers the exclusive
 /// Running token only after idle publishes this frame's actual saved stack.

@@ -2,7 +2,8 @@
 //! with a validated plan enters its compiled dispatcher through
 //! `hirsel_rt_v2_resume_run`, and saving its compact frame at every boundary,
 //! or moving the task to another worker at every suspension, changes no
-//! observation.
+//! observation. Under the shared dispatcher a saved compact frame leaves its
+//! stack and activates on another worker's (resume-dispatch-51).
 use hirsel_driver::native::{self, *};
 use hirsel_engine::*;
 use hirsel_lir::continuation::Representation;
@@ -197,6 +198,171 @@ fn runtime50_migrate_every_suspension_continuations() {
         };
         for (source, label) in [(TWO_BOUNDARY, "two-boundary"), (FANOUT, "fanout")] {
             agree(source, &migrate, label);
+        }
+    });
+}
+
+/// One compact trace line: `leave` or `activate`, task row, state, worker, pooled.
+type Line = (String, u32, u32, String, bool);
+
+/// Live and replayed standalone runs of `source` on both backends, under
+/// Ordered admission on four cores with forced migration, in the diagnostic
+/// archive with its compact trace.
+fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
+    let mut engine = crate::source_std::engine();
+    let file = engine.sources.add("main.hir", source.into()).unwrap();
+    let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let entry = entry_path(&default_context());
+    let reference = run_observed_snapshot(
+        &mut engine,
+        &RunConfiguration {
+            entry: entry.clone(),
+            hash_seed: 50,
+            inputs: vec![],
+        },
+        (&Fixture::default()).into(),
+    )
+    .unwrap();
+    let expected = Observation::of_reference(reference.observation.as_ref().unwrap());
+    let input = engine.export_native_input().unwrap();
+    let sites = native::Sites::new(&input);
+    let validated = engine.import_native_input(input.clone()).unwrap();
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let ready = native::build(&validated, &Options::new(target.clone())).unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("runtime50-compact-")
+        .tempdir()
+        .unwrap();
+    let tools = Toolchain::in_tree_diagnostic(&root.path().join("runtime"), &[&target]).unwrap();
+    let mut traces = Vec::new();
+    for backend in [Backend::Llvm, Backend::Cranelift] {
+        let dir = root.path().join(format!("{backend:?}"));
+        std::fs::create_dir_all(dir.join("root")).unwrap();
+        let objects = native::emit_backend_objects(
+            &ready,
+            backend,
+            hirsel_lir::emission::OptLevel::Default,
+            Partition::Whole,
+            false,
+            None,
+        )
+        .unwrap();
+        let exe = native::link_standalone_objects(&ready, &entry, &objects, &tools, &dir).unwrap();
+        let grants = dir.join("grants.json");
+        std::fs::write(
+            &grants,
+            r#"{"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","dirs":[]},"args":[],"placement":{"cores":4}}"#,
+        )
+        .unwrap();
+        let tape = dir.join("run.tape");
+        for replay in [false, true] {
+            let record = dir.join("observation");
+            let trace = dir.join(format!("compact-{replay}"));
+            let mut command = std::process::Command::new(&exe);
+            command
+                .env_clear()
+                .env("HIRSEL_RT_ROOT", dir.join("root"))
+                .env("HIRSEL_RT_DIAGNOSTIC", "1")
+                .env("HIRSEL_RT_OBSERVATION", &record)
+                .env("HIRSEL_RT_MIGRATE", "1")
+                .env("HIRSEL_RT_COMPACT_TRACE", &trace)
+                .stdin(std::process::Stdio::null());
+            if replay {
+                command.arg("--hirsel-replay").arg(&tape);
+            } else {
+                command
+                    .arg("--hirsel-record")
+                    .arg(&tape)
+                    .arg("--hirsel-grants")
+                    .arg(&grants);
+            }
+            let output = command.output().unwrap();
+            let launched = native::Launched {
+                audit_required: true,
+                exit: output.status.code(),
+                signal: None,
+                stdout: output.stdout,
+                stderr: output.stderr,
+                record: std::fs::read_to_string(&record).unwrap(),
+            };
+            let cell = format!("{label} {backend:?} replay={replay}");
+            assert_eq!(
+                native::observe(&launched, &ready, &sites).unwrap(),
+                expected,
+                "{cell}: {}",
+                String::from_utf8_lossy(&launched.stderr)
+            );
+            let lines = std::fs::read_to_string(&trace).unwrap();
+            traces.push(
+                lines
+                    .lines()
+                    .map(|line| {
+                        let words: Vec<&str> = line.split(' ').collect();
+                        (
+                            words[0].to_owned(),
+                            words[1].parse().unwrap(),
+                            words[2].parse().unwrap(),
+                            words[3].to_owned(),
+                            words.get(4) == Some(&"1"),
+                        )
+                    })
+                    .collect(),
+            );
+        }
+    }
+    traces
+}
+
+/// Each compact frame left its stack, which its worker pooled, and activated
+/// once at exactly the state it saved, on another worker: never its entry,
+/// never twice. Every task's last leave is followed by its activation.
+fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
+    let mut saved: std::collections::BTreeMap<u32, (u32, String)> = Default::default();
+    let mut activations = 0;
+    for (kind, task, state, worker, pooled) in trace {
+        match kind.as_str() {
+            "leave" => {
+                assert!(*pooled, "{label}: task {task} kept the stack it left");
+                assert!(*state > 0, "{label}: task {task} saved at its entry");
+                assert!(
+                    saved.insert(*task, (*state, worker.clone())).is_none(),
+                    "{label}: task {task} saved twice without an activation"
+                );
+            }
+            "activate" => {
+                let (left, from) = saved
+                    .remove(task)
+                    .unwrap_or_else(|| panic!("{label}: task {task} activated unsaved"));
+                assert_eq!(*state, left, "{label}: task {task} resumed another state");
+                assert_ne!(*worker, from, "{label}: task {task} did not migrate");
+                activations += 1;
+            }
+            other => panic!("{label}: {other}"),
+        }
+    }
+    assert!(
+        saved.is_empty(),
+        "{label}: frames never activated: {saved:?}"
+    );
+    activations
+}
+
+#[test]
+fn runtime50_compact_frames_migrate_off_released_stacks_and_replay() {
+    with_compiler_stack(|| {
+        for (source, label, children) in [
+            (TWO_BOUNDARY, "two-boundary", 1),
+            (FANOUT, "fanout", 4),
+            (CANCELED, "canceled", 1),
+        ] {
+            for (index, trace) in compact_runs(source, label).iter().enumerate() {
+                let cell = format!("{label} run {index}");
+                let activations = exact_compact_custody(trace, &cell);
+                // Each child saves at its first send; one that is not canceled
+                // first saves at its second too.
+                assert!(activations >= children, "{cell}: {activations}");
+            }
         }
     });
 }

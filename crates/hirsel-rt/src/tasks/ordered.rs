@@ -6,6 +6,8 @@ pub(crate) mod admission;
 pub(crate) mod ahead;
 #[cfg(test)]
 mod commit_tests;
+#[cfg(test)]
+mod compact_tests;
 pub(crate) mod driver;
 pub(crate) mod drops;
 pub(crate) mod engine;

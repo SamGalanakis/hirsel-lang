@@ -26,6 +26,7 @@ pub(super) fn topology(width: u16) -> Topology {
         searcher: AtomicUsize::new(0),
         after_search: Mutex::new(None),
         before_save: Default::default(),
+        after_compact: Default::default(),
     };
     let cell = std::sync::OnceLock::new();
     assert!(cell.set(dispatch).is_ok());
@@ -70,6 +71,7 @@ fn segment(execs: &Execs, task: u32) -> Saved {
             notification,
             owner: AtomicUsize::new(owner_word(Owner::Any)),
             saved: AtomicBool::new(true),
+            left: AtomicUsize::new(0),
             #[cfg(feature = "free-qualification")]
             stop_before_start: false,
         }),

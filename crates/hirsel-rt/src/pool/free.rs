@@ -24,6 +24,8 @@ pub(crate) struct Frame {
     notification: Notification<Image>,
     owner: AtomicUsize,
     saved: AtomicBool,
+    /// Under forced migration, the exec a compact frame left, until another claims it.
+    left: AtomicUsize,
     // This observer is absent from shipping archives and never reads a queued image.
     #[cfg(feature = "free-qualification")]
     stop_before_start: bool,
@@ -64,6 +66,7 @@ impl Frame {
             notification,
             owner: AtomicUsize::new(0),
             saved: AtomicBool::new(saved),
+            left: AtomicUsize::new(0),
             #[cfg(feature = "free-qualification")]
             stop_before_start: false,
         })
@@ -122,7 +125,12 @@ pub(super) struct Active {
 
 #[derive(Clone, Copy)]
 pub(crate) enum Leave {
-    Suspend { owner: Owner, yielded: bool },
+    Suspend {
+        owner: Owner,
+        yielded: bool,
+    },
+    /// A saved compact frame left its stack for good (`tasks::compact`).
+    Compact,
     Complete,
 }
 
@@ -140,6 +148,10 @@ pub(super) struct Dispatch {
     after_search: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     before_save: std::sync::OnceLock<Box<dyn Fn(u32, bool) + Send + Sync>>,
+    /// Observes each compact leave's released stack: its task, the stack's
+    /// context slot, and whether the idle worker's pool now holds it.
+    #[cfg(test)]
+    after_compact: std::sync::OnceLock<CompactHook>,
 }
 
 /// Install a per-run idle-save observer before the root spawns children. It runs after
@@ -159,6 +171,28 @@ pub(crate) unsafe fn test_before_save(
             .get()
             .unwrap()
             .before_save
+            .set(Box::new(hook))
+            .is_ok()
+    );
+}
+
+#[cfg(test)]
+type CompactHook = Box<dyn Fn(u32, usize, bool) + Send + Sync>;
+
+/// Install a per-run observer of compact leaves, as for [`test_before_save`].
+/// # Safety
+/// As for [`test_before_save`].
+#[cfg(test)]
+pub(crate) unsafe fn test_after_compact(
+    ctx: *mut TaskCtx,
+    hook: impl Fn(u32, usize, bool) + Send + Sync + 'static,
+) {
+    assert!(
+        execs(ctx)
+            .dispatch
+            .get()
+            .unwrap()
+            .after_compact
             .set(Box::new(hook))
             .is_ok()
     );
@@ -231,6 +265,8 @@ pub(crate) unsafe fn enable(ctx: *mut TaskCtx) {
                 after_search: Mutex::new(None),
                 #[cfg(test)]
                 before_save: Default::default(),
+                #[cfg(test)]
+                after_compact: Default::default(),
                 count: Arc::new(Count {
                     live: AtomicU32::new(0),
                     home: Arc::downgrade(&execs.home),
@@ -324,6 +360,7 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> 
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
     unsafe {
         if let Some(frame) = slot {
+            let owner = route(execs, frame, owner);
             frame.owner.store(owner_word(owner), Ordering::Release);
             frame.notification.notify().map(|queued| Saved {
                 queued,
@@ -342,6 +379,7 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: u32, owner: Owner) -> 
                 notification,
                 owner: AtomicUsize::new(owner_word(owner)),
                 saved: AtomicBool::new(true),
+                left: AtomicUsize::new(0),
                 #[cfg(feature = "free-qualification")]
                 stop_before_start: task == 1 && dispatch.queued_stop_witness.is_some(),
             });
@@ -654,6 +692,58 @@ pub(crate) unsafe fn finish_current(ctx: *mut TaskCtx) -> ! {
     fault("a completed physical segment was resumed")
 }
 
+/// Leave a saved compact frame's stack for good. The idle continuation
+/// gives the stack back to its worker and publishes the frame, which any
+/// worker activates on a stack of its own (`tasks::compact`).
+///
+/// # Safety
+/// The running task holds the role at depth one from its resume entry, and
+/// `tasks::compact::leave` accepted this resume point: no runtime borrow,
+/// wait or address into this stack is live, and no frame on it owns a value
+/// requiring Drop.
+pub(crate) unsafe fn leave_compact(
+    ctx: *mut TaskCtx,
+    compact: Box<crate::continuation::Compact>,
+) -> ! {
+    // SAFETY: caller contract; only this thread touches its Exec cells.
+    unsafe {
+        assert!((*ctx).compact.replace(compact).is_none());
+        (*ctx).switch_out();
+        let execs = execs(ctx);
+        let me = current(execs);
+        assert!((*me).leaving.replace(Some(Leave::Compact)).is_none());
+        let idle = idle_of(ctx, execs, me);
+        // The abandoned frames' guards never drop: the lent stack's entry
+        // takes the role afresh.
+        (*ctx).role_depth = 0;
+        crate::tasks::role::release(ctx);
+        let mut abandoned = std::ptr::null_mut();
+        fiber::switch(&raw mut abandoned, idle);
+    }
+    fault("a left compact stack was resumed")
+}
+
+/// The owner a notification publishes `frame` to: under forced migration, a
+/// compact frame goes to a compute worker other than the one it left, when
+/// the run has one; every other frame keeps `owner`.
+fn route(execs: &Execs, frame: &Frame, owner: Owner) -> Owner {
+    let left = frame.left.load(Ordering::Acquire);
+    if owner != Owner::Any || left == 0 {
+        return owner;
+    }
+    let compute = execs.compute.lock().unwrap();
+    let width = compute.active.len();
+    let here = compute
+        .active
+        .iter()
+        .position(|other| Arc::as_ptr(other).addr() == left);
+    let next = &compute.active[here.map_or(0, |here| (here + 1) % width.max(1))];
+    if Arc::as_ptr(next).addr() == left || next.kind == Kind::Home {
+        return owner;
+    }
+    Owner::Compute(Arc::as_ptr(next).expose_provenance())
+}
+
 /// Idle only: the switch has saved task_sp before this becomes reachable.
 pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
     let Some(leaving) = exec.leaving.take() else {
@@ -686,6 +776,73 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             let _activity = execs.activity.lock().unwrap();
             exec.busy.store(false, Ordering::SeqCst);
             drop(lease);
+        }
+        Leave::Compact => {
+            let task = running.value().task;
+            // SAFETY: the leave switched away from its stack for good.
+            let (ctx, stack) = unsafe { crate::tasks::compact::saved(run, task) };
+            let released = stack.context() as usize;
+            // SAFETY: this idle worker's own pool; no frame runs on the stack.
+            unsafe { (*exec.worker.get()).idle_stacks.put(stack) };
+            #[cfg(any(test, feature = "diagnostic"))]
+            {
+                // SAFETY: as above; the pool is this idle thread's.
+                let pooled = unsafe { &*exec.worker.get() }
+                    .idle_stacks
+                    .iter()
+                    .any(|stack| stack.context() as usize == released);
+                #[cfg(test)]
+                if let Some(hook) = execs
+                    .dispatch
+                    .get()
+                    .and_then(|dispatch| dispatch.after_compact.get())
+                {
+                    hook(task, released, pooled);
+                }
+                #[cfg(feature = "diagnostic")]
+                // SAFETY: the idle worker owns this saved image exclusively.
+                crate::compact_trace::left(
+                    task,
+                    unsafe { (*ctx).compact.as_ref() }.map_or(0, |compact| compact.state()),
+                    pooled,
+                );
+            }
+            #[cfg(not(any(test, feature = "diagnostic")))]
+            let _ = released;
+            let image = running.value_mut();
+            image.ctx = ctx;
+            image.sp = std::ptr::null_mut();
+            if execs.migrate {
+                frame
+                    .left
+                    .store((exec as *const Exec).addr(), Ordering::Release);
+            }
+            frame.owner.store(owner_word(Owner::Any), Ordering::Release);
+            unsafe { crate::tasks::after_save(run, task, false) };
+            let queued = running.save(false);
+            if queued.is_some() {
+                let owner = route(
+                    execs,
+                    &frame,
+                    word_owner(frame.owner.load(Ordering::Acquire)),
+                );
+                frame.owner.store(owner_word(owner), Ordering::Release);
+            }
+            let _activity = execs.activity.lock().unwrap();
+            exec.busy.store(false, Ordering::SeqCst);
+            if let Some(queued) = queued {
+                publish(
+                    execs,
+                    Saved {
+                        queued,
+                        frame,
+                        lease,
+                        chained: false,
+                    },
+                    false,
+                    true,
+                );
+            }
         }
         Leave::Suspend { owner, yielded } => {
             let image = running.value_mut();
@@ -951,6 +1108,19 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             exec.chain.set(Budget::default());
         }
         frame.saved.store(false, Ordering::Release);
+        frame.left.store(0, Ordering::Release);
+        // A compact frame owns no stack: this worker lends it one.
+        let sp = if sp.is_null() {
+            let stack = (*exec.worker.get()).idle_stacks.take();
+            #[cfg(feature = "diagnostic")]
+            crate::compact_trace::activated(
+                task,
+                (*ctx).compact.as_ref().map_or(0, |compact| compact.state()),
+            );
+            crate::tasks::compact::activate(run, task, stack)
+        } else {
+            sp
+        };
         TaskCtx::switch_in(ctx, exec.worker.get());
         crate::tasks::role::release(ctx);
         assert!(

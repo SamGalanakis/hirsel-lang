@@ -882,6 +882,7 @@ pub(super) fn after_save(s: &mut Scheduler, task: u32, completed: bool) {
             // consumed before idle. No other task can yet recycle this row.
             unsafe {
                 std::ptr::drop_in_place(row.ctx);
+                drop(row.context_home.take());
                 crate::pool::free::recycle_stack(stack);
             }
         }

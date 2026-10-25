@@ -203,6 +203,9 @@ pub struct TaskCtx {
     /// Free operation state only the running task touches: its quantum,
     /// deferred child and resolved object leases (`tasks::free::objects`).
     pub(crate) free_ops: crate::tasks::free::objects::OpLocal,
+    /// A compact frame the shared dispatcher owns off any stack, between its
+    /// save and its activation (`crate::continuation::Compact`).
+    pub(crate) compact: Option<Box<crate::continuation::Compact>>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -477,6 +480,7 @@ impl TaskCtx {
             )),
             cleanup_rejections: 0,
             free_ops: Default::default(),
+            compact: None,
             invocation_sites,
             invocation_depth: 0,
             invocation_tokens,

@@ -665,6 +665,7 @@ fn prepare(
         notification,
         owner: AtomicUsize::new(owner_word(Owner::Any)),
         saved: AtomicBool::new(true),
+        left: AtomicUsize::new(0),
         #[cfg(feature = "free-qualification")]
         stop_before_start: false,
     });
@@ -1250,6 +1251,7 @@ impl World {
                     self.spawn_successor(t, next);
                 }
             }
+            Leave::Compact => unreachable!("the protocol model saves no compact frame"),
             Leave::Suspend { yielded, .. } => {
                 frame.owner.store(owner_word(Owner::Any), Ordering::Release);
                 let unacknowledged = self.config.mutant == Some(Mutant::MissingSaveAck)

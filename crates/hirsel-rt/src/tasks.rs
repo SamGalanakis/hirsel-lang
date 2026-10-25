@@ -44,6 +44,7 @@
 //! Handles are run-local: a Scope or Task word is a table index with a generation, so a stale
 //! or foreign word is an invariant fault rather than another task's row.
 
+pub(crate) mod compact;
 pub(crate) mod free;
 pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
@@ -160,9 +161,12 @@ struct Task {
     /// Role-owned notification metadata. Remote wakes never read a running
     /// TaskCtx, whose local runtime entries may hold an exclusive borrow.
     dispatch: Option<std::sync::Arc<crate::pool::free::Frame>>,
-    /// Its context: the root's is the run's first, a child's lies at the top of its stack.
+    /// Its context: the root's is the run's first, a child's lies at the top of its stack
+    /// until its first compact save moves it to `context_home`.
     ctx: *mut TaskCtx,
     stack: Option<Stack>,
+    /// A compact task's context, once its first stack is gone. Its stack, if any, is lent.
+    context_home: Option<Box<compact::ContextHome>>,
     /// Fast children own a stable context independently of the lent fiber.
     inline_context: Option<Box<std::cell::UnsafeCell<TaskCtx>>>,
     /// Parent destination while an immediate child runs on its parent's fiber.
@@ -877,7 +881,7 @@ impl Scheduler {
         let task = self.tasks[index as usize]
             .take()
             .unwrap_or_else(|| fault("a task completed twice"));
-        if task.stack.is_some() {
+        if task.stack.is_some() || task.context_home.is_some() {
             fault("a task left its rows before it completed");
         }
         // Tokio cancellation_token/tree_node.rs:201-239 at ce685ee6916549ed:
@@ -936,6 +940,7 @@ impl Task {
             dispatch: None,
             ctx,
             stack: None,
+            context_home: None,
             inline_context: None,
             inline_result: None,
             inline_value: None,
@@ -1007,12 +1012,13 @@ impl Scheduler {
 }
 
 impl Drop for Task {
-    /// A task that still has its stack (it never completed: its run stopped or ended) drops the
-    /// context lying in it; a completed task's context gave up its contents at its departure.
+    /// A task that still has its stack or context home (it never completed: its run stopped
+    /// or ended) drops the context lying there; a completed task's context gave up its
+    /// contents at its departure.
     fn drop(&mut self) {
-        if self.stack.is_some() {
+        if self.stack.is_some() || self.context_home.is_some() {
             self.restore_ahead_custody();
-            // SAFETY: the context lies in this task's stack, which it outlives no longer.
+            // SAFETY: the context lies in this task's stack or home, which it outlives no longer.
             unsafe { std::ptr::drop_in_place(self.ctx) };
         }
     }
