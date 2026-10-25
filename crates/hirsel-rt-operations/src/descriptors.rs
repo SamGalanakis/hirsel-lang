@@ -1037,6 +1037,21 @@ pub const INLINE: &[Inline] = &[
         effect: "inline free's owner check: a block of another worker's heap goes to the runtime",
     },
     Inline {
+        word: "CTX_FOREGROUND_COUNT_OFFSET",
+        locality: Local,
+        effect: "a depth-leaf call's read-only room test of the task's foreground depth",
+    },
+    Inline {
+        word: "CTX_CLEANUP_COUNT_OFFSET",
+        locality: Local,
+        effect: "a depth-leaf call's read-only room test of the task's cleanup depth",
+    },
+    Inline {
+        word: "CTX_CLEANUP_MODE_OFFSET",
+        locality: Local,
+        effect: "a depth-leaf call's read-only test of the task's finalizer nesting",
+    },
+    Inline {
         word: "COUNT_OFFSET",
         locality: Local,
         effect: "inline count increment and decrement of a block the task holds",

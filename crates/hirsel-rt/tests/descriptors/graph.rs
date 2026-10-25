@@ -10,6 +10,11 @@
 //! typed. Closures belong to
 //! the function that contains them. Calls through function pointers and trait objects (compiled
 //! code, drop thunks, the Io adapter) are not followed.
+//!
+//! A function passed as the entry of `Stack::prepare` is not called by its starter: it starts a
+//! fiber that a dispatcher later switches to. It is an activation edge, followed like a call
+//! unless the started function acquires the role itself ([`ACTIVATION_ROLES`]); then its body is
+//! that activation's own work, not an effect of the function that lent it a stack.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
@@ -20,6 +25,16 @@ pub const FORBIDDEN: &[&str] = &["tasks::scheduler", "Binding::get"];
 
 /// Not followed: a stop is the executor's terminal boundary (§4.1 `stop`).
 const BOUNDARIES: &[&str] = &["stop::raise"];
+
+/// The role acquisitions that make a started fiber its own activation. A task fiber takes the
+/// role afresh on its stack (`tasks::task_entry`, `tasks::compact::entry`), as a Tokio poll owns
+/// its task until `Harness::complete` hands the output to the joiner
+/// (`tokio/src/runtime/task/harness.rs:330-365`): what runs after the switch is the started
+/// task's, under its own role, while the dispatcher's own effects up to the switch stay checked.
+pub const ACTIVATION_ROLES: &[&str] = &["Guard::physical", "Guard::new"];
+
+/// The method whose function argument starts a fiber rather than calling it.
+const FIBER_START: &str = "Stack::prepare";
 
 /// Calls that release a credit of a block the caller proves is not unique, so they never free
 /// it and never reach the release walk's drops.
@@ -32,6 +47,8 @@ const NON_LAST_RELEASES: &[(&str, &str)] = &[
 pub struct Graph {
     /// Function key to the keys it may call.
     edges: BTreeMap<String, BTreeSet<String>>,
+    /// Function key to the fiber entries it starts on a stack (`Stack::prepare`).
+    activations: BTreeMap<String, BTreeSet<String>>,
     /// Exported entry symbol to its function key.
     entries: BTreeMap<String, String>,
     symbols: BTreeMap<String, String>,
@@ -43,6 +60,8 @@ struct Body {
     module: Vec<String>,
     owner: Option<String>,
     paths: Vec<Vec<String>>,
+    /// The function paths passed as the entry of a `.prepare(..)` call.
+    starts: Vec<Vec<String>>,
     methods: Vec<String>,
     /// The type names it mentions.
     types: BTreeSet<String>,
@@ -117,6 +136,7 @@ fn join(module: &[String], name: &str) -> String {
 #[derive(Default)]
 struct Refs {
     paths: Vec<Vec<String>>,
+    starts: Vec<Vec<String>>,
     methods: Vec<String>,
     types: BTreeSet<String>,
     locals: BTreeSet<String>,
@@ -206,6 +226,29 @@ impl<'a> Visit<'a> for Refs {
     }
     fn visit_expr_method_call(&mut self, e: &'a syn::ExprMethodCall) {
         self.methods.push(e.method.to_string());
+        if e.method == "prepare"
+            && let Some(syn::Expr::Path(entry)) = e.args.first()
+            && !(entry.path.segments.len() == 1
+                && self
+                    .locals
+                    .contains(&entry.path.segments[0].ident.to_string()))
+        {
+            // Resolved as a start, or as a call when the receiver may be no Stack.
+            self.visit_path(&entry.path);
+            self.starts.push(
+                entry
+                    .path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect(),
+            );
+            self.visit_expr(&e.receiver);
+            for arg in e.args.iter().skip(1) {
+                self.visit_expr(arg);
+            }
+            return;
+        }
         syn::visit::visit_expr_method_call(self, e);
     }
     fn visit_macro(&mut self, m: &'a syn::Macro) {
@@ -248,6 +291,7 @@ impl Collect {
             module: module.to_vec(),
             owner,
             paths: refs.paths,
+            starts: refs.starts,
             methods: refs.methods,
             types: refs.types,
         });
@@ -359,6 +403,29 @@ impl Collect {
                 }
                 syn::Item::Use(u) if !cfg_test(&u.attrs) => self.uses(module, Vec::new(), &u.tree),
                 _ => {}
+            }
+        }
+    }
+
+    /// Adds the methods `body` may call on the types it names or gets back from `targets`.
+    fn close(&self, body: &Body, targets: &mut BTreeSet<String>, types: &mut BTreeSet<String>) {
+        loop {
+            for target in targets.iter() {
+                types.extend(self.returns.get(target).into_iter().flatten().cloned());
+            }
+            let before = targets.len();
+            for method in &body.methods {
+                targets.extend(
+                    self.methods
+                        .get(method)
+                        .into_iter()
+                        .flatten()
+                        .filter(|key| types.contains(key.split("::").next().unwrap()))
+                        .cloned(),
+                );
+            }
+            if targets.len() == before {
+                break;
             }
         }
     }
@@ -507,25 +574,26 @@ impl Graph {
                 targets.extend(collect.resolve(&body.module, body.owner.as_deref(), path));
             }
             let mut types = body.types.clone();
-            loop {
-                for target in &targets {
-                    types.extend(collect.returns.get(target).into_iter().flatten().cloned());
-                }
-                let before = targets.len();
-                for method in &body.methods {
-                    targets.extend(
-                        collect
-                            .methods
-                            .get(method)
-                            .into_iter()
-                            .flatten()
-                            .filter(|key| types.contains(key.split("::").next().unwrap()))
-                            .cloned(),
-                    );
-                }
-                if targets.len() == before {
-                    break;
-                }
+            collect.close(body, &mut targets, &mut types);
+            let starts: BTreeSet<String> = body
+                .starts
+                .iter()
+                .flat_map(|path| collect.resolve(&body.module, body.owner.as_deref(), path))
+                .collect();
+            // Only a `prepare` that can name nothing but the fiber stack's starts a fiber.
+            let fiber = targets
+                .iter()
+                .filter(|key| key.ends_with("::prepare"))
+                .eq([FIBER_START]);
+            if fiber {
+                graph
+                    .activations
+                    .entry(body.key.clone())
+                    .or_default()
+                    .extend(starts);
+            } else if !starts.is_empty() {
+                targets.extend(starts);
+                collect.close(body, &mut targets, &mut types);
             }
             targets.remove(&body.key);
             for (caller, callee) in NON_LAST_RELEASES {
@@ -554,6 +622,22 @@ impl Graph {
             .map(|(s, k)| (s.as_str(), k.as_str()))
     }
 
+    /// The fiber entries `start` starts on a stack.
+    pub fn starts(&self, start: &str) -> impl Iterator<Item = &str> {
+        self.activations
+            .get(start)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+    }
+
+    /// A started fiber that acquires the role itself is its own activation.
+    pub fn own_activation(&self, entry: &str) -> bool {
+        ACTIVATION_ROLES
+            .iter()
+            .any(|role| self.directly_calls(entry, role))
+    }
+
     pub fn entry_symbol(&self, key: &str) -> Option<&str> {
         self.symbols.get(key).map(String::as_str)
     }
@@ -566,6 +650,7 @@ impl Graph {
 
     /// A caller-specific boundary does not alter other audits: in particular,
     /// physical budget services remain traversed by the whole-Run borrow check.
+    /// A started fiber is followed as a call unless it is its own activation.
     pub fn reaches_until(
         &self,
         start: &str,
@@ -575,8 +660,15 @@ impl Graph {
         let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
         let mut queue = VecDeque::from([start]);
         while let Some(key) = queue.pop_front() {
-            for next in self.edges.get(key).into_iter().flatten() {
-                let next = next.as_str();
+            let started = self.starts(key).filter(|entry| !self.own_activation(entry));
+            for next in self
+                .edges
+                .get(key)
+                .into_iter()
+                .flatten()
+                .map(String::as_str)
+                .chain(started)
+            {
                 if next == start || parent.contains_key(next) {
                     continue;
                 }

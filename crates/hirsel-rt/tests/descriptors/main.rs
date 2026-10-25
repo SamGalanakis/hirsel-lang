@@ -27,6 +27,7 @@ fn every_semantic_entry_acquires_the_scheduler_role_directly() {
         "hirsel_rt_v2_callback_failed",
     ];
     let mut checked = 0;
+    let mut violations = Vec::new();
     for (symbol, key) in graph.entries() {
         if !matches!(
             entry_descriptor(symbol).unwrap().locality,
@@ -35,21 +36,32 @@ fn every_semantic_entry_acquires_the_scheduler_role_directly() {
         {
             continue;
         }
-        assert!(
-            graph.directly_calls(key, "Guard::new"),
-            "unguarded semantic entry: {symbol} ({key})"
-        );
+        if TASK_OWNED_ENTRIES.contains(&symbol) {
+            if !graph.directly_calls(key, "tasks::role::task_owned") {
+                violations.push(format!("task-owned entry skips the barrier: {symbol}"));
+            }
+            if let Some(path) = task_owned_violation(graph, key) {
+                violations.push(format!(
+                    "task-owned entry reaches the scheduler outside a guard: {symbol}: {}",
+                    path.join(" -> ")
+                ));
+            }
+        } else if !graph.directly_calls(key, "Guard::new") {
+            violations.push(format!("unguarded semantic entry: {symbol} ({key})"));
+        }
         if entry_descriptor(symbol).unwrap().locality == Locality::Physical {
             // Physical scheduling services are independently checked below;
             // the entry itself may not submit or commit a semantic operation.
-            assert_eq!(
-                physical_entry_violation(graph, key),
-                None,
-                "physical entry creates an operation or ordinal: {symbol}"
-            );
+            if let Some(path) = physical_entry_violation(graph, key) {
+                violations.push(format!(
+                    "physical entry creates an operation or ordinal: {symbol}: {}",
+                    path.join(" -> ")
+                ));
+            }
         }
         checked += 1;
     }
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
     assert!(checked >= 150, "only checked {checked} semantic entries");
 }
 
@@ -69,6 +81,31 @@ fn parallel_services_never_borrow_the_whole_run_exclusively() {
             "{symbol} can exclusively borrow RunShared during another worker's shared read"
         );
     }
+}
+
+/// Semantic entries whose own work is the running task's storage
+/// (`tasks::role::task_owned`): they wait at the ahead barrier without the
+/// role, and every step that reaches role-protected state opens its own guard.
+const TASK_OWNED_ENTRIES: &[&str] = &["hirsel_rt_v2_finalize"];
+
+/// A path from a task-owned entry to role-protected state that no function on
+/// it guards directly.
+fn task_owned_violation(graph: &graph::Graph, key: &str) -> Option<Vec<String>> {
+    graph.reaches_until(
+        key,
+        |target| {
+            matches!(
+                target,
+                "tasks::scheduler"
+                    | "tasks::role::with_role"
+                    | "tasks::role::enter"
+                    | "Binding::get"
+                    | "TaskCtx::run"
+            )
+        },
+        // The barrier is Guard::new's own wait, checked as a physical service.
+        |target| target == PHYSICAL_AHEAD_SERVICES[0] || graph.directly_calls(target, "Guard::new"),
+    )
 }
 
 /// The runtime's call graph, parsed once on a thread with room for syn's recursion over the
@@ -296,10 +333,20 @@ const PHYSICAL_AHEAD_SERVICES: &[&str] = &[
     "tasks::ordered::ahead::refill",
 ];
 
+// The idle-side counterparts of the budget services: the dispatcher settles a
+// claimed private-ahead segment at head before switching into it
+// (`tasks::ordered::ahead::native::run`). They retire the claimed task's
+// existing logs as `fuel_refill` does, and are checked as it is.
+const IDLE_BUDGET_SERVICES: &[&str] = &[
+    "tasks::ordered::engine::ahead_refill",
+    "tasks::ordered::engine::host_segment_barrier",
+];
+
 fn budget_service_violations(graph: &graph::Graph) -> Vec<String> {
     PHYSICAL_BUDGET_SERVICES
         .iter()
         .chain(PHYSICAL_AHEAD_SERVICES)
+        .chain(IDLE_BUDGET_SERVICES)
         .filter_map(|service| {
             graph
                 .reaches(service, |key| {
@@ -654,7 +701,9 @@ fn physical_entry_violation(graph: &graph::Graph, key: &str) -> Option<Vec<Strin
             )
         },
         |target| {
-            PHYSICAL_BUDGET_SERVICES.contains(&target) || PHYSICAL_AHEAD_SERVICES.contains(&target)
+            PHYSICAL_BUDGET_SERVICES.contains(&target)
+                || PHYSICAL_AHEAD_SERVICES.contains(&target)
+                || IDLE_BUDGET_SERVICES.contains(&target)
         },
     )
 }
