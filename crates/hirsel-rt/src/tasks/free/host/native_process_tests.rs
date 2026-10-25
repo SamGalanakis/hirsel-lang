@@ -55,6 +55,12 @@ unsafe fn program(ctx: *mut TaskCtx, granted: bool) {
     let Completion::Spawned(Ok(narrowed)) = narrowed else {
         panic!("narrowed process")
     };
+    // As hirsel_rt_v2_proc_run does: the reached entry selects the host process
+    // provider; replay selects none.
+    assert!({
+        let _role = unsafe { role::Guard::new(ctx) };
+        concurrent::with_current(|io| io.process(crate::process::send_host))
+    });
     for process in [narrowed, alias.value] {
         assert_eq!(
             unsafe {
