@@ -471,7 +471,7 @@ impl Task {
                 owner.lower.signatures().types().clone(),
                 &summary.summary,
                 &summary.growth,
-                summary.checked.as_ref(),
+                summary.checked.as_deref(),
             ),
             summary,
             lower: lower.as_ref().and_then(|o| o.verified.clone()),
