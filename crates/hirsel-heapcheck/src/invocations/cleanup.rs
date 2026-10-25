@@ -8,12 +8,12 @@ use hirsel_lir::{
     stage::Stage,
 };
 
-pub(super) fn references<S: Stage>(
+pub(super) fn targets<S: Stage>(
     unit: &LirUnit<S>,
     bodies: &[ReferenceBody],
     layouts: &LayoutTable,
     owner_body: u32,
-) -> Checked<Vec<ReferenceInvocation>> {
+) -> Checked<Vec<Target>> {
     let malformed = |text: &str| err(V::FrameImbalance, text);
     let mut result = Vec::new();
     for (block, row) in unit.blocks.iter().enumerate() {
@@ -106,14 +106,22 @@ pub(super) fn references<S: Stage>(
         {
             return Err(malformed("cleanup invocation borrows a different resource"));
         }
-        result.push(ReferenceInvocation {
-            body: owner_body,
-            block: u32::MAX,
-            statement: call.anchor.0,
-            restart: false,
-            primitive: None,
-            callee: Some(finalizer.definition.clone()),
+        result.push(Target {
+            address,
+            reference: ReferenceInvocation {
+                body: owner_body,
+                block: u32::MAX,
+                statement: call.anchor.0,
+                restart: false,
+                primitive: None,
+                callee: Some(finalizer.definition.clone()),
+            },
         });
     }
     Ok(result)
+}
+
+pub(super) struct Target {
+    pub reference: ReferenceInvocation,
+    pub address: AddressId,
 }

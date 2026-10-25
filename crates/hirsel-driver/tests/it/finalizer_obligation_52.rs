@@ -341,6 +341,16 @@ fn finalizer_obligation_52_nested_cleanup_has_shared_failure_suffixes() {
 fn finalizer_obligation_52_false_guard_cannot_hide_an_entered_cleanup() {
     with_compiler_stack(|| {
         let program = program();
+        let mut heap = program.heap_program();
+        let entry = main_unit(&program).header.definition;
+        let clean = hirsel_heapcheck::run_ready(
+            &heap,
+            &entry,
+            &[],
+            &mut hirsel_heapcheck::NoOperations,
+            &hirsel_heapcheck::Config::default(),
+        );
+        assert!(clean.result.is_ok(), "{:?}", clean.result);
         let mut unit = main_unit(&program);
         assert!(errors(&program, &unit, &program.operations).is_empty());
         let mut changed = 0;
@@ -374,6 +384,28 @@ fn finalizer_obligation_52_false_guard_cannot_hide_an_entered_cleanup() {
             changed += 1;
         }
         assert!(changed > 0);
+        let target = heap
+            .units
+            .iter_mut()
+            .find(|row| row.header.definition == entry)
+            .unwrap();
+        *target = unit.clone();
+        let malformed = hirsel_heapcheck::run_ready(
+            &heap,
+            &entry,
+            &[],
+            &mut hirsel_heapcheck::NoOperations,
+            &hirsel_heapcheck::Config::default(),
+        );
+        let violation = malformed.result.unwrap_err();
+        assert_eq!(
+            violation.kind,
+            hirsel_heapcheck::ViolationKind::FrameImbalance
+        );
+        assert!(
+            violation.message.contains("guard") || violation.message.contains("invocation"),
+            "{violation:?}"
+        );
         let violations = errors(&program, &unit, &program.operations);
         assert!(violations.iter().any(|v| matches!(&v.kind, validate::ViolationKind::Schema(message) if message.contains("guard") || message.contains("invocation"))), "{violations:?}");
     });

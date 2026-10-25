@@ -5,6 +5,7 @@ use hirsel_lir::{invocations::ReferenceInvocation, ir::*, stage::Stage};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod cleanup;
+mod flow;
 
 type Identity = (u32, u32, u32);
 
@@ -22,7 +23,9 @@ pub(crate) fn audit<S: Stage>(
         ));
     }
     let mut references = references.to_vec();
-    references.extend(cleanup::references(unit, bodies, layouts, body)?);
+    let cleanups = cleanup::targets(unit, bodies, layouts, body)?;
+    let model = flow::Model::new(unit, &cleanups, layouts)?;
+    references.extend(cleanups.iter().map(|target| target.reference.clone()));
     let expected: BTreeMap<_, _> = references
         .iter()
         .filter(|r| r.body == body && !r.restart)
@@ -72,11 +75,11 @@ pub(crate) fn audit<S: Stage>(
             .map(|e| e.target)
             .ok_or_else(|| malformed("invocation edge is outside its table"))
     };
-    let mut states = vec![None::<Vec<Identity>>; unit.blocks.len()];
+    let mut states = vec![None::<flow::State>; unit.blocks.len()];
     let entry = states
         .get_mut(unit.entry.index())
         .ok_or_else(|| malformed("invocation entry is outside CFG"))?;
-    *entry = Some(vec![]);
+    *entry = Some(flow::State::default());
     let mut pending = vec![unit.entry];
     while let Some(block) = pending.pop() {
         let mut active = states[block.index()].clone().unwrap();
@@ -94,14 +97,14 @@ pub(crate) fn audit<S: Stage>(
                     .ok_or_else(|| malformed("invocation instruction failure"))?;
                 successors.push((target(failure.cleanup)?, active.clone()));
             }
+            model.update(&mut active, inst)?;
             match *inst {
-                Inst::FrameEnter { failure } => {
-                    active.push(identity(unit.tables.failures[failure.index()].anchor)?)
-                }
+                Inst::FrameEnter { failure } => model.enter(
+                    &mut active,
+                    identity(unit.tables.failures[failure.index()].anchor)?,
+                )?,
                 Inst::FrameLeave => {
-                    active
-                        .pop()
-                        .ok_or_else(|| malformed("retirement has no invocation"))?;
+                    active.leave(false)?;
                 }
                 _ => (),
             }
@@ -119,9 +122,9 @@ pub(crate) fn audit<S: Stage>(
             let id = identity(call.anchor)?;
             if let Some(reference) = expected.get(&id) {
                 let scope = if reference.admitted() {
-                    active.last() == Some(&id)
+                    active.current() == Some(&model.key(id))
                 } else {
-                    active.is_empty()
+                    active.empty()
                 };
                 if !scope {
                     return Err(malformed(
@@ -168,12 +171,18 @@ pub(crate) fn audit<S: Stage>(
         if matches!(
             term,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && !active.is_empty()
+        ) && !active.empty()
         {
             return Err(malformed("invocation remains live at source unit exit"));
         }
-        for edge in term.normal_edges(&unit.pools) {
-            successors.push((target(edge)?, active.clone()));
+        if let Some(paths) = model.split(unit, block, &active)? {
+            for (edge, state) in paths {
+                successors.push((target(edge)?, state));
+            }
+        } else {
+            for edge in term.normal_edges(&unit.pools) {
+                successors.push((target(edge)?, active.clone()));
+            }
         }
         for failure in term.failure_edges(&unit.tables) {
             let failure = unit
@@ -188,10 +197,11 @@ pub(crate) fn audit<S: Stage>(
                 .get_mut(block.index())
                 .ok_or_else(|| malformed("invocation successor outside CFG"))?;
             match previous {
-                Some(previous) if *previous != state => {
-                    return Err(malformed("invocation scopes disagree at control-flow join"));
+                Some(previous) => {
+                    if previous.merge(&state)? {
+                        pending.push(block);
+                    }
                 }
-                Some(_) => (),
                 None => {
                     *previous = Some(state);
                     pending.push(block);
@@ -210,10 +220,14 @@ pub(crate) fn audit_library<S: Stage>(
     layouts: &hirsel_lir::LayoutTable,
 ) -> Checked<()> {
     let malformed = |text: &str| err(V::FrameImbalance, text);
-    let cleanup = cleanup::references(unit, bodies, layouts, 0)?;
+    let cleanup = cleanup::targets(unit, bodies, layouts, 0)?;
+    let model = flow::Model::new(unit, &cleanup, layouts)?;
     let expected: BTreeSet<_> = cleanup
         .iter()
-        .map(|reference| (reference.body, reference.block, reference.statement))
+        .map(|target| {
+            let reference = &target.reference;
+            (reference.body, reference.block, reference.statement)
+        })
         .collect();
     let mut found = BTreeSet::new();
     for instruction in &unit.instructions {
@@ -292,10 +306,10 @@ pub(crate) fn audit_library<S: Stage>(
     let mut states = vec![None; unit.blocks.len()];
     *states
         .get_mut(unit.entry.index())
-        .ok_or_else(|| malformed("callback entry outside CFG"))? = Some((false, false));
+        .ok_or_else(|| malformed("callback entry outside CFG"))? = Some(flow::State::default());
     let mut pending = vec![unit.entry];
     while let Some(block) = pending.pop() {
-        let (mut live, mut called) = states[block.index()].unwrap();
+        let mut active = states[block.index()].clone().unwrap();
         let row = &unit.blocks[block.index()];
         let mut exits = vec![];
         for inst in row
@@ -309,26 +323,20 @@ pub(crate) fn audit_library<S: Stage>(
                     .failures
                     .get(failure.index())
                     .ok_or_else(|| malformed("callback failure"))?;
-                exits.push((target(failure.cleanup)?, (live, called)));
+                exits.push((target(failure.cleanup)?, active.clone()));
             }
+            model.update(&mut active, inst)?;
             match *inst {
                 Inst::FrameEnter { failure } => {
-                    if live
-                        || unit.tables.failures[failure.index()].rule.as_deref() != Some("LANG-10")
-                    {
+                    if unit.tables.failures[failure.index()].rule.as_deref() != Some("LANG-10") {
                         return Err(malformed("invalid generated callback entry"));
                     }
-                    live = true;
-                    called = false;
+                    let origin = &unit.tables.source_anchors
+                        [unit.tables.failures[failure.index()].anchor.index()];
+                    model.enter(&mut active, (origin.body, origin.block, origin.statement))?;
                 }
                 Inst::FrameLeave => {
-                    if !live || (!called && row.kind != BlockKind::FailureCleanup) {
-                        return Err(malformed(
-                            "generated callback retirement lacks an invocation",
-                        ));
-                    }
-                    live = false;
-                    called = false;
+                    active.leave(row.kind != BlockKind::FailureCleanup)?;
                 }
                 _ => (),
             }
@@ -355,28 +363,31 @@ pub(crate) fn audit_library<S: Stage>(
             if Some(*id) != forwarded
                 && (source_direct
                     || matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
-                    || live && !call.forward_caller)
+                    || !active.empty() && !call.forward_caller)
             {
-                if !live || called {
-                    return Err(malformed("generated callback has no distinct admission"));
-                }
-                called = true;
+                active.dispatch()?;
             }
         }
         if matches!(
             term,
             Terminator::Return(_) | Terminator::Propagate | Terminator::RejectTransfer
-        ) && live
+        ) && !active.empty()
         {
             return Err(malformed("generated callback remains live at exit"));
         }
-        for edge in term.normal_edges(&unit.pools) {
-            exits.push((target(edge)?, (live, called)));
+        if let Some(paths) = model.split(unit, block, &active)? {
+            for (edge, state) in paths {
+                exits.push((target(edge)?, state));
+            }
+        } else {
+            for edge in term.normal_edges(&unit.pools) {
+                exits.push((target(edge)?, active.clone()));
+            }
         }
         for failure in term.failure_edges(&unit.tables) {
             exits.push((
                 target(unit.tables.failures[failure.index()].cleanup)?,
-                (live, called),
+                active.clone(),
             ));
         }
         for (target, state) in exits {
@@ -384,10 +395,11 @@ pub(crate) fn audit_library<S: Stage>(
                 .get_mut(target.index())
                 .ok_or_else(|| malformed("callback target"))?;
             match slot {
-                Some(previous) if *previous != state => {
-                    return Err(malformed("generated callback states disagree"));
+                Some(previous) => {
+                    if previous.merge(&state)? {
+                        pending.push(target);
+                    }
                 }
-                Some(_) => (),
                 None => {
                     *slot = Some(state);
                     pending.push(target);

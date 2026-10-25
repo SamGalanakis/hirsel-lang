@@ -193,6 +193,9 @@ pub(crate) struct Frame {
     failing: bool,
     admitted: u32,
     invocation_sites: Vec<(Option<CallerSite>, Option<CallerSite>)>,
+    /// Actual ledger places whose cleanup activations have entered. This is
+    /// independent of C's address/retirement map and survives shared suffixes.
+    invocation_resources: Vec<Option<(Ptr, LayoutId)>>,
     /// H-owned runtime callback token, separate from candidate FrameEnter events.
     implicit_invocation: Option<bool>,
     env: Option<Ptr>,
@@ -530,6 +533,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             failing: false,
             admitted: 0,
             invocation_sites: Vec::new(),
+            invocation_resources: Vec::new(),
             implicit_invocation: None,
             env,
             destination: None,
@@ -5721,6 +5725,25 @@ impl<'p, S: Stage> Machine<'p, S> {
                     return self.fail_at(f, failure, false);
                 }
                 let anchor = self.unit(f.unit).tables.failures[failure.index()].anchor;
+                let unit = self.unit(f.unit);
+                let cleanup = (unit.tables.source_anchors[anchor.index()].block == u32::MAX)
+                    .then(|| {
+                        unit.blocks[f.block.index()]
+                            .instructions
+                            .get(&unit.instructions)
+                            .unwrap_or(&[])
+                            .iter()
+                            .rev()
+                            .find_map(|inst| match inst {
+                                Inst::FinalizeBegin { address, .. } => Some(*address),
+                                _ => None,
+                            })
+                    })
+                    .flatten();
+                let resource = cleanup
+                    .map(|address| self.resolve_use(f, address).map(|at| (at.ptr, at.layout)))
+                    .transpose()?;
+                f.invocation_resources.push(resource);
                 let sites = self.caller_sites(f, self.source_range(f, anchor), true);
                 f.invocation_sites.push(sites);
                 f.admitted += 1;
@@ -5728,6 +5751,15 @@ impl<'p, S: Stage> Machine<'p, S> {
             Inst::FrameLeave => {
                 if f.admitted == 0 {
                     return fail(V::FrameImbalance, "frame leave without admission");
+                }
+                if let Some(Some((ptr, layout))) = f.invocation_resources.pop() {
+                    let extent = &self.ledger.check(ptr)?.extent;
+                    if self.owners(extent, ptr.offset, layout, self.ledger.path(ptr))? {
+                        return fail(
+                            V::FrameImbalance,
+                            "cleanup invocation retires before its owned descendants",
+                        );
+                    }
                 }
                 f.admitted -= 1;
                 if f.invocation_sites.pop().is_none() {
