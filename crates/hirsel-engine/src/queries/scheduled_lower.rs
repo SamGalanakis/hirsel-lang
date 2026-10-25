@@ -12,7 +12,7 @@ use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     future::{Future, poll_fn},
     pin::Pin,
     rc::Rc,
@@ -490,6 +490,7 @@ impl FrontLowerQueries {
             owner: self.clone(),
             reads,
             observed: Rc::new(RefCell::new(ReadsBuilder::new())),
+            refusal: Rc::new(Cell::new(None)),
             depth: Rc::new(RefCell::new(DepthEvidence::leaf(dependency_limit(
                 self.limits.call_depth,
             )))),
@@ -516,6 +517,12 @@ impl FrontLowerQueries {
         } else {
             self.compute(id.kind, &path, &mut source).await
         };
+        // A missing dependency outcome is a scheduler/transport refusal, not
+        // a typed body error. Preserve its exact identity through all clones
+        // of the asynchronous source before constructing any descriptor.
+        if let Some(reference) = source.refusal.get() {
+            return Err(reference);
+        }
         let mut depth = source.depth.borrow().clone();
         if source.framed {
             depth.first[0] = None;
@@ -643,7 +650,7 @@ impl FrontLowerQueries {
         let body = self
             .front
             .outcome(reference)
-            .ok_or(QueryError::NotImplemented)?;
+            .ok_or_else(|| source.refused(selected.err().unwrap_or(self.errors.protocol)))?;
         source.merge(&body.outcome.reads);
         let analyzed = body.outcome.result?;
         source.execution_signatures(analyzed.dependencies.iter());
@@ -857,11 +864,20 @@ struct Source {
     owner: Arc<FrontLowerQueries>,
     reads: QueryReads,
     observed: Rc<RefCell<ReadsBuilder>>,
+    refusal: Rc<Cell<Option<Reference>>>,
     depth: Rc<RefCell<DepthEvidence<Span>>>,
     framed: bool,
     evidence: Rc<RefCell<Evidence>>,
 }
 impl Source {
+    fn refused(&self, reference: Reference) -> QueryError {
+        if self.refusal.get().is_none() {
+            self.refusal.set(Some(reference));
+        }
+        // The internal phase result only unwinds the shared computation. The
+        // owner returns the original runtime reference before publication.
+        QueryError::NotImplemented
+    }
     fn overflow(&self, site: Span) -> QueryError {
         let limit = hirsel_tir::ToolingLimit {
             kind: hirsel_tir::ToolingLimitKind::CallDepth,
@@ -910,7 +926,7 @@ impl Source {
         let outcome = self
             .owner
             .selected(id, selected)
-            .ok_or(QueryError::NotImplemented)?;
+            .ok_or_else(|| self.refused(selected.err().unwrap_or(self.owner.errors.protocol)))?;
         self.merge(&outcome.reads);
         self.evidence
             .borrow_mut()

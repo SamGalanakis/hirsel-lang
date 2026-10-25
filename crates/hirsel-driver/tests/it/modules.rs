@@ -199,3 +199,4 @@ mod native_compilation_tasks_19;
 mod runtime52_resume_coverage;
 mod scheduled_proof_export;
 mod scheduled_constant_publication;
+mod scheduled_runtime_refusal;
