@@ -87,8 +87,36 @@ pub(super) fn compile_with_context<R>(
     verification: hirsel_engine::store::VerifyStore,
     use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
 ) -> (Objects, R) {
+    compile_roots(
+        engine,
+        store,
+        std::slice::from_ref(entry),
+        &[],
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        verification,
+        use_context,
+    )
+}
+
+pub(super) fn compile_roots<R>(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    selected: &[hirsel_syntax::DefPath],
+    requested: &[hirsel_syntax::DefPath],
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-    let mut declarations = NativeDeclarations::collect(engine, &mut cache, &[]).unwrap();
+    let mut declarations = NativeDeclarations::collect(engine, &mut cache, requested).unwrap();
     let paths = declarations.sources.keys().cloned().collect::<Vec<_>>();
     let original = engine
         .native_original_reader(&paths, store.clone())
@@ -124,7 +152,7 @@ pub(super) fn compile_with_context<R>(
                 anchors: &declarations.source_anchors,
                 signatures: engine.signature_snapshot(),
                 semantic,
-                selected: std::slice::from_ref(entry),
+                selected,
                 callees: None,
             },
             &original,
@@ -221,7 +249,7 @@ pub(super) fn compile_with_context<R>(
         native.clone(),
         source.clone(),
         NativeRootKey {
-            roots: vec![entry.clone()],
+            roots: selected.to_vec(),
             target_abi: target.digest(),
             policy,
         },
