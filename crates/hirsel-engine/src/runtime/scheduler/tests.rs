@@ -1365,7 +1365,7 @@ fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes()
         dropping,
         release: Mutex::new(Some(release)),
     });
-    let (entered, _entered) = mpsc::channel();
+    let (entered, child_entered) = mpsc::channel();
     let (release_child, release) = mpsc::channel();
     let child = Arc::new(BlockingFactory {
         entered,
@@ -1386,6 +1386,10 @@ fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes()
         kind: 2,
         ..query(0)
     };
+    // The child occupies one worker before the frame exists, so the frame's
+    // home is the other, idle worker and can run its cancellation cleanup.
+    let held = rt.request(&[query(1)]);
+    let started = child_entered.recv_timeout(Duration::from_secs(10));
     let request = rt.request(&[local]);
     let waited = suspended.recv_timeout(Duration::from_secs(10));
     rt.cancel(request);
@@ -1394,7 +1398,9 @@ fn local_continuation_frame_cancellation_keeps_charge_until_home_drop_finishes()
     // Release the held destructors before any assertion can unwind the test.
     let _ = release_drop.send(());
     let _ = release_child.send(());
+    rt.cancel(held);
     rt.shutdown();
+    assert!(started.is_ok(), "child occupied one worker first");
     assert!(
         waited.is_ok(),
         "local continuation suspended before cancellation"
