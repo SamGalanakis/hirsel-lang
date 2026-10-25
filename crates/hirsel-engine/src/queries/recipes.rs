@@ -117,17 +117,19 @@ pub(crate) fn offer(
         }
         // Even a rejected type check retains elaborated expressions. They are
         // used only to propose text; the fresh check below is the authority.
-        let Some(typed) = typed.get(&syntax.item.definition) else {
-            continue;
-        };
+        let typed = typed.get(&syntax.item.definition);
         let spelling = |ty| {
-            hirsel_type_analysis::spelling::type_spelling(
-                &engine.types,
-                ty,
-                &typed.checked.resolution.generic_declarations,
-                &context.package,
-                true,
-            )
+            typed
+                .map(|typed| {
+                    hirsel_type_analysis::spelling::type_spelling(
+                        &engine.types,
+                        ty,
+                        &typed.checked.resolution.generic_declarations,
+                        &context.package,
+                        true,
+                    )
+                })
+                .unwrap_or_default()
         };
         for (index, expression) in tree.expressions.iter().enumerate() {
             let ExprKind::Closure { signature, body } = &expression.kind else {
@@ -135,10 +137,10 @@ pub(crate) fn offer(
             };
             // Task operations can keep a literal in a local before await/select.
             // Limit these recipes to a file actually using a task boundary.
-            let task_boundary = typed.checked.calls.iter().any(|call| {
+            let task_boundary = typed.is_some_and(|typed| typed.checked.calls.iter().any(|call| {
                 matches!(&call.target, hirsel_types::CallTarget::Definition(path)
                     if ["task.spawn", "task.async", "task.select", "task.await"].iter().any(|name| path.is_core(name)))
-            }) || tree.expressions.iter().any(|e| match &e.kind {
+            })) || tree.expressions.iter().any(|e| match &e.kind {
                 ExprKind::Path(path) => {
                     let names = path.segments.iter().map(|s| s.as_str()).collect::<Vec<_>>();
                     matches!(names.as_slice(), ["task", "async" | "spawn" | "select" | "await"])
@@ -154,12 +156,13 @@ pub(crate) fn offer(
                     candidates.push(Candidate { edits, site: expression.origin.span,
                         note: format!("R3 closure literal result rows: write `-> {row}` on this literal at task.async/spawn/select/await; the literal and task boundary check (no copy)") });
                 }
-            } else if let Some(elaboration) = typed
-                .checked
-                .expressions
-                .iter()
-                .find(|e| e.expression.0 as usize == index)
-                && let Some(row) = engine.types.get(elaboration.ty)
+            } else if let Some(elaboration) = typed.and_then(|typed| {
+                typed
+                    .checked
+                    .expressions
+                    .iter()
+                    .find(|e| e.expression.0 as usize == index)
+            }) && let Some(row) = engine.types.get(elaboration.ty)
                 && let TypeKind::Function(function) = &row.kind
             {
                 for result in strengthened_rows(engine, function.result) {
@@ -194,6 +197,7 @@ pub(crate) fn offer(
                     note: format!("R3 closure literal result rows: write `-> {row}` on this literal at task.async/spawn/select/await; the literal and task boundary check (no copy)") });
             }
         }
+        let Some(typed) = typed else { continue };
         for statement in &tree.statements {
             let StmtKind::Let {
                 pattern,
