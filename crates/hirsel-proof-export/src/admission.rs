@@ -880,6 +880,42 @@ pub(crate) mod tests {
             locator: Rc::new(|_| Location::unknown()),
         }
     }
+    #[test]
+    fn exact_arc_output_has_one_retained_text_allocation_and_matches_scalar_digest() {
+        for width in [1, 4, 16] {
+            let mut input = input(TypeInterner::new(None));
+            input.header.environment.compiler_version = "λ🐑escaped\\\"".repeat(width * 1024);
+            let export = crate::build(&input);
+            let expected = crate::encode(&export, &input.locator);
+            let length = crate::encoded_bytes(&export, &input.locator).unwrap();
+            assert_eq!(length, expected.len());
+            let (refused, _) = measured(|| {
+                crate::encode_arc_with_output_limit(&export, &input.locator, length - 1)
+            });
+            assert!(refused.is_none());
+            let (actual, count) = measured(|| {
+                crate::encode_arc_with_output_limit(&export, &input.locator, length).unwrap()
+            });
+            assert_eq!(&*actual, expected);
+            let allocation = Layout::new::<[usize; 2]>()
+                .extend(Layout::array::<u8>(length).unwrap())
+                .unwrap()
+                .0
+                .pad_to_align()
+                .size();
+            assert_eq!(count.live as usize, allocation);
+            assert!(
+                count.peak < (2 * length) as isize,
+                "String-to-Arc-sized overlap reappeared: {} vs {length}",
+                count.peak
+            );
+            let clone = actual.clone();
+            let (_, release) = measured(|| drop(actual));
+            assert_eq!(release.live, 0);
+            let (_, release) = measured(|| drop(clone));
+            assert_eq!(-release.live, count.live);
+        }
+    }
     struct Lazy;
     impl TypeBaseSource for Lazy {
         fn rows(&self, _: u32, _: &TypeBase) -> Option<Vec<(u32, Type)>> {
