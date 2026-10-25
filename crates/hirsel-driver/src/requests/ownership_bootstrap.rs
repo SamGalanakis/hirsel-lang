@@ -8,6 +8,7 @@ use crate::native::{
         instance_tasks::InstanceTasks, ownership_compilation::OwnershipCompilation,
         products::EmissionOptions, source_inputs::NativeInstanceInputs,
     },
+    root_source::{NativeLinkFacts, NativeLinkSource},
 };
 use hirsel_engine::{
     FrontLowerQueries, FrontNativeProducts, FrontNativeQueries, runtime::*, store::*,
@@ -54,6 +55,7 @@ struct Prepared {
     source: ProductRef,
     facts: Arc<FrontNativeProducts>,
     compilation: Arc<OwnershipCompilation>,
+    link: Arc<NativeLinkSource>,
 }
 pub(super) struct OwnershipBootstrap {
     source: Source,
@@ -168,6 +170,12 @@ impl OwnershipBootstrap {
             prepared.facts.clone(),
         ))
     }
+    pub fn link_source(&self) -> Result<Arc<NativeLinkSource>, String> {
+        self.prepared
+            .get()
+            .map(|prepared| prepared.link.clone())
+            .ok_or("ownership source has not completed".into())
+    }
     pub fn failure(&self, reference: Reference) -> Option<String> {
         self.failure
             .lock()
@@ -199,7 +207,7 @@ impl OwnershipBootstrap {
             .outcome(selected)
             .ok_or("ownership native source root is unavailable")?
             .products;
-        let plan = self
+        let mut plan = self
             .pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -218,6 +226,39 @@ impl OwnershipBootstrap {
             .original_context
             .reader(facts.originals.clone(), self.source.store.clone())
             .map_err(|e| format!("ownership original products: {e:?}"))?;
+        let entries = declarations
+            .context
+            .sources
+            .iter()
+            .filter(|(path, _)| {
+                declarations.program.signatures.get(*path).is_some_and(|signature| {
+                    matches!(&signature.kind, hirsel_types::SignatureKind::Function(function) if function.generics.is_empty())
+                })
+            })
+            .map(|(path, context)| (path.clone(), context.entry.0))
+            .collect();
+        let callees =
+            native::settled_callee_metadata(facts.run.callees.clone(), &facts.run.runtime)
+                .map_err(|error| error.to_string())?;
+        let link = Arc::new(
+            NativeLinkSource::from_settled(
+                NativeLinkFacts {
+                    program: &declarations.program,
+                    operations: Arc::new(declarations.program.operation_registry()),
+                    roots: &declarations.roots,
+                    declarations: &declarations.sources,
+                    entries: &entries,
+                    anchors: &declarations.source_anchors,
+                    signatures: facts.signatures.clone(),
+                    semantic: facts.semantic.clone(),
+                    selected: std::slice::from_ref(&facts.run.entry),
+                    callees: Some(callees),
+                },
+                &reader,
+            )
+            .map_err(|error| error.to_string())?,
+        );
+        link.retain_metadata(&mut plan.admission.instances)?;
         let inputs = NativeInstanceInputs::from_products(declarations, reader)
             .map_err(|e| format!("ownership native instance inputs: {e:?}"))?;
         let source_paths = inputs
@@ -261,7 +302,7 @@ impl OwnershipBootstrap {
                 input,
                 native::OptLevel::None,
                 false,
-                Default::default(),
+                link.foreign_dispatch(),
                 true,
                 false,
                 false,
@@ -278,6 +319,7 @@ impl OwnershipBootstrap {
                 source: selected,
                 facts,
                 compilation,
+                link,
             })
             .map_err(|_| "ownership bootstrap dispatch constructed twice")?;
         Ok(self.prepared.get().unwrap())

@@ -44,7 +44,9 @@ pub fn emit_leaf(
     backend: Backend,
     opt: OptLevel,
 ) -> Result<LeafObjects, NativeError> {
-    let failed = |message| NativeError::new(StageName::Emission, message);
+    fn failed(message: impl Into<String>) -> NativeError {
+        NativeError::new(StageName::Emission, message)
+    }
     if program.units.len() != program.summaries.len() || program.unit_objects.is_some() {
         return Err(failed(
             "ownership emission requires all checked Ready bodies",
@@ -55,18 +57,78 @@ pub fn emit_leaf(
             "ownership emission does not yet cover alternate task bodies",
         ));
     }
+    let selected: Vec<_> = program.units.iter().collect();
+    let plans = selected
+        .iter()
+        .map(|unit| {
+            LeafPlan::prepare(unit, &program.table)
+                .map(|plan| (unit.unit().digest(), plan.plan().clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()
+        .map_err(failed)?;
+    let empty = BTreeSet::new();
+    let inputs = EmitInputs {
+        ahead: None,
+        continuation: None,
+        alternate: false,
+        index: None,
+        verify_backend: program.validation == super::Validation::EveryStage,
+        input: &program.input,
+        target: &program.target,
+        layouts: &program.table,
+        keys: &program.keys,
+        manifest: &program.manifest,
+        statics: &program.statics,
+        inline_instances: &program.inline_instances,
+        available_externally: &empty,
+        callbacks: !program.callbacks.is_empty(),
+        tracking: program.tracking(),
+        foreign: &program.foreign_dispatch,
+        opt,
+        measurement: false,
+        fuel: program.fuel,
+    };
+    emit_relocated(program, entry, &selected, &inputs, &plans, sites, backend)
+}
+
+/// Complete checked diagnostic closure with the original transported plans.
+/// The source-bound linker projection owns the semantic/runtime metadata.
+pub(crate) fn emit_relocated(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    selected: &[&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>],
+    inputs: &EmitInputs<'_>,
+    plans: &BTreeMap<hirsel_syntax::ContentHash, hirsel_lir::ownership_trace::Plan>,
+    sites: &Sites<'_>,
+    backend: Backend,
+) -> Result<LeafObjects, NativeError> {
+    fn failed(message: impl Into<String>) -> NativeError {
+        NativeError::new(StageName::Emission, message)
+    }
+    hirsel_lir::ownership_trace::native::Request::Relocated(plans)
+        .prepare(selected, inputs.layouts)
+        .map_err(failed)?;
+    if selected.len() != program.summaries.len() || !program.ahead_units.is_empty() {
+        return Err(failed(
+            "ownership emission requires the complete checked closure",
+        ));
+    }
     let revision = program
         .revision(entry)
         .ok_or_else(|| failed("ownership emission has no checked semantic entry binding"))?
         .digest();
-    let selected: Vec<_> = program.units.iter().collect();
-    let calls = hirsel_lir::ownership_trace::native::local_calls(&selected)
+    let calls = hirsel_lir::ownership_trace::native::local_calls(selected)
         .map_err(|message| NativeError::new(StageName::Emission, message))?;
     let mut units = BTreeMap::new();
-    for unit in &program.units {
-        let plan = LeafPlan::prepare(unit, &program.table).map_err(|message| NativeError {
-            definition: Some(unit.unit().header.definition.clone()),
-            ..NativeError::new(StageName::Emission, message)
+    for unit in selected {
+        let original = plans
+            .get(&unit.unit().digest())
+            .ok_or_else(|| failed("missing original ownership plan"))?;
+        let plan = LeafPlan::from_relocated(unit, inputs.layouts, original).map_err(|message| {
+            NativeError {
+                definition: Some(unit.unit().header.definition.clone()),
+                ..NativeError::new(StageName::Emission, message)
+            }
         })?;
         let body = unit.unit();
         let mut types = BTreeMap::new();
@@ -138,33 +200,13 @@ pub fn emit_leaf(
         }
     }
     super::check_runtime_calls(program)?;
-    let empty = BTreeSet::new();
-    let inputs = EmitInputs {
-        ahead: None,
-        continuation: None,
-        alternate: false,
-        index: None,
-        verify_backend: program.validation == super::Validation::EveryStage,
-        input: &program.input,
-        target: &program.target,
-        layouts: &program.table,
-        keys: &program.keys,
-        manifest: &program.manifest,
-        statics: &program.statics,
-        inline_instances: &program.inline_instances,
-        available_externally: &empty,
-        callbacks: !program.callbacks.is_empty(),
-        tracking: program.tracking(),
-        foreign: &program.foreign_dispatch,
-        opt,
-        measurement: false,
-        fuel: program.fuel,
-    };
     let object = match backend {
-        Backend::Llvm => hirsel_llvm::emit_object_ownership(&selected, &inputs)
+        Backend::Llvm => hirsel_llvm::emit_object_relocated_ownership(selected, inputs, plans)
             .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?,
-        Backend::Cranelift => hirsel_cranelift::emit_object_ownership(&selected, &inputs)
-            .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?,
+        Backend::Cranelift => {
+            hirsel_cranelift::emit_object_relocated_ownership(selected, inputs, plans)
+                .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
+        }
     };
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
         &program.table,
@@ -188,6 +230,59 @@ pub struct LeafExecution {
     pub trace: Result<hirsel_run_schema::ownership_trace::Trace, String>,
 }
 impl LeafObjects {
+    pub(crate) fn retained_bytes(&self) -> u64 {
+        use hirsel_engine::NativeMetadataWeight as Weight;
+        let mut w = Weight::default();
+        w.add(std::mem::size_of::<Self>());
+        w.path(&self.entry);
+        w.vec(&self.objects, |w, object| {
+            let ObjectArtifact {
+                ahead,
+                target: _,
+                format: _,
+                bytes,
+                exports,
+                imports,
+                relocations,
+                abi: _,
+                reproducibility,
+                debug,
+            } = object;
+            w.flat_vec(bytes);
+            let mut symbol = |w: &mut Weight, symbol: &hirsel_lir::stage::ObjectSymbol| {
+                w.add(symbol.name.capacity());
+                if let Some(path) = &symbol.definition {
+                    w.path(path);
+                }
+            };
+            w.vec(exports, &mut symbol);
+            w.vec(imports, &mut symbol);
+            w.flat_vec(relocations);
+            w.add(reproducibility.toolchain.capacity());
+            w.vec(debug, |w, row| {
+                w.add(row.symbol.capacity());
+                w.vec(&row.items, |w, path| w.path(path));
+                w.flat_vec(&row.sources);
+                w.flat_vec(&row.owner_kinds);
+                w.flat_vec(&row.ranges);
+            });
+            if let Some(ahead) = ahead {
+                w.flat_vec(&ahead.frames);
+                w.flat_vec(&ahead.bounds);
+            }
+        });
+        w.map(&self.units, |w, _, markers| {
+            w.map(markers, |w, _, marker| {
+                w.add(marker.value_type.capacity());
+                w.add(marker.source.definition.capacity());
+                w.add(marker.source.file.capacity());
+            })
+        });
+        w.map(&self.calls, |w, _, targets| {
+            w.tree::<[u8; 32], ()>(targets.len())
+        });
+        w.bytes()
+    }
     pub fn objects(&self) -> &[ObjectArtifact] {
         &self.objects
     }

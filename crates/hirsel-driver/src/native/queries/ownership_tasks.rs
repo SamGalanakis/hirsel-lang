@@ -370,6 +370,129 @@ impl OwnershipTasks {
         use_units(&units, &emit, &plans)
     }
 
+    /// Use the existing source-bound linker projection over the complete
+    /// diagnostic C scope. No ordinary Ready result or source compilation is
+    /// consulted, and original observation plans remain beside the objects.
+    pub fn with_link_context<R>(
+        &self,
+        root: ProductRef,
+        source: &crate::native::root_source::NativeLinkSource,
+        use_context: impl FnOnce(
+            &crate::native::ReadyProgram,
+            &[&hirsel_lir::stage::ValidatedUnit<Ready>],
+            &hirsel_lir::emission::EmitInputs<'_>,
+            &BTreeMap<ContentHash, Plan>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
+        use hirsel_lir::{fragment::UnitSummary, ir::UnitOrigin};
+        let snapshot = &self.native.snapshot;
+        if source.input() != &snapshot.emission.input
+            || source.foreign_dispatch() != snapshot.emission.foreign
+        {
+            return Err("ownership linker source differs from selected emission input".into());
+        }
+        self.with_ready(root, |units, emit, plans| {
+            let raw = units
+                .iter()
+                .map(|unit| unit.unit().clone())
+                .collect::<Vec<_>>();
+            hirsel_lir::validate::check_result_arena_calls(&raw, emit.layouts)?;
+            hirsel_lir::validate::check_scoped_links(&raw, emit.layouts)?;
+            let mut summaries = Vec::new();
+            let mut semantic_owners = BTreeMap::new();
+            let mut functions = BTreeMap::new();
+            for unit in units {
+                let mut summary =
+                    UnitSummary::of(unit.unit(), emit.layouts, emit.keys, emit.manifest)?;
+                summary.add_static_references(emit.statics);
+                let owner = match summary.origin {
+                    UnitOrigin::Source => Some(summary.definition.clone()),
+                    UnitOrigin::Library => None,
+                };
+                if semantic_owners
+                    .insert(summary.definition.clone(), owner.clone())
+                    .is_some_and(|previous| previous != owner)
+                {
+                    return Err("mixed ownership semantic owner origins".into());
+                }
+                for request in self.requests.values().filter(|request| {
+                    request.owner.instance.digest() == summary.instance
+                        && request.owner.instance.definition() == &summary.definition
+                }) {
+                    if source.functions().get(request.owner.instance.definition())
+                        == Some(&request.owner.instance.body())
+                        && functions
+                            .insert(summary.definition.clone(), summary.instance)
+                            .is_some()
+                    {
+                        return Err("duplicate ownership linker entry".into());
+                    }
+                }
+                summaries.push(summary);
+            }
+            let environment = snapshot.environment();
+            let mut finalizers = BTreeMap::new();
+            for request in self.requests.values() {
+                let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+                let reference = owner.product.statics_finalizers;
+                if reference.domain != super::instance::STATICS_FINALIZERS_DOMAIN {
+                    return Err("wrong ownership finalizer domain".into());
+                }
+                let bytes = snapshot
+                    .store
+                    .get_content(reference)
+                    .ok_or("missing ownership finalizers")?;
+                let (_, rows): (super::local::StaticRows, super::local::FinalizerRows) =
+                    serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+                if rows.windows(2).any(|pair| pair[0] >= pair[1]) {
+                    return Err("noncanonical ownership finalizers".into());
+                }
+                for (layout, definition, instance, abi, library) in rows {
+                    let summary = summaries
+                        .iter()
+                        .find(|summary| {
+                            summary.definition == definition && summary.instance == instance
+                        })
+                        .ok_or("ownership finalizer has no C-admitted body")?;
+                    if emit.keys.fn_abi_of(emit.layouts, summary.abi) != Some(abi)
+                        || (summary.origin == UnitOrigin::Library) != library
+                    {
+                        return Err("ownership finalizer ABI or origin differs".into());
+                    }
+                    let layout = emit
+                        .keys
+                        .all()
+                        .iter()
+                        .position(|key| key.0 == layout)
+                        .map(|index| hirsel_lir::LayoutId(index as u32))
+                        .ok_or("missing ownership finalizer layout")?;
+                    if finalizers
+                        .insert(layout, instance)
+                        .is_some_and(|previous| previous != instance)
+                    {
+                        return Err("conflicting ownership finalizer instances".into());
+                    }
+                }
+            }
+            let table = emit.layouts.clone();
+            let keys = hirsel_lir::LayoutKeys::new(&table);
+            super::roots::with_link_assembly(
+                snapshot,
+                source,
+                super::roots::LinkAssembly {
+                    semantic_owners,
+                    summaries,
+                    functions,
+                    finalizers,
+                    table,
+                    keys,
+                    statics: emit.statics.to_vec(),
+                },
+                |program| use_context(program, units, emit, plans),
+            )
+        })
+    }
+
     /// Reopen one selected diagnostic output and independently revalidate C.
     /// This performs no source, import or lowering work and grants recipes no
     /// semantic authority. A caller cannot substitute an ordinary Ready hit.

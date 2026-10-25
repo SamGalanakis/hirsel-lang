@@ -28,7 +28,7 @@ pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
 };
-pub use ownership_selection::OwnershipExecution;
+pub use ownership_selection::{OwnershipExecution, OwnershipObjects};
 pub use selector::{CompilerRequests, RequestLimits};
 
 /// Already observed inputs, including missing files, manifests, aliases and

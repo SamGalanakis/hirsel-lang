@@ -25,6 +25,8 @@ pub struct OwnershipExecution {
     pub product: ProductRef,
     units: Vec<ProductRef>,
     tasks: Arc<OwnershipTasks>,
+    root: ProductRef,
+    link: Arc<native::root_source::NativeLinkSource>,
     _owner: Arc<OutputOwner>,
 }
 struct OutputOwner {
@@ -32,9 +34,74 @@ struct OutputOwner {
     _source: Arc<FrontNativeProducts>,
     _allowance: MemoryReservation,
 }
+/// Objects remain bound to one selected diagnostic completion and retain its
+/// original owners and an independent debit from the existing output grant.
+pub struct OwnershipObjects {
+    objects: native::ownership_trace::LeafObjects,
+    root: ProductRef,
+    _owner: Arc<OwnershipExecution>,
+    _allowance: MemoryReservation,
+}
+impl OwnershipObjects {
+    pub fn objects(&self) -> &[hirsel_lir::stage::ObjectArtifact] {
+        self.objects.objects()
+    }
+    pub fn metadata(&self) -> &hirsel_run_schema::ownership_trace::native::Units {
+        self.objects.metadata()
+    }
+}
 impl OwnershipExecution {
     pub fn units(&self) -> &[ProductRef] {
         &self.units
+    }
+    /// Emit from the exact source/instance/arena diagnostic closure, preserving
+    /// original Value marker ids through checked rebinding. Ordinary objects
+    /// and a second source compilation cannot substitute for these products.
+    pub fn emit(self: &Arc<Self>, backend: native::Backend) -> Result<OwnershipObjects, String> {
+        let objects = self.tasks.with_link_context(
+            self.root,
+            &self.link,
+            |program, units, inputs, plans| {
+                native::ownership_trace::emit_relocated(
+                    program,
+                    &self.entry,
+                    units,
+                    inputs,
+                    plans,
+                    &self.link.sites(),
+                    backend,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )?;
+        let bytes = objects
+            .retained_bytes()
+            .saturating_add(std::mem::size_of::<OwnershipObjects>() as u64);
+        let allowance = self._owner._bootstrap.reserve_output(bytes)?;
+        Ok(OwnershipObjects {
+            objects,
+            root: self.root,
+            _owner: self.clone(),
+            _allowance: allowance,
+        })
+    }
+    pub fn launch(
+        &self,
+        objects: &OwnershipObjects,
+        tools: &native::Toolchain,
+        directory: &std::path::Path,
+        event_limit: usize,
+    ) -> Result<native::ownership_trace::LeafExecution, String> {
+        if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
+            return Err("ownership objects belong to another selected completion".into());
+        }
+        self.tasks
+            .with_link_context(self.root, &self.link, |program, _, _, _| {
+                objects
+                    .objects
+                    .launch(program, tools, directory, event_limit)
+                    .map_err(|error| error.to_string())
+            })
     }
     /// Each selected body re-enters C before a diagnostic consumer sees it.
     /// This read never runs source discovery or compiler transformations.
@@ -233,6 +300,8 @@ impl OwnershipSelection {
             product: selected,
             units,
             tasks,
+            root,
+            link: self.bootstrap.link_source().map_err(ToolError::Runtime)?,
             _owner: owner,
         });
         self.completed

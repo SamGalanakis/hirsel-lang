@@ -792,57 +792,99 @@ impl NativeRoots for RootProducts {
                 }
             }
         }
-        let callbacks = summaries
-            .iter()
-            .flat_map(|s| s.glue.callbacks.iter().map(|(path, _)| path.clone()))
-            .collect();
-        let entries = summaries
-            .iter()
-            .flat_map(|s| {
-                s.glue.entries.iter().map(|(path, instance)| {
-                    (
-                        hirsel_lir::emission::function_thunk_name(path, instance.as_ref()),
-                        path.to_string(),
-                    )
-                })
-            })
-            .collect();
-        let mut program = crate::native::ReadyProgram {
-            semantic_owners,
-            semantic_units: None,
-            production: None,
-            validation: snapshot.options.validation,
-            operations: self.source.operations().clone(),
-            launch: snapshot.options.launch.clone(),
-            input: snapshot.emission.input.clone(),
-            target: snapshot.options.target.clone(),
-            table: binding.table,
-            keys,
-            manifest: snapshot.manifest.clone(),
-            units: vec![],
-            ahead_units: vec![],
-            ahead_environments: BTreeMap::new(),
-            summaries,
-            unit_objects: None,
-            inline_instances: BTreeSet::new(),
-            callbacks,
-            entries,
-            callee_facts: None,
-            finalizers,
-            functions,
-            launches: self.source.launches(),
-            revisions: BTreeMap::new(),
-            exit_reports: BTreeMap::new(),
-            statics: statics.into_values().collect(),
-            discharged: snapshot.options.discharge.clone(),
-            foreign_links: vec![],
-            foreign_unreplayable: false,
-            foreign_dispatch: BTreeMap::new(),
-            escaping: BTreeSet::new(),
-            fuel: snapshot.emission.fuel,
-            failure_table: None,
-        };
-        self.source.bind(&mut program).map_err(|e| e.to_string())?;
-        use_context(&program)
+        with_link_assembly(
+            snapshot,
+            &self.source,
+            LinkAssembly {
+                semantic_owners,
+                summaries,
+                functions,
+                finalizers,
+                table: binding.table,
+                keys,
+                statics: statics.into_values().collect(),
+            },
+            use_context,
+        )
     }
+}
+
+/// Shared body-free linker projection. Both ordinary and ownership consumers
+/// supply only summaries/layouts derived from their own exact current C scope.
+pub(super) struct LinkAssembly {
+    pub semantic_owners: BTreeMap<hirsel_syntax::DefPath, Option<hirsel_syntax::DefPath>>,
+    pub summaries: Vec<UnitSummary>,
+    pub functions: BTreeMap<hirsel_syntax::DefPath, ContentHash>,
+    pub finalizers: BTreeMap<hirsel_lir::LayoutId, ContentHash>,
+    pub table: hirsel_lir::LayoutTable,
+    pub keys: hirsel_lir::LayoutKeys,
+    pub statics: Vec<hirsel_lir::statics::StaticData>,
+}
+pub(super) fn with_link_assembly<R>(
+    snapshot: &NativeSnapshot,
+    source: &NativeLinkSource,
+    assembly: LinkAssembly,
+    use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
+) -> Result<R, String> {
+    let LinkAssembly {
+        semantic_owners,
+        summaries,
+        functions,
+        finalizers,
+        table,
+        keys,
+        statics,
+    } = assembly;
+    let callbacks = summaries
+        .iter()
+        .flat_map(|s| s.glue.callbacks.iter().map(|(path, _)| path.clone()))
+        .collect();
+    let entries = summaries
+        .iter()
+        .flat_map(|s| {
+            s.glue.entries.iter().map(|(path, instance)| {
+                (
+                    hirsel_lir::emission::function_thunk_name(path, instance.as_ref()),
+                    path.to_string(),
+                )
+            })
+        })
+        .collect();
+    let mut program = crate::native::ReadyProgram {
+        semantic_owners,
+        semantic_units: None,
+        production: None,
+        validation: snapshot.options.validation,
+        operations: source.operations().clone(),
+        launch: snapshot.options.launch.clone(),
+        input: snapshot.emission.input.clone(),
+        target: snapshot.options.target.clone(),
+        table,
+        keys,
+        manifest: snapshot.manifest.clone(),
+        units: vec![],
+        ahead_units: vec![],
+        ahead_environments: BTreeMap::new(),
+        summaries,
+        unit_objects: None,
+        inline_instances: BTreeSet::new(),
+        callbacks,
+        entries,
+        callee_facts: None,
+        finalizers,
+        functions,
+        launches: source.launches(),
+        revisions: BTreeMap::new(),
+        exit_reports: BTreeMap::new(),
+        statics,
+        discharged: snapshot.options.discharge.clone(),
+        foreign_links: vec![],
+        foreign_unreplayable: false,
+        foreign_dispatch: BTreeMap::new(),
+        escaping: BTreeSet::new(),
+        fuel: snapshot.emission.fuel,
+        failure_table: None,
+    };
+    source.bind(&mut program).map_err(|e| e.to_string())?;
+    use_context(&program)
 }
