@@ -1639,3 +1639,211 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
         assert_eq!(budget.reserved(), 0, "every proof owner releases");
     });
 }
+
+#[test]
+fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes() {
+    hirsel_engine::with_compiler_stack(|| {
+        const SOURCE: &str = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}";
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("plan.hir");
+        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(1 << 30);
+        let reference = store
+            .put_content(
+                Domain {
+                    kind: 0x5200_0001,
+                    schema: 1,
+                },
+                b"input binding refusal",
+            )
+            .unwrap();
+        let errors = RuntimeErrors {
+            resource: reference,
+            cycle: reference,
+            cancelled: reference,
+            protocol: reference,
+            panicked: reference,
+        };
+        let weight = MemoryWeight {
+            retained: 1 << 20,
+            scratch: 16 << 20,
+            stack: 0,
+        };
+        let source_output = |text: &str| {
+            std::fs::write(&path, text).unwrap();
+            // These original vectors are ordinary u64 functions, not launch
+            // entries. Settle their native declarations directly; the Run-root
+            // helper used by evidence controls has executable entry policy.
+            let mut program = crate::COMPILER
+                .with_config(CompileConfig {
+                    jobs: Jobs::ONE,
+                    store: store.clone(),
+                    hold_bytes: 0,
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&path)
+                .unwrap();
+            let paths = program.engine.front_source_roots();
+            let front = program
+                .engine
+                .front_body_queries(&paths, weight, budget.reserve(24 << 20).unwrap(), errors)
+                .unwrap();
+            let lower = program
+                .engine
+                .front_lower_queries(
+                    &paths,
+                    front.clone(),
+                    weight,
+                    paths.len() * 3,
+                    budget.reserve(24 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let definitions = program
+                .engine
+                .front_native_definition_queries(
+                    &paths,
+                    front.clone(),
+                    lower.clone(),
+                    weight,
+                    budget.reserve(24 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let mut runtime =
+                AdmittedRuntime::new(Jobs::ONE, budget.reserve(512 << 20).unwrap(), errors)
+                    .unwrap();
+            runtime
+                .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
+                .unwrap();
+            runtime
+                .register_local(hirsel_engine::FRONT_LOWER_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register_local(hirsel_engine::FRONT_EVALUATE_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register(
+                    hirsel_engine::FRONT_NATIVE_DEFINITION_KIND,
+                    definitions.factory(),
+                )
+                .unwrap();
+            let queries = paths
+                .iter()
+                .map(|path| definitions.query(path).unwrap())
+                .collect::<Vec<_>>();
+            drop(program);
+            let request = runtime.request(&queries);
+            runtime
+                .wait(request)
+                .unwrap()
+                .iter()
+                .map(|product| product.record)
+                .collect::<Vec<_>>()
+        };
+        let original = source_output(SOURCE);
+        for changed in [
+            SOURCE.replace("1u64", "2u64"),
+            format!("{SOURCE}\nfn other()->u64{{1u64}}"),
+        ] {
+            assert_ne!(original, source_output(&changed));
+        }
+        std::fs::write(&path, SOURCE).unwrap();
+        let graph = proof_graph(&path, &store, &budget, errors, weight);
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let calls = Arc::new(AtomicU64::new(0));
+        let query = |case: u8, foreign: Vec<Reference>| {
+            let mut options = native::Options::new(target.clone());
+            if case == 1 {
+                options.flat_walk = !options.flat_walk;
+            }
+            if case == 2 {
+                options.scoped_specialization = !options.scoped_specialization;
+            }
+            let plan = NativePlan {
+                options,
+                policy: ContentHash::of_bytes(b"original plan input controls"),
+                verify_store: hirsel_engine::store::VerifyStore::Off,
+                opt: hirsel_lir::emission::OptLevel::None,
+                debug: false,
+                verify_backend: true,
+                measurement: false,
+                fuel: case == 3,
+                requested_run: None,
+                test_entries: vec![],
+                emit_only: false,
+                backends: vec![CompilationBackend {
+                    backend: "cranelift".into(),
+                    backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                    target_features: target.digest(),
+                    profile_options: ContentHash::of_bytes(b"none"),
+                    runtime_abi: ContentHash::of_bytes(
+                        &hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes(),
+                    ),
+                    linker_options: ContentHash::of_bytes(b"input binding link"),
+                    runtime_archives: vec![],
+                    foreign_inputs: foreign,
+                    executor: Arc::new(StopLink(calls.clone(), vec![])),
+                }],
+            };
+            let routing = NativeRouting::new(
+                super::super::native_assembly::KINDS,
+                errors.protocol,
+                budget.reserve(16 << 10).unwrap(),
+            )
+            .unwrap();
+            let bootstrap = NativeBootstrap::new(
+                graph.source.clone(),
+                graph.lower.clone(),
+                graph.paths.clone(),
+                routing,
+                store.clone(),
+                plan,
+                NativeAdmission {
+                    instances: budget.reserve(32 << 20).unwrap(),
+                    arena: budget.reserve(32 << 20).unwrap(),
+                    compilation: budget.reserve(32 << 20).unwrap(),
+                },
+                None,
+                weight,
+                budget.reserve(1 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+            bootstrap.query()
+        };
+        let base = query(0, vec![]);
+        for case in [1, 2, 3] {
+            assert_ne!(base, query(case, vec![]));
+        }
+        let foreign = directory.path().join("foreign.o");
+        let capture = || {
+            object_queries::store_link_input_reader(
+                store.as_ref(),
+                std::fs::File::open(&foreign).unwrap(),
+            )
+            .unwrap()
+        };
+        std::fs::write(&foreign, b"one").unwrap();
+        let before = query(0, vec![capture()]);
+        std::fs::write(&foreign, b"two").unwrap();
+        assert_ne!(before, query(0, vec![capture()]));
+        let tools = native::Toolchain::in_tree(directory.path(), &[&target]).unwrap();
+        assert!(
+            native::selected_foreign_inputs(
+                &tools,
+                &target,
+                &[hirsel_engine::LinkInput::Library("unknown".into())]
+            )
+            .is_err()
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "input selection runs no linker"
+        );
+        drop(graph);
+        assert_eq!(budget.reserved(), 0, "selection releases every reservation");
+    });
+}
