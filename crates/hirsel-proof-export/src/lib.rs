@@ -11,8 +11,8 @@ hirsel_guard::install!(admission::tests::Counting: admission::tests::Counting);
 mod admission;
 mod annotations;
 pub use admission::{
-    CapturedTypes, build_captured_tables_bytes, build_owned_tables_bytes, build_tables_bytes,
-    capture_types, capture_types_bytes,
+    BuildTablesLayout, CapturedTypes, build_captured_tables_bytes, build_owned_tables_bytes,
+    build_owned_tables_layout, build_tables_bytes, capture_types, capture_types_bytes,
 };
 mod constants;
 mod content;

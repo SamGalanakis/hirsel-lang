@@ -52,6 +52,7 @@ pub struct Cx {
     pub(crate) sizing: Option<crate::admission::WireShape>,
     pub(crate) capture_roots: Option<Vec<TypeId>>,
     pub(crate) captured_types: Option<Arc<std::collections::HashSet<TypeId>>>,
+    pub(crate) section_types: Option<Arc<[TypeId]>>,
     pub(crate) locations: Vec<Location>,
     location_ids: HashMap<Location, u32>,
     /// Per syntax-id kind: file-arena id -> order-preserving per-section rank.
@@ -88,6 +89,7 @@ impl Cx {
             sizing: None,
             capture_roots: None,
             captured_types: None,
+            section_types: None,
             locations: vec![],
             location_ids: HashMap::new(),
             syntax_seen: Default::default(),
@@ -312,6 +314,10 @@ impl Snapshot<Cx> for TypeId {
                 && (w.context.types.get_if_loaded(*self).is_none()
                     || w.context
                         .captured_types
+                        .as_ref()
+                        .is_some_and(|rows| !rows.contains(self))
+                    || w.context
+                        .section_types
                         .as_ref()
                         .is_some_and(|rows| !rows.contains(self)));
             shape.types = shape.types.checked_add(1).unwrap_or(usize::MAX);
