@@ -369,6 +369,15 @@ impl FrontBodyQueries {
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
+    /// Inspect compact reads without decoding the checked body.
+    pub(crate) fn selected_reads(&self, reference: Reference) -> Option<Arc<Reads>> {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .find(|outcome| outcome.reference == reference)
+            .map(|outcome| outcome.reads.clone())
+    }
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
     pub fn outcome(self: &Arc<Self>, reference: Reference) -> Option<FrontBodyOutput> {

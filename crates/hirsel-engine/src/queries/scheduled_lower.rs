@@ -242,6 +242,24 @@ impl FrontLowerQueries {
             .get(&(id.kind, id.address.0))
             .map(|(_, outcome, _)| Arc::new(outcome.reads.clone()))
     }
+    pub(crate) fn selected_read_len(&self, id: QueryId, reference: Reference) -> Option<usize> {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.kind, id.address.0))
+            .filter(|(selected, _, _)| *selected == reference)
+            .map(|(_, outcome, _)| outcome.reads.len())
+    }
+    /// Exact settled descriptor, including failed Lower reads. This does not
+    /// decode a body, invoke a producer or accept another query's reference.
+    pub(crate) fn selected_reads(&self, id: QueryId, reference: Reference) -> Option<Arc<Reads>> {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(id.kind, id.address.0))
+            .filter(|(selected, _, _)| *selected == reference)
+            .map(|(_, outcome, _)| Arc::new(outcome.reads.clone()))
+    }
     pub fn work_snapshot(&self) -> Vec<(DefPath, FrontLowerWork)> {
         self.work
             .lock()
@@ -481,6 +499,18 @@ impl FrontLowerQueries {
                 self.weight.retained,
             ))),
         };
+        // A root observes its own body before preparation, including when
+        // that preparation fails. Nested callers keep the same root receipt.
+        source.record(
+            ReadKey::ExecutedBody(DefId::intern(&path)),
+            memos::optional(Some(self.inputs[&path].implementation)),
+        );
+        if self.verify == Verify::On {
+            let mut observed = ReadsBuilder::new();
+            FrozenProvider::new(&self.snapshot, path.0.package.clone(), &mut observed)
+                .validation_universe();
+            source.merge(&observed.finish().map_err(|_| self.errors.protocol)?);
+        }
         let result = if source.framed && source.depth.borrow().limit() == 0 {
             Err(source.overflow(self.inputs[&path].site))
         } else {
@@ -616,6 +646,7 @@ impl FrontLowerQueries {
             .ok_or(QueryError::NotImplemented)?;
         source.merge(&body.outcome.reads);
         let analyzed = body.outcome.result?;
+        source.execution_signatures(analyzed.dependencies.iter());
         let signature = source.signature(path)?;
         let mut observed = ReadsBuilder::new();
         let staged = crate::comptime::prepare_staged_types(
@@ -848,6 +879,19 @@ impl Source {
     fn record(&self, key: ReadKey, hash: ContentHash) {
         self.observed.borrow_mut().record(key, hash);
     }
+    fn execution_signatures<'a>(
+        &self,
+        dependencies: impl IntoIterator<Item = &'a SignatureDependency>,
+    ) {
+        for dependency in dependencies {
+            if let Some(signature) = self.owner.snapshot.signature(dependency.definition) {
+                self.record(
+                    ReadKey::ExecutedSignature(dependency.definition),
+                    memos::signature_value(signature.ok().map(|s| s.fingerprint)),
+                );
+            }
+        }
+    }
     fn signature(&self, path: &DefPath) -> Result<hirsel_types::SignatureRef, QueryError> {
         let mut observed = ReadsBuilder::new();
         let result = SignatureProvider::signature(
@@ -922,9 +966,7 @@ impl s1::AsyncDependencySource for Source {
     async fn definition(&mut self, path: &DefPath) -> s1::DependencyProduct<DefinitionRef> {
         let result = match self.value(path, FRONT_LOWER_KIND, Span::default()).await {
             Ok(Value::Lower(lower)) => {
-                for d in lower.dependencies.iter() {
-                    self.record(ReadKey::ExecutedSignature(d.definition), d.fingerprint);
-                }
+                self.execution_signatures(lower.dependencies.iter());
                 lower
                     .decode(&self.owner)
                     .map(|output| output.value)

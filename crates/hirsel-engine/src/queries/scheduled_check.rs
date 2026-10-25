@@ -7,10 +7,12 @@ use super::*;
 use crate::runtime::*;
 use crate::store::{Domain, Reference, ResultStore};
 use std::{sync::Mutex, task::Poll};
+mod scope;
+pub use scope::FrontCheckScope;
 pub const FRONT_CHECK_KIND: u32 = 0x4600_000a;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_000b,
-    schema: 1,
+    schema: 2,
 };
 /// Engine-selected snapshots and source order. Clients submit operations and
 /// frozen input observations; the compiler host constructs this plan.
@@ -33,6 +35,8 @@ struct Data {
     checked: CheckOutput,
     front: Vec<(DefPath, ProductRef)>,
     lowered: Vec<(DefPath, ProductRef)>,
+    failed_front: Vec<(DefPath, Reference)>,
+    failed_lowered: Vec<(DefPath, Reference)>,
     reads: Arc<Reads>,
 }
 /// Source and receipt owners remain admitted until the last inspection or
@@ -85,6 +89,7 @@ impl FrontCheckQueries {
     pub fn input_bytes(definitions: &[DefPath], files: usize, weight: MemoryWeight) -> Option<u64> {
         let path_slot = (std::mem::size_of::<(DefPath, bool)>()
             + 2 * std::mem::size_of::<(DefPath, ProductRef)>()
+            + 2 * std::mem::size_of::<(DefPath, Reference)>()
             + std::mem::size_of::<DefId>()
             + 128) as u64;
         let base = weight.retained.checked_add(
@@ -152,6 +157,8 @@ impl QueryFactory for Factory {
             reads: ReadsBuilder::new(),
             front: Vec::new(),
             lowered: Vec::new(),
+            failed_front: Vec::new(),
+            failed_lowered: Vec::new(),
             terminal: None,
         }))
     }
@@ -208,6 +215,8 @@ struct Task {
     reads: ReadsBuilder,
     front: Vec<(DefPath, ProductRef)>,
     lowered: Vec<(DefPath, ProductRef)>,
+    failed_front: Vec<(DefPath, Reference)>,
+    failed_lowered: Vec<(DefPath, Reference)>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
 impl QueryTask for Task {
@@ -316,7 +325,10 @@ impl Task {
                                     }
                                 }
                             }
-                            Err(error) => file.error(error, body.outcome.phase),
+                            Err(error) => {
+                                self.failed_front.push((path.clone(), reference));
+                                file.error(error, body.outcome.phase);
+                            }
                         }
                         self.root += 1;
                     }
@@ -453,14 +465,24 @@ impl Task {
                                 file.diagnostics.extend(output.output.diagnostics);
                                 self.lowered.push((path.clone(), product));
                             }
-                            Err(reference) => file.error(
-                                self.queries
+                            Err(reference) => {
+                                let reads = self
+                                    .queries
                                     .plan
                                     .lower
-                                    .failure(reference)
-                                    .ok_or(reference)?,
-                                Some(QueryKind::Lower),
-                            ),
+                                    .selected_reads(id, reference)
+                                    .ok_or(reference)?;
+                                self.reads.merge(&reads);
+                                self.failed_lowered.push((path.clone(), reference));
+                                file.error(
+                                    self.queries
+                                        .plan
+                                        .lower
+                                        .failure(reference)
+                                        .ok_or(reference)?,
+                                    Some(QueryKind::Lower),
+                                );
+                            }
                         }
                         self.root += 1;
                     }
@@ -535,6 +557,8 @@ impl Task {
                         .iter()
                         .map(|(path, p)| (path, p.record))
                         .collect::<Vec<_>>(),
+                    &self.failed_front,
+                    &self.failed_lowered,
                     &reads,
                 ),
             )
@@ -547,7 +571,7 @@ impl Task {
             .put_content(OUTPUT, &bytes)
             .ok_or(queries.errors.resource)?;
         let action = hirsel_artifact_store::Action(ContentHash::of_parts(
-            "hirsel.front.check.action.v1",
+            "hirsel.front.check.action.v2",
             [
                 queries.query.address.0.0.as_slice(),
                 record.output.0.0.as_slice(),
@@ -568,6 +592,8 @@ impl Task {
             checked,
             front: std::mem::take(&mut self.front),
             lowered: std::mem::take(&mut self.lowered),
+            failed_front: std::mem::take(&mut self.failed_front),
+            failed_lowered: std::mem::take(&mut self.failed_lowered),
             reads: Arc::new(reads),
         });
         *queries.completed.lock().unwrap_or_else(|e| e.into_inner()) = Some((product, data));
