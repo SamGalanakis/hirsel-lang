@@ -55,6 +55,14 @@ and abort the rebase; resolve them yourself and run land again. Land does
 not run tests or commit generated files. Main's scheduled run owns the API
 index; the generated-file and independent-line-list rules still apply.
 
+Before publishing a ticket, land finds and probes Cargo and rustc locally;
+an unavailable toolchain refuses submission with one line. Land slots and
+`prepare.py` share the lookup: the prepared compiler tree, the pinned rustup
+toolchain under `RUSTUP_HOME` (default `~/.rustup`), then `CARGO_HOME/bin`
+(default `~/.cargo/bin`), with the host PATH as a fallback. Every slot
+subprocess receives that explicit PATH, including nested preparation and
+build-file generation, so the batch head needs no shell Rust setup.
+
 Every retry checks its rebased tree. There is no third-attempt exception,
 no inherited lint pass and no attempt limit. Losing a push race waits a
 random duration in `[0, min(30, 2**attempt)]` seconds, then fetches and

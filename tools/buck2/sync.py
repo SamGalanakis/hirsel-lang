@@ -1023,7 +1023,7 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-land", script="tools/tests/land.py", full=False,
                             data=["tools/land", "tools/tests/land.py", "//tools/buck2:generated.py",
                                   "//tools/buck2:merging.py", "//tools/buck2:clippy.py", "//tools/buck2:fmt.py",
-                                  "//tools/buck2:event_logs.py"]))
+                                  "//tools/buck2:event_logs.py", "//tools/buck2:rust_environment.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
                             files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh",

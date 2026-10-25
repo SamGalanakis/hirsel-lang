@@ -81,6 +81,7 @@ class Land(unittest.TestCase):
         files = dict(FAKES, **{'tools/land': (ROOT / 'tools/land').read_text(),
                                'tools/buck2/generated.py': (ROOT / 'tools/buck2/generated.py').read_text(),
                                'tools/buck2/merging.py': (ROOT / 'tools/buck2/merging.py').read_text(),
+                               'tools/buck2/rust_environment.py': (ROOT / 'tools/buck2/rust_environment.py').read_text(),
                                '.gitignore': '.buck2/\n'})
         for name, text in files.items():
             (self.lane / name).parent.mkdir(parents=True, exist_ok=True)
@@ -105,6 +106,50 @@ class Land(unittest.TestCase):
 
     def main_log(self):
         return self.git(self.origin, 'log', '--format=%s', 'main').split('\n')[:-1]
+
+    def test_slot_preparation_finds_cargo_without_it_on_the_leaders_path(self):
+        cargo_bin = self.top / 'cargo-home/bin'
+        cargo_bin.mkdir(parents=True)
+        cargo = cargo_bin / 'cargo'
+        cargo.write_text('#!/bin/sh\necho cargo-found\n')
+        cargo.chmod(0o755)
+        (cargo_bin / 'rustc').symlink_to(cargo)
+        # The same nested process boundary as prepare -> bootstrap -> sync.
+        (self.lane / 'tools/buck2/prepare.py').write_text(FAKES['tools/buck2/prepare.py'] + '''import subprocess, sys
+subprocess.run([sys.executable, 'tools/buck2/sync.py'], check=True)
+''')
+        (self.lane / 'tools/buck2/sync.py').write_text('''import subprocess
+from pathlib import Path
+found = subprocess.check_output(['cargo', '--version'], text=True).strip()
+assert found == 'cargo-found', found
+Path('.buck2/prepared').write_text(found)
+''')
+        self.git(self.lane, 'commit', '-qam', 'prepare needs cargo')
+        stripped = dict(PATH=os.defpath, CARGO='cargo', CARGO_HOME=str(cargo_bin.parent),
+                        RUSTUP_HOME=str(self.top / 'rustup-home'))
+        self.assertIsNone(shutil.which('cargo', path=stripped['PATH']))
+        landed = self.land(**stripped)
+        self.assertEqual(landed.returncode, 0, landed.stdout + landed.stderr)
+        self.assertIn('pass  prepare.py', landed.stdout)
+        slots = self.top / 'lane-land-slots'
+        self.assertTrue(any(path.read_text() == 'cargo-found' for path in slots.glob('*/.buck2/prepared')))
+
+    def test_missing_toolchain_is_refused_before_a_ticket_is_published(self):
+        for installed in (False, True):
+            with self.subTest(installed=installed):
+                if installed:
+                    cargo_bin = self.top / 'cargo/bin'
+                    cargo_bin.mkdir(parents=True)
+                    for name in ('cargo', 'rustc'):
+                        tool = cargo_bin / name
+                        tool.write_text('#!/bin/sh\nexit 1\n')
+                        tool.chmod(0o755)
+                landed = self.land(PATH=os.defpath, HOME=str(self.top / 'home'), CARGO='cargo',
+                                   CARGO_HOME=str(self.top / 'cargo'), RUSTUP_HOME=str(self.top / 'rustup'))
+                self.assertEqual(landed.returncode, 1, landed.stdout + landed.stderr)
+                self.assertEqual(len(landed.stdout.splitlines()), 1)
+                self.assertIn('Rust toolchain unavailable' if installed else 'no Rust toolchain found', landed.stdout)
+                self.assertFalse((self.lane / '.git/land-queue').exists())
 
     def test_a_push_rejected_because_main_moved_rebases_rebuilds_and_lands(self):
         landed = self.land(FAKE_OTHER_LANE=str(self.top / 'other'))

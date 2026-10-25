@@ -22,6 +22,8 @@ import os
 import subprocess
 import sys
 
+import rust_environment
+
 ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / 'tools/buck2'
 LOCAL_CONFIG = ('# Every action runs on this host (tools/buck2/prepare.py --local).\n'
@@ -49,8 +51,13 @@ def main():
     if arguments not in ([], ['--local']):
         print(__doc__, file=sys.stderr)
         return 2
+    try:
+        env = rust_environment.environment(ROOT)
+    except ValueError as error:
+        print(f'prepare: {error}', file=sys.stderr)
+        return 1
     subprocess.run([sys.executable, str(HERE / 'bootstrap.py')], check=True, cwd=ROOT,
-                   stdout=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, env=env)
     local = ROOT / '.buckconfig.local'
     if arguments == ['--local']:
         if not local.is_file() or local.read_text() != LOCAL_CONFIG:
@@ -61,7 +68,7 @@ def main():
     reason = ('no remote-execution hook ($HIRSEL_BUCK2_REMOTE_CONFIG or '
               '~/.config/hirsel/buck2-remote-config)')
     if hook:
-        remote = subprocess.run([str(hook), str(ROOT)], cwd=ROOT, capture_output=True, text=True)
+        remote = subprocess.run([str(hook), str(ROOT)], cwd=ROOT, capture_output=True, text=True, env=env)
         if remote.returncode == 0:
             return 0
         reason = f'{hook} exited {remote.returncode}' + (f': {remote.stderr.strip()}' if remote.stderr.strip() else '')

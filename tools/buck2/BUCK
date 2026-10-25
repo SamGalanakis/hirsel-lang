@@ -162,6 +162,7 @@ export_file(name = "workspace-metadata.json", mode = "reference", visibility = [
     "merging.py",
     "clippy.py",
     "fmt.py",
+    "rust_environment.py",
 ]]
 
 # Production request functions exercised by the launcher tool test.
