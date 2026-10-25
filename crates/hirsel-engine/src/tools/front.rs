@@ -341,7 +341,7 @@ impl QueryEngine {
                 .front
                 .entry(outcome.definition.clone())
                 .or_default();
-            *reads = Arc::new(
+            *reads = std::sync::Arc::new(
                 Reads::from_vec(
                     reads
                         .iter()
