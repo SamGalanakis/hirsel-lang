@@ -609,7 +609,7 @@ impl DemandInstances {
         {
             return Ok(output.clone());
         }
-        let operations = if request.recipe.domain == SOURCE_RECIPE {
+        let mut operations = if request.recipe.domain == SOURCE_RECIPE {
             let output = inputs
                 .source_output(&request.key.definition)?
                 .ok_or("native source instance needs current V invocation observations")?;
@@ -817,12 +817,17 @@ impl DemandInstances {
         .map_err(|e| e.to_string())?;
         let ready_source = ReadySourceFacts::for_instance(&instances, id).encode()?;
         let table = layouts.finish();
-        let unit = hirsel_rc::flat_walk::rewrite(
+        let mut unit = hirsel_rc::flat_walk::rewrite(
             imported.unit,
             &table,
             &hirsel_rc::flat_walk::Options {
                 enabled: options.flat_walk,
             },
+        );
+        hirsel_rc::import::prune_pretransfer(
+            std::slice::from_mut(&mut unit),
+            &table,
+            &operations.pretransfer_adapters,
         );
         let mut requests = instances
             .ids()
