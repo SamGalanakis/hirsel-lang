@@ -143,12 +143,31 @@ struct ForeignGate {
     waiters: Vec<u32>,
 }
 
-/// A completed child's result slot, inside its parked frame.
+/// A completed child's result slot, inside its parked frame, and the `None`
+/// image a join leaves behind, which its row owns ([`Task::held_none`]).
 #[derive(Clone, Copy)]
 struct Slot {
     slot: *mut u8,
     none: *const u8,
     size: usize,
+}
+
+impl Slot {
+    /// The slot of a result at `slot`, with a copy of its `None` carrier for
+    /// the ending task's row: the carrier may lie on a stack its compact
+    /// frame gives up (`compact::can_hold`). Allocates, so it runs before
+    /// any recorder section.
+    ///
+    /// # Safety
+    /// `none` is readable for `size` bytes.
+    unsafe fn held(slot: *mut u8, none: *const u8, size: u64) -> (Self, Box<[u8]>) {
+        let size =
+            usize::try_from(size).unwrap_or_else(|_| fault("a result slot's size overflows"));
+        // SAFETY: caller contract.
+        let image: Box<[u8]> = unsafe { std::slice::from_raw_parts(none, size) }.into();
+        let none = image.as_ptr();
+        (Self { slot, none, size }, image)
+    }
 }
 
 struct Task {
@@ -173,6 +192,8 @@ struct Task {
     /// Its result is held for its parent from a saved compact frame: the
     /// reissued task end continues after the hold (`compact::hold`).
     hold_left: bool,
+    /// The `None` image its [`Slot`] leaves behind, freed with the row.
+    held_none: Option<Box<[u8]>>,
     /// Fast children own a stable context independently of the lent fiber.
     inline_context: Option<Box<std::cell::UnsafeCell<TaskCtx>>>,
     /// Parent destination while an immediate child runs on its parent's fiber.
@@ -956,6 +977,7 @@ impl Task {
             context_home: None,
             compact_frame: None,
             hold_left: false,
+            held_none: None,
             inline_context: None,
             inline_result: None,
             inline_value: None,
@@ -3431,11 +3453,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     if free::enabled(ctx) {
         return unsafe { crate::stop::check(ctx, free::lifecycle::finish(ctx, slot, none, size)) };
     }
-    let held = Slot {
-        slot,
-        none,
-        size: usize::try_from(size).unwrap_or_else(|_| fault("a result slot's size overflows")),
-    };
+    // SAFETY: caller contract.
+    let (held, image) = unsafe { Slot::held(slot, none, size) };
     let Some((current, path)) = role::with_role(ctx, |s| {
         let current = s.current;
         let row = s.task(current);
@@ -3456,6 +3475,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
     unsafe {
         role::with_held(ctx, |s| {
             let row = s.task(current);
+            row.held_none = Some(image);
             row.slot = Some(held);
             row.state = State::Holding;
             s.order(current);

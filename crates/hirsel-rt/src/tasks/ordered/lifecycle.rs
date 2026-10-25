@@ -389,17 +389,16 @@ pub(crate) unsafe fn finish(
         return Ok(STATUS_OK);
     }
     let (parent, progress) = engine::head_effect(ctx, "task.end", || {
+        // SAFETY: caller contract.
+        let (held, image) = unsafe { Slot::held(slot, none, size) };
         let parent = role::with_role(ctx, |s| {
             let scope = s.task(me).scope.expect("a child has a scope");
             let parent = s.scope(scope).owner;
             let parent = handle(parent, s.task(parent).generation);
             let row = s.task(me);
             row.ended = true;
-            row.slot = Some(Slot {
-                slot,
-                none,
-                size: usize::try_from(size).expect("task result size fits usize"),
-            });
+            row.slot = Some(held);
+            row.held_none = Some(image);
             row.state = State::Holding;
             s.order(me);
             parent

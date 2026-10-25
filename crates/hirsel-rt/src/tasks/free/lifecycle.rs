@@ -372,11 +372,8 @@ pub(crate) unsafe fn finish(
         })?;
         return Ok(STATUS_OK);
     }
-    let held = Slot {
-        slot,
-        none,
-        size: usize::try_from(size).expect("a result slot fits memory"),
-    };
+    // SAFETY: caller contract.
+    let (held, image) = unsafe { Slot::held(slot, none, size) };
     unsafe {
         role::with_held(ctx, |s| {
             let additional = s.set_waiters.len() + 2;
@@ -388,6 +385,7 @@ pub(crate) unsafe fn finish(
             let row = s.task(me);
             row.ended = true;
             row.slot = Some(held);
+            row.held_none = Some(image);
             row.state = State::Holding;
             s.order(me);
             s.settle(me);
