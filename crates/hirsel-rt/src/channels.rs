@@ -10,8 +10,10 @@
 //! but the queue's growth: the queue is one ring of images ([`Ring`]) that doubles when full.
 //!
 //! Sender and Receiver are run-local handle words with [`ENDPOINT`] set, an endpoint index and
-//! a generation; dropping one closes it through [`close`], reached from the handle close of
-//! `finalize.rs` instead of the Io adapter.
+//! that index's generation; dropping one closes it through [`close`], reached from the handle
+//! close of `finalize.rs` instead of the Io adapter. Endpoint rows are reused per slot as task
+//! rows are ([`Slots`]): a generation never wraps, so a closed endpoint's word, and any lease
+//! still keyed by it, never names a later endpoint.
 
 use hirsel_free::sync::{Arc, AtomicU32, AtomicU64, Mutex, MutexGuard, Ordering};
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
@@ -20,9 +22,14 @@ use std::ptr::NonNull;
 
 use crate::fault;
 use crate::release::{LAYOUT_DYNAMIC, Layout};
+use crate::tasks::registry::Slots;
 
 /// The tag of a channel endpoint's handle word.
 pub(crate) const ENDPOINT: u64 = 1 << 63;
+
+/// An endpoint slot's last generation: its word stays below `tasks::TASK_SET`, which marks a
+/// task set's endpoint word. A slot that reaches it is never reused.
+const ENDPOINT_GENERATIONS: u32 = 0x3fff_ffff;
 
 /// A send or receive status: done, closed, or canceled (`CANCELED + cause`).
 pub(crate) const DONE: u32 = 0;
@@ -399,8 +406,7 @@ pub(crate) struct Channels {
     channels: Vec<Option<Channel>>,
     vacant_channels: Vec<u32>,
     endpoints: Vec<Option<Endpoint>>,
-    vacant_endpoints: Vec<u32>,
-    generation: u32,
+    endpoint_slots: Slots<ENDPOINT_GENERATIONS>,
     /// The channels whose `touched` is set.
     touched: Vec<u32>,
 }
@@ -410,8 +416,10 @@ impl Channels {
     /// remain absent until the owning creation command commits.
     pub(crate) fn reserve_open(&mut self) -> ReservedChannel {
         let channel = self.vacant_channels.pop().unwrap_or_else(|| {
+            let channel = u32::try_from(self.channels.len())
+                .unwrap_or_else(|_| fault("a run's channel table is full"));
             self.channels.push(None);
-            (self.channels.len() - 1) as u32
+            channel
         });
         ReservedChannel {
             channel,
@@ -506,26 +514,19 @@ impl Channels {
     }
 
     fn reserve_endpoint(&mut self, sender: bool) -> ReservedEndpoint {
-        // Below `tasks::TASK_SET`, which marks a task set's endpoint word.
-        self.generation = (self.generation + 1) & 0x3fff_ffff;
-        let row = Endpoint {
-            generation: self.generation,
+        let (index, generation) = self.endpoint_slots.take(self.endpoints.len());
+        let row = Some(Endpoint {
+            generation,
             channel: u32::MAX,
             sender,
             initialized: false,
-        };
-        let index = match self.vacant_endpoints.pop() {
-            Some(index) => {
-                self.endpoints[index as usize] = Some(row);
-                index
-            }
-            None => {
-                self.endpoints.push(Some(row));
-                (self.endpoints.len() - 1) as u32
-            }
-        };
+        });
+        match self.endpoints.get_mut(index as usize) {
+            Some(vacant) => *vacant = row,
+            None => self.endpoints.push(row),
+        }
         ReservedEndpoint {
-            word: ENDPOINT | u64::from(self.generation) << 32 | u64::from(index),
+            word: ENDPOINT | u64::from(generation) << 32 | u64::from(index),
         }
     }
 
@@ -716,7 +717,7 @@ impl Channels {
 
     /// Reserve recycling lists before a native recording phase.
     pub(crate) fn prepare_close(&mut self) {
-        self.vacant_endpoints.reserve(1);
+        self.endpoint_slots.reserve(1);
         self.vacant_channels.reserve(1);
         self.touched.reserve(1);
     }
@@ -776,7 +777,7 @@ impl Channels {
             fault("a channel endpoint closed twice or of another run");
         };
         self.endpoints[index as usize] = None;
-        self.vacant_endpoints.push(index);
+        self.endpoint_slots.release(index, endpoint.generation);
         last.then(|| {
             self.vacant_channels.push(endpoint.channel);
             self.channels[endpoint.channel as usize]
@@ -907,6 +908,13 @@ mod tests {
 
     fn channel() -> (Channels, u64, u64, u32) {
         let mut channels = Channels::default();
+        let (sender, receiver) = open(&mut channels);
+        let channel = channels.channel(sender, true);
+        (channels, sender, receiver, channel)
+    }
+
+    /// A fresh channel of `[tag, value]` images in `channels`: its Sender and Receiver words.
+    fn open(channels: &mut Channels) -> (u64, u64) {
         let layout = Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,
@@ -924,9 +932,176 @@ mod tests {
         };
         let none = [0u64; 2];
         let element = unsafe { Element::new(0, &layout, none.as_ptr().cast()) };
-        let (sender, receiver) = channels.open(element, &layout);
-        let channel = channels.channel(sender, true);
-        (channels, sender, receiver, channel)
+        channels.open(element, &layout)
+    }
+
+    fn generation(word: u64) -> u32 {
+        ((word & !ENDPOINT) >> 32) as u32
+    }
+
+    /// An endpoint slot is reused with its next generation, and once its last generation
+    /// closes it is never reused: every closed word stays dead. The setup ages vacant slots
+    /// instead of reserving 2^30 endpoints.
+    #[test]
+    fn endpoint_words_fail_after_reuse_and_after_their_slot_is_exhausted() {
+        let mut channels = Channels::default();
+        let first = open(&mut channels);
+        channels.close(first.0);
+        channels.close(first.1);
+        let reused = open(&mut channels);
+        assert_eq!(
+            [reused.0 as u32, reused.1 as u32],
+            [first.1 as u32, first.0 as u32],
+            "vacant slots are reused, last closed first"
+        );
+        assert_eq!(
+            [generation(reused.0), generation(reused.1)],
+            [2, 2],
+            "per slot, not one counter"
+        );
+        assert!(!channels.initialized(first.0, true) && !channels.initialized(first.1, false));
+        assert!(channels.initialized(reused.0, true) && channels.initialized(reused.1, false));
+        channels.close(reused.0);
+        channels.close(reused.1);
+
+        channels.endpoint_slots.age(ENDPOINT_GENERATIONS - 1);
+        let last = open(&mut channels);
+        for word in [last.0, last.1] {
+            assert_eq!(generation(word), ENDPOINT_GENERATIONS);
+            assert!((word as u32) < 2, "the exhausted slots are the reused ones");
+            assert_eq!(
+                word & crate::tasks::TASK_SET,
+                0,
+                "the last generation stays an endpoint word"
+            );
+            assert_eq!(word >> 32, ENDPOINT >> 32 | u64::from(ENDPOINT_GENERATIONS));
+        }
+        assert_eq!(
+            channels.channel(last.0, true),
+            channels.channel(last.1, false)
+        );
+        channels.close(last.0);
+        channels.close(last.1);
+
+        let fresh = open(&mut channels);
+        assert_eq!([fresh.0 as u32, fresh.1 as u32], [2, 3]);
+        assert_eq!([generation(fresh.0), generation(fresh.1)], [1, 1]);
+        for (word, sender) in [first, reused, last]
+            .into_iter()
+            .flat_map(|(s, r)| [(s, true), (r, false)])
+        {
+            assert!(
+                !channels.initialized(word, sender),
+                "{word:#x} names a later endpoint"
+            );
+        }
+        channels.close(fresh.0);
+        channels.close(fresh.1);
+    }
+
+    /// slotmap's `check_drops` (src/basic.rs:1450-1498 at slotmap 1.0.7) over endpoint rows:
+    /// queued messages are the counted values, a receiver close detaches them, and vacant slots
+    /// are reused. Two variants: tasks keep leases (word to retained cell, as
+    /// `tasks::free::objects` does) on every closed endpoint, and a final round closes slots at
+    /// their last generation. A lease retains its closed cell's storage but never authorizes a
+    /// later endpoint, and each message is left to exactly one cleanup owner, the close.
+    /// Channels whose tasks keep leases (word to retained cell, as `tasks::free::objects` does)
+    /// on every endpoint they close, counting the messages each close leaves.
+    #[derive(Default)]
+    struct Leased {
+        channels: Channels,
+        leases: Vec<(u64, Arc<ChannelCell>)>,
+        closed: std::collections::HashSet<u64>,
+        left: usize,
+    }
+
+    impl Leased {
+        fn open_sent(&mut self, value: u64) -> (u64, u64) {
+            let words = open(&mut self.channels);
+            for word in [words.0, words.1] {
+                assert!(!self.closed.contains(&word), "{word:#x} was reissued");
+                assert!(self.leases.iter().all(|(key, _)| *key != word));
+            }
+            let channel = self.channels.channel(words.0, true);
+            let mut image = [1, value];
+            assert_eq!(
+                unsafe { self.channels.send(channel, image.as_mut_ptr().cast()) },
+                DONE
+            );
+            words
+        }
+
+        fn close(&mut self, (sender, receiver): (u64, u64)) {
+            let cell = self.channels.payload(self.channels.channel(sender, true));
+            self.leases.push((sender, cell.clone()));
+            self.leases.push((receiver, cell.clone()));
+            self.channels.close(sender);
+            if let Some((queue, _)) = self.channels.close_images(receiver) {
+                self.left += queue.len();
+            }
+            assert!(cell.lock().queue.is_empty(), "the close took the messages");
+            assert!(self.closed.insert(sender) && self.closed.insert(receiver));
+        }
+    }
+
+    /// slotmap's `check_drops` (src/basic.rs:1450-1498 at slotmap 1.0.7) over endpoint rows:
+    /// queued messages are the counted values, a receiver close leaves them, and vacant slots
+    /// are reused. Two variants: leases stay on every closed endpoint, and a round reuses slots
+    /// at their last generation. A lease retains its closed cell's storage but never names a
+    /// later endpoint, and each message has exactly one cleanup owner, the close.
+    #[test]
+    fn retained_leases_keep_closed_cells_while_slots_reuse_to_their_last_generation() {
+        let mut t = Leased::default();
+        let words: Vec<_> = (0..100).map(|n| t.open_sent(n)).collect();
+        for &pair in words.iter().step_by(2) {
+            t.close(pair);
+        }
+        assert_eq!(t.left, 50);
+        // Reuse half the vacant slots, then the other half at their last generation.
+        let reused: Vec<_> = (0..25).map(|n| t.open_sent(100 + n)).collect();
+        t.channels.endpoint_slots.age(ENDPOINT_GENERATIONS - 1);
+        let last: Vec<_> = (0..25).map(|n| t.open_sent(200 + n)).collect();
+        assert!(
+            reused
+                .iter()
+                .all(|&(s, r)| generation(s) == 2 && generation(r) == 2)
+        );
+        assert!(
+            last.iter()
+                .all(|&(s, r)| generation(s) == ENDPOINT_GENERATIONS
+                    && generation(r) == ENDPOINT_GENERATIONS
+                    && (s as u32) < 200
+                    && (r as u32) < 200)
+        );
+        for &pair in &last {
+            t.close(pair);
+        }
+        // No exhausted slot is reused: the next endpoints are fresh rows.
+        let fresh = t.open_sent(300);
+        assert_eq!([fresh.0 as u32, fresh.1 as u32], [200, 201]);
+        for &pair in reused
+            .iter()
+            .chain(words.iter().skip(1).step_by(2))
+            .chain([&fresh])
+        {
+            t.close(pair);
+        }
+        assert_eq!(
+            t.left, 151,
+            "every queued message was left to its close once"
+        );
+        drop(t.channels);
+        // Leases still hold their cells; each is closed, empty and refuses a send.
+        assert_eq!(t.leases.len(), 302);
+        for (_, cell) in &t.leases {
+            assert_eq!(Arc::strong_count(cell), 2, "only the endpoints' two leases");
+            let mut image = [1u64, 9];
+            assert_eq!(
+                unsafe { cell.send(&mut cell.lock(), image.as_mut_ptr().cast(), false) }.0,
+                CLOSED
+            );
+            assert_eq!(image, [1, 9]);
+        }
     }
 
     #[test]

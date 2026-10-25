@@ -5,7 +5,8 @@
 //! Later immediate operations take only the cell latch and the task's own
 //! phase: no role acquisition, task-table lookup or readiness poll. A lease
 //! keeps cell storage, never a closed object: sync words are never reissued
-//! (cells are append-only) and endpoint words carry their generation.
+//! (cells are append-only), and an endpoint slot's generation never wraps, so
+//! a lease keyed by a closed word never matches a later endpoint.
 //!
 //! An operation that cannot complete at once leaves before its ordinal
 //! begins, and the role path registers its wait. A completed put, send, kill

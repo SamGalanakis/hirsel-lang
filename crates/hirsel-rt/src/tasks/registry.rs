@@ -167,6 +167,15 @@ impl<const LIMIT: u32> Slots<LIMIT> {
     pub(crate) fn free_len(&self) -> usize {
         self.free.len()
     }
+
+    /// Bounded exhaustion setup: every vacant slot last held `generation`.
+    #[cfg(test)]
+    pub(crate) fn age(&mut self, generation: u32) {
+        assert!(generation < LIMIT, "an aged slot is still reusable");
+        for (_, last) in &mut self.free {
+            *last = generation;
+        }
+    }
 }
 
 /// A retired task slot whose storage may still be owned elsewhere.

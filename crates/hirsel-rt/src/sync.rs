@@ -165,13 +165,19 @@ impl MutexCell {
 }
 
 impl Synchronizers {
+    /// Rows are append-only, so no index names two cells and a word is never
+    /// reissued: the generation, kept below [`MUTEX`], only rejects foreign
+    /// words, and its wrap aliases nothing. A closed row stays `Closed`. The
+    /// index must fit its 32 bits, or it would spill into the generation.
     fn create(&mut self, payload: Payload) -> u64 {
+        let index = row_index(self.cells.len())
+            .unwrap_or_else(|| fault("a run's synchronizer table is full"));
         self.generation = (self.generation + 1) & 0x1fff_ffff;
         self.cells.push(Cell {
             generation: self.generation,
             payload,
         });
-        u64::from(self.generation) << 32 | (self.cells.len() - 1) as u64
+        u64::from(self.generation) << 32 | u64::from(index)
     }
 
     pub(crate) fn reserve_image(&mut self) -> Reserved {
@@ -457,6 +463,11 @@ impl Synchronizers {
     }
 }
 
+/// The next appended row's index, while it fits a word's low 32 bits.
+fn row_index(len: usize) -> Option<u32> {
+    u32::try_from(len).ok()
+}
+
 /// # Safety
 /// `image` is readable for `size` bytes.
 unsafe fn bytes<'a>(image: *const u8, size: u64) -> &'a [u8] {
@@ -467,6 +478,29 @@ unsafe fn bytes<'a>(image: *const u8, size: u64) -> &'a [u8] {
 #[cfg(test)]
 mod free_atomic_tests {
     use super::*;
+
+    /// Append-only rows make a generation wrap harmless: the wrapped words name distinct
+    /// indices and still resolve to their own rows. Neither field spills into the other or
+    /// into the tag.
+    #[test]
+    fn wrapped_generations_name_distinct_rows_and_indices_stay_in_32_bits() {
+        assert_eq!(row_index(u32::MAX as usize), Some(u32::MAX));
+        assert_eq!(row_index(u32::MAX as usize + 1), None);
+        let mut cells = Synchronizers::default();
+        cells.generation = 0x1fff_fffe;
+        let last = cells.reserve_mutex().word();
+        let wrapped = cells.reserve_mutex().word();
+        let image = cells.reserve_image().word();
+        assert_eq!(last, MUTEX | 0x1fff_ffff << 32);
+        assert_eq!(wrapped, MUTEX | 1);
+        assert_eq!(image, 1 << 32 | 2);
+        for word in [last, wrapped, image] {
+            assert!(
+                !cells.initialized(word),
+                "{word:#x} resolves to its reserved row"
+            );
+        }
+    }
 
     #[test]
     fn resolved_images_remain_live_after_registry_growth_and_retirement() {
