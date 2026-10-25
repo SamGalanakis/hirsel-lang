@@ -130,6 +130,8 @@ struct SourceProducts {
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     receipt: Option<Arc<CheckedReceipt>>,
+    /// PS9 capture over the conditional Run view of an Artifacts request.
+    export: Option<Arc<hirsel_engine::FrontProofExport>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -149,7 +151,8 @@ impl GraphProducts for SourceProducts {
             }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
-            CompileOperation::SafeCheck => self.safe.is_some(),
+            CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
+            CompileOperation::Artifacts { native: false } => self.export.is_some(),
             CompileOperation::NativeOwnership(request) => self
                 .ownership
                 .as_ref()
@@ -174,7 +177,7 @@ impl GraphProducts for SourceProducts {
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
                 vec![self.native.as_ref().ok_or_else(uninstalled)?.query()]
             }
-            CompileOperation::SafeCheck => {
+            CompileOperation::SafeCheck | CompileOperation::Artifacts { native: false } => {
                 vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
             }
             CompileOperation::Check { lowering }
@@ -208,6 +211,7 @@ impl GraphProducts for SourceProducts {
         let native = self.native.clone();
         let ownership = self.ownership.clone();
         let safe = self.safe.clone();
+        let export = self.export.clone();
         let lower = self.lower.clone();
         let check = self.check.clone();
         let receipt = self.receipt.clone();
@@ -304,6 +308,30 @@ impl GraphProducts for SourceProducts {
                             let (checked, reach) =
                                 safe.as_ref().ok_or_else(uninstalled)?.outcome(*product)?;
                             CompileResult::SafeCheck { checked, reach }
+                        }
+                        CompileOperation::Artifacts { native: false } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|selected| selected.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            let (checked, run) =
+                                safe.as_ref().ok_or_else(uninstalled)?.settled(*product)?;
+                            // A rejected or incomplete check never demanded Run;
+                            // completed_artifacts then publishes diagnostics only.
+                            let tir = match run {
+                                Some(run) => export
+                                    .as_ref()
+                                    .ok_or_else(uninstalled)?
+                                    .input(run)
+                                    .map(|input| hirsel_proof_export::export(&input).into_bytes())
+                                    .map_err(|error| format!("{error:?}")),
+                                None => Err("check was not accepted".into()),
+                            };
+                            CompileResult::Artifacts(super::host_selector::completed_artifacts(
+                                &checked, tir, None,
+                            ))
                         }
                         CompileOperation::Check { .. } => {
                             let [product] = products else {
@@ -771,11 +799,14 @@ pub(super) fn install(
             (LoweringPolicy::Reachable, true)
         }
         CompileOperation::SafeCheck => (config.lowering, true),
+        // The oracle export reads the check and TIR of every reachable body.
+        CompileOperation::Artifacts { native: false } => (LoweringPolicy::Reachable, true),
         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
             (LoweringPolicy::Reachable, true)
         }
         _ => return Err(uninstalled()),
     };
+    let artifacts = matches!(request.operation, CompileOperation::Artifacts { .. });
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
     let mut loading = budget.begin(limits)?;
@@ -895,7 +926,10 @@ pub(super) fn install(
             ),
             matches!(&request.operation, CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) if native.evidence.is_some()),
             matches!(request.operation, CompileOperation::NativeOwnership(_)),
-            matches!(request.operation, CompileOperation::SafeCheck),
+            matches!(
+                request.operation,
+                CompileOperation::SafeCheck | CompileOperation::Artifacts { .. }
+            ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             footprint,
             run_input_bytes,
@@ -1140,11 +1174,27 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
-    let safe_allowance = if matches!(request.operation, CompileOperation::SafeCheck) {
+    let safe_allowance = if matches!(
+        request.operation,
+        CompileOperation::SafeCheck | CompileOperation::Artifacts { .. }
+    ) {
         Some(
             run.split(super::safe_check::BYTES)
                 .ok_or_else(uninstalled)?,
         )
+    } else {
+        None
+    };
+    // PS9 headers and source metadata share the Run partition; their
+    // constructors refuse metadata beyond these splits.
+    let export_allowance = if artifacts {
+        let headers = program
+            .engine
+            .front_checked_signatures_bytes(&front)
+            .map_err(&query_error)?;
+        let headers = run.split(headers).ok_or_else(uninstalled)?;
+        let export = run.split(run.bytes() / 4).ok_or_else(uninstalled)?;
+        Some((headers, export))
     } else {
         None
     };
@@ -1183,6 +1233,27 @@ pub(super) fn install(
         drop(run);
         None
     };
+    // The export selects its own unshared Run view of the entry package; that
+    // view replaces the ordinary Run for this graph.
+    let mut export_products = None;
+    if let Some((headers, allowance)) = export_allowance {
+        let headers = program
+            .engine
+            .front_checked_signatures(front.clone(), headers)
+            .map_err(&query_error)?;
+        let entry = program.entry.clone();
+        let export = program
+            .engine
+            .front_proof_export(
+                &entry,
+                run.take().ok_or_else(uninstalled)?,
+                headers,
+                allowance,
+            )
+            .map_err(&query_error)?;
+        run = Some(export.run().clone());
+        export_products = Some(export);
+    }
     let safe = safe_allowance
         .map(|allowance| {
             super::safe_check::SafeCheck::new(
@@ -1402,6 +1473,7 @@ pub(super) fn install(
         ownership,
         safe,
         receipt,
+        export: export_products,
         front,
         lower,
         check,
