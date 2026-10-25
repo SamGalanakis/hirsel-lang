@@ -2636,6 +2636,28 @@ unsafe fn block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) {
 ///
 /// # Safety
 /// `ctx` is live; whatever `wait` names outlives the wait.
+/// [`try_block`]'s Free park for a task whose compact frame leaves its stack
+/// instead of suspending on it: the task waits as it would, and the frame's
+/// wake reissues the op that parked (`compact::can_wait`).
+///
+/// # Safety
+/// As for [`try_block`]; the caller returns `STATUS_SUSPENDED` to its
+/// boundary call.
+pub(crate) unsafe fn park_left(ctx: *mut TaskCtx, wait: Wait) -> Stopped<()> {
+    // SAFETY: the running task owns this entry until its suspension or return.
+    let _role = unsafe { role::Guard::new(ctx) };
+    crate::stop::observe(ctx)?;
+    unsafe {
+        role::with_held(ctx, |t| {
+            let me = t.current;
+            t.task(me).wait_site = 0;
+            t.park(wait);
+        });
+        free::dispatch_ready(ctx);
+    }
+    Ok(())
+}
+
 unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> Stopped<()> {
     // SAFETY: the running task owns this entry until its suspension or return.
     let _role = unsafe { role::Guard::new(ctx) };
@@ -4295,8 +4317,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
     sender: *mut u64,
     message: *mut u8,
 ) -> u8 {
-    // SAFETY: caller contract; a resolved immediate send needs no role.
-    if let Some(result) = unsafe { free::objects::channel_send(ctx, sender.read(), message, out) } {
+    // SAFETY: caller contract; a resolved immediate send needs no role. A
+    // reissued send continues its replay wait under the role.
+    if !unsafe { (*ctx).wait_left }
+        && let Some(result) =
+            unsafe { free::objects::channel_send(ctx, sender.read(), message, out) }
+    {
         return unsafe { free::objects::finish(ctx, result) };
     }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
@@ -4313,8 +4339,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_send(
         return STATUS_OK;
     }
     if free::enabled(ctx) {
-        unsafe { crate::stop::check(ctx, free::channel::send(ctx, sender.read(), message, out)) };
-        return STATUS_OK;
+        let left = unsafe {
+            crate::stop::check(ctx, free::channel::send(ctx, sender.read(), message, out))
+        };
+        return if left {
+            crate::STATUS_SUSPENDED
+        } else {
+            STATUS_OK
+        };
     }
     crate::free::enter(ctx, Phase::Done);
     // SAFETY: caller contract.

@@ -348,7 +348,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         // Any boundary call can suspend its frame: a resumable callee, or an
         // operation that holds or parks from the saved frame (`STATUS_SUSPENDED`).
+        // An operation's library body returns its entry's suspension to that
+        // boundary call.
         let boundary = self.resume_boundary_call(call);
+        let suspends = boundary
+            || matches!(site.callee, Callee::Operation(op) if unit
+                .tables
+                .operations
+                .get(op.index())
+                .is_some_and(|id| hirsel_lir::continuation::leaves_in_library(&id.definition)));
         let nested = self.resume_boundary(call)?;
         let arguments = self.pool(site.arguments, &unit.pools.call_arguments)?;
         // The callee: a named function, or a code pointer and its environment.
@@ -714,7 +722,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         signature.attribute_call(self.module, returned);
         // A rejected gate leaves mut roots and temporary scatters unpublished.
         let status = signature.status(&self.builder, returned);
-        if boundary {
+        if suspends {
             self.resume_propagate(status)?;
         }
         if let Some(rejected) = site.pretransfer_failure {

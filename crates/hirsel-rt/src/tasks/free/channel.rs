@@ -103,6 +103,9 @@ pub(crate) unsafe fn dup(ctx: *mut TaskCtx, sender: u64, out: *mut u64) -> Stopp
     unsafe { try_yield(&mut *ctx) }
 }
 
+/// `true` means the send left its stack in its replay wait; its wake
+/// reissues it.
+///
 /// # Safety
 /// The role is held; sender is open, message is its Some carrier, out writable.
 pub(crate) unsafe fn send(
@@ -110,10 +113,16 @@ pub(crate) unsafe fn send(
     sender: u64,
     message: *mut u8,
     out: *mut u32,
-) -> Stopped<()> {
-    super::record::begin(ctx);
+) -> Stopped<bool> {
+    let reissued = crate::tasks::compact::waited(ctx);
+    if !reissued {
+        super::record::begin(ctx);
+    }
     let channel = role::with_role(ctx, |s| s.channels.channel(sender, true));
-    unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
+    let handle = (crate::free::CHANNEL, u64::from(channel));
+    if unsafe { super::replay::wait_object_leaving(ctx, handle, reissued) }? {
+        return Ok(true);
+    }
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe { role::with_held(ctx, |s| s.channels.payload(channel)) };
     super::objects::keep_endpoint(ctx, sender, channel, true, &cell);
@@ -129,7 +138,8 @@ pub(crate) unsafe fn send(
     if publication? == crate::channels::DONE {
         role::with_role(ctx, |s| s.channels.touch(channel));
     }
-    unsafe { try_yield(&mut *ctx) }
+    unsafe { try_yield(&mut *ctx) }?;
+    Ok(false)
 }
 
 /// Send's bounded action and its evidence, under the held cell lock.

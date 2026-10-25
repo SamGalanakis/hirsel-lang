@@ -446,15 +446,34 @@ pub(super) unsafe fn wait_object(
     ctx: *mut TaskCtx,
     handle: hirsel_free::session::Handle,
 ) -> Stopped<()> {
+    unsafe { wait_object_from(ctx, handle, false, false) }.map(|_| ())
+}
+
+/// [`wait_object`] for an op that can leave its stack while it waits:
+/// `true` means it left and returns `STATUS_SUSPENDED`. `reissued` is the
+/// op its wake reissued, which already entered its wait.
+pub(super) unsafe fn wait_object_leaving(
+    ctx: *mut TaskCtx,
+    handle: hirsel_free::session::Handle,
+    reissued: bool,
+) -> Stopped<bool> {
+    unsafe { wait_object_from(ctx, handle, true, reissued) }
+}
+
+unsafe fn wait_object_from(
+    ctx: *mut TaskCtx,
+    handle: hirsel_free::session::Handle,
+    leave: bool,
+    mut entered: bool,
+) -> Stopped<bool> {
     if !on(ctx) {
-        return Ok(());
+        return Ok(false);
     }
-    let mut entered = false;
     loop {
         {
             let object = object(ctx, handle).expect("an admitted object replay");
             let Some(dependency) = object.pending(ctx)? else {
-                return Ok(());
+                return Ok(false);
             };
             if !entered {
                 object.token.publish(ctx, Phase::Entered, || ())?;
@@ -463,6 +482,11 @@ pub(super) unsafe fn wait_object(
             if dependency.subscribe(subscriber(ctx)) {
                 continue;
             }
+        }
+        if leave && unsafe { crate::tasks::compact::can_wait(ctx) } {
+            unsafe { crate::tasks::park_left(ctx, Wait::Retry { cancelable: false }) }?;
+            crate::tasks::compact::wait(ctx);
+            return Ok(true);
         }
         unsafe { park(ctx) }?;
     }

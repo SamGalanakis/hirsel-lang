@@ -229,6 +229,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
         early: state & RESUME_EARLY != 0,
     };
     // SAFETY: compiled code calls this at a boundary of the running task.
+    unsafe { (*ctx).point_ops = 0 };
     let saves = !crate::tasks::ordered::ahead::private(ctx)
         && unsafe { crate::tasks::compact::parks(ctx, ahead) };
     #[cfg(feature = "diagnostic")]

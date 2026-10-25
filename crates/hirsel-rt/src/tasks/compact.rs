@@ -148,6 +148,38 @@ pub(crate) fn held(ctx: *mut TaskCtx) -> bool {
     })
 }
 
+/// Whether the running op's replay wait can leave its stack: the task runs
+/// a compact frame bound by its entry, can leave its stack, and began no op
+/// since its resume point but this one. The op then parks logically and
+/// returns `STATUS_SUSPENDED`, which its library body (`channel.send`'s)
+/// returns to the boundary call; the wake activates the frame, which
+/// reissues that call (Go's `gopark` parks the goroutine, not its caller's
+/// stack, `proc.go:457-492`).
+///
+/// # Safety
+/// The running task holds the role inside an op of its boundary call.
+pub(crate) unsafe fn can_wait(ctx: *mut TaskCtx) -> bool {
+    let bound = role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).compact_frame.is_some()
+    });
+    // SAFETY: caller contract.
+    bound && unsafe { (*ctx).point_ops == 1 && movable(ctx) }
+}
+
+/// Record that the running op left its stack in its replay wait.
+pub(crate) fn wait(ctx: *mut TaskCtx) {
+    // SAFETY: the running task owns its context.
+    assert!(!std::mem::replace(unsafe { &mut (*ctx).wait_left }, true));
+}
+
+/// Whether this op is the reissue of one that left its stack in its replay
+/// wait; it then continues that wait.
+pub(crate) fn waited(ctx: *mut TaskCtx) -> bool {
+    // SAFETY: the running task owns its context.
+    std::mem::take(unsafe { &mut (*ctx).wait_left })
+}
+
 /// Whether the running task can leave its stack at this resume point. If it
 /// can, its logical policy records the physical leave, and the caller must
 /// leave: Ordered marks the frame saving (a wait resumes at head; a published
@@ -170,8 +202,9 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
         let published = crate::pool::free::migrating(unsafe { (*ctx).run_ref() });
         // A held end resumes when its parent calls its rest, as its park would.
         ordered::engine::transfer(ctx, !published && !holding);
-    } else if holding {
-        // Only the parent's hand-off makes a holding task Ready again.
+    } else if holding || unsafe { (*ctx).wait_left } {
+        // Only the parent's hand-off makes a holding task Ready again, and
+        // only its dependency's wake a waiting one.
     } else {
         // SAFETY: the role is held and no table borrow survives this call.
         unsafe {

@@ -181,6 +181,14 @@ pub struct TaskCtx {
     /// The actual source invocation of a site-carrying host primitive. Task-owned
     /// across a physical save; nested calls restore their caller's site.
     pub(crate) operation_site: u64,
+    /// A Free replay op whose compact frame left its stack while it waited
+    /// for its version: the reissued op resumes the wait after its entry
+    /// (`compact::wait`).
+    pub(crate) wait_left: bool,
+    /// Free ops begun since the task's last resume point: an op that leaves
+    /// from its library body is that boundary's first, so the reissued body
+    /// repeats no effect (`compact::can_wait`).
+    pub(crate) point_ops: u32,
     /// Private execution ownership; never part of the compiled context view.
     pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
     pub(crate) ahead_physical: *mut crate::tasks::ordered::ahead::native::Physical,
@@ -480,6 +488,8 @@ impl TaskCtx {
             #[cfg(test)]
             test_host_tail: false,
             native_host_result: None,
+            wait_left: false,
+            point_ops: 0,
             replay_host: None,
             ordered_charge_trace: Default::default(),
             activations: Default::default(),

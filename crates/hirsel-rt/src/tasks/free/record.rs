@@ -418,6 +418,8 @@ fn phase<T>(
 
 /// Begin a semantic operation once, including when it later parks/retries.
 pub(super) fn begin(ctx: *mut TaskCtx) {
+    // SAFETY: the running task owns its context.
+    unsafe { (*ctx).point_ops = (*ctx).point_ops.saturating_add(1) };
     if super::replay::at_cut(ctx) {
         crate::tasks::park_final(ctx);
     }
@@ -434,6 +436,8 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
 /// [`begin`] for an immediate op whose task token checked its cut: replay
 /// keeps no recorder ordinal, and entry has nothing pending to apply.
 pub(super) fn begin_replayed(ctx: *mut TaskCtx, replay: &super::replay::Token) {
+    // SAFETY: the running task owns its context.
+    unsafe { (*ctx).point_ops = (*ctx).point_ops.saturating_add(1) };
     entry(ctx);
     replay.begin();
 }

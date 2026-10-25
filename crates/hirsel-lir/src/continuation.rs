@@ -178,6 +178,26 @@ pub fn resume_hint(definition: &DefPath) -> u32 {
     hint
 }
 
+/// Runtime entries that may return `STATUS_SUSPENDED` from inside their
+/// operation's library body. The rule: a library operation whose only effect
+/// begins at this runtime entry, so reissuing the whole body from its
+/// boundary repeats nothing. The library body returns the status to its
+/// boundary call, which saves the frame and reissues the body on the wake;
+/// the runtime checks the rule itself (an entry leaves only as the first op
+/// begun since its resume point).
+///
+/// Only `channel.send` qualifies today: its body builds `Some(message)` in a
+/// stack slot and calls this entry, and its Free replay version wait is the
+/// only wait an entry can leave from. `channel.receive` and the mutex
+/// operations join by the same rule once their waits can leave.
+const LEAVES_IN_LIBRARY: &[&str] = &["$intrinsic.ChannelSend"];
+
+/// Whether a call of operation `definition` outside a boundary returns
+/// `STATUS_SUSPENDED` to its caller ([`LEAVES_IN_LIBRARY`]).
+pub fn leaves_in_library(definition: &DefPath) -> bool {
+    core_name(definition).is_some_and(|name| LEAVES_IN_LIBRARY.contains(&name.as_str()))
+}
+
 /// What a call does to its caller's continuation, as the runtime's reviewed
 /// operation descriptors classify it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

@@ -759,12 +759,11 @@ fn peak_held(trace: &[Line]) -> usize {
 /// Go's `TestStackMem` (`runtime/stack_test.go:24-79`) as a native fanout:
 /// with no runtime knob, N children whose ends hold their results until the
 /// root's `task.all` hold at most one stack per worker (4 cores), not one
-/// each, on both backends: under Ordered live and replayed, and under Free
-/// live. Each child's end holds its result from its saved compact frame,
-/// whose stack its worker pooled; every observation equals the reference
-/// interpreter's (`compact_runs_with`), under Free replayed too. A Free
-/// replay's send still waits for its tape turn on its stack, inside the
-/// library body that implements it, so Free replay checks only the leaves.
+/// each, under Ordered and Free, on both backends, live and replayed. Each
+/// child's end holds its result from its saved compact frame, and a Free
+/// replay's send waits for its tape turn from it too (its library body
+/// returns the suspension to the boundary call); every observation equals the
+/// reference interpreter's (`compact_runs_with`).
 #[test]
 fn runtime52_parked_fanout_holds_worker_stacks() {
     with_compiler_stack(|| {
@@ -783,10 +782,7 @@ fn runtime52_parked_fanout_holds_worker_stacks() {
                 let peak = peak_held(trace);
                 eprintln!("{cell}: leaves {leaves} peak held {peak}");
                 assert!(leaves as u64 >= children, "{cell}: {leaves} leaves");
-                // Runs alternate live and replayed, LLVM first.
-                if tasks != "tasks.free@1" || index % 2 == 0 {
-                    assert!(peak <= 4, "{cell}: {peak} suspended children held stacks");
-                }
+                assert!(peak <= 4, "{cell}: {peak} suspended children held stacks");
                 let mut saved = std::collections::BTreeMap::new();
                 for (kind, task, state, _, flag) in trace {
                     match kind.as_str() {
