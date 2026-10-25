@@ -313,16 +313,15 @@ impl FrontBuiltProof {
         hirsel_proof_export::encoded_bytes(&self.export, self.input.locator())
             .ok_or(QueryError::NotImplemented)
     }
-    /// Encoding's String and the final Arc overlap until conversion completes.
-    /// The unused temporary part of this admission is released before return.
+    /// One final exact-length Arc; emitter context/digest framing scratch is
+    /// covered by the separately retained construction workspace.
     pub fn output_bytes(&self) -> Result<u64, QueryError> {
         let bytes = self.encoded_bytes()?;
         let metadata = 2 * size_of::<usize>()
             + arc_layout::<MemoryReservation>().ok_or(QueryError::NotImplemented)?
             + size_of::<FrontProofText>();
         bytes
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(metadata))
+            .checked_add(metadata)
             .and_then(|n| n.try_into().ok())
             .ok_or(QueryError::NotImplemented)
     }
@@ -335,17 +334,13 @@ impl FrontBuiltProof {
             return Err(operational("PS9 canonical output buffers exceed admission"));
         }
         let length = self.encoded_bytes()?;
-        let text = hirsel_proof_export::encode_with_output_limit(
+        let canonical = hirsel_proof_export::encode_arc_with_output_limit(
             &self.export,
             self.input.locator(),
             length,
         )
         .ok_or(QueryError::NotImplemented)?;
-        let canonical: Arc<str> = Arc::from(text.as_str());
-        drop(text);
-        let retained = needed
-            .checked_sub(length as u64)
-            .ok_or(QueryError::NotImplemented)?;
+        let retained = needed;
         let owner = Arc::new(
             allowance
                 .split(retained)

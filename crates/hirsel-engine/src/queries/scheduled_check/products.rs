@@ -272,7 +272,7 @@ impl FrontCheckScope {
     pub(crate) fn receipt_finish_bytes(
         &self,
         headers: &FrontCheckedSignatures,
-        canonical: usize,
+        _canonical: usize,
     ) -> Result<u64, QueryError> {
         let missing = || QueryError::NotImplemented;
         let mut weight = crate::NativeMetadataWeight::default();
@@ -282,7 +282,6 @@ impl FrontCheckScope {
         let mut parts = 1usize
             .checked_add(headers.registrations().len())
             .ok_or_else(missing)?;
-        weight.add(canonical); // digest's independent canonical byte copy
         for registration in headers.registrations() {
             weight.add(registration.len());
         }
