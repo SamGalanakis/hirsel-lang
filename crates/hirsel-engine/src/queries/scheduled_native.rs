@@ -265,7 +265,8 @@ impl Task {
             ));
         }
         let syntax = analyzed.value.typed.syntax.clone();
-        let executable = generation::executable(&syntax);
+        let executable = generation::executable(&syntax)
+            && native_declaration(owner.lower.signatures().types(), &input.signature);
         let mut reads = ReadsBuilder::new();
         reads.merge(&front.outcome.reads);
         let lower = if executable {
@@ -457,7 +458,8 @@ impl Task {
                 )
             })
             .transpose()?;
-        let executable = generation::executable(&syntax);
+        let executable = generation::executable(&syntax)
+            && native_declaration(owner.lower.signatures().types(), &input.signature);
         let source = crate::NativeDefinitionProduct {
             definition: self.path.clone(),
             signature: input.signature.clone(),
