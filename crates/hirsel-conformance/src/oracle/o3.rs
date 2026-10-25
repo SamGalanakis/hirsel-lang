@@ -82,7 +82,7 @@ fn one(scenario: &Scenario, report: &mut Report) -> Result<(), String> {
                 })
                 .map_err(|error| error.to_string())?;
             match &selected.result {
-                hirsel_driver::requests::CompileResult::Inspection(inspection) => {
+                hirsel_driver::requests::CompileResult::Inspect(inspection) => {
                     Ok(inspection.clone())
                 }
                 _ => Err("inspection request returned another operation".into()),
