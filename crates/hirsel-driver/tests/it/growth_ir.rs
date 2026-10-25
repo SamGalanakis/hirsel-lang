@@ -532,9 +532,10 @@ fn functions(ir: &str) -> BTreeMap<String, Vec<&str>> {
 }
 
 /// The runtime entries that allocate a heap block.
-const ALLOCATING: [&str; 6] = [
+const ALLOCATING: [&str; 7] = [
     "hirsel_rt_v2_alloc",
     "hirsel_rt_v2_seq_grow",
+    "hirsel_rt_v2_block_grow",
     "hirsel_rt_v2_detach",
     "hirsel_rt_v2_unique_copy",
     "hirsel_rt_v2_unique_copy_value",
