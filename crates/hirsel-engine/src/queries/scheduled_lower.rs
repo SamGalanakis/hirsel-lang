@@ -28,7 +28,13 @@ const FAILURE: Domain = Domain {
 };
 const LOWER_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0006,
-    schema: 4,
+    schema: 5,
+};
+// Ordinary immutable substitution bytes, owned by the selected provider like
+// the original body archive. Inspectors decode under their working allowance.
+const LOWER_MATERIALIZED: Domain = Domain {
+    kind: 0x4600_0032,
+    schema: 1,
 };
 const CONSTANT_DESCRIPTOR: Domain = Domain {
     kind: 0x4600_0007,
@@ -60,7 +66,7 @@ struct LowerProduct {
     dependencies: Dependencies,
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
-    materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
+    materialized: Reference,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -97,7 +103,6 @@ impl Outcome {
                         .ok()?,
                 );
                 weight.add(lower.dependencies.retained_bytes());
-                weight.vec(&lower.materialized, |w, (_, value)| w.materialized(value));
                 if let Some(verified) = &lower.verified {
                     weight.add(verified.retained_bytes()?.try_into().ok()?);
                 }
@@ -411,6 +416,9 @@ impl FrontLowerQueries {
         let execution_subject = outcome.execution_subject;
         drop(outcomes);
         let output = lower.decode(self)?;
+        let materialized = self
+            .records
+            .decode(&self.anchors, &self.store.get_content(lower.materialized)?)?;
         let input = self.inputs.get(lower.definition.path())?;
         let signature = self
             .snapshot
@@ -428,7 +436,7 @@ impl FrontLowerQueries {
             implementation_revision: input.implementation,
             signature,
             verified: lower.verified,
-            materialized: lower.materialized,
+            materialized,
             owner: self.clone(),
         })
     }
@@ -805,6 +813,13 @@ impl FrontLowerQueries {
             .store
             .put_content(crate::NATIVE_ORIGINAL_BODY, &bytes)
             .ok_or(QueryError::NotImplemented)?;
+        drop(bytes);
+        let materialized = self
+            .records
+            .encode(&self.anchors, &constants)
+            .filter(|bytes| bytes.len() as u64 <= self.weight.scratch)
+            .and_then(|bytes| self.store.put_content(LOWER_MATERIALIZED, &bytes))
+            .ok_or(QueryError::NotImplemented)?;
         let mut dependencies = analyzed.dependencies.clone();
         dependencies.extend(output.dependencies);
         Ok(Value::Lower(LowerProduct {
@@ -814,7 +829,7 @@ impl FrontLowerQueries {
             dependencies: dependencies.into(),
             verified,
             acceptance,
-            materialized: constants,
+            materialized,
         }))
     }
 }
