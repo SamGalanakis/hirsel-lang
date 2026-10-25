@@ -87,6 +87,7 @@ pub struct NativeSnapshot {
     pub(super) instances: DemandInstances,
     pub(super) arena: SettledArenaGraph,
     pub(super) options: crate::native::Options,
+    pub(super) verify_store: hirsel_engine::store::VerifyStore,
     pub(super) emission: EmissionOptions,
     pub(super) context: Reference,
     pub(super) manifest: hirsel_core_contract::Manifest,
@@ -165,6 +166,7 @@ impl NativeSnapshot {
             instances,
             arena,
             options,
+            verify_store: hirsel_engine::store::VerifyStore::Off,
             emission,
             context,
             manifest,
@@ -175,6 +177,18 @@ impl NativeSnapshot {
             materializations: AtomicU64::new(0),
             retained_allowances: Vec::new(),
         }))
+    }
+
+    /// Capture cache verification before factories share this immutable view.
+    /// A shared snapshot cannot change the policy of an admitted request.
+    pub fn with_store_verification(
+        mut self: Arc<Self>,
+        policy: hirsel_engine::store::VerifyStore,
+    ) -> Result<Arc<Self>, String> {
+        Arc::get_mut(&mut self)
+            .ok_or("native store verification must be selected before sharing")?
+            .verify_store = policy;
+        Ok(self)
     }
 
     /// Backend copying observes only settled instance facts. Every selected
