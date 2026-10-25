@@ -15,7 +15,8 @@ use crate::native::{
     root_source::{NativeLinkFacts, NativeLinkSource},
 };
 use hirsel_engine::{
-    FrontLowerQueries, FrontNativeProducts, FrontNativeQueries, runtime::*, store::*,
+    FrontLowerQueries, FrontNativeProducts, FrontNativeQueries, FrontProofExport, runtime::*,
+    store::*,
 };
 use hirsel_syntax::{ContentHash, DefPath};
 use std::{
@@ -47,6 +48,12 @@ pub(super) struct NativePlan {
     pub backends: Vec<CompilationBackend>,
     pub requested_run: Option<Arc<hirsel_run_config::ValidatedRun>>,
 }
+/// Selected evidence and the PS9 export captured over this bootstrap's native
+/// source root. Assessment reads only that root's completed product.
+pub(super) struct NativeProofs {
+    pub evidence: Arc<native::Evidence>,
+    pub export: Arc<FrontProofExport>,
+}
 pub(super) struct NativeAdmission {
     pub instances: MemoryReservation,
     pub arena: MemoryReservation,
@@ -56,6 +63,7 @@ struct Prepared {
     source: ProductRef,
     facts: Arc<FrontNativeProducts>,
     compilation: Arc<CompilationTasks>,
+    proofs: Option<native::Proofs>,
 }
 struct Completed {
     product: ProductRef,
@@ -72,6 +80,7 @@ pub(super) struct NativeBootstrap {
     query: QueryId,
     weight: MemoryWeight,
     pending: Mutex<Option<(NativePlan, NativeAdmission)>>,
+    proofs: Option<NativeProofs>,
     prepared: OnceLock<Prepared>,
     completed: OnceLock<Completed>,
     failure: Mutex<Option<(Reference, String)>>,
@@ -88,6 +97,7 @@ impl NativeBootstrap {
         store: Arc<dyn ResultStore>,
         mut plan: NativePlan,
         mut admission: NativeAdmission,
+        proofs: Option<NativeProofs>,
         weight: MemoryWeight,
         allowance: MemoryReservation,
         errors: RuntimeErrors,
@@ -95,28 +105,12 @@ impl NativeBootstrap {
         if plan.options.objects.is_some() {
             return Err("native bootstrap requires ordinary object query producers".into());
         }
-        let discharge = plan
-            .options
-            .discharge
-            .0
-            .iter()
-            .map(|(path, sites)| {
-                let sites = sites
-                    .iter()
-                    .map(|site| {
-                        use hirsel_lir::discharge::Form;
-                        let form = match &site.form {
-                            Form::Check(rule) => (0u8, rule.as_str(), 0u32),
-                            Form::Integer => (1, "", 0),
-                            Form::Negation => (2, "", 0),
-                            Form::Projection { place, rule } => (3, rule.as_str(), *place),
-                        };
-                        (site.body, site.block, site.statement, form)
-                    })
-                    .collect::<Vec<_>>();
-                (path, sites)
-            })
-            .collect::<Vec<_>>();
+        // Evidence selects its discharge only after the source root settles;
+        // a caller-planned discharge would bypass that assessment.
+        if proofs.is_some() && !plan.options.discharge.is_empty() {
+            return Err("native evidence and a planned discharge are exclusive".into());
+        }
+        let discharge = discharge_rows(&plan.options.discharge);
         let native_policy = serde_json::to_vec(&(
             match plan.options.validation {
                 native::Validation::Ready => 0u8,
@@ -130,6 +124,9 @@ impl NativeBootstrap {
             plan.options.flat_walk,
             plan.options.scoped_specialization,
             discharge,
+            proofs
+                .as_ref()
+                .map(|proofs| super::native_products::evidence_identity(&proofs.evidence)),
         ))
         .map_err(|error| error.to_string())?;
         plan.policy = ContentHash::of_parts(
@@ -206,6 +203,7 @@ impl NativeBootstrap {
             query,
             weight,
             pending: Mutex::new(Some((plan, admission))),
+            proofs,
             prepared: OnceLock::new(),
             completed: OnceLock::new(),
             failure: Mutex::new(None),
@@ -253,6 +251,10 @@ impl NativeBootstrap {
             prepared.facts.clone(),
         ))
     }
+    /// The assessment selected for this bootstrap's completed source root.
+    pub fn proofs(&self) -> Option<&native::Proofs> {
+        self.prepared.get().and_then(|prepared| prepared.proofs.as_ref())
+    }
     pub fn failure(&self, reference: Reference) -> Option<String> {
         self.failure
             .lock()
@@ -283,12 +285,37 @@ impl NativeBootstrap {
             .outcome(product)
             .ok_or("native source root is unavailable")?
             .products;
-        let (plan, admission) = self
+        let (mut plan, admission) = self
             .pending
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or("native bootstrap initialization already consumed")?;
+        let proofs = self
+            .proofs
+            .as_ref()
+            .map(|proofs| {
+                native::Proofs::assess_native(
+                    &proofs.export,
+                    &self.source,
+                    product,
+                    &proofs.evidence,
+                    self.store.clone(),
+                )
+                .map_err(|error| error.to_string())
+            })
+            .transpose()?;
+        if let Some(proofs) = &proofs {
+            // Instance and Ready identities read the assessed removals, not
+            // only the sidecar that selected them for this source revision.
+            let assessed = serde_json::to_vec(&discharge_rows(&proofs.discharge))
+                .map_err(|error| error.to_string())?;
+            plan.policy = ContentHash::of_parts(
+                "hirsel.host.native-assessed-policy.v1",
+                [plan.policy.0.as_slice(), assessed.as_slice()],
+            );
+            plan.options.discharge = proofs.discharge.clone();
+        }
         let declarations = NativeDeclarations::from_settled(
             &facts.signatures,
             facts.roots.clone(),
@@ -401,6 +428,7 @@ impl NativeBootstrap {
                 source: product,
                 facts,
                 compilation,
+                proofs,
             })
             .map_err(|_| "native bootstrap dispatch was constructed twice")?;
         Ok(self.prepared.get().unwrap())
@@ -445,6 +473,30 @@ impl NativeBootstrap {
             .map_err(|_| "duplicate native bootstrap completion")?;
         Ok(product)
     }
+}
+fn discharge_rows(
+    discharge: &hirsel_lir::discharge::Discharge,
+) -> Vec<(&DefPath, Vec<(u32, u32, u32, (u8, &str, u32))>)> {
+    use hirsel_lir::discharge::Form;
+    discharge
+        .0
+        .iter()
+        .map(|(path, sites)| {
+            let sites = sites
+                .iter()
+                .map(|site| {
+                    let form = match &site.form {
+                        Form::Check(rule) => (0u8, rule.as_str(), 0u32),
+                        Form::Integer => (1, "", 0),
+                        Form::Negation => (2, "", 0),
+                        Form::Projection { place, rule } => (3, rule.as_str(), *place),
+                    };
+                    (site.body, site.block, site.statement, form)
+                })
+                .collect();
+            (path, sites)
+        })
+        .collect()
 }
 struct Factory(Arc<NativeBootstrap>);
 impl QueryFactory for Factory {

@@ -308,6 +308,7 @@ impl Plan {
         files: usize,
         needs_run: bool,
         needs_native: bool,
+        needs_proofs: bool,
         needs_safe: bool,
         footprint: FrontInputFootprint,
         inspection_bytes: u64,
@@ -355,7 +356,7 @@ impl Plan {
         let slack = slack - native_slack;
         let native = if needs_native {
             Some(
-                super::native_selection::Footprint::new(definitions, native_slack)
+                super::native_selection::Footprint::new(definitions, native_slack, needs_proofs)
                     .ok_or_else(uninstalled)?,
             )
         } else {
@@ -541,6 +542,11 @@ pub(super) fn install(
         matches!(
             request.operation,
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
+        ),
+        matches!(
+            &request.operation,
+            CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native)
+                if native.evidence.is_some()
         ),
         matches!(request.operation, CompileOperation::SafeCheck),
         footprint,

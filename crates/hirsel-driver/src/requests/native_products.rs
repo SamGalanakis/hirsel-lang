@@ -4,7 +4,7 @@
 use super::{NativeExecution, NativeRequest, native_bootstrap::NativeBootstrap};
 use crate::native::{self, NativeError, StageName, object_queries};
 use hirsel_engine::{FrontNativeProducts, runtime::ProductRef, store::ResultStore};
-use hirsel_syntax::DefId;
+use hirsel_syntax::{ContentHash, DefId};
 use std::sync::{Arc, Mutex};
 
 struct OutputOwner {
@@ -33,14 +33,6 @@ impl NativeBuildReadiness {
         toolchain: Arc<native::Toolchain>,
         platform: Arc<super::native_link::FrozenPlatform>,
     ) -> Result<Self, NativeError> {
-        // Evidence requires its actual assessment/discharge producer. An
-        // uninstalled proof root can never become an empty successful report.
-        if request.evidence.is_some() {
-            return Err(NativeError::new(
-                StageName::Manifest,
-                "native proof assessment root is not installed",
-            ));
-        }
         let store = bootstrap.selected_store();
         Ok(Self {
             bootstrap,
@@ -88,6 +80,17 @@ impl NativeBuildReadiness {
             ));
         }
         let observation = compilation.observation(product).map_err(failed)?;
+        // Report the removals the completed discovery actually validated;
+        // the assessed plan alone never certifies a report.
+        let report = match (&self.request.evidence, self.bootstrap.proofs()) {
+            (None, _) => vec![],
+            (Some(_), Some(proofs)) => {
+                proofs.report_discharged(&compilation.discharged(product).map_err(failed)?)
+            }
+            (Some(_), None) => {
+                return Err(failed("native evidence has no selected assessment".into()));
+            }
+        };
         let signature = source
             .signatures
             .signature(DefId::intern(&source.run.entry))
@@ -115,6 +118,7 @@ impl NativeBuildReadiness {
         copied.callees(&source.run.callees);
         copied.foreign_use(&source.run.foreign);
         copied.vec(&observation.failure_rules, |w, rule| w.add(rule.capacity()));
+        copied.vec(&report, |w, line| w.add(line.capacity()));
         copied.map(&observation.sites, |w, _, (path, _)| w.path(path));
         copied.map(&observation.anchors, |w, path, anchors| {
             w.path(path);
@@ -142,7 +146,7 @@ impl NativeBuildReadiness {
             platform: self.platform.clone(),
             store: self.store.clone(),
             observation,
-            report: vec![],
+            report,
             entry: source.run.entry.clone(),
             signature,
             sources: source.roots.sources.clone().retain_owner(owner.clone()),
@@ -160,6 +164,34 @@ impl NativeBuildReadiness {
         *completed = Some(execution.clone());
         Ok(execution)
     }
+}
+
+/// Canonical identity of selected evidence: every record field in sidecar
+/// order and the trusted checkers. Equal identities assess equal sidecars.
+pub(super) fn evidence_identity(evidence: &native::Evidence) -> ContentHash {
+    let records = evidence
+        .records
+        .iter()
+        .map(|record| {
+            (
+                record.revision,
+                &record.obligation,
+                record.checksum,
+                record.checker.to_string(),
+                &record.budget.unit,
+                record.budget.count,
+                record.verdict.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let trusted = evidence
+        .trusted
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&(records, trusted))
+        .unwrap_or_else(|error| unreachable!("evidence identity encodes: {error}"));
+    ContentHash::of_parts("hirsel.host.native-evidence.v1", [bytes.as_slice()])
 }
 
 pub(super) fn request_metadata(

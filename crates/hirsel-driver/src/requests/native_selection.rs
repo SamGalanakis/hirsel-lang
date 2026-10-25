@@ -2,14 +2,14 @@
 //! Reuse recaptures linker/kit/runtime resolution before choosing the old key.
 use super::{
     NativeRequest,
-    native_assembly::{NativeAssembly, NativeAssemblyPlan, NativeSourceInputs},
+    native_assembly::{NativeAssembly, NativeAssemblyPlan, NativeProofPlan, NativeSourceInputs},
     native_bootstrap::NativeAdmission,
     native_platform::{
         NativePlatformInputs, NativePlatformPolicy, NativePlatformSelection, NativePurpose,
     },
     native_products::NativeBuildReadiness,
 };
-use crate::native::{self, NativeError, StageName, object_queries};
+use crate::native::{self, NativeError, object_queries};
 use hirsel_engine::{
     FrontNativeDefinitionQueries, FrontNativeQueries, LinkInput, LoadedProgram, ToolError,
     runtime::{MemoryReservation, MemoryWeight, QueryId, RuntimeErrors},
@@ -25,24 +25,30 @@ pub(super) struct Footprint {
     source: u64,
     bootstrap: u64,
     tasks: u64,
+    /// Checked headers and the PS9 export; zero unless evidence is selected.
+    proofs: u64,
 }
 impl Footprint {
     const ROUTING: u64 = 16 << 10;
     const PLATFORM: u64 = 64 << 10;
     const POLICY: u64 = 64 << 10;
     pub fn minimum(definitions: &[DefPath]) -> Option<u64> {
-        Self::new(definitions, 0)?.bytes()
+        Self::new(definitions, 0, false)?.bytes()
     }
-    pub fn new(definitions: &[DefPath], slack: u64) -> Option<Self> {
+    pub fn new(definitions: &[DefPath], slack: u64, proofs: bool) -> Option<Self> {
         let bootstrap = definitions.iter().try_fold(32 << 10, |bytes: u64, path| {
             bytes.checked_add(serde_json::to_vec(path).ok()?.len() as u64 + 128)
         })?;
+        // Proof capture shares the native slack; its constructors refuse
+        // metadata beyond this partition instead of growing any cap.
+        let share = slack / if proofs { 6 } else { 5 };
         Some(Self {
             catalogue: FrontNativeDefinitionQueries::input_bytes(definitions)?
-                .checked_add(slack / 5)?,
-            source: FrontNativeQueries::input_bytes(definitions)?.checked_add(slack / 5)?,
+                .checked_add(share)?,
+            source: FrontNativeQueries::input_bytes(definitions)?.checked_add(share)?,
             bootstrap,
-            tasks: slack / 5,
+            tasks: share,
+            proofs: if proofs { share } else { 0 },
         })
     }
     pub fn bytes(&self) -> Option<u64> {
@@ -53,6 +59,7 @@ impl Footprint {
             self.tasks,
             self.tasks,
             self.tasks,
+            self.proofs,
             Self::ROUTING,
             Self::POLICY,
             Self::PLATFORM,
@@ -147,10 +154,19 @@ impl NativeSelection {
             split(Footprint::PLATFORM)?,
         )
         .map_err(native_error)?;
+        let proofs = match &request.evidence {
+            None => None,
+            Some(evidence) => Some(NativeProofPlan {
+                evidence: evidence.clone(),
+                headers: split(footprint.proofs / 2)?,
+                export: split(footprint.proofs - footprint.proofs / 2)?,
+            }),
+        };
         let assembly = NativeAssembly::new(
             program,
             source,
             NativeAssemblyPlan {
+                proofs,
                 native: plan,
                 tasks: NativeAdmission {
                     instances: split(footprint.tasks)?,
@@ -228,12 +244,6 @@ fn native_error(error: NativeError) -> ToolError {
     ToolError::Runtime(error.to_string())
 }
 fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<ContentHash, ToolError> {
-    if request.evidence.is_some() {
-        return Err(native_error(NativeError::new(
-            StageName::Manifest,
-            "native proof assessment root is not installed",
-        )));
-    }
     let bytes = serde_json::to_vec(&(
         &request.definition,
         request.backend.name(),
@@ -246,6 +256,10 @@ fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<Conten
         &request.launch,
         request.run.as_ref().map(|run| run.identity()),
         request.fuel,
+        request
+            .evidence
+            .as_deref()
+            .map(super::native_products::evidence_identity),
     ))
     .map_err(|error| ToolError::Runtime(error.to_string()))?;
     Ok(ContentHash::of_parts(

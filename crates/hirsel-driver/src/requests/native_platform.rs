@@ -112,12 +112,6 @@ impl NativePlatformSelection {
                 "release builds use LLVM; select LLVM or a non-release profile",
             ));
         }
-        if request.evidence.is_some() {
-            return Err(NativeError::new(
-                StageName::Manifest,
-                "native proof assessment root is not installed",
-            ));
-        }
         if request
             .run
             .as_ref()

@@ -214,6 +214,7 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                     arena: budget.reserve(32 << 20).unwrap(),
                     compilation: budget.reserve(32 << 20).unwrap(),
                 },
+                None,
                 weight,
                 budget.reserve(1 << 20).unwrap(),
                 errors,
@@ -567,6 +568,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                     arena: budget.reserve(32 << 20).unwrap(),
                     compilation: budget.reserve(32 << 20).unwrap(),
                 },
+                None,
                 weight,
                 budget.reserve(1 << 20).unwrap(),
                 errors,
@@ -975,6 +977,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                     arena: budget.reserve(32 << 20).unwrap(),
                     compilation: budget.reserve(32 << 20).unwrap(),
                 },
+                None,
                 weight,
                 budget.reserve(1 << 20).unwrap(),
                 errors,
@@ -1172,5 +1175,389 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                 "completed native controls release all owners"
             );
         }
+    });
+}
+
+const PROOF_SOURCE: &str = r#"
+fn bump(xs:List[u32],i:u64,y:u32)->u32 ensures result>=y {xs[i]+y}
+pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
+"#;
+
+/// One complete source graph over `PROOF_SOURCE`, with its PS9 export
+/// attached to the exact native source root a bootstrap would select.
+struct ProofGraph {
+    runtime: AdmittedRuntime,
+    source: Arc<FrontNativeQueries>,
+    lower: Arc<FrontLowerQueries>,
+    paths: Vec<DefPath>,
+    export: Arc<FrontProofExport>,
+    owners: Vec<Arc<dyn Send + Sync>>,
+}
+fn proof_graph(
+    manifest: &std::path::Path,
+    store: &Arc<dyn ResultStore>,
+    budget: &Arc<ProcessBudget>,
+    errors: RuntimeErrors,
+    weight: MemoryWeight,
+) -> ProofGraph {
+    let mut program = crate::COMPILER
+        .with_config(CompileConfig {
+            jobs: Jobs::ONE,
+            store: store.clone(),
+            hold_bytes: 0,
+            ..Default::default()
+        })
+        .with_owned_engines()
+        .load_program(manifest)
+        .unwrap();
+    let paths = program.engine.front_source_roots();
+    let entry = program.entry.clone();
+    let mut runtime =
+        AdmittedRuntime::new(Jobs::ONE, budget.reserve(512 << 20).unwrap(), errors).unwrap();
+    let front = program
+        .engine
+        .front_body_queries(&paths, weight, budget.reserve(24 << 20).unwrap(), errors)
+        .unwrap();
+    let lower = program
+        .engine
+        .front_lower_queries(
+            &paths,
+            front.clone(),
+            weight,
+            paths.len() * 3,
+            budget.reserve(24 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let growth = program
+        .engine
+        .front_growth_queries(
+            &entry,
+            front.clone(),
+            weight,
+            budget.reserve(12 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let check = program
+        .engine
+        .front_check_queries(
+            FrontCheckPlan {
+                files: program
+                    .files
+                    .iter()
+                    .map(|(file, cx)| (*file, cx.clone(), LoweringPolicy::Reachable))
+                    .collect(),
+                front: front.clone(),
+                lower: lower.clone(),
+                growth: growth.clone(),
+                unsafe_ffi: program.unsafe_ffi.clone(),
+            },
+            weight,
+            budget.reserve(24 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let headers = program
+        .engine
+        .front_checked_signatures(front.clone(), budget.reserve(4 << 20).unwrap())
+        .unwrap();
+    let run = program
+        .engine
+        .front_run_queries(
+            check.clone(),
+            front.clone(),
+            lower.clone(),
+            weight,
+            budget.reserve(16 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let definitions = program
+        .engine
+        .front_native_definition_queries(
+            &paths,
+            front.clone(),
+            lower.clone(),
+            weight,
+            budget.reserve(24 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let source = program
+        .engine
+        .front_native_queries(
+            FrontNativePlan {
+                entry: entry.clone(),
+                roots: vec![],
+                run,
+                definitions,
+            },
+            weight,
+            budget.reserve(12 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let export = program
+        .engine
+        .front_proof_export_from_native(
+            &entry,
+            &source,
+            headers,
+            budget.reserve(4 << 20).unwrap(),
+        )
+        .unwrap();
+    runtime
+        .register(hirsel_engine::FRONT_BODY_KIND, front.factory())
+        .unwrap();
+    runtime
+        .register_local(hirsel_engine::FRONT_LOWER_KIND, lower.factory())
+        .unwrap();
+    runtime
+        .register_local(hirsel_engine::FRONT_EVALUATE_KIND, lower.factory())
+        .unwrap();
+    runtime
+        .register(hirsel_engine::FRONT_GROWTH_KIND, growth.factory())
+        .unwrap();
+    runtime
+        .register(hirsel_engine::FRONT_CHECK_KIND, check.factory())
+        .unwrap();
+    runtime
+        .register(hirsel_engine::FRONT_RUN_KIND, source.run_factory())
+        .unwrap();
+    runtime
+        .register(
+            hirsel_engine::FRONT_NATIVE_DEFINITION_KIND,
+            source.definition_factory(),
+        )
+        .unwrap();
+    runtime
+        .register(hirsel_engine::FRONT_NATIVE_ROOT_KIND, source.factory())
+        .unwrap();
+    ProofGraph {
+        runtime,
+        source,
+        lower,
+        paths,
+        export,
+        owners: vec![front, growth, check],
+    }
+}
+
+/// Evidence for the export's two `bump` obligations, signed by `prover@1`.
+fn proof_evidence(graph: &mut ProofGraph) -> native::Evidence {
+    let request = graph.runtime.request(&[graph.source.query()]);
+    let completed = graph.runtime.wait(request).unwrap()[0];
+    let input = graph
+        .export
+        .input_for_native(&graph.source, completed)
+        .unwrap();
+    let table = hirsel_proof_export::build(&input);
+    let checker = hirsel_proof_export::sidecar::Checker::parse("prover@1").unwrap();
+    let records = table
+        .definitions
+        .iter()
+        .flat_map(|d| &d.obligations)
+        .filter(|o| {
+            let id = o.id.to_string();
+            id.contains("/bump#FACT-1/") || id.contains("/bump#SEM-1/")
+        })
+        .map(|o| hirsel_proof_export::sidecar::Record {
+            revision: table.header.program_revision.unwrap(),
+            obligation: o.id.to_string(),
+            checksum: o.checksum,
+            checker: checker.clone(),
+            budget: hirsel_proof_export::sidecar::Budget {
+                unit: "steps".into(),
+                count: 1000,
+            },
+            verdict: hirsel_proof_export::sidecar::Verdict::Proved,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    native::Evidence {
+        records,
+        trusted: vec![checker],
+    }
+}
+
+#[test]
+fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_instances() {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"), PROOF_SOURCE).unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"proof_bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(1 << 30);
+        let diagnostic = |message: &[u8]| {
+            store
+                .put_content(
+                    Domain {
+                        kind: 0x5200_0001,
+                        schema: 1,
+                    },
+                    message,
+                )
+                .unwrap()
+        };
+        let errors = RuntimeErrors {
+            resource: diagnostic(b"proof bootstrap resource refusal"),
+            cycle: diagnostic(b"proof bootstrap cycle refusal"),
+            cancelled: diagnostic(b"proof bootstrap cancelled"),
+            protocol: diagnostic(b"proof bootstrap protocol refusal"),
+            panicked: diagnostic(b"proof bootstrap producer panic"),
+        };
+        let weight = MemoryWeight {
+            retained: 1 << 20,
+            scratch: 16 << 20,
+            stack: 0,
+        };
+        let evidence = {
+            let mut graph = proof_graph(&manifest, &store, &budget, errors, weight);
+            proof_evidence(&mut graph)
+        };
+        let mut untrusted = evidence.clone();
+        untrusted.trusted.clear();
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let plan = |calls: &Arc<AtomicU64>| NativePlan {
+            options: native::Options::new(target.clone()),
+            policy: ContentHash::of_bytes(b"proof bootstrap control"),
+            verify_store: hirsel_engine::store::VerifyStore::Off,
+            opt: hirsel_lir::emission::OptLevel::None,
+            debug: false,
+            verify_backend: true,
+            measurement: false,
+            fuel: false,
+            requested_run: None,
+            backends: vec![CompilationBackend {
+                backend: "cranelift".into(),
+                backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                target_features: target.digest(),
+                profile_options: ContentHash::of_bytes(b"none"),
+                runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
+                linker_options: ContentHash::of_bytes(b"intentional Link refusal"),
+                runtime_archives: vec![],
+                foreign_inputs: vec![],
+                executor: Arc::new(StopLink(calls.clone())),
+            }],
+        };
+        let admission = || NativeAdmission {
+            instances: budget.reserve(32 << 20).unwrap(),
+            arena: budget.reserve(32 << 20).unwrap(),
+            compilation: budget.reserve(32 << 20).unwrap(),
+        };
+        let mut queries = vec![];
+        for (selected, removed) in [(Some(&evidence), 2), (Some(&untrusted), 0), (None, 0)] {
+            let mut graph = proof_graph(&manifest, &store, &budget, errors, weight);
+            let routing = NativeRouting::new(
+                super::super::native_assembly::KINDS,
+                errors.protocol,
+                budget.reserve(16 << 10).unwrap(),
+            )
+            .unwrap();
+            let calls = Arc::new(AtomicU64::new(0));
+            let bootstrap = NativeBootstrap::new(
+                graph.source.clone(),
+                graph.lower.clone(),
+                graph.paths.clone(),
+                routing.clone(),
+                store.clone(),
+                plan(&calls),
+                admission(),
+                selected.map(|evidence| NativeProofs {
+                    evidence: Arc::new(evidence.clone()),
+                    export: graph.export.clone(),
+                }),
+                weight,
+                budget.reserve(1 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+            graph.runtime.register(KIND, bootstrap.factory()).unwrap();
+            for (kind, factory) in routing.factories() {
+                graph.runtime.register(kind, factory).unwrap();
+            }
+            let request = graph.runtime.request(&[bootstrap.query()]);
+            graph.runtime.completion().wait(request);
+            let result = graph.runtime.poll(request);
+            let Poll::Ready(Err(error)) = result else {
+                panic!("expected exact Link refusal, got {result:?}");
+            };
+            // Link is reached only after the complete discovery accepted the
+            // assessed discharge; an unremoved licensed site fails earlier.
+            assert_eq!(
+                store.get_content(error).unwrap().as_ref(),
+                b"selected bootstrap Link control refusal",
+                "earlier assessment/discovery failure: {:?} / {:?}",
+                bootstrap.failure(error),
+                graph.source.failure(error)
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            match (selected, bootstrap.proofs()) {
+                (None, None) => {}
+                (Some(_), Some(proofs)) => {
+                    let sites = proofs.discharge.0.values().map(|sites| sites.len()).sum::<usize>();
+                    assert_eq!(sites, removed, "assessed discharge sites");
+                    let report = proofs.report_discharged(&proofs.discharge);
+                    assert!(
+                        report
+                            .iter()
+                            .any(|line| line.starts_with(&format!("proofs: {removed} removed,"))),
+                        "{report:?}"
+                    );
+                }
+                _ => panic!("assessment presence differs from evidence"),
+            }
+            queries.push(bootstrap.query().address.0);
+            graph.runtime.shutdown();
+            drop(graph);
+            drop(bootstrap);
+            drop(routing);
+        }
+        queries.sort();
+        queries.dedup();
+        assert_eq!(queries.len(), 3, "evidence identity selects its own bootstrap");
+
+        // A caller-planned discharge cannot bypass the settled assessment.
+        let graph = proof_graph(&manifest, &store, &budget, errors, weight);
+        let calls = Arc::new(AtomicU64::new(0));
+        let mut planned = plan(&calls);
+        planned.options.discharge.0.insert(
+            graph.paths[0].clone(),
+            [hirsel_lir::discharge::Discharged {
+                body: 0,
+                block: 0,
+                statement: 0,
+                form: hirsel_lir::discharge::Form::Integer,
+            }]
+            .into(),
+        );
+        let routing = NativeRouting::new(
+            super::super::native_assembly::KINDS,
+            errors.protocol,
+            budget.reserve(16 << 10).unwrap(),
+        )
+        .unwrap();
+        let refused = NativeBootstrap::new(
+            graph.source.clone(),
+            graph.lower.clone(),
+            graph.paths.clone(),
+            routing,
+            store.clone(),
+            planned,
+            admission(),
+            Some(NativeProofs {
+                evidence: Arc::new(evidence),
+                export: graph.export.clone(),
+            }),
+            weight,
+            budget.reserve(1 << 20).unwrap(),
+            errors,
+        );
+        assert!(refused.is_err());
+        drop(refused);
+        drop(graph);
+        assert_eq!(budget.reserved(), 0, "every proof owner releases");
     });
 }

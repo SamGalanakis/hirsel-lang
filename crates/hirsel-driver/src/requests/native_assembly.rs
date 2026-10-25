@@ -3,7 +3,7 @@
 //! remain producer work; this constructor retains no mutable compiler engine.
 use super::{
     NativeRequest,
-    native_bootstrap::{NativeAdmission, NativeBootstrap, NativePlan},
+    native_bootstrap::{NativeAdmission, NativeBootstrap, NativePlan, NativeProofs},
     native_link::FrozenPlatform,
     native_products::NativeBuildReadiness,
     native_routing::NativeRouting,
@@ -28,10 +28,17 @@ pub(super) struct NativeSourceInputs {
     pub run: Arc<FrontRunQueries>,
     pub store: Arc<dyn ResultStore>,
 }
+/// Selected evidence and its partitions of the native snapshot allowance.
+pub(super) struct NativeProofPlan {
+    pub evidence: Arc<native::Evidence>,
+    pub headers: MemoryReservation,
+    pub export: MemoryReservation,
+}
 /// These partitions transfer the caller's existing snapshot reservation.
 /// This module cannot reserve another process cap or enlarge a task frame.
 pub(super) struct NativeAssemblyPlan {
     pub native: NativePlan,
+    pub proofs: Option<NativeProofPlan>,
     pub tasks: NativeAdmission,
     pub catalogue: MemoryReservation,
     pub source: MemoryReservation,
@@ -42,7 +49,7 @@ pub(super) struct NativeAssemblyPlan {
     pub errors: RuntimeErrors,
 }
 
-const KINDS: &[u32] = &[
+pub(super) const KINDS: &[u32] = &[
     INSTANCE_KIND,
     instance_tasks::INSTANCE_INPUT_KIND,
     instance_tasks::DISCOVERY_KIND,
@@ -76,11 +83,12 @@ impl NativeAssembly {
             phase: None,
             sources: sources.clone(),
         };
+        let entry = inputs.entry.clone();
         let catalogue = program
             .engine
             .front_native_definition_queries(
                 &inputs.definitions,
-                inputs.front,
+                inputs.front.clone(),
                 inputs.lower.clone(),
                 plan.source_weight,
                 plan.catalogue,
@@ -101,6 +109,27 @@ impl NativeAssembly {
                 plan.errors,
             )
             .map_err(|error| program.error(error))?;
+        // PS9 attaches to this exact native Run before any request, so the
+        // assessment reads the same selected roots that native compiles.
+        let proofs = plan
+            .proofs
+            .map(|proofs| {
+                let headers = program
+                    .engine
+                    .front_checked_signatures(inputs.front, proofs.headers)?;
+                let export = program.engine.front_proof_export_from_native(
+                    &entry,
+                    &source,
+                    headers,
+                    proofs.export,
+                )?;
+                Ok(NativeProofs {
+                    evidence: proofs.evidence,
+                    export,
+                })
+            })
+            .transpose()
+            .map_err(source_error)?;
         let routing = NativeRouting::new(KINDS, plan.errors.protocol, plan.routing)
             .map_err(|message| ToolError::Runtime(message.into()))?;
         let bootstrap = NativeBootstrap::new(
@@ -111,6 +140,7 @@ impl NativeAssembly {
             inputs.store,
             plan.native,
             plan.tasks,
+            proofs,
             plan.weight,
             plan.bootstrap,
             plan.errors,
