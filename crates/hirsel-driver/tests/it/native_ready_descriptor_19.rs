@@ -44,7 +44,7 @@ fn actual_root_rejects_changed_owner_policy_and_c_bound_ready_summary() {
             hirsel_intern::jobs::Jobs::ONE,
             VerifyStore::Off,
             |view, root, readies| {
-                let (summaries, table, keys) = view
+                let (summaries, table, _keys) = view
                     .with_link_context(root, readies, |program| {
                         assert!(program.units.is_empty());
                         Ok((
@@ -67,35 +67,64 @@ fn actual_root_rejects_changed_owner_policy_and_c_bound_ready_summary() {
                     view.with_link_context(&Arc::new(wrong_policy), readies, |_| Ok(()))
                         .is_err()
                 );
-                // Keep the actual product identity and owner/ABI; substitute
-                // only an ordinary summary's tracking claim. C must bind it.
-                let mut forged = readies.to_vec();
-                let mut summary = summaries
+                let original = summaries
                     .iter()
                     .find(|summary| summary.definition.0.name == "main")
-                    .unwrap()
-                    .clone();
-                summary.recovers = !summary.recovers;
-                let bytes = summary.encode(&table, &keys).unwrap();
-                let reference = store
-                    .put_content(queries::ready::UNIT_SUMMARY_DOMAIN, &bytes)
                     .unwrap();
+                assert!(!original.calls.is_empty(), "original written helper call");
                 let selected = root
                     .instances
                     .iter()
                     .position(|owner| owner.instance.definition().0.name == "main")
                     .unwrap();
                 let address = root.instances[selected].address(queries::READY_KIND);
-                let selected = forged
+                let selected = readies
                     .iter()
                     .position(|ready| ready.product.address == address)
                     .unwrap();
-                let mut candidate = (*forged[selected]).clone();
-                candidate.unit_summary = reference;
-                forged[selected] = Arc::new(candidate);
+                // Preserve each original plan forgery independently. Coherent
+                // summary bytes retain the real owner and product identity;
+                // only current C can authorize their complete metadata.
+                for mutation in 0..4 {
+                    let mut summary = original.clone();
+                    let mut table = table.clone();
+                    match mutation {
+                        0 => summary.recovers = !summary.recovers,
+                        1 => {
+                            summary
+                                .glue
+                                .callbacks
+                                .insert((DefPath::core("unselected"), None));
+                        }
+                        2 => {
+                            let mut abi = table.fn_abis[summary.abi.0 as usize].clone();
+                            abi.result_arena = Some(0);
+                            summary.abi = hirsel_lir::FnAbiId(table.fn_abis.len() as u32);
+                            table.fn_abis.push(abi);
+                        }
+                        3 => summary.calls.clear(),
+                        _ => unreachable!(),
+                    }
+                    let keys = hirsel_lir::LayoutKeys::new(&table);
+                    let bytes = summary.encode(&table, &keys).unwrap();
+                    let reference = store
+                        .put_content(queries::ready::UNIT_SUMMARY_DOMAIN, &bytes)
+                        .unwrap();
+                    assert_ne!(reference, readies[selected].unit_summary);
+                    let mut forged = readies.to_vec();
+                    let mut candidate = (*forged[selected]).clone();
+                    candidate.unit_summary = reference;
+                    forged[selected] = Arc::new(candidate);
+                    assert!(
+                        view.with_link_context(root, &forged, |_| Ok(())).is_err(),
+                        "ordinary summary mutation {mutation} acquired C authority"
+                    );
+                }
+                let mut wrong_schema = (**root).clone();
+                wrong_schema.product.record.domain.schema += 1;
                 assert!(
-                    view.with_link_context(root, &forged, |_| Ok(())).is_err(),
-                    "ordinary summary acquired C authority through a retained product identity"
+                    view.with_link_context(&Arc::new(wrong_schema), readies, |_| Ok(()))
+                        .is_err()
                 );
             },
             |_, _| (),
