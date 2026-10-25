@@ -188,7 +188,6 @@ fn append_map_inner(
     }
     let container = b.parameters[0].address;
     let entries = field(b, container, 0)?;
-    let hashes = field(b, container, 2)?;
     let live = field(b, container, 3)?;
     let count = b.read_bits(live)?;
     let one = b.u64(1)?;
@@ -209,12 +208,18 @@ fn append_map_inner(
     let value = entry_value(b, element, Some(pair))?;
     if let Some((slot, next)) = reserved {
         b.store(slot, value)?;
+        // Storing an entry may detach its parent. Locate the holder again
+        // after that write before changing the sequence metadata.
+        let entries = field(b, container, 0)?;
         b.seq_set_len(entries, next)?;
     } else {
         let ty = entry_type(b)?;
         append(b, entries, ty, value)?;
     }
+    // Appending or detaching the entries may relocate the Map payload.
+    let live = field(b, container, 3)?;
     overwrite(b, live, count)?;
+    let hashes = field(b, container, 2)?;
     let word = add_type(b.cx.types, TypeKind::Primitive(Primitive::U64));
     append(b, hashes, word, hash)?;
     update_index(b)

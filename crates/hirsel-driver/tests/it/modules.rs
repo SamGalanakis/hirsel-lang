@@ -231,3 +231,4 @@ mod native_std_object_regressions_19;
 mod native_object_output_19;
 mod comptime_budget_54;
 mod implementation_contracts_53;
+mod keyed_prepared_address_19;
