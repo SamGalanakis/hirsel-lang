@@ -556,3 +556,52 @@ fn finite_layout_cleanup_and_packed_carriers_have_no_nominal_depth_cutoff() {
         }
     }
 }
+
+#[test]
+fn repeated_flat_copies_keep_canonical_rows_without_reinterning() {
+    let mut f = Fixture::unit();
+    owner_sig(&mut f, &[]);
+    let types = interner();
+    let reader = crate::input::Reader::new(types, &f.signatures);
+    let declarations = typing::declaration_tables(types, &f.definition, &reader).unwrap();
+    let scratch = scratch::Scratch::new(f.definition.bodies.len());
+    let memo = TypeMemo::new();
+    let checker = Checker {
+        definition: &f.definition,
+        t: types,
+        memo: &memo,
+        body: &f.definition.bodies[0],
+        signatures: &reader,
+        declarations: &declarations,
+        scratch: &scratch,
+        contract: false,
+        site: Site {
+            body: BodyId(0),
+            block: None,
+            instruction: None,
+        },
+        errors: vec![],
+        captured: BTreeMap::new(),
+        returned: BTreeMap::new(),
+        static_data: None,
+        proof_errors: std::cell::RefCell::new(Vec::new()),
+    };
+    let operand = copy(0);
+    let original = checker.body.places[0].ty;
+    let canonical = checker.copied_type(types, &operand, original);
+    assert_eq!(checker.copied_type(types, &operand, canonical), canonical);
+    let before = types.stats();
+    for _ in 0..16 {
+        assert_eq!(checker.copied_type(types, &operand, canonical), canonical);
+    }
+    let after = types.stats();
+    assert_eq!(
+        after.row_bytes, before.row_bytes,
+        "copies retain no additional rows"
+    );
+    assert_eq!(
+        after.hits, before.hits,
+        "unchanged copy modes must not repeat interner/base lookups"
+    );
+    assert!(checker.proof_errors.borrow().is_empty());
+}

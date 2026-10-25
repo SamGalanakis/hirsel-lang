@@ -2,6 +2,16 @@
 use super::*;
 use hirsel_types::{Sendability, TypeId, TypeInterner, TypeKind, Uniqueness};
 
+// A mode transformation that leaves its immutable input unchanged needs no
+// canonical lookup. Changed rows still use the interner's complete equality.
+fn update_type(store: &TypeInterner, original: TypeId, row: hirsel_types::Type) -> TypeId {
+    if store.get(original) == Some(&row) {
+        original
+    } else {
+        store.intern(row)
+    }
+}
+
 impl Checker<'_> {
     /// Core consuming cursors retain their owner's current evidence, rather
     /// than manufacturing a fresh unique payload from a type argument.
@@ -37,7 +47,7 @@ impl Checker<'_> {
             // value, never region-placed: it is global.
             let mut row = store.get(ty).unwrap().clone();
             row.modes.relation = self.placement(&row.modes.relation);
-            let root = store.intern(row.clone());
+            let root = update_type(store, ty, row.clone());
             row.modes.sendability = self
                 .proof(
                     store,
@@ -48,14 +58,14 @@ impl Checker<'_> {
                 .unwrap_or_else(|error| {
                     self.proof_failure(error, hirsel_types::Sendability::NotSendable)
                 });
-            return store.intern(row);
+            return update_type(store, ty, row);
         }
         if !self.flat_value(value.place) {
             return ty;
         }
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
-        let root = store.intern(row.clone());
+        let root = update_type(store, ty, row.clone());
         row.modes.sendability = self
             .proof(
                 store,
@@ -66,7 +76,7 @@ impl Checker<'_> {
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-        store.intern(row)
+        update_type(store, ty, row)
     }
     pub(crate) fn weakened_type(
         &self,
@@ -79,13 +89,13 @@ impl Checker<'_> {
         if !erased_environment(&row.kind) {
             row.modes.sendability = Sendability::NotSendable;
         }
-        let root = store.intern(row.clone());
+        let root = update_type(store, ty, row.clone());
         row.modes.sendability = self
             .proof(store, root, super::proofs::Proof::AfterSharing, generics)
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-        store.intern(row)
+        update_type(store, ty, row)
     }
     pub(super) fn transferred_type(
         &self,
@@ -131,7 +141,7 @@ impl Checker<'_> {
             if state.must[root].has(MustFacts::SENDABLE) {
                 proof.modes.sendability = Sendability::Sendable;
             } else {
-                let part = store.intern(proof);
+                let part = update_type(store, ty, proof);
                 let unique = self.unique_type(store, part);
                 proof = store.get(unique).unwrap().clone();
             }
@@ -160,7 +170,7 @@ impl Checker<'_> {
                 };
             }
         }
-        let ty = store.intern(row);
+        let ty = update_type(store, ty, row);
         let ty = if self.global_operand(state, value)
             && store.get(ty).unwrap().modes.relation.has_environment()
         {
@@ -174,7 +184,7 @@ impl Checker<'_> {
                 row.modes.sendability = Sendability::Sendable;
             }
 
-            let root = store.intern(row);
+            let root = update_type(store, ty, row);
             self.derive_sendability(store, root)
         } else {
             ty
@@ -188,7 +198,7 @@ impl Checker<'_> {
             if state.must[root].has(MustFacts::SENDABLE) {
                 let mut row = store.get(unique).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                return store.intern(row);
+                return update_type(store, unique, row);
             }
             return unique;
         }
@@ -206,7 +216,7 @@ impl Checker<'_> {
             {
                 let mut row = store.get(weakened).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                store.intern(row)
+                update_type(store, weakened, row)
             } else {
                 weakened
             }
@@ -215,11 +225,11 @@ impl Checker<'_> {
             if access.projection.is_empty() && state.must[root].has(MustFacts::SENDABLE) {
                 let mut row = store.get(ty).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
-                store.intern(row)
+                update_type(store, ty, row)
             } else if projected && !self.operand_unique(state, value) {
                 let mut row = store.get(ty).unwrap().clone();
                 row.modes.uniqueness = Uniqueness::Aliased;
-                store.intern(row)
+                update_type(store, ty, row)
             } else {
                 ty
             }
@@ -928,7 +938,7 @@ impl Checker<'_> {
     pub(crate) fn unique_type(&self, store: &TypeInterner, ty: TypeId) -> TypeId {
         let mut row = store.get(ty).unwrap().clone();
         row.modes.uniqueness = Uniqueness::Unique;
-        let root = store.intern(row);
+        let root = update_type(store, ty, row);
         let mut row = store.get(root).unwrap().clone();
         row.modes.sendability = self
             .proof(
@@ -940,7 +950,7 @@ impl Checker<'_> {
             .unwrap_or_else(|error| {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             });
-        store.intern(row)
+        update_type(store, root, row)
     }
     pub(super) fn operand_fresh_receipt(&self, state: &State, value: &Operand) -> bool {
         let place = &self.body.places[value.place.0 as usize];
