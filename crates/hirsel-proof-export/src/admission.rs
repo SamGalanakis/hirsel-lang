@@ -319,6 +319,36 @@ pub fn build_captured_tables_bytes(
     }
     build_tables(input, max_module_bytes, Some(&types.rows))
 }
+/// Construction workspace when the input's unique payloads move into Export.
+/// The source body-name set owns copied paths while the input map is consumed.
+/// Retained input payloads stay under the caller's existing input reservation.
+pub fn build_owned_tables_bytes(
+    input: &ExportInput,
+    max_module_bytes: usize,
+    types: &CapturedTypes,
+) -> Option<u64> {
+    let base = build_captured_tables_bytes(input, max_module_bytes, types)?;
+    let mut extra = Bytes::default();
+    extra.tree::<DefPath, ()>(input.definitions.len().checked_add(input.skipped.len())?)?;
+    for path in input
+        .definitions
+        .keys()
+        .chain(input.skipped.iter().map(|item| &item.name))
+    {
+        let payload = path.0.modules.iter().try_fold(
+            path.0
+                .package
+                .name
+                .len()
+                .checked_add(path.0.package.version.len())?
+                .checked_add(path.0.name.len())?
+                .checked_add(path.0.modules.len().checked_mul(size_of::<String>())?)?,
+            |bytes, module| bytes.checked_add(module.len()),
+        )?;
+        extra.add(payload)?;
+    }
+    base.checked_add(extra.0.try_into().ok()?)
+}
 /// Upper bound for canonical construction tables, digest-text scratch and
 /// section metadata. Input payload clones are a separate caller obligation.
 /// `max_module_bytes` bounds every location module supplied by the locator.
@@ -811,97 +841,142 @@ pub(crate) mod tests {
         );
         assert_eq!(source.0.load(Ordering::Relaxed), 1);
     }
+    fn construction_input(width: usize) -> ExportInput {
+        let types = TypeInterner::new(None);
+        let ty = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let mut input = input(types);
+        let path = input.header.entry.clone();
+        let span = Span::default();
+        let projection = vec![
+            Projection::Index(LocalId(0)),
+            Projection::VariantField {
+                variant: 0,
+                field: 0,
+            },
+        ]
+        .into();
+        let mut definition = Definition {
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: Arc::from([ty]),
+            path: DefId::intern(&path),
+            signature_hash: ContentHash::default(),
+            entry: BodyId(0),
+            contracts: vec![],
+            bodies: vec![Body {
+                arena_scope_grant: None,
+                parameter_scope: hirsel_syntax::LexicalOwner::first(&path)
+                    .site(hirsel_syntax::NameSite::Item),
+                locals: vec![Local {
+                    ty,
+                    storage: Storage::Local,
+                    scope: ScopeId(0),
+                    span,
+                }],
+                places: vec![hirsel_tir::Place {
+                    loan: None,
+                    binding: None,
+                    root: LocalId(0),
+                    projection,
+                    ty,
+                }],
+                blocks: vec![Block {
+                    span,
+                    instructions: vec![
+                        Instruction {
+                            kind: InstructionKind::Check {
+                                rule: RuleId::of("FACT-1"),
+                                condition: Operand {
+                                    place: PlaceId(0),
+                                    usage: UseKind::Copy
+                                }
+                            },
+                            span,
+                            on_failure: CleanupId(0)
+                        };
+                        width
+                    ],
+                    terminator: Terminator::Unreachable,
+                }],
+                scopes: vec![],
+                rvalues: vec![],
+                cleanups: vec![],
+                cleanup_nodes: vec![],
+                entry: BlockId(0),
+                parameters: vec![],
+                result: ty,
+                borrow_cursors: vec![],
+                tail_sites: vec![],
+                matches: vec![],
+                scoped_parameters: vec![],
+            }],
+        };
+        definition.types = hirsel_tir::definition_types(&input.types, &definition);
+        input.definitions.insert(path.clone(), Arc::new(definition));
+        input.signatures.insert(
+            path.clone(),
+            SignatureSection {
+                path: path.clone(),
+                dependencies: vec![],
+                owner_view: None,
+                public: Signature {
+                    definition: DefId::intern(&path),
+                    metadata: Default::default(),
+                    fingerprint: ContentHash::default(),
+                    kind: SignatureKind::Const {
+                        ty,
+                        generics: vec![].into(),
+                    },
+                },
+            },
+        );
+        input
+    }
+    #[test]
+    fn consuming_construction_moves_original_buffers_and_preserves_exact_scalar_bytes() {
+        for width in [1, 4, 16] {
+            let input = construction_input(width);
+            let expected = crate::export(&input);
+            let body_buffer = input.definitions.values().next().unwrap().bodies.as_ptr() as usize;
+            let locator = input.locator.clone();
+            let captured = capture_types(&input, capture_types_bytes(&input).unwrap()).unwrap();
+            let bound = build_owned_tables_bytes(&input, 0, &captured).unwrap();
+            let (built, actual) = measured(|| crate::build_owned(input));
+            let built = built.unwrap();
+            assert!(built.skipped.is_empty());
+            assert_eq!(
+                built.definitions[0].tir.bodies.as_ptr() as usize,
+                body_buffer,
+                "move the original body allocation"
+            );
+            assert!(
+                actual.peak as u64 <= bound,
+                "width {width}: actual {} exceeds workspace {bound}",
+                actual.peak
+            );
+            assert_eq!(crate::encode(&built, &locator), expected);
+        }
+        for weak in [false, true] {
+            let input = construction_input(4);
+            let original = input.definitions.values().next().unwrap();
+            let shared = (!weak).then(|| original.clone());
+            let weak_owner = weak.then(|| Arc::downgrade(original));
+            let (built, actual) = measured(|| crate::build_owned(input));
+            assert!(
+                built.is_none(),
+                "shared or externally upgradable originals cannot move"
+            );
+            assert_eq!(
+                actual.allocations, 0,
+                "refuse before construction allocations"
+            );
+            drop((shared, weak_owner));
+        }
+    }
     #[test]
     fn construction_bound_covers_real_obligation_and_context_allocation_peaks() {
         for width in [1, 4, 16] {
-            let types = TypeInterner::new(None);
-            let ty = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
-            let mut input = input(types);
-            let path = input.header.entry.clone();
-            let span = Span::default();
-            let projection = vec![
-                Projection::Index(LocalId(0)),
-                Projection::VariantField {
-                    variant: 0,
-                    field: 0,
-                },
-            ]
-            .into();
-            let mut definition = Definition {
-                caller_bodies: vec![],
-                protocol_associations: vec![],
-                types: Arc::from([ty]),
-                path: DefId::intern(&path),
-                signature_hash: ContentHash::default(),
-                entry: BodyId(0),
-                contracts: vec![],
-                bodies: vec![Body {
-                    arena_scope_grant: None,
-                    parameter_scope: hirsel_syntax::LexicalOwner::first(&path)
-                        .site(hirsel_syntax::NameSite::Item),
-                    locals: vec![Local {
-                        ty,
-                        storage: Storage::Local,
-                        scope: ScopeId(0),
-                        span,
-                    }],
-                    places: vec![hirsel_tir::Place {
-                        loan: None,
-                        binding: None,
-                        root: LocalId(0),
-                        projection,
-                        ty,
-                    }],
-                    blocks: vec![Block {
-                        span,
-                        instructions: vec![
-                            Instruction {
-                                kind: InstructionKind::Check {
-                                    rule: RuleId::of("FACT-1"),
-                                    condition: Operand {
-                                        place: PlaceId(0),
-                                        usage: UseKind::Copy
-                                    }
-                                },
-                                span,
-                                on_failure: CleanupId(0)
-                            };
-                            width
-                        ],
-                        terminator: Terminator::Unreachable,
-                    }],
-                    scopes: vec![],
-                    rvalues: vec![],
-                    cleanups: vec![],
-                    cleanup_nodes: vec![],
-                    entry: BlockId(0),
-                    parameters: vec![],
-                    result: ty,
-                    borrow_cursors: vec![],
-                    tail_sites: vec![],
-                    matches: vec![],
-                    scoped_parameters: vec![],
-                }],
-            };
-            definition.types = hirsel_tir::definition_types(&input.types, &definition);
-            input.definitions.insert(path.clone(), Arc::new(definition));
-            input.signatures.insert(
-                path.clone(),
-                SignatureSection {
-                    path: path.clone(),
-                    dependencies: vec![],
-                    owner_view: None,
-                    public: Signature {
-                        definition: DefId::intern(&path),
-                        metadata: Default::default(),
-                        fingerprint: ContentHash::default(),
-                        kind: SignatureKind::Const {
-                            ty,
-                            generics: vec![].into(),
-                        },
-                    },
-                },
-            );
+            let input = construction_input(width);
             let (_, clones) = measured(|| {
                 (
                     input.header.clone(),
