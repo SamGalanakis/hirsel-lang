@@ -145,6 +145,19 @@ fn ownership_compilation_root_discovers_source_and_arena_before_diagnostics() {
     );
 }
 
+#[test]
+fn ownership_graph_binding_emits_original_value_plans_on_both_backends() {
+    ready_case_inner(
+        "resource type Token { value:u64 }\ndrop(x) {}\nfn other()->u64{9u64}\npub fn main()->u64{let first=Token(value:7u64)\nlet second=take first\n7u64}",
+        false,
+        false,
+        false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        4,
+    );
+}
+
 fn ready_case_policy(
     source: &str,
     adapter: bool,
@@ -567,7 +580,7 @@ fn ready_case_inner(
             ] {
                 ready_runtime.register(kind, ready_factory.clone()).unwrap();
             }
-            if ownership == 2 {
+            if ownership == 2 || ownership == 4 {
                 use native::queries::ownership_tasks::{
                     OWNERSHIP_READY_KIND, OWNERSHIP_ROOT_KIND, OwnershipTasks,
                 };
@@ -625,6 +638,34 @@ fn ready_case_inner(
                     before,
                     "readiness cannot lower again"
                 );
+                if ownership == 4 {
+                    roots
+                        .with_ready(root, |units, emit, plans| {
+                            assert_eq!(plans.len(), units.len());
+                            let llvm =
+                                hirsel_llvm::emit_object_relocated_ownership(units, emit, plans)
+                                    .map_err(|e| e.to_string())?;
+                            let clif = hirsel_cranelift::emit_object_relocated_ownership(
+                                units, emit, plans,
+                            )
+                            .map_err(|e| e.to_string())?;
+                            assert!(!llvm.bytes.is_empty() && !clif.bytes.is_empty());
+                            let mut missing = plans.clone();
+                            missing.pop_first();
+                            assert!(
+                                hirsel_llvm::emit_object_relocated_ownership(units, emit, &missing)
+                                    .is_err()
+                            );
+                            assert!(
+                                hirsel_cranelift::emit_object_relocated_ownership(
+                                    units, emit, &missing
+                                )
+                                .is_err()
+                            );
+                            Ok(())
+                        })
+                        .unwrap();
+                }
                 let mut wrong = root;
                 wrong.action = store::Action(hirsel_syntax::ContentHash::of_bytes(
                     b"stale ownership root",

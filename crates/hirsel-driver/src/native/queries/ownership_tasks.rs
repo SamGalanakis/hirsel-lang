@@ -206,6 +206,170 @@ impl OwnershipTasks {
         }
         Ok(outputs)
     }
+    /// Bind the complete selected diagnostic closure for emission. Every local
+    /// product and the shared table re-enter C, and canonical body/ABI/layout
+    /// equality transports the original plan through numeric rebinding.
+    pub fn with_ready<R>(
+        &self,
+        root: ProductRef,
+        use_units: impl FnOnce(
+            &[&hirsel_lir::stage::ValidatedUnit<Ready>],
+            &hirsel_lir::emission::EmitInputs<'_>,
+            &BTreeMap<ContentHash, Plan>,
+        ) -> Result<R, String>,
+    ) -> Result<R, String> {
+        use hirsel_lir::{
+            products::{Binding, LayoutClosure},
+            validate::Inputs,
+        };
+        let outputs = self.outputs(root)?;
+        let local = outputs
+            .iter()
+            .map(|product| self.materialize(*product))
+            .collect::<Result<Vec<_>, _>>()?;
+        let snapshot = &self.native.snapshot;
+        let environment = snapshot.environment();
+        let mut captures = Vec::new();
+        for (product, observed) in outputs.iter().zip(&local) {
+            let request = &self.requests[&product.address.0];
+            let declarations = snapshot
+                .instances
+                .operations(&request.owner, &environment)?;
+            let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+            let operations = super::instance_operations::InstanceOperations {
+                declarations: &declarations,
+                all_sources: false,
+                source: (!owner.templates.library).then_some((
+                    request.owner.instance.definition(),
+                    request.owner.instance.digest(),
+                )),
+                pretransfer: Some(super::instance_operations::bind_pretransfer(
+                    &declarations,
+                    &observed.layouts,
+                    environment.target,
+                )?),
+            };
+            let inputs = Inputs {
+                memo: Default::default(),
+                target: environment.target,
+                layouts: &observed.layouts,
+                operations: &operations,
+                manifest: environment.manifest,
+                discharge: environment.discharge,
+            };
+            captures.push(LayoutClosure::capture(&observed.unit, &inputs, &[])?);
+        }
+        let closures = captures
+            .iter()
+            .map(|(closure, _)| closure)
+            .collect::<Vec<_>>();
+        let binding = Binding::new(environment.target, &closures)?;
+        let operations = super::instance_operations::InstanceOperations {
+            declarations: environment.operations,
+            all_sources: true,
+            source: None,
+            pretransfer: Some(super::instance_operations::bind_pretransfer(
+                environment.operations,
+                &binding.table,
+                environment.target,
+            )?),
+        };
+        let bound_inputs = Inputs {
+            memo: Default::default(),
+            target: environment.target,
+            layouts: &binding.table,
+            operations: &operations,
+            manifest: environment.manifest,
+            discharge: environment.discharge,
+        };
+        let mut units = Vec::new();
+        let mut plans = BTreeMap::new();
+        let mut statics = BTreeMap::new();
+        for ((product, observed), (_, body)) in outputs.iter().zip(&local).zip(&captures) {
+            let unit =
+                hirsel_lir::validate::validate_ready(binding.materialize(body)?, &bound_inputs)
+                    .map_err(|e| format!("bound ownership Ready C: {:?}", e.violations))?;
+            let request = &self.requests[&product.address.0];
+            let declarations = snapshot
+                .instances
+                .operations(&request.owner, &environment)?;
+            let (owner, _) = snapshot.instances.admitted(&request.owner, &environment)?;
+            let operations = super::instance_operations::InstanceOperations {
+                declarations: &declarations,
+                all_sources: false,
+                source: (!owner.templates.library).then_some((
+                    request.owner.instance.definition(),
+                    request.owner.instance.digest(),
+                )),
+                pretransfer: Some(super::instance_operations::bind_pretransfer(
+                    &declarations,
+                    &observed.layouts,
+                    environment.target,
+                )?),
+            };
+            let inputs = Inputs {
+                memo: Default::default(),
+                target: environment.target,
+                layouts: &observed.layouts,
+                operations: &operations,
+                manifest: environment.manifest,
+                discharge: environment.discharge,
+            };
+            let plan = hirsel_lir::ownership_trace::native::rebind_plan(
+                &observed.unit,
+                &inputs,
+                &unit,
+                &bound_inputs,
+                &observed.plan,
+            )?;
+            if plans.insert(unit.unit().digest(), plan).is_some() {
+                return Err("duplicate ownership emission unit".into());
+            }
+            for data in super::local::read_statics(
+                snapshot.store.as_ref(),
+                owner.product.statics_finalizers,
+                &binding,
+            )? {
+                let name = hirsel_codec::to_text(&data.symbol);
+                if statics
+                    .insert(name, data.clone())
+                    .is_some_and(|previous| previous != data)
+                {
+                    return Err("conflicting ownership emission static data".into());
+                }
+            }
+            units.push(unit);
+        }
+        let statics = statics.into_values().collect::<Vec<_>>();
+        let keys = hirsel_lir::LayoutKeys::new(&binding.table);
+        let index = hirsel_lir::LayoutIndex::new(&binding.table);
+        let emit = hirsel_lir::emission::EmitInputs {
+            ahead: None,
+            continuation: None,
+            alternate: false,
+            index: Some(&index),
+            input: &snapshot.emission.input,
+            target: environment.target,
+            layouts: &binding.table,
+            keys: &keys,
+            manifest: environment.manifest,
+            statics: &statics,
+            inline_instances: &snapshot.emission.inline_instances,
+            available_externally: &Default::default(),
+            callbacks: snapshot.emission.callbacks,
+            tracking: snapshot.emission.tracking,
+            foreign: &snapshot.emission.foreign,
+            opt: snapshot.emission.opt,
+            verify_backend: snapshot.emission.verify_backend,
+            measurement: snapshot.emission.measurement,
+            fuel: snapshot.emission.fuel,
+        };
+        let units = units.iter().collect::<Vec<_>>();
+        hirsel_lir::ownership_trace::native::Request::Relocated(&plans)
+            .prepare(&units, &binding.table)?;
+        use_units(&units, &emit, &plans)
+    }
+
     /// Reopen one selected diagnostic output and independently revalidate C.
     /// This performs no source, import or lowering work and grants recipes no
     /// semantic authority. A caller cannot substitute an ordinary Ready hit.
