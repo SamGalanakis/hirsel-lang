@@ -887,7 +887,8 @@ fn parameter_slot(u: &LirUnit<Ready>, s: SlotId) -> bool {
 /// Whether a `mut` parameter of `layout` can be borrowed in place by a
 /// compact frame: a whole non-owning scalar (no pointer, scan, drop or
 /// finalizer), so its record is only an address and no writeback, gather or
-/// realignment exists.
+/// realignment exists. Its value must also be a plain `Scalar`: a handle
+/// (a task set's, say) has a scalar layout but names runtime state.
 fn exclusive_scalar(table: &LayoutTable, layout: LayoutId) -> bool {
     table.layout(layout).is_some_and(|l| {
         matches!(l.kind, LayoutKind::Scalar(k) if k != ScalarKind::Pointer)
@@ -917,7 +918,7 @@ fn fixed_area(
     }
     let mut exclusive = 0;
     let mut extents = Vec::with_capacity(abi.parameters.len());
-    for p in &abi.parameters {
+    for (p, &value) in abi.parameters.iter().zip(&u.parameters) {
         match p.passing {
             ParameterPassing::ByValue
             | ParameterPassing::ReadOnlyAddress
@@ -932,9 +933,12 @@ fn fixed_area(
                     .filter(|s| s.kind == SlotKind::Parameter(p.source))
                     .count()
                     == 1;
+                let ty = &u.types[u.values[value.index()].ty.index()];
                 if exclusive > 1
                     || p.convention != Passing::Mut
                     || !slotted
+                    || !matches!(ty.repr, ValueRepr::Scalar(_))
+                    || u.values[value.index()].holding != Holding::Plain
                     || !exclusive_scalar(table, p.layout)
                 {
                     return Err("exclusive parameter".into());
@@ -1037,6 +1041,7 @@ fn exclusive_edge(
         || slot_layout(u, slot).0 != record.layout
         || u.types[info.ty.index()].layout != record.layout
         || !exclusive_scalar(table, record.layout)
+        || !matches!(slot_layout(u, slot).1, ValueRepr::Scalar(_))
         || !slots.contains(&slot)
     {
         return None;

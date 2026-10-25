@@ -382,6 +382,7 @@ fn exclusive_proof(
         || !layout.scan.is_empty()
         || !layout.drop.is_empty()
         || layout.finalizer.is_some()
+        || !matches!(u.types[info.ty.index()].repr, ValueRepr::Scalar(_))
         || place.projection.len != 0
         || !place.unchecked.is_empty()
         || !matches!(info.kind, SlotKind::Local | SlotKind::Temporary)
@@ -630,7 +631,15 @@ fn check_fixed(
                         && l.drop.is_empty()
                         && l.finalizer.is_none()
                 });
-                if exclusive > 1 || p.convention != Passing::Mut || !scalar || slots.len() != 1 {
+                let received = &u.values[value.index()];
+                let plain = matches!(u.types[received.ty.index()].repr, ValueRepr::Scalar(_))
+                    && received.holding == Holding::Plain;
+                if exclusive > 1
+                    || p.convention != Passing::Mut
+                    || !scalar
+                    || !plain
+                    || slots.len() != 1
+                {
                     return Err(refused);
                 }
                 let pointer = u64::from(target.pointer_bytes);
