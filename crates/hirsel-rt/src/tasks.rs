@@ -1707,8 +1707,10 @@ pub(crate) unsafe fn record_dispatch(
 /// waiter without its logical unpark. Its dispatch ends that object wait here,
 /// under the role it takes to start the task, as the policy's unpark would;
 /// the waiter's loop checks its condition again. `false`: the task is parked
-/// on a wait no object wake ends, so a stale token woke it, or `key` no
-/// longer names its slot's row, and the caller returns its frame unstarted.
+/// on a wait no object wake ends, or holds its result until its parent's
+/// hand-off (which alone makes it Ready), so a stale or remembered wake woke
+/// it; or `key` no longer names its slot's row. The caller returns its frame
+/// unstarted.
 /// # Safety
 /// The caller holds the scheduler role and is starting `key`'s frame.
 pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, key: registry::TaskKey) -> bool {
@@ -1723,6 +1725,9 @@ pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, key: registry:
     let Some(Some(row)) = s.tasks.get_mut(task as usize) else {
         return true;
     };
+    if row.state == State::Holding {
+        return false;
+    }
     if row.state != State::Parked {
         return true;
     }
