@@ -11,8 +11,8 @@ hirsel_guard::install!(admission::tests::Counting: admission::tests::Counting);
 mod admission;
 mod annotations;
 pub use admission::{
-    CapturedTypes, build_captured_tables_bytes, build_tables_bytes, capture_types,
-    capture_types_bytes,
+    CapturedTypes, build_captured_tables_bytes, build_owned_tables_bytes, build_tables_bytes,
+    capture_types, capture_types_bytes,
 };
 mod constants;
 mod content;
@@ -480,6 +480,42 @@ fn section(
     })
 }
 
+fn section_owned(
+    types: &Arc<TypeInterner>,
+    definition: Definition,
+    locator: &Locator,
+    signatures: &BTreeMap<DefPath, SignatureSection>,
+    bodies: &BTreeSet<DefPath>,
+) -> Result<DefinitionSection, String> {
+    let digested = digest_definition(types, &definition, locator, signatures)?;
+    let table = obligations::table(types, &definition, |path| {
+        signatures.get(path).map(|s| &s.public)
+    });
+    let obligations = table
+        .obligations
+        .into_iter()
+        .map(|(id, sites, detail)| Obligation {
+            checksum: checksum(&id, &digested.tir_digest, &digested.references),
+            id,
+            sites,
+            detail,
+        })
+        .collect();
+    Ok(DefinitionSection {
+        path: definition.path.path().clone(),
+        locations: digested.locations,
+        tir: definition,
+        tir_digest: digested.tir_digest,
+        references: digested.references,
+        operations: table
+            .callees
+            .into_iter()
+            .filter(|path| !bodies.contains(path) && signatures.contains_key(path))
+            .collect(),
+        obligations,
+    })
+}
+
 /// Build the export; a definition whose section cannot be built joins the
 /// skip list with its reason.
 pub fn build(input: &ExportInput) -> Export {
@@ -523,6 +559,58 @@ pub fn build(input: &ExportInput) -> Export {
         annotations: input.annotations.clone(),
         annotation_digest: annotation_digest(&input.annotations),
     }
+}
+
+/// Consume uniquely owned original artifacts and move their existing payloads
+/// into the canonical export. Shared originals refuse before construction;
+/// callers keep the input's retained-storage grant through the returned export.
+/// No body or signature payload is cloned by this path.
+pub fn build_owned(input: ExportInput) -> Option<Export> {
+    if input
+        .definitions
+        .values()
+        .any(|definition| Arc::strong_count(definition) != 1 || Arc::weak_count(definition) != 0)
+    {
+        return None;
+    }
+    let definitions_input = input.definitions;
+    let bodies: BTreeSet<_> = definitions_input
+        .keys()
+        .chain(input.skipped.iter().map(|s| &s.name))
+        .cloned()
+        .collect();
+    let mut owned = Vec::with_capacity(definitions_input.len());
+    let mut skipped = input.skipped;
+    for (path, definition) in definitions_input {
+        let definition = Arc::try_unwrap(definition)
+            .unwrap_or_else(|_| unreachable!("original's unique ownership was checked"));
+        match section_owned(
+            &input.types,
+            definition,
+            &input.locator,
+            &input.signatures,
+            &bodies,
+        ) {
+            Ok(section) => owned.push(section),
+            Err(reason) => skipped.push(Skipped { name: path, reason }),
+        }
+    }
+    skipped.sort_by(|a, b| a.name.cmp(&b.name));
+    let annotation_digest = annotation_digest(&input.annotations);
+    Some(Export {
+        types: input.types,
+        header: input.header,
+        definitions: owned,
+        signatures: input.signatures.into_values().collect(),
+        constants: input
+            .constants
+            .into_iter()
+            .map(|(path, value)| ConstantSection { path, value })
+            .collect(),
+        skipped,
+        annotations: input.annotations,
+        annotation_digest,
+    })
 }
 
 fn encode_body(export: &Export, locator: &Locator) -> String {
