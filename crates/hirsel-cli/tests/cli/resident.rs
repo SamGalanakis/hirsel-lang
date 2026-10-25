@@ -42,6 +42,20 @@ fn resident_edits_equal_cold_diagnostics_and_restart_loads_the_disk_store() {
     log.read_line(&mut ready).unwrap();
     assert!(ready.contains("serving"), "{ready}");
     let mut server = Server(child);
+    let run = |flag: Option<&str>, daemon: &str, results: &str| {
+        let mut c = command(&directory);
+        c.env("HIRSEL_DAEMON", daemon)
+            .env("HIRSEL_RESULTS", results)
+            .arg("check");
+        if let Some(flag) = flag {
+            c.arg(flag);
+        }
+        c.arg("main.hir").output().unwrap()
+    };
+    // Keep the resident edit sequence contiguous: the independent fresh checks
+    // can outlast the server's idle timeout on a shared worker. Retain every
+    // result, then compare it with both fresh paths after stopping this server.
+    let mut resident = vec![];
     for source in [
         "fn a() -> u8 { 1u8 }\nfn main() { let _ = a() }\n",
         "fn a() -> u8 { 2u8 }\nfn main() { let _ = a() }\n",
@@ -52,39 +66,33 @@ fn resident_edits_equal_cold_diagnostics_and_restart_loads_the_disk_store() {
     ] {
         std::fs::write(&file, source).unwrap();
         for flag in [None, Some("--json")] {
-            let run = |daemon: &str, results: &str| {
-                let mut c = command(&directory);
-                c.env("HIRSEL_DAEMON", daemon)
-                    .env("HIRSEL_RESULTS", results)
-                    .arg("check");
-                if let Some(flag) = flag {
-                    c.arg(flag);
-                }
-                c.arg("main.hir").output().unwrap()
-            };
-            let warm = run("auto", "dir@1");
+            let warm = run(flag, "auto", "dir@1");
             let mut served = String::new();
             log.read_line(&mut served).unwrap();
             assert!(
                 served.contains("serve:") && served.contains("exited"),
                 "{served}"
             );
-            let disk = run("off", "dir@1");
-            let cold = run("off", "none@1");
-            assert_eq!(
-                (&warm.status, &warm.stdout, &warm.stderr),
-                (&cold.status, &cold.stdout, &cold.stderr),
-                "resident: {source}"
-            );
-            assert_eq!(
-                (&disk.status, &disk.stdout, &disk.stderr),
-                (&cold.status, &cold.stdout, &cold.stderr),
-                "disk: {source}"
-            );
+            resident.push((source, flag, warm));
         }
     }
     server.0.kill().unwrap();
     server.0.wait().unwrap();
+    for (source, flag, warm) in resident {
+        std::fs::write(&file, source).unwrap();
+        let disk = run(flag, "off", "dir@1");
+        let cold = run(flag, "off", "none@1");
+        assert_eq!(
+            (&warm.status, &warm.stdout, &warm.stderr),
+            (&cold.status, &cold.stdout, &cold.stderr),
+            "resident: {source}"
+        );
+        assert_eq!(
+            (&disk.status, &disk.stdout, &disk.stderr),
+            (&cold.status, &cold.stdout, &cold.stderr),
+            "disk: {source}"
+        );
+    }
     // A stale socket after an unclean shutdown is replaced on demand.
     let result = command(&directory)
         .env("HIRSEL_SERVE_IDLE", "1")
