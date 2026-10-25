@@ -255,9 +255,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             self.reload(s)?;
             let unit = self.unit;
-            for (block, i) in hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped) {
+            for (block, i) in
+                hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped)
+            {
                 self.at = (block, i);
-                let inst = &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
+                let inst =
+                    &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
                 self.instruction(inst)?;
             }
             self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
@@ -358,10 +361,12 @@ pub(super) fn declare<'m, 'a>(
             if module.defines(&name) {
                 return Err(CodegenError::DuplicateSymbol { name });
             }
-            let function = module.function(&name, ty).map_err(|what| CodegenError::Invalid {
-                definition: header.definition.clone(),
-                what,
-            })?;
+            let function = module
+                .function(&name, ty)
+                .map_err(|what| CodegenError::Invalid {
+                    definition: header.definition.clone(),
+                    what,
+                })?;
             module.add_attribute(function, AttributeSlot::Function, Attribute::NoUnwind);
             manifested.exports.insert(
                 name.clone(),
@@ -380,7 +385,9 @@ pub(super) fn declare<'m, 'a>(
         let entry = module.append_block(dispatcher);
         builder.position(entry);
         let arity = signature.types.len() as u32 + 1;
-        let params: Vec<_> = (0..arity).map(|i| module.parameter(dispatcher, i)).collect();
+        let params: Vec<_> = (0..arity)
+            .map(|i| module.parameter(dispatcher, i))
+            .collect();
         let frame = *params.last().unwrap();
         let number = builder.load(module.int_type(32), frame, 8);
         let invalid = module.append_block(dispatcher);

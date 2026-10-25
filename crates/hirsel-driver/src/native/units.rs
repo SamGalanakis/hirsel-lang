@@ -409,7 +409,9 @@ pub(crate) fn lower(
                         }
                     }
                 }
-                let object = timed(Phase::Codegen, || emit(program, &selected, &ahead_plan, &continuation))?;
+                let object = timed(Phase::Codegen, || {
+                    emit(program, &selected, &ahead_plan, &continuation)
+                })?;
                 let summary = |unit: &ValidatedUnit<Ready>| {
                     UnitSummary::of(
                         unit.unit(),
