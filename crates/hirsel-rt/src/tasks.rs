@@ -2688,6 +2688,12 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         crate::root_trace::point(ctx)
     };
     crate::stop::observe(ctx)?;
+    // A first blocked host call can precede every task operation. The role
+    // guard excludes other owners but does not create the root's tables;
+    // polling and parking below borrow those tables through with_held.
+    if unsafe { (*ctx.run_ref().tasks.get()).is_none() } {
+        create_scheduler(ctx);
+    }
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
     }

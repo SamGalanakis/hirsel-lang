@@ -1990,6 +1990,53 @@ unsafe fn wait_here(ctx: *mut TaskCtx) -> Stopped<bool> {
 #[cfg(test)]
 mod native_tests {
     use super::*;
+    #[test]
+    fn first_blocked_host_call_creates_the_root_scheduler_before_polling() {
+        struct FirstWait(bool, Completion);
+        impl crate::io::Adapter for FirstWait {
+            fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+                Ok(None)
+            }
+            fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+                if std::mem::take(&mut self.0) {
+                    Err(AdapterError::Blocked)
+                } else {
+                    Ok(self.1.clone())
+                }
+            }
+        }
+        for (request, completion) in [
+            (
+                Request::SleepUntil {
+                    clock: 17,
+                    deadline: 100,
+                },
+                Completion::Wait(Ok(())),
+            ),
+            (
+                Request::ReadStdin { stdin: 17, max: 1 },
+                Completion::Input(Ok(vec![42])),
+            ),
+        ] {
+            let mut run = crate::host::BodyRun::new(1, false);
+            run.adapter = Some(Box::new(FirstWait(true, completion.clone())));
+            let outcome = run.run(
+                |_| {},
+                move |ctx| unsafe {
+                    let _role = crate::tasks::role::Guard::new(ctx);
+                    assert!((*(*ctx).run_ref().tasks.get()).is_none());
+                    let (result, parked) = issue(ctx, request.clone()).unwrap();
+                    assert_eq!(result, Ok(completion.clone()));
+                    assert!(parked);
+                    assert!((*(*ctx).run_ref().tasks.get()).is_some());
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert_eq!(outcome.pending, 0);
+        }
+    }
+
     struct Edge(bool);
     impl crate::io::Adapter for Edge {
         fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
