@@ -413,7 +413,9 @@ impl Task {
                     .iter()
                     .map(|d| d.definition.path().clone()),
             );
-            extend_reads(&mut dependencies, &output.outcome.reads, &queries.front);
+            extend_reads(&mut dependencies, &output.outcome.reads, |key| {
+                queries.front.lookup_definition(key)
+            });
             if input.executable {
                 let Some(id) = queries.lower.query(path) else {
                     return Poll::Ready(Err(queries
@@ -441,7 +443,9 @@ impl Task {
                         .iter()
                         .map(|d| d.definition.path().clone()),
                 );
-                extend_reads(&mut dependencies, &output.reads, &queries.front);
+                extend_reads(&mut dependencies, &output.reads, |key| {
+                    queries.front.lookup_definition(key)
+                });
                 tir = Some(output.output.value);
                 if matches!(&input.signature.kind, SignatureKind::Const {generics, ..} if generics.is_empty())
                 {
@@ -456,7 +460,9 @@ impl Task {
                         Poll::Ready(Ok(_)) => {}
                     }
                     if let Some(reads) = queries.lower.settled_reads(path, QueryKind::Evaluate) {
-                        extend_reads(&mut dependencies, &reads, &queries.front);
+                        extend_reads(&mut dependencies, &reads, |key| {
+                            queries.front.lookup_definition(key)
+                        });
                     }
                     let value = match queries.lower.settled_constant(path, &[]) {
                         Ok(value) => value,
@@ -739,14 +745,18 @@ fn operational(message: impl Into<String>) -> QueryError {
         message: message.into(),
     })
 }
-fn extend_reads(dependencies: &mut BTreeSet<DefPath>, reads: &Reads, front: &FrontBodyQueries) {
+fn extend_reads(
+    dependencies: &mut BTreeSet<DefPath>,
+    reads: &Reads,
+    mut lookup: impl FnMut(crate::memo::LookupKey) -> Option<DefPath>,
+) {
     dependencies.extend(reads.iter().filter_map(|(read, _)| match read {
         ReadKey::Signature(id)
         | ReadKey::ExecutedSignature(id)
         | ReadKey::ExecutedBody(id)
         | ReadKey::LayoutBody(id)
         | ReadKey::Representation(id) => Some(id.path().clone()),
-        ReadKey::Lookup(key) => front.lookup_definition(*key),
+        ReadKey::Lookup(key) => lookup(*key),
         _ => None,
     }));
 }
@@ -800,6 +810,7 @@ impl QueryEngine {
     /// the planner and producer consume this one catalog's exact byte count.
     pub fn front_run_inputs(&mut self, limit: u64) -> Result<FrontRunInputs, QueryError> {
         let signatures = self.signature_inputs();
+        let declarations = self.frozen_declarations();
         let source_paths = self.source_paths();
         let mut paths: BTreeSet<_> = source_paths.iter().cloned().collect();
         paths.extend(self.native_builtin_signatures().into_keys());
@@ -834,7 +845,9 @@ impl QueryEngine {
             // observations too: normalized coverage can omit aliases and
             // primitive lookups whose spelling still belongs to PS9 closure.
             if let Some(reads) = self.shared_memo_reads(&path, QueryKind::Signature) {
-                extend_reads(&mut dependencies, &reads, &front);
+                extend_reads(&mut dependencies, &reads, |key| {
+                    FrontBodyQueries::lookup_in(&signatures, &declarations, key)
+                });
             }
             if let Some(reads) = self.dependency_reads(&path, QueryKind::Signature) {
                 dependencies.extend(reads.signatures.iter().map(|d| d.definition.path().clone()));

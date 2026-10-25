@@ -253,6 +253,13 @@ impl FrontBodyQueries {
     /// Successful lookup targets are semantic closure edges even when a
     /// primitive/alias adds no normalized signature fingerprint dependency.
     pub(crate) fn lookup_definition(&self, key: crate::memo::LookupKey) -> Option<DefPath> {
+        Self::lookup_in(&self.snapshot, &self.declarations, key)
+    }
+    pub(crate) fn lookup_in(
+        snapshot: &SignatureSnapshot,
+        declarations: &Declarations,
+        key: crate::memo::LookupKey,
+    ) -> Option<DefPath> {
         use crate::memo::LookupSource;
         let context = key.context();
         let path = hirsel_syntax::Path {
@@ -264,9 +271,8 @@ impl FrontBodyQueries {
                 .collect(),
         };
         match key.source {
-            LookupSource::Provider => self.snapshot.lookup(&context, &path).result.ok(),
-            LookupSource::Manifest => self
-                .declarations
+            LookupSource::Provider => snapshot.lookup(&context, &path).result.ok(),
+            LookupSource::Manifest => declarations
                 .index(context.package.clone())
                 .lookup(&context, &path)
                 .ok(),
