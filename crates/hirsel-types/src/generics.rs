@@ -20,6 +20,110 @@ struct BoundDeclarations {
     outer: Option<Arc<BoundDeclarations>>,
 }
 impl GenericDeclarations {
+    /// Visit retained declaration allocations. A nonzero identity names an
+    /// immutable shared allocation; returning false skips its already-counted
+    /// children. Identity zero denotes owned storage with no shared identity.
+    /// Interned sites/types and allocator size classes are excluded.
+    pub fn visit_retained_allocations(&self, mut visit: impl FnMut(usize, usize) -> bool) {
+        use std::alloc::Layout;
+        fn arc<T: ?Sized>(value: &Arc<T>, visit: &mut impl FnMut(usize, usize) -> bool) -> bool {
+            let bytes = Layout::new::<[usize; 2]>()
+                .extend(Layout::for_value(&**value))
+                .expect("existing Arc layout")
+                .0
+                .pad_to_align()
+                .size();
+            visit(Arc::as_ptr(value).cast::<()>() as usize, bytes)
+        }
+        fn tree<K, V>(len: usize) -> usize {
+            // Mutators clear an emptied map, so empty declaration tables
+            // retain no root (alloc BTreeMap::clear, map.rs:670-677).
+            if len == 0 {
+                return 0;
+            }
+            // Rust alloc BTree node.rs:42-112: min five non-root entries,
+            // eleven key/value slots and twelve edges in an internal node.
+            let parts = [
+                Layout::new::<usize>(),
+                Layout::new::<u16>(),
+                Layout::new::<u16>(),
+                Layout::new::<[K; 11]>(),
+                Layout::new::<[V; 11]>(),
+                Layout::new::<[usize; 12]>(),
+            ];
+            let alignment = parts.iter().map(Layout::align).max().unwrap();
+            let node = parts.iter().fold(alignment - 1, |n, l| {
+                n.saturating_add(l.size()).saturating_add(l.align() - 1)
+            });
+            (len / 5 + 1).saturating_mul(node)
+        }
+        fn parameters(
+            values: &Arc<[GenericParameter]>,
+            visit: &mut impl FnMut(usize, usize) -> bool,
+        ) {
+            if !arc(values, visit) {
+                return;
+            }
+            for parameter in &**values {
+                match parameter {
+                    GenericParameter::Type { name, bounds } => {
+                        visit(0, name.capacity());
+                        let identity = bounds.storage_identity();
+                        if identity != 0 {
+                            let bytes = Layout::new::<[usize; 2]>()
+                                .extend(Layout::for_value(bounds.as_slice()))
+                                .expect("existing shared slice layout")
+                                .0
+                                .pad_to_align()
+                                .size();
+                            visit(identity, bytes);
+                        }
+                    }
+                    GenericParameter::Size { name } => {
+                        visit(0, name.capacity());
+                    }
+                }
+            }
+        }
+        for map in [&self.body, &self.permissions] {
+            if arc(map, &mut visit) {
+                visit(0, tree::<SiteRef, Arc<[GenericParameter]>>(map.len()));
+                for values in map.values() {
+                    parameters(values, &mut visit);
+                }
+            }
+        }
+        let mut layer = self.bound.as_ref();
+        while let Some(bound) = layer {
+            if !arc(bound, &mut visit) {
+                break;
+            }
+            parameters(&bound.parameters, &mut visit);
+            layer = bound.outer.as_ref();
+        }
+        if let Some(lexical) = &self.lexical {
+            let declarations = &lexical.declarations;
+            if arc(declarations, &mut visit) {
+                visit(
+                    0,
+                    tree::<SiteRef, (Vec<usize>, Arc<[GenericParameter]>)>(
+                        declarations.parameters.len(),
+                    ),
+                );
+                visit(
+                    0,
+                    declarations
+                        .intervals
+                        .capacity()
+                        .saturating_mul(size_of::<(usize, usize)>()),
+                );
+                for (owners, values) in declarations.parameters.values() {
+                    visit(0, owners.capacity().saturating_mul(size_of::<usize>()));
+                    parameters(values, &mut visit);
+                }
+            }
+        }
+    }
     pub fn signature(parameters: &[GenericParameter]) -> Self {
         work::count_by(
             Counter::CopiedGenericDeclarationRows,
@@ -44,6 +148,9 @@ impl GenericDeclarations {
             }
         }
         body.retain(|_, parameters: &mut Arc<[GenericParameter]>| !parameters.is_empty());
+        if body.is_empty() {
+            body.clear();
+        }
         let mut head = None;
         for (depth, parameters) in bound.into_iter().rev() {
             let parameters: Arc<[GenericParameter]> = parameters;
@@ -69,7 +176,11 @@ impl GenericDeclarations {
                     self.permissions.len() as u64,
                 );
             }
-            Arc::make_mut(&mut self.permissions).remove(&scope);
+            let permissions = Arc::make_mut(&mut self.permissions);
+            permissions.remove(&scope);
+            if permissions.is_empty() {
+                permissions.clear();
+            }
         }
         if parameters.is_empty() && !self.body.contains_key(&scope) {
             self.remove_lexical_parameters(scope);
@@ -84,6 +195,9 @@ impl GenericDeclarations {
         let body = Arc::make_mut(&mut self.body);
         if parameters.is_empty() {
             body.remove(&scope);
+            if body.is_empty() {
+                body.clear();
+            }
             self.remove_lexical_parameters(scope);
         } else {
             body.insert(scope, parameters.into());
@@ -98,9 +212,11 @@ impl GenericDeclarations {
                         context.declarations.parameters.len() as u64,
                     );
                 }
-                Arc::make_mut(&mut context.declarations)
-                    .parameters
-                    .remove(&scope);
+                let parameters = &mut Arc::make_mut(&mut context.declarations).parameters;
+                parameters.remove(&scope);
+                if parameters.is_empty() {
+                    parameters.clear();
+                }
             }
         }
     }
@@ -357,6 +473,9 @@ impl GenericDeclarations {
             return None;
         }
         parameters.retain(|_, (_, parameters)| !parameters.is_empty());
+        if parameters.is_empty() {
+            parameters.clear();
+        }
         let declarations = std::sync::Arc::new(LexicalDeclarations {
             parameters,
             intervals,
@@ -555,6 +674,133 @@ mod sharing_tests {
                 .declarations
                 .parameters
                 .is_empty()
+        );
+    }
+}
+
+#[cfg(test)]
+mod retained_allocation_tests {
+    use super::lexical_tests::site;
+    use super::*;
+    #[test]
+    fn generic_retention_counts_owned_capacity_and_skips_shared_cloned_declarations() {
+        let mut name = String::with_capacity(8192);
+        name.push('N');
+        let capacity = name.capacity();
+        let declarations = GenericDeclarations::from_binders([(
+            GenericBinder::Body(site("owner", NameSite::Item)),
+            vec![GenericParameter::Size { name }],
+        )]);
+        let mut seen = std::collections::HashSet::new();
+        let mut bytes = 0usize;
+        {
+            let mut visit = |id, amount| {
+                let fresh = id == 0 || seen.insert(id);
+                if fresh {
+                    bytes += amount;
+                }
+                fresh
+            };
+            declarations.visit_retained_allocations(&mut visit);
+            declarations.clone().visit_retained_allocations(&mut visit);
+        }
+        assert!(bytes >= capacity);
+        let mut same_seen = std::collections::HashSet::new();
+        let mut once = 0;
+        declarations.visit_retained_allocations(|id, amount| {
+            let fresh = id == 0 || same_seen.insert(id);
+            if fresh {
+                once += amount;
+            }
+            fresh
+        });
+        assert_eq!(
+            bytes, once,
+            "cloning declarations retains one backing graph"
+        );
+    }
+    #[test]
+    fn clearing_last_generic_binder_releases_payloads_and_empty_tree_allocations() {
+        fn bytes(value: &GenericDeclarations) -> usize {
+            let mut bytes = 0;
+            let mut seen = std::collections::HashSet::new();
+            value.visit_retained_allocations(|id, amount| {
+                let fresh = id == 0 || seen.insert(id);
+                if fresh {
+                    bytes += amount;
+                }
+                fresh
+            });
+            bytes
+        }
+        let owner = site("cleared", NameSite::Item);
+        let reference = TypeParameterRef::body(owner, TypeParamId(0));
+        let original = GenericDeclarations::from_binders([(
+            GenericBinder::Body(owner),
+            vec![GenericParameter::Type {
+                name: "T".into(),
+                bounds: vec![Bound::Plain].into(),
+            }],
+        )]);
+        let weak = Arc::downgrade(&original.body[&owner]);
+        let mut edited = original.with_copyable(&std::collections::BTreeSet::from([reference]));
+        assert!(edited.bounds(reference).contains(&Bound::Copyable));
+        edited.insert(owner, vec![]);
+        assert_eq!(bytes(&edited), bytes(&GenericDeclarations::default()));
+        assert!(edited.get(reference).is_none());
+        assert_eq!(original.bounds(reference), &[Bound::Plain]);
+        assert!(
+            weak.upgrade().is_some(),
+            "the original immutable owner still retains its declarations"
+        );
+        drop(original);
+        assert!(
+            weak.upgrade().is_none(),
+            "removed declarations release after their last owner"
+        );
+    }
+    #[test]
+    fn lexical_retention_visits_one_shared_tree_across_nested_views() {
+        let owner = site("lexical", NameSite::Item);
+        let child = site("lexical", NameSite::Expression(hirsel_syntax::ExprId(1)));
+        let scopes = GenericDeclarations::lexical(vec![
+            (
+                owner,
+                None,
+                vec![GenericParameter::Type {
+                    name: "T".into(),
+                    bounds: vec![Bound::Plain].into(),
+                }]
+                .into(),
+            ),
+            (child, Some(0), Arc::from([])),
+        ])
+        .unwrap();
+        let mut seen = std::collections::HashSet::new();
+        let mut bytes = 0;
+        let mut visit = |id, amount| {
+            let fresh = id == 0 || seen.insert(id);
+            if fresh {
+                bytes += amount;
+            }
+            fresh
+        };
+        scopes[0].visit_retained_allocations(&mut visit);
+        let mut fresh_allocations = 0;
+        scopes[1].visit_retained_allocations(|id, amount| {
+            let fresh = id == 0 || seen.insert(id);
+            if fresh {
+                fresh_allocations += amount;
+            }
+            fresh
+        });
+        assert!(bytes > 0);
+        // Each view owns independent empty default body/permission Arcs;
+        // the lexical graph itself must be skipped on the second visit.
+        assert!(fresh_allocations < bytes);
+        assert_eq!(
+            scopes[1].bounds(TypeParameterRef::body(owner, TypeParamId(0))),
+            &[Bound::Plain]
         );
     }
 }

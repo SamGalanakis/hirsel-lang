@@ -165,7 +165,35 @@ pub(crate) struct Weight {
     shared: HashSet<usize>,
 }
 impl Weight {
-    fn diagnostic(&mut self, diagnostic: &hirsel_diag::Diagnostic) {
+    pub(crate) fn allocation(&mut self, identity: usize, bytes: usize) -> bool {
+        if identity != 0 && !self.shared.insert(identity) {
+            return false;
+        }
+        self.add(bytes);
+        true
+    }
+    pub(crate) fn arc<T: ?Sized>(
+        &mut self,
+        value: &std::sync::Arc<T>,
+        visit: impl FnOnce(&mut Self, &T),
+    ) {
+        if self.allocation(
+            std::sync::Arc::as_ptr(value).cast::<()>() as usize,
+            arc_bytes(&**value),
+        ) {
+            visit(self, value);
+        }
+    }
+    pub(crate) fn reads(&mut self, value: &std::sync::Arc<Reads>) {
+        self.arc(value, |w, reads| {
+            w.add(
+                reads
+                    .len()
+                    .saturating_mul(size_of::<(super::ReadKey, hirsel_syntax::ContentHash)>()),
+            )
+        });
+    }
+    pub(crate) fn diagnostic(&mut self, diagnostic: &hirsel_diag::Diagnostic) {
         let hirsel_diag::Diagnostic {
             rule,
             severity: _,
@@ -200,7 +228,7 @@ impl Weight {
         self.package(&context.package);
         self.vec(&context.modules, |w, part| w.add(part.capacity()));
     }
-    fn error(&mut self, error: &hirsel_types::QueryError) {
+    pub(crate) fn error(&mut self, error: &hirsel_types::QueryError) {
         match error {
             hirsel_types::QueryError::Operational(failure) => self.failure(failure),
             hirsel_types::QueryError::Diagnostics(diagnostics) => {
@@ -302,7 +330,7 @@ impl Weight {
     pub(crate) fn flat_vec<T>(&mut self, value: &Vec<T>) {
         self.add(value.capacity().saturating_mul(size_of::<T>()));
     }
-    fn vec<T>(&mut self, value: &Vec<T>, mut visit: impl FnMut(&mut Self, &T)) {
+    pub(crate) fn vec<T>(&mut self, value: &Vec<T>, mut visit: impl FnMut(&mut Self, &T)) {
         self.flat_vec(value);
         for element in value {
             visit(self, element);
