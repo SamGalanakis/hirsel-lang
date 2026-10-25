@@ -614,6 +614,7 @@ fn run_program_case(
             let mut wrong = selected;
             wrong.action = store::Action(ContentHash::of_bytes(b"wrong compilation action"));
             assert!(compilation.observation(wrong).is_err());
+            assert!(compilation.discharged(wrong).is_err());
             assert_eq!(trace.totals(), before);
             metadata
         });
@@ -657,6 +658,14 @@ fn run_program_case(
         let request = runtime.request(&[instances.discovery_id()]);
         let discovery = runtime.wait(request).unwrap()[0];
         let completed = instances.completed_instances(discovery).unwrap();
+        if observation_only {
+            let before = trace.totals();
+            assert_eq!(
+                compilation.discharged(selected).unwrap(),
+                instances.discharged(discovery).unwrap()
+            );
+            assert_eq!(trace.totals(), before);
+        }
         if let ProgramCase::OrdinaryCallee { optimized } = case {
             let owner = completed
                 .iter()
