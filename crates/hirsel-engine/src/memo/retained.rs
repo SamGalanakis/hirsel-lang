@@ -1,5 +1,7 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
+#[cfg(test)]
+mod type_storage;
 use super::{DepthEvidence, Reads};
 use crate::comptime::StagedRegistration;
 use hirsel_syntax::DefPath;
