@@ -107,6 +107,7 @@ positions, including when an item moves.
 
 ```sh
 hirsel serve --workspace . --idle 900  # foreground server, seconds until idle exit
+hirsel serve --stop --workspace .     # stop this workspace's compiler server
 hirsel check app/hirsel.json          # use the workspace server
 hirsel check --watch app/hirsel.json  # check after edits until interrupted
 HIRSEL_DAEMON=off hirsel check app/hirsel.json  # a fresh compiler process
@@ -117,8 +118,10 @@ directory, or the entry's directory outside a checkout. Its socket lives in a
 user-private directory under `$XDG_RUNTIME_DIR` (or the system temporary
 directory). `HIRSEL_SERVE_IDLE` sets the default idle timeout, in seconds;
 `--idle` overrides it. A busy server lets the client compile in its own
-process. Commands with `--timings` or `--mem-usage` run in their own process,
-as do programs reading a terminal. A client with different compiler code,
+process. `serve --stop` requests a clean shutdown, waits for the socket to be
+removed, and succeeds if no server is running. It waits up to 30 seconds for a
+busy server to finish its command. Commands with `--timings` or `--mem-usage`
+run in their own process, as do programs reading a terminal. A client with different compiler code,
 environment or file creation permissions uses a fresh process.
 
 Definition results also persist under `$XDG_CACHE_HOME/hirsel/results-v2`

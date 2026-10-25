@@ -18,7 +18,7 @@
 //! entry's directory. A client starts the workspace's server when none runs
 //! (`HIRSEL_DAEMON=off` never uses one, and test launchers set it, so tests
 //! stay hermetic). A server exits after `--idle` seconds without a request
-//! (`HIRSEL_SERVE_IDLE`, default 900).
+//! (`HIRSEL_SERVE_IDLE`, default 900), or on `serve --stop` for that workspace.
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -284,25 +284,49 @@ fn send_with_fds(stream: &UnixStream, bytes: &[u8], fds: &[RawFd]) -> std::io::R
 
 // ---- the server ----
 
-/// `hirsel serve [--workspace <dir>] [--idle <seconds>]`.
+/// `hirsel serve [--stop] [--workspace <dir>] [--idle <seconds>]`.
 pub fn serve(args: &[OsString]) -> u8 {
     let mut workspace_dir = None;
+    let mut stop_requested = false;
     let mut idle = std::env::var("HIRSEL_SERVE_IDLE")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_IDLE);
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        match (arg.to_str(), args.next()) {
-            (Some("--workspace"), Some(dir)) => workspace_dir = Some(PathBuf::from(dir)),
-            (Some("--idle"), Some(seconds)) => {
-                match seconds.to_str().and_then(|s| s.parse().ok()) {
-                    Some(seconds) => idle = seconds,
-                    None => return usage(),
-                }
-            }
+        match arg.to_str() {
+            Some("--stop") => stop_requested = true,
+            Some("--workspace") => match args.next() {
+                Some(dir) => workspace_dir = Some(PathBuf::from(dir)),
+                None => return usage(),
+            },
+            Some("--idle") => match args.next().and_then(|s| s.to_str()?.parse().ok()) {
+                Some(seconds) => idle = seconds,
+                None => return usage(),
+            },
             _ => return usage(),
         }
+    }
+    let workspace = workspace(&workspace_dir.unwrap_or_else(|| PathBuf::from(".")));
+    let socket = socket(&workspace);
+    if stop_requested {
+        return match stop(&socket) {
+            Ok(true) => {
+                eprintln!("hirsel: serve: stopped server for {}", workspace.display());
+                0
+            }
+            Ok(false) => {
+                eprintln!(
+                    "hirsel: serve: no server running for {}",
+                    workspace.display()
+                );
+                0
+            }
+            Err(error) => {
+                eprintln!("hirsel: serve: stop {}: {error}", socket.display());
+                3
+            }
+        };
     }
     // Own a process group before accepting run requests. Disconnect cleanup
     // must never signal the invoking shell's process group.
@@ -312,8 +336,6 @@ pub fn serve(args: &[OsString]) -> u8 {
             return 3;
         }
     }
-    let workspace = workspace(&workspace_dir.unwrap_or_else(|| PathBuf::from(".")));
-    let socket = socket(&workspace);
     let listener = match bind(&socket) {
         Ok(Some(listener)) => listener,
         Ok(None) => {
@@ -341,8 +363,71 @@ pub fn serve(args: &[OsString]) -> u8 {
     code
 }
 fn usage() -> u8 {
-    eprintln!("usage: hirsel serve [--workspace <dir>] [--idle <seconds>]");
+    eprintln!("usage: hirsel serve [--stop] [--workspace <dir>] [--idle <seconds>]");
     2
+}
+
+/// Stop through the existing frame protocol, without attaching client stdio or
+/// requiring the compilation environment to match. Busy commands finish first.
+fn stop(socket: &Path) -> std::io::Result<bool> {
+    use std::io::{Error, ErrorKind};
+    let body = serde_json::json!({"identity": identity(), "op": "stop"}).to_string();
+    let mut frame = MAGIC.to_vec();
+    frame.extend((body.len() as u32).to_le_bytes());
+    frame.extend(body.as_bytes());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(|| {
+                Error::new(ErrorKind::TimedOut, "server did not stop within 30 seconds")
+            })?;
+        let mut stream = match UnixStream::connect(socket) {
+            Ok(stream) => stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    ErrorKind::NotFound | ErrorKind::ConnectionRefused
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        stream.set_read_timeout(Some(remaining))?;
+        stream.set_write_timeout(Some(remaining))?;
+        let sent = stream.write_all(&frame);
+        let mut status = [0];
+        stream.read_exact(&mut status)?;
+        // A busy server may close before our write completes; its B reply is
+        // still sufficient to retry after the active command drains.
+        if status[0] == b'B' {
+            std::thread::sleep(Duration::from_millis(20));
+            continue;
+        }
+        sent?;
+        if status[0] != b'A' {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "server refused shutdown",
+            ));
+        }
+        let mut code = [0; 2];
+        stream.read_exact(&mut code)?;
+        if code != [b'X', 0] {
+            return Err(Error::new(ErrorKind::InvalidData, "invalid shutdown reply"));
+        }
+        while socket.try_exists()? {
+            if Instant::now() >= deadline {
+                return Err(Error::new(
+                    ErrorKind::TimedOut,
+                    "server socket remains after shutdown",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        return Ok(true);
+    }
 }
 
 /// Bind the socket, replacing a stale one; None when a live server holds it.
@@ -442,6 +527,10 @@ fn serve_one(mut stream: UnixStream, ours: &[(String, String)], root: &Path) -> 
         let _ = stream.write_all(b"R");
         return Ok(false);
     };
+    if &magic == MAGIC && value["op"] == "stop" && fds.is_empty() {
+        let _ = stream.write_all(&[b'A', b'X', 0]);
+        return Ok(true);
+    }
     if &magic == candidate::MAGIC {
         return candidate::serve(stream, value, fds, ours, root).map(|_| true);
     }
