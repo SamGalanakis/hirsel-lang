@@ -73,3 +73,56 @@ fn sealed_regions_33_combined_format_preserves_the_optional_grant_encoding() {
         assert_eq!(decoded, grant);
     }
 }
+
+#[test]
+fn bounded_export_output_includes_digest_and_refuses_partial_text() {
+    let types = TypeInterner::new(None);
+    let locator: Locator = Rc::new(|_| Location::unknown());
+    for name in ["plain", "quoted\"\\\nλ🐑"] {
+        let input = ExportInput {
+            types: types.clone(),
+            header: Header {
+                format: FORMAT.into(),
+                tir_version: TIR_VERSION,
+                environment: Environment {
+                    interface_version: 1,
+                    compiler_version: name.into(),
+                    spec_hash: ContentHash::default(),
+                },
+                entry: DefPath::core(name),
+                program_revision: None,
+            },
+            definitions: BTreeMap::new(),
+            signatures: BTreeMap::new(),
+            constants: BTreeMap::from([(
+                DefPath::core("unit"),
+                Materialized {
+                    root: hirsel_tir::ValueNode {
+                        ty: types.intern(hirsel_types::Type::unit()),
+                        kind: hirsel_tir::ValueKind::Construct {
+                            constructor: hirsel_tir::Constructor::Tuple,
+                            fields: vec![],
+                        },
+                    },
+                },
+            )]),
+            skipped: vec![],
+            annotations: vec![],
+            locator: locator.clone(),
+        };
+        let built = build(&input);
+        let expected = encode(&built, &locator);
+        assert_eq!(encoded_bytes(&built, &locator), Some(expected.len()));
+        assert_eq!(
+            encode_with_output_limit(&built, &locator, expected.len()),
+            Some(expected.clone())
+        );
+        for limit in [0, encode_body(&built, &locator).len(), expected.len() - 1] {
+            assert!(encode_with_output_limit(&built, &locator, limit).is_none());
+        }
+        assert_eq!(
+            encode_with_output_limit(&built, &locator, expected.len() + 1),
+            Some(expected)
+        );
+    }
+}

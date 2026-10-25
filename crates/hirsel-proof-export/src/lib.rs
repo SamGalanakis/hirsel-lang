@@ -516,6 +516,43 @@ pub fn encode(export: &Export, locator: &Locator) -> String {
     body + &digest
 }
 
+/// Exact canonical output length, including the trailing digest node, without
+/// allocating output text. The ordinary context table visitors still run and
+/// need the caller's working memory; this does not build an ExportInput.
+pub fn encoded_bytes(export: &Export, locator: &Locator) -> Option<usize> {
+    let mut body = Writer::counting(Cx::new(locator.clone(), export.types.clone()));
+    export.write(&mut body);
+    let mut digest = Writer::counting(());
+    digest.open("ExportDigest");
+    digest.bytes(&[0; 32]);
+    digest.close();
+    body.output_bytes()?
+        .checked_add(digest.output_bytes()?)?
+        .checked_add(2)
+}
+
+/// Encode an already built export into a caller-admitted output byte buffer.
+/// Refuses the whole result if its canonical text and trailing digest do not
+/// fit. Export construction and context tables require separate working memory.
+/// The limit includes UTF-8 escapes, whitespace and the complete digest node.
+pub fn encode_with_output_limit(
+    export: &Export,
+    locator: &Locator,
+    limit: usize,
+) -> Option<String> {
+    let mut writer =
+        Writer::with_output_limit(Cx::new(locator.clone(), export.types.clone()), limit)?;
+    export.write(&mut writer);
+    let (body, _) = writer.finish_checked();
+    let mut body = body?;
+    let digest = digest_node(&body);
+    if body.len().checked_add(digest.len())? > limit {
+        return None;
+    }
+    body.push_str(&digest);
+    Some(body)
+}
+
 /// PS-8/PS-9: build and encode.
 pub fn export(input: &ExportInput) -> String {
     encode(&build(input), &input.locator)

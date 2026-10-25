@@ -89,6 +89,11 @@ enum TextOutput {
     #[default]
     Empty,
     Text(String),
+    Limited {
+        text: String,
+        limit: usize,
+        overflow: bool,
+    },
     Count {
         bytes: Option<usize>,
         last: Option<char>,
@@ -99,6 +104,7 @@ impl TextOutput {
         match self {
             Self::Empty => true,
             Self::Text(s) => s.is_empty(),
+            Self::Limited { text, .. } => text.is_empty(),
             Self::Count { bytes, .. } => *bytes == Some(0),
         }
     }
@@ -106,6 +112,7 @@ impl TextOutput {
         match self {
             Self::Empty => false,
             Self::Text(s) => s.ends_with(c),
+            Self::Limited { text, .. } => text.ends_with(c),
             Self::Count { last, .. } => *last == Some(c),
         }
     }
@@ -113,6 +120,7 @@ impl TextOutput {
     fn capacity(&self) -> usize {
         match self {
             Self::Text(s) => s.capacity(),
+            Self::Limited { text, .. } => text.capacity(),
             _ => 0,
         }
     }
@@ -124,6 +132,23 @@ impl TextOutput {
                 *self = Self::Text(s);
             }
             Self::Text(s) => push_hex(s, bytes),
+            Self::Limited {
+                text,
+                limit,
+                overflow,
+            } => {
+                if *overflow
+                    || bytes
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|n| text.len().checked_add(n))
+                        .is_none_or(|n| n > *limit)
+                {
+                    *overflow = true;
+                } else {
+                    push_hex(text, bytes);
+                }
+            }
             Self::Count { bytes: count, last } => {
                 *count = count.and_then(|n| {
                     bytes
@@ -147,6 +172,22 @@ impl TextOutput {
                 *self = Self::Text(text.into());
             }
             Self::Text(s) => s.push_str(text),
+            Self::Limited {
+                text: output,
+                limit,
+                overflow,
+            } => {
+                if *overflow
+                    || output
+                        .len()
+                        .checked_add(text.len())
+                        .is_none_or(|n| n > *limit)
+                {
+                    *overflow = true;
+                } else {
+                    output.push_str(text);
+                }
+            }
             Self::Count { bytes, last } => {
                 *bytes = bytes.and_then(|n| n.checked_add(text.len()));
                 if let Some(c) = text.chars().last() {
@@ -202,19 +243,45 @@ impl<C> Writer<C> {
             ..Self::with_context(context)
         }
     }
+    /// Emit into one caller-admitted output buffer. The buffer never grows
+    /// past `limit`; overflow refuses the whole text through finish_checked.
+    /// Context allocations remain the caller's separate working obligation.
+    pub fn with_output_limit(context: C, limit: usize) -> Option<Self> {
+        let mut text = String::new();
+        text.try_reserve_exact(limit).ok()?;
+        Some(Self {
+            out: TextOutput::Limited {
+                text,
+                limit,
+                overflow: false,
+            },
+            ..Self::with_context(context)
+        })
+    }
     pub fn output_bytes(&self) -> Option<usize> {
         match &self.out {
             TextOutput::Empty => Some(0),
             TextOutput::Text(s) => Some(s.len()),
+            TextOutput::Limited { text, overflow, .. } => (!*overflow).then_some(text.len()),
             TextOutput::Count { bytes, .. } => *bytes,
         }
     }
     /// The written text (empty for a discard writer) and the context.
     pub fn finish(self) -> (String, C) {
+        let (text, context) = self.finish_checked();
+        (
+            text.expect("canonical writer exceeded its output limit"),
+            context,
+        )
+    }
+    /// Refuse the complete result after a bounded writer overflows, including
+    /// when later emitter calls would otherwise leave a valid-looking prefix.
+    pub fn finish_checked(self) -> (Option<String>, C) {
         (
             match self.out {
-                TextOutput::Text(s) => s,
-                _ => String::new(),
+                TextOutput::Text(s) => Some(s),
+                TextOutput::Limited { text, overflow, .. } => (!overflow).then_some(text),
+                _ => Some(String::new()),
             },
             self.context,
         )
@@ -1393,5 +1460,38 @@ mod tests {
             "measurement retains no output text"
         );
         assert!(measured.finish().0.is_empty());
+    }
+    #[test]
+    fn bounded_output_preserves_exact_text_and_refuses_every_short_buffer() {
+        fn write(w: &mut Writer) {
+            w.open("Limited");
+            w.text("\" \\ \n λ 🐑");
+            w.bytes(&[0, 1, 127, 255]);
+            w.int(i128::MIN);
+            w.open("Nested");
+            w.uint(u128::MAX);
+            w.close();
+            w.close();
+        }
+        let mut ordinary = Writer::default();
+        write(&mut ordinary);
+        let expected = ordinary.finish().0;
+        for limit in 0..=expected.len() {
+            let mut bounded = Writer::with_output_limit((), limit).unwrap();
+            write(&mut bounded);
+            assert!(
+                bounded.out.capacity() <= limit,
+                "output buffer grew beyond admission"
+            );
+            assert_eq!(
+                bounded.output_bytes(),
+                (limit == expected.len()).then_some(limit)
+            );
+            assert_eq!(
+                bounded.finish_checked().0.as_deref(),
+                (limit == expected.len()).then_some(expected.as_str())
+            );
+        }
+        assert!(Writer::with_output_limit((), usize::MAX).is_none());
     }
 }
