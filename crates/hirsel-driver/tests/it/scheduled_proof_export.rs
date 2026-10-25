@@ -265,15 +265,28 @@ fn export_case(source: &str, attach_native: bool, admitted: bool, build: bool) {
                 .unwrap();
             let built = if build {
                 let owned = owned.as_ref().unwrap();
-                let required = owned.build_bytes().unwrap();
+                let required = owned.type_capture_bytes().unwrap();
                 assert!(
                     owned
+                        .clone()
+                        .capture_types_with_allowance(budget.reserve(required - 1).unwrap())
+                        .is_err()
+                );
+                let prepared = std::rc::Rc::new(
+                    owned
+                        .clone()
+                        .capture_types_with_allowance(budget.reserve(required).unwrap())
+                        .unwrap(),
+                );
+                let required = prepared.build_bytes().unwrap();
+                assert!(
+                    prepared
                         .clone()
                         .build_with_allowance(budget.reserve(required - 1).unwrap())
                         .is_err()
                 );
                 Some(
-                    owned
+                    prepared
                         .clone()
                         .build_with_allowance(budget.reserve(required).unwrap())
                         .unwrap(),
