@@ -291,6 +291,14 @@ pub struct CheckedProductEncoder {
     types: Arc<hirsel_types::TypeInterner>,
 }
 impl CheckedProductEncoder {
+    /// Already encoded bytes from the same admitted immutable builder. This
+    /// constructor carries no V or native authority.
+    pub(crate) fn from_canonical(
+        canonical: Arc<str>,
+        types: Arc<hirsel_types::TypeInterner>,
+    ) -> Self {
+        Self { canonical, types }
+    }
     pub fn new(input: &ExportInput) -> Result<Self, QueryError> {
         let export = hirsel_proof_export::build(input);
         if !export.skipped.is_empty() {

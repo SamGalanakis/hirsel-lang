@@ -33,7 +33,7 @@ pub struct FrontProofInput {
 /// The exact selected type closure and its admitted inspection workspace.
 /// This owns no decoded output beyond the ordinary complete input.
 pub struct FrontPreparedProof {
-    input: Rc<FrontProofInput>,
+    input: Rc<dyn AdmittedProofInput>,
     types: hirsel_proof_export::CapturedTypes,
     _allowance: MemoryReservation,
 }
@@ -77,10 +77,36 @@ impl FrontProofInput {
     pub fn input(&self) -> &ExportInput {
         &self.input
     }
-    /// Metadata-only workspace size for the selected type closure. Unrelated
-    /// lazy interner rows never become export obligations.
+    /// Metadata-only workspace size for the selected type closure.
     pub fn type_capture_bytes(&self) -> Result<u64, QueryError> {
-        hirsel_proof_export::capture_types_bytes(&self.input)
+        FrontPreparedProof::capture_bytes(self)
+    }
+    pub fn capture_types_with_allowance(
+        self: Rc<Self>,
+        allowance: MemoryReservation,
+    ) -> Result<FrontPreparedProof, QueryError> {
+        FrontPreparedProof::capture(self, allowance)
+    }
+}
+impl AdmittedProofInput for FrontProofInput {
+    fn export_input(&self) -> &ExportInput {
+        &self.input
+    }
+    fn export_module_bytes(&self) -> usize {
+        self._owner
+            .modules
+            .values()
+            .map(String::len)
+            .max()
+            .unwrap_or(0)
+    }
+    fn export_clone_bytes(&self) -> u64 {
+        self._allowance.bytes()
+    }
+}
+impl FrontPreparedProof {
+    pub(crate) fn capture_bytes(input: &dyn AdmittedProofInput) -> Result<u64, QueryError> {
+        hirsel_proof_export::capture_types_bytes(input.export_input())
             .and_then(|n| {
                 n.checked_add(
                     size_of::<FrontPreparedProof>() as u64 + 2 * size_of::<usize>() as u64,
@@ -88,36 +114,29 @@ impl FrontProofInput {
             })
             .ok_or(QueryError::NotImplemented)
     }
-    pub fn capture_types_with_allowance(
-        self: Rc<Self>,
+    pub(crate) fn capture(
+        input: Rc<dyn AdmittedProofInput>,
         allowance: MemoryReservation,
-    ) -> Result<FrontPreparedProof, QueryError> {
-        if self.type_capture_bytes()? > allowance.bytes() {
-            return Err(operational("PS9 type closure workspace exceeds admission"));
+    ) -> Result<Self, QueryError> {
+        if Self::capture_bytes(&*input)? > allowance.bytes() {
+            return Err(operational(
+                "canonical type closure workspace exceeds admission",
+            ));
         }
-        let types = hirsel_proof_export::capture_types(&self.input, allowance.bytes())
+        let types = hirsel_proof_export::capture_types(input.export_input(), allowance.bytes())
             .ok_or(QueryError::NotImplemented)?;
-        Ok(FrontPreparedProof {
-            input: self,
+        Ok(Self {
+            input,
             types,
             _allowance: allowance,
         })
     }
-}
-impl FrontPreparedProof {
     /// Table-free inspection of the actual canonical fields. Source producers
     /// have already materialized every type their headers/originals name.
     pub fn build_bytes(&self) -> Result<u64, QueryError> {
-        let module = self
-            .input
-            ._owner
-            .modules
-            .values()
-            .map(String::len)
-            .max()
-            .unwrap_or(0);
+        let module = self.input.export_module_bytes();
         let tables = hirsel_proof_export::build_captured_tables_bytes(
-            &self.input.input,
+            self.input.export_input(),
             module,
             &self.types,
         )
@@ -125,7 +144,7 @@ impl FrontPreparedProof {
         // The input reservation covers all prospective owned input payloads;
         // cloning them for Export needs one additional independently held copy.
         tables
-            .checked_add(self.input._allowance.bytes())
+            .checked_add(self.input.export_clone_bytes())
             .and_then(|n| n.checked_add(size_of::<FrontBuiltProof>() as u64))
             .ok_or(QueryError::NotImplemented)
     }
@@ -136,7 +155,7 @@ impl FrontPreparedProof {
         if self.build_bytes()? > allowance.bytes() {
             return Err(operational("PS9 construction buffers exceed admission"));
         }
-        let export = hirsel_proof_export::build(&self.input.input);
+        let export = hirsel_proof_export::build(self.input.export_input());
         if !export.skipped.is_empty() {
             return Err(operational(
                 "PS9 construction refused an incomplete definition section",
@@ -150,11 +169,55 @@ impl FrontPreparedProof {
     }
 }
 impl FrontBuiltProof {
+    /// Complete checked-product read maps and digest scratch, independent of
+    /// the canonical text output allowance. PS9-only inputs cannot mint this.
+    pub fn checked_products_bytes(&self) -> Result<u64, QueryError> {
+        let (scope, headers) = self
+            .input
+            .input
+            .checked_receipt()
+            .ok_or(QueryError::NotImplemented)?;
+        scope.receipt_finish_bytes(headers, self.encoded_bytes()?)
+    }
+    pub fn checked_products_with_allowances(
+        &self,
+        output: MemoryReservation,
+        mut receipt: MemoryReservation,
+    ) -> Result<Arc<CheckedProducts>, QueryError> {
+        let needed = self.checked_products_bytes()?;
+        if needed > receipt.bytes() {
+            return Err(operational(
+                "checked receipt read/digest buffers exceed admission",
+            ));
+        }
+        let (scope, headers) = self
+            .input
+            .input
+            .checked_receipt()
+            .ok_or(QueryError::NotImplemented)?;
+        let encoded = self.encode_with_allowance(output)?;
+        let (canonical, output_owner) = encoded.into_parts();
+        let products = CheckedProductEncoder::from_canonical(canonical, self.export.types.clone())
+            .finish(scope.reads().clone(), headers.registrations().to_vec());
+        let retained = products
+            .receipt_retained_bytes()
+            .ok_or(QueryError::NotImplemented)?;
+        if retained > receipt.bytes() {
+            return Err(operational(
+                "checked receipt storage exceeds its construction bound",
+            ));
+        }
+        let owner = Arc::new(receipt.split(retained).ok_or(QueryError::NotImplemented)?);
+        Ok(Arc::new(
+            products.retain_owner(output_owner).retain_owner(owner),
+        ))
+    }
+
     pub fn export(&self) -> &hirsel_proof_export::Export {
         &self.export
     }
     pub fn encoded_bytes(&self) -> Result<usize, QueryError> {
-        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.input.locator)
+        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.export_input().locator)
             .ok_or(QueryError::NotImplemented)
     }
     /// Encoding's String and the final Arc overlap until conversion completes.
@@ -181,7 +244,7 @@ impl FrontBuiltProof {
         let length = self.encoded_bytes()?;
         let text = hirsel_proof_export::encode_with_output_limit(
             &self.export,
-            &self.input.input.input.locator,
+            &self.input.input.export_input().locator,
             length,
         )
         .ok_or(QueryError::NotImplemented)?;

@@ -262,6 +262,35 @@ impl ReadKey {
                 .map(|d| PackageKey::of(&d.path().0.package)),
         }
     }
+    /// Exact persisted key length without allocating a byte buffer.
+    pub fn encoded_bytes(&self) -> Option<usize> {
+        let text = |s: &str| 4usize.checked_add(s.len());
+        let payload = match *self {
+            Self::Signature(d)
+            | Self::FailedSignature(d)
+            | Self::Representation(d)
+            | Self::ExecutedBody(d)
+            | Self::LayoutBody(d)
+            | Self::ExecutedSignature(d)
+            | Self::CitedText(d)
+            | Self::DeclarationCandidates(d)
+            | Self::ValidationView(d) => encoded_def_path_bytes(d.path())?,
+            Self::Lookup(l) => {
+                let mut bytes = 2usize
+                    .checked_add(text(l.package.0.as_str())?)?
+                    .checked_add(text(l.module.0.as_str())?)?
+                    .checked_add(text(l.path.as_str())?)?;
+                if let Some(q) = l.qualifier {
+                    bytes = bytes.checked_add(text(q.0.as_str())?)?;
+                }
+                bytes
+            }
+            Self::NameSet(p, m) => text(p.0.as_str())?.checked_add(text(m.0.as_str())?)?,
+            Self::ValidationUniverse(p) => text(p.0.as_str())?,
+            Self::UniverseErrors | Self::FirstHeap | Self::Environment => 0,
+        };
+        payload.checked_add(1)
+    }
     /// Persisted form: kind tag, then DefPaths and spellings, never session ids.
     pub fn encode(&self, out: &mut Vec<u8>) {
         fn text(out: &mut Vec<u8>, s: &str) {
@@ -590,6 +619,17 @@ pub fn encode_def_path(out: &mut Vec<u8>, path: &DefPath) {
         put_text(out, module);
     }
     put_text(out, &item.name);
+}
+/// Exact persisted path length; framing follows encode_def_path.
+pub fn encoded_def_path_bytes(path: &DefPath) -> Option<usize> {
+    let item = &path.0;
+    std::iter::once(&item.package.name)
+        .chain(std::iter::once(&item.package.version))
+        .chain(&item.modules)
+        .chain(std::iter::once(&item.name))
+        .try_fold(4usize, |bytes, text| {
+            bytes.checked_add(4)?.checked_add(text.len())
+        })
 }
 pub fn decode_def_path(input: &mut &[u8]) -> Option<DefPath> {
     let name = take_text(input)?.to_owned();
@@ -974,5 +1014,66 @@ mod tests {
             }),
             Some(ReadKey::Environment)
         );
+    }
+}
+
+#[cfg(test)]
+mod admission_tests {
+    use super::*;
+    #[test]
+    fn persisted_key_lengths_cover_every_read_kind_and_unicode_lookup_frame() {
+        let path = DefPath(hirsel_syntax::ItemPath {
+            package: PackageId {
+                name: "pkg🐑".into(),
+                version: "2".into(),
+            },
+            modules: vec!["α".into(), "module".into()],
+            name: "field\"".into(),
+        });
+        let id = DefId::intern(&path);
+        let ctx = FileContext {
+            package: path.0.package.clone(),
+            modules: path.0.modules.clone(),
+        };
+        let package = PackageKey::of(&ctx.package);
+        let mut keys = vec![
+            ReadKey::Signature(id),
+            ReadKey::FailedSignature(id),
+            ReadKey::Representation(id),
+            ReadKey::ExecutedBody(id),
+            ReadKey::LayoutBody(id),
+            ReadKey::ExecutedSignature(id),
+            ReadKey::CitedText(id),
+            ReadKey::DeclarationCandidates(id),
+            ReadKey::ValidationView(id),
+            ReadKey::NameSet(package, ModuleKey::of(&ctx.modules)),
+            ReadKey::ValidationUniverse(package),
+            ReadKey::UniverseErrors,
+            ReadKey::FirstHeap,
+            ReadKey::Environment,
+        ];
+        for source in [
+            LookupSource::Provider,
+            LookupSource::Manifest,
+            LookupSource::Head,
+            LookupSource::Candidates,
+        ] {
+            for qualifier in [None, Some(&ctx.package)] {
+                keys.push(ReadKey::Lookup(LookupKey::of(
+                    source,
+                    &ctx,
+                    qualifier,
+                    &["δ".into(), "x🐑".into()],
+                )));
+            }
+        }
+        for key in keys {
+            let mut bytes = vec![];
+            key.encode(&mut bytes);
+            assert_eq!(key.encoded_bytes(), Some(bytes.len()), "{key:?}");
+        }
+        let mut bytes = vec![];
+        encode_def_path(&mut bytes, &path);
+        assert_eq!(encoded_def_path_bytes(&path), Some(bytes.len()));
     }
 }
