@@ -12,9 +12,8 @@ use hirsel_intern::{
 use std::sync::{Arc, Mutex};
 
 const SOURCE: &str = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}";
-#[derive(Default)]
 struct Store {
-    inner: store::MemStore,
+    inner: store::DirStore,
     substituted: Mutex<Option<(Address, Association)>>,
 }
 impl ResultStore for Store {
@@ -23,6 +22,23 @@ impl ResultStore for Store {
     }
     fn put(&self, key: &EntryKey, bytes: &[u8]) {
         self.inner.put(key, bytes);
+    }
+    fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
+        self.inner.local_product_store()
+    }
+    fn get_content(&self, reference: store::Reference) -> Option<Bytes> {
+        self.inner.get_content(reference)
+    }
+    fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
+        self.inner.put_content(domain, bytes)
+    }
+    fn associate_product(
+        &self,
+        address: Address,
+        action: store::Action,
+        reference: store::Reference,
+    ) {
+        self.inner.associate_product(address, action, reference);
     }
     fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
         self.inner.verifier()
@@ -107,7 +123,11 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
     with_compiler_stack(|| {
         timings::enable();
         for workers in [1, 2, 8] {
-            let store = Arc::new(Store::default());
+            let directory = tempfile::tempdir().unwrap();
+            let store = Arc::new(Store {
+                inner: store::DirStore::new(directory.path().join("products")),
+                substituted: Mutex::new(None),
+            });
             let before = calls();
             let cold = compile(
                 store.clone(),
