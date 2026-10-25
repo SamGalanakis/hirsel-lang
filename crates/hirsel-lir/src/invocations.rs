@@ -318,11 +318,13 @@ fn check_library_context<S: Stage>(
     } else {
         None
     };
+    // Cleanup origins are independent obligations even for helpers without a
+    // fixed callback recipe (for example owned_cursor_drop).
+    let cleanups = layouts
+        .map(|layouts| cleanup::references(unit, declarations, layouts, 0))
+        .transpose()?
+        .unwrap_or_default();
     if let Some(expected) = expected {
-        let cleanups = layouts
-            .map(|layouts| cleanup::references(unit, declarations, layouts, 0))
-            .transpose()?
-            .unwrap_or_default();
         let entries = unit
             .instructions
             .iter()
