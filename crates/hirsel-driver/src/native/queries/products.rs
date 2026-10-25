@@ -59,9 +59,11 @@ impl EmissionOptions {
     }
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         serde_json::to_vec(&(
-            1u32,
+            2u32,
             self.input.interface_version,
-            self.input.digest,
+            // EmitInputs checks the interface and C-bound per-unit dependencies.
+            // Program identity belongs to the root/link manifest; the ordinary
+            // library donor and its consumer share identical machine fragments.
             match self.opt {
                 OptLevel::None => 0u32,
                 OptLevel::Default => 1,

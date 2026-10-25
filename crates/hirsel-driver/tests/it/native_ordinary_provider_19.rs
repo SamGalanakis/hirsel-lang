@@ -89,7 +89,7 @@ fn ordinary_provider(backend: Backend) {
             )
         };
         assert!(!donor.objects.is_empty());
-        drop(donor);
+        let donor_records = donor.diagnostics;
         let application_compile = |store: Arc<dyn ResultStore>, verification| {
             let transport_budget = runtime::ProcessBudget::new(24 << 20);
             let store: Arc<dyn ResultStore> = Arc::new(RequestStore::new(
@@ -119,6 +119,33 @@ fn ordinary_provider(backend: Backend) {
             )
         };
         let first = application_compile(open_store(), VerifyStore::Off);
+        if first.hits == 0 {
+            for (key, new, ready) in &first.diagnostics {
+                if key.owner.instance.definition().0.package.name != "ordinary" {
+                    continue;
+                }
+                if let Some((_, old, old_ready)) = donor_records
+                    .iter()
+                    .find(|(old, _, _)| old.address() == key.address())
+                {
+                    eprintln!(
+                        "provider-read {backend:?} {}: action={} body={} layouts={} emission={} summary={} descriptor={}",
+                        key.owner.instance.definition(),
+                        old.action == new.action,
+                        old_ready.ready == ready.ready,
+                        old_ready.layout_closure == ready.layout_closure,
+                        old_ready.emission_context == ready.emission_context,
+                        old_ready.unit_summary == ready.unit_summary,
+                        old_ready.product.record == ready.product.record
+                    );
+                } else {
+                    eprintln!(
+                        "provider-read {backend:?} {}: owner address changed",
+                        key.owner.instance.definition()
+                    );
+                }
+            }
+        }
         assert!(first.hits > 0, "{backend:?}: no ordinary donor hit");
         let expected = first.objects.clone();
         let summaries = first.summaries.clone();

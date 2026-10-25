@@ -27,6 +27,7 @@ pub(super) struct Objects {
     pub products: Vec<(CodegenKey, ProductRef)>,
     pub ready_transformations: u64,
     pub ready_products: Vec<ProductRef>,
+    pub diagnostics: Vec<(CodegenKey, ProductRef, queries::ReadyProduct)>,
 }
 
 pub(super) fn compile(
@@ -357,13 +358,20 @@ pub(super) fn compile_roots<R>(
             objects: artifacts,
             hits,
             products: keys
-                .into_iter()
+                .iter()
+                .cloned()
                 .zip(selected[..count].iter().copied())
                 .collect(),
             ready_products: ready.to_vec(),
             ready_transformations: native
                 .ready_transformations
                 .load(std::sync::atomic::Ordering::Relaxed),
+            diagnostics: keys
+                .into_iter()
+                .zip(selected[..count].iter().copied())
+                .zip(readies.iter())
+                .map(|((key, product), ready)| (key, product, ready.as_ref().clone()))
+                .collect(),
         },
         output,
     )
