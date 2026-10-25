@@ -936,6 +936,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let NativePlatformSelection { mut plan, platform } = NativePlatformSelection::capture(
                 store.clone(),
                 NativePlatformInputs {
+                    verify_store: hirsel_engine::store::VerifyStore::Off,
                     purpose: if bind_run {
                         NativePurpose::Run
                     } else {

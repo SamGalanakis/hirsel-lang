@@ -70,6 +70,7 @@ pub(super) struct NativeSelection {
     key: ContentHash,
     request: NativeRequest,
     purpose: NativePurpose,
+    verify_store: hirsel_engine::store::VerifyStore,
     entry: DefPath,
     tools: Arc<native::Toolchain>,
     links: Vec<LinkInput>,
@@ -182,6 +183,7 @@ impl NativeSelection {
             key: request_key(&request, purpose)?,
             request,
             purpose,
+            verify_store,
             entry,
             tools,
             links,
@@ -205,6 +207,7 @@ impl NativeSelection {
             self.store.clone(),
             NativePlatformInputs {
                 purpose: self.purpose,
+                verify_store: self.verify_store,
                 request: &self.request,
                 entry: &self.entry,
                 tools: &self.tools,
