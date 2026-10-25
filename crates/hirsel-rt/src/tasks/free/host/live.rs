@@ -61,7 +61,7 @@ pub(super) unsafe fn request(
     }
     super::super::record::begin(ctx);
     let pending = unsafe { (*ctx).live_host.as_deref_mut().unwrap() } as *mut Pending;
-    let wait = io.register(token, unsafe { (*pending).request.buffers().clone() });
+    let wait = io.register(token, unsafe { (*pending).request.clone() });
     if blocking {
         unsafe { (*pending).job = Some(super::jobs::Owned::new(ctx)) };
     }

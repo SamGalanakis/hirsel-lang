@@ -42,7 +42,8 @@ impl Rows {
 }
 
 struct Row {
-    request: Request,
+    /// The request's one immutable owner, shared with its table and Pending.
+    request: Arc<hirsel_free::claim::Request<Request>>,
     task: Option<(u32, u32)>,
     ready: bool,
     notified: bool,
@@ -131,7 +132,11 @@ impl Service {
             .any(|row| row.task.is_some())
     }
 
-    pub(super) fn register(&self, token: u64, request: Request) -> u64 {
+    pub(super) fn register(
+        &self,
+        token: u64,
+        request: Arc<hirsel_free::claim::Request<Request>>,
+    ) -> u64 {
         assert_eq!(token >> 48, 0, "request token below driver tag bits");
         let wait = token | CONCURRENT;
         assert!(
@@ -268,11 +273,11 @@ pub(super) unsafe fn request_with_keys(
             .expect("concurrent host admission")
     };
     // Move every buffer into Pending before begin may reject an admitted cut.
-    // Clone only from that stable owner after preparation has returned.
+    // The readiness row shares that stable owner after preparation returned.
     unsafe { prepare_with_keys(ctx, request, keys) }?;
     let (token, request) = {
         let pending = unsafe { (*ctx).pending_host.as_ref().unwrap() };
-        (pending.request.id, pending.request.buffers().clone())
+        (pending.request.id, pending.request.clone())
     };
     let wait = io.register(token, request);
     unsafe { super::blocking::before_claim(ctx, io, wait) }?;
@@ -383,7 +388,7 @@ pub(crate) unsafe fn service(run: *mut RunShared) -> bool {
             .into_iter()
             .filter(|token| {
                 rows.entries.get(token).is_some_and(|row| {
-                    crate::io_checks::cancellation_result(&row.request, 0).is_some()
+                    crate::io_checks::cancellation_result(row.request.buffers(), 0).is_some()
                 })
             })
             .map(|token| token & !CONCURRENT)
