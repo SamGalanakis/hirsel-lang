@@ -27,7 +27,7 @@ exposures supply identities, never file discovery or spelling.
 
 ## Package selection
 
-The launch input is a UTF-8 JSON object with exactly `schema: 1`,
+The launch input is a UTF-8 JSON object with exactly `schema: 1` (or `schema: 2`, below),
 `package: {name, version}`, `sources: [{path, module}]`,
 `dependencies: [{manifest, package, expose}]`, and a launch-only `entry: {module, name}`. A
 dependency manifest may omit `entry`. Names, the entry name, module segments and exposed
@@ -49,6 +49,47 @@ malformed metadata are tool-input errors, not language diagnostics.
  "sources":[{"path":"main.hir","module":[]},{"path":"text/wrap.hir","module":["wrap"]}],
  "dependencies":[{"manifest":"../stdlib/hirsel.json","package":{"name":"std","version":"1"},
                   "expose":[{"head":"json","module":["json"]}]}]}
+```
+
+### Implementation slots
+
+A `schema: 2` manifest has the schema-1 fields except the edge form, plus `parameters`
+and `dependency_catalog`. `dependency_catalog` maps a frame-local edge ID to exactly
+`{manifest, package}`; a catalog entry alone selects nothing. `dependencies` is an array of
+`{use, bindings, expose}`: `use` names a catalog ID (at most once), `bindings` is a
+whole-slot override object (empty allowed) and `expose` is as above. `parameters` maps a
+slot name to `{signature, default?}`; a slot without `default` is required. A declaration
+reference is `{dependency, module, name}`, where `dependency` is a catalog ID of the frame
+the reference is written in, or `self`. A binding is exactly `{"implementation": reference}`
+or `{"parameter": {dependency, name}}`, which forwards the whole effective slot `name` of a
+dependency the frame selects (or of its own slot, with `self`). There are no partial maps,
+expressions, positional actuals, implicit provider search or root precedence.
+
+An edge's actual resolves in the frame that writes it; an omitted slot's default resolves in
+the provider's own frame. An overridden default is never evaluated, so its catalog target is
+never opened, though every reference is still checked against its frame's catalog, edges and
+slots. A used reference to an unselected catalog ID selects that target as an edge of its
+frame, with the target's own defaults and no exposures; a signature reference always does.
+Forwarding must be acyclic: a cycle is refused naming its slots in order. A required slot
+with no actual, a binding of an undeclared slot and a reference or forward its frame cannot
+name are tool-input errors; each names its selecting path.
+
+Each nominal package/version has exactly one effective slot map per program. A map is
+normalized to terminal declarations, `(package, version, module, item)`, in slot-name order:
+catalog aliases of one package, forwarding and explicit or omitted defaults that reach the
+same declaration are equal, while separately named equal-bodied implementations are not.
+Every selecting edge must yield an equal map; otherwise loading refuses, naming the two
+shortest selecting paths (ties by spelling) and both maps, independent of manifest and edge
+order. Each slot's signature and implementation must name declarations the slotted package
+can see ([PROG-2](#prog-2-visibility)). Schema-1 manifests declare no slots, and a schema-1
+edge leaves every slot of its target at its default.
+
+```json
+{"schema":2,"package":{"name":"mac","version":"1"},"sources":[{"path":"api.hir","module":["api"]}],
+ "parameters":{"H":{"signature":{"dependency":"std","module":["digest"],"name":"Digest"},
+                    "default":{"implementation":{"dependency":"std","module":["sha256"],"name":"sha256_impl"}}}},
+ "dependency_catalog":{"std":{"manifest":"../stdlib/hirsel.json","package":{"name":"std","version":"1"}}},
+ "dependencies":[{"use":"std","bindings":{},"expose":[]}]}
 ```
 
 ## Dependency exposure
@@ -102,6 +143,12 @@ at the exact selected version; file, module partition and compilation topology d
 change it. The representation, and a sealed capability's implementation authority ceiling,
 are visible only in this owner's view. [DROP-4](failure.md#drop-4-commit) and resource
 destructuring keep their defining-module restrictions.
+
+A package's effective [implementation slot](#implementation-slots) map never enters nominal
+identity: definition paths, opacity owners, brands, codecs, reflection, definition hashes and
+the run revision a tape binds are those of the unconfigured package. The map keys only the
+package's own checked products. Selecting a provider grants no capability: every effectful
+operation still declares and receives its authority.
 
 ### PROG-3: Entry
 

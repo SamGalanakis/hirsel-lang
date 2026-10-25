@@ -1,7 +1,9 @@
 //! PROG-1: explicit source packages and the toolchain std for manifestless sources.
 mod dependency_card;
 mod diagnostic_guidance;
+mod slots;
 pub use dependency_card::render_dependency_cards;
+pub use slots::{ImplementationSlot, PackageSlots};
 
 use crate::*;
 use hirsel_resolve::DependencyExposure;
@@ -19,7 +21,7 @@ pub(crate) fn format_sources(path: &Path) -> Result<Vec<PathBuf>, ToolError> {
         return Ok(vec![path.to_path_buf()]);
     }
     let mut graph = Graph::default();
-    let package = graph.select(path, None, false)?;
+    let package = graph.select(path, None, None)?;
     let mut seen = BTreeSet::new();
     Ok(graph.packages[&package]
         .sources
@@ -35,6 +37,8 @@ pub struct PackageDeclarations {
     pub package: PackageId,
     pub engine: QueryEngine,
     pub files: Vec<(FileId, FileContext)>,
+    /// Each selected package's effective implementation slots (PROG-1).
+    pub slots: PackageSlots,
 }
 impl PackageDeclarations {
     /// Whether a declaration is visible from outside every selected package.
@@ -124,11 +128,13 @@ pub(crate) fn load_package_declarations(
             files.push((file, context.clone()));
         }
     }
+    slots::check_targets(&engine, &graph.slots)?;
     engine.result_store = result_store;
     Ok(PackageDeclarations {
         package,
         engine,
         files,
+        slots: graph.slots,
     })
 }
 
@@ -141,6 +147,8 @@ pub struct LoadedProgram {
     pub primary: FileId,
     /// The selected packages marked `unsafe ffi`, in package order (PROG-4).
     pub unsafe_ffi: Vec<UnsafeFfiPackage>,
+    /// Each selected package's effective implementation slots (PROG-1).
+    pub slots: PackageSlots,
     /// The files other than sources that loading read or probed: each package
     /// manifest and, for a source, its sidecar path. A change to any of them
     /// selects another package graph, so a resident session loads again.
@@ -392,6 +400,7 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
     let primary = std::fs::canonicalize(path)?;
     let mut graph = Graph::default();
     let root = graph.visit(&sidecar, None)?;
+    graph.expand_slots()?;
     std::fs::create_dir_all(dir)?;
     let manifests: BTreeMap<_, _> = graph
         .packages
@@ -421,14 +430,27 @@ pub fn bundle_program(path: &Path, source: &str, dir: &Path) -> Result<bool, Too
             std::fs::write(dir.join(&name), text)?;
             value["sources"][index]["path"] = name.into();
         }
-        for dependency in value["dependencies"].as_array_mut().unwrap() {
-            let target = std::fs::canonicalize(
-                p.path
-                    .parent()
-                    .unwrap()
-                    .join(dependency["manifest"].as_str().unwrap()),
-            )?;
-            dependency["manifest"] = manifests[&target].clone().into();
+        let base = p.path.parent().unwrap();
+        if let Some(catalog) = value
+            .get_mut("dependency_catalog")
+            .and_then(Value::as_object_mut)
+        {
+            // An unselected descriptor need not exist; it keeps its spelling.
+            for descriptor in catalog.values_mut() {
+                let declared = base.join(descriptor["manifest"].as_str().unwrap());
+                if let Some(name) = std::fs::canonicalize(declared)
+                    .ok()
+                    .and_then(|target| manifests.get(&target))
+                {
+                    descriptor["manifest"] = name.clone().into();
+                }
+            }
+        } else {
+            for dependency in value["dependencies"].as_array_mut().unwrap() {
+                let target =
+                    std::fs::canonicalize(base.join(dependency["manifest"].as_str().unwrap()))?;
+                dependency["manifest"] = manifests[&target].clone().into();
+            }
         }
         std::fs::write(
             dir.join(&manifests[&p.path]),
@@ -516,15 +538,23 @@ pub(crate) fn load_program_inputs(
             "sidecar must assign its source to the root package",
         ));
     }
+    // A package's effective slot map is chosen by its selecting frames, so it
+    // keys the package's own products; a package without slots keys as before.
     let selection = |id: &PackageId| {
-        ContentHash::of_parts(
-            "hirsel.package.selection.v1",
-            [
-                id.name.as_bytes(),
-                id.version.as_bytes(),
-                graph.packages[id].manifest.as_slice(),
-            ],
-        )
+        let slots = graph
+            .slots
+            .get(id)
+            .map(slots::canonical)
+            .unwrap_or_default();
+        let mut parts = vec![
+            id.name.as_bytes(),
+            id.version.as_bytes(),
+            graph.packages[id].manifest.as_slice(),
+        ];
+        if !slots.is_empty() {
+            parts.push(&slots);
+        }
+        ContentHash::of_parts("hirsel.package.selection.v1", parts)
     };
     let manifest_hash = |packages: &mut dyn Iterator<Item = &PackageId>| {
         let parts: Vec<_> = packages.map(selection).collect();
@@ -646,6 +676,7 @@ pub(crate) fn load_program_inputs(
         has_launch_entry: root.entry.is_some(),
         primary: primary.ok_or_else(|| invalid("missing primary source"))?,
         unsafe_ffi,
+        slots: graph.slots.clone(),
         inputs: path
             .extension()
             .is_none_or(|e| e != "json")
@@ -661,6 +692,7 @@ pub(crate) fn load_program_inputs(
                 .index_source(*file, context)
                 .map_err(|e| program.error(e))?;
         }
+        slots::check_targets(&program.engine, &program.slots)?;
         // A declared wrapper names an ordinary function of its own package.
         for package in &program.unsafe_ffi {
             // Wrapper classification consumes syntax only for this package.
@@ -721,6 +753,11 @@ struct SelectedPackage {
     entry: Option<DefPath>,
     dependencies: Vec<PackageId>,
     unsafe_ffi: Option<ForeignManifest>,
+    /// Schema 2: declared implementation slots, the dependency catalog
+    /// (descriptor manifest and package by edge ID) and the selected edges.
+    parameters: BTreeMap<String, slots::Slot>,
+    catalog: BTreeMap<String, (PathBuf, PackageId)>,
+    uses: BTreeMap<String, PackageId>,
 }
 /// `unsafe_ffi`: link inputs, headers_checked, wrappers (PROG-4) and threads (S-13).
 type ForeignManifest = (
@@ -733,6 +770,10 @@ struct Graph<'a> {
     inputs: &'a dyn crate::loader_inputs::LoaderInputs,
     packages: BTreeMap<PackageId, SelectedPackage>,
     active: Vec<PathBuf>,
+    /// Every edge selecting each package, in discovery order.
+    selections: BTreeMap<PackageId, Vec<slots::Selection>>,
+    /// The effective slot maps, once expanded.
+    slots: PackageSlots,
 }
 impl Default for Graph<'static> {
     fn default() -> Self {
@@ -774,12 +815,28 @@ impl<'a> Graph<'a> {
                             "expose": [],
                         }],
                     });
-                    let std = graph.visit(
+                    let context = default_context();
+                    let package = context.package.clone();
+                    graph
+                        .selections
+                        .entry(package.clone())
+                        .or_default()
+                        .push(slots::Selection {
+                            parent: None,
+                            edge: None,
+                            bindings: BTreeMap::new(),
+                        });
+                    let std = graph.visit_from(
                         &crate::tools::toolchain_std_manifest_inputs(inputs)?,
                         Some(&PackageId {
                             name: "std".into(),
                             version: "1".into(),
                         }),
+                        slots::Selection {
+                            parent: Some(package.clone()),
+                            edge: None,
+                            bindings: BTreeMap::new(),
+                        },
                     )?;
                     let exposures = graph.packages[&std]
                         .sources
@@ -793,8 +850,6 @@ impl<'a> Graph<'a> {
                             })
                         })
                         .collect();
-                    let context = default_context();
-                    let package = context.package.clone();
                     let logical = PathBuf::from("standalone@0").join(source.file_name().unwrap());
                     graph.packages.insert(
                         package.clone(),
@@ -807,6 +862,9 @@ impl<'a> Graph<'a> {
                             entry: Some(entry_path(&context)),
                             dependencies: vec![std],
                             unsafe_ffi: None,
+                            parameters: BTreeMap::new(),
+                            catalog: BTreeMap::new(),
+                            uses: BTreeMap::new(),
                         },
                     );
                     package
@@ -814,6 +872,7 @@ impl<'a> Graph<'a> {
                 Err(e) => return Err(e.into()),
             }
         };
+        graph.expand_slots()?;
         Ok((graph, package))
     }
     fn with_inputs(inputs: &'a dyn crate::loader_inputs::LoaderInputs) -> Self {
@@ -821,6 +880,8 @@ impl<'a> Graph<'a> {
             inputs,
             packages: BTreeMap::new(),
             active: Vec::new(),
+            selections: BTreeMap::new(),
+            slots: PackageSlots::new(),
         }
     }
     fn closure(&self, id: &PackageId) -> BTreeSet<PackageId> {
@@ -863,15 +924,32 @@ impl<'a> Graph<'a> {
         }
         ContentHash::of_parts("hirsel.checked-package.v1", parts.iter().map(Vec::as_slice))
     }
+    /// Select a root manifest and its dependencies.
     fn visit(&mut self, path: &Path, expected: Option<&PackageId>) -> Result<PackageId, ToolError> {
-        self.select(path, expected, true)
+        let root = slots::Selection {
+            parent: None,
+            edge: None,
+            bindings: BTreeMap::new(),
+        };
+        self.select(path, expected, Some(root))
     }
+    fn visit_from(
+        &mut self,
+        path: &Path,
+        expected: Option<&PackageId>,
+        via: slots::Selection,
+    ) -> Result<PackageId, ToolError> {
+        self.select(path, expected, Some(via))
+    }
+    /// Select one manifest through `via`; without it, only that manifest is
+    /// validated and no dependency is opened.
     fn select(
         &mut self,
         path: &Path,
         expected: Option<&PackageId>,
-        follow_dependencies: bool,
+        via: Option<slots::Selection>,
     ) -> Result<PackageId, ToolError> {
+        let follow_dependencies = via.is_some();
         let path = self.inputs.canonicalize(path)?;
         if self.active.contains(&path) {
             return Err(invalid("cyclic package dependency"));
@@ -879,9 +957,9 @@ impl<'a> Graph<'a> {
         let bytes = self.inputs.read(&path)?.to_vec();
         let value: UniqueJson = serde_json::from_slice(&bytes)
             .map_err(|e| invalid(&format!("{}: {e}", path.display())))?;
-        let object = object_value(
-            &value.0,
-            &[
+        let schema = value.0.get("schema").and_then(Value::as_u64);
+        let fields: &[&str] = match schema {
+            Some(1) => &[
                 "schema",
                 "package",
                 "sources",
@@ -889,10 +967,19 @@ impl<'a> Graph<'a> {
                 "entry",
                 "unsafe_ffi",
             ],
-        )?;
-        if object.get("schema").and_then(Value::as_u64) != Some(1) {
-            return Err(invalid("package schema must be 1"));
-        }
+            Some(2) => &[
+                "schema",
+                "package",
+                "sources",
+                "parameters",
+                "dependency_catalog",
+                "dependencies",
+                "entry",
+                "unsafe_ffi",
+            ],
+            _ => return Err(invalid("package schema must be 1 or 2")),
+        };
+        let object = object_value(&value.0, fields)?;
         let package = package_value(required(object, "package")?)?;
         if package.package_is("core", "1") {
             return Err(invalid("core@1 is compiler-owned"));
@@ -908,8 +995,16 @@ impl<'a> Graph<'a> {
                     "two implementation revisions selected for one package",
                 ));
             }
+            self.selections
+                .entry(package.clone())
+                .or_default()
+                .extend(via);
             return Ok(package);
         }
+        self.selections
+            .entry(package.clone())
+            .or_default()
+            .extend(via);
         self.active.push(path.clone());
         let base = path.parent().unwrap();
         let mut logical_sources = BTreeMap::new();
@@ -955,17 +1050,73 @@ impl<'a> Graph<'a> {
                 }))
             })
             .transpose()?;
+        let parameters = object
+            .get("parameters")
+            .map(slots::parameters)
+            .transpose()?
+            .unwrap_or_default();
+        let mut catalog = BTreeMap::new();
+        if let Some(entries) = object.get("dependency_catalog") {
+            let entries = entries
+                .as_object()
+                .ok_or_else(|| invalid("dependency_catalog must be an object"))?;
+            for (id, descriptor) in entries {
+                let id = identifier(&Value::String(id.clone()))?;
+                if id == "self" {
+                    return Err(invalid("self is reserved and cannot be a catalog ID"));
+                }
+                let d = object_value(descriptor, &["manifest", "package"])?;
+                let target = package_value(required(d, "package")?)?;
+                catalog.insert(id, (base.join(string(required(d, "manifest")?)?), target));
+            }
+        }
+        // Each edge: its manifest, package, written bindings and catalog ID.
+        let mut edges = Vec::new();
+        let mut uses = BTreeMap::new();
+        for d in array(required(object, "dependencies")?)? {
+            if schema == Some(1) {
+                let o = object_value(d, &["manifest", "package", "expose"])?;
+                let expected = package_value(required(o, "package")?)?;
+                let manifest = base.join(string(required(o, "manifest")?)?);
+                edges.push((manifest, expected, BTreeMap::new(), None, o));
+                continue;
+            }
+            let o = object_value(d, &["use", "bindings", "expose"])?;
+            let id = identifier(required(o, "use")?)?;
+            let Some((manifest, expected)) = catalog.get(&id).cloned() else {
+                return Err(invalid(&format!(
+                    "dependency uses {id:?}, which is not in the dependency_catalog"
+                )));
+            };
+            if uses.insert(id.clone(), expected.clone()).is_some() {
+                return Err(invalid(&format!("two dependencies use {id:?}")));
+            }
+            let bindings = slots::bindings(required(o, "bindings")?)?;
+            edges.push((manifest, expected, bindings, Some(id), o));
+        }
+        slots::check_frame(
+            &package,
+            &catalog,
+            &uses,
+            &parameters,
+            edges.iter().flat_map(|e| e.2.values().cloned()),
+        )?;
         let mut exposures = Vec::new();
         let mut dependencies = Vec::new();
-        for d in array(required(object, "dependencies")?)? {
-            let d = object_value(d, &["manifest", "package", "expose"])?;
-            let expected = package_value(required(d, "package")?)?;
-            let manifest = base.join(string(required(d, "manifest")?)?);
+        for (manifest, expected, bindings, edge, d) in edges {
             if !follow_dependencies {
                 dependency_exposures(d, &expected)?;
                 continue;
             }
-            let selected = self.visit(&manifest, Some(&expected))?;
+            let selected = self.visit_from(
+                &manifest,
+                Some(&expected),
+                slots::Selection {
+                    parent: Some(package.clone()),
+                    edge,
+                    bindings,
+                },
+            )?;
             // Every foreign library of a program is chosen by its root (PROG-4).
             if self.active.len() > 1 && self.packages[&selected].unsafe_ffi.is_some() {
                 return Err(invalid(&format!(
@@ -1014,6 +1165,9 @@ impl<'a> Graph<'a> {
                 entry,
                 dependencies,
                 unsafe_ffi,
+                parameters,
+                catalog,
+                uses,
             },
         );
         Ok(package)

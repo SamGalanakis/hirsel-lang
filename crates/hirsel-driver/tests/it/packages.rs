@@ -50,10 +50,10 @@ fn launch_metadata_errors_are_tool_errors() {
     std::fs::write(dir.join("main.hir"), "pub fn main(t: Test) {}\n").unwrap();
     let base = serde_json::json!({"schema":1,"package":{"name":"app","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}});
     let path = dir.join("hirsel.json");
-    for mutate in [0, 1, 2, 3, 4, 5, 6, 7] {
+    for mutate in [0, 1, 2, 3, 4, 5, 6, 7, 8] {
         let mut manifest = base.clone();
         match mutate {
-            0 => manifest["schema"] = 2.into(),
+            0 => manifest["schema"] = 3.into(),
             1 => manifest["unknown"] = true.into(),
             2 => manifest["package"]["name"] = "not/a/name".into(),
             3 => manifest["package"] = serde_json::json!({"name":"core","version":"1"}),
@@ -65,7 +65,12 @@ fn launch_metadata_errors_are_tool_errors() {
                 manifest["dependencies"] = serde_json::json!([{"manifest":"hirsel.json","package":{"name":"app","version":"1"},"expose":[]}])
             }
             6 => manifest["package"]["version"] = "1-rc".into(),
-            _ => manifest["package"]["name"] = "fn".into(),
+            7 => manifest["package"]["name"] = "fn".into(),
+            // Schema 2 selects through its catalog, not schema 1's edge form.
+            _ => {
+                manifest["schema"] = 2.into();
+                manifest["dependencies"] = serde_json::json!([{"manifest":"hirsel.json","package":{"name":"app","version":"1"},"expose":[]}])
+            }
         }
         std::fs::write(&path, manifest.to_string()).unwrap();
         assert!(
