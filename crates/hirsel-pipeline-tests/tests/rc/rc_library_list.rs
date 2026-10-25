@@ -789,6 +789,8 @@ fn handmade_finalizer(library: bool, wrong_convention: bool) {
     use hirsel_rc::cleanup::Finalizer;
     use std::collections::BTreeMap;
     let mut layouts = Layouts::new(target());
+    // Source finalizer admission uses a checked retirement guard.
+    layouts.scalar(ScalarKind::Bool);
     let scalar = layouts.scalar(ScalarKind::U64);
     let empty = layouts.record(&[]);
     let block_layout = layouts.block(empty);
