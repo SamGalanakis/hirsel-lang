@@ -136,8 +136,8 @@ pub fn root(data: Bytes) -> Result[unique Root, explain.Fault] uses {} {
     return Error(Shape())
   }
   let mut owned = take decoded
-  for i in 0u64..list.len(owned.dependencies) {
-    validate(owned.dependencies[i])?
+  for item in owned.dependencies {
+    validate(item)?
   }
   list.sort(mut owned.dependencies, by_requirement)
   Ok(take owned)

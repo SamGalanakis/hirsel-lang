@@ -1,0 +1,32 @@
+// rule: MODE-2
+// expect: run
+// W1c: lend an indexed field, then sort it and hand back the unique owner.
+type Pkg {
+  deps: List[String],
+}
+
+type Cat {
+  pkgs: List[Pkg],
+}
+
+@noalloc
+fn by(a: String, b: String) -> i32 uses {} {
+  string.compare(a, b)
+}
+
+fn sorted(take c: unique Cat) -> unique Cat {
+  let mut owned = take c
+  for i in 0u64..list.len(owned.pkgs) {
+    for d in owned.pkgs[i].deps {
+      failure.check(string.byte_len(d) > 0, Arithmetic())
+    }
+    list.sort(mut owned.pkgs[i].deps, by)
+  }
+  take owned
+}
+
+pub fn main() -> Result[(), ()] {
+  let r = sorted(unique Cat(pkgs: [Pkg(deps: ["b", "a"])]))
+  failure.check(r.pkgs[0].deps[0] == "a" && r.pkgs[0].deps[1] == "b", Arithmetic())
+  Ok(())
+}

@@ -1,0 +1,19 @@
+// rule: MODE-2
+// expect: reject OWN-3 at line 12
+// twin: MODE/MODE-2-loop-place-52-field-run.hir
+// A loop loan forbids overlap; a saved element still shares the owner.
+type Rec {
+  items: List[String],
+}
+
+fn sorted(take r: unique Rec) -> unique Rec {
+  let mut owned = take r
+  for item in owned.items {
+    list.push(mut owned.items, "z")
+  }
+  take owned
+}
+
+pub fn main() {
+  let r = sorted(unique Rec(items: ["b", "a"]))
+}

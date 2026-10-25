@@ -152,8 +152,8 @@ pub fn decode(take data: unique Bytes) -> Result[unique Batch, report.Problem] u
     return Error(Manifests())
   }
   // Validate every manifest before scheduling any result or publishing bytes.
-  for i in 0u64..list.len(batch.manifests) {
-    constraints.validate(batch.manifests[i])?
+  for item in batch.manifests {
+    constraints.validate(item)?
   }
   Ok(take batch)
 }

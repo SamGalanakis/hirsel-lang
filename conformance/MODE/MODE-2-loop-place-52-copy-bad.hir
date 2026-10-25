@@ -1,0 +1,26 @@
+// rule: MODE-2
+// expect: reject MODE-2 at line 18
+// twin: MODE/MODE-2-loop-place-52-copy-ok.hir
+// A loop loan forbids overlap; a saved element still shares the owner.
+type Rec {
+  items: List[String],
+}
+
+@noalloc
+fn by(a: String, b: String) -> i32 uses {} {
+  0
+}
+
+fn sorted(take r: unique Rec) -> unique Rec {
+  let mut owned = take r
+  let mut kept = ""
+  for item in owned.items {
+    kept = item
+  }
+  list.sort(mut owned.items, by)
+  take owned
+}
+
+pub fn main() {
+  let r = sorted(unique Rec(items: ["b", "a"]))
+}

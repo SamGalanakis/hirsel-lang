@@ -163,8 +163,7 @@ fn progress(
   let mut current = list.remove(mut waiting, 0)
   let now = shutdown.ticks(clock)?
   let mut valid = client.alive(tasks, endpoints[current.publisher].state)
-  for cursor in 0u64..list.len(current.targets) {
-    let target = current.targets[cursor]
+  for target in current.targets {
     if !client.alive(tasks, endpoints[target].state) || !subscribed(
       endpoints[target],
       current.topic
@@ -312,9 +311,9 @@ fn dispatch(
             },
             Unsubscribe(topic) => {
               let mut kept: List[unique String] = []
-              for cursor in 0u64..list.len(endpoints[id].topics) {
-                if endpoints[id].topics[cursor] != topic {
-                  list.push(mut kept, wire.owned(endpoints[id].topics[cursor]))
+              for existing in endpoints[id].topics {
+                if existing != topic {
+                  list.push(mut kept, wire.owned(existing))
                 }
               }
               endpoints[id].topics = take kept

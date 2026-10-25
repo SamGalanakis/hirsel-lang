@@ -1,0 +1,27 @@
+// rule: MODE-2
+// expect: run
+// W1: lending a field leaves its owner unique; disjoint siblings stay writable.
+type Rec {
+  items: List[String],
+  count: u64,
+}
+
+@noalloc
+fn by(a: String, b: String) -> i32 uses {} {
+  string.compare(a, b)
+}
+
+fn sorted(take r: unique Rec) -> unique Rec {
+  let mut owned = take r
+  for item in owned.items {
+    owned.count += string.byte_len(item)
+  }
+  list.sort(mut owned.items, by)
+  take owned
+}
+
+pub fn main() -> Result[(), ()] {
+  let r = sorted(unique Rec(items: ["b", "a"], count: 0))
+  failure.check(r.items[0] == "a" && r.items[1] == "b" && r.count == 2, Arithmetic())
+  Ok(())
+}

@@ -1860,10 +1860,20 @@ pub(super) fn build(
                             } else {
                                 header
                             };
+                            // The lent source is a view of its place, a field or
+                            // element path as much as a binding (OWN-8): no count.
                             jobs.push(Job::Expr {
                                 entry,
                                 expression: *source,
-                                context: Context::Read,
+                                context: if borrowed_place
+                                    && rows.source_place(*source).is_some_and(|i| {
+                                        matches!(body.places[i].root, SourceRoot::Binding { .. })
+                                            && body.places[i].access == SourceAccess::Read
+                                    }) {
+                                    Context::View
+                                } else {
+                                    Context::Read
+                                },
                                 operation: *source,
                                 escaping: false,
                                 owning: false,

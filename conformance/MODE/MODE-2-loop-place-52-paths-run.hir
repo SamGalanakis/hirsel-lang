@@ -1,0 +1,49 @@
+// rule: MODE-2
+// expect: run
+// Index operands run once; loop-element paths and cursor sources lend their place.
+type Pkg {
+  deps: List[String],
+}
+
+type Cat {
+  pkgs: List[Pkg],
+  names: Set[String],
+}
+
+fn index(mut calls: u64) -> u64 {
+  calls += 1
+  0
+}
+
+fn scan(take cat: unique Cat) -> unique Cat {
+  let mut owned = take cat
+  let mut calls = 0u64
+  let mut size = 0u64
+  for dep in owned.pkgs[index(mut calls)].deps {
+    size += string.byte_len(dep)
+  }
+  failure.check(calls == 1 && size == 2, Arithmetic())
+  let mut i = 0u64
+  for dep in owned.pkgs[i].deps {
+    i = 1
+    size += string.byte_len(dep)
+  }
+  for pkg in owned.pkgs {
+    for dep in pkg.deps {
+      size += string.byte_len(dep)
+    }
+  }
+  set.insert(mut owned.names, "x")
+  for name in owned.names {
+    size += string.byte_len(name)
+  }
+  let _ = set.remove(mut owned.names, "x")
+  failure.check(size == 7, Arithmetic())
+  take owned
+}
+
+pub fn main() -> Result[(), ()] {
+  let cat = scan(unique Cat(pkgs: [Pkg(deps: ["b", "a"])], names: set.empty()))
+  failure.check(set.len(cat.names) == 0, Arithmetic())
+  Ok(())
+}

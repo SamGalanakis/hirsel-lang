@@ -291,6 +291,9 @@ impl Builder<'_, '_> {
             self.scope = enclosing;
             return Ok(());
         };
+        // Ownership selects Borrow for every lent source place, including
+        // projected fields and pinned indices. Keep that place for the loan;
+        // spilling it as a counted copy would lose the owner's uniqueness.
         source.usage = self.decision(source_id)?.usage;
         if matches!(source.usage, UseKind::Take | UseKind::Copy) {
             source = self.transport(source, Storage::Temporary, span);

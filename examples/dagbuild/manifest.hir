@@ -64,6 +64,13 @@ fn array_width(value: json.Value, field: String) -> Result[u64, Problem] uses {}
   Ok(list.len(items))
 }
 
+fn executable(program: String) -> bool uses {} {
+  let Ok(normal) = path.normalize(path.of(program)) else {
+    return false
+  }
+  string.starts_with(program, "/") && program != "/" && path.text(normal) == program
+}
+
 // Preflight the bounded DOM before a derived decoder allocates typed lists.
 pub fn decode(take data: unique Bytes) -> Result[unique Dag, Problem] uses {} {
   if bytes.len(data) > MAX_MANIFEST {
@@ -138,11 +145,7 @@ pub fn decode(take data: unique Bytes) -> Result[unique Dag, Problem] uses {} {
       }
       argv_bytes += size
     }
-    let program = node.argv[0]
-    let Ok(normal) = path.normalize(path.of(program)) else {
-      return Error(problem("program"))
-    }
-    if !string.starts_with(program, "/") || program == "/" || path.text(normal) != program {
+    if !executable(node.argv[0]) {
       return Error(problem("program"))
     }
     for name in node.inputs {
@@ -156,7 +159,7 @@ pub fn decode(take data: unique Bytes) -> Result[unique Dag, Problem] uses {} {
       }
     }
   }
-  Ok(unique dag)
+  Ok(take dag)
 }
 
 pub fn command(node: Node) -> unique Command uses {} {

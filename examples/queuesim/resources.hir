@@ -37,16 +37,13 @@ pub fn enqueue(mut station: unique StationState, index: u64) -> () uses {} {
 }
 
 pub fn remove(mut station: unique StationState, index: u64) -> () uses {} {
-  let mut kept: List[u64] = []
-  let mut at = 0u64
-  while at < list.len(station.queue) {
-    let waiting = station.queue[at]
-    if waiting != index {
-      list.push(mut kept, waiting)
+  let mut at = list.len(station.queue)
+  while at > 0 {
+    at -= 1
+    if station.queue[at] == index {
+      let _ = list.remove(mut station.queue, at)
     }
-    at += 1
   }
-  station.queue = take kept
 }
 
 pub fn first(station: StationState) -> Option[u64] uses {} {
