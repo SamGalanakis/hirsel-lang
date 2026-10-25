@@ -392,3 +392,17 @@ mod tests {
         );
     }
 }
+
+impl QueryEngine {
+    /// Payload of retained S0 signature memo entries, including resolver syntax,
+    /// private shapes and complete reads. Table buckets, source text, frozen
+    /// declaration inputs and type/session interners are separate components.
+    /// Non-source body artifacts refuse rather than receiving a partial bound.
+    pub fn source_signature_entry_payload_bytes(&self) -> Option<u64> {
+        self.signatures.values().try_fold(0u64, |bytes, entry| {
+            bytes.checked_add(crate::memo::retained::retained_signature_entry_bytes(
+                entry,
+            )?)
+        })
+    }
+}
