@@ -8,7 +8,7 @@
 use super::*;
 use crate::sealed_source::demand::ExternalDemand;
 use hirsel_layout::instance::InstanceKey;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 const PROFILE: &str = "hirsel.closed-storage-profile.v1";
 const DEMAND: &str = "hirsel.receipt-demand.v1";
@@ -25,11 +25,85 @@ impl ContextId {
 pub struct Context<'a> {
     /// Original lexical key, before profile/demand or optimization derivation.
     pub base: &'a InstanceKey,
-    /// An independently qualified context, not a union over erased source types.
-    pub profile: &'a ClosedStorageProfile,
     pub entry: &'a SourceCallableEntry,
     pub source: &'a SourceDemandProjection,
     pub ports: &'a BTreeMap<Port, ClosedStorageProfile>,
+}
+
+struct ContextEncoding {
+    schema: u32,
+    callable: ClosedStorageType,
+    ports: Vec<ProfilePort>,
+}
+struct ProfilePort {
+    kind: u32,
+    ordinal: u32,
+    profile: ClosedStorageProfile,
+}
+hirsel_codec::snapshot_struct!(ContextEncoding {
+    schema,
+    callable,
+    ports
+});
+hirsel_codec::snapshot_struct!(ProfilePort {
+    kind,
+    ordinal,
+    profile
+});
+
+impl Context<'_> {
+    /// One complete source callable context, preserving which profile belongs
+    /// to each original port. Source observations stay out of these bytes.
+    /// Completeness of each profile is still the source query owner's proof.
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, SourceError> {
+        let expected = self
+            .entry
+            .parameters()
+            .iter()
+            .map(|p| Port::Parameter(p.ordinal))
+            .chain([Port::Result])
+            .chain(
+                self.entry
+                    .captures()
+                    .iter()
+                    .map(|c| Port::Capture(c.ordinal)),
+            )
+            .collect::<BTreeSet<_>>();
+        if !expected.iter().eq(self.ports.keys()) {
+            return Err(SourceError::Malformed(
+                "receipt context needs a complete ordered port-profile map",
+            ));
+        }
+        binding(&Input {
+            entry: self.entry,
+            source: self.source,
+            profiles: self.ports,
+            calls: &BTreeMap::new(),
+            closures: &BTreeMap::new(),
+        })?;
+        let ports: Vec<_> = self
+            .ports
+            .iter()
+            .map(|(port, profile)| {
+                let (kind, ordinal) = match port {
+                    Port::Parameter(ordinal) => (0u32, *ordinal),
+                    Port::Result => (1, 0),
+                    Port::Capture(ordinal) => (2, *ordinal),
+                };
+                ProfilePort {
+                    kind,
+                    ordinal,
+                    profile: profile.clone(),
+                }
+            })
+            .collect();
+        Ok(hirsel_codec::to_text(&ContextEncoding {
+            schema: 1,
+            callable: self.entry.callable().clone(),
+            ports,
+        })
+        .into_bytes())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,19 +178,7 @@ impl Registry {
                 "receipt context lacks its original lexical base",
             ));
         }
-        let calls = BTreeMap::new();
-        let closures = BTreeMap::new();
-        binding(&Input {
-            entry: input.entry,
-            source: input.source,
-            profiles: input.ports,
-            calls: &calls,
-            closures: &closures,
-        })?;
-        let bytes = input
-            .profile
-            .canonical_bytes()
-            .map_err(SourceError::Malformed)?;
+        let bytes = input.canonical_bytes()?;
         let context = input.base.derived(PROFILE, &[&bytes]);
         if let Some(&id) = self.by_context.get(&context) {
             let old = &self.rows[id.0];

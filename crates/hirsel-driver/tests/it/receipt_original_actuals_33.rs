@@ -280,7 +280,6 @@ fn port_context_declared_function_values_keep_distinct_actuals_and_reject_profil
         for (&unique, (base, entry, source, ports)) in &selected {
             let context = || Context {
                 base,
-                profile: &ports[&Port::Parameter(0)],
                 entry,
                 source,
                 ports,
@@ -305,13 +304,12 @@ fn port_context_declared_function_values_keep_distinct_actuals_and_reject_profil
             registry
                 .register(Context {
                     base: &b.0,
-                    profile: &a.3[&Port::Parameter(0)],
                     entry: &b.1,
                     source: &b.2,
-                    ports: &b.3,
+                    ports: &a.3,
                 })
                 .unwrap_err(),
-            SourceError::Malformed("conflicting original data for receipt profile context")
+            SourceError::Malformed("receipt profile differs from full original source type")
         );
         let calls = BTreeMap::new();
         let closures = BTreeMap::new();

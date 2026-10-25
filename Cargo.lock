@@ -1077,6 +1077,7 @@ dependencies = [
 name = "hirsel-rc"
 version = "0.1.0"
 dependencies = [
+ "hirsel-codec",
  "hirsel-core-contract",
  "hirsel-graph",
  "hirsel-guard",

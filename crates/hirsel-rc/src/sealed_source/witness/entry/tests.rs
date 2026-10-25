@@ -545,3 +545,20 @@ fn selected_named_entry_preserves_source_modes_erased_by_base_instance_key() {
         &crate::sealed_source::closed_storage_type(&types, unique).unwrap()
     );
 }
+
+#[test]
+fn original_entry_callable_identity_keeps_header_axes_beyond_parameter_types() {
+    let (types, source, signature, key) = named();
+    let a = source.named_entry(&key, &types, &signature, Ok).unwrap();
+    let mut changed = (*signature).clone();
+    let SignatureKind::Function(function) = &mut changed.kind else {
+        unreachable!()
+    };
+    function.allocation = Allocation::NoAlloc;
+    // This data control deliberately holds the supplied declaration fingerprint
+    // equal; actual source/V query binding remains the provider's obligation.
+    let b = source.named_entry(&key, &types, &changed, Ok).unwrap();
+    assert_eq!(a.parameters(), b.parameters());
+    assert_eq!(a.result(), b.result());
+    assert_ne!(a.callable().source_type, b.callable().source_type);
+}

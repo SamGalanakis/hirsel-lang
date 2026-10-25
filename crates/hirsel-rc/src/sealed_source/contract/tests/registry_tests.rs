@@ -2,6 +2,8 @@
 //! completeness remains independent; these fixtures do not manufacture V proof.
 use super::*;
 use crate::sealed_source::contract::registry::{Context, ContextId, Expansion, Registry};
+use hirsel_lir::sealed_payload_source::{ClosedStorageCase, ClosedStorageFunction};
+use std::collections::BTreeSet;
 
 fn register(registry: &mut Registry, fixture: &Fixture, types: &TypeInterner) -> ContextId {
     let reference = fixture.entry.reference();
@@ -17,7 +19,6 @@ fn register(registry: &mut Registry, fixture: &Fixture, types: &TypeInterner) ->
     registry
         .register(Context {
             base: &base,
-            profile: &fixture.profiles[&Port::Parameter(0)],
             entry: &fixture.entry,
             source: &fixture.projection,
             ports: &fixture.profiles,
@@ -236,9 +237,14 @@ fn demanded_request_uses_exact_profile_then_contract_namespaces() {
     let request = &requests[id.index()];
     let context = request.ordinary_key().derived(
         "hirsel.closed-storage-profile.v1",
-        &[&fixture.profiles[&Port::Parameter(0)]
-            .canonical_bytes()
-            .unwrap()],
+        &[&Context {
+            base: request.ordinary_key(),
+            entry: &fixture.entry,
+            source: &fixture.projection,
+            ports: &fixture.profiles,
+        }
+        .canonical_bytes()
+        .unwrap()],
     );
     let aware = context.derived(
         "hirsel.receipt-demand.v1",
@@ -285,13 +291,12 @@ fn full_source_profiles_stay_distinct_and_conflicting_collapse_is_rejected() {
         registry
             .register(Context {
                 base: &base,
-                profile: &a.profiles[&Port::Parameter(0)],
                 entry: &b.entry,
                 source: &b.projection,
-                ports: &b.profiles
+                ports: &a.profiles
             })
             .unwrap_err(),
-        SourceError::Malformed("conflicting original data for receipt profile context")
+        SourceError::Malformed("receipt profile differs from full original source type")
     );
     registry
         .resolve(a_id, BTreeMap::new(), BTreeMap::new())
@@ -399,7 +404,6 @@ fn source_observation_edits_do_not_enter_the_semantic_request_key() {
         registry
             .register(Context {
                 base: &base,
-                profile: &b.profiles[&Port::Parameter(0)],
                 entry: &b.entry,
                 source: &b.projection,
                 ports: &b.profiles
@@ -480,7 +484,6 @@ fn a_derived_or_foreign_key_cannot_replace_the_original_lexical_base() {
             registry
                 .register(Context {
                     base,
-                    profile: &fixture.profiles[&Port::Parameter(0)],
                     entry: &fixture.entry,
                     source: &fixture.projection,
                     ports: &fixture.profiles
@@ -490,4 +493,112 @@ fn a_derived_or_foreign_key_cannot_replace_the_original_lexical_base() {
         );
     }
     assert!(registry.is_empty());
+}
+
+#[test]
+fn context_preserves_port_profiles_with_the_same_union_of_callable_cases() {
+    let (types, _, scalar, _) = types();
+    let callable = types.intern(Type::with_kind(TypeKind::Function(function(&[], scalar))));
+    let mut a = Fixture::named(
+        &types,
+        body(&[callable, callable, scalar], 2),
+        &[PassingMode::Borrow, PassingMode::Borrow],
+        "context_ordered_ports",
+        2,
+    );
+    let mut b = Fixture::named(
+        &types,
+        body(&[callable, callable, scalar], 2),
+        &[PassingMode::Borrow, PassingMode::Borrow],
+        "context_ordered_ports",
+        2,
+    );
+    let code_type = crate::sealed_source::closed_storage_type(&types, callable).unwrap();
+    let cases = ["code_a", "code_b"].map(|label| {
+        let definition = DefPath::core(label);
+        let base = InstanceKey::new(&definition, 0, &[], &types, None, None).unwrap();
+        ClosedStorageCase {
+            body: hirsel_lir::invocations::ReferenceBody {
+                definition,
+                body: 0,
+                instance: base.digest(),
+            },
+            recipe: ContentHash::of_parts("synthetic-profile-data-case", [label.as_bytes()]),
+            environment: None,
+        }
+    });
+    let selected = |case: &ClosedStorageCase| ClosedStorageProfile {
+        schema: ClosedStorageProfile::SCHEMA,
+        root: code_type.clone(),
+        functions: vec![ClosedStorageFunction {
+            ty: code_type.clone(),
+            cases: vec![case.clone()],
+        }],
+    };
+    for (ports, order) in [(&mut a.profiles, [0, 1]), (&mut b.profiles, [1, 0])] {
+        for (port, case) in order.into_iter().enumerate() {
+            ports.insert(Port::Parameter(port as u32), selected(&cases[case]));
+        }
+    }
+    let union = |fixture: &Fixture| {
+        fixture
+            .profiles
+            .values()
+            .flat_map(|profile| &profile.functions)
+            .flat_map(|function| &function.cases)
+            .map(|case| hirsel_codec::to_text(case))
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(union(&a), union(&b));
+    let mut registry = Registry::default();
+    let left = register(&mut registry, &a, &types);
+    let right = register(&mut registry, &b, &types);
+    assert_ne!(left, right);
+    for id in [left, right] {
+        registry
+            .resolve(id, BTreeMap::new(), BTreeMap::new())
+            .unwrap();
+    }
+    let requests = registry.solve().unwrap();
+    assert_eq!(
+        requests[left.index()].ordinary_key(),
+        requests[right.index()].ordinary_key()
+    );
+    assert_ne!(
+        requests[left.index()].context_key(),
+        requests[right.index()].context_key()
+    );
+}
+
+#[test]
+fn context_requires_every_original_port_even_without_boundary_demand() {
+    let (types, bytes, scalar, _) = types();
+    let mut fixture = Fixture::named(
+        &types,
+        body(&[bytes, scalar], 1),
+        &[PassingMode::Borrow],
+        "context_missing_port",
+        2,
+    );
+    fixture.profiles.remove(&Port::Result);
+    let base = InstanceKey::new(
+        &fixture.entry.reference().definition,
+        0,
+        &[],
+        &types,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        Registry::default()
+            .register(Context {
+                base: &base,
+                entry: &fixture.entry,
+                source: &fixture.projection,
+                ports: &fixture.profiles
+            })
+            .unwrap_err(),
+        SourceError::Malformed("receipt context needs a complete ordered port-profile map")
+    );
 }

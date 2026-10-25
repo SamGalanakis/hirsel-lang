@@ -46,6 +46,7 @@ pub struct SourceCallableEntry {
     source: ContentHash,
     revision: ContentHash,
     kind: SourceEntryKind,
+    callable: ClosedStorageType,
     parameters: Vec<SourceParameter>,
     result: ClosedStorageType,
     captures: Vec<SourceCapture>,
@@ -63,6 +64,11 @@ impl SourceCallableEntry {
     }
     pub fn kind(&self) -> &SourceEntryKind {
         &self.kind
+    }
+    /// Full original callable type at this source specialization. It identifies
+    /// the entry header, not a selected environment recipe or code authority.
+    pub fn callable(&self) -> &ClosedStorageType {
+        &self.callable
     }
     pub fn parameters(&self) -> &[SourceParameter] {
         &self.parameters
@@ -141,6 +147,19 @@ impl SourceInput {
         if result != super::super::closed_storage_type(types, substitute(function.result)?)? {
             return Err(SourceError::Malformed("original entry result type differs"));
         }
+        let callable = match &kind {
+            SourceEntryKind::Closure { callable, .. } => callable.clone(),
+            SourceEntryKind::Definition { .. } => {
+                let mut closed = function.clone();
+                for parameter in closed.parameters.iter_mut() {
+                    parameter.ty = substitute(parameter.ty)?;
+                }
+                closed.result = substitute(closed.result)?;
+                closed.error = closed.error.map(&mut *substitute).transpose()?;
+                let ty = types.intern(hirsel_types::Type::with_kind(TypeKind::Function(closed)));
+                super::super::closed_storage_type(types, ty)?
+            }
+        };
         Ok(SourceCallableEntry {
             reference: ReferenceBody {
                 definition: base.definition().clone(),
@@ -150,6 +169,7 @@ impl SourceInput {
             source: self.source,
             revision: self.revision,
             kind,
+            callable,
             parameters,
             result,
             captures: vec![],
@@ -281,6 +301,26 @@ impl SourceInput {
                 "original named specialization key differs",
             ));
         }
+        let authorities = vec![hirsel_types::AuthoritySummary::Unknown; actuals.arguments.len()];
+        let view = hirsel_types::view_digest(types, signature)
+            .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+        let selected = hirsel_types::instantiate(
+            types,
+            memo,
+            signature,
+            view,
+            &hirsel_types::Substitution {
+                arguments: &actuals.arguments,
+                authorities: &authorities,
+                roles: &signature.metadata.roles,
+                ..Default::default()
+            },
+        )
+        .map_err(|error| SourceError::Type(format!("{error:?}")))?;
+        let SignatureKind::Function(mut selected) = selected.kind else {
+            unreachable!()
+        };
+        selected.generics.clear();
         let mut substitute = |ty| {
             crate::instance::substitute(types, memo, ty, actuals, true)
                 .map_err(|error| SourceError::Type(format!("{error:?}")))
@@ -288,7 +328,7 @@ impl SourceInput {
         self.entry(
             base,
             types,
-            function,
+            &selected,
             SourceEntryKind::Definition {
                 declaration: signature.fingerprint,
             },
