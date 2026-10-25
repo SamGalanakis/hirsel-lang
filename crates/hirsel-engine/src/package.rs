@@ -702,7 +702,14 @@ pub(crate) fn load_program_inputs_with_source_index(
                         .ok_or(ToolError::SourceTooLarge)?
                 }
             }
-            _ => engine
+            Some((file, _)) => {
+                engine.indexed_sources.remove(&file);
+                engine
+                    .sources
+                    .add_logical(source, logical, text)
+                    .ok_or(ToolError::SourceTooLarge)?
+            }
+            None => engine
                 .sources
                 .add_logical(source, logical, text)
                 .ok_or(ToolError::SourceTooLarge)?,
