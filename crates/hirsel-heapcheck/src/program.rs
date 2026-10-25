@@ -102,7 +102,13 @@ impl<S: Stage> Program<S> {
                 if bodies.next().is_some() {
                     return fail(V::FrameImbalance, "duplicate independent body selection");
                 }
-                crate::invocations::audit(unit, reference, selected.body)?;
+                crate::invocations::audit(
+                    unit,
+                    reference,
+                    selected.body,
+                    &self.invocation_bodies,
+                    &self.layouts,
+                )?;
             }
             if unit.header.origin == hirsel_lir::ir::UnitOrigin::Library {
                 crate::invocations::audit_library(unit, &self.invocation_bodies, &self.layouts)?;

@@ -4,12 +4,16 @@ use crate::violation::{Checked, ViolationKind as V, err};
 use hirsel_lir::{invocations::ReferenceInvocation, ir::*, stage::Stage};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod cleanup;
+
 type Identity = (u32, u32, u32);
 
 pub(crate) fn audit<S: Stage>(
     unit: &LirUnit<S>,
     references: &[ReferenceInvocation],
     body: u32,
+    bodies: &[hirsel_lir::invocations::ReferenceBody],
+    layouts: &hirsel_lir::LayoutTable,
 ) -> Checked<()> {
     let malformed = |message: &str| err(V::FrameImbalance, message);
     if unit.tables.source_anchors.iter().any(|a| a.body != body) {
@@ -17,6 +21,8 @@ pub(crate) fn audit<S: Stage>(
             "source anchor differs from independently selected body",
         ));
     }
+    let mut references = references.to_vec();
+    references.extend(cleanup::references(unit, bodies, layouts, body)?);
     let expected: BTreeMap<_, _> = references
         .iter()
         .filter(|r| r.body == body && !r.restart)
@@ -204,6 +210,32 @@ pub(crate) fn audit_library<S: Stage>(
     layouts: &hirsel_lir::LayoutTable,
 ) -> Checked<()> {
     let malformed = |text: &str| err(V::FrameImbalance, text);
+    let cleanup = cleanup::references(unit, bodies, layouts, 0)?;
+    let expected: BTreeSet<_> = cleanup
+        .iter()
+        .map(|reference| (reference.body, reference.block, reference.statement))
+        .collect();
+    let mut found = BTreeSet::new();
+    for instruction in &unit.instructions {
+        if let Inst::FrameEnter { failure } = instruction {
+            let origin = unit
+                .tables
+                .failures
+                .get(failure.index())
+                .and_then(|failure| unit.tables.source_anchors.get(failure.anchor.index()))
+                .ok_or_else(|| malformed("cleanup admission has no source identity"))?;
+            if origin.block == u32::MAX
+                && !found.insert((origin.body, origin.block, origin.statement))
+            {
+                return Err(malformed("duplicate cleanup invocation admission"));
+            }
+        }
+    }
+    if found != expected {
+        return Err(malformed(
+            "cleanup invocation coverage differs from typed finalizers",
+        ));
+    }
     // H reconstructs the static callback recipe from canonical library identity.
     let path = &unit.header.definition;
     let forwarded = if path.is_core("iter.next") {
@@ -244,7 +276,7 @@ pub(crate) fn audit_library<S: Stage>(
             .iter()
             .filter(|i| matches!(i, Inst::FrameEnter { .. }))
             .count()
-            != expected
+            != expected + cleanup.len()
     }) {
         return Err(malformed(
             "H generated callback recipe invocation coverage differs",

@@ -1121,6 +1121,34 @@ fn source_finalizers_from_library_cleanup_require_their_own_admission() {
         invocation_bodies: built.operations.invocation_bodies,
         pretransfer_adapters: built.operations.pretransfer_adapters,
     };
+    for (mutant, message) in [
+        (erased, "cleanup invocation coverage"),
+        (crossed, "cleanup origin"),
+    ] {
+        let mut changed = program.clone();
+        let selected = changed
+            .units
+            .iter_mut()
+            .find(|unit| {
+                unit.header.definition == mutant.header.definition
+                    && unit.header.instance == mutant.header.instance
+            })
+            .unwrap();
+        *selected = mutant;
+        let run = hirsel_heapcheck::run(
+            &changed,
+            &path("main"),
+            &[],
+            &mut NoOperations,
+            &Config::default(),
+        );
+        let violation = run.result.unwrap_err();
+        assert_eq!(
+            violation.kind,
+            hirsel_heapcheck::ViolationKind::FrameImbalance
+        );
+        assert!(violation.message.contains(message), "{violation:?}");
+    }
     let campaign = hirsel_heapcheck::fault_campaign(
         &program,
         &path("main"),
