@@ -269,6 +269,7 @@ impl NativeBootstrap {
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .and_then(|(selected, message)| (*selected == reference).then(|| message.clone()))
+            .or_else(|| self.prepared.get()?.compilation.failure(reference))
     }
     fn fail(&self, message: String) -> Reference {
         if message.len() as u64 > self.weight.retained {

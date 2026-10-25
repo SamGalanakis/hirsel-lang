@@ -180,6 +180,11 @@ impl CompilationTasks {
         }
         Ok(self)
     }
+    /// The diagnostic produced by an actual native dependency, including a
+    /// failure before compilation completes. Reopening it executes no query.
+    pub fn failure(&self, reference: Reference) -> Option<String> {
+        self.instances.failure_message(reference)
+    }
     pub fn query_id(&self) -> QueryId {
         self.query
     }

@@ -325,6 +325,13 @@ fn bootstrap_link_refusal(test_table: bool, emit_only: bool) {
             };
             let bytes = store.get_content(error).unwrap();
             assert_eq!(
+                bootstrap.failure(error).as_deref(),
+                Some("selected bootstrap Link control refusal")
+            );
+            let mut foreign = error;
+            foreign.domain.schema += 1;
+            assert!(bootstrap.failure(foreign).is_none());
+            assert_eq!(
                 bytes.as_ref(),
                 b"selected bootstrap Link control refusal",
                 "earlier bootstrap/source/C failure: {:?} / {:?}",

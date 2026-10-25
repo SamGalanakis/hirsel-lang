@@ -328,6 +328,18 @@ impl InstanceTasks {
             .put_content(FAILURE, message.as_bytes())
             .unwrap_or(self.fallback)
     }
+    /// Reopen a bounded native diagnostic. This conveys no product or verifier
+    /// authority and never reruns source, instance, C or Ready work.
+    pub fn failure_message(&self, reference: Reference) -> Option<String> {
+        if reference.domain != FAILURE || reference.len > self.weight.retained {
+            return None;
+        }
+        let bytes = self.store.get_content(reference)?;
+        if FAILURE.reference(&bytes) != Some(reference) {
+            return None;
+        }
+        std::str::from_utf8(&bytes).ok().map(str::to_owned)
+    }
     pub(super) fn source_inputs(&self) -> &NativeInstanceInputs {
         &self.source
     }
