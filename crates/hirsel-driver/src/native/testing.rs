@@ -1,7 +1,16 @@
 //! Compile one package test executable and launch each test in a fresh process.
-use super::{Backend, NativeError, OptLevel, Options, Partition, StageName, TargetSpec, Toolchain};
+use super::{Backend, NativeError, OptLevel, StageName, TargetSpec, Toolchain};
+use crate::requests::{
+    CompileOperation, CompileRequest, CompileResult, CompilerRequests, NativeExecution,
+    NativeRequest, NativeSourceText,
+};
 use crate::testing::{BenchResult, Selection, Test, TestResult};
-use hirsel_engine::{LoadedProgram, NativeInput, ToolError};
+use hirsel_engine::runtime::QueryRuntime;
+use hirsel_engine::{
+    DefinitionQueries, LoadedProgram, ToolError,
+    requests::{OutputReadiness, RequestEngine, observe_inputs},
+};
+use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -17,15 +26,21 @@ pub fn test_path(
     schedules: &crate::testing::Schedules,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let mut loaded = crate::COMPILER
-        .with_verify(verify)
-        .load_test_package(path)?;
+    let (mut loaded, inputs) = load_test_inputs(path, verify)?;
     let tests = crate::testing::discover(&mut loaded, filters, seed, Selection::Tests)?;
     if tests.is_empty() {
         return Ok(vec![]);
     }
-    run(&mut loaded, &tests, backend, bless, schedules)
-        .map_err(|e| ToolError::Runtime(e.to_string()))
+    run(
+        path,
+        &inputs,
+        &mut loaded,
+        &tests,
+        backend,
+        bless,
+        schedules,
+    )
+    .map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
 /// Benches build at the ordinary executable optimization level and time each launch of
@@ -38,63 +53,155 @@ pub fn bench_path(
     target: Duration,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let mut loaded = crate::COMPILER
-        .with_verify(verify)
-        .load_test_package(path)?;
+    let (mut loaded, inputs) = load_test_inputs(path, verify)?;
     let benches = crate::testing::discover(&mut loaded, filters, seed, Selection::Benches)?;
     if benches.is_empty() {
         return Ok(vec![]);
     }
-    bench(&mut loaded, &benches, backend, target).map_err(|e| ToolError::Runtime(e.to_string()))
+    bench(path, &inputs, &mut loaded, &benches, backend, target)
+        .map_err(|e| ToolError::Runtime(e.to_string()))
+}
+
+fn load_test_inputs(
+    path: &Path,
+    verify: hirsel_engine::Verify,
+) -> Result<(LoadedProgram, hirsel_engine::loader_inputs::FrozenInputs), ToolError> {
+    let compiler = crate::COMPILER.with_verify(verify);
+    let selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let (loaded, inputs) = observe_inputs(
+        selector.input_limits(),
+        selector.capture_attempts(),
+        |inputs| compiler.load_test_package_inputs(path, inputs),
+    )
+    .map_err(|_| ToolError::Runtime("test package inputs changed during capture".into()))?;
+    Ok((loaded?, inputs))
 }
 
 /// One executable (or its image in a runner) whose argument selects which entry of `tests`
 /// it launches.
 struct Executable {
-    input: NativeInput,
-    program: super::ReadyProgram,
+    execution: Arc<NativeExecution>,
     runnable: super::Runnable,
-    toolchain: Toolchain,
     scratch: super::executable::Scratch,
 }
 
 impl Executable {
     fn build(
+        path: &Path,
+        inputs: &hirsel_engine::loader_inputs::FrozenInputs,
         loaded: &mut LoadedProgram,
         tests: &[Test],
         backend: Backend,
         optimization: OptLevel,
     ) -> Result<Self, NativeError> {
-        let input = loaded
-            .engine
-            .export_native_input()
-            .map_err(|e| NativeError::new(StageName::Manifest, format!("{e:?}")))?;
-        let validated = loaded
-            .engine
-            .import_native_input(input.clone())
-            .map_err(|e| NativeError::new(StageName::Manifest, format!("{e:?}")))?;
+        let failed = |error: &dyn std::fmt::Display| {
+            NativeError::new(StageName::Manifest, error.to_string())
+        };
+        let mut additions = std::collections::BTreeMap::new();
+        for test in tests {
+            let syntax = loaded
+                .engine
+                .parse_definition(&test.entry)
+                .map_err(|error| failed(&format!("{error:?}")))?
+                .value;
+            let (file, _) = loaded
+                .engine
+                .sources
+                .anchor(syntax.anchor)
+                .ok_or_else(|| failed(&"test entry source is unavailable"))?;
+            let source = loaded
+                .engine
+                .sources
+                .file(file)
+                .ok_or_else(|| failed(&"test entry file is unavailable"))?;
+            additions.insert(
+                file,
+                NativeSourceText {
+                    // The wrapper is an explicit immutable request input. A
+                    // display-only `<...>` source has no persistent query key.
+                    name: format!("native-testing/{}.hir", source.path.to_string_lossy()),
+                    context: hirsel_syntax::FileContext {
+                        package: test.entry.0.package.clone(),
+                        modules: test.entry.0.modules.clone(),
+                    },
+                    text: source.text().into(),
+                },
+            );
+        }
         let target = TargetSpec::x86_64_unknown_linux_gnu();
-        let mut program = super::build(&validated, &Options::new(target.clone()))?;
-        let scratch = super::executable::Scratch::new()?;
         let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
             .map(PathBuf::from)
             .unwrap_or_else(super::runtime_cache::default_directory);
-        let tools = Toolchain::in_tree(&cache, &[&target])?;
-        let objects = super::emit_backend_objects(
-            &program,
-            backend,
-            optimization,
-            Partition::Whole,
-            false,
-            None,
-        )?;
-        let runnable = super::link::link_tests(&mut program, tests, &objects, &tools, &scratch.0)?;
+        let tools = Arc::new(Toolchain::in_tree(&cache, &[&target])?);
+        let compiler = crate::COMPILER.with_verify(loaded.engine.verify);
+        let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration())
+            .with_toolchain(tools);
+        let request = CompileRequest {
+            path: path.to_owned(),
+            inputs: inputs.clone(),
+            operation: CompileOperation::NativeBuild(NativeRequest {
+                definition: Some(
+                    tests
+                        .first()
+                        .ok_or_else(|| failed(&"test selection is empty"))?
+                        .entry
+                        .clone(),
+                ),
+                test_entries: tests
+                    .iter()
+                    .map(|test| (test.entry.clone(), test.seed))
+                    .collect(),
+                supplemental_sources: additions.into_values().collect(),
+                backend,
+                profile: super::BuildProfile::Default,
+                optimization: Some(optimization),
+                output: crate::requests::NativeOutput::Executable,
+                target,
+                validation: super::Validation::EveryStage,
+                launch: Default::default(),
+                run: None,
+                fuel: false,
+                evidence: None,
+            }),
+        };
+        let mut selected = selector.select(&request).map_err(|error| failed(&error))?;
+        let complete = {
+            let mut runtime = selected
+                .runtime
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let request = runtime.request(&selected.roots);
+            runtime.wait(request)
+        };
+        let complete = match complete {
+            Ok(complete) => complete,
+            Err(reference) => {
+                return Err(failed(
+                    &selected
+                        .output
+                        .failed(reference)
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "native test compilation refused".into()),
+                ));
+            }
+        };
+        let output = selected
+            .output
+            .ready(&complete)
+            .map_err(|error| failed(&error))?;
+        let execution = match &output.result {
+            CompileResult::Native(execution) => execution.clone(),
+            CompileResult::NativeError(error) => return Err(error.clone()),
+            _ => return Err(failed(&"test request completed another operation")),
+        };
+        let runnable = execution
+            .platform
+            .executable(execution.executable.clone())
+            .map_err(|error| NativeError::new(StageName::Launch, error))?;
         Ok(Self {
-            input,
-            program,
+            execution,
             runnable,
-            toolchain: tools,
-            scratch,
+            scratch: super::executable::Scratch::new()?,
         })
     }
 
@@ -105,7 +212,15 @@ impl Executable {
         index: usize,
         scheduler: Option<&hirsel_run_schema::Scheduler>,
     ) -> Result<(Option<String>, Vec<u8>, Duration), NativeError> {
-        let sites = super::Sites::new(&self.input);
+        let sites = super::Sites::from_anchors(
+            &self.execution.sources,
+            self.execution
+                .observation
+                .anchors
+                .iter()
+                .map(|(path, anchors)| (path, anchors.clone()))
+                .collect(),
+        );
         let record = self.scratch.0.join("observation");
         let _ = std::fs::remove_file(&record);
         let start = Instant::now();
@@ -119,8 +234,8 @@ impl Executable {
         }
         let output = super::link::run_bounded(
             &self.runnable,
-            &self.program.target,
-            &self.toolchain,
+            &self.execution.request.target,
+            &self.execution.toolchain,
             &self.scratch.0.join("tooling"),
             &command,
             None,
@@ -134,7 +249,23 @@ impl Executable {
             stderr: output.stderr,
             record: std::fs::read_to_string(&record).unwrap_or_default(),
         };
-        let failure = match super::observe(&launched, &self.program, &sites) {
+        let observed = super::link::observe_request(
+            &launched,
+            &self.execution.observation,
+            &self.execution.sources,
+        )
+        .and_then(|observed| match observed {
+            super::link::Observed::Ran(observation, _) => Ok(observation),
+            super::link::Observed::Refused(reason) => Err(NativeError::new(
+                StageName::Launch,
+                format!("launch refused: {reason}"),
+            )),
+            super::link::Observed::Stopped(outcome) => Err(NativeError::new(
+                StageName::Launch,
+                format!("the run stopped: {outcome:?}"),
+            )),
+        });
+        let failure = match observed {
             Ok(observation) if observation.exit_code == Some(0) => None,
             Ok(observation) if observation.exit_code == Some(1) => Some("returned Error".into()),
             Ok(observation) => Some(match observation.failures.first() {
@@ -151,13 +282,15 @@ impl Executable {
 }
 
 fn run(
+    path: &Path,
+    inputs: &hirsel_engine::loader_inputs::FrozenInputs,
     loaded: &mut LoadedProgram,
     tests: &[Test],
     backend: Backend,
     bless: bool,
     schedules: &crate::testing::Schedules,
 ) -> Result<Vec<TestResult>, NativeError> {
-    let executable = Executable::build(loaded, tests, backend, OptLevel::None)?;
+    let executable = Executable::build(path, inputs, loaded, tests, backend, OptLevel::None)?;
     let mut results = Vec::new();
     for (index, test) in tests.iter().enumerate() {
         let mut error = None;
@@ -179,6 +312,8 @@ fn run(
 }
 
 fn bench(
+    path: &Path,
+    inputs: &hirsel_engine::loader_inputs::FrozenInputs,
     loaded: &mut LoadedProgram,
     benches: &[Test],
     backend: Backend,
@@ -195,7 +330,7 @@ fn bench(
             })
         })
         .collect();
-    let executable = Executable::build(loaded, &entries, backend, OptLevel::Default)?;
+    let executable = Executable::build(path, inputs, loaded, &entries, backend, OptLevel::Default)?;
     let mut results = Vec::new();
     for (ordinal, bench) in benches.iter().enumerate() {
         let first = ordinal * bench.loops.len();
