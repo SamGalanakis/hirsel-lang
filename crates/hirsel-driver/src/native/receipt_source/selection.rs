@@ -40,6 +40,18 @@ pub fn direct(
             "receipt indirect call needs original callable cases",
         ));
     };
+    definition(provider, path, arguments, actuals, memo)
+}
+
+/// Shared source-definition selection after the caller's original call/code
+/// producer has independently been read. Not a held environment recipe.
+pub(super) fn definition(
+    provider: &dyn provider::SelectionProvider,
+    path: &hirsel_syntax::DefPath,
+    arguments: &[hirsel_types::GenericArgument],
+    actuals: &Actuals,
+    memo: &TypeMemo,
+) -> Result<DirectCall, SourceError> {
     let closed = callee_actuals(
         provider.types(),
         memo,

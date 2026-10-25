@@ -1,6 +1,7 @@
 //! Source-context assembly before native instance restoration. This uses the
 //! existing context registry and demand solver; it creates no native C proof.
 use super::{ReceiptSourceObservation, SourceError, provider, selection};
+mod code;
 mod operations;
 use hirsel_layout::instance::InstanceKey;
 use hirsel_lir::sealed_payload_source::ClosedStorageProfile;
@@ -234,7 +235,22 @@ pub struct OperationObservation {
     pub operation: hirsel_core_contract::OperationId,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallTargets {
+    pub caller: ContextId,
+    pub block: u32,
+    pub targets: Vec<ContextId>,
+}
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClosureObservation {
+    pub caller: ContextId,
+    pub value: u32,
+    pub target: ContextId,
+}
+
 pub struct NamedGraph {
+    pub targets: Vec<CallTargets>,
+    pub closures: Vec<ClosureObservation>,
     pub operations: Vec<OperationObservation>,
     pub calls: Vec<CallObservation>,
     pub contexts: Vec<NamedContext>,
@@ -258,7 +274,9 @@ impl NamedGraph {
         ) -> Result<Vec<CallableCase>, SourceError>,
     ) -> Result<(), SourceError> {
         let current = named_graph(provider, roots, cases)?;
-        if self.operations != current.operations
+        if self.targets != current.targets
+            || self.closures != current.closures
+            || self.operations != current.operations
             || self.calls != current.calls
             || self.roots != current.roots
             || self.contexts.len() != current.contexts.len()
@@ -292,8 +310,8 @@ impl NamedGraph {
     }
 }
 
-/// Discover a complete graph of original named source calls. Unsupported
-/// operations, indirect targets or closure environments remain unavailable;
+/// Discover original named and local closure call contexts from named roots.
+/// Unsupported operations or unresolved incoming callable producers remain unavailable;
 /// none becomes a known-empty expansion or an ordinary fallback request.
 /// Source-available support for those boundaries belongs in this same factory.
 pub fn named_graph(
@@ -315,15 +333,36 @@ pub fn named_graph(
         }
         root_ids.push(id);
     }
+    let mut closures_observed = Vec::new();
+    let mut call_targets = Vec::new();
     let mut index = 0;
     while index < contexts.len() {
         let context = &contexts[index];
-        if !context.source.demand().projection().closures().is_empty() {
-            return Err(SourceError::Unsupported(
-                "receipt factory needs original closure context expansion",
-            ));
+        let id = registry.register(context.context())?;
+        let code = code::capture(provider, context)?;
+        let mut closures = BTreeMap::new();
+        for (value, input) in code.closures() {
+            let context = closure(provider, input, &memo, cases)?;
+            let context = NamedContext {
+                input: NamedInput {
+                    base: context.input.base,
+                    actuals: Actuals::none(),
+                },
+                source: context.source,
+                ports: context.ports,
+            };
+            let target = registry.register(context.context())?;
+            if target.index() == contexts.len() {
+                contexts.push(context);
+            }
+            closures.insert(value, target);
+            closures_observed.push(ClosureObservation {
+                caller: id,
+                value,
+                target,
+            });
         }
-        let blocks: Vec<_> = context
+        let blocks: Vec<_> = contexts[index]
             .source
             .demand()
             .projection()
@@ -331,14 +370,11 @@ pub fn named_graph(
             .keys()
             .copied()
             .collect();
-        let id = registry.register(context.context())?;
         let mut calls = BTreeMap::new();
         for block in blocks {
             let context = &contexts[index];
-            if let Some((operation, demand)) = operations::expand(
-                provider,
-                &context.source.demand().projection().calls()[&block],
-            )? {
+            let call = &context.source.demand().projection().calls()[&block];
+            if let Some((operation, demand)) = operations::expand(provider, call)? {
                 calls.insert(
                     block,
                     hirsel_rc::sealed_source::contract::registry::Expansion::External(demand),
@@ -350,50 +386,78 @@ pub fn named_graph(
                 });
                 continue;
             }
-            let target = selection::direct(
-                provider,
-                &context.input.base,
-                &context.input.actuals,
-                block,
-                &memo,
-            )?;
-            let selection = target.selection;
-            let context = named(
-                provider,
-                NamedInput {
-                    base: target.base,
-                    actuals: target.actuals,
-                },
-                &memo,
-                cases,
-            )?;
-            let target = registry.register(context.context())?;
-            if target.index() == contexts.len() {
-                contexts.push(context);
-            }
-            use hirsel_rc::sealed_source::contract::registry::Expansion;
-            calls.insert(
-                block,
-                if selection.generated {
-                    Expansion::Generated {
-                        selection: selection.clone(),
-                        target,
+            let indirect = matches!(call.callee, hirsel_tir::Callee::Indirect { .. });
+            let selected = code.targets(block)?;
+            let mut targets = Vec::new();
+            let mut generated = None;
+            for selected in selected {
+                match selected {
+                    code::Target::Closure(value) => {
+                        targets.push(*closures.get(&value).ok_or(SourceError::Malformed(
+                            "receipt call has no original closure producer",
+                        ))?);
                     }
-                } else {
-                    Expansion::Targets(vec![target])
-                },
-            );
-            observations.push(CallObservation {
+                    code::Target::Definition { path, arguments } => {
+                        let target = selection::definition(
+                            provider,
+                            &path,
+                            &arguments,
+                            &contexts[index].input.actuals,
+                            &memo,
+                        )?;
+                        let selection = target.selection;
+                        let context = named(
+                            provider,
+                            NamedInput {
+                                base: target.base,
+                                actuals: target.actuals,
+                            },
+                            &memo,
+                            cases,
+                        )?;
+                        let target = registry.register(context.context())?;
+                        if target.index() == contexts.len() {
+                            contexts.push(context);
+                        }
+                        if selection.generated && !indirect {
+                            generated = Some((selection.clone(), target));
+                        }
+                        observations.push(CallObservation {
+                            caller: id,
+                            block,
+                            target,
+                            selection,
+                        });
+                        targets.push(target);
+                    }
+                }
+            }
+            targets.sort_unstable();
+            targets.dedup();
+            use hirsel_rc::sealed_source::contract::registry::Expansion;
+            let expansion = if let Some((selection, target)) = generated {
+                if targets != [target] {
+                    return Err(SourceError::Malformed(
+                        "receipt direct generated call has multiple targets",
+                    ));
+                }
+                Expansion::Generated { selection, target }
+            } else {
+                Expansion::Targets(targets.clone())
+            };
+            call_targets.push(CallTargets {
                 caller: id,
                 block,
-                target,
-                selection,
+                targets,
             });
+            calls.insert(block, expansion);
         }
-        registry.resolve(id, calls, BTreeMap::new())?;
+        registry.resolve(id, calls, closures)?;
         index += 1;
     }
     Ok(NamedGraph {
+        targets: call_targets,
+        closures: closures_observed,
         operations,
         calls: observations,
         contexts,

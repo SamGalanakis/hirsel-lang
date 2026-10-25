@@ -185,12 +185,13 @@ pub fn main()->u64 { count(3u64) }
 }
 
 #[test]
-fn source_factory_refuses_unexpanded_original_closures_even_without_a_seal() {
+fn source_factory_refuses_mutated_original_callable_even_without_a_seal() {
     with_compiler_stack(|| {
         let (reader, path) = source(
             r#"
 pub fn main()->u64 {
-  let f=fn()->u64 {7u64}
+  let mut f:fn()->u64=fn()->u64 {7u64}
+  let old=replace(mut f, fn()->u64 {11u64})
   f()
 }
 "#,
@@ -199,7 +200,7 @@ pub fn main()->u64 {
         assert!(matches!(
             named_graph(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
             Err(SourceError::Unsupported(
-                "receipt factory needs original closure context expansion"
+                "receipt indirect call needs complete original code producers"
             ))
         ));
     });
@@ -496,5 +497,81 @@ pub fn main()->u64 {
             context.recheck(&simulated, input, &mut |_, _, _| Ok(vec![])),
             Err(SourceError::Unsupported("simulated unknown source"))
         ));
+    });
+}
+
+#[test]
+fn source_factory_discovers_literal_closures_and_named_function_values() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+fn id(x:u64)->u64 {x}
+pub fn main()->u64 {
+  let f:fn(u64)->u64=id
+  let captured=7u64
+  let c=fn(x:u64)->u64 {id(x)+captured}
+  let first=f(1u64)
+  first+c(2u64)
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar entry and capture ports")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 3);
+        assert_eq!(graph.closures.len(), 1);
+        assert_eq!(graph.targets.len(), 3);
+        assert_eq!(graph.calls.len(), 2);
+        let closure_context = &graph.contexts[graph.closures[0].target.index()];
+        assert_eq!(closure_context.source.entry().captures().len(), 1);
+        assert_eq!(closure_context.ports.len(), 3);
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
+        let simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+            signature_override: None,
+        };
+        graph
+            .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
+                panic!("scalar ports")
+            })
+            .unwrap();
+    });
+}
+
+#[test]
+fn source_factory_keeps_the_original_literal_closure_vector_as_an_accepted_graph() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let f=fn()->u64 {7u64}
+  f()
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("no callable entry ports")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 2);
+        assert_eq!(graph.closures.len(), 1);
+        assert_eq!(graph.targets.len(), 1);
+        assert_eq!(graph.targets[0].targets, [graph.closures[0].target]);
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
     });
 }
