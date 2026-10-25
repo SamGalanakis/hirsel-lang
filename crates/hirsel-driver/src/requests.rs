@@ -26,7 +26,7 @@ mod source_graph;
 mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
-    NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
+    NativeExecution, NativeObjectOutput, NativeObservation, RequestWork, TirExecution, TirProducts,
 };
 pub use ownership_selection::{OwnershipExecution, OwnershipObjects};
 pub use selector::{CompilerRequests, RequestLimits};
@@ -86,6 +86,8 @@ pub struct NativeRequest {
     /// Additional source produced by the package test or surface compiler.
     /// These ordinary inputs are parsed and checked in the owning package.
     pub supplemental_sources: Vec<NativeSourceText>,
+    pub output: NativeOutput,
+    pub optimization: Option<crate::native::OptLevel>,
     pub backend: Backend,
     pub profile: BuildProfile,
     pub target: TargetSpec,
@@ -115,4 +117,11 @@ pub struct OwnershipRequest {
     pub target: TargetSpec,
     pub validation: Validation,
     pub launch: LaunchInputs,
+}
+
+/// The requested build artifact, independent of runtime launchability.
+#[derive(Clone, serde::Serialize)]
+pub enum NativeOutput {
+    Executable,
+    Objects { roots: Vec<DefPath> },
 }

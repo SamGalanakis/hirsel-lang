@@ -49,6 +49,9 @@ pub(super) enum NativePurpose {
 }
 impl NativePurpose {
     pub fn opt(self, request: &NativeRequest) -> native::OptLevel {
+        if let Some(optimization) = request.optimization {
+            return optimization;
+        }
         match (self, request.profile, request.backend) {
             // Preserve tool::run's interactive Cranelift policy. Executable
             // builds retain their explicit profile policy on both backends.
@@ -86,11 +89,11 @@ pub(super) struct NativePlatformInputs<'a> {
     pub entry: &'a DefPath,
     pub tools: &'a Toolchain,
     pub links: &'a [LinkInput],
-    pub policy: &'a NativePlatformPolicy,
+    pub policy: Option<&'a NativePlatformPolicy>,
 }
 pub(super) struct NativePlatformSelection {
     pub plan: NativePlan,
-    pub platform: Arc<FrozenPlatform>,
+    pub platform: Option<Arc<FrozenPlatform>>,
 }
 impl NativePlatformSelection {
     pub fn capture(
@@ -123,6 +126,60 @@ impl NativePlatformSelection {
             ));
         }
         let target = &request.target;
+        if let super::NativeOutput::Objects { roots } = &request.output {
+            if roots.is_empty()
+                || !request.test_entries.is_empty()
+                || request.run.is_some()
+                || matches!(inputs.purpose, NativePurpose::Run)
+            {
+                return Err(failed(
+                    "object emission needs explicit roots and no launch selection".into(),
+                ));
+            }
+            let profile_options = profile_options(request, inputs.purpose)?;
+            let mut options = request.profile.options(target.clone());
+            options.validation = request.validation;
+            return Ok(Self {
+                plan: NativePlan {
+                    options,
+                    policy: profile_options,
+                    verify_store: if request.validation == native::Validation::EveryStage {
+                        hirsel_engine::store::VerifyStore::Recompute
+                    } else {
+                        inputs.verify_store
+                    },
+                    opt: inputs.purpose.opt(request),
+                    debug: request.profile == BuildProfile::Debug,
+                    verify_backend: true,
+                    measurement: inputs.tools.runtime_build.measurement,
+                    fuel: request.fuel,
+                    requested_run: None,
+                    test_entries: Vec::new(),
+                    emit_only: true,
+                    backends: vec![
+                        crate::native::queries::compilation_tasks::CompilationBackend {
+                            backend: request.backend.name().into(),
+                            backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                            target_features: target.digest(),
+                            profile_options,
+                            runtime_abi: ContentHash::of_bytes(
+                                &hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes(),
+                            ),
+                            linker_options: ContentHash::of_bytes(
+                                b"native object output has no linker",
+                            ),
+                            runtime_archives: vec![],
+                            foreign_inputs: vec![],
+                            executor: Arc::new(ObjectOutput(request.backend)),
+                        },
+                    ],
+                },
+                platform: None,
+            });
+        }
+        let policy = inputs
+            .policy
+            .ok_or_else(|| failed("native executable has no selected platform policy".into()))?;
         let (loader_name, emulator) = match target.triple.as_str() {
             "x86_64-unknown-linux-gnu" => ("ld-linux-x86-64.so.2", None),
             "aarch64-unknown-linux-gnu" => (
@@ -145,13 +202,13 @@ impl NativePlatformSelection {
             .tools
             .glibc_floor
             .as_ref()
-            .unwrap_or(&inputs.policy.floor)
+            .unwrap_or(&policy.floor)
             .join(&target.triple);
         let (loader, libraries) = inputs
             .tools
             .loader(target)?
             .unwrap_or_else(|| (floor.join(loader_name), floor));
-        let auditor = inputs.policy.auditors.join(format!("{}.so", target.triple));
+        let auditor = policy.auditors.join(format!("{}.so", target.triple));
         let stripped = inputs
             .tools
             .archive(&target.triple)
@@ -163,8 +220,7 @@ impl NativePlatformSelection {
             request.profile == BuildProfile::Debug,
         )?;
         let foreign = native::selected_foreign_inputs(inputs.tools, target, inputs.links)?;
-        let linker =
-            FrozenLinker::snapshot(store.as_ref(), &inputs.policy.linker).map_err(failed)?;
+        let linker = FrozenLinker::snapshot(store.as_ref(), &policy.linker).map_err(failed)?;
         let kit =
             FrozenLinkKit::snapshot(store.as_ref(), &inputs.tools.kit, target, linker, limits)
                 .map_err(failed)?;
@@ -225,7 +281,7 @@ impl NativePlatformSelection {
                 fuel: request.fuel,
                 requested_run: request.run.clone(),
                 test_entries: request.test_entries.clone(),
-                emit_only: false,
+                emit_only: matches!(request.output, super::NativeOutput::Objects { .. }),
                 backends: vec![platform.backend(
                     ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
                     target.digest(),
@@ -233,7 +289,7 @@ impl NativePlatformSelection {
                     ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 )],
             },
-            platform,
+            platform: Some(platform),
         })
     }
 }
@@ -249,6 +305,8 @@ mod tests {
                 definition: None,
                 test_entries: Vec::new(),
                 supplemental_sources: Vec::new(),
+                output: super::super::NativeOutput::Executable,
+                optimization: None,
                 backend,
                 profile: BuildProfile::Default,
                 target: native::TargetSpec::x86_64_unknown_linux_gnu(),
@@ -293,5 +351,24 @@ mod tests {
                 profile_options(&request, NativePurpose::Run).unwrap()
             );
         }
+    }
+}
+
+/// Only chooses the ordinary backend partition. Compilation's emit-only mode
+/// never creates a Link plan, so calling this method is a protocol error.
+struct ObjectOutput(Backend);
+impl native::queries::link_tasks::NativeLinkExecutor for ObjectOutput {
+    fn codegen_partition(&self) -> native::queries::link_tasks::CodegenPartition {
+        match self.0 {
+            Backend::Llvm => native::queries::link_tasks::CodegenPartition::WholeModule,
+            Backend::Cranelift => native::queries::link_tasks::CodegenPartition::PerInstance,
+        }
+    }
+    fn link(
+        &self,
+        _: &mut native::queries::roots::RootProducts,
+        _: native::queries::link_tasks::LinkExecution<'_>,
+    ) -> Result<Vec<u8>, String> {
+        Err("object-only compilation cannot execute Link".into())
     }
 }

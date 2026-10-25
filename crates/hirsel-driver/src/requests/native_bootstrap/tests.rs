@@ -992,6 +992,8 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                 definition: Some(entry.clone()),
                 test_entries: Vec::new(),
                 supplemental_sources: Vec::new(),
+                output: crate::requests::NativeOutput::Executable,
+                optimization: None,
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),
@@ -1017,7 +1019,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                     entry: &entry,
                     tools: &tools,
                     links: &[],
-                    policy: &policy,
+                    policy: Some(&policy),
                 },
                 object_queries::capture::CaptureLimits {
                     archive_bytes: 64 << 20,
@@ -1030,6 +1032,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                 budget.reserve(16 << 10).unwrap(),
             )
             .unwrap();
+            let platform = platform.expect("executable request captures its platform");
             plan.backends[0].executor = Arc::new(CountLink {
                 platform: platform.clone(),
                 calls: calls.clone(),
@@ -1120,7 +1123,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
                         bootstrap.clone(),
                         request.clone(),
                         tools.clone(),
-                        platform.clone(),
+                        Some(platform.clone()),
                     )
                     .unwrap()
                     .materialize(*selected)

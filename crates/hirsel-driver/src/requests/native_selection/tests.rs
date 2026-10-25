@@ -68,6 +68,8 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
                 definition: None,
                 test_entries: Vec::new(),
                 supplemental_sources: Vec::new(),
+                output: crate::requests::NativeOutput::Executable,
+                optimization: None,
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),
@@ -203,6 +205,8 @@ fn native_test_table_order_seed_and_definition_are_request_inputs() {
         definition: Some(path.clone()),
         test_entries: vec![],
         supplemental_sources: Vec::new(),
+        output: crate::requests::NativeOutput::Executable,
+        optimization: None,
         backend: native::Backend::Cranelift,
         profile: native::BuildProfile::Default,
         target: native::TargetSpec::x86_64_unknown_linux_gnu(),
@@ -240,6 +244,8 @@ fn native_source_text_context_and_name_are_request_inputs() {
         definition: Some(path.clone()),
         test_entries: vec![],
         supplemental_sources: vec![],
+        output: crate::requests::NativeOutput::Executable,
+        optimization: None,
         backend: native::Backend::Cranelift,
         profile: native::BuildProfile::Default,
         target: native::TargetSpec::x86_64_unknown_linux_gnu(),
@@ -280,6 +286,50 @@ fn native_source_text_context_and_name_are_request_inputs() {
         .push("other".into());
     assert_ne!(
         original,
+        request_key(&request, NativePurpose::Build).unwrap()
+    );
+}
+
+#[test]
+fn native_object_roots_and_emission_level_are_request_inputs() {
+    let path = hirsel_engine::entry_path(&hirsel_engine::default_context());
+    let mut other = path.clone();
+    other.0.name = "another".into();
+    let mut request = NativeRequest {
+        definition: Some(path.clone()),
+        test_entries: vec![],
+        supplemental_sources: vec![],
+        output: crate::requests::NativeOutput::Executable,
+        optimization: None,
+        backend: native::Backend::Cranelift,
+        profile: native::BuildProfile::Default,
+        target: native::TargetSpec::x86_64_unknown_linux_gnu(),
+        validation: native::Validation::Ready,
+        launch: Default::default(),
+        run: None,
+        fuel: false,
+        evidence: None,
+    };
+    let executable = request_key(&request, NativePurpose::Build).unwrap();
+    let mut executable_weight = hirsel_engine::NativeMetadataWeight::default();
+    super::super::native_products::request_metadata(&mut executable_weight, &request);
+    request.output = crate::requests::NativeOutput::Objects {
+        roots: vec![path.clone()],
+    };
+    let objects = request_key(&request, NativePurpose::Build).unwrap();
+    assert_ne!(executable, objects);
+    let mut object_weight = hirsel_engine::NativeMetadataWeight::default();
+    super::super::native_products::request_metadata(&mut object_weight, &request);
+    assert!(object_weight.bytes() > executable_weight.bytes());
+    request.output = crate::requests::NativeOutput::Objects { roots: vec![other] };
+    assert_ne!(
+        objects,
+        request_key(&request, NativePurpose::Build).unwrap()
+    );
+    request.output = crate::requests::NativeOutput::Objects { roots: vec![path] };
+    request.optimization = Some(native::OptLevel::None);
+    assert_ne!(
+        objects,
         request_key(&request, NativePurpose::Build).unwrap()
     );
 }

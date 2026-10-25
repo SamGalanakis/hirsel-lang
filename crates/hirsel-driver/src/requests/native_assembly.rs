@@ -38,6 +38,7 @@ pub(super) struct NativeProofPlan {
 /// This module cannot reserve another process cap or enlarge a task frame.
 pub(super) struct NativeAssemblyPlan {
     pub native: NativePlan,
+    pub output: super::NativeOutput,
     pub proofs: Option<NativeProofPlan>,
     pub tasks: NativeAdmission,
     pub catalogue: MemoryReservation,
@@ -87,6 +88,7 @@ impl NativeAssembly {
             sources: sources.clone(),
         };
         let entry = inputs.entry.clone();
+        let request_output = plan.output.clone();
         let catalogue = program
             .engine
             .front_native_definition_queries(
@@ -103,14 +105,17 @@ impl NativeAssembly {
             .front_native_queries(
                 FrontNativePlan {
                     entry: inputs.entry,
-                    roots: plan
-                        .native
-                        .test_entries
-                        .iter()
-                        .map(|(path, _)| path.clone())
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
+                    roots: if let super::NativeOutput::Objects { roots } = &request_output {
+                        roots.clone()
+                    } else {
+                        plan.native
+                            .test_entries
+                            .iter()
+                            .map(|(path, _)| path.clone())
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .into_iter()
+                            .collect()
+                    },
                     run: inputs.run,
                     definitions: catalogue,
                 },
@@ -195,7 +200,7 @@ impl NativeAssembly {
         &self,
         request: NativeRequest,
         tools: Arc<native::Toolchain>,
-        platform: Arc<FrozenPlatform>,
+        platform: Option<Arc<FrozenPlatform>>,
     ) -> Result<NativeBuildReadiness, native::NativeError> {
         NativeBuildReadiness::new(self.bootstrap.clone(), request, tools, platform)
     }

@@ -127,6 +127,7 @@ pub enum CompileResult {
     Tir(Arc<TirExecution>),
     Native(Arc<NativeExecution>),
     Ownership(Arc<super::OwnershipExecution>),
+    NativeObjects(Arc<NativeObjectOutput>),
 }
 /// Materialize only already settled, checked execution products. These reads
 /// may decode an owned product but never run a compiler query, evaluate a
@@ -256,4 +257,13 @@ impl hirsel_engine::requests::OutputReadiness for CompilerReadiness {
     ) -> Result<Self::Output, Self::Error> {
         (self.materialize)(products)
     }
+}
+
+/// Settled object products. The retained owner holds the same admitted source
+/// and native producers; the store provides ordinary content, never authority.
+pub struct NativeObjectOutput {
+    pub products: Vec<hirsel_engine::runtime::ProductRef>,
+    pub instances: usize,
+    pub store: Arc<dyn hirsel_engine::store::ResultStore>,
+    pub(super) _owner: Arc<dyn Send + Sync>,
 }

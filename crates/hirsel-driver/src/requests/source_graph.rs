@@ -163,14 +163,28 @@ impl GraphProducts for SourceProducts {
                             if selected.is_none_or(|query| query.address != product.address) {
                                 return Err(uninstalled());
                             }
-                            match native
-                                .as_ref()
-                                .ok_or_else(uninstalled)?
-                                .readiness
-                                .materialize(*product)
+                            if let CompileOperation::NativeBuild(request) = &operation
+                                && matches!(request.output, super::NativeOutput::Objects { .. })
                             {
-                                Ok(execution) => CompileResult::Native(execution),
-                                Err(error) => CompileResult::NativeError(error),
+                                match native
+                                    .as_ref()
+                                    .ok_or_else(uninstalled)?
+                                    .readiness
+                                    .objects(*product)
+                                {
+                                    Ok(objects) => CompileResult::NativeObjects(objects),
+                                    Err(error) => CompileResult::NativeError(error),
+                                }
+                            } else {
+                                match native
+                                    .as_ref()
+                                    .ok_or_else(uninstalled)?
+                                    .readiness
+                                    .materialize(*product)
+                                {
+                                    Ok(execution) => CompileResult::Native(execution),
+                                    Err(error) => CompileResult::NativeError(error),
+                                }
                             }
                         }
                         CompileOperation::SafeCheck => {

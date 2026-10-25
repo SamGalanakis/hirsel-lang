@@ -23,15 +23,16 @@ pub(super) struct NativeBuildReadiness {
     request: NativeRequest,
     store: Arc<dyn ResultStore>,
     toolchain: Arc<native::Toolchain>,
-    platform: Arc<super::native_link::FrozenPlatform>,
+    platform: Option<Arc<super::native_link::FrozenPlatform>>,
     completed: Mutex<Option<Arc<NativeExecution>>>,
+    objects: Mutex<Option<Arc<super::NativeObjectOutput>>>,
 }
 impl NativeBuildReadiness {
     pub fn new(
         bootstrap: Arc<NativeBootstrap>,
         request: NativeRequest,
         toolchain: Arc<native::Toolchain>,
-        platform: Arc<super::native_link::FrozenPlatform>,
+        platform: Option<Arc<super::native_link::FrozenPlatform>>,
     ) -> Result<Self, NativeError> {
         let store = bootstrap.selected_store();
         Ok(Self {
@@ -41,10 +42,66 @@ impl NativeBuildReadiness {
             toolchain,
             platform,
             completed: Mutex::new(None),
+            objects: Mutex::new(None),
         })
     }
+    pub fn objects(
+        &self,
+        selected: ProductRef,
+    ) -> Result<Arc<super::NativeObjectOutput>, NativeError> {
+        let failed = |message| NativeError::new(StageName::Emission, message);
+        if !matches!(self.request.output, super::NativeOutput::Objects { .. }) {
+            return Err(failed("native request did not select object output".into()));
+        }
+        let (compilation, product, source) = self.bootstrap.outcome(selected).map_err(failed)?;
+        let mut completed = self
+            .objects
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let products = compilation.outputs(product).map_err(failed)?.to_vec();
+        for selected in &products {
+            let fragment =
+                object_queries::fragment_product(self.store.as_ref(), *selected).map_err(failed)?;
+            // Reopen the actual completed backend bytes, with the ordinary
+            // fragment/object/domain checks. No output is treated as a Link.
+            object_queries::load_object(self.store.as_ref(), fragment.object).map_err(failed)?;
+        }
+        if let Some(output) = completed.as_ref() {
+            return Ok(output.clone());
+        }
+        let instances = compilation.emitted_instances(product).map_err(failed)?;
+        let mut weight = hirsel_engine::NativeMetadataWeight::default();
+        weight.add(
+            std::mem::size_of::<super::NativeObjectOutput>() + 6 * std::mem::size_of::<usize>(),
+        );
+        weight.flat_vec(&products);
+        weight.add(std::mem::size_of::<Self>());
+        request_metadata(&mut weight, &self.request);
+        let allowance = self
+            .bootstrap
+            .reserve_output(weight.bytes())
+            .map_err(failed)?;
+        let output = Arc::new(super::NativeObjectOutput {
+            products,
+            instances,
+            store: self.store.clone(),
+            _owner: Arc::new((allowance, self.bootstrap.clone(), compilation, source)),
+        });
+        *completed = Some(output.clone());
+        Ok(output)
+    }
     pub fn materialize(&self, selected: ProductRef) -> Result<Arc<NativeExecution>, NativeError> {
+        if !matches!(self.request.output, super::NativeOutput::Executable) {
+            return Err(NativeError::new(
+                StageName::Link,
+                "object output is not executable",
+            ));
+        }
         let failed = |message| NativeError::new(StageName::Link, message);
+        let platform = self
+            .platform
+            .as_ref()
+            .ok_or_else(|| failed("native executable has no platform".into()))?;
         let (compilation, product, source) = self.bootstrap.outcome(selected).map_err(failed)?;
         let mut completed = self
             .completed
@@ -59,7 +116,7 @@ impl NativeBuildReadiness {
                 &execution.executable,
             )
             .map_err(failed)?;
-            self.platform
+            platform
                 .validate_image(&execution.executable)
                 .map_err(failed)?;
             return Ok(execution.clone());
@@ -103,7 +160,7 @@ impl NativeBuildReadiness {
             object_queries::linked_product(self.store.as_ref(), *linked).map_err(failed)?;
         object_queries::materialize_executable(self.store.as_ref(), &artifact, &executable)
             .map_err(failed)?;
-        self.platform.validate_image(&executable).map_err(failed)?;
+        platform.validate_image(&executable).map_err(failed)?;
         let mut copied = hirsel_engine::NativeMetadataWeight::default();
         // Inline Arc/header storage plus actual backing capacities. Signatures,
         // types and source text remain shared with the retained producer owner.
@@ -138,12 +195,12 @@ impl NativeBuildReadiness {
             _bootstrap: self.bootstrap.clone(),
             _compilation: compilation.clone(),
             _source: source.clone(),
-            _platform: self.platform.clone(),
+            _platform: platform.clone(),
         });
         let execution = Arc::new(NativeExecution {
             executable,
             product: *linked,
-            platform: self.platform.clone(),
+            platform: platform.clone(),
             store: self.store.clone(),
             observation,
             report,
@@ -200,6 +257,9 @@ pub(super) fn request_metadata(
 ) {
     if let Some(path) = &request.definition {
         weight.path(path);
+    }
+    if let super::NativeOutput::Objects { roots } = &request.output {
+        weight.vec(roots, |weight, path| weight.path(path));
     }
     weight.vec(&request.test_entries, |weight, (path, _)| weight.path(path));
     weight.vec(&request.supplemental_sources, |weight, source| {

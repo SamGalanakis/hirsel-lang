@@ -85,8 +85,8 @@ pub(super) struct NativeSelection {
     entry: DefPath,
     tools: Arc<native::Toolchain>,
     links: Vec<LinkInput>,
-    policy: NativePlatformPolicy,
-    platform: Arc<super::native_link::FrozenPlatform>,
+    policy: Option<NativePlatformPolicy>,
+    platform: Option<Arc<super::native_link::FrozenPlatform>>,
     validation: Arc<MemoryReservation>,
     store: Arc<dyn ResultStore>,
     limits: object_queries::capture::CaptureLimits,
@@ -113,7 +113,12 @@ impl NativeSelection {
                 failed("native snapshot partition exceeds its original admission".into())
             })
         };
-        let policy = NativePlatformPolicy::capture().map_err(native_error)?;
+        let policy = match request.output {
+            super::NativeOutput::Executable => {
+                Some(NativePlatformPolicy::capture().map_err(native_error)?)
+            }
+            super::NativeOutput::Objects { .. } => None,
+        };
         let entry = source.entry.clone();
         let links = program.engine.foreign_links.clone();
         let limits = object_queries::capture::CaptureLimits {
@@ -130,9 +135,11 @@ impl NativeSelection {
         copied.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
         super::native_products::request_metadata(&mut copied, &request);
         copied.path(&entry);
-        copied.add(policy.linker.capacity());
-        copied.add(policy.auditors.capacity());
-        copied.add(policy.floor.capacity());
+        if let Some(policy) = &policy {
+            copied.add(policy.linker.capacity());
+            copied.add(policy.auditors.capacity());
+            copied.add(policy.floor.capacity());
+        }
         copied.vec(&links, |w, input| match input {
             LinkInput::Library(name) => w.add(name.capacity()),
             LinkInput::File(path) => w.add(path.capacity()),
@@ -152,7 +159,7 @@ impl NativeSelection {
                 entry: &entry,
                 tools: &tools,
                 links: &links,
-                policy: &policy,
+                policy: policy.as_ref(),
             },
             limits,
             runtime_limits,
@@ -173,6 +180,7 @@ impl NativeSelection {
             NativeAssemblyPlan {
                 proofs,
                 native: plan,
+                output: request.output.clone(),
                 tasks: NativeAdmission {
                     instances: split(footprint.tasks)?,
                     arena: split(footprint.tasks)?,
@@ -234,13 +242,16 @@ impl NativeSelection {
                 entry: &self.entry,
                 tools: &self.tools,
                 links: &self.links,
-                policy: &self.policy,
+                policy: self.policy.as_ref(),
             },
             self.limits,
             self.runtime_limits,
             self.validation.clone(),
         )
-        .is_ok_and(|selected| selected.platform.identity() == self.platform.identity())
+        .is_ok_and(|selected| {
+            selected.platform.as_ref().map(|p| p.identity())
+                == self.platform.as_ref().map(|p| p.identity())
+        })
     }
     pub fn query(&self) -> QueryId {
         self.assembly.query()
@@ -254,6 +265,7 @@ fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<Conten
         &request.definition,
         &request.test_entries,
         &request.supplemental_sources,
+        &request.output,
         request.backend.name(),
         super::native_platform::profile_options(request, purpose).map_err(native_error)?,
         request.target.digest(),
