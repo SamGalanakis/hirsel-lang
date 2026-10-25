@@ -240,3 +240,4 @@ mod runtime54_bounded_callback;
 mod native_plan_controls_19;
 mod library_finalizer_discovery_19;
 mod runtime55_exclusive_slot;
+mod source_index_loader;

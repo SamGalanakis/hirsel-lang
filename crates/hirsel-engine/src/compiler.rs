@@ -263,6 +263,26 @@ impl Compiler {
             },
         )
     }
+    /// Load a fresh immutable request using admitted source/header indexes from
+    /// a prior request. Body products and controllers are never restored.
+    pub fn load_check_package_inputs_with_source_index(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+        source_index: crate::SourceIndexState,
+    ) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_inputs_with_source_index(
+            self,
+            path,
+            inputs,
+            crate::package::Loading {
+                replacement: None,
+                entry_selection: crate::package::EntrySelection::Check,
+                parse_sources: true,
+            },
+            Some(source_index),
+        )
+    }
     /// Load an explicit test package without requiring a launch entry. The root
     /// package's sources are checked in full; no function is selected as main.
     pub fn load_test_package(&self, manifest: &Path) -> Result<LoadedProgram, ToolError> {

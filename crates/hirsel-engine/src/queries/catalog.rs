@@ -417,26 +417,51 @@ impl QueryEngine {
             .map(|syntax| (syntax.owner(), LexicalShape::capture(&syntax)))
             .or_else(|| self.catalog.lexical(path))
     }
+    pub(crate) fn retained_source_syntax(&self, file: FileId) -> Vec<&Arc<ItemSyntax>> {
+        if !self.indexed_sources.contains_key(&file) {
+            return vec![];
+        }
+        let mut items: Vec<_> = self
+            .items
+            .values()
+            .flatten()
+            .filter(|syntax| {
+                let path = &syntax.item.definition;
+                self.sources
+                    .anchor(syntax.anchor)
+                    .is_some_and(|(owner, _)| owner == file)
+                    && hirsel_check_protocol::fact::fact_owner(path).is_none()
+                    && !path.0.name.starts_with("$dictionary$")
+                    && !crate::families::derived(path)
+            })
+            .collect();
+        items.sort_by_key(|syntax| self.sources.anchor(syntax.anchor).unwrap().1);
+        items
+    }
     pub(crate) fn source_items(&self, file: FileId) -> Vec<SourceItem> {
         if let Some(items) = self.catalog.source_items(file) {
             return items;
         }
-        self.parsed
-            .get(&file)
-            .and_then(|(_, _, result)| result.as_ref().ok())
-            .map(|parsed| {
-                parsed
-                    .value
-                    .items
-                    .iter()
-                    .map(|syntax| SourceItem {
-                        definition: syntax.item.definition.clone(),
-                        anchor: syntax.anchor,
-                        facts: self.catalog.syntax_facts(syntax),
-                    })
-                    .collect()
+        if let Some((_, _, Ok(parsed))) = self.parsed.get(&file) {
+            return parsed
+                .value
+                .items
+                .iter()
+                .map(|syntax| SourceItem {
+                    definition: syntax.item.definition.clone(),
+                    anchor: syntax.anchor,
+                    facts: self.catalog.syntax_facts(syntax),
+                })
+                .collect();
+        }
+        self.retained_source_syntax(file)
+            .into_iter()
+            .map(|syntax| SourceItem {
+                definition: syntax.item.definition.clone(),
+                anchor: syntax.anchor,
+                facts: self.catalog.syntax_facts(syntax),
             })
-            .unwrap_or_default()
+            .collect()
     }
     pub(crate) fn source_facts(&self, path: &DefPath) -> Option<SourceFacts> {
         self.items
@@ -489,6 +514,14 @@ impl QueryEngine {
     /// Index an immutable source's ordinary declaration heads. A hit restores
     /// names and anchors only. Explicit parse/body queries demand syntax later.
     pub fn index_source(&mut self, file: FileId, context: &FileContext) -> Result<(), QueryError> {
+        let environment = self.package_environment(&context.package);
+        if self
+            .indexed_sources
+            .get(&file)
+            .is_some_and(|(previous, inputs)| previous == context && inputs == &environment)
+        {
+            return Ok(());
+        }
         if self.catalog.files.get(&file) == Some(context) {
             return Ok(());
         }
@@ -524,6 +557,8 @@ impl QueryEngine {
             && let Some(record) = cached
         {
             self.adopt_heads(file, context, record.heads);
+            self.indexed_sources
+                .insert(file, (context.clone(), environment));
             return Ok(());
         }
         self.parse_file(file, context)?;
@@ -835,14 +870,11 @@ impl QueryEngine {
             candidates.retain(|candidate| candidate.file != file);
             !candidates.is_empty()
         });
-        self.parsed.insert(
-            file,
-            (
-                context.clone(),
-                self.package_environment(&context.package),
-                Ok(output),
-            ),
-        );
+        let environment = self.package_environment(&context.package);
+        self.indexed_sources
+            .insert(file, (context.clone(), environment.clone()));
+        self.parsed
+            .insert(file, (context.clone(), environment, Ok(output)));
         Ok(())
     }
     pub(super) fn prepare_catalog_edit(&mut self, file: FileId) -> Result<(), QueryError> {

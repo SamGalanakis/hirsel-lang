@@ -502,6 +502,16 @@ pub(crate) fn load_program_inputs(
     inputs: &dyn crate::loader_inputs::LoaderInputs,
     loading: Loading<'_>,
 ) -> Result<LoadedProgram, ToolError> {
+    load_program_inputs_with_source_index(compiler, path, inputs, loading, None)
+}
+
+pub(crate) fn load_program_inputs_with_source_index(
+    compiler: &Compiler,
+    path: &Path,
+    inputs: &dyn crate::loader_inputs::LoaderInputs,
+    loading: Loading<'_>,
+    source_index: Option<crate::SourceIndexState>,
+) -> Result<LoadedProgram, ToolError> {
     let Loading {
         replacement,
         entry_selection,
@@ -630,33 +640,73 @@ pub(crate) fn load_program_inputs(
         .as_ref()
         .and_then(|store| store.local_product_store())
         .map(|store| store.request());
+    if let Some(source_index) = source_index {
+        source_index
+            .restore(&mut engine)
+            .map_err(|_| invalid("source index cannot restore into this compiler"))?;
+    }
     engine.comptime_limits = limits;
     engine.package_manifests = manifests;
+    let package_exposures: BTreeMap<_, _> = graph
+        .packages
+        .iter()
+        .map(|(id, p)| (id.clone(), p.exposures.clone()))
+        .collect();
+    let package_dependencies: BTreeMap<_, _> = graph
+        .packages
+        .iter()
+        .map(|(id, p)| (id.clone(), p.dependencies.clone()))
+        .collect();
+    let previous = engine.declarations.inputs();
+    if previous.package_exposures != package_exposures
+        || previous.package_dependencies != package_dependencies
+        || previous.signature_metadata.unsafe_ffi != unsafe_ffi_metadata
     {
         let inputs = engine.declarations.inputs_mut();
-        inputs.package_exposures = graph
-            .packages
-            .iter()
-            .map(|(id, p)| (id.clone(), p.exposures.clone()))
-            .collect();
-        inputs.package_dependencies = graph
-            .packages
-            .iter()
-            .map(|(id, p)| (id.clone(), p.dependencies.clone()))
-            .collect();
+        inputs.package_exposures = package_exposures;
+        inputs.package_dependencies = package_dependencies;
         inputs.signature_metadata.unsafe_ffi = unsafe_ffi_metadata;
     }
+    // Each path's latest immutable snapshot is the only candidate for reuse.
+    // ParsedSource values are absent after carry; their indexing contexts are
+    // retained independently instead of treating archived Catalog.files as all sources.
+    let mut previous: BTreeMap<PathBuf, (FileId, FileContext)> = engine
+        .indexed_sources
+        .iter()
+        .filter_map(|(file, (context, _))| {
+            Some((
+                engine.sources.file(*file)?.path.clone(),
+                (*file, context.clone()),
+            ))
+        })
+        .collect();
     let mut primary = None;
     let mut ids = Vec::new();
     for ((source, context), text) in files.iter().zip(texts) {
-        let file = engine
-            .sources
-            .add_logical(
-                source,
-                &graph.packages[&context.package].logical_sources[source],
-                text,
-            )
-            .ok_or(ToolError::SourceTooLarge)?;
+        let logical = &graph.packages[&context.package].logical_sources[source];
+        let file = match previous.remove(source) {
+            Some((file, old_context))
+                if old_context == *context
+                    && engine
+                        .sources
+                        .file(file)
+                        .is_some_and(|old| old.logical_path() == logical) =>
+            {
+                if engine.sources.file(file).unwrap().text() == text {
+                    file
+                } else {
+                    engine.indexed_sources.remove(&file);
+                    engine
+                        .sources
+                        .add_snapshot(file, text)
+                        .ok_or(ToolError::SourceTooLarge)?
+                }
+            }
+            _ => engine
+                .sources
+                .add_logical(source, logical, text)
+                .ok_or(ToolError::SourceTooLarge)?,
+        };
         if source == &primary_path {
             primary = Some(file);
         }
@@ -687,6 +737,22 @@ pub(crate) fn load_program_inputs(
             .collect(),
     };
     if parse_sources {
+        // Removed sources pass through the ordinary empty-source index diff:
+        // declaration heads and all typed subscribers retire before checking.
+        // Keep their old anchors alive only for detached outputs that own them.
+        for (_, (file, context)) in previous {
+            program.engine.indexed_sources.remove(&file);
+            let retired = program
+                .engine
+                .sources
+                .add_snapshot(file, String::new())
+                .ok_or(ToolError::SourceTooLarge)?;
+            program
+                .engine
+                .parse_file(retired, &context)
+                .map_err(|e| program.error(e))?;
+            program.engine.indexed_sources.remove(&retired);
+        }
         for (file, context) in &program.files {
             program
                 .engine
