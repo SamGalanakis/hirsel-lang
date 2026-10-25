@@ -44,7 +44,14 @@ impl ResultStore for Faults {
                 return None;
             }
         }
-        self.disk.put_content(domain, bytes)
+        let written = self.disk.put_content(domain, bytes);
+        if let Some(reference) = written {
+            self.hidden
+                .lock()
+                .unwrap()
+                .retain(|hidden| *hidden != reference);
+        }
+        written
     }
     fn lookup_product(&self, address: store::Address) -> Option<store::Association> {
         self.substituted
@@ -146,24 +153,27 @@ fn original_missing_corrupt_metadata_and_failed_publication_recompute_without_lo
         );
         assert_eq!(cold.objects, corrupt.objects);
         store.substituted.lock().unwrap().clear();
-        // Refuse every old fragment read and every replacement durable write.
-        // Request-local content still owns the actual produced output.
-        *store.hidden.lock().unwrap() = cold
-            .products
-            .iter()
-            .map(|(_, product)| product.record)
-            .collect();
-        store.drop_writes.store(true, Ordering::Relaxed);
-        let before = store.fragment_puts.load(Ordering::Relaxed);
-        let unpublished = compile(store.clone(), Verify::On);
-        assert!(store.fragment_puts.load(Ordering::Relaxed) > before);
+        // A fresh durable store refuses every fragment publication. The
+        // bounded request transport still owns each actual produced output.
+        let denied = Arc::new(Faults {
+            disk: store::DirStore::new(directory.path().join("denied")),
+            hidden: Mutex::new(vec![]),
+            substituted: Mutex::new(vec![]),
+            drop_writes: AtomicBool::new(true),
+            fragment_puts: AtomicUsize::new(0),
+        });
+        let unpublished = compile(denied.clone(), Verify::On);
+        assert!(denied.fragment_puts.load(Ordering::Relaxed) > 0);
         assert_eq!(cold.objects, unpublished.objects);
-        for (key, _) in &cold.products {
-            assert!(store.lookup_product(key.address()).is_some());
+        for (key, _) in &unpublished.products {
+            assert!(
+                denied.lookup_product(key.address()).is_none(),
+                "failed durable write published an association"
+            );
         }
         // Verification off still uses independent native C, never an object
         // byte association as source or native validation authority.
-        let unverified = compile(store.clone(), Verify::Off);
+        let unverified = compile(denied.clone(), Verify::Off);
         assert_eq!(cold.objects, unverified.objects);
     });
 }
