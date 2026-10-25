@@ -222,10 +222,17 @@ impl LogOut<'_> {
 
 impl Head {
     /// Append the log's bytes `from..to` to `out`; `inline` is the tail's inline storage.
-    fn read(&self, inline: &[u8; INLINE], mut from: usize, to: usize, out: &mut Vec<u8>) {
+    fn read(&self, inline: &[u8; INLINE], from: usize, to: usize, out: &mut Vec<u8>) {
+        self.slices(inline, from, to, |bytes| out.extend_from_slice(bytes));
+    }
+    /// Each stored run of the log's bytes `from..to`, in order: the inline prefix, then
+    /// segment by segment.
+    fn slices(&self, inline: &[u8; INLINE], mut from: usize, to: usize, mut f: impl FnMut(&[u8])) {
         if from < INLINE {
             let n = to.min(INLINE) - from;
-            out.extend_from_slice(&inline[from..from + n]);
+            if n != 0 {
+                f(&inline[from..from + n]);
+            }
             from += n;
         }
         let mut segment = self.first.as_deref();
@@ -239,7 +246,7 @@ impl Head {
             }
             let at = from - base;
             let n = (to - from).min(SEGMENT - at);
-            out.extend_from_slice(&current.bytes[at..at + n]);
+            f(&current.bytes[at..at + n]);
             from += n;
         }
     }
@@ -610,10 +617,105 @@ impl Cut<'_> {
     /// Every task any scan has seen, with its progress now: a terminal cut's progress list.
     /// Call it after [`scan`](Self::scan).
     pub fn progress(&self) -> Vec<(Vec<u32>, Progress)> {
-        self.known
+        progress(&self.known)
+    }
+
+    /// A stop's whole cut in one pass, instead of [`scan`](Self::scan) then
+    /// [`progress`](Self::progress): every task, in path order, with its progress and a view of
+    /// the log bytes it appended since the previous scan. Nothing is copied; the views borrow
+    /// the logs while the gate stays closed.
+    pub fn terminal(&mut self) -> Vec<Closed<'_>> {
+        assert!(self.stop, "only a stop's cut is terminal");
+        for slot in self.gate.slots.iter() {
+            // SAFETY: as in `scan`.
+            let mut next = unsafe { slot.dirty.with_mut(Option::take) };
+            while let Some(task) = next {
+                // SAFETY: as above.
+                let seen = unsafe {
+                    next = task.next_dirty.with_mut(Option::take);
+                    task.dirty.with_mut(|dirty| *dirty = false);
+                    task.scanned.with(|scanned| scanned.1)
+                };
+                if !seen {
+                    self.known.push(task);
+                }
+            }
+        }
+        // A log grows only in a section that marks its task, so an unmarked task's range is
+        // empty and every task reads the same way.
+        let mut closed: Vec<_> = self
+            .known
             .iter()
-            .map(|task| (task.path().to_vec(), task.progress()))
-            .collect()
+            .map(|task| {
+                // SAFETY: as in `scan`; the gate stays closed for good, so no scan follows and
+                // the scan position is left as it is.
+                let (from, to) = unsafe {
+                    (
+                        task.scanned.with(|scanned| scanned.0),
+                        task.tail.with(|tail| tail.len),
+                    )
+                };
+                Closed {
+                    task,
+                    progress: task.progress(),
+                    from,
+                    to,
+                }
+            })
+            .collect();
+        closed.sort_unstable_by(|a, b| a.task.path().cmp(b.task.path()));
+        closed
+    }
+}
+
+fn progress(known: &[Arc<TaskLog>]) -> Vec<(Vec<u32>, Progress)> {
+    known
+        .iter()
+        .map(|task| (task.path().to_vec(), task.progress()))
+        .collect()
+}
+
+/// One task of a terminal cut: its progress and the log bytes since the previous scan, read
+/// in place.
+pub struct Closed<'c> {
+    task: &'c TaskLog,
+    pub progress: Progress,
+    from: usize,
+    to: usize,
+}
+
+impl Closed<'_> {
+    pub fn path(&self) -> &[u32] {
+        self.task.path()
+    }
+    /// The number of new log bytes.
+    pub fn len(&self) -> usize {
+        self.to - self.from
+    }
+    pub fn is_empty(&self) -> bool {
+        self.to == self.from
+    }
+    /// The new log bytes, one stored run at a time.
+    pub fn slices(&self, f: impl FnMut(&[u8])) {
+        // SAFETY: a `Closed` borrows its stop's cut, so no section is open or opens again.
+        unsafe {
+            self.task.tail.with(|tail| {
+                self.task
+                    .head
+                    .with(|head| head.slices(&tail.inline, self.from, self.to, f))
+            });
+        }
+    }
+}
+
+impl Gate {
+    /// The terminal cut's progress, in the order the scans first saw each task; `None` before
+    /// the run stopped. A stop leaves every log and progress as its cut read them.
+    pub fn terminal_progress(&self) -> Option<Vec<(Vec<u32>, Progress)>> {
+        if !self.stopped() {
+            return None;
+        }
+        Some(progress(&self.role.lock().unwrap()))
     }
 }
 

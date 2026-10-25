@@ -446,3 +446,159 @@ fn a_rejected_entry_prefix_leaves_no_progress_record_or_open_gate_slot() {
     replay.publish(&[], done(1)).unwrap();
     replay.finish(&cut.progress).unwrap();
 }
+
+/// The frame starts of a tape's chunks after its header.
+fn frames(bytes: &[u8]) -> Vec<usize> {
+    let mut at = tape::MAGIC.len();
+    let mut starts = Vec::new();
+    while at < bytes.len() {
+        starts.push(at);
+        at += 8 + u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    }
+    starts.remove(0);
+    starts
+}
+
+/// rr `block_clone_syscallbuf_overflow.c`: buffers of counted words, here observation payloads
+/// that straddle 4 KiB log segments, read back from a flushed prefix. The terminal cut encodes
+/// them in place in path order (not first-seen order), the same bytes with an observer as
+/// without, and the bytes an owned chunk list encodes. Truncating or damaging the result keeps
+/// its verdicts: a torn stop chunk admits the flush's cut, damage before it refuses.
+#[test]
+fn terminal_cuts_encode_multi_segment_logs_in_place_observed_or_not() {
+    const WORDS: usize = 300;
+    const BUFS: u64 = 10;
+    const FLUSHED: u64 = 4;
+    let bound = RecordBound::records(1).payload(WORDS * 4);
+    let buffer = |path: &[u32], at: u64| -> Vec<u8> {
+        let base = (path.iter().fold(1u32, |h, &s| h * 31 + s) << 16) + at as u32 * WORDS as u32;
+        (0..WORDS as u32)
+            .flat_map(|word| (base + word).to_le_bytes())
+            .collect()
+    };
+    let record = |observed: bool| {
+        let mut recorder =
+            Recorder::<Vec<u8>>::new(Vec::new(), b"overflow", 1, false, false, None).unwrap();
+        if observed {
+            recorder.observe(Arc::new(hirsel_free::concurrent::Observer::default()));
+        }
+        let mut worker = recorder.executor(0).unwrap();
+        let mut root = recorder.root(&mut worker).unwrap();
+        let mut prepared = root.prepare_children(2);
+        // Room for the children, and the task list's later entries, before the section.
+        let mut tasks = Vec::with_capacity(4);
+        recorder
+            .phase(&mut worker, &mut root, done(1), PHASE, |writer| {
+                for child in prepared.drain(..) {
+                    tasks.push(writer.spawn_prepared(child));
+                }
+            })
+            .unwrap();
+        // [1] is seen before [0, 0], which sorts first.
+        recorder.flush().unwrap().unwrap();
+        let grandchild = tasks[0].prepare_child();
+        let grandchild = recorder
+            .phase(&mut worker, &mut tasks[0], done(1), PHASE, |writer| {
+                writer.spawn_prepared(grandchild)
+            })
+            .unwrap();
+        tasks.push(grandchild);
+        tasks.push(root);
+        let mut flushed = None;
+        for at in 0..BUFS {
+            if at == FLUSHED {
+                flushed = Some(recorder.flush().unwrap().unwrap().progress);
+            }
+            for task in &mut tasks {
+                // Sections allocate nothing: the buffer exists first.
+                let words = buffer(task.path(), at);
+                let op = task.progress().op + 1;
+                recorder
+                    .phase(&mut worker, task, done(op), bound, |writer| {
+                        writer.observation(&words)
+                    })
+                    .unwrap();
+            }
+        }
+        let stopped = recorder.stop("returned", Some(&[1])).unwrap().unwrap().0;
+        assert_eq!(recorder.terminal_cut().unwrap().progress, stopped.progress);
+        assert_eq!(recorder.projection().is_some(), observed);
+        drop(worker);
+        (recorder.into_sink(), flushed.unwrap(), stopped.progress)
+    };
+    let (bytes, flushed, terminal) = record(false);
+    let (observed, ..) = record(true);
+    assert_eq!(observed, bytes, "an observer changes no tape byte");
+
+    let whole = tape::parse(&bytes).unwrap();
+    assert_eq!(whole.cut, terminal);
+    assert_eq!(whole.cut.len(), 4);
+    let starts = frames(&bytes);
+    let stop = *starts.last().unwrap();
+    let prefix = tape::parse(&bytes[..stop]).unwrap();
+    assert!(prefix.end.is_none() && !prefix.torn);
+    assert_eq!(prefix.cut, flushed);
+    for (path, log) in &whole.logs {
+        assert!(
+            log.len() > 2 * hirsel_free::section::SEGMENT,
+            "{path:?} spans segments"
+        );
+        // Every buffer, whole and in order, the flushed ones in the prefix.
+        let mut at = 0;
+        for n in 0..BUFS {
+            let words = buffer(path, n);
+            let found = log[at..]
+                .windows(words.len())
+                .position(|window| window == words)
+                .unwrap_or_else(|| panic!("{path:?} buffer {n}"));
+            at += found + words.len();
+            if n + 1 == FLUSHED {
+                assert!(at <= prefix.logs[path].len());
+            }
+        }
+    }
+    // The in-place stop chunk is the owned encoding of the same cut, in path order.
+    let owned: Vec<_> = whole
+        .cut
+        .iter()
+        .map(|(path, progress)| tape::TaskChunk {
+            path: path.clone(),
+            progress: *progress,
+            bytes: whole.logs[path][prefix.logs.get(path).map_or(0, Vec::len)..].to_vec(),
+        })
+        .collect();
+    let end = whole.end.clone().unwrap();
+    assert_eq!(end.task, Some(vec![1]));
+    assert_eq!(&bytes[stop..], tape::stop(&[], &owned, &end));
+
+    let torn_at = (stop..bytes.len()).filter(|at| {
+        let into = at - stop;
+        into < 16 || bytes.len() - at < 16 || into.is_multiple_of(97)
+    });
+    for at in torn_at {
+        let torn = tape::parse(&bytes[..at]).unwrap();
+        assert_eq!(torn.torn, at != stop, "cut at {at}");
+        assert!(torn.end.is_none());
+        assert_eq!(torn.cut, flushed);
+        assert_eq!(torn.logs, prefix.logs);
+    }
+    let flush = starts[starts.len() - 2];
+    for at in (flush..stop).step_by(61).chain([flush + 4, stop - 1]) {
+        let mut damaged = bytes.clone();
+        damaged[at] ^= 0x20;
+        assert!(
+            tape::parse(&damaged).is_err(),
+            "damage at {at} before the stop"
+        );
+    }
+    for at in (stop..bytes.len()).step_by(61).chain([bytes.len() - 1]) {
+        let mut damaged = bytes.clone();
+        damaged[at] ^= 0x20;
+        let tape = tape::parse(&damaged).unwrap();
+        assert!(
+            tape.torn && tape.end.is_none(),
+            "damage at {at} in the stop"
+        );
+        assert_eq!(tape.cut, flushed);
+    }
+}

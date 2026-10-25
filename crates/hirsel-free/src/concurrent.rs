@@ -240,8 +240,8 @@ struct Output<S> {
     sink: S,
     named: usize,
     watermark: BTreeMap<Vec<u32>, Progress>,
-    /// The terminal outcome and cut, once stopped.
-    terminal: Option<(String, BTreeMap<Vec<u32>, Progress>)>,
+    /// The terminal outcome, once its stop chunk is durable. The cut stays in the stopped gate.
+    terminal: Option<String>,
 }
 
 /// A recorder's cut and the sink offset/flush policy belong to the caller. The
@@ -626,30 +626,35 @@ impl<S: TapeSink, B> Recorder<S, B> {
         self.stop_with(|_| outcome.into(), task)
     }
 
-    /// Build the terminal payload from the request sweep while the terminal
-    /// gate is closed. The sink observes the cut, receipt and cause atomically.
+    /// [`end_with`](Self::end_with), returning the terminal cut too.
     pub fn stop_with(
         &self,
         outcome: impl FnOnce(&Sweep) -> String,
         task: Option<&[u32]>,
     ) -> io::Result<Option<(Cut, Sweep)>> {
+        let Some(sweep) = self.end_with(outcome, task)? else {
+            return Ok(None);
+        };
+        let cut = self.terminal_cut().expect("a written stop has its cut");
+        Ok(Some((cut, sweep)))
+    }
+
+    /// Build the terminal payload from the request sweep while the terminal
+    /// gate is closed. The sink observes the cut, receipt and cause atomically.
+    /// The stop chunk is encoded from the closed logs in place; the cut is
+    /// materialized only on request ([`terminal_cut`](Self::terminal_cut)).
+    pub fn end_with(
+        &self,
+        outcome: impl FnOnce(&Sweep) -> String,
+        task: Option<&[u32]>,
+    ) -> io::Result<Option<Sweep>> {
         let Some(terminal) = self.arbiter.stop(0, &[&self.requests]) else {
             return Ok(None);
         };
         // No section opens again: an executor waiting to register starts unregistered.
         self.executors.wake();
         let mut cut = terminal.cut.unwrap();
-        let mut scanned: BTreeMap<_, _> =
-            cut.scan().into_iter().map(|s| (s.path, s.bytes)).collect();
-        let progress: BTreeMap<_, _> = cut.progress().into_iter().collect();
-        let tasks: Vec<_> = progress
-            .iter()
-            .map(|(path, progress)| TaskChunk {
-                path: path.clone(),
-                progress: *progress,
-                bytes: scanned.remove(path).unwrap_or_default(),
-            })
-            .collect();
+        let tasks = cut.terminal();
         let mut output = self.output.lock().unwrap();
         let keys = self.keys.lock().unwrap();
         let end = End {
@@ -660,23 +665,38 @@ impl<S: TapeSink, B> Recorder<S, B> {
         output.sink.append(&bytes)?;
         output.sink.barrier()?;
         output.named = keys.len();
+        // The gate is stopped and its cutter role free before the outcome is published,
+        // so a reader of the outcome finds the terminal progress.
+        drop(tasks);
+        drop(cut);
         // Terminal output owns this assignment. A concurrent reporter cannot
-        // observe a terminal frame without its corresponding live cut.
-        output.terminal = Some((end.outcome, progress.clone()));
-        Ok(Some((
-            Cut {
-                progress,
-                terminal: true,
-            },
-            terminal.sweep,
-        )))
+        // observe a terminal frame before its stop chunk is written.
+        output.terminal = Some(end.outcome);
+        Ok(Some(terminal.sweep))
+    }
+
+    /// The terminal cut, once its stop chunk is written.
+    pub fn terminal_cut(&self) -> Option<Cut> {
+        self.output.lock().unwrap().terminal.as_ref()?;
+        Some(Cut {
+            progress: self.terminal_progress(),
+            terminal: true,
+        })
+    }
+
+    /// Called only after the stop chunk is written; the output lock is not held, keeping
+    /// cutter order gate then output.
+    fn terminal_progress(&self) -> BTreeMap<Vec<u32>, Progress> {
+        let gate = self.arbiter.gate().unwrap();
+        let progress = gate.terminal_progress().expect("the run stopped");
+        progress.into_iter().collect()
     }
 
     /// The observer's projection of the terminal cut, once stopped.
     pub fn projection(&self) -> Option<Projection> {
-        let (outcome, cut) = self.output.lock().unwrap().terminal.clone()?;
         let observer = self.observer.as_ref()?;
-        Some(observer.projection(&outcome, &cut))
+        let outcome = self.output.lock().unwrap().terminal.clone()?;
+        Some(observer.projection(&outcome, &self.terminal_progress()))
     }
 
     pub fn into_sink(self) -> S {

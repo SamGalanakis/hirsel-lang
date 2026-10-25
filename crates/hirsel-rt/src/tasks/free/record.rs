@@ -184,7 +184,7 @@ impl hirsel_free::recorder::TapeSink for Sink {
 /// It never needs the scheduler role, a saved stack, or the home adapter.
 pub(crate) struct Terminal {
     recording: Arc<Recording>,
-    receipt: Mutex<Option<(hirsel_free::concurrent::Cut, hirsel_free::claim::Sweep)>>,
+    receipt: Mutex<Option<hirsel_free::claim::Sweep>>,
 }
 
 impl Terminal {
@@ -212,7 +212,7 @@ impl crate::stop::Terminal for Terminal {
         let mut bytes = Vec::new();
         cause.encode(&mut bytes);
         let outcome = format!("native-stop-v1/{}", hirsel_run_schema::hex(&bytes));
-        let receipt = self.recording.recorder.stop_with(
+        let receipt = self.recording.recorder.end_with(
             |sweep| {
                 if self.recording.production {
                     match observed {

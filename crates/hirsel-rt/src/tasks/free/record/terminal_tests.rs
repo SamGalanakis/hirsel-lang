@@ -100,7 +100,8 @@ fn embedding_stop_cuts_native_requests_before_publishing_the_run_outcome() {
                     std::thread::yield_now();
                 }
                 assert_eq!(issued.load(Ordering::Acquire), point >= 2);
-                let (cut, sweep) = terminal.receipt.lock().unwrap().take().unwrap();
+                let sweep = terminal.receipt.lock().unwrap().take().unwrap();
+                let cut = recording.recorder.terminal_cut().unwrap();
                 assert_eq!(
                     sweep,
                     Sweep {

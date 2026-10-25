@@ -129,7 +129,7 @@ impl Session {
         if let Self::Recording { recorder, .. } = self {
             recorder
                 .recorder
-                .stop_with(
+                .end_with(
                     |sweep| terminal_bytes("native-outcome-v2", outcome, sweep),
                     None,
                 )
