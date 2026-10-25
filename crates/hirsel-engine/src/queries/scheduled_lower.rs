@@ -4,6 +4,7 @@
 use super::*;
 mod dependencies;
 mod evidence;
+mod values;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
@@ -19,6 +20,7 @@ use std::{
     sync::Mutex,
     task::{Context, Poll, Waker},
 };
+use values::{MaterializedPool, SharedMaterialized};
 
 pub const FRONT_LOWER_KIND: u32 = 0x4600_0003;
 pub const FRONT_EVALUATE_KIND: u32 = 0x4600_0004;
@@ -50,7 +52,10 @@ struct Input {
 #[derive(Clone)]
 enum Value {
     Lower(LowerProduct),
-    Constant(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>),
+    Constant(
+        SharedMaterialized,
+        Vec<(hirsel_syntax::ExprId, SharedMaterialized)>,
+    ),
 }
 #[derive(Clone)]
 struct LowerProduct {
@@ -60,7 +65,7 @@ struct LowerProduct {
     dependencies: Dependencies,
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
-    materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
+    materialized: Vec<(hirsel_syntax::ExprId, SharedMaterialized)>,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -99,17 +104,14 @@ impl Outcome {
                         .ok()?,
                 );
                 weight.add(lower.dependencies.retained_bytes());
-                weight.vec(&lower.materialized, |w, (_, value)| w.materialized(value));
+                weight.flat_vec(&lower.materialized);
                 if let Some(verified) = &lower.verified {
                     weight.add(verified.retained_bytes()?.try_into().ok()?);
                 }
                 // AcceptedArtifact and every other inline field belong to
                 // the typed B-tree row, charged by outcome_table_bytes.
             }
-            Ok(Value::Constant(value, substitutions)) => {
-                weight.materialized(value);
-                weight.vec(substitutions, |w, (_, value)| w.materialized(value));
-            }
+            Ok(Value::Constant(_, substitutions)) => weight.flat_vec(substitutions),
             Err(error) => weight.add(
                 crate::memo::retained::retained_query_error_bytes(error)
                     .try_into()
@@ -177,6 +179,7 @@ pub struct FrontLowerQueries {
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome, u64)>>,
     work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
+    materialized: Mutex<MaterializedPool>,
     weight: MemoryWeight,
     max_reads: usize,
     errors: RuntimeErrors,
@@ -187,12 +190,15 @@ impl FrontLowerQueries {
     /// Compact potential dependency inventory; no Lower/Evaluate output or
     /// maximum continuation is reserved until that query is actually demanded.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions.iter().try_fold(0u64, |total, path| {
-            let path_bytes = bincode::serialized_size(path).ok()?;
-            total.checked_add(path_bytes.checked_add(
-                (std::mem::size_of::<(DefPath, Input)>() + 6 * std::mem::size_of::<usize>()) as u64,
-            )?)
-        })
+        definitions
+            .iter()
+            .try_fold(size_of::<MaterializedPool>() as u64, |total, path| {
+                let path_bytes = bincode::serialized_size(path).ok()?;
+                total.checked_add(path_bytes.checked_add(
+                    (std::mem::size_of::<(DefPath, Input)>() + 6 * std::mem::size_of::<usize>())
+                        as u64,
+                )?)
+            })
     }
     /// One completed descriptor plus its independently stored ordinary body,
     /// materialized value, reads/depth and opaque acceptance metadata.
@@ -305,7 +311,7 @@ impl FrontLowerQueries {
             .cloned()
             .ok_or(QueryError::NotImplemented)?;
         match selected.1.result? {
-            Value::Constant(value, _) => Ok(Arc::new(value)),
+            Value::Constant(value, _) => Ok(Arc::new(value.owned())),
             _ => Err(QueryError::NotImplemented),
         }
     }
@@ -412,7 +418,7 @@ impl FrontLowerQueries {
             implementation_revision: input.implementation,
             signature,
             verified: lower.verified,
-            materialized: lower.materialized,
+            materialized: values::expand(&lower.materialized),
             owner: self.clone(),
         })
     }
@@ -562,7 +568,7 @@ impl FrontLowerQueries {
             cache.publish_execution(execution_subject, receipt);
         }
         let failed = result.is_err();
-        let outcome = Outcome {
+        let mut outcome = Outcome {
             result,
             reads: observed,
             depth,
@@ -570,8 +576,32 @@ impl FrontLowerQueries {
             execution,
             execution_subject,
         };
-        let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
+        // The pool owns every shared payload, including a payload retained
+        // before a later outcome-row refusal. No failed admission leaves an
+        // uncharged allocation. Public outputs expand independent values.
+        let mut pool = self.materialized.lock().unwrap_or_else(|e| e.into_inner());
+        let mut intern = |value: &mut SharedMaterialized| {
+            let bytes = self.records.encode(&self.anchors, &**value)?;
+            let key = ContentHash::of_bytes(&bytes);
+            pool.intern(key, value, &mut retention)
+        };
+        match &mut outcome.result {
+            Ok(Value::Lower(lower)) => {
+                for (_, value) in &mut lower.materialized {
+                    intern(value).ok_or(self.errors.resource)?;
+                }
+            }
+            Ok(Value::Constant(value, substitutions)) => {
+                intern(value).ok_or(self.errors.resource)?;
+                for (_, value) in substitutions {
+                    intern(value).ok_or(self.errors.resource)?;
+                }
+            }
+            Err(_) => (),
+        }
+        drop(pool);
+        let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let selected = (id.kind, id.address.0);
         let old = outcomes.get(&selected).map(|(_, _, charge)| *charge);
@@ -696,7 +726,13 @@ impl FrontLowerQueries {
             if is_dictionary && !constants.iter().any(|(id, _)| *id == expression) {
                 constants.push((expression, value.clone()));
             }
-            return Ok(Value::Constant(value, constants));
+            return Ok(Value::Constant(
+                value.into(),
+                constants
+                    .into_iter()
+                    .map(|(id, v)| (id, v.into()))
+                    .collect(),
+            ));
         }
         self.count(path, |work| work.lowerings += 1);
         let output = self.lowering.lower(
@@ -778,7 +814,10 @@ impl FrontLowerQueries {
             dependencies: dependencies.into(),
             verified,
             acceptance,
-            materialized: constants,
+            materialized: constants
+                .into_iter()
+                .map(|(id, v)| (id, v.into()))
+                .collect(),
         }))
     }
 }
@@ -913,7 +952,7 @@ impl Source {
         site: Span,
     ) -> Result<(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>), QueryError> {
         match self.value(path, FRONT_EVALUATE_KIND, site).await? {
-            Value::Constant(v, c) => Ok((v, c)),
+            Value::Constant(v, c) => Ok((v.owned(), values::expand(&c))),
             _ => Err(QueryError::NotImplemented),
         }
     }
@@ -1214,6 +1253,7 @@ impl QueryEngine {
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             work: Mutex::new(BTreeMap::new()),
+            materialized: Mutex::new(MaterializedPool::default()),
             weight,
             max_reads,
             errors,
@@ -1232,8 +1272,8 @@ mod retention_tests {
         bytes.push(1);
         let capacity = bytes.capacity();
         let substitutions = Vec::with_capacity(4);
-        let substitutions_bytes =
-            substitutions.capacity() * std::mem::size_of::<(hirsel_syntax::ExprId, Materialized)>();
+        let substitutions_bytes = substitutions.capacity()
+            * std::mem::size_of::<(hirsel_syntax::ExprId, SharedMaterialized)>();
         let outcome = Outcome {
             result: Ok(Value::Constant(
                 Materialized {
@@ -1241,7 +1281,8 @@ mod retention_tests {
                         ty: hirsel_types::TypeId::DANGLING,
                         kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Bytes(bytes)),
                     },
-                },
+                }
+                .into(),
                 substitutions,
             )),
             reads: Reads::from_vec(vec![(
@@ -1254,8 +1295,16 @@ mod retention_tests {
             execution: None,
             execution_subject: ContentHash::default(),
         };
-        let expected = capacity
-            + substitutions_bytes
+        let mut pool = MaterializedPool::default();
+        let initial = 1 << 20;
+        let mut available = initial;
+        let Value::Constant(mut value, _) = outcome.result.clone().unwrap() else {
+            unreachable!()
+        };
+        pool.intern(ContentHash::default(), &mut value, &mut available)
+            .unwrap();
+        assert!(initial - available >= capacity as u64 + crate::memo::retained_arc_bytes(&*value));
+        let expected = substitutions_bytes
             + std::mem::size_of::<(ReadKey, ContentHash)>()
             + std::mem::size_of_val(&*outcome.depth.first);
         assert_eq!(outcome.retained_bytes(), Some(expected as u64));
