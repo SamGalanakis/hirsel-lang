@@ -8,7 +8,7 @@ use super::{
     ready::{EMISSION_CONTEXT_DOMAIN, ReadyMiss, ReadyQueries},
     *,
 };
-use hirsel_engine::store::{Action, ResultStore};
+use hirsel_engine::store::{Action, ResultStore, VerifyStore};
 use hirsel_lir::{
     products::{Binding, LayoutClosure, UnitBody},
     stage::Value,
@@ -84,11 +84,13 @@ pub(super) fn read_statics(
 pub struct LocalReadyQueries {
     store: Arc<dyn ResultStore>,
     pub queries: ReadyQueries,
+    verify_store: VerifyStore,
 }
 impl LocalReadyQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
         Self {
             queries: ReadyQueries::new(store.clone()),
+            verify_store: VerifyStore::Off,
             store,
         }
     }
@@ -98,8 +100,16 @@ impl LocalReadyQueries {
     ) -> Self {
         Self {
             queries: ReadyQueries::with_validator(store.clone(), native),
+            verify_store: VerifyStore::Off,
             store,
         }
+    }
+
+    /// VerifyStore compares a real local recomputation against the admitted
+    /// cached output. It changes reuse policy, never the semantic action.
+    pub fn with_verification(mut self, verify_store: VerifyStore) -> Self {
+        self.verify_store = verify_store;
+        self
     }
 
     fn decode<T: hirsel_codec::Snapshot>(&self, reference: Reference) -> Result<T, String> {
@@ -237,8 +247,21 @@ impl LocalReadyQueries {
             "hirsel.native.local-ready-action.v1",
             [bytes.as_slice()],
         ));
-        if let Some(hit) = self.queries.lookup(key, action, environment) {
+        // Callee admissions above consume the complete independent snapshot.
+        // Only this owner's own C lookup/publication uses its base read scope.
+        let operations = instances.operations(key, environment)?;
+        let scoped = NativeEnvironment {
+            operations: &operations,
+            ..*environment
+        };
+        let environment = &scoped;
+        let recompute = self.verify_store == VerifyStore::Recompute
+            || options.validation == crate::native::Validation::EveryStage;
+        if !recompute && let Some(hit) = self.queries.lookup(key, action, environment) {
             return Ok(hit);
+        }
+        if recompute {
+            self.queries.counts.misses += 1;
         }
 
         // Metadata for directly consumed ABIs is bound only on a local miss.
