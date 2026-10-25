@@ -3,7 +3,7 @@
 use crate::{QueryEngine, store::ResultStore};
 use hirsel_product_codec::TypeRecords;
 use hirsel_span::Anchor;
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{DefId, DefPath};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -33,25 +33,45 @@ pub struct NativeRecordContext {
     types: Arc<hirsel_types::TypeInterner>,
     owners: BTreeMap<Anchor, (DefPath, u32)>,
     anchors: BTreeMap<(DefPath, u32), Anchor>,
+    source_definitions: BTreeMap<Anchor, DefId>,
 }
 impl NativeRecordContext {
     pub(crate) fn input_bytes(&self) -> Option<u64> {
         let slot = (std::mem::size_of::<(Anchor, (DefPath, u32))>()
             + std::mem::size_of::<((DefPath, u32), Anchor)>()
-            + 12 * std::mem::size_of::<usize>()) as u64;
+            + std::mem::size_of::<(Anchor, DefId)>()
+            + 18 * std::mem::size_of::<usize>()) as u64;
         (self.owners.len() as u64)
             .checked_mul(slot)?
             .checked_add(std::mem::size_of::<Self>() as u64)
     }
 
+    /// The declaration owning this current source generation. A generated
+    /// codec owner is content-bound and can differ from this declaration;
+    /// selector ordinals are neither codec occurrences nor source bases.
+    pub fn source_definition(&self, anchor: Anchor) -> Option<&DefPath> {
+        self.source_definitions.get(&anchor).map(|id| id.path())
+    }
+
     pub fn capture(engine: &QueryEngine) -> Self {
         let mut owners = BTreeMap::new();
         let mut anchors = BTreeMap::new();
+        let mut source_definitions = BTreeMap::new();
         for (anchor, _, _) in engine.sources.anchors() {
             if let Some(owner) = engine.record_anchor_owner(anchor) {
                 if let Some(selected) = engine.record_anchor(&owner.0, owner.1) {
                     anchors.insert(owner.clone(), selected);
                 }
+                let declaration = engine
+                    .sources
+                    .anchor(anchor)
+                    .and_then(|(file, _)| {
+                        engine.generated.iter().find_map(|(path, generated)| {
+                            (generated.file == file).then(|| DefId::intern(path))
+                        })
+                    })
+                    .unwrap_or_else(|| DefId::intern(&owner.0));
+                source_definitions.insert(anchor, declaration);
                 owners.insert(anchor, owner);
             }
         }
@@ -59,6 +79,7 @@ impl NativeRecordContext {
             types: engine.types().clone(),
             owners,
             anchors,
+            source_definitions,
         }
     }
 }
