@@ -50,6 +50,16 @@ pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQuer
 pub use scheduled_lower::{
     FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FrontLowerOutput, FrontLowerQueries, FrontLowerWork,
 };
+/// Engine-owned complete canonical input. Only admitted source wrappers
+/// implement this lifetime/size seam; it supplies no validation authority.
+pub(crate) trait AdmittedProofInput {
+    fn export_input(&self) -> &hirsel_proof_export::ExportInput;
+    fn export_module_bytes(&self) -> usize;
+    fn export_clone_bytes(&self) -> u64;
+    fn checked_receipt(&self) -> Option<(&FrontCheckScope, &FrontCheckedSignatures)> {
+        None
+    }
+}
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
 #[derive(Clone, Debug)]

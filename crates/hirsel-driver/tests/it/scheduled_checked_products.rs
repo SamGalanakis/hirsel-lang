@@ -11,6 +11,15 @@ fn products_case_with_admission(
     failed_lower: bool,
     admitted: bool,
 ) {
+    products_case_full_admission(source, failed_front, failed_lower, admitted, false);
+}
+fn products_case_full_admission(
+    source: &str,
+    failed_front: bool,
+    failed_lower: bool,
+    admitted: bool,
+    finish: bool,
+) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -258,7 +267,7 @@ fn products_case_with_admission(
                     before_reads,
                     "N-1 refuses before original body I/O"
                 );
-                Some(
+                Some(std::rc::Rc::new(
                     scope
                         .checked_product_input_with_allowance(
                             headers.clone(),
@@ -266,11 +275,61 @@ fn products_case_with_admission(
                             budget.reserve(required).unwrap(),
                         )
                         .unwrap(),
-                )
+                ))
             } else {
                 None
             };
-            let actual_products = scope.checked_products(&headers, &program.entry).unwrap();
+            let actual_products = if finish {
+                let owned = owned.as_ref().unwrap().clone();
+                let needed = owned.type_capture_bytes().unwrap();
+                assert!(
+                    owned
+                        .clone()
+                        .capture_types_with_allowance(budget.reserve(needed - 1).unwrap())
+                        .is_err()
+                );
+                let prepared = std::rc::Rc::new(
+                    owned
+                        .capture_types_with_allowance(budget.reserve(needed).unwrap())
+                        .unwrap(),
+                );
+                let needed = prepared.build_bytes().unwrap();
+                assert!(
+                    prepared
+                        .clone()
+                        .build_with_allowance(budget.reserve(needed - 1).unwrap())
+                        .is_err()
+                );
+                let built = prepared
+                    .build_with_allowance(budget.reserve(needed).unwrap())
+                    .unwrap();
+                let output_bytes = built.output_bytes().unwrap();
+                let receipt_bytes = built.checked_products_bytes().unwrap();
+                assert!(
+                    built
+                        .checked_products_with_allowances(
+                            budget.reserve(output_bytes).unwrap(),
+                            budget.reserve(receipt_bytes - 1).unwrap()
+                        )
+                        .is_err()
+                );
+                assert!(
+                    built
+                        .checked_products_with_allowances(
+                            budget.reserve(output_bytes - 1).unwrap(),
+                            budget.reserve(receipt_bytes).unwrap()
+                        )
+                        .is_err()
+                );
+                built
+                    .checked_products_with_allowances(
+                        budget.reserve(output_bytes).unwrap(),
+                        budget.reserve(receipt_bytes).unwrap(),
+                    )
+                    .unwrap()
+            } else {
+                Arc::new(scope.checked_products(&headers, &program.entry).unwrap())
+            };
             if let Some(owned) = &owned {
                 assert_eq!(
                     Some(hirsel_proof_export::export(owned.input()).as_str()),
@@ -322,6 +381,18 @@ fn products_case_with_admission(
                 actual_products.digest,
                 "formatting after shutdown retains its immutable sources"
             );
+            if finish {
+                let detached = actual_products.clone();
+                assert!(Arc::ptr_eq(&detached, &actual_products));
+                let before = budget.reserved();
+                drop(actual_products);
+                assert_eq!(budget.reserved(), before);
+                drop(detached);
+                assert!(
+                    budget.reserved() < before,
+                    "last receipt clone releases its physical output/map ownership"
+                );
+            }
         }
     });
 }
@@ -363,4 +434,20 @@ fn completed_checked_input_admission_refuses_before_body_reads_and_preserves_sca
         false,
         true,
     );
+}
+
+#[test]
+fn completed_checked_receipt_admission_preserves_scalar_bytes_reads_digest_and_detached_clones() {
+    products_case_full_admission(
+        "pub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        false,
+        false,
+        true,
+        true,
+    );
+}
+
+#[test]
+fn completed_checked_receipt_admission_preserves_failed_front_negative_reads() {
+    products_case_full_admission("pub fn main()->u8{missing}", true, false, true, true);
 }
