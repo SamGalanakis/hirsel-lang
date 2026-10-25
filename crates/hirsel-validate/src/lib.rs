@@ -445,6 +445,15 @@ fn validate_input(
     }
     // Closure environments participate in the same finite flow proof. Compute
     // entry snapshots before reporting, so body arena order has no significance.
+    // A single entry body with no closure producer has no environment edges.
+    // Its ordinary reporting pass proves the same flow below; there is no
+    // capture snapshot to discover in a preliminary copy of that fixed point.
+    let entry_only = definition.bodies.len() == 1
+        && definition.contracts.is_empty()
+        && definition.bodies[0]
+            .rvalues
+            .iter()
+            .all(|value| !matches!(value, Rvalue::Closure { .. }));
     let mut environments = BTreeMap::<u32, Vec<flow_origins::CapturedOrigin>>::new();
     let mut pending = VecDeque::new();
     environments.insert(definition.entry.0, vec![]);
@@ -454,6 +463,9 @@ fn validate_input(
         pending.push_back(body.0);
     }
     while let Some(index) = pending.pop_front() {
+        if entry_only {
+            continue;
+        }
         let body = &definition.bodies[index as usize];
         let mut checker = Checker {
             definition,
@@ -516,6 +528,12 @@ fn validate_input(
         };
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
+            // Preserve the preliminary pass's early tooling-limit outcome.
+            if entry_only && !checker.proof_errors.borrow().is_empty() {
+                return Validation {
+                    violations: checker.proof_errors.into_inner(),
+                };
+            }
             if index as u32 == definition.entry.0 {
                 for parameter in unique_promises(t, signatures.get(definition.path), signatures) {
                     let mut proof = Checker {

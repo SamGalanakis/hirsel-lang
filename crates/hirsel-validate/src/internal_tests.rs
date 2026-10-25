@@ -605,3 +605,19 @@ fn repeated_flat_copies_keep_canonical_rows_without_reinterning() {
     );
     assert!(checker.proof_errors.borrow().is_empty());
 }
+
+#[test]
+fn a_single_body_without_closures_solves_its_flow_once() {
+    let mut fixture = Fixture::unit();
+    owner_sig(&mut fixture, &[]);
+    assert_eq!(fixture.definition.bodies.len(), 1);
+    assert!(fixture.definition.contracts.is_empty());
+    assert_eq!(fixture.definition.bodies[0].blocks.len(), 1);
+    let before = hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateFlowSteps);
+    fixture.valid();
+    let steps = hirsel_intern::work::read(hirsel_intern::work::Counter::ValidateFlowSteps) - before;
+    assert_eq!(
+        steps, 1,
+        "no closure environment needs a preliminary fixed point"
+    );
+}
