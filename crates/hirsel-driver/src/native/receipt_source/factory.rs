@@ -3,7 +3,7 @@
 use super::{ReceiptSourceObservation, SourceError, provider, selection};
 use hirsel_layout::instance::InstanceKey;
 use hirsel_lir::sealed_payload_source::ClosedStorageProfile;
-use hirsel_rc::instance::{Actuals, substitute};
+use hirsel_rc::instance::{Actuals, SelectionRead, substitute};
 use hirsel_rc::sealed_source::{
     SourceCallableEntry,
     contract::{
@@ -15,6 +15,7 @@ use hirsel_rc::sealed_source::{
 use hirsel_types::{OperationalFailure, QueryError, TypeId, TypeMemo};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub struct NamedInput {
     pub base: InstanceKey,
     pub actuals: Actuals,
@@ -100,10 +101,68 @@ pub fn named(
     Ok(context)
 }
 
+/// Original call selectors and selection observations, outside semantic keys.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CallObservation {
+    pub caller: ContextId,
+    pub block: u32,
+    pub target: ContextId,
+    pub selection: SelectionRead,
+}
+
 pub struct NamedGraph {
+    pub calls: Vec<CallObservation>,
     pub contexts: Vec<NamedContext>,
     pub roots: Vec<ContextId>,
     pub requests: Vec<Request>,
+}
+
+impl NamedGraph {
+    /// Reconstruct the whole graph from current source and the original roots.
+    /// Deleting both a target and its call observation cannot hide a dependency.
+    /// Requested roots come from the caller, never the saved graph under test.
+    /// This checks source data, not native C or metadata custody.
+    pub fn recheck(
+        &self,
+        provider: &dyn provider::SelectionProvider,
+        roots: impl IntoIterator<Item = NamedInput>,
+        cases: &mut impl FnMut(
+            &SourceCallableEntry,
+            Port,
+            TypeId,
+        ) -> Result<Vec<CallableCase>, SourceError>,
+    ) -> Result<(), SourceError> {
+        let current = named_graph(provider, roots, cases)?;
+        if self.calls != current.calls
+            || self.roots != current.roots
+            || self.contexts.len() != current.contexts.len()
+            || self.requests.len() != current.requests.len()
+            || self
+                .contexts
+                .iter()
+                .zip(&current.contexts)
+                .any(|(before, after)| {
+                    before.source.entry() != after.source.entry()
+                        || before.source.demand().projection() != after.source.demand().projection()
+                        || before.ports != after.ports
+                })
+            || self
+                .requests
+                .iter()
+                .zip(&current.requests)
+                .any(|(before, after)| {
+                    before.ordinary_key() != after.ordinary_key()
+                        || before.context_key() != after.context_key()
+                        || before.aware_key() != after.aware_key()
+                        || before.declaration() != after.declaration()
+                })
+        {
+            return Err(SourceError::Malformed(
+                "receipt graph differs from current original observations",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Discover a complete graph of original named source calls. Unsupported
@@ -119,6 +178,7 @@ pub fn named_graph(
     let mut registry = Registry::default();
     let mut contexts = Vec::new();
     let mut root_ids = Vec::new();
+    let mut observations = Vec::new();
     for root in roots {
         let context = named(provider, root, &memo, cases)?;
         let id = registry.register(context.context())?;
@@ -154,6 +214,7 @@ pub fn named_graph(
                 block,
                 &memo,
             )?;
+            let selection = target.selection;
             let context = named(
                 provider,
                 NamedInput {
@@ -167,15 +228,30 @@ pub fn named_graph(
             if target.index() == contexts.len() {
                 contexts.push(context);
             }
+            use hirsel_rc::sealed_source::contract::registry::Expansion;
             calls.insert(
                 block,
-                hirsel_rc::sealed_source::contract::registry::Expansion::Targets(vec![target]),
+                if selection.generated {
+                    Expansion::Generated {
+                        selection: selection.clone(),
+                        target,
+                    }
+                } else {
+                    Expansion::Targets(vec![target])
+                },
             );
+            observations.push(CallObservation {
+                caller: id,
+                block,
+                target,
+                selection,
+            });
         }
         registry.resolve(id, calls, BTreeMap::new())?;
         index += 1;
     }
     Ok(NamedGraph {
+        calls: observations,
         contexts,
         roots: root_ids,
         requests: registry.solve()?,

@@ -602,3 +602,94 @@ fn context_requires_every_original_port_even_without_boundary_demand() {
         SourceError::Malformed("receipt context needs a complete ordered port-profile map")
     );
 }
+
+#[test]
+fn generated_links_keep_original_declaration_and_selected_body_distinct() {
+    let (types, bytes, scalar, _) = types();
+    let target = Fixture::named(
+        &types,
+        body(&[bytes, bytes, scalar], 2),
+        &[PassingMode::Mut, PassingMode::Mut],
+        "selected_generated_body",
+        2,
+    );
+    let caller = caller(
+        &types,
+        bytes,
+        scalar,
+        "generated_data_caller",
+        "generated_declaration",
+        0,
+    );
+    let mut registry = Registry::default();
+    let target_id = register(&mut registry, &target, &types);
+    let caller_id = register(&mut registry, &caller, &types);
+    let observed = crate::instance::SelectionRead {
+        declaration: DefPath::core("generated_declaration"),
+        arguments: Some(vec!["Bytes".into()]),
+        generated: true,
+        selected: Some(target.entry.reference().definition.clone()),
+    };
+    for mutation in 0..4 {
+        let mut selection = observed.clone();
+        match mutation {
+            0 => selection.generated = false,
+            1 => selection.arguments = None,
+            2 => selection.declaration = DefPath::core("foreign_declaration"),
+            3 => selection.selected = Some(DefPath::core("foreign_selected_body")),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            registry
+                .resolve(
+                    caller_id,
+                    BTreeMap::from([
+                        (
+                            0,
+                            Expansion::Generated {
+                                selection,
+                                target: target_id
+                            }
+                        ),
+                        (1, Expansion::External(ExternalDemand::default())),
+                    ]),
+                    BTreeMap::new()
+                )
+                .unwrap_err(),
+            SourceError::Malformed("receipt generated target differs from original selection")
+        );
+    }
+    assert_eq!(
+        registry
+            .resolve(
+                caller_id,
+                BTreeMap::from([
+                    (0, Expansion::Targets(vec![target_id])),
+                    (1, Expansion::External(ExternalDemand::default())),
+                ]),
+                BTreeMap::new()
+            )
+            .unwrap_err(),
+        SourceError::Malformed("receipt target differs from original definition")
+    );
+    registry
+        .resolve(
+            caller_id,
+            BTreeMap::from([
+                (
+                    0,
+                    Expansion::Generated {
+                        selection: observed,
+                        target: target_id,
+                    },
+                ),
+                (1, Expansion::External(ExternalDemand::default())),
+            ]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    registry
+        .resolve(target_id, BTreeMap::new(), BTreeMap::new())
+        .unwrap();
+    assert_eq!(registry.solve().unwrap().len(), 2);
+}

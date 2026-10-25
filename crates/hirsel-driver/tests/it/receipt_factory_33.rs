@@ -16,6 +16,7 @@ use std::sync::Arc;
 struct Simulated<'a> {
     front: &'a Front<'a>,
     unavailable: bool,
+    redirect: Option<(DefId, DefId)>,
 }
 impl Provider for Simulated<'_> {
     fn types(&self) -> &TypeInterner {
@@ -40,6 +41,11 @@ impl SelectionProvider for Simulated<'_> {
         declaration: DefId,
         arguments: &[GenericArgument],
     ) -> Result<Option<DefId>, SourceError> {
+        if let Some((from, to)) = self.redirect
+            && declaration == from
+        {
+            return Ok(Some(to));
+        }
         self.front.selected_instance(declaration, arguments)
     }
 }
@@ -113,6 +119,7 @@ pub fn main()->u64 {
         let mut simulated = Simulated {
             front: &front,
             unavailable: false,
+            redirect: None,
         };
         let same = named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| {
             panic!("no callable profile query")
@@ -180,6 +187,97 @@ pub fn main()->u64 {
             Err(SourceError::Unsupported(
                 "receipt factory needs original closure context expansion"
             ))
+        ));
+    });
+}
+
+#[test]
+fn source_factory_rechecks_actual_ct5_selections_and_complete_call_inventory() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+type Point {x:u64}
+fn make[T](s:TypeShape[T])->Result[Body[fn(T)->u64 uses {}],String] {
+  Ok(codegen.body("fn(v: standalone@0/Point) -> u64 uses {} { v.x }"))
+}
+fn generated[T](v:T)->u64 uses {} = comptime make(shape(T))
+fn other(v:Point)->u64 uses {} {v.x}
+fn pick(flag:bool)->u64 {if flag {generated(Point(x:7u64))} else {other(Point(x:11u64))}}
+pub fn main()->u64 {pick(true)}
+"#,
+        );
+        let front = Front::new(&reader);
+        let mut graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("no held callable")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 4);
+        assert_eq!(graph.calls.len(), 3);
+        let call = graph
+            .calls
+            .iter()
+            .find(|call| call.selection.generated)
+            .unwrap();
+        assert!(call.selection.valid());
+        let generated = DefId::intern(&call.selection.declaration);
+        let other = graph
+            .contexts
+            .iter()
+            .find(|context| context.input.base.definition().0.name == "other")
+            .unwrap();
+        let alternative = DefId::intern(other.input.base.definition());
+        graph
+            .recheck(&front, [root(&front, &path)], &mut |_, _, _| {
+                panic!("no held callable")
+            })
+            .unwrap();
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+        };
+        graph
+            .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
+                panic!("no held callable")
+            })
+            .unwrap();
+        simulated.redirect = Some((generated, alternative));
+        assert!(matches!(
+            graph.recheck(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+        simulated.redirect = None;
+        let saved = graph.calls.pop().unwrap();
+        assert!(matches!(
+            graph.recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+        graph.calls.push(saved);
+        graph
+            .recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![]))
+            .unwrap();
+        let saved_roots = std::mem::take(&mut graph.roots);
+        let saved_contexts = std::mem::take(&mut graph.contexts);
+        let saved_requests = std::mem::take(&mut graph.requests);
+        let saved_calls = std::mem::take(&mut graph.calls);
+        assert!(matches!(
+            graph.recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+        graph.roots = saved_roots;
+        graph.contexts = saved_contexts;
+        graph.requests = saved_requests;
+        graph.calls = saved_calls;
+        simulated.unavailable = true;
+        assert!(matches!(
+            graph.recheck(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Unsupported("simulated unknown source"))
         ));
     });
 }
