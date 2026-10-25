@@ -79,6 +79,15 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 return Err(Error::IdentityRewrite(id));
             }
         }
+        if matches!(new.point, Point::ReleaseDrop { .. }) {
+            // This typed expansion is not an arbitrary relocation permit. Its
+            // source must be the same semantic cleanup action and address.
+            let old_anchor = drop_anchor(before, old.point);
+            let new_anchor = drop_anchor(after, new.point);
+            if old_anchor.is_none() || old_anchor != new_anchor {
+                return Err(Error::InvalidTransport(id));
+            }
+        }
         if old.marker.kind != new.marker.kind
             || old.marker.site != new.marker.site
             || new.point != relocation.point
@@ -227,12 +236,33 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 (Inst::Release { value, .. } | Inst::Reset { value, .. }, Moment::Before) => {
                     same(Drop, Value(value))
                 }
+                (
+                    Inst::Drop {
+                        address,
+                        if_live: false,
+                        ..
+                    },
+                    Moment::Before,
+                ) => same(Drop, Address(address)),
                 (Inst::FinalizeEnd { address, .. }, Moment::After) => same(Drop, Address(address)),
                 // Conditional Drop, Replace, generic runtime operations and other
                 // compound transitions need their own explicit commit recipe.
                 // Never accept them as "close enough" to a supported transition.
                 _ => false,
             }
+        }
+        Point::ReleaseDrop { block: b, index } => {
+            let instructions = block(b)?
+                .instructions
+                .get(&unit.instructions)
+                .ok_or(Error::InvalidPoint(m.id))?;
+            let pair = index
+                .checked_sub(1)
+                .and_then(|start| instructions.get(start as usize..=index as usize));
+            matches!(pair, Some([
+                Inst::Read { result, address, mode: ReadMode::Take, .. },
+                Inst::Release { value, live: MaskRef::All, .. },
+            ]) if result == value && same(Drop, Address(*address)))
         }
         Point::Edge(id) => {
             let edge = unit
@@ -285,7 +315,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
     match point {
         Point::Entry => block_site(unit.entry),
-        Point::Instruction { block, index, .. } => {
+        Point::Instruction { block, index, .. } | Point::ReleaseDrop { block, index } => {
             let inst = unit
                 .blocks
                 .get(block.index())?
@@ -299,7 +329,8 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
                 Inst::Closure { closure, .. } => {
                     source(unit.tables.closures.get(closure.index())?.anchor)
                 }
-                Inst::Release { anchor, .. }
+                Inst::Drop { anchor, .. }
+                | Inst::Release { anchor, .. }
                 | Inst::Reset { anchor, .. }
                 | Inst::FinalizeEnd { anchor, .. } => cleanup(anchor),
                 _ => block_site(block),
@@ -314,4 +345,44 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
         }
         Point::Return(block) => block_site(block),
     }
+}
+
+// Exact cleanup identity is stricter than equal source ranges: two actions of
+// one source statement may have the same span and still name different drops.
+fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
+    let (block, index, lowered) = match point {
+        Point::Instruction {
+            block,
+            index,
+            moment: Moment::Before,
+        } => (block, index, false),
+        Point::ReleaseDrop { block, index } => (block, index, true),
+        _ => return None,
+    };
+    let instruction = unit
+        .blocks
+        .get(block.index())?
+        .instructions
+        .get(&unit.instructions)?
+        .get(index as usize)?;
+    let anchor = match (instruction, lowered) {
+        (
+            Inst::Drop {
+                anchor,
+                if_live: false,
+                ..
+            },
+            false,
+        )
+        | (
+            Inst::Release {
+                anchor,
+                live: MaskRef::All,
+                ..
+            },
+            true,
+        ) => *anchor,
+        _ => return None,
+    };
+    unit.tables.cleanup_anchors.get(anchor.index())
 }

@@ -46,6 +46,21 @@ pub(crate) fn finish<A: Stage, B: Stage>(
                         moment,
                     }
                 }
+                Point::ReleaseDrop { block, index } => {
+                    let relocated = origins[block.index()]
+                        .iter()
+                        .position(|origin| *origin == Some(index))
+                        .ok_or_else(|| {
+                            format!(
+                                "ownership trace: lost release for marker {:?}",
+                                observation.marker.id
+                            )
+                        })?;
+                    Point::ReleaseDrop {
+                        block: remap_block(block)?,
+                        index: relocated as u32,
+                    }
+                }
                 Point::Entry => Point::Entry,
                 Point::Edge(edge) => Point::Edge(EdgeId(
                     edges.get(edge.index()).copied().flatten().ok_or_else(|| {

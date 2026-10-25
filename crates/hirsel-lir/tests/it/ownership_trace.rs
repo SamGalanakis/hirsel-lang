@@ -1271,3 +1271,190 @@ fn ownership_trace_reuse_refuses_a_stale_input_before_rewriting() {
         hirsel_rc::reuse::reuse_observed(before, &Default::default(), &index, &input).unwrap_err();
     assert!(error.contains("InvalidSite(MarkerId(0))"), "{error}");
 }
+
+fn drop_transport_fixture() -> (LirUnit<Rc>, Plan, LirUnit<hirsel_lir::stage::Ready>, Plan) {
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::BLK)], None);
+    let value = t.owned(l::BLK);
+    t.param(value);
+    let slot = t.slot(l::BLK, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[support::Undo::Release(value)]);
+    t.store(ENTRY, address, value, slot);
+    let cleanup = t.cleanup(&[]);
+    let failure = t.failure(cleanup);
+    let anchor = t.cleanup_anchor();
+    t.builder.push(
+        ENTRY,
+        Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+    );
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let operations = t.operations.clone();
+    let (before, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let before = hirsel_lir::validate::validate(before, &inputs)
+        .unwrap()
+        .into_raw();
+    let after = hirsel_rc::cleanup::lower(before.clone(), &table, &Default::default()).unwrap();
+    let violations = hirsel_lir::validate::check(&after, &inputs);
+    assert!(
+        violations.is_empty(),
+        "actual cleanup output must validate: {violations:?}"
+    );
+    let old_index = before.blocks[0]
+        .instructions
+        .get(&before.instructions)
+        .unwrap()
+        .iter()
+        .position(|inst| matches!(inst, Inst::Drop { .. }))
+        .unwrap() as u32;
+    let new_index = after.blocks[0].instructions.get(&after.instructions).unwrap().windows(2)
+        .position(|pair| matches!(pair, [Inst::Read { address: a, mode: ReadMode::Take, .. }, Inst::Release { .. }] if *a == address))
+        .expect("actual cleanup emits the whole read/release pair") as u32 + 1;
+    let marker = ObserveOwnership {
+        id: MarkerId(0),
+        site: before.tables.cleanup_anchors[anchor.index()].site,
+        kind: Kind::Drop,
+        token: Location::Address(address),
+        owner: Location::Address(address),
+    };
+    let input = Plan::new(
+        &before,
+        vec![Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index: old_index,
+                moment: Moment::Before,
+            },
+            marker: marker.clone(),
+        }],
+    );
+    let output = Plan::new(
+        &after,
+        vec![Observation {
+            point: Point::ReleaseDrop {
+                block: ENTRY,
+                index: new_index,
+            },
+            marker,
+        }],
+    );
+    (before, input, after, output)
+}
+
+#[test]
+fn ownership_trace_drop_transport_preserves_the_semantic_address_and_action() {
+    let (before, input, after, output) = drop_transport_fixture();
+    check(&before, &input).unwrap();
+    check(&after, &output).unwrap();
+    assert_eq!(input.observations[0].marker, output.observations[0].marker);
+    check_transform(
+        &before,
+        &input,
+        &after,
+        &output,
+        Some(&recipe(&input, &output)),
+    )
+    .unwrap();
+    let decoded: Plan = hirsel_codec::from_text(&hirsel_codec::to_text(&output)).unwrap();
+    assert_eq!(decoded, output);
+}
+
+#[test]
+fn ownership_trace_drop_transport_refuses_a_different_released_value() {
+    let (_, _, mut after, mut output) = drop_transport_fixture();
+    let Point::ReleaseDrop { block, index } = output.observations[0].point else {
+        unreachable!()
+    };
+    let at = after.blocks[block.index()].instructions.start as usize + index as usize;
+    let Inst::Release { value, .. } = &mut after.instructions[at] else {
+        unreachable!()
+    };
+    *value = ValueId(0);
+    output.unit = after.digest();
+    assert_eq!(
+        check(&after, &output).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
+}
+
+#[test]
+fn ownership_trace_drop_transport_refuses_a_masked_release() {
+    let (_, _, mut after, mut output) = drop_transport_fixture();
+    let Point::ReleaseDrop { block, index } = output.observations[0].point else {
+        unreachable!()
+    };
+    let at = after.blocks[block.index()].instructions.start as usize + index as usize;
+    let Inst::Release { live, .. } = &mut after.instructions[at] else {
+        unreachable!()
+    };
+    *live = MaskRef::Static(MaskId(0));
+    output.unit = after.digest();
+    assert_eq!(
+        check(&after, &output).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
+}
+
+#[test]
+fn ownership_trace_drop_transport_refuses_a_different_cleanup_with_the_same_source() {
+    let (before, input, mut after, mut output) = drop_transport_fixture();
+    let Point::ReleaseDrop { block, index } = output.observations[0].point else {
+        unreachable!()
+    };
+    let at = after.blocks[block.index()].instructions.start as usize + index as usize;
+    let Inst::Release { anchor, .. } = after.instructions[at] else {
+        unreachable!()
+    };
+    after.tables.cleanup_anchors[anchor.index()].action += 1;
+    output.unit = after.digest();
+    check(&after, &output).unwrap();
+    assert_eq!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &output,
+            Some(&recipe(&input, &output))
+        )
+        .unwrap_err(),
+        Error::InvalidTransport(MarkerId(0)),
+    );
+}
+
+#[test]
+fn ownership_trace_drop_transport_refuses_to_certify_a_conditional_drop_as_unconditional() {
+    let (mut before, mut input, _, _) = drop_transport_fixture();
+    let Point::Instruction { block, index, .. } = input.observations[0].point else {
+        unreachable!()
+    };
+    let at = before.blocks[block.index()].instructions.start as usize + index as usize;
+    let Inst::Drop { if_live, .. } = &mut before.instructions[at] else {
+        unreachable!()
+    };
+    *if_live = true;
+    input.unit = before.digest();
+    assert_eq!(
+        check(&before, &input).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
+}

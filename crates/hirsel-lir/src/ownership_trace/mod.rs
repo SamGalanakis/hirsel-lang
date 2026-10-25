@@ -28,7 +28,7 @@ mod check;
 pub use check::{check, check_transform};
 pub mod native;
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -94,6 +94,13 @@ pub enum Point {
     CallEntered(BlockId),
     CallReturned(BlockId),
     Return(BlockId),
+    /// An unconditional semantic address drop lowered to adjacent Read Take and
+    /// whole Release. The index names Release; the marker retains its original
+    /// address identity instead of inventing a creation or move for the load.
+    ReleaseDrop {
+        block: BlockId,
+        index: u32,
+    },
 }
 snapshot_enum!(Point {
     Entry,
@@ -101,7 +108,8 @@ snapshot_enum!(Point {
     Edge(edge),
     CallEntered(block),
     CallReturned(block),
-    Return(block)
+    Return(block),
+    ReleaseDrop { block, index }
 });
 
 /// At Create/Drop `token == owner`. At Move `token` is the previous shadow
@@ -220,6 +228,7 @@ pub enum Error {
     InvalidPoint(MarkerId),
     InvalidBinding(MarkerId),
     InvalidSite(MarkerId),
+    InvalidTransport(MarkerId),
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
