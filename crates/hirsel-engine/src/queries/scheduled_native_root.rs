@@ -234,16 +234,14 @@ impl Task {
             let Some(output) = owner.run.outcome(product) else {
                 return Poll::Ready(Err(owner.errors.protocol));
             };
-            let signatures = owner.definitions.signatures();
+            // Bootstrap binds every checked semantic declaration, including
+            // compile-time-only functions. Runtime registration is a separate
+            // subset; omitting these headers breaks the exact source union.
             self.selected = Some(
                 output
                     .semantic
                     .source_bindings()
-                    .filter_map(|(path, _, _)| {
-                        let signature = signatures.signature(DefId::intern(path))?.ok()?;
-                        scheduled_native::native_declaration(signatures.types(), signature)
-                            .then(|| path.clone())
-                    })
+                    .map(|(path, _, _)| path.clone())
                     .collect(),
             );
             self.run_product = Some(product);
@@ -287,7 +285,15 @@ impl Task {
             .outcome(run_product)
             .ok_or(QueryError::NotImplemented)?;
         let signatures = owner.definitions.signatures();
-        let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
+        let native_selected = selected
+            .iter()
+            .filter_map(|path| {
+                let signature = signatures.signature(DefId::intern(path))?.ok()?;
+                scheduled_native::native_declaration(signatures.types(), signature)
+                    .then(|| path.clone())
+            })
+            .collect::<Vec<_>>();
+        let selected_set = native_selected.iter().cloned().collect::<BTreeSet<_>>();
         // Decorating the external map copies its file/path metadata. Shared
         // text, lines and anchors keep their original producer reservations.
         // Refuse before allocating the copy, within the existing output grant.
@@ -300,7 +306,7 @@ impl Task {
             return Err(invalid("native source metadata exceeds admission"));
         }
         let mut roots = owner.template.clone();
-        roots.definitions = selected.clone();
+        roots.definitions = native_selected;
         roots
             .instance_bodies
             .declarations

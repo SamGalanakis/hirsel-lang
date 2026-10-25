@@ -8,7 +8,7 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         let manifest = directory.path().join("hirsel.json");
-        std::fs::write(&path,"pub type Secret{level:u64}\nconst A:u64=comptime B;\nconst B:u64=comptime 3u64;\nfn view(x:Secret)->u64{x.level}\nfn orphan(x:u64)->u64{x}\npub fn main()->u64{A+view(Secret(level:4u64))}\n").unwrap();
+        std::fs::write(&path,"pub type Secret{level:u64}\nconst A:u64=comptime B;\nconst B:u64=comptime 3u64;\nfn view(x:Secret)->u64{x.level}\nfn orphan(x:u64)->u64{x}\nfn ct_body()->Result[Body[fn(u64)->u64 uses {}],String]{Ok(codegen.body(\"fn(x:u64)->u64 uses {} {9u64/x}\"))}\npub fn main()->u64{A+view(Secret(level:4u64))}\n").unwrap();
         std::fs::write(&manifest,r#"{"schema":1,"package":{"name":"roots","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         for jobs in [1, 2] {
             for explicit in [false, true] {
@@ -161,6 +161,23 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                     !explicit,
                     "whole-package default must retain unexecuted declarations"
                 );
+                let ct = paths.iter().find(|p| p.0.name == "ct_body").unwrap();
+                assert!(
+                    !actual.roots.definitions.contains(ct),
+                    "CT-only declarations stay outside runtime registration"
+                );
+                let checked_ct = actual.catalogue.iter().find(|d| &d.source.definition == ct);
+                assert_eq!(
+                    checked_ct.is_some(),
+                    !explicit,
+                    "bootstrap keeps the selected semantic declaration union"
+                );
+                if let Some(ct) = checked_ct {
+                    assert!(ct.source.lower.is_none());
+                    assert!(ct.source.audit.is_none());
+                    assert!(ct.contracts.is_none());
+                }
+                assert!(!actual.originals.iter().any(|o| &o.definition == ct));
                 assert!(Arc::ptr_eq(
                     &actual.signatures,
                     actual.semantic.signatures()
