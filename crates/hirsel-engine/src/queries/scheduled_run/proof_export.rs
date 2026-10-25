@@ -41,8 +41,35 @@ pub struct FrontPreparedProof {
 /// It borrows no mutable compiler and cannot request another source product.
 pub struct FrontBuiltProof {
     export: hirsel_proof_export::Export,
-    input: Rc<FrontPreparedProof>,
+    input: BuiltProofInput,
     _allowance: MemoryReservation,
+}
+enum BuiltProofInput {
+    Borrowed(Rc<FrontPreparedProof>),
+    Owned {
+        locator: Locator,
+        source: OwnedProofSource,
+        _input_allowance: MemoryReservation,
+        _types: hirsel_proof_export::CapturedTypes,
+        _capture_allowance: MemoryReservation,
+    },
+}
+impl BuiltProofInput {
+    fn locator(&self) -> &Locator {
+        match self {
+            Self::Borrowed(input) => &input.input.export_input().locator,
+            Self::Owned { locator, .. } => locator,
+        }
+    }
+    fn checked_receipt(&self) -> Option<(&FrontCheckScope, &FrontCheckedSignatures)> {
+        match self {
+            Self::Borrowed(input) => input.input.checked_receipt(),
+            Self::Owned { source, .. } => source
+                .checked
+                .as_ref()
+                .map(|(scope, headers)| (&**scope, &**headers)),
+        }
+    }
 }
 /// Portable canonical bytes keep only their actual output allocation charged,
 /// including through detached clones. Neither source nor native authority is
@@ -102,6 +129,19 @@ impl AdmittedProofInput for FrontProofInput {
     }
     fn export_clone_bytes(&self) -> u64 {
         self._allowance.bytes()
+    }
+    fn into_owned(self: Rc<Self>) -> Result<OwnedProofInput, QueryError> {
+        let this = Rc::try_unwrap(self).map_err(|_| {
+            operational("PS9 input must be uniquely owned before moving its payloads")
+        })?;
+        Ok(OwnedProofInput {
+            input: this.input,
+            source: OwnedProofSource {
+                _proof: Some(this._owner),
+                checked: None,
+            },
+            allowance: this._allowance,
+        })
     }
 }
 impl FrontPreparedProof {
@@ -163,7 +203,51 @@ impl FrontPreparedProof {
         }
         Ok(FrontBuiltProof {
             export,
-            input: self,
+            input: BuiltProofInput::Borrowed(self),
+            _allowance: allowance,
+        })
+    }
+    /// Construction tables only: unique input payloads move under their
+    /// existing reservation instead of requiring a second payload grant.
+    pub fn owned_build_bytes(&self) -> Result<u64, QueryError> {
+        hirsel_proof_export::build_owned_tables_bytes(
+            self.input.export_input(),
+            self.input.export_module_bytes(),
+            &self.types,
+        )
+        .and_then(|n| n.checked_add(size_of::<FrontBuiltProof>() as u64))
+        .ok_or(QueryError::NotImplemented)
+    }
+    /// Consume this preparation and its sole input reference. Shared inputs
+    /// refuse before export construction; successful exports retain all source
+    /// and input owners until their last inspection/encoding consumer drops.
+    pub fn build_owned_with_allowance(
+        self,
+        allowance: MemoryReservation,
+    ) -> Result<FrontBuiltProof, QueryError> {
+        if self.owned_build_bytes()? > allowance.bytes() {
+            return Err(operational(
+                "owned PS9 construction buffers exceed admission",
+            ));
+        }
+        let owned = self.input.into_owned()?;
+        let locator = owned.input.locator.clone();
+        let export = hirsel_proof_export::build_owned(owned.input)
+            .ok_or_else(|| operational("original body payloads must be uniquely owned"))?;
+        if !export.skipped.is_empty() {
+            return Err(operational(
+                "PS9 construction refused an incomplete definition section",
+            ));
+        }
+        Ok(FrontBuiltProof {
+            export,
+            input: BuiltProofInput::Owned {
+                locator,
+                source: owned.source,
+                _input_allowance: owned.allowance,
+                _types: self.types,
+                _capture_allowance: self._allowance,
+            },
             _allowance: allowance,
         })
     }
@@ -173,7 +257,6 @@ impl FrontBuiltProof {
     /// the canonical text output allowance. PS9-only inputs cannot mint this.
     pub fn checked_products_bytes(&self) -> Result<u64, QueryError> {
         let (scope, headers) = self
-            .input
             .input
             .checked_receipt()
             .ok_or(QueryError::NotImplemented)?;
@@ -191,7 +274,6 @@ impl FrontBuiltProof {
             ));
         }
         let (scope, headers) = self
-            .input
             .input
             .checked_receipt()
             .ok_or(QueryError::NotImplemented)?;
@@ -217,7 +299,7 @@ impl FrontBuiltProof {
         &self.export
     }
     pub fn encoded_bytes(&self) -> Result<usize, QueryError> {
-        hirsel_proof_export::encoded_bytes(&self.export, &self.input.input.export_input().locator)
+        hirsel_proof_export::encoded_bytes(&self.export, self.input.locator())
             .ok_or(QueryError::NotImplemented)
     }
     /// Encoding's String and the final Arc overlap until conversion completes.
@@ -244,7 +326,7 @@ impl FrontBuiltProof {
         let length = self.encoded_bytes()?;
         let text = hirsel_proof_export::encode_with_output_limit(
             &self.export,
-            &self.input.input.export_input().locator,
+            self.input.locator(),
             length,
         )
         .ok_or(QueryError::NotImplemented)?;
@@ -268,6 +350,11 @@ impl FrontProofExport {
     /// Captured layout metadata plus exactly this completed Run's typed body
     /// and value decode bounds. Does not open a provider or decode any body.
     pub fn input_bytes(&self, product: ProductRef) -> Result<u64, QueryError> {
+        self.input_layout(product)?
+            .total()
+            .ok_or(QueryError::NotImplemented)
+    }
+    fn input_layout(&self, product: ProductRef) -> Result<DefinitionDecodeLayout, QueryError> {
         if product.address != self.query().address {
             return Err(QueryError::NotImplemented);
         }
@@ -304,19 +391,22 @@ impl FrontProofExport {
                 transient = transient.max(layout.transient);
             }
         }
-        required
-            .checked_add(transient)
-            .and_then(|n| n.checked_add(maps.bytes()))
-            .ok_or(QueryError::NotImplemented)
+        Ok(DefinitionDecodeLayout {
+            retained: required
+                .checked_add(maps.bytes())
+                .ok_or(QueryError::NotImplemented)?,
+            transient,
+        })
     }
     /// Refuse N-1 before body/provider inspection. The returned owner pins both
     /// the selected source and the caller's physical decode/clone reservation.
     pub fn input_with_allowance(
         self: &Arc<Self>,
         product: ProductRef,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
     ) -> Result<FrontProofInput, QueryError> {
-        if self.input_bytes(product)? > allowance.bytes() {
+        let layout = self.input_layout(product)?;
+        if layout.total().ok_or(QueryError::NotImplemented)? > allowance.bytes() {
             return Err(operational(
                 "PS9 input decode/clone buffers exceed admission",
             ));
@@ -324,7 +414,9 @@ impl FrontProofExport {
         Ok(FrontProofInput {
             input: self.input(product)?,
             _owner: self.clone(),
-            _allowance: allowance,
+            _allowance: allowance
+                .split(layout.retained)
+                .ok_or(QueryError::NotImplemented)?,
         })
     }
 
