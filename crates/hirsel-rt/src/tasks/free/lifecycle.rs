@@ -554,8 +554,11 @@ pub(crate) unsafe fn spawn(
                 return Ok(());
             }
             // Count spawn as an operation even when its physical switch is
-            // elided; the parent's 128-op fairness bound still applies.
+            // elided; the parent's 128-op fairness bound still applies. This
+            // op already spent its budget: give up the worker without a
+            // second charge, which would renew the quantum instead.
             super::spawn::flush(ctx);
+            return super::boundary(&mut *ctx, false);
         } else if fast {
             super::spawn::run(ctx, index, None)?;
         } else {
