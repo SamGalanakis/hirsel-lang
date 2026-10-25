@@ -6,6 +6,22 @@ use hirsel_core_contract::OperationId;
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+mod cleanup;
+
+/// Include cleanup admissions reconstructed from independently selected
+/// finalizer bodies and the supplied physical layouts, never call counters.
+pub fn check_with_layouts<S: Stage>(
+    unit: &LirUnit<S>,
+    reference: &[ReferenceInvocation],
+    body: u32,
+    declarations: &dyn crate::operation::OperationDeclarations,
+    layouts: &crate::LayoutTable,
+) -> Result<(), String> {
+    let mut complete = reference.to_vec();
+    complete.extend(cleanup::references(unit, declarations, layouts, body)?);
+    check(unit, &complete, body)
+}
+
 /// A source call's identity within its independently supplied definition.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceInvocation {
@@ -303,12 +319,16 @@ fn check_library_context<S: Stage>(
         None
     };
     if let Some(expected) = expected {
+        let cleanups = layouts
+            .map(|layouts| cleanup::references(unit, declarations, layouts, 0))
+            .transpose()?
+            .unwrap_or_default();
         let entries = unit
             .instructions
             .iter()
             .filter(|i| matches!(i, Inst::FrameEnter { .. }))
             .count();
-        if entries != expected {
+        if entries != expected + cleanups.len() {
             return Err("generated callback recipe invocation coverage differs".into());
         }
     }

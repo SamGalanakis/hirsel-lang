@@ -1069,6 +1069,73 @@ fn library_finalizers_take_mut_self_and_source_finalizers_borrow_self() {
 }
 
 #[test]
+fn source_finalizers_from_library_cleanup_require_their_own_admission() {
+    let built = build(
+        "resource type R {n:u64}\ndrop(r) {let _=1u64/r.n}\npub fn main()->u64 {let xs:List[R]=[R(n:1)];for r in take xs {break};0u64}\n",
+    );
+    let unit = built
+        .units
+        .iter()
+        .find(|unit| unit.header.definition.is_core("$native.owned_cursor_drop"))
+        .unwrap();
+    assert!(
+        unit.instructions
+            .iter()
+            .any(|inst| matches!(inst, Inst::FrameEnter { .. }))
+    );
+    let target = target();
+    let rows = hirsel_core_contract::Manifest::skeleton([]);
+    let inputs = Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &built.operations,
+        target: &target,
+        layouts: &built.table,
+        manifest: &rows,
+    };
+    let mut erased = hirsel_rc::insert::Editor::new(unit.clone());
+    for code in &mut erased.code {
+        code.retain(|inst| !matches!(inst, Inst::FrameEnter { .. } | Inst::FrameLeave));
+    }
+    let erased = erased.finish();
+    let errors = hirsel_lir::validate::check(&erased, &inputs);
+    assert!(errors.iter().any(|error| matches!(&error.kind,
+        hirsel_lir::validate::ViolationKind::Schema(message) if message.contains("callback lacks its own admission"))), "{errors:?}");
+    let mut crossed = unit.clone();
+    let call = crossed
+        .tables
+        .calls
+        .iter()
+        .find(|call| crossed.tables.source_anchors[call.anchor.index()].block == u32::MAX)
+        .unwrap();
+    crossed.tables.source_anchors[call.anchor.index()].statement += 1;
+    let errors = hirsel_lir::validate::check(&crossed, &inputs);
+    assert!(errors.iter().any(|error| matches!(&error.kind,
+        hirsel_lir::validate::ViolationKind::Schema(message) if message.contains("cleanup origin"))), "{errors:?}");
+    let program = hirsel_heapcheck::Program {
+        target,
+        layouts: built.table,
+        units: built.units,
+        statics: built.statics,
+        invocations: built.operations.invocations,
+        invocation_bodies: built.operations.invocation_bodies,
+        pretransfer_adapters: built.operations.pretransfer_adapters,
+    };
+    let campaign = hirsel_heapcheck::fault_campaign(
+        &program,
+        &path("main"),
+        &[],
+        &mut || Box::new(NoOperations),
+        &Config::default(),
+    );
+    assert!(
+        campaign.first_violation().is_none(),
+        "{:?}",
+        campaign.first_violation()
+    );
+}
+
+#[test]
 fn consuming_list_elements_leave_the_cursor_before_returning_to_the_loop() {
     let source = source(
         "fn value() -> u64 { let xs: List[u64] = [1, 2, 3]; let mut n: u64 = 0; for x in take xs { n += x }; n }\n",

@@ -1804,8 +1804,13 @@ impl Lowering<'_, '_> {
                 let anchor = self.ed.unit.blocks[at.index()].anchor;
                 let normal = self.ed.block(kind, &[], anchor);
                 let failed = self.ed.block(BlockKind::FailureCleanup, &[], anchor);
+                let rejected =
+                    (!mutable).then(|| self.ed.block(BlockKind::FailureCleanup, &[], anchor));
                 for b in [normal, failed] {
                     let code = &mut self.ed.code[b.index()];
+                    if !mutable {
+                        code.push(Inst::FrameLeave);
+                    }
                     if let Some(loan) = loan {
                         code.push(Inst::EndLoan {
                             loan,
@@ -1822,6 +1827,28 @@ impl Lowering<'_, '_> {
                 // the remaining fields are released after it, in the chain.
                 let rest = fail(self, ());
                 let rest = self.ed.unit.tables.failures[rest.index()].clone();
+                if let Some(rejected) = rejected {
+                    if let Some(loan) = loan {
+                        self.ed.code[rejected.index()].push(Inst::EndLoan {
+                            loan,
+                            if_active: false,
+                        });
+                    }
+                    self.ed.code[rejected.index()].push(Inst::FinalizeEnd {
+                        address,
+                        anchor: site.anchor,
+                    });
+                    self.ed.unit.terminators[rejected.index()] = Terminator::Jump(rest.cleanup);
+                    let cleanup = self.ed.edge(rejected, &[]);
+                    let failure = FailureId(self.ed.unit.tables.failures.len() as u32);
+                    self.ed.unit.tables.failures.push(FailureEdge {
+                        cleanup,
+                        rule: Some("LANG-10".into()),
+                        anchor: self.ed.unit.tables.calls[call.index()].anchor,
+                        dispose: PoolRange::EMPTY,
+                    });
+                    self.ed.code[at.index()].push(Inst::FrameEnter { failure });
+                }
                 let into_failed = self.ed.edge(failed, &[]);
                 let call_failure = FailureId(self.ed.unit.tables.failures.len() as u32);
                 self.ed.unit.tables.failures.push(FailureEdge {
@@ -2276,7 +2303,7 @@ impl Lowering<'_, '_> {
         let origin = hirsel_lir::ir::SourceAnchor {
             body: cleanup.body,
             block: u32::MAX,
-            statement: site.anchor.0,
+            statement: self.ed.unit.tables.calls.len() as u32,
             site: cleanup.site,
         };
         let anchor = match self

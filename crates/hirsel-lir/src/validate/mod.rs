@@ -784,9 +784,15 @@ fn check_with_context<S: Stage>(
                 .operations
                 .invocation_body(&unit.header.definition, unit.header.instance)
                 .ok_or_else(|| "independent source body selection is missing".to_owned());
-            if let Err(error) =
-                selected.and_then(|body| crate::invocations::check(unit, reference, body))
-            {
+            if let Err(error) = selected.and_then(|body| {
+                crate::invocations::check_with_layouts(
+                    unit,
+                    reference,
+                    body,
+                    inputs.operations,
+                    inputs.layouts,
+                )
+            }) {
                 report.add(Site::UNIT, ViolationKind::Schema(error));
             }
         }
