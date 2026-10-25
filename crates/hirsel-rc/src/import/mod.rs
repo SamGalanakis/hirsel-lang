@@ -594,6 +594,30 @@ pub(crate) fn invocation_registry(
             .insert(evidence.body.definition.clone(), evidence.invocations);
         registry.invocation_bodies.push(evidence.body);
     }
+    bind_pretransfer_inventory(&mut registry, program, instances)
+        .expect("independent adapter instance plan is valid");
+    registry
+        .invocation_bodies
+        .sort_by(|a, b| (&a.definition, a.instance).cmp(&(&b.definition, b.instance)));
+    registry
+}
+
+/// Bind materialized keyed adapters from the independent instance plan, never
+/// candidate calls, symbols, anchors or ABI tables. Both batch and one-instance
+/// import use this exact inventory before target-dependent edge cleanup and C.
+pub fn bind_pretransfer_inventory(
+    registry: &mut hirsel_layout::operation::OperationRegistry,
+    program: &Program,
+    instances: &Instances,
+) -> Result<(), String> {
+    if !std::sync::Arc::ptr_eq(&registry.types, &program.types)
+        || !registry.pretransfer_adapters.is_empty()
+        || !registry.pretransfer_actuals.is_empty()
+    {
+        return Err(
+            "pretransfer inventory belongs to another or already bound declaration scope".into(),
+        );
+    }
     for id in instances.ids() {
         let view = instances.view(id);
         let Some(primitive) = hirsel_lir::pretransfer::primitive(view.key.definition()) else {
@@ -604,7 +628,7 @@ pub(crate) fn invocation_registry(
                 && instances.actuals[other.index()].arguments
                     == instances.actuals[id.index()].arguments
         }) else {
-            panic!("materialized adapter has no independently planned primitive");
+            return Err("materialized adapter has no independently planned primitive".into());
         };
         let reference = crate::invocations::keyed_adapter(
             view,
@@ -613,26 +637,25 @@ pub(crate) fn invocation_registry(
             &instances.actuals[body.index()].arguments,
             instances.abis[id.index()],
         )
-        .expect("independent adapter instance plan is valid");
-        if let Some(operation) = program.operations.get(&primitive)
-            && let Ok(arguments) = hirsel_layout::operation::collect_arguments(
-                &program.types,
-                &instances.actuals[body.index()].arguments,
-            )
-        {
-            registry.pretransfer_actuals.push((
-                reference.adapter.clone(),
-                reference.abi,
-                operation.clone(),
-                arguments,
-            ));
-        }
+        .map_err(str::to_owned)?;
+        let operation = program
+            .operations
+            .get(&primitive)
+            .ok_or("materialized adapter has no independent primitive declaration")?;
+        let arguments = hirsel_layout::operation::collect_arguments(
+            &program.types,
+            &instances.actuals[body.index()].arguments,
+        )
+        .map_err(|error| format!("materialized adapter actuals: {error:?}"))?;
+        registry.pretransfer_actuals.push((
+            reference.adapter.clone(),
+            reference.abi,
+            operation.clone(),
+            arguments,
+        ));
         registry.pretransfer_adapters.push(reference);
     }
-    registry
-        .invocation_bodies
-        .sort_by(|a, b| (&a.definition, a.instance).cmp(&(&b.definition, b.instance)));
-    registry
+    Ok(())
 }
 
 /// The definition of every static empty sequence; its instance names the

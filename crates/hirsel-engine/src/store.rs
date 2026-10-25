@@ -7,7 +7,9 @@
 //! still observes its value, so the store changes only how much is recomputed.
 use crate::memo::{ReadKey, Reads};
 use crate::{LoweringPolicy, QueryKind};
-pub use hirsel_artifact_store::{Action, Address, Association, Bytes, Domain, Output, Reference};
+pub use hirsel_artifact_store::{
+    Action, Address, Association, Bytes, Contents, Domain, MAX_RECORD, Output, Reference,
+};
 use hirsel_syntax::{ContentHash, DefPath};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
