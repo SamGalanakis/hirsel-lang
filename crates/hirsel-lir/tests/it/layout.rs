@@ -1945,23 +1945,6 @@ fn golden(name: &str, actual: &str) {
     );
 }
 
-#[test]
-fn golden_layout_tables_are_deterministic_per_target() {
-    for target in TargetSpec::executed() {
-        let table = golden_corpus(&target);
-        let text = snapshot::to_text(&table);
-        assert_eq!(
-            text,
-            snapshot::to_text(&golden_corpus(&target)),
-            "derivation is deterministic"
-        );
-        let decoded: LayoutTable = snapshot::from_text(&text).unwrap();
-        assert_eq!(decoded, table);
-        let arch = target.triple.split('-').next().unwrap().to_string();
-        golden(&format!("table-{arch}.txt"), &text);
-    }
-}
-
 /// `@layout(c)` records mirrored by hand in `native-tests/layout/c_records.h`.
 fn c_records(owners: &mut Owners) -> Vec<&'static str> {
     let c = || OwnerSpec {

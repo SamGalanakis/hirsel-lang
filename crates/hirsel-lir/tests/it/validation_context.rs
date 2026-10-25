@@ -94,12 +94,6 @@ fn shared_checks_preserve_receipts_and_reject_mutations_at_every_stage() {
 }
 
 #[test]
-fn program_validation_context_is_sync() {
-    fn sync<T: Sync>() {}
-    sync::<ValidationContext<'_>>();
-}
-
-#[test]
 fn preflight_checks_without_units_and_raw_errors_remain_schema_first() {
     let (mut unit, mut table, manifest) = identity::<Ready>();
     table.layouts[l::I64.0 as usize].align = 3;

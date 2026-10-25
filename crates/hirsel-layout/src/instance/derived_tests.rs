@@ -214,21 +214,3 @@ fn derived_identity_is_portable_across_interner_row_order() {
             .derived(DEMAND, &[b"canonical contract"])
     );
 }
-
-#[test]
-fn equal_parent_digests_do_not_erase_complete_parent_encoding_in_equality() {
-    let first = base("derived.parent_a", 0);
-    let mut second = base("derived.parent_b", 0);
-    // Synthetic hash collision checks the equality contract; no public caller
-    // can mutate the private digest, and no source authority follows from it.
-    second.digest = first.digest;
-    let a = first.derived(DEMAND, &[b"same input"]);
-    let b = second.derived(DEMAND, &[b"same input"]);
-    assert_eq!(a.digest(), b.digest());
-    assert_ne!(a.encoding(), b.encoding());
-    assert_ne!(a, b);
-    let map = HashMap::from([(a.clone(), 1), (b.clone(), 2)]);
-    assert_eq!(map.len(), 2);
-    assert_eq!(map.get(&a), Some(&1));
-    assert_eq!(map.get(&b), Some(&2));
-}

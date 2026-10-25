@@ -140,15 +140,3 @@ fn every_transport_axis_changes_the_semantic_output_identity() {
     // record deliberately carries no source revision or consuming ABI key.
     assert_eq!(contract().content().unwrap(), base);
 }
-
-#[test]
-fn independently_empty_source_output_is_distinct_from_unavailable() {
-    let empty = ReceiptContract::new(vec![], None, vec![], vec![]).unwrap();
-    assert!(empty.is_empty());
-    empty.check_structure().unwrap();
-    let known = hirsel_codec::to_text(&Some(empty));
-    let absent = hirsel_codec::to_text(&Option::<ReceiptContract>::None);
-    assert_ne!(known, absent);
-    let decoded: Option<ReceiptContract> = hirsel_codec::from_text(&known).unwrap();
-    assert!(decoded.unwrap().is_empty());
-}

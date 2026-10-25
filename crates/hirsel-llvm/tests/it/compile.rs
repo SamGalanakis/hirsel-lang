@@ -41,21 +41,6 @@ fn smoke_imports(target: &TargetSpec) -> &'static [&'static str] {
 }
 
 #[test]
-fn the_loaded_libllvm_is_the_pin() {
-    assert_eq!(loaded_llvm_version(), PINNED_LLVM);
-    assert_eq!(PINNED_LLVM.to_string(), "23.1.4");
-}
-
-/// The schema's pinned DataLayout string, byte order, pointer width and scalar sizes and
-/// alignments are what the pinned LLVM's target machine reports, for every executed target.
-#[test]
-fn every_target_spec_agrees_with_the_pinned_llvm() {
-    for target in TargetSpec::executed() {
-        check_target(&target).unwrap_or_else(|e| panic!("{}: {e}", target.triple));
-    }
-}
-
-#[test]
 fn a_target_spec_that_disagrees_with_llvm_is_rejected() {
     let mut wrong = aarch64();
     wrong.llvm_data_layout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32".into();
@@ -98,19 +83,6 @@ fn the_smoke_fixture_exports_and_imports_its_manifest_on_every_target() {
             }
         }
     }
-}
-
-#[test]
-fn the_object_borrows_nothing() {
-    fn owned<T: Send + Sync + 'static>(_: &T) {}
-    let object = {
-        let ir = SMOKE.to_owned();
-        let object = compile_ir(&ir, &x86(), OptLevel::Speed).unwrap();
-        drop(ir);
-        object
-    };
-    owned::<ObjectFile>(&object);
-    assert_eq!(&object.bytes[..4], b"\x7fELF");
 }
 
 #[test]

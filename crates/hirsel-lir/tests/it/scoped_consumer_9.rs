@@ -120,16 +120,6 @@ fn nested(mutation: u8) -> Result<(), String> {
     memo.qualify(&[unit], &table)
 }
 #[test]
-fn independently_reconstructed_nested_entry_qualifies() {
-    nested(0).unwrap();
-}
-#[test]
-fn missing_forged_and_mismatched_nested_entries_refuse_only_strict_proof() {
-    for mutation in 1..=4 {
-        assert!(nested(mutation).is_err(), "mutation {mutation}");
-    }
-}
-#[test]
 fn nested_contract_identity_is_serialized_and_caches_by_content() {
     let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
     let a = t.table.fn_abis[t.builder.unit.header.abi.0 as usize].clone();

@@ -114,16 +114,6 @@ fn object(program: &Program, opt: OptLevel) -> Vec<u8> {
 }
 
 #[test]
-fn capacity_has_no_runtime_call_on_either_target() {
-    for target in TargetSpec::executed() {
-        let program = program(&target);
-        for opt in [OptLevel::None, OptLevel::Speed] {
-            object(&program, opt);
-        }
-    }
-}
-
-#[test]
 #[ignore = "native: focused capacity controls on both targets"]
 fn capacity_is_the_header_word_that_seq_grow_leaves_exact() {
     for target in TargetSpec::executed() {

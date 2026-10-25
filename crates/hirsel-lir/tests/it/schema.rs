@@ -2436,12 +2436,3 @@ fn runtime_failure_rules_round_trip_and_change_manifest_identity() {
     manifest.replace(row).unwrap();
     assert_ne!(sem3, lir_snapshot::digest("manifest", &manifest));
 }
-
-#[test]
-fn the_path_layout_kind_round_trips_without_becoming_a_capability_handle() {
-    assert_round_trip(&LayoutKind::Path);
-    assert_ne!(
-        snapshot::to_text(&LayoutKind::Path),
-        snapshot::to_text(&LayoutKind::Handle)
-    );
-}

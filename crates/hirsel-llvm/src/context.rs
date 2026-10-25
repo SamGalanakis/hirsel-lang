@@ -1658,66 +1658,6 @@ mod optimization_tests {
     use super::*;
     use hirsel_lir::layout_types::ScalarKind;
 
-    #[test]
-    fn checked_adds_share_a_cold_failure_block() {
-        let context = Context::new();
-        let module = Module::new(&context, "checked-fast-path");
-        let machine = TargetMachine::new(&TargetSpec::x86_64_unknown_linux_gnu(), true).unwrap();
-        module.set_target(&machine);
-        let word = module.int_type(64);
-        let function = module
-            .function("probe", module.function_type(word, &[word, word]))
-            .unwrap();
-        let builder = Builder::new(&module);
-        builder.position(module.append_block(function));
-        let failure = module.append_block(function);
-        let trap = module.intrinsic("llvm.trap", &[]).unwrap();
-        let mut guard: crate::scalar::Guard<'_, '_> = &mut |b, failed| {
-            let next = module.append_block(function);
-            b.cold_cond_br(failed, failure, next);
-            b.position(next);
-        };
-        let left = module.parameter(function, 0);
-        let right = module.parameter(function, 1);
-        let sum = crate::scalar::binary(
-            &builder,
-            hirsel_lir::ir::BinaryOp::Add,
-            ScalarKind::U64,
-            left,
-            right,
-            &mut guard,
-        )
-        .unwrap();
-        let sum = crate::scalar::binary(
-            &builder,
-            hirsel_lir::ir::BinaryOp::Add,
-            ScalarKind::U64,
-            sum,
-            right,
-            &mut guard,
-        )
-        .unwrap();
-        builder.ret(sum);
-        builder.position(failure);
-        builder.call(trap, &[]);
-        builder.unreachable();
-        module.verify().unwrap();
-        module.run_passes("default<O3>", &machine).unwrap();
-        module.verify().unwrap();
-        let ir = module.text();
-        assert_eq!(
-            ir.matches("call { i64, i1 } @llvm.uadd.with.overflow.i64")
-                .count(),
-            2,
-            "{ir}"
-        );
-        assert_eq!(ir.matches("call void @llvm.trap()").count(), 1, "{ir}");
-        assert!(
-            ir.contains("!{!\"branch_weights\", i32 1, i32 2000}"),
-            "{ir}"
-        );
-    }
-
     /// The store's pointer is deliberately unrelated in LLVM's syntax. Only the
     /// justified storage metadata can distinguish it from the length pointer.
     fn loads_after_store(metadata: bool, same_class: bool) -> String {

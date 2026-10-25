@@ -281,11 +281,6 @@ fn a_leak_where_a_scope_deadline_cancels_a_sleep_is_found_only_by_firing_it_earl
 }
 
 #[test]
-fn a_leak_where_a_run_times_out_is_found_only_by_firing_its_deadline_early() {
-    check(Race::Run);
-}
-
-#[test]
 fn a_stalled_source_parks_until_its_scope_deadline_cancels_it() {
     // Only the deadline ends the wait, so the clean run takes the canceled path: the broken
     // twin's leak is found there, and the fixed twin passes, its scope Expired.

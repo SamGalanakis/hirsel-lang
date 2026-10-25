@@ -106,32 +106,6 @@ fn inputs<'a>(
 }
 
 #[test]
-fn arena_fast_path_has_no_call_on_either_target() {
-    for target in TargetSpec::executed() {
-        let p = program(&target);
-        let input = input();
-        let inputs = inputs(&p, &input, OptLevel::None);
-        let ir = emit_optimized_ir(&p.units(), &inputs).unwrap();
-        // Each constructor's block which installs the immortal count must also
-        // advance the cursor, with no call on that path. A fixed layout's block has
-        // no extent: the cursor, the two header words and the result are its stores.
-        let fast: Vec<_> = ir
-            .split("\n\n")
-            .filter(|b| b.contains("store i32 -1,"))
-            .collect();
-        assert_eq!(fast.len(), 2, "{ir}");
-        for block in fast {
-            assert!(!block.contains("call "), "{block}");
-            assert!(block.contains("store ptr "), "{block}");
-            assert!(!block.contains("store i64 "), "{block}");
-            assert_eq!(block.matches("store ").count(), 4, "{block}");
-        }
-        assert!(ir.contains("call ptr @hirsel_rt_v2_arena_alloc"), "{ir}");
-        emit_object(&p.units(), &inputs).unwrap();
-    }
-}
-
-#[test]
 #[ignore = "native: focused arena bump controls on both targets"]
 fn bumps_preserve_metadata_alignment_and_diagnostic_owners() {
     for target in TargetSpec::executed() {

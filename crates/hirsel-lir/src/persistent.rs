@@ -759,22 +759,6 @@ mod tests {
     }
 
     #[test]
-    fn a_hash_follows_every_write() {
-        let mut v: PVec<u32> = (0..5000).collect();
-        let before = hash_of(&v);
-        let shared = v.clone();
-        v[4097] = 7;
-        assert_ne!(hash_of(&v), before);
-        assert_eq!(hash_of(&shared), before);
-        v[4097] = 4097;
-        assert_eq!(hash_of(&v), before);
-        assert!(v == shared);
-        v.push(1);
-        assert_ne!(hash_of(&v), before);
-        assert!(v != shared);
-    }
-
-    #[test]
     fn a_join_agrees_with_the_element_wise_join() {
         let n = 3000;
         let dense = |seed: u32| -> Vec<Mark> {

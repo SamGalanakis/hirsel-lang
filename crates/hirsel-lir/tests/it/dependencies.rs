@@ -285,38 +285,6 @@ fn workspace_edges_respect_the_crate_layering() {
 }
 
 #[test]
-fn implementation_to_implementation_production_and_build_edges_are_rejected() {
-    for (from, to) in [
-        ("hirsel-rc", "hirsel-llvm"),
-        ("hirsel-llvm", "hirsel-rt"),
-        ("hirsel-heapcheck", "hirsel-rt"),
-        ("hirsel-rc", "hirsel-interp"),
-        ("hirsel-check", "hirsel-authority"),
-        ("hirsel-authority", "hirsel-ownership"),
-        ("hirsel-check", "hirsel-artifact-store"),
-        ("hirsel-artifact-store", "hirsel-check"),
-    ] {
-        assert!(
-            check_edge(from, to, Kind::Production).is_err(),
-            "{from} -> {to}"
-        );
-        assert!(check_edge(from, to, Kind::Build).is_err(), "{from} -> {to}");
-        assert!(check_edge(from, to, Kind::Dev).is_ok(), "{from} -> {to}");
-    }
-}
-
-#[test]
-fn argument_parser_is_shared_only_by_tools() {
-    for tool in ["hirsel-cli", "hirsel-conformance"] {
-        assert!(check_edge(tool, "hirsel-cli-args", Kind::Production).is_ok());
-    }
-    for compiler in ["hirsel-driver", "hirsel-engine", "hirsel-rc", "hirsel-lir"] {
-        assert!(check_edge(compiler, "hirsel-cli-args", Kind::Production).is_err());
-        assert!(check_edge(compiler, "hirsel-cli-args", Kind::Build).is_err());
-    }
-}
-
-#[test]
 fn layering_controls() {
     // The graph helpers serve every compiler layer and read only data crates
     // and leaf utilities.

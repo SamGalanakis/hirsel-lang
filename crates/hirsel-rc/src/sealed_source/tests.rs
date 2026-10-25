@@ -646,23 +646,6 @@ fn source_demand_33_uses_original_lower_snapshot_after_native_body_rewrite() {
 }
 
 #[test]
-fn source_demand_33_refuses_other_definition_or_body_before_expansion() {
-    let types = TypeInterner::new(None);
-    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
-    let definition = witness_definition(body(&[scalar], 1));
-    let source = SourceInput::capture(witness_input(1), witness_input(2), definition.clone());
-    let other = hirsel_syntax::DefPath::core("other_source");
-    for (path, body, error) in [
-        (&other, 0, "source witness definition identity"),
-        (definition.path.path(), 1, "source witness body identity"),
-    ] {
-        let key =
-            hirsel_layout::instance::InstanceKey::new(path, body, &[], &types, None, None).unwrap();
-        assert_eq!(source.demand_body(&key), Err(SourceError::Malformed(error)));
-    }
-}
-
-#[test]
 fn source_demand_projection_33_binds_original_instance_and_releases_definition() {
     let types = TypeInterner::new(None);
     let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));

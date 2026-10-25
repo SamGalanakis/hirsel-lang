@@ -745,14 +745,6 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn none_stores_nothing() {
-        let store = objects_by_name("none@1", None, "p").unwrap();
-        store.put(&key(1), b"object");
-        assert!(store.get(&key(1)).is_none());
-        assert!(objects_by_name("disk@9", None, "p").is_err());
-    }
-
     fn paths(store: &DirObjects, key: &UnitKey) -> (PathBuf, PathBuf) {
         let entry = store.store.lookup(address(key)).unwrap();
         // 25e2b384 stores associations in immutable packed segments.

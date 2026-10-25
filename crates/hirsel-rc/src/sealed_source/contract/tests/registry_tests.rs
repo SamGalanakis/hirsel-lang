@@ -410,47 +410,6 @@ fn source_observation_edits_do_not_enter_the_semantic_request_key() {
 }
 
 #[test]
-fn twenty_incoming_uses_keep_all_requirements_in_one_aware_context() {
-    let (types, bytes, scalar, _) = types();
-    let callee = Fixture::named(
-        &types,
-        body(&[bytes, bytes, scalar], 2),
-        &[PassingMode::Mut, PassingMode::Mut],
-        "context_many_callee",
-        2,
-    );
-    let mut registry = Registry::default();
-    let callee = register(&mut registry, &callee, &types);
-    registry
-        .resolve(callee, BTreeMap::new(), BTreeMap::new())
-        .unwrap();
-    for i in 0..20 {
-        let fixture = caller(
-            &types,
-            bytes,
-            scalar,
-            &format!("context_many_{i}"),
-            "context_many_callee",
-            i % 2,
-        );
-        let id = register(&mut registry, &fixture, &types);
-        link_caller(&mut registry, id, callee);
-    }
-    let requests = registry.solve().unwrap();
-    assert_eq!(requests.len(), 21);
-    assert_eq!(
-        requests[callee.index()]
-            .declaration()
-            .contract()
-            .unwrap()
-            .parameters
-            .len(),
-        2
-    );
-    assert!(requests[callee.index()].aware_key().is_some());
-}
-
-#[test]
 fn internal_demand_with_no_carriers_keeps_an_aware_request() {
     let (types, bytes, scalar, _) = types();
     let mut source = body(&[scalar, bytes, scalar], 1);

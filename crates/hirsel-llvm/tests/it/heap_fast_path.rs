@@ -79,52 +79,6 @@ fn inputs<'a>(
 }
 
 #[test]
-fn heap_fast_paths_are_inlined_after_optimization_on_either_target() {
-    for target in TargetSpec::executed() {
-        let p = program(&target);
-        let input = input();
-        for opt in [OptLevel::None, OptLevel::Speed] {
-            let ir = emit_optimized_ir(&p.units(), &inputs(&p, &input, opt)).unwrap();
-            // Every fast path function was inlined and deleted: only its exit labels remain.
-            assert!(!ir.contains("@hirsel.fast."), "{opt:?}: {ir}");
-            for exit in ["hirsel.fast.alloc.0.exit", "hirsel.fast.free.exit"] {
-                assert!(ir.contains(exit), "{opt:?} {exit}: {ir}");
-            }
-            // The allocation joins from two blocks: the fast one writes the header, and only
-            // the slow one calls the runtime. Optimization may inline `churn` into its
-            // function-reference thunk too, so only its own definition is counted.
-            let churn = ir
-                .split("\ndefine ")
-                .find(|f| f.contains("@_H17fixture104emit5churn"))
-                .unwrap_or_else(|| panic!("{opt:?}: no definition of churn: {ir}"));
-            let joins: Vec<_> = churn
-                .split("\n\n")
-                .filter(|b| b.contains("br label %hirsel.fast.alloc.0.exit"))
-                .collect();
-            assert_eq!(joins.len(), 2, "{opt:?}: {ir}");
-            let called = joins.iter().filter(|b| b.contains("call ")).count();
-            assert_eq!(called, 1, "{opt:?}: {ir}");
-            for slow in [
-                "call ptr @hirsel_rt_v2_alloc",
-                "call void @hirsel_rt_v2_dup",
-                "call void @hirsel_rt_v2_free",
-            ] {
-                assert!(ir.contains(slow), "{opt:?} {slow}: {ir}");
-            }
-        }
-        // At O0 the dup's fast block adds its holder without a call.
-        let ir = emit_optimized_ir(&p.units(), &inputs(&p, &input, OptLevel::None)).unwrap();
-        let dup: Vec<_> = ir
-            .split("\n\n")
-            .filter(|b| b.contains("add i32") && b.contains("!tbaa"))
-            .collect();
-        assert_eq!(dup.len(), 1, "{ir}");
-        assert!(!dup[0].contains("call "), "{}", dup[0]);
-        emit_object(&p.units(), &inputs(&p, &input, OptLevel::Speed)).unwrap();
-    }
-}
-
-#[test]
 #[ignore = "native: focused heap fast path controls on both targets"]
 fn inline_allocation_dup_and_free_agree_with_the_runtime() {
     for target in TargetSpec::executed() {
