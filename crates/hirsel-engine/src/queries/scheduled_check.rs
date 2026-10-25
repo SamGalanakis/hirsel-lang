@@ -7,6 +7,7 @@ use super::*;
 use crate::runtime::*;
 use crate::store::{Domain, Reference, ResultStore};
 use std::{sync::Mutex, task::Poll};
+mod products;
 mod scope;
 pub use scope::FrontCheckScope;
 pub const FRONT_CHECK_KIND: u32 = 0x4600_000a;

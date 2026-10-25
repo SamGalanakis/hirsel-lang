@@ -10,6 +10,10 @@ pub struct FrontCheckScope {
     _allowance: MemoryReservation,
 }
 impl FrontCheckScope {
+    pub(super) fn owner(&self) -> &Arc<FrontCheckQueries> {
+        &self._owner
+    }
+
     pub fn reads(&self) -> &BTreeMap<DefPath, Arc<Reads>> {
         &self.reads
     }
