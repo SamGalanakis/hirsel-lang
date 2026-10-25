@@ -387,12 +387,14 @@ signature works for the others:
 Declarations in `std@1/list`:
 
 ```hirsel
-fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}
+fn filled[T: plain](n: u64, take value: T) -> unique List[T]
+fn filled_copyable[T: copyable](n: u64, take value: T) -> List[T] uses {value}
 @preserves_unique(xs) fn truncate[T](mut xs: List[T], len: u64) -> () uses {xs}
 ```
 
 `filled` evaluates `n` and its taken seed `value` once, reserves capacity before copying, and
-returns exactly `n` copies of `value`. Copies of counted values share their owners
+returns exactly `n` copies of `value` in a deeply unique list. `filled_copyable` also
+accepts counted seeds; copies of counted values share their owners
 under ordinary copy-on-write semantics; no user clone callback runs. The fresh
 outer list needs one native allocation for a nonempty, nonzero-size element
 sequence of slot-addressable elements, with no intermediate list or geometric growth. An empty list uses no

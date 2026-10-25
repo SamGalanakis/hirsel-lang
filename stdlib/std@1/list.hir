@@ -5,7 +5,24 @@
 /// Reserves for the count, then copies the value into each initialized element.
 /// Packed elements occupy their active variant's width. Reservation uses the
 /// smallest width, so larger variants can require amortized backing growth.
-pub fn filled[T: copyable](n: u64, take value: T) -> List[T] uses {value} {
+pub fn filled[T: plain](n: u64, take value: T) -> unique List[T] {
+  let mut out: unique List[T] = []
+  // Keep reservation directly after construction: the native capacity proof
+  // recognizes the fresh empty list and removes growth checks from the loop.
+  if n != 0 {
+    core@1/list.reserve(mut out, n)
+    for i in 0u64..n {
+      core@1/list.push(mut out, copy value)
+    }
+  }
+  take out
+}
+
+/// Copies of counted seeds share their owners under copy-on-write.
+/// Reserves for the count, then copies the value into each initialized element.
+/// Packed elements occupy their active variant's width. Reservation uses the
+/// smallest width, so larger variants can require amortized backing growth.
+pub fn filled_copyable[T: copyable](n: u64, take value: T) -> List[T] uses {value} {
   let mut out: List[T] = []
   // Keep reservation directly after construction: the native capacity proof
   // recognizes the fresh empty list and removes growth checks from the loop.

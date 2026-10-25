@@ -24,7 +24,7 @@ pub fn main() -> Result[(), ()] {
     ],
     Bounds()
   )
-  let mut xs = list.filled(8, 0u8)
+  let mut xs: unique List[u8] = list.filled(8, 0u8)
   failure.check(list.len(xs) == 8 && xs[7] == 0, Bounds())
   xs[0] = 9
   list.truncate(mut xs, 18446744073709551615u64)
@@ -43,9 +43,11 @@ pub fn main() -> Result[(), ()] {
   list.truncate(mut shared, 1)
   failure.check(shared == [1] && alias == [1, 2, 3], Bounds())
   let seed: List[u64] = [1, 2]
-  let mut rows = list.filled(3, copy seed)
+  let mut rows = list.filled_copyable(3, copy seed)
   rows[0][0] = 9
   failure.check(seed == [1, 2] && rows[1] == [1, 2] && rows[2] == [1, 2], Bounds())
+  let zeros: unique List[u64] = list.filled(4, 0u64)
+  failure.check(zeros == [0u64, 0, 0, 0], Bounds())
   let units = list.filled(3, ())
   failure.check(list.len(units) == 3, Bounds())
   Ok(())

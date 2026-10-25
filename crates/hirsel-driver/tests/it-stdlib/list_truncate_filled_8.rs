@@ -266,3 +266,24 @@ fn impossible_reserve_preserves_fixed_shared_empty_and_packed_contents() {
         )
     });
 }
+
+#[test]
+fn filled_plain_header_excludes_counted_seeds() {
+    with_compiler_stack(|| {
+        let path = fixture("SEM", "SEM-4-list-filled-truncate-run");
+        let source =
+            "pub fn main() { let seed: List[u64] = [1]; let rows = list.filled(2, copy seed) }";
+        let mut loaded = load_program_source(&path, Some(source)).unwrap();
+        let output = loaded.check(LoweringPolicy::Comptime).unwrap();
+        assert_eq!(output.completion, CheckCompletion::Complete);
+        assert!(!output.diagnostics.is_empty());
+        assert!(
+            output
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("plain")),
+            "{:?}",
+            output.diagnostics
+        );
+    });
+}
