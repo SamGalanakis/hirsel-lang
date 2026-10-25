@@ -209,3 +209,4 @@ mod receipt_selection_33;
 mod prepared_source_inputs_49;
 mod receipt_factory_33;
 mod package_slots;
+mod native_hard_admission_19;
