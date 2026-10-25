@@ -648,7 +648,9 @@ impl DemandInstances {
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };
+        let recompute = options.validation == crate::native::Validation::EveryStage;
         if previous.is_some()
+            && !recompute
             && inputs.query_policy().reuse
             && let Some(product) = self.queries.lookup(key, action, &environment)
             && let Ok(output) = self.discovered(key, product, adapters.clone())
@@ -656,7 +658,7 @@ impl DemandInstances {
             return Ok(output);
         }
 
-        if previous.is_none() || !inputs.query_policy().reuse {
+        if previous.is_none() || recompute || !inputs.query_policy().reuse {
             self.queries.counts.misses += 1;
         }
         let recipe_bytes = self
