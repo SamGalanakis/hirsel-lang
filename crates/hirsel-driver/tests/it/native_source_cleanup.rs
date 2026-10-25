@@ -532,3 +532,113 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         );
     });
 }
+
+#[test]
+fn native_variant_children_keep_parent_finalizer_custody_on_success_and_failure() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = history::Runner::new(directory.path()).unwrap();
+        for active in [false, true] {
+            for bad in [false, true] {
+                let source = format!(
+                    r#"
+resource type Leaf {{out:Stdout,text:String}}
+drop(x) {{let _=out.print(x.out,x.text)}}
+resource type Outer {{out:Stdout,child:Option[Leaf],sibling:Leaf,bad:bool}}
+drop(x) {{
+  let _=out.print(x.out,"parent\n")
+  if x.bad {{let zero:u64=0u64;let _=1u64/zero}}
+}}
+pub fn main(rt:Io)->Result[(),GrantError] {{
+  let stdout=io.stdout(rt)?
+  let root=Outer(out:stdout,child:{child},sibling:Leaf(out:stdout,text:"sibling\n"),bad:{bad})
+  Ok(())
+}}
+"#,
+                    child = if active {
+                        "Some(Leaf(out:stdout,text:\"child\\n\"))"
+                    } else {
+                        "None()"
+                    }
+                );
+                let report = runner.run(&format!("variant-parent-{active}-{bad}"), &source);
+                assert_eq!(report.cells.len(), 4, "{report:#?}");
+                assert!(report.agrees(), "{report:#?}");
+                for cell in &report.cells {
+                    let observation = cell.observation.as_ref().unwrap();
+                    assert_eq!(
+                        observation.output,
+                        if active {
+                            b"parent\nsibling\nchild\n".as_slice()
+                        } else {
+                            b"parent\nsibling\n".as_slice()
+                        },
+                        "{report:#?}"
+                    );
+                    assert_eq!(observation.failures.len(), usize::from(bad), "{report:#?}");
+                    assert_eq!(
+                        observation.exit_code,
+                        if bad { None } else { Some(0) },
+                        "{report:#?}"
+                    );
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn native_variant_completion_before_owning_siblings_preserves_cleanup_joins() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = history::Runner::new(directory.path()).unwrap();
+        for active in [false, true] {
+            for bad in [false, true] {
+                let source = format!(
+                    r#"
+resource type Leaf {{out:Stdout,text:String}}
+drop(x) {{let _=out.print(x.out,x.text)}}
+resource type Branch {{out:Stdout,leaf:Leaf}}
+drop(x) {{let _=out.print(x.out,"branch\n")}}
+resource type Outer {{out:Stdout,sibling:Leaf,child:Option[Branch],bad:bool}}
+drop(x) {{
+  let _=out.print(x.out,"parent\n")
+  if x.bad {{let zero:u64=0u64;let _=1u64/zero}}
+}}
+pub fn main(rt:Io)->Result[(),GrantError] {{
+  let stdout=io.stdout(rt)?
+  let root=Outer(out:stdout,sibling:Leaf(out:stdout,text:"sibling\n"),child:{child},bad:{bad})
+  Ok(())
+}}
+"#,
+                    child = if active {
+                        "Some(Branch(out:stdout,leaf:Leaf(out:stdout,text:\"leaf\\n\")))"
+                    } else {
+                        "None()"
+                    }
+                );
+                let report = runner.run(&format!("variant-join-{active}-{bad}"), &source);
+                assert_eq!(report.cells.len(), 4, "{report:#?}");
+                assert!(report.agrees(), "{report:#?}");
+                for cell in &report.cells {
+                    let observation = cell.observation.as_ref().unwrap();
+                    assert_eq!(
+                        observation.output,
+                        if active {
+                            b"parent\nbranch\nleaf\nsibling\n".as_slice()
+                        } else {
+                            b"parent\nsibling\n".as_slice()
+                        },
+                        "{report:#?}"
+                    );
+                    assert_eq!(observation.failures.len(), usize::from(bad), "{report:#?}");
+                    assert_eq!(
+                        observation.exit_code,
+                        if bad { None } else { Some(0) },
+                        "{report:#?}"
+                    );
+                }
+            }
+        }
+    });
+}

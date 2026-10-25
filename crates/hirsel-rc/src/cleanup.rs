@@ -2134,6 +2134,71 @@ impl Lowering<'_, '_> {
         }
     }
 
+    /// Keep a completed projected owner absent across an arm join. Each
+    /// incoming false flag is checked against that arm's actual ownership;
+    /// the false successor preserves the subtree proof before phase maps
+    /// from inactive arms meet. No payload is read or transferred here.
+    fn completed_part(
+        &mut self,
+        slot: SlotId,
+        path: &[Step],
+        destination: EdgeId,
+        kind: BlockKind,
+        anchor: hirsel_lir::ir::SourceAnchorId,
+    ) -> Result<EdgeId, PassError> {
+        let boolean = self
+            .index
+            .scalar(hirsel_lir::layout_types::ScalarKind::Bool)
+            .ok_or_else(|| PassError::Malformed("cleanup completion needs bool layout".into()))?;
+        let ty = type_of(
+            &mut self.ed.unit,
+            ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
+            boolean,
+        );
+        let present = self.ed.value(ty, Holding::Plain);
+        let joined = self.ed.block(kind, &[present], anchor);
+        let path = flag_projection(self.ed, path)?;
+        self.ed
+            .unit
+            .tables
+            .init_flags
+            .push(hirsel_lir::ir::InitFlag {
+                value: present,
+                slot,
+                path,
+                environment: None,
+            });
+        let invalid = self.ed.block(kind, &[], anchor);
+        self.ed.unit.terminators[invalid.index()] = Terminator::InvariantFault {
+            reason: "completed variant still owns cleanup content".into(),
+        };
+        let yes = self.ed.edge(invalid, &[]);
+        self.ed.unit.terminators[joined.index()] = Terminator::Branch {
+            condition: present,
+            yes,
+            no: destination,
+        };
+        let absent = self.ed.value(ty, Holding::Plain);
+        let constant = hirsel_lir::ir::ConstantId(self.ed.unit.tables.constants.len() as u32);
+        self.ed
+            .unit
+            .tables
+            .constants
+            .push(hirsel_lir::ir::ConstantData {
+                ty,
+                value: hirsel_lir::ir::ConstantValue::Bool(false),
+            });
+        self.ed.code[self.ed.unit.entry.index()].insert(
+            0,
+            Inst::Const {
+                result: absent,
+                constant,
+            },
+        );
+        self.inserted.push((self.ed.unit.entry, 0));
+        Ok(self.ed.edge(joined, &[absent]))
+    }
+
     /// Select an intact variant's active arm. Ordinary variants use a
     /// temporary that each arm ends; resources retain their original slot
     /// so their own finalizer preserves the slot's cleanup order.
@@ -2182,6 +2247,13 @@ impl Lowering<'_, '_> {
             .get(&self.ed.unit.pools.values)
             .unwrap_or(&[])
             .to_vec();
+        let mut normal = self.ed.edge(joined, &[]);
+        let mut failure = self.ed.edge(exit.target, &exit_args);
+        if !held && !path.is_empty() {
+            normal = self.completed_part(slot, path, normal, kind, anchor)?;
+            failure =
+                self.completed_part(slot, path, failure, BlockKind::FailureCleanup, anchor)?;
+        }
         let variants = record.tag.as_ref().unwrap().variants.clone();
         let state = crate::insert::SlotState {
             live: Tri::Yes,
@@ -2260,7 +2332,7 @@ impl Lowering<'_, '_> {
                     });
                 }
                 self.ed.unit.terminators[dead.index()] =
-                    Terminator::Jump(self.ed.edge(exit.target, &exit_args));
+                    Terminator::Jump(extended(self.ed, failure, &[]));
                 let edge = self.ed.edge(dead, &[]);
                 let sub = Site {
                     slot,
@@ -2280,11 +2352,11 @@ impl Lowering<'_, '_> {
                         if_live: false,
                     });
                 }
-                self.ed.unit.terminators[end.index()] = Terminator::Jump(if failed {
-                    self.ed.edge(exit.target, &exit_args)
-                } else {
-                    self.ed.edge(joined, &[])
-                });
+                self.ed.unit.terminators[end.index()] = Terminator::Jump(extended(
+                    self.ed,
+                    if failed { failure } else { normal },
+                    &[],
+                ));
                 self.prepared.truncate(base);
                 arms.push(hirsel_lir::ir::SwitchArm {
                     value: variant.ordinal,

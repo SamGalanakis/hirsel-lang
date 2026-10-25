@@ -446,3 +446,80 @@ pub fn main()->Result[(),()] {
         );
     });
 }
+
+#[test]
+fn finalizer_obligation_52_variant_completion_precedes_an_owned_sibling() {
+    with_compiler_stack(|| {
+        let program = source_program(
+            r#"
+resource type Leaf {n:u64}
+drop(x) {()}
+resource type Branch {leaf:Leaf}
+drop(x) {()}
+resource type Outer {sibling:Leaf, child:Option[Branch]}
+drop(x) {()}
+pub fn main()->Result[(),()] {
+  let root=Outer(sibling:Leaf(n:11u64),child:Some(Branch(leaf:Leaf(n:7u64))))
+  Ok(())
+}
+"#,
+        );
+        let mut unit = main_unit(&program);
+        assert!(errors(&program, &unit, &program.operations).is_empty());
+        let flag = *unit
+            .tables
+            .init_flags
+            .iter()
+            .find(|f| f.path.len > 0)
+            .unwrap();
+        let (block, ordinal) = unit
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(i, b)| {
+                b.parameters
+                    .get(&unit.pools.values)
+                    .unwrap()
+                    .iter()
+                    .position(|v| *v == flag.value)
+                    .map(|ordinal| (BlockId(i as u32), ordinal))
+            })
+            .unwrap();
+        let edge = unit
+            .tables
+            .edges
+            .iter()
+            .position(|e| e.target == block)
+            .unwrap();
+        let ty = unit.values[flag.value.index()].ty;
+        let forged = ValueId(unit.values.len() as u32);
+        unit.values.push(unit.values[flag.value.index()].clone());
+        let constant = ConstantId(unit.tables.constants.len() as u32);
+        unit.tables.constants.push(ConstantData {
+            ty,
+            value: ConstantValue::Bool(true),
+        });
+        let mut code: Vec<_> = unit
+            .blocks
+            .iter()
+            .map(|b| b.instructions.get(&unit.instructions).unwrap().to_vec())
+            .collect();
+        code[unit.entry.index()].insert(
+            0,
+            Inst::Const {
+                result: forged,
+                constant,
+            },
+        );
+        replace_code(&mut unit, code);
+        let mut args = unit.tables.edges[edge]
+            .arguments
+            .get(&unit.pools.values)
+            .unwrap()
+            .to_vec();
+        args[ordinal] = forged;
+        unit.tables.edges[edge].arguments = PoolRange::push(&mut unit.pools.values, args);
+        let rejected = errors(&program, &unit, &program.operations);
+        assert!(rejected.iter().any(|e| matches!(e.kind, validate::ViolationKind::InitFlag {slot, ..} if slot == flag.slot)), "{rejected:?}");
+    });
+}
