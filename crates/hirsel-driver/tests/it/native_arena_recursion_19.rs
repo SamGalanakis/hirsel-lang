@@ -98,10 +98,14 @@ fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) ->
         retained: 1 << 20,
         stack: 0,
     };
+    // This witness measures ordinary production hits. EveryStage deliberately
+    // reconstructs warm Values and has its own recomputation control.
+    let mut options = native::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+    options.validation = native::Validation::Ready;
     let tasks = InstanceTasks::new(
         inputs,
         store.clone(),
-        native::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu()),
+        options,
         hirsel_syntax::ContentHash::of_bytes(b"recursive native arena witness"),
         weight,
         budget.reserve(16 << 20).unwrap(),
