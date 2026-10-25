@@ -1747,8 +1747,8 @@ fn generated_body_failure_uses_generated_source_in_every_engine() {
 
 #[test]
 fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
-    use hirsel_driver::native::{self, Backend, OptLevel, UnitObjects, Validation};
-    use hirsel_lir::objects::NoObjects;
+    use hirsel_driver::native::{self, Backend, OptLevel, Validation};
+    use hirsel_engine::store::{MemStore, ResultStore};
     use std::sync::Arc;
     let Some(runs) = hirsel_intern::under_salts(
         "native::generated_body_sites_and_objects_do_not_depend_on_id_assignment",
@@ -1757,26 +1757,24 @@ fn generated_body_sites_and_objects_do_not_depend_on_id_assignment() {
             with_compiler_stack(|| {
                 let mut transcript = String::new();
                 for (_, source, _, _, _) in generated_failure_sources() {
-                    let program = checked(&source);
+                    let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
+                    let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+                        .with_result_store(store.clone());
+                    let program = checked_in(&mut engine, &source);
                     transcript.push_str(&format!("{:?}\n", program.reference));
                     for backend in [Backend::Cranelift, Backend::Llvm] {
                         let mut options = native::Options::new(x86());
                         options.validation = Validation::EveryStage;
-                        options.objects = Some(UnitObjects {
-                            store: Arc::new(NoObjects),
+                        let ready = crate::native_object_products_19::compile(
+                            &mut engine,
+                            store.clone(),
                             backend,
-                            opt: OptLevel::None,
-                            debug: true,
-                            fuel: false,
-                            jobs: hirsel_intern::jobs::Jobs::new(2),
-                            byte_budget: None,
-                        });
-                        let ready = native::build(&program.validated, &options).unwrap();
-                        for (summary, object) in ready
-                            .summaries
-                            .iter()
-                            .zip(&ready.unit_objects.as_ref().unwrap().objects)
-                        {
+                            OptLevel::None,
+                            options,
+                            true,
+                            hirsel_intern::jobs::Jobs::new(2),
+                        );
+                        for (summary, object) in ready.summaries.iter().zip(&ready.objects) {
                             transcript.push_str(&format!("{:?}\n", object.digest()));
                             for site in &summary.sites {
                                 transcript.push_str(&format!(

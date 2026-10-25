@@ -138,10 +138,19 @@ impl NativeLinkSource {
             }
             for anchor in anchors {
                 let owner = context.record_owner(*anchor);
+                let canonical = owner.as_ref().and_then(|(owner, occurrence)| {
+                    context.record_source_anchor(owner, *occurrence)
+                });
+                // Raw source-map aliases can share the same content-owned
+                // identity and placed origin. Require the full codec identity
+                // to round-trip through its selected canonical alias.
                 if context.source_definition(*anchor) != Some(path)
-                    || owner.as_ref().and_then(|(owner, occurrence)| {
-                        context.record_source_anchor(owner, *occurrence)
-                    }) != Some(*anchor)
+                    || canonical.is_none_or(|canonical| {
+                        context.record_owner(canonical) != owner
+                            || context.source_definition(canonical) != Some(path)
+                            || facts.roots.sources.anchor(canonical)
+                                != facts.roots.sources.anchor(*anchor)
+                    })
                     || facts.roots.sources.anchor(*anchor).is_none()
                 {
                     return Err(failed(format!("settled source anchor differs for {path}")));
