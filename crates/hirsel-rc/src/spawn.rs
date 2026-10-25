@@ -237,7 +237,8 @@ pub(crate) fn op_free(units: &[LirUnit<Value>], table: &LayoutTable) -> HashMap<
 }
 
 /// A narrow normal-path proof. The first call after spawn must await its exact
-/// SSA result. No branch, drop, computation, or other operation is crossed.
+/// SSA result. Logical frame accounting is transparent; no branch, drop,
+/// computation, or other operation is crossed.
 pub(crate) fn immediately_awaited(u: &LirUnit<Value>, call: usize) -> bool {
     let Some(value) = u.tables.calls[call].result else {
         return false;
@@ -293,6 +294,8 @@ pub(crate) fn immediately_awaited(u: &LirUnit<Value>, call: usize) -> bool {
                 | Inst::BindOrigin { .. }
                 | Inst::BindFields { .. }
                 | Inst::EndOrigin { .. }
+                | Inst::FrameEnter { .. }
+                | Inst::FrameLeave
                 | Inst::EndScope { .. } => {}
                 _ => return false,
             }
