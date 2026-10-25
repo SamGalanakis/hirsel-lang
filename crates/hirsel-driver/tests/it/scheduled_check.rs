@@ -107,11 +107,21 @@ fn check_case(
             errors,
         )
         .unwrap();
+    // Match package checking: the requested policy applies to the root
+    // package; dependencies lower only their compile-time obligations.
+    let root = program.entry.0.package.clone();
     let plan = FrontCheckPlan {
         files: program
             .files
             .iter()
-            .map(|(file, context)| (*file, context.clone(), policy))
+            .map(|(file, context)| {
+                let lowering = if context.package == root {
+                    policy
+                } else {
+                    LoweringPolicy::Comptime
+                };
+                (*file, context.clone(), lowering)
+            })
             .collect(),
         front: front.clone(),
         lower: lower.clone(),
