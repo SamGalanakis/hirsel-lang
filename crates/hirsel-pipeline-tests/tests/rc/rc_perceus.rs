@@ -737,17 +737,18 @@ fn a_mut_element_argument_is_detached_after_the_last_argument() {
     assert_eq!(uniqueness_tests(source, "main"), 2);
 }
 
-/// Writes rooted in a `unique` parameter, and every write of an accepted
-/// `noalloc` body (MEM-5), need no detach.
+/// Every write of an accepted `noalloc` body (MEM-5) needs no detach. A
+/// `unique` `mut` parameter may be lent an arena List, never written in
+/// place, so its write is tested like any other.
 #[test]
-fn proven_unique_storage_is_written_in_place() {
+fn noalloc_storage_is_written_in_place() {
     assert_eq!(
         uniqueness_tests(
             "fn edit(mut xs: unique List[u64]) -> () { xs[0] = 2 }\n\
              fn main() -> u64 { 3 }",
             "edit",
         ),
-        0
+        1
     );
     assert_eq!(
         uniqueness_tests(

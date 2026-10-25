@@ -4954,6 +4954,7 @@ conformance/PROV/PROV-4-mut-content-between-bad.hir
 conformance/PROV/PROV-4-mut-content-builtin-bad.hir
 conformance/PROV/PROV-4-mut-content-replace-bad.hir
 conformance/PROV/PROV-4-mut-content-wrapper-bad.hir
+conformance/PROV/PROV-4-mut-unique-arena-write-run.hir
 conformance/PROV/PROV-4-nested-loop-field-element-run.hir
 conformance/PROV/PROV-4-placed-local-binding-result-bad.hir
 conformance/PROV/PROV-4-placed-local-binding-result-ok.hir

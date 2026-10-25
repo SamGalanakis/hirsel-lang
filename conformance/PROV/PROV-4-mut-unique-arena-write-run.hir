@@ -1,0 +1,32 @@
+// rule: PROV-4
+// expect: run
+// An arena List lent to a `unique` `mut` parameter is written there as a
+// fresh List, never in place, at its root and at a nested element.
+fn set0(mut xs: unique List[u64]) -> () uses {} {
+  xs[0] = 5u64
+}
+
+fn set_inner(mut rows: unique List[List[u64]]) -> () uses {} {
+  rows[0][1] = 7u64
+}
+
+fn inside(a: Arena) -> u64 uses {} {
+  let mut xs: unique List[u64] in a = [1u64, 2u64]
+  set0(mut xs)
+  let mut rows: unique List[List[u64]] in a = [[1u64, 2u64], [3u64]]
+  set_inner(mut rows)
+  xs[0] + xs[1] + rows[0][1] + rows[1][0]
+}
+
+pub fn main() -> Result[(), ()] uses {} {
+  let n: u64 = arena.with(
+    fn(a: Arena) -> u64 {
+      inside(a)
+    }
+  )
+  if n == 17 {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

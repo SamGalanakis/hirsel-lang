@@ -62,8 +62,8 @@ pub struct Proofs {
     /// MEM-5: an accepted `noalloc` body performs no detach not proven
     /// unnecessary, so none of its writes needs one.
     pub noalloc: bool,
-    /// Source ordinals of deep-unique (`unique`) parameters (MODE-2): writes
-    /// rooted in them never meet a shared block.
+    /// Source ordinals of deep-unique (`unique`) taken parameters (MODE-2):
+    /// writes rooted in them never meet a shared block.
     pub unique: Vec<u32>,
 }
 
@@ -82,15 +82,20 @@ impl Proofs {
                 .enumerate()
                 .filter(|(_, p)| {
                     // An arena block is never written in place: its header is
-                    // immortal, so the write detaches it.
+                    // immortal, so the write detaches it. A relation-free `mut`
+                    // parameter may be lent an arena-placed argument (PROV-4);
+                    // only a taken one is on the heap.
                     let arena = hirsel_syntax::DefPath::core("Arena");
-                    store.get(p.ty).is_some_and(|t| {
-                        t.modes.uniqueness == hirsel_types::Uniqueness::Unique
-                            && t.modes
-                                .relation
-                                .arenas(|o| hirsel_types::arena_parameter(store, f, o, 0, &arena))
-                                .is_empty()
-                    })
+                    p.passing != hirsel_syntax::PassingMode::Mut
+                        && store.get(p.ty).is_some_and(|t| {
+                            t.modes.uniqueness == hirsel_types::Uniqueness::Unique
+                                && t.modes
+                                    .relation
+                                    .arenas(|o| {
+                                        hirsel_types::arena_parameter(store, f, o, 0, &arena)
+                                    })
+                                    .is_empty()
+                        })
                 })
                 .map(|(i, _)| i as u32)
                 .collect(),
