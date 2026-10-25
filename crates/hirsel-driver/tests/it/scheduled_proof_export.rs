@@ -2,7 +2,7 @@ use hirsel_driver::*;
 use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
 
-fn export_case(source: &str, attach_native: bool, admitted: bool) {
+fn export_case(source: &str, attach_native: bool, admitted: bool, build: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -242,11 +242,11 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
                     before_reads,
                     "N-1 export input refuses before any original decode"
                 );
-                Some(
+                Some(std::rc::Rc::new(
                     export
                         .input_with_allowance(product, budget.reserve(required).unwrap())
                         .unwrap(),
-                )
+                ))
             } else {
                 None
             };
@@ -260,10 +260,57 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
             };
             let input = owned
                 .as_ref()
-                .map(FrontProofInput::input)
+                .map(|owned| owned.input())
                 .or(ordinary.as_ref())
                 .unwrap();
-            let actual = hirsel_proof_export::export(input);
+            let built = if build {
+                let owned = owned.as_ref().unwrap();
+                let required = owned.build_bytes().unwrap();
+                assert!(
+                    owned
+                        .clone()
+                        .build_with_allowance(budget.reserve(required - 1).unwrap())
+                        .is_err()
+                );
+                Some(
+                    owned
+                        .clone()
+                        .build_with_allowance(budget.reserve(required).unwrap())
+                        .unwrap(),
+                )
+            } else {
+                None
+            };
+            let encoded = built.as_ref().map(|built| {
+                assert!(
+                    built
+                        .export()
+                        .definitions
+                        .iter()
+                        .any(|section| !section.obligations.is_empty()),
+                    "exercise a real obligation table"
+                );
+                let required = built.output_bytes().unwrap();
+                assert!(
+                    built
+                        .encode_with_allowance(budget.reserve(required - 1).unwrap())
+                        .is_err()
+                );
+                let before = budget.reserved();
+                let encoded = built
+                    .encode_with_allowance(budget.reserve(required).unwrap())
+                    .unwrap();
+                assert_eq!(
+                    budget.reserved(),
+                    before + encoded.retained_bytes(),
+                    "temporary encoding charge is released before return"
+                );
+                encoded
+            });
+            let actual = encoded
+                .as_ref()
+                .map(|text| text.text().to_owned())
+                .unwrap_or_else(|| hirsel_proof_export::export(input));
             assert_eq!(lower.work_snapshot(), before_lower);
             assert_eq!(front.work_snapshot(), before_front);
             assert!(!input.annotations.is_empty());
@@ -281,6 +328,7 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
             assert!(read_rows.contains_key(&unused));
             drop(owned);
             drop(ordinary);
+            drop(built);
             runtime.shutdown();
             drop(program);
             assert_eq!(
@@ -288,6 +336,24 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
                 actual,
                 "the exact export remains available after loader/runtime shutdown"
             );
+            if let Some(encoded) = encoded {
+                let detached = encoded.clone();
+                assert_eq!(detached.text(), actual);
+                let before = budget.reserved();
+                let retained = encoded.retained_bytes();
+                drop(encoded);
+                assert_eq!(
+                    budget.reserved(),
+                    before,
+                    "detached clone keeps output admission"
+                );
+                drop(detached);
+                assert_eq!(
+                    budget.reserved(),
+                    before - retained,
+                    "last clone releases the one output grant"
+                );
+            }
         }
     });
 }
@@ -295,6 +361,7 @@ fn export_case(source: &str, attach_native: bool, admitted: bool) {
 fn source_export_matches_full_ps9_package_closure_private_views_annotations_and_positions() {
     export_case(
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        false,
         false,
         false,
     );
@@ -306,6 +373,7 @@ fn source_export_shares_exact_native_selected_run_and_completed_originals() {
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
         true,
         false,
+        false,
     );
 }
 
@@ -313,6 +381,17 @@ fn source_export_shares_exact_native_selected_run_and_completed_originals() {
 fn complete_ps9_input_admission_precedes_body_reads_and_matches_scalar_export() {
     export_case(
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        true,
+        true,
+        false,
+    );
+}
+
+#[test]
+fn full_ps9_build_and_text_admission_preserve_scalar_and_detached_ownership() {
+    export_case(
+        "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        true,
         true,
         true,
     );
