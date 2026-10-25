@@ -1046,11 +1046,22 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
             self.terminator(&unit.terminators[start.index()])?;
         }
+        let mut emitted = vec![false; count];
         for b in order {
             if state != 0 && b == start.index() {
                 continue;
             }
+            emitted[b] = true;
             self.emit_block(BlockId(b as u32))?;
+        }
+        // Blocks before this state's boundary never run here; a re-run
+        // preparation's failure edge, whose check passed before the save, may
+        // still name one.
+        for (b, done) in emitted.into_iter().enumerate() {
+            if !done {
+                self.b.switch_to_block(self.blocks[b]);
+                self.b.ins().trap(TRAP);
+            }
         }
         while let Some((location, profile, deferred)) = self.deferred.pop() {
             self.b.set_srcloc(location);

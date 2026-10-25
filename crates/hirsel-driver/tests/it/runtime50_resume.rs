@@ -127,7 +127,11 @@ fn parameterized_source(canceled: bool) -> String {
 
 /// The resumable symbols a backend's objects export, and whether a task body
 /// enters through the runtime's resume loop.
-fn routing(program: &ReadyProgram, backend: Backend, partition: Partition) -> (usize, bool) {
+pub(crate) fn routing(
+    program: &ReadyProgram,
+    backend: Backend,
+    partition: Partition,
+) -> (usize, bool) {
     let objects = native::emit_backend_objects(
         program,
         backend,
@@ -151,11 +155,11 @@ fn routing(program: &ReadyProgram, backend: Backend, partition: Partition) -> (u
 
 /// Every native backend agrees with the reference under `fixture`, and with
 /// `replay`, its recorded run replays to the same observation.
-fn agree(source: &str, fixture: &Fixture, label: &str) {
+pub(crate) fn agree(source: &str, fixture: &Fixture, label: &str) {
     agree_replayed(source, fixture, label, false)
 }
 
-fn agree_replayed(source: &str, fixture: &Fixture, label: &str, replay: bool) {
+pub(crate) fn agree_replayed(source: &str, fixture: &Fixture, label: &str, replay: bool) {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -280,7 +284,7 @@ type Line = (String, u32, u32, String, bool);
 /// Live and replayed standalone runs of `source` on both backends, under
 /// Ordered admission on four cores with forced migration, in the diagnostic
 /// archive with its compact trace.
-fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
+pub(crate) fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -389,7 +393,7 @@ fn compact_runs(source: &str, label: &str) -> Vec<Vec<Line>> {
 /// Each compact frame left its stack, which its worker pooled, and activated
 /// once at exactly the state it saved, on another worker: never its entry,
 /// never twice. Every task's last leave is followed by its activation.
-fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
+pub(crate) fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
     let mut saved: std::collections::BTreeMap<u32, (u32, String)> = Default::default();
     let mut activations = 0;
     for (kind, task, state, worker, pooled) in trace {

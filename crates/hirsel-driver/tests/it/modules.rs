@@ -192,3 +192,4 @@ mod native_arena_recursion_19;
 mod scheduled_checked_products;
 mod receipt_provider_33;
 mod loop_place_52;
+mod runtime52_resumed_preparation;
