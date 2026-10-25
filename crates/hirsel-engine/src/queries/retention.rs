@@ -65,7 +65,7 @@ impl QueryEngine {
         self.items.get(path)?.first()?;
         self.note_environment();
         let text = self.key_text(path, QueryKind::Summary).ok()?;
-        if text != summary.text || !self.execution_valid(path, reads) {
+        if text != summary.text {
             return None;
         }
         let entry = self.summaries.get(&id)?.clone();
@@ -82,7 +82,7 @@ impl QueryEngine {
         {
             return Some(summary.clone());
         }
-        if !self.memo_valid(path, &entry, text) {
+        if !self.execution_valid(path, reads) || !self.memo_valid(path, &entry, text) {
             return None;
         }
         Some(entry.result().ok()?.value.clone())
