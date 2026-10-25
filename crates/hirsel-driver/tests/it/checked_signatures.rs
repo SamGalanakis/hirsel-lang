@@ -41,9 +41,19 @@ fn checked_signature_inputs_keep_exact_coverage_private_views_and_source_owner()
                 .is_err()
         );
         assert_eq!(budget.reserved(), before);
+        let required = program
+            .engine
+            .front_checked_signatures_bytes(&front)
+            .unwrap();
+        assert!(
+            program
+                .engine
+                .front_checked_signatures(front.clone(), budget.reserve(required - 1).unwrap())
+                .is_err()
+        );
         let inputs = program
             .engine
-            .front_checked_signatures(front.clone(), budget.reserve(4 << 20).unwrap())
+            .front_checked_signatures(front.clone(), budget.reserve(required).unwrap())
             .unwrap();
         assert!(inputs.matches(&front));
         assert_eq!(inputs.environment(), &program.engine.proof_environment());
@@ -99,7 +109,7 @@ fn checked_signature_inputs_keep_exact_coverage_private_views_and_source_owner()
         drop(expected);
         drop(program);
         drop(front);
-        assert_eq!(budget.reserved(), before + (4 << 20));
+        assert_eq!(budget.reserved(), before + required);
         assert!(
             inputs.section(&hidden).is_some(),
             "header inspection keeps its source owner alive"
