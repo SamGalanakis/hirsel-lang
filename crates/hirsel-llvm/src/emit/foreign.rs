@@ -97,6 +97,22 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     types.push(pointer);
                     args.push(self.builder.load(pointer, place.ptr, place.align));
                 }
+                // A borrowed variable-size flat value: its bytes and their extent.
+                (
+                    ParameterPassing::PointerLength,
+                    ArgumentValue::Value(value),
+                    LayoutKind::Block { payload } | LayoutKind::Box { payload },
+                ) => {
+                    let payload = *payload;
+                    let place = if self.value_type(value)?.repr == ValueRepr::Uncounted {
+                        self.uncounted_payload(self.get(value)?, payload)?
+                    } else {
+                        self.payload(self.get(value)?, parameter.layout)?
+                    };
+                    types.extend([pointer, self.module.int_type(64)]);
+                    args.push(place.ptr);
+                    args.push(self.extent(place.layout, place.ptr)?);
+                }
                 // A borrowed record: the address of a copy C only reads.
                 (
                     ParameterPassing::ReadOnlyAddress | ParameterPassing::PointerLength,

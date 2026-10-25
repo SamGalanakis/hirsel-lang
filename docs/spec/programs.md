@@ -345,8 +345,12 @@ float passes as the C type of its width (`i32` as `int32_t`, `f64` as `double`);
 and `FnPtr[...]` as non-null pointers; `Option[Ptr[T]]` and
 `Option[FnPtr[...]]` as the same one-pointer ABI (zero for `None`, the pointer for
 `Some`); a borrowed `Bytes` as two arguments, `const uint8_t *` and
-`size_t`; a `@layout(c)` or flat record as its address (read-only when borrowed, writable
-for `mut`); and a `mut` number or pointer as its writable address. A result is `()`
+`size_t`; a `@layout(c)` or fixed-size flat record as its address (read-only when
+borrowed, writable for `mut`); a borrowed variable-size flat value as its bytes'
+`const uint8_t *` and their `size_t` extent, like a byte view; and a `mut` number or
+pointer as its writable address. C reads a `@layout(c)` type through the declarations
+`hirsel export --c-header` generates ([MEM-7](memory.md#mem-7-layout)); a variable-size
+flat value's bytes are private to Hirsel and C sees only their address and extent. A result is `()`
 (`void`), a sized numeric, a pointer or one of those nullable pointer options.
 
 **Null at the boundary.** `Ptr` and `FnPtr` are non-null. Every pointer C hands to

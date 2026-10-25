@@ -119,6 +119,25 @@ impl FnEmitter<'_, '_, '_> {
                     sig.params.push(AbiParam::new(PTR));
                     args.push(pointer);
                 }
+                // A borrowed variable-size flat value: its bytes and their extent.
+                (
+                    ParameterPassing::PointerLength,
+                    ArgumentValue::Value(value),
+                    LayoutKind::Block { payload } | LayoutKind::Box { payload },
+                ) => {
+                    let payload = *payload;
+                    let pointer = self.get1(value)?;
+                    let place = if self.value_type(value)?.repr == ValueRepr::Uncounted {
+                        self.uncounted_payload(pointer, payload)?
+                    } else {
+                        self.payload(pointer, parameter.layout)?
+                    };
+                    sig.params.push(AbiParam::new(PTR));
+                    sig.params.push(AbiParam::new(ir::types::I64));
+                    args.push(place.ptr);
+                    let extent = self.extent(place.layout, place.ptr)?;
+                    args.push(extent);
+                }
                 (
                     ParameterPassing::ReadOnlyAddress | ParameterPassing::PointerLength,
                     ArgumentValue::Value(value),

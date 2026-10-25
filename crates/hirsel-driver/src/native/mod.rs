@@ -7,6 +7,7 @@
 mod adapt;
 mod admission;
 mod ahead;
+mod c_abi;
 pub use ahead::{check_objects as check_ahead_objects, plan as ahead_plan};
 pub mod continuation;
 mod coverage;
@@ -57,7 +58,7 @@ pub use emit::{
 };
 pub use executable::{
     BuildProfile, build_path_native, build_path_native_backend,
-    build_path_native_backend_with_validation,
+    build_path_native_backend_with_validation, export_data_abi,
 };
 pub use heap::{HeapRun, HeapWorld, heap_campaign, heap_campaign_in, run_heap, run_heap_in};
 pub use hirsel_lir::emission::OptLevel;

@@ -2297,8 +2297,13 @@ fn link_launcher(
             }
         }
     }
-    // The externs resolve against the root's `unsafe ffi` libraries (PROG-4).
+    // The externs resolve against the root's `unsafe ffi` libraries (PROG-4), and those
+    // compiled from a generated header against its data ABI identities (MEM-7).
     let foreign = foreign_inputs(&kit, &target.triple, &program.foreign_links)?;
+    let mut inputs = inputs;
+    if let Some(abi) = &program.data_abi {
+        inputs.push(write(dir, "data-abi.o", &abi.object()?)?);
+    }
     let debug = toolchain.debug_info;
     let (kind, runtime) = match output {
         Output::Image(_) => unreachable!("an image links above"),
@@ -2323,7 +2328,16 @@ fn link_launcher(
         foreign: &foreign,
     };
     let (mut command, _) = link.command(&toolchain.lld, &executable)?;
-    checked(StageName::Link, &mut command)?;
+    checked(StageName::Link, &mut command).map_err(|error| {
+        match program
+            .data_abi
+            .as_ref()
+            .and_then(|abi| super::c_abi::refusal(abi, &error.message))
+        {
+            Some(refusal) => NativeError::new(StageName::Link, refusal),
+            None => error,
+        }
+    })?;
     Ok(Linked {
         path: executable,
         image: None,

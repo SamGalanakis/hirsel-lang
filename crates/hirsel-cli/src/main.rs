@@ -9,7 +9,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--stop] [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] [--trace-ownership <dir>] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [--trace-ownership <json>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--stop] [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] [--trace-ownership <dir>] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [--trace-ownership <json>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run|--c-header|--native-abi <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 const FMT_HELP: &str = "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic.";
 
@@ -234,7 +234,8 @@ enum Command {
         analysis: Option<String>,
     },
     Export {
-        run: bool,
+        /// `tir`, `run`, `c-header` or `native-abi`.
+        kind: &'static str,
         entry: OsString,
         output: OsString,
     },
@@ -791,18 +792,22 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             }
         }
         Some(Value(command)) if command == "export" => {
-            let run = match args.next()? {
-                Some(Long("tir")) => false,
-                Some(Long("run")) => true,
+            let kind = match args.next()? {
+                Some(Long("tir")) => "tir",
+                Some(Long("run")) => "run",
+                Some(Long("c-header")) => "c-header",
+                Some(Long("native-abi")) => "native-abi",
                 Some(arg) => return Err(arg.unexpected()),
-                None => return Err("export requires --tir or --run".into()),
+                None => {
+                    return Err("export requires --tir, --run, --c-header or --native-abi".into());
+                }
             };
             let entry = args.value()?;
             if !matches!(args.next()?, Some(Short('o'))) {
                 return Err("export requires -o".into());
             }
             Command::Export {
-                run,
+                kind,
                 entry,
                 output: args.value()?,
             }
@@ -1699,8 +1704,31 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                 }
             };
         }
-        Command::Export { run, entry, output } => {
-            if run {
+        Command::Export {
+            kind,
+            entry,
+            output,
+        } => {
+            if matches!(kind, "c-header" | "native-abi") {
+                let target = hirsel_driver::native::TargetSpec::x86_64_unknown_linux_gnu();
+                let header = kind == "c-header";
+                return match hirsel_driver::native::export_data_abi(
+                    Path::new(&entry),
+                    target,
+                    header,
+                ) {
+                    Ok(Ok(text)) => match std::fs::write(output, text) {
+                        Ok(()) => 0,
+                        Err(error) => tool_error(ToolError::Io(error), false),
+                    },
+                    Ok(Err(error)) => {
+                        eprintln!("export: {}", error.message);
+                        1
+                    }
+                    Err(error) => tool_error(error, false),
+                };
+            }
+            if kind == "run" {
                 return match hirsel_driver::export_run_path(Path::new(&entry)) {
                     Ok(bytes) => match std::fs::write(output, bytes) {
                         Ok(()) => 0,

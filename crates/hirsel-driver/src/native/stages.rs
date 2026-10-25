@@ -209,6 +209,8 @@ pub struct ReadyProgram {
     pub discharged: Discharge,
     /// The externs' libraries, bound with the revisions (PROG-4).
     pub foreign_links: Vec<hirsel_engine::LinkInput>,
+    /// The published data ABI, when foreign objects link (MEM-7, PROG-4).
+    pub data_abi: Option<super::c_abi::DataAbi>,
     /// Executables refuse to record or replay (PROG-4).
     pub foreign_unreplayable: bool,
     /// Each extern's dispatch word (S-13, `EmitInputs::foreign`).
@@ -363,6 +365,9 @@ impl ReadyProgram {
             })
             .collect::<Result<_, _>>()?;
         self.foreign_links = input.foreign_links.clone();
+        if !self.foreign_links.is_empty() {
+            self.data_abi = Some(super::c_abi::data_abi(input, &self.target)?);
+        }
         self.foreign_unreplayable = input.foreign_unreplayable;
         self.foreign_dispatch = super::foreign::dispatch(input);
         super::foreign::check_callbacks(self, input)?;
@@ -829,6 +834,7 @@ pub(super) fn build_program_roots(
         statics,
         discharged,
         foreign_links: Vec::new(),
+        data_abi: None,
         foreign_unreplayable: false,
         foreign_dispatch: BTreeMap::new(),
         escaping: BTreeSet::new(),
@@ -1034,6 +1040,7 @@ impl BuiltUnits {
             statics: self.statics,
             discharged: self.discharged,
             foreign_links: Vec::new(),
+            data_abi: None,
             foreign_unreplayable: false,
             escaping: BTreeSet::new(),
             fuel: options.objects.as_ref().is_some_and(|o| o.fuel),

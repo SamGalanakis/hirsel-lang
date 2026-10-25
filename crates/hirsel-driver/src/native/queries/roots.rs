@@ -879,6 +879,7 @@ pub(super) fn with_link_assembly<R>(
         statics,
         discharged: snapshot.options.discharge.clone(),
         foreign_links: vec![],
+        data_abi: None,
         foreign_unreplayable: false,
         foreign_dispatch: BTreeMap::new(),
         escaping: BTreeSet::new(),

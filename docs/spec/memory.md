@@ -304,7 +304,17 @@ itself a resource, is rejected, and so are `Inline[T, n]` of an `@soa` `T` and a
 rejection is a MEM-7 error at the `@soa` attribute, except a `Packed` occurrence, which is
 MEM-13.
 
-The native data ABI is unspecified.
+**Native data ABI.** A native build publishes the data ABI of its target: the runtime ABI
+version and, for every non-generic `@layout(c)` record and variant and every `@soa`
+element, a layout identity covering its size, alignment and field offsets. A `@layout(c)`
+record is the C struct of its fields in declaration order. A `@layout(c)` variant is the C
+struct of a `uint32_t` ordinal tag followed by a union of one struct per variant with
+fields; it has no niche. An `@soa` element publishes its row size, the start of its
+columns and each column's offset as a multiple of the capacity, with its tag width.
+`hirsel export --native-abi` writes this descriptor and `hirsel export --c-header` the C
+declarations, each asserting its size and offsets and referencing its identity's link
+symbol. Foreign code compiled from a header of another ABI version, target or layout
+does not link: the build refuses with PROG-4, naming the mismatch.
 
 ### MEM-8: Vectors
 

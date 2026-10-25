@@ -127,6 +127,43 @@ pub fn build_path_native_backend(
     )
 }
 
+/// `hirsel export --c-header` (or `--native-abi`, the JSON descriptor): the program's
+/// published native data ABI for `target` (MEM-7, PROG-4).
+pub fn export_data_abi(
+    source: &Path,
+    target: TargetSpec,
+    header: bool,
+) -> Result<Result<String, NativeError>, ToolError> {
+    crate::session::with_program(source, hirsel_engine::Verify::On, |loaded| {
+        loaded.check_for_execution()?;
+        let engine = &mut loaded.engine;
+        let input = engine
+            .export_native_input()
+            .map_err(|error| ToolError::Query {
+                error,
+                phase: engine.unavailable,
+                sources: engine.sources.clone(),
+            })?;
+        let validated = match engine.import_native_input(input) {
+            Ok(input) => input,
+            Err(error) => {
+                return Ok(Err(NativeError::new(
+                    StageName::Manifest,
+                    format!("the native snapshot: {error:?}"),
+                )));
+            }
+        };
+        let source = super::root_source::LinkSource::snapshot(&validated);
+        Ok(super::c_abi::data_abi(&source, &target).map(|abi| {
+            if header {
+                abi.header()
+            } else {
+                abi.descriptor()
+            }
+        }))
+    })
+}
+
 /// Build with an explicit LIR validation policy. Harnesses use `EveryStage`.
 pub fn build_path_native_backend_with_validation(
     source: &Path,

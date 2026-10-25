@@ -637,6 +637,7 @@ fn assemble(
         statics: plan.statics.clone(),
         discharged: Default::default(),
         foreign_links: Vec::new(),
+        data_abi: None,
         foreign_unreplayable: false,
         escaping: BTreeSet::new(),
         fuel: objects.fuel,
