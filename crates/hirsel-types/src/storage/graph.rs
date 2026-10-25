@@ -159,6 +159,16 @@ pub enum StorageCallee {
         result_path: SharedPath<OwnedTypePart>,
         requires_code: bool,
     },
+    /// Ordered operations also execute the actual Order.compare producer.
+    SortedMapInsert,
+    SortedMapGet {
+        result_path: SharedPath<OwnedTypePart>,
+        requires_code: bool,
+    },
+    SortedMapRemove {
+        result_path: SharedPath<OwnedTypePart>,
+        requires_code: bool,
+    },
     /// Move the actual child's stored result out of a reviewed Task carrier,
     /// preserving code producers as well as storage dependencies.
     TaskAwait,

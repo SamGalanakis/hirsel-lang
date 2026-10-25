@@ -1573,9 +1573,11 @@ impl Program<'_> {
                             holds_storage,
                             requires_code,
                         } => self.copy_to(&arguments, *holds_storage, *requires_code, strict),
-                        StorageCallee::MapInsert => {
+                        StorageCallee::MapInsert | StorageCallee::SortedMapInsert => {
+                            let offset =
+                                u32::from(matches!(callee, StorageCallee::SortedMapInsert));
                             let mut receiver = arguments
-                                .get(&ParamId(0))
+                                .get(&ParamId(offset))
                                 .cloned()
                                 .unwrap_or_else(Value::unknown);
                             let mut result = Summary::default();
@@ -1589,7 +1591,7 @@ impl Program<'_> {
                             );
                             for parameter in 1..=2 {
                                 let value = arguments
-                                    .get(&ParamId(parameter))
+                                    .get(&ParamId(parameter + offset))
                                     .cloned()
                                     .unwrap_or_else(Value::unknown);
                                 result.unknown |= value.payload.unknown;
@@ -1603,10 +1605,13 @@ impl Program<'_> {
                                     ),
                                 );
                             }
+                            if offset == 1 {
+                                result.join(&self.sorted_comparison(&arguments, summaries, strict));
+                            }
                             receiver.normalize(domain)?;
                             if let Some((_, place)) = argument_places
                                 .iter()
-                                .find(|(parameter, _)| *parameter == ParamId(0))
+                                .find(|(parameter, _)| *parameter == ParamId(offset))
                             {
                                 write(&mut state, place, receiver);
                             } else {
@@ -1621,9 +1626,22 @@ impl Program<'_> {
                         | StorageCallee::MapRemove {
                             result_path,
                             requires_code,
+                        }
+                        | StorageCallee::SortedMapGet {
+                            result_path,
+                            requires_code,
+                        }
+                        | StorageCallee::SortedMapRemove {
+                            result_path,
+                            requires_code,
                         } => {
+                            let ordered = matches!(
+                                callee,
+                                StorageCallee::SortedMapGet { .. }
+                                    | StorageCallee::SortedMapRemove { .. }
+                            );
                             let receiver = arguments
-                                .get(&ParamId(0))
+                                .get(&ParamId(u32::from(ordered)))
                                 .cloned()
                                 .unwrap_or_else(Value::unknown);
                             let mut value = receiver.project(
@@ -1639,7 +1657,16 @@ impl Program<'_> {
                                     result: value.prefixed(result_path),
                                     ..Summary::default()
                                 };
-                                if matches!(callee, StorageCallee::MapRemove { .. }) {
+                                if ordered {
+                                    result.join(
+                                        &self.sorted_comparison(&arguments, summaries, strict),
+                                    );
+                                }
+                                if matches!(
+                                    callee,
+                                    StorageCallee::MapRemove { .. }
+                                        | StorageCallee::SortedMapRemove { .. }
+                                ) {
                                     result.allocations.extend(
                                         receiver
                                             .payload
@@ -1649,7 +1676,7 @@ impl Program<'_> {
                                     );
                                     // Removing an entry only shrinks the set of possible
                                     // stored producers; retaining the original set is sound.
-                                    result.updates.insert(ParamId(0), receiver);
+                                    result.updates.insert(ParamId(u32::from(ordered)), receiver);
                                 }
                                 result
                             }
@@ -1729,7 +1756,10 @@ impl Program<'_> {
                         // MapInsert updated its exact receiver above. All other
                         // writes require the independently reconstructed callee
                         // output; an opaque/missing effect cannot retain old code.
-                        if matches!(callee, StorageCallee::MapInsert) {
+                        if matches!(
+                            callee,
+                            StorageCallee::MapInsert | StorageCallee::SortedMapInsert
+                        ) {
                             continue;
                         }
                         let Some((_, place)) = argument_places
@@ -2045,6 +2075,44 @@ impl Program<'_> {
         }
         result
     }
+    /// Ordered lookup may compare the requested key with any stored key.
+    /// Execute actual code with both provenances; the scalar comparison result
+    /// adds no stored-value producer and never replaces the map result.
+    fn sorted_comparison(
+        &self,
+        arguments: &BTreeMap<ParamId, Value>,
+        summaries: &[Summary],
+        strict: bool,
+    ) -> Summary {
+        let by = arguments
+            .get(&ParamId(0))
+            .cloned()
+            .unwrap_or_else(Value::unknown)
+            .project(&vec![OwnedTypePart::Field(0)].into());
+        let mut key = arguments
+            .get(&ParamId(1))
+            .cloned()
+            .unwrap_or_else(Value::unknown)
+            .project(&vec![OwnedTypePart::Elements, OwnedTypePart::Field(0)].into());
+        key.join(
+            &arguments
+                .get(&ParamId(2))
+                .cloned()
+                .unwrap_or_else(Value::unknown),
+        );
+        let mut result = self.invoke(
+            &by,
+            &BTreeMap::from([(ParamId(0), key.clone()), (ParamId(1), key)]),
+            summaries,
+            strict,
+            false,
+        );
+        result.result = Value::default();
+        result.unknown |= !result.updates.is_empty();
+        result.updates.clear();
+        result
+    }
+
     fn invoke(
         &self,
         value: &Value,
@@ -2696,6 +2764,108 @@ mod tests {
             Err(StorageProgramError::InvalidSuccessor { .. })
         ));
     }
+    #[test]
+    fn storage_sorted_comparator_effects_keep_both_key_provenances() {
+        for allocation in [None, Some(0), Some(1)] {
+            let mut operations = vec![];
+            if let Some(parameter) = allocation {
+                operations.push(unique(parameter, 2));
+            }
+            operations.push(StorageOp::Assign(vec![(
+                StoragePlace::root(3),
+                StorageValue::Fresh,
+            )]));
+            operations.push(StorageOp::Return(StoragePlace::root(3)));
+            let mut compare = body("sorted-compare", operations);
+            compare.inputs.push(input(1));
+            let callback = body(
+                "sorted-reader",
+                vec![
+                    StorageOp::Assign(vec![(
+                        StoragePlace::root(1),
+                        StorageValue::Callable {
+                            target: compare.callable,
+                            captures: vec![],
+                        },
+                    )]),
+                    StorageOp::Assign(vec![
+                        (
+                            StoragePlace::root(2),
+                            StorageValue::Construct {
+                                fields: vec![(
+                                    vec![OwnedTypePart::Field(0)].into(),
+                                    StoragePlace::root(1),
+                                )],
+                                placement: StoragePlacement::Independent,
+                            },
+                        ),
+                        (StoragePlace::root(3), StorageValue::Fresh),
+                    ]),
+                    StorageOp::Call {
+                        callee: StorageCallee::SortedMapGet {
+                            result_path: vec![OwnedTypePart::VariantField {
+                                variant: 1,
+                                field: 0,
+                            }]
+                            .into(),
+                            requires_code: false,
+                        },
+                        arguments: vec![
+                            (ParamId(0), StoragePlace::root(2)),
+                            (ParamId(1), StoragePlace::root(0)),
+                            (ParamId(2), StoragePlace::root(3)),
+                        ],
+                        mutations: vec![],
+                        destination: Some(StoragePlace::root(4)),
+                    },
+                    StorageOp::Assign(vec![(StoragePlace::root(5), StorageValue::Fresh)]),
+                    StorageOp::Return(StoragePlace::root(5)),
+                ],
+            );
+            let reader = read_callback(callback.callable);
+            let bodies = vec![compare.clone(), callback.clone(), reader.clone()];
+            let result = analyze(
+                &bodies,
+                &bodies
+                    .iter()
+                    .map(StorageDomain::for_body)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            if allocation.is_none() {
+                assert!(result.violations.is_empty(), "{result:?}");
+                assert_eq!(result.behaviors[1], StorageBehavior::empty());
+            } else {
+                assert!(
+                    result
+                        .violations
+                        .iter()
+                        .any(|v| matches!(v.failure, StorageReadFailure::AllocatesFromRoot(_))),
+                    "{result:?}"
+                );
+            }
+            let mut unknown = callback;
+            unknown.nodes[0].operation =
+                StorageOp::Assign(vec![(StoragePlace::root(1), StorageValue::Unknown)]);
+            let bodies = vec![compare, unknown, reader];
+            let result = analyze(
+                &bodies,
+                &bodies
+                    .iter()
+                    .map(StorageDomain::for_body)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            assert!(
+                result
+                    .violations
+                    .iter()
+                    .any(|v| v.failure == StorageReadFailure::UnknownCallback),
+                "{result:?}"
+            );
+        }
+    }
+
     #[test]
     fn storage_map_removal_charges_receiver_and_preserves_possible_values() {
         let selected: Path = vec![OwnedTypePart::VariantField {

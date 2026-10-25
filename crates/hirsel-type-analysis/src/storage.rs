@@ -119,11 +119,17 @@ impl StorageDomain {
                     match callee {
                         StorageCallee::MapInsert
                         | StorageCallee::MapGet { .. }
-                        | StorageCallee::MapRemove { .. } => {
+                        | StorageCallee::MapRemove { .. }
+                        | StorageCallee::SortedMapInsert
+                        | StorageCallee::SortedMapGet { .. }
+                        | StorageCallee::SortedMapRemove { .. } => {
+                            add(&vec![OwnedTypePart::Field(0)].into());
                             add(&vec![OwnedTypePart::Elements, OwnedTypePart::Field(0)].into());
                             add(&vec![OwnedTypePart::Elements, OwnedTypePart::Field(1)].into());
                             if let StorageCallee::MapGet { result_path, .. }
-                            | StorageCallee::MapRemove { result_path, .. } = callee
+                            | StorageCallee::MapRemove { result_path, .. }
+                            | StorageCallee::SortedMapGet { result_path, .. }
+                            | StorageCallee::SortedMapRemove { result_path, .. } = callee
                             {
                                 add(result_path);
                             }

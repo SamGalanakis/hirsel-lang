@@ -501,7 +501,7 @@ impl Producer<'_> {
             },
         }
     }
-    fn map_arguments(&self, ty: TypeId) -> Option<Vec<TypeId>> {
+    fn map_arguments(&self, ty: TypeId, ordered: bool) -> Option<Vec<TypeId>> {
         let mut ty = ty;
         if let TypeKind::Named {
             definition,
@@ -526,16 +526,23 @@ impl Producer<'_> {
             .ok()?;
         }
         match &self.types.row(ty).kind {
-            TypeKind::Builtin {
-                kind: BuiltinType::Map,
-                arguments,
-            } if arguments.len() == 2 => arguments
-                .iter()
-                .map(|argument| match argument {
-                    GenericArgument::Type(ty) => Some(*ty),
-                    _ => None,
-                })
-                .collect(),
+            TypeKind::Builtin { kind, arguments }
+                if *kind
+                    == if ordered {
+                        BuiltinType::SortedMap
+                    } else {
+                        BuiltinType::Map
+                    }
+                    && arguments.len() == 2 =>
+            {
+                arguments
+                    .iter()
+                    .map(|argument| match argument {
+                        GenericArgument::Type(ty) => Some(*ty),
+                        _ => None,
+                    })
+                    .collect()
+            }
             _ => None,
         }
     }
@@ -552,34 +559,107 @@ impl Producer<'_> {
         {
             return None;
         }
-        let Some(first) = function.parameters.first() else {
+        let ordered = path.is_core("sorted_map.insert")
+            || path.is_core("sorted_map.get")
+            || path.is_core("sorted_map.remove");
+        let offset = usize::from(ordered);
+        let Some(first) = function.parameters.get(offset) else {
             return None;
         };
-        let Some(arguments) = self.map_arguments(first.ty) else {
+        let Some(arguments) = self.map_arguments(first.ty, ordered) else {
             return None;
         };
-        if !matches!(&function.generics[0], GenericParameter::Type { bounds, .. } if bounds.contains(&Bound::Key))
+        if !matches!(&function.generics[0], GenericParameter::Type { bounds, .. } if ordered || bounds.contains(&Bound::Key))
             || !matches!(&function.generics[1], GenericParameter::Type { .. })
         {
             return None;
         }
-        if path.is_core("map.insert") {
-            let reviewed = function.parameters.len() == 3
+        if ordered {
+            let by = &function.parameters[0];
+            let TypeKind::Named {
+                definition,
+                arguments: order_arguments,
+            } = &self.types.row(by.ty).kind
+            else {
+                return None;
+            };
+            if by.passing != PassingMode::Borrow
+                || !definition.path().is_core("Order")
+                || !matches!(order_arguments.as_slice(), [GenericArgument::Type(key)] if self.types.semantic_eq(*key, arguments[0]))
+            {
+                return None;
+            }
+            let order = self.signatures.get(*definition)?;
+            let SignatureKind::Type(declaration) = &order.kind else {
+                return None;
+            };
+            let Some(representation) = declaration.representation else {
+                return None;
+            };
+            let Ok(representation) = substitute(
+                self.types,
+                &TypeMemo::new(),
+                representation,
+                &Substitution {
+                    binder: Some(GenericBinder::Bound(0)),
+                    arguments: order_arguments,
+                    authorities: &vec![AuthoritySummary::Unknown; order_arguments.len()],
+                    roles: &order.metadata.roles,
+                },
+            ) else {
+                return None;
+            };
+            let Ok(key) = shift_type_binders(self.types, arguments[0], 1) else {
+                return None;
+            };
+            let TypeKind::Record(fields) = &self.types.row(representation).kind else {
+                return None;
+            };
+            if fields.len() != 1 || fields[0].name.as_str() != "compare" {
+                return None;
+            }
+            let TypeKind::Function(compare) = &self.types.row(fields[0].ty).kind else {
+                return None;
+            };
+            if !compare.generics.is_empty()
+                || compare.parameters.len() != 2
+                || compare
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.passing != PassingMode::Borrow)
+                || compare
+                    .parameters
+                    .iter()
+                    .any(|parameter| self.types.row(parameter.ty).kind != self.types.row(key).kind)
+                || self.types.row(compare.result).kind != TypeKind::Primitive(Primitive::I32)
+                || compare.incomplete
+                || compare.foreign.is_some()
+                || compare.error.is_some()
+            {
+                return None;
+            }
+        }
+        if path.is_core("map.insert") || path.is_core("sorted_map.insert") {
+            let reviewed = function.parameters.len() == 3 + offset
                 && first.passing == PassingMode::Mut
-                && function.parameters[1].passing == PassingMode::Take
-                && function.parameters[2].passing == PassingMode::Take
+                && function.parameters[1 + offset].passing == PassingMode::Take
+                && function.parameters[2 + offset].passing == PassingMode::Take
                 && self
                     .types
-                    .semantic_eq(function.parameters[1].ty, arguments[0])
+                    .semantic_eq(function.parameters[1 + offset].ty, arguments[0])
                 && self
                     .types
-                    .semantic_eq(function.parameters[2].ty, arguments[1])
+                    .semantic_eq(function.parameters[2 + offset].ty, arguments[1])
                 && matches!(&self.types.row(function.result).kind, TypeKind::Tuple(fields) if fields.is_empty())
                 && function.allocation == Allocation::MayAllocate;
-            return reviewed.then_some(StorageCallee::MapInsert);
+            return reviewed.then_some(if ordered {
+                StorageCallee::SortedMapInsert
+            } else {
+                StorageCallee::MapInsert
+            });
         }
-        let removing = path.is_core("map.remove");
-        if function.parameters.len() != 2
+        let removing = path.is_core("map.remove") || path.is_core("sorted_map.remove");
+        if function.parameters.len() != 2 + offset
             || first.passing
                 != if removing {
                     PassingMode::Mut
@@ -587,10 +667,11 @@ impl Producer<'_> {
                     PassingMode::Borrow
                 }
             || removing && self.types.row(first.ty).modes.uniqueness != Uniqueness::Unique
-            || function.parameters[1].passing != PassingMode::Borrow
-            || self.types.row(function.parameters[1].ty).kind != self.types.row(arguments[0]).kind
+            || function.parameters[1 + offset].passing != PassingMode::Borrow
+            || self.types.row(function.parameters[1 + offset].ty).kind
+                != self.types.row(arguments[0]).kind
             || function.allocation
-                != if removing {
+                != if removing || ordered {
                     Allocation::MayAllocate
                 } else {
                     Allocation::NoAlloc
@@ -642,7 +723,7 @@ impl Producer<'_> {
                 return None;
             }
         } else if reaches.len() != 1
-            || !matches!(&reaches[0], Reach::Place(Origin { root: OriginRoot::Parameter(ParameterRef::Bound { depth: 0, parameter: ParamId(0) }), fields }) if fields.is_empty())
+            || !matches!(&reaches[0], Reach::Place(Origin { root: OriginRoot::Parameter(ParameterRef::Bound { depth: 0, parameter }), fields }) if *parameter == ParamId(offset as u32) && fields.is_empty())
         {
             return None;
         }
@@ -655,7 +736,19 @@ impl Producer<'_> {
             TypeKind::Named { arguments, .. } => arguments.iter().any(|argument| matches!(argument, GenericArgument::Type(ty) if matches!(self.types.row(*ty).kind, TypeKind::Function(_)))),
             _ => false,
         };
-        Some(if removing {
+        Some(if ordered {
+            if removing {
+                StorageCallee::SortedMapRemove {
+                    result_path,
+                    requires_code,
+                }
+            } else {
+                StorageCallee::SortedMapGet {
+                    result_path,
+                    requires_code,
+                }
+            }
+        } else if removing {
             StorageCallee::MapRemove {
                 result_path,
                 requires_code,
@@ -871,7 +964,13 @@ impl Producer<'_> {
                 .into(),
             };
         }
-        if path.is_core("map.insert") || path.is_core("map.get") || path.is_core("map.remove") {
+        if path.is_core("map.insert")
+            || path.is_core("map.get")
+            || path.is_core("map.remove")
+            || path.is_core("sorted_map.insert")
+            || path.is_core("sorted_map.get")
+            || path.is_core("sorted_map.remove")
+        {
             return result
                 .and_then(|result| self.map_callee(path, function, result))
                 .unwrap_or_else(unknown_callee);
