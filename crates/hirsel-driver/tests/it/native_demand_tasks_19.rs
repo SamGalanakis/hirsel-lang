@@ -95,10 +95,14 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
             let budget = ProcessBudget::new(runtime_bytes + (16 << 20));
             let trace = hirsel_lir::construction::ValueTrace::default();
             let _observe = trace.enter();
+            // This control exercises production hit admission; EveryStage
+            // intentionally recomputes instead of consuming stored Values.
+            let mut options = native::Options::new(target.clone());
+            options.validation = native::Validation::Ready;
             let tasks = InstanceTasks::new(
                 inputs,
                 store.clone(),
-                native::Options::new(target.clone()),
+                options,
                 policy,
                 MemoryWeight {
                     scratch: 16 << 20,
