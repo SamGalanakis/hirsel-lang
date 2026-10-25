@@ -1303,18 +1303,22 @@ pub fn main(rt:Io)->Result[(),GrantError] {
             assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
             let input = engine.export_native_input().unwrap();
             let input = engine.import_native_input(input).unwrap();
-            let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
-            options.objects = Some(super::super::UnitObjects {
-                store: std::sync::Arc::new(hirsel_lir::objects::NoObjects),
-                backend: super::super::Backend::Cranelift,
-                opt: hirsel_lir::emission::OptLevel::None,
-                debug: false,
-                fuel: false,
-                jobs: hirsel_intern::jobs::Jobs::ONE,
-                byte_budget: None,
-            });
+            let options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
             let mut ready = build(&input, &options).unwrap();
-            let mut objects = ready.unit_objects.as_ref().unwrap().objects.clone();
+            let mut objects = (0..ready.units.len())
+                .map(|owner| {
+                    super::super::emit::emit_registered(
+                        &ready,
+                        super::super::Backend::Cranelift,
+                        hirsel_lir::emission::OptLevel::None,
+                        |selected| selected == owner,
+                        &BTreeSet::new(),
+                        false,
+                        None,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
             ready.check_semantic_units(&objects).unwrap();
             let definition = ready.summaries[0].definition.clone();
             ready.summaries[0].definition = DefPath::core("unselected");
