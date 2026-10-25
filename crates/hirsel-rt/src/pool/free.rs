@@ -126,6 +126,9 @@ pub(crate) enum Leave {
         owner: Owner,
         yielded: bool,
     },
+    /// A role-free object park (`tasks::free::park_registered`): the save
+    /// callback parks the row and reads the owner under its own role.
+    Park,
     /// A saved compact frame left its stack for good (`tasks::compact`).
     Compact,
     Complete,
@@ -428,10 +431,21 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner)
 /// The owner is the one admit() would read from the row at wake time: a
 /// parked row's owner never changes (only a running task pins or unpins,
 /// and its park leaves it unpinned), and a token is taken only for a task
-/// still parked in, or entering, the wait it registered for.
+/// still parked in, or entering, the wait it registered for. A task's own
+/// token ([`own_token`]) has none: its role-free park's save sets the owner
+/// before any wake can publish the frame.
 pub(crate) struct Token {
     frame: Arc<Frame>,
-    owner: usize,
+    owner: Option<usize>,
+}
+
+impl Clone for Token {
+    fn clone(&self) -> Self {
+        Self {
+            frame: self.frame.clone(),
+            owner: self.owner,
+        }
+    }
 }
 
 /// The running task's wake token, or `None` without physical dispatch.
@@ -446,7 +460,25 @@ pub(crate) unsafe fn token(run: *mut RunShared, task: TaskKey, owner: Owner) -> 
         .unwrap_or_else(|| fault("a wake token for a stale task key"));
     slot.as_ref().map(|frame| Token {
         frame: frame.clone(),
-        owner: owner_word(owner),
+        owner: Some(owner_word(owner)),
+    })
+}
+
+/// The running task's own wake token, which it keeps for its role-free
+/// object parks (`Leave::Park`), or `None` without physical dispatch. Its
+/// frame is the task's for life: a lent inline child's is its parent's.
+/// # Safety
+/// As for [`token`].
+pub(crate) unsafe fn own_token(run: *mut RunShared, task: TaskKey) -> Option<Token> {
+    if !enabled(unsafe { &*run }) {
+        return None;
+    }
+    // SAFETY: the role owns this task lookup.
+    let (slot, _) = unsafe { crate::tasks::dispatch_frame(run, task) }
+        .unwrap_or_else(|| fault("a wake token for a stale task key"));
+    slot.as_ref().map(|frame| Token {
+        frame: frame.clone(),
+        owner: None,
     })
 }
 
@@ -459,7 +491,9 @@ pub(crate) unsafe fn token(run: *mut RunShared, task: TaskKey, owner: Owner) -> 
 pub(crate) unsafe fn notify(run: *mut RunShared, token: &Token) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
-    token.frame.placement.set_owner(token.owner);
+    if let Some(owner) = token.owner {
+        token.frame.placement.set_owner(owner);
+    }
     if let Some(queued) = token.frame.notification.notify() {
         publish(
             execs,
@@ -697,6 +731,26 @@ pub(crate) unsafe fn suspend_current(ctx: *mut TaskCtx, yielded: bool) {
     }
 }
 
+/// Suspend a segment parked on an object wait it registered without the
+/// role. The idle continuation parks its row and sets its owner under the
+/// save callback's role, before its notification state settles: a wake that
+/// beat the save republishes the frame (`saved`). It returns without the role.
+///
+/// # Safety
+/// The caller is the running task at role depth zero, on a compute or home
+/// worker. No scheduler, object, worker, or run borrow may survive the switch.
+pub(crate) unsafe fn park_current(ctx: *mut TaskCtx) {
+    // SAFETY: caller contract; only this thread touches its Exec cells.
+    unsafe {
+        (*ctx).switch_out();
+        let execs = execs(ctx);
+        let me = current(execs);
+        assert!((*me).leaving.replace(Some(Leave::Park)).is_none());
+        let idle = idle_of(ctx, execs, me);
+        fiber::switch(&raw mut (*ctx).task_sp, idle);
+    }
+}
+
 /// Abandon completed execution ownership. The idle continuation invalidates
 /// notifications before releasing its activity reservation or reusing a stack.
 ///
@@ -871,14 +925,26 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
                 );
             }
         }
-        Leave::Suspend { owner, yielded } => {
+        Leave::Suspend { .. } | Leave::Park => {
             let image = running.value_mut();
             image.sp = unsafe { (*image.ctx).task_sp };
-            frame.placement.set_owner(owner_word(owner));
             let task = image.task;
             #[cfg(feature = "diagnostic")]
             crate::compact_trace::held(task.slot);
-            unsafe { crate::tasks::after_save(run, task, false) };
+            let yielded = match leaving {
+                Leave::Suspend { owner, yielded } => {
+                    frame.placement.set_owner(owner_word(owner));
+                    unsafe { crate::tasks::after_save(run, task, false) };
+                    yielded
+                }
+                _ => {
+                    // The row parks before its save can take a wake.
+                    if let Some(owner) = unsafe { crate::tasks::after_park(run, task, image.ctx) } {
+                        frame.placement.set_owner(owner_word(owner));
+                    }
+                    false
+                }
+            };
             #[cfg(test)]
             if let Some(hook) = execs
                 .dispatch

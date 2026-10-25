@@ -395,6 +395,9 @@ pub(crate) unsafe fn finish(
 /// # Safety
 /// This is the running child after body/environment cleanup, with the role.
 pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> Stopped<()> {
+    // The task waits on no object again; its row's retirement must not wait
+    // for the frame reference its own wake token keeps.
+    super::objects::release_wake(ctx);
     let (path, first_end, scope) = role::with_role(ctx, |s| {
         let row = s.task(index);
         let scope = row.scope.expect("a child has a scope");

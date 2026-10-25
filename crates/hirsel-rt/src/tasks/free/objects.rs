@@ -54,6 +54,11 @@ pub(crate) struct OpLocal {
     replay: Option<super::replay::Token>,
     /// This task's spawn path, for the failure chain a kill keeps.
     path: Option<Vec<u32>>,
+    /// This task's own wake token, taken once under the role, which its
+    /// role-free registrations keep in the cell.
+    wake: Option<crate::pool::free::Token>,
+    /// The wait of a role-free park, from its switch to its save callback.
+    parking: Option<Wait>,
     /// Registry rows a role-free close left for this task's next role entry.
     retired: Vec<Retired>,
 }
@@ -114,7 +119,20 @@ pub(super) fn keep_mutex(ctx: *mut TaskCtx, word: u64, cell: &Arc<crate::sync::M
         let path = role::with_role(ctx, |s| s.task(me).path.clone());
         unsafe { (*ctx).free_ops.path = Some(path) };
     }
+    keep_wake(ctx);
     unsafe { (*ctx).free_ops.mutexes.keep(word, || cell.clone()) };
+}
+
+/// The wait the running task's role-free park leaves for its save callback.
+pub(super) fn parking(ctx: *mut TaskCtx, wait: Wait) {
+    assert!(unsafe { (*ctx).free_ops.parking.replace(wait) }.is_none());
+}
+
+/// The wait a role-free park left, read once by its save callback.
+/// # Safety
+/// The caller's idle continuation owns the suspended image `ctx`.
+pub(crate) unsafe fn parked(ctx: *mut TaskCtx) -> Option<Wait> {
+    unsafe { (*ctx).free_ops.parking.take() }
 }
 
 /// Lifecycle administration a role-free close left: its closed rows retire
@@ -142,6 +160,22 @@ pub(super) fn keep_image(ctx: *mut TaskCtx, word: u64, image: &Arc<crate::sync::
     unsafe { (*ctx).free_ops.images.keep(word, || image.clone()) };
 }
 
+/// Take this task's own wake token once, with its first object lease, for
+/// the role-free registrations that lease's cell keeps.
+fn keep_wake(ctx: *mut TaskCtx) {
+    if unsafe { (*ctx).free_ops.wake.is_none() } {
+        let key = role::with_role(ctx, |s| s.key(s.current));
+        unsafe { (*ctx).free_ops.wake = crate::pool::free::own_token((*ctx).run_ptr(), key) };
+    }
+}
+
+/// Drop this task's own wake token at its body's end: a fast child's
+/// context outlives its row's retirement, which waits for every frame
+/// reference (`registry::TaskSlots::retire`).
+pub(super) fn release_wake(ctx: *mut TaskCtx) {
+    drop(unsafe { (*ctx).free_ops.wake.take() });
+}
+
 /// A lease is useless in replay without the token, so take both together.
 fn keep_replay(ctx: *mut TaskCtx) {
     if super::replay::on(ctx) && unsafe { (*ctx).free_ops.replay.is_none() } {
@@ -158,6 +192,7 @@ pub(super) fn keep_endpoint(
     cell: &Arc<crate::channels::ChannelCell>,
 ) {
     keep_replay(ctx);
+    keep_wake(ctx);
     unsafe {
         (*ctx).free_ops.endpoints.keep(word, || Endpoint {
             channel,

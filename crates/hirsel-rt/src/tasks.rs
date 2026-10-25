@@ -671,7 +671,11 @@ impl Scheduler {
     /// The running task parks on `wait`: it is polled at the next scheduling point, and
     /// registered where the events that can end its wait find it.
     fn park(&mut self, wait: Wait) {
-        let current = self.current;
+        self.park_task(self.current, wait);
+    }
+    /// [`Self::park`] for `current`, which need not be the role's task: a
+    /// role-free object park's save callback parks its saved row.
+    fn park_task(&mut self, current: u32, wait: Wait) {
         let at = self.parks;
         self.parks += 1;
         let row = self.task(current);
@@ -1778,14 +1782,59 @@ pub(crate) unsafe fn after_save(
     key: registry::TaskKey,
     completed: bool,
 ) {
+    unsafe { saved(run, key, completed, std::ptr::null_mut()) };
+}
+
+/// [`after_save`] for a role-free object park (`free::park_registered`):
+/// under the same idle role, before the frame's notification state settles,
+/// `key`'s still running row parks on the wait `ctx` left, as `try_block`
+/// would have parked it, with `ctx`'s shield. A wake that beat this save is
+/// remembered on the frame and its dispatch ends the wait (`resumed`). The
+/// owner its frame resumes on, `None` when the row is gone.
+///
+/// # Safety
+/// As for [`after_save`]; `ctx` is the suspended image the caller owns.
+pub(crate) unsafe fn after_park(
+    run: *mut crate::context::RunShared,
+    key: registry::TaskKey,
+    ctx: *mut TaskCtx,
+) -> Option<Owner> {
+    unsafe { saved(run, key, false, ctx) }
+}
+
+/// The save callback; a non-null `parked` is a role-free object park's image.
+unsafe fn saved(
+    run: *mut crate::context::RunShared,
+    key: registry::TaskKey,
+    completed: bool,
+    parked: *mut TaskCtx,
+) -> Option<Owner> {
     // SAFETY: the worker stays busy and retains its Lease throughout this
     // guard; it cannot be reclaimed even if a callback vacates this task.
     let _role = unsafe { role::IdleGuard::idle(run) };
+    let mut resume_on = None;
     let ready = {
         // SAFETY: IdleGuard exclusively owns role-protected task metadata.
         let Some(s) = (unsafe { (*(*run).tasks.get()).as_deref_mut() }) else {
-            return;
+            return resume_on;
         };
+        // SAFETY: the idle continuation owns the suspended image.
+        let wait = (!parked.is_null())
+            .then(|| unsafe { free::objects::parked(parked) }.expect("a role-free park's wait"));
+        if let Some(wait) = wait
+            && let Some(row) = ordered::ahead::physical(s, key)
+        {
+            assert!(
+                row.state == State::Ready && row.wait.is_none(),
+                "a role-free park's row runs"
+            );
+            row.wait_site = 0;
+            unpin(row);
+            resume_on = Some(row.owner);
+            // SAFETY: the idle continuation owns the suspended image.
+            unsafe { snapshot_shield(s, parked) };
+            s.park_task(key.slot, wait);
+        }
         // The saved frame pins its slot (`registry::TaskSlots::retire`): a
         // later occupant here is a broken retirement, not a stale wake.
         if s.tasks
@@ -1803,7 +1852,7 @@ pub(crate) unsafe fn after_save(
             for (task, owner) in ready {
                 unsafe { batch.schedule(task, owner) };
             }
-            return;
+            return resume_on;
         }
         if let Some(Some(row)) = s.tasks.get(task as usize)
             && let Some(frame) = &row.dispatch
@@ -1816,10 +1865,10 @@ pub(crate) unsafe fn after_save(
         // The flag and policy callback share one role acquisition: no join
         // can observe completion, vacate this row, and reuse its id in between.
         if unsafe { (*run).control.stopped().is_some() } {
-            return;
+            return resume_on;
         }
         match s.logical {
-            Logical::Cooperative => return,
+            Logical::Cooperative => return resume_on,
             Logical::Free(_) => unsafe {
                 free::after_save(s, task, completed, crate::pool::has_slot_run(run))
             },
@@ -1858,6 +1907,7 @@ pub(crate) unsafe fn after_save(
         unsafe { crate::pool::wake_home(run) };
     }
     unsafe { free::check_quiet(run, Some(key.slot)) };
+    resume_on
 }
 
 /// Dispatch the running task's foreign interval to a blocking-pool thread (S-13): it waits

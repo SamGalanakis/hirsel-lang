@@ -180,6 +180,26 @@ pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
     unsafe { crate::pool::free::suspend_current(ctx, yielded) };
 }
 
+/// Park the running task on `wait`, for an object it registered with under
+/// that object's latch alone, as `try_block` parks it but with no role on
+/// this stack: the save callback parks the row under its own role
+/// (`tasks::after_park`). Returns once a wake dispatched it; the caller
+/// rechecks its object, as after any object wake.
+/// # Safety
+/// The running task is at role depth zero on a settled worker, with its own
+/// token registered and no runtime borrow or latch on this frame. Whatever
+/// `wait` names outlives the wait.
+pub(super) unsafe fn park_registered(ctx: &mut TaskCtx, wait: Wait) -> Stopped<()> {
+    if let Some(metrics) = &ctx.run_ref().worker_metrics {
+        metrics.op();
+        metrics.switch();
+    }
+    objects::parking(ctx, wait);
+    unsafe { crate::pool::free::park_current(ctx) };
+    recycle(ctx);
+    crate::stop::observe(ctx)
+}
+
 /// # Safety
 /// As for try_yield, including any foreign-affine ownership transition.
 pub(super) unsafe fn migrate(ctx: &mut TaskCtx) {

@@ -1341,6 +1341,7 @@ impl World {
                 }
             }
             Leave::Compact => unreachable!("the protocol model saves no compact frame"),
+            Leave::Park => unreachable!("the protocol model parks by suspension"),
             Leave::Suspend { yielded, .. } => {
                 frame.placement.set_owner(owner_word(Owner::Any));
                 let unacknowledged = self.config.mutant == Some(Mutant::MissingSaveAck)
