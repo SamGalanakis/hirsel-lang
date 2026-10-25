@@ -30,8 +30,8 @@ const CRATES: &[(&str, Class)] = &[
     // Data rather than a leaf utility: its content keys are ContentHash values.
     ("hirsel-graph", Class::Data),
     ("hirsel-guard", Class::LeafUtility),
-    // The free-mode protocol: std only, shared by the runtime and the interpreter.
-    ("hirsel-free", Class::LeafUtility),
+    // Shared protocol data and operations; debug sections use hirsel-guard.
+    ("hirsel-free", Class::Data),
     ("hirsel-span", Class::Data),
     ("hirsel-intern", Class::Data),
     ("hirsel-diag", Class::Data),
@@ -79,6 +79,8 @@ const CRATES: &[(&str, Class)] = &[
     ("hirsel-conformance", Class::Tool),
     ("hirsel-native-build", Class::Tool),
     ("hirsel-pipeline-tests", Class::Tool),
+    ("hirsel-free-loom", Class::Tool),
+    ("hirsel-heaps-loom", Class::Tool),
 ];
 
 /// The implementation crates the engine may use directly; it reaches
@@ -316,6 +318,9 @@ fn layering_controls() {
     }
     // Leaf utilities depend on no workspace crate.
     assert!(check_edge("hirsel-guard", "hirsel-graph", Kind::Production).is_err());
+    assert!(check_edge("hirsel-free", "hirsel-guard", Kind::Production).is_ok());
+    assert!(check_edge("hirsel-free", "hirsel-rt", Kind::Production).is_err());
+    assert!(check_edge("hirsel-free", "hirsel-interp", Kind::Production).is_err());
     for consumer in ["hirsel-rt", "hirsel-interp", "hirsel-heapcheck"] {
         assert!(check_edge(consumer, "hirsel-kernels", Kind::Production).is_ok());
     }
