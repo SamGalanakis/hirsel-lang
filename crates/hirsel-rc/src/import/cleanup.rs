@@ -627,7 +627,20 @@ impl Importer<'_> {
                 if !self.owns(self.out.slots[slot.index()].ty) {
                     return Ok(Step2::Skip);
                 }
-                (*slot, Vec::new(), *anchor, self.span)
+                // A synthetic state cleanup names the local it destroys,
+                // just as its TIR cleanup does. Anchoring at each failing
+                // call would duplicate otherwise identical cleanup suffixes.
+                // The FailureEdge still retains the failing call's own site.
+                let span = if anchor.0 == STATE_RELEASE {
+                    self.local_slot
+                        .iter()
+                        .zip(&self.body.locals)
+                        .find_map(|(bound, local)| (*bound == Some(*slot)).then_some(local.span))
+                        .unwrap_or(self.span)
+                } else {
+                    self.span
+                };
+                (*slot, Vec::new(), *anchor, span)
             }
             Action::Tir { node } => match &self.body.cleanup_nodes[*node as usize].action {
                 tir::CleanupAction::EndLoan { loan, .. } => {
