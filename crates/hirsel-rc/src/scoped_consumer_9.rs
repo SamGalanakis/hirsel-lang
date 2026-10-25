@@ -74,6 +74,7 @@ pub(crate) fn specialize(
                 units: lowered.units.clone(),
                 table: lowered.table.clone(),
                 origins: result.origins.clone(),
+                keys: result.keys.clone(),
                 inline: result.inline.clone(),
                 baseline,
                 target: target.clone(),
@@ -112,6 +113,7 @@ pub(crate) fn specialize(
                 lowered.units = transaction.units;
                 lowered.table = transaction.table;
                 result.origins = transaction.origins;
+                result.keys = transaction.keys;
                 result.inline = transaction.inline;
                 changed = true;
                 break;
@@ -433,6 +435,7 @@ struct Transaction {
     units: Vec<Unit>,
     table: LayoutTable,
     origins: Vec<crate::instance::InstanceId>,
+    keys: Vec<hirsel_layout::instance::InstanceKey>,
     inline: BTreeSet<ContentHash>,
     baseline: usize,
     target: hirsel_lir::TargetSpec,
@@ -487,10 +490,9 @@ impl Transaction {
             hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &abi.nonretaining_captures);
         let key = hirsel_lir::LayoutKeys::new(&self.table).fn_abi(&abi);
         let encoded = ContentHash::of_parts(domain, [key.0.as_slice()]);
-        u.header.instance = ContentHash::of_parts(
-            "hirsel.scoped-explicit-captures.v1",
-            [u.header.instance.0.as_slice(), encoded.0.as_slice()],
-        );
+        let derived =
+            self.keys[original].derived("hirsel.scoped-explicit-captures.v1", &[&encoded.0]);
+        u.header.instance = derived.digest();
         abi.key.callable = ContentHash::of_parts(
             "hirsel.scoped-direct-abi.v1",
             [abi.key.callable.0.as_slice(), encoded.0.as_slice()],
@@ -510,6 +512,7 @@ impl Transaction {
         self.inline.insert(u.header.instance);
         self.units.push(u);
         self.origins.push(owner);
+        self.keys.push(derived);
         Ok((self.units.len() - 1, true))
     }
     fn capture_body(&mut self, body: usize, types: &[LirType]) -> Result<usize, ()> {

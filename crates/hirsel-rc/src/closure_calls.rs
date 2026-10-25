@@ -207,6 +207,10 @@ fn discover(
 /// signature proofs), and source units replicated for partition-independent inlining.
 pub struct Specializations {
     pub origins: Vec<InstanceId>,
+    /// Every unit's own instance key: an original's, or the ordinary derived
+    /// key its specialization was requested under. Its digest is the unit's
+    /// instance.
+    pub keys: Vec<hirsel_layout::instance::InstanceKey>,
     pub inline: BTreeSet<ContentHash>,
 }
 
@@ -223,10 +227,12 @@ impl Specializations {
         assert_eq!(instances.actuals.len(), n);
         assert_eq!(instances.environments.len(), n);
         assert_eq!(self.origins.len(), lowered.units.len());
-        for (unit, &origin) in lowered.units.iter().zip(&self.origins) {
+        assert_eq!(self.keys.len(), lowered.units.len());
+        for ((unit, &origin), key) in lowered.units.iter().zip(&self.origins).zip(&self.keys) {
             let view = instances.view(origin);
             instances.callable(origin);
             assert_eq!(&unit.header.definition, view.key.definition());
+            assert_eq!(unit.header.instance, key.digest());
         }
         for id in instances.ids() {
             assert_eq!(self.origins[id.index()], id);
@@ -500,6 +506,9 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
         })
         .collect::<HashMap<_, _>>();
     let mut origins: Vec<_> = (0..originals.len()).map(|i| InstanceId(i as u32)).collect();
+    let mut keys: Vec<_> = (0..originals.len())
+        .map(|i| lowered.instances.view(InstanceId(i as u32)).key.clone())
+        .collect();
     let mut inline = BTreeSet::new();
     let mut counts = vec![0; originals.len()];
     let mut cache = BTreeMap::new();
@@ -559,6 +568,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                 u.header.instance = digest;
                 lowered.units.push(u);
                 origins.push(InstanceId(original as u32));
+                keys.push(request.key.clone());
                 seeds.push(vec![(value, target.clone())]);
                 spawn_flags.push(0);
                 inline.insert(digest);
@@ -604,6 +614,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                 u.header.instance = digest;
                 lowered.units.push(u);
                 origins.push(InstanceId(original as u32));
+                keys.push(request.key.clone());
                 seeds.push(
                     request
                         .seeds
@@ -621,7 +632,11 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
         lowered.units[at] = unit;
         at += 1;
     }
-    Specializations { origins, inline }
+    Specializations {
+        origins,
+        keys,
+        inline,
+    }
 }
 
 pub use crate::spawn::{OperationFreedom, settle_operation_freedom};

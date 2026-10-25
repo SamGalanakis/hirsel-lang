@@ -11,7 +11,9 @@ use hirsel_lir::continuation::{
 use hirsel_syntax::ContentHash;
 
 use super::runtime50_continuation::ready;
-use super::runtime50_resume::{agree, agree_replayed, compact_runs, exact_compact_custody, routing};
+use super::runtime50_resume::{
+    agree, agree_replayed, compact_runs, exact_compact_custody, routing,
+};
 
 /// A child that sends twice inside an `arena.with` callback, holding a sender
 /// it duplicated and a list across both sends; completed, or canceled while
@@ -87,7 +89,11 @@ fn arena_plans(
         plans
             .plans
             .values()
-            .find(|p| p.states.iter().any(|s| s.callee.is_some_and(|c| c.body == body)))
+            .find(|p| {
+                p.states
+                    .iter()
+                    .any(|s| s.callee.is_some_and(|c| c.body == body))
+            })
             .unwrap_or_else(|| panic!("a caller nesting {body:?}: {:#?}", summary(plans)))
     };
     let callback = plans
@@ -165,17 +171,23 @@ fn runtime52_arena_callback_continuation() {
         let checks: Vec<(&str, ContinuationError, fn(&ContinuationError) -> bool)> = vec![
             (
                 "nested frame of another body",
-                refused(arena.body, &|p| p.states[0].callee.as_mut().unwrap().body = other),
+                refused(arena.body, &|p| {
+                    p.states[0].callee.as_mut().unwrap().body = other
+                }),
                 |e| matches!(e, ContinuationError::Frame(_)),
             ),
             (
                 "nested frame smaller than the callback's",
-                refused(arena.body, &|p| p.states[0].callee.as_mut().unwrap().bytes -= 8),
+                refused(arena.body, &|p| {
+                    p.states[0].callee.as_mut().unwrap().bytes -= 8
+                }),
                 |e| matches!(e, ContinuationError::Frame(_)),
             ),
             (
                 "nested frame over the arena token",
-                refused(arena.body, &|p| p.states[0].callee.as_mut().unwrap().offset = 8),
+                refused(arena.body, &|p| {
+                    p.states[0].callee.as_mut().unwrap().offset = 8
+                }),
                 |e| matches!(e, ContinuationError::Frame(_)),
             ),
             (

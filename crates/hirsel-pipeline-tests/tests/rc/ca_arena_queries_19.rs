@@ -27,7 +27,7 @@ fn arena_query_graph_settles_local_equations_and_reuses_unchanged_components() {
     let store = MemStore::default();
     let mut nodes = Vec::new();
     for (index, unit) in lowered.units.iter().enumerate() {
-        let key = &lowered.instances.view(lowered.unit_origins[index]).key;
+        let key = &lowered.unit_keys[index];
         assert_eq!(unit.header.instance, key.digest());
         let checked = hirsel_lir::validate::validate_value(unit.clone(), &inputs).unwrap();
         let owner = InstanceAddress {
