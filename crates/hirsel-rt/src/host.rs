@@ -189,6 +189,17 @@ pub struct Sinks {
     pub report: Sink,
 }
 impl Sinks {
+    /// Keep explicitly transportable streams when a home adapter was built
+    /// through the generic writer constructors.
+    pub(crate) fn preserve_send_streams(&self, io: &mut RealIo) {
+        if let Some(output) = &self.stdout.send {
+            io.set_send_output(output.clone());
+        }
+        if let Some(output) = &self.stderr.send {
+            io.set_send_stderr(output.clone());
+        }
+    }
+
     /// The process's own streams. Standard output is written unbuffered, so a write error
     /// reaches the program as a recorded outcome (`RawStdout`).
     pub fn process() -> Self {
@@ -282,12 +293,7 @@ impl Host {
         })?;
         let admitted = run.admit(&mut host, now)?;
         let mut io = host.into_io();
-        if let Some(output) = &sinks.stdout.send {
-            io.set_send_output(output.clone());
-        }
-        if let Some(output) = &sinks.stderr.send {
-            io.set_send_stderr(output.clone());
-        }
+        sinks.preserve_send_streams(&mut io);
         Ok((admitted, io))
     }
 

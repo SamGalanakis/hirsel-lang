@@ -2251,6 +2251,7 @@ pub(crate) unsafe fn execute(
                 )
             } {
                 Ok(mut io) => {
+                    sinks.preserve_send_streams(&mut io);
                     if std::env::var_os("HIRSEL_RT_DENY_OUTPUT").is_some() {
                         io.deny_output();
                     }
