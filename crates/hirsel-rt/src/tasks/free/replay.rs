@@ -594,6 +594,12 @@ impl Token {
         self.with(|task| task.cursor.cancel_outcome(task.op))
     }
 
+    /// [`Self::cancel_peek`] for the op that begins next, read before its
+    /// begin as [`Self::immediate`] is.
+    pub(super) fn next_cancel(&self) -> Option<u32> {
+        self.with(|task| task.cursor.cancel_outcome(task.op.checked_add(1)?))
+    }
+
     /// No action runs past its admitted phase. Rejection returns through its
     /// runtime owner so temporary cell accesses drop normally before stopping.
     pub(super) fn publish<T>(

@@ -4161,11 +4161,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     receiver: *mut u64,
     message: *mut u8,
 ) -> u8 {
+    // A replay may stop at the receive, before the ordinary wait stores
+    // caller_site. Retain the checked operation code in this task's context.
+    let previous = unsafe { (*ctx).run_ref().free_replay }
+        .then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
     // SAFETY: caller contract; a resolved ready receive needs no role.
     if let Some(result) =
         unsafe { free::objects::channel_receive(ctx, receiver.read(), message, out) }
     {
-        return unsafe { free::objects::finish(ctx, result) };
+        let status = unsafe { free::objects::finish(ctx, result) };
+        if let Some(previous) = previous {
+            unsafe { (*ctx).operation_site = previous };
+        }
+        return status;
     }
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
@@ -4180,11 +4188,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
         };
     }
     if free::enabled(ctx) {
-        // A replay may stop at the receive entry before the ordinary wait stores
-        // caller_site. Retain the checked operation code in this task's context.
-        let replay = unsafe { (*ctx).run_ref().free_replay };
-        let previous = replay
-            .then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
         unsafe {
             crate::stop::check(
                 ctx,

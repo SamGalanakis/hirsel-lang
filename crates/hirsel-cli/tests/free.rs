@@ -1361,6 +1361,116 @@ fn runtime50_object_phase_cross_engine_replay_durable() {
     });
 }
 
+/// A receiver drains a child's messages in FIFO order and sees Closed only
+/// after its last live sender closes (Tokio `tests/sync_mpsc.rs:213-228`,
+/// `:483-521`); a canceled child's ready receives on its leased endpoint then
+/// report Canceled before their queued message. Replayed receives that find
+/// their outcome ready complete without the scheduler role.
+const RECEIVES: &str = r#"pub type AppError = Grant(GrantError) | Output(OutputError)
+fn discard[T](take value: T) -> () {
+  ()
+}
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let output = io.stdout(rt) ? Grant
+  task.scope(tasks, fn(s: Scope) {
+    let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let spare = sender.dup(tasks, sender)
+    let child = task.async(s, fn() {
+      let mut tx = take sender
+      let mut i = 1u32
+      while i <= 6u32 {
+        let _ = channel.send(tasks, mut tx, i)
+        i += 1u32
+      }
+    })
+    let mut rx = take receiver
+    failure.check(channel.receive(tasks, mut rx) == Ok(1u32), Bounds())
+    discard(take spare)
+    let mut expected = 2u32
+    while expected <= 6u32 {
+      failure.check(channel.receive(tasks, mut rx) == Ok(expected), Bounds())
+      expected += 1u32
+    }
+    failure.check(channel.receive(tasks, mut rx) == Error(Closed()), Bounds())
+    task.await(s, take child)
+  })
+  task.scope(tasks, fn(s: Scope) {
+    let (sender, receiver): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let (ready, started): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let (wake, sleep): (Sender[u32], Receiver[u32]) = channel.open(tasks)
+    let mut tx = take sender
+    let _ = channel.send(tasks, mut tx, 7u32)
+    let _ = channel.send(tasks, mut tx, 8u32)
+    discard(take tx)
+    let child = task.async(s, fn() -> bool {
+      let mut rx = take receiver
+      let first = channel.receive(tasks, mut rx) == Ok(7u32)
+      let mut up = take ready
+      let _ = channel.send(tasks, mut up, 1u32)
+      let mut gate = take sleep
+      let waiting = channel.receive(tasks, mut gate) == Error(Canceled(Requested()))
+      let queued = channel.receive(tasks, mut rx) == Error(Canceled(Requested()))
+      let again = channel.receive(tasks, mut rx) == Error(Canceled(Requested()))
+      first && waiting && queued && again
+    })
+    let mut go = take started
+    failure.check(channel.receive(tasks, mut go) == Ok(1u32), Bounds())
+    task.cancel(s, child)
+    failure.check(task.await(s, take child), Bounds())
+    let _ = wake
+  })
+  out.print(output, "receives\n") ? Output
+  Ok(())
+}
+"#;
+
+/// The reference and checked executors replay the same tape in-process.
+fn receives_reference_and_checked(
+    live: &Output,
+    _: &hirsel_free::tape::Tape,
+    scratch: &Scratch,
+    level: &str,
+) {
+    assert_eq!(live.stdout, b"receives\n");
+    let (program, tape) = (scratch.path("main.hir"), scratch.path(level));
+    hirsel_engine::with_compiler_stack(|| {
+        let plain = hirsel_driver::replay_observations(&program, &tape, Some(1_000_000)).unwrap();
+        let checked =
+            hirsel_driver::replay_observations_checked(&program, &tape, Some(1_000_000)).unwrap();
+        assert!(plain.equivalent(&checked), "{level}");
+        assert_eq!(plain.output, b"receives\n", "{level}");
+        assert_eq!(plain.exit_code, Some(0), "{level}");
+        assert!(plain.failures.is_empty(), "{level}");
+    });
+}
+
+fn replayed_receives_at(level: &'static [&'static str; 1]) {
+    f1_corpus_matrix_cells(
+        &format!("replayed-receives-{}", level[0]),
+        RECEIVES,
+        |_| serde_json::json!({"io":{"stdout":"stdout.bytes@1", "tasks":"tasks.free@1", "dirs":[]},"args":[]}),
+        (0, receives_reference_and_checked),
+        b"",
+        || Box::new(|| {}),
+        Cells {
+            levels: level,
+            engines: &ENGINES,
+            dimensions: &[("1", 1), ("4", 1)],
+        },
+    );
+}
+
+#[test]
+fn replayed_receive_outcomes_cross_engine_replay() {
+    replayed_receives_at(&["record"]);
+}
+
+#[test]
+fn replayed_receive_outcomes_cross_engine_replay_durable() {
+    replayed_receives_at(&["durable"]);
+}
+
 #[test]
 fn f1_task_set_corpus_full_projection_width_and_permit_matrix() {
     f1_corpus_matrix(

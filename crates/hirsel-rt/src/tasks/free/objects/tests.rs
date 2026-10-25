@@ -147,13 +147,11 @@ struct Disjoint {
     endpoints: [u64; 2],
     atomic: u64,
     window: *const Window,
-    /// This child's own role acquisitions across its measured rounds'
-    /// mutex, send and atomic ops; a replayed receive keeps the role path.
+    /// This child's own role acquisitions across its measured rounds.
     roles: AtomicU64,
 }
 
-/// One round; returns the calling thread's role acquisitions outside its
-/// receive.
+/// One round; returns the calling thread's role acquisitions.
 unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) -> u64 {
     let mut payload = [0u64; 2];
     let mut message = [1u64, value];
@@ -177,9 +175,6 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) -> u64 {
             message.as_mut_ptr().cast(),
         );
         assert_eq!((status, message), (crate::channels::DONE, [0, 0]));
-    }
-    let roles = role::thread_acquisitions() - before;
-    unsafe {
         hirsel_rt_v2_channel_receive(
             ctx,
             0,
@@ -189,15 +184,12 @@ unsafe fn round(ctx: *mut TaskCtx, objects: &mut Disjoint, value: u64) -> u64 {
             message.as_mut_ptr().cast(),
         );
         assert_eq!((status, message), (crate::channels::DONE, [1, value]));
-    }
-    let before = role::thread_acquisitions();
-    unsafe {
         hirsel_rt_v2_atomic_store(ctx, &objects.atomic, (&raw const value).cast(), 8);
         let mut loaded = 0u64;
         hirsel_rt_v2_atomic_load(ctx, &objects.atomic, (&raw mut loaded).cast(), 8);
         assert_eq!(loaded, value);
     }
-    roles + role::thread_acquisitions() - before
+    role::thread_acquisitions() - before
 }
 
 unsafe extern "C" fn disjoint_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -221,8 +213,7 @@ unsafe extern "C" fn disjoint_child(ctx: *mut TaskCtx, env: *mut Header, _: u64,
     STATUS_OK
 }
 
-/// The measured window's run-wide role acquisitions, and the children's own
-/// outside their receives.
+/// The measured window's run-wide role acquisitions, and the children's own.
 #[derive(Default)]
 struct Measured {
     window: AtomicU64,
@@ -390,8 +381,8 @@ fn runtime50_immediate_objects_do_not_enter_role() {
             tape = Some((bytes, trace));
         }
     }
-    // Replay admits each op from the task's own token: its mutex, send and
-    // atomic ops take no R. Its receives keep the role path.
+    // Replay admits each op from the task's own token: its mutex, channel and
+    // atomic ops take no R.
     let (bytes, trace) = tape.unwrap();
     let parsed = hirsel_free::tape::parse(&bytes).unwrap();
     let replay = super::super::replay::Replay::new(&bytes).unwrap();
@@ -416,7 +407,7 @@ fn runtime50_immediate_objects_do_not_enter_role() {
     assert_eq!(
         measured.ops.load(Ordering::Acquire),
         0,
-        "replayed mutex, send and atomic ops entered R"
+        "replayed mutex, channel and atomic ops entered R"
     );
     assert_eq!(
         replay.finish().unwrap(),

@@ -14,7 +14,11 @@
 //! deferred child and every creation, close or failure keep the role path.
 //! Replay admits an immediate op through the task's own token, captured once
 //! under the role: the cut, the op's Done and its object's version order are
-//! the task's cursor and the shared version cells, never the scheduler. This follows Tokio's reserve-oldest then unlock-before-wake order
+//! the task's cursor and the shared version cells, never the scheduler. A
+//! replayed receive reads the tape's cancellation before it begins; with no
+//! cause and nothing ready it stays unbegun, and the role path registers, then
+//! rechecks, as Tokio's `recv` (`tokio/src/sync/mpsc/chan.rs:304-344`). This
+//! follows Tokio's reserve-oldest then unlock-before-wake order
 //! (`tokio/src/sync/batch_semaphore.rs:334-402`, ce685ee6) and Verona's
 //! single-resource successor handoff (`src/rt/boc/behaviourcore.h:648-677`).
 
@@ -407,49 +411,97 @@ pub(crate) unsafe fn channel_receive(
     message: *mut u8,
     out: *mut u32,
 ) -> Option<Stopped<()>> {
-    // A replayed receive keeps its role path: its cancel outcome and retry
-    // wait are the scheduler's.
-    if !admitted(ctx) || unsafe { (*ctx).free_ops.replay.is_some() } {
+    if !admitted(ctx) {
         return None;
     }
     let shield = unsafe { (*ctx).shield };
     let ops = unsafe { &(*ctx).free_ops };
-    // Receive is a cancellation point: act only on an observation that no
-    // cancellation, scope change or shield change has invalidated since.
-    let known = ops.uncanceled.as_ref()?;
-    if known.shield != shield || known.epoch.load() != known.seen {
-        return None;
-    }
     let endpoint = ops.endpoints.get(receiver)?;
     if endpoint.sender {
         return None;
     }
+    let channel = endpoint.channel;
     let cell = unsafe { &*Arc::as_ptr(&endpoint.cell) };
+    let handle = (crate::free::CHANNEL, u64::from(channel));
+    // Receive is a cancellation point. Replay reads its recorded cause before
+    // the op begins; a receive orders against no version, only the cut.
+    let (replay, cause) = match replayed(ctx, None)? {
+        Some(token) => {
+            let cause = if shield == 0 {
+                token.next_cancel()
+            } else {
+                None
+            };
+            (Some(token.bind(handle)), cause)
+        }
+        // Live, act only on an observation that no cancellation, scope change
+        // or shield change has invalidated since.
+        None => {
+            let known = ops.uncanceled.as_ref()?;
+            if known.shield != shield || known.epoch.load() != known.seen {
+                return None;
+            }
+            (None, None)
+        }
+    };
+    let canceled = cause.map(|cause| format!("canceled {cause}"));
     let mut state = cell.lock();
-    if !cell.ready(&state) {
+    // Without a message or close, the role path enters and registers the wait.
+    if cause.is_none() && !cell.ready(&state) {
         return None;
     }
-    super::record::begin(ctx);
-    let publication = super::record::publish_with_replay(ctx, Phase::Done, None, |writer| {
-        let (status, outcome) = match unsafe { cell.receive(&mut state, message) } {
-            Ok(true) => (crate::channels::DONE, "msg"),
-            Err(status) => (status, "closed"),
-            Ok(false) => unreachable!("the receiver owns this channel's ready message"),
-        };
-        if let Some(writer) = writer {
-            if shield == 0 {
-                writer.cancel(None);
+    begin(ctx, replay.as_ref().map(|object| object.token()));
+    let publication = super::record::publish_with_replay(
+        ctx,
+        Phase::Done,
+        replay.as_ref().map(|object| object.token()),
+        |writer| {
+            let (status, outcome) = if let Some(cause) = cause {
+                (
+                    crate::channels::CANCELED + cause,
+                    canceled.as_deref().unwrap(),
+                )
+            } else {
+                match unsafe { cell.receive(&mut state, message) } {
+                    Ok(true) => (crate::channels::DONE, "msg"),
+                    Err(status) => (status, "closed"),
+                    Ok(false) => unreachable!("the receiver owns this channel's ready message"),
+                }
+            };
+            if let Some(writer) = writer {
+                if shield == 0 {
+                    writer.cancel(None);
+                }
+                writer.receive(
+                    cell.object
+                        .get()
+                        .expect("a recorded channel identity")
+                        .clone(),
+                    outcome,
+                );
+            } else if let Some(replay) = &replay {
+                if shield == 0 {
+                    assert_eq!(replay.token().cancel(cause)?, cause);
+                }
+                replay.receive(outcome)?;
             }
-            writer.receive(
-                cell.object
-                    .get()
-                    .expect("a recorded channel identity")
-                    .clone(),
-                outcome,
-            );
-        }
-        unsafe { out.write(status) };
-    });
+            unsafe { out.write(status) };
+            Ok(())
+        },
+    );
+    let parked = cell.parked();
     drop(state);
-    Some(publication.and_then(|()| unsafe { tail(ctx) }))
+    drop(canceled);
+    drop(replay);
+    Some(publication.and_then(|result| result).and_then(|()| {
+        if cause.is_some() && parked {
+            // A canceled receive takes no message: the policy serves the next
+            // parked receiver, as on the role path.
+            let _role = unsafe { role::Guard::new(ctx) };
+            role::with_role(ctx, |s| s.channels.touch(channel));
+            unsafe { super::try_yield(&mut *ctx) }
+        } else {
+            unsafe { tail(ctx) }
+        }
+    }))
 }
