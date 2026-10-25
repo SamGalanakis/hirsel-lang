@@ -22,6 +22,15 @@ pub struct NamedInput {
     pub actuals: Actuals,
 }
 
+impl NamedInput {
+    fn same(&self, other: &Self) -> bool {
+        self.base == other.base
+            && self.actuals.binder == other.actuals.binder
+            && self.actuals.arguments == other.actuals.arguments
+            && self.actuals.outer == other.actuals.outer
+    }
+}
+
 /// Full port profiles and the original current observation are retained beside
 /// one lexical request. Executable source bodies are released after capture.
 pub struct NamedContext {
@@ -57,7 +66,33 @@ pub fn named(
         &input.actuals,
         memo,
     )?;
-    let body = &original.definition().bodies[input.base.body() as usize];
+    let ports = profiles(
+        provider,
+        &source,
+        &original.definition().bodies[input.base.body() as usize],
+        &input.actuals,
+        memo,
+        cases,
+    )?;
+    let context = NamedContext {
+        input,
+        source,
+        ports,
+    };
+    // Exact complete port coverage/type/source binding is the same operation
+    // used by Registry, not a second context identity implementation.
+    context.context().canonical_bytes()?;
+    Ok(context)
+}
+
+fn profiles(
+    provider: &dyn provider::Provider,
+    source: &ReceiptSourceObservation,
+    body: &hirsel_tir::Body,
+    actuals: &Actuals,
+    memo: &TypeMemo,
+    cases: &mut impl FnMut(&SourceCallableEntry, Port, TypeId) -> Result<Vec<CallableCase>, SourceError>,
+) -> Result<BTreeMap<Port, ClosedStorageProfile>, SourceError> {
     let mut ports = BTreeMap::new();
     for (port, ty) in body
         .parameters
@@ -70,8 +105,14 @@ pub fn named(
             )
         })
         .chain([(Port::Result, body.result)])
+        .chain(source.entry().captures().iter().map(|capture| {
+            (
+                Port::Capture(capture.ordinal),
+                body.locals[capture.local as usize].ty,
+            )
+        }))
     {
-        let ty = substitute(provider.types(), memo, ty, &input.actuals, true)
+        let ty = substitute(provider.types(), memo, ty, actuals, true)
             .map_err(|error| SourceError::Type(format!("{error:?}")))?;
         let profile = profile::boundary(
             provider.types(),
@@ -91,13 +132,88 @@ pub fn named(
         )?;
         ports.insert(port, profile);
     }
-    let context = NamedContext {
+    Ok(ports)
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClosureInput {
+    pub base: InstanceKey,
+    pub parent: hirsel_tir::BodyId,
+    pub block: hirsel_tir::BlockId,
+    pub statement: u32,
+}
+
+pub struct ClosureContext {
+    pub input: ClosureInput,
+    pub source: ReceiptSourceObservation,
+    pub ports: BTreeMap<Port, ClosedStorageProfile>,
+}
+impl ClosureContext {
+    pub fn context(&self) -> Context<'_> {
+        Context {
+            base: &self.input.base,
+            entry: self.source.entry(),
+            source: self.source.demand(),
+            ports: &self.ports,
+        }
+    }
+    /// The requested closure producer comes from the caller, outside this saved
+    /// record. Re-read the actual source assignment and every original capture.
+    pub fn recheck(
+        &self,
+        provider: &dyn provider::Provider,
+        input: ClosureInput,
+        cases: &mut impl FnMut(
+            &SourceCallableEntry,
+            Port,
+            TypeId,
+        ) -> Result<Vec<CallableCase>, SourceError>,
+    ) -> Result<(), SourceError> {
+        let current = closure(provider, input, &TypeMemo::new(), cases)?;
+        if self.input != current.input
+            || self.source.entry() != current.source.entry()
+            || self.source.demand().projection() != current.source.demand().projection()
+            || self.ports != current.ports
+        {
+            return Err(SourceError::Malformed(
+                "receipt closure differs from current original observations",
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Assemble a nongeneric closure from an exact current original assignment.
+/// Callable type equality alone cannot select its capture ordinals/profiles.
+/// This retains source data without inventing a CT-5/environment recipe.
+pub fn closure(
+    provider: &dyn provider::Provider,
+    input: ClosureInput,
+    memo: &TypeMemo,
+    cases: &mut impl FnMut(&SourceCallableEntry, Port, TypeId) -> Result<Vec<CallableCase>, SourceError>,
+) -> Result<ClosureContext, SourceError> {
+    let (_, original) = provider::original(provider, input.base.definition())?;
+    let source = super::closure(
+        &original,
+        &input.base,
+        provider.types(),
+        input.parent,
+        input.block,
+        input.statement,
+    )?;
+    let ports = profiles(
+        provider,
+        &source,
+        &original.definition().bodies[input.base.body() as usize],
+        &Actuals::none(),
+        memo,
+        cases,
+    )?;
+    let context = ClosureContext {
         input,
         source,
         ports,
     };
-    // Exact complete port coverage/type/source binding is the same operation
-    // used by Registry, not a second context identity implementation.
     context.context().canonical_bytes()?;
     Ok(context)
 }
@@ -152,7 +268,8 @@ impl NamedGraph {
                 .iter()
                 .zip(&current.contexts)
                 .any(|(before, after)| {
-                    before.source.entry() != after.source.entry()
+                    !before.input.same(&after.input)
+                        || before.source.entry() != after.source.entry()
                         || before.source.demand().projection() != after.source.demand().projection()
                         || before.ports != after.ports
                 })

@@ -2,7 +2,10 @@
 //! no receipt-aware ABI, Some native provider or public seal is activated here.
 use hirsel_driver::{
     compiler_adapters,
-    native::receipt_source::{factory::*, provider::*},
+    native::receipt_source::{
+        factory::{closure as factory_closure, *},
+        provider::*,
+    },
 };
 use hirsel_engine::*;
 use hirsel_rc::{
@@ -272,6 +275,15 @@ pub fn main()->u64 {pick(true)}
         graph
             .recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![]))
             .unwrap();
+        let saved_input = graph.contexts[1].input.clone();
+        graph.contexts[1].input.base = root(&front, &path).base;
+        assert!(matches!(
+            graph.recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+        graph.contexts[1].input = saved_input;
         let saved_roots = std::mem::take(&mut graph.roots);
         let saved_contexts = std::mem::take(&mut graph.contexts);
         let saved_requests = std::mem::take(&mut graph.requests);
@@ -368,5 +380,121 @@ pub fn pack(take a:Arena in a, take root:u64)->Region[u64] {
                 ))
             ));
         }
+    });
+}
+
+#[test]
+fn source_factory_closure_context_keeps_original_capture_ports_and_rechecks_its_producer() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let captured:u64=7u64
+  let f=fn(x:u64)->u64 {captured+x}
+  f(1u64)
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let original = front.original(&path).unwrap();
+        let mut selected = None;
+        for (parent, body) in original.definition().bodies.iter().enumerate() {
+            for (block, source) in body.blocks.iter().enumerate() {
+                for (statement, instruction) in source.instructions.iter().enumerate() {
+                    let hirsel_tir::InstructionKind::Assign { value, .. } = instruction.kind else {
+                        continue;
+                    };
+                    let hirsel_tir::Rvalue::Closure { body: target, .. } =
+                        &body.rvalues[value.0 as usize]
+                    else {
+                        continue;
+                    };
+                    assert!(selected.is_none());
+                    selected = Some(ClosureInput {
+                        base: hirsel_layout::instance::InstanceKey::new(
+                            &path,
+                            target.0,
+                            &[],
+                            front.types(),
+                            None,
+                            None,
+                        )
+                        .unwrap(),
+                        parent: hirsel_tir::BodyId(parent as u32),
+                        block: hirsel_tir::BlockId(block as u32),
+                        statement: statement as u32,
+                    });
+                }
+            }
+        }
+        let input = selected.expect("the original source closure assignment exists");
+        let mut context = factory_closure(
+            &front,
+            input.clone(),
+            &hirsel_types::TypeMemo::new(),
+            &mut |_, _, _| panic!("only scalar ports"),
+        )
+        .unwrap();
+        assert_eq!(context.source.entry().parameters().len(), 1);
+        assert_eq!(context.source.entry().captures().len(), 1);
+        assert_eq!(context.ports.len(), 3);
+        let capture = &context.source.entry().captures()[0];
+        assert_eq!(capture.ordinal, 0);
+        let capture_port = hirsel_rc::sealed_source::contract::Port::Capture(0);
+        assert_eq!(context.ports[&capture_port].root, capture.ty);
+        assert!(matches!(
+            context.source.entry().kind(),
+            hirsel_rc::sealed_source::SourceEntryKind::Closure { .. }
+        ));
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+            signature_override: None,
+        };
+        context
+            .recheck(&simulated, input.clone(), &mut |_, _, _| {
+                panic!("only scalar ports")
+            })
+            .unwrap();
+        let saved_input = context.input.clone();
+        context.input.statement = u32::MAX;
+        assert!(matches!(
+            context.recheck(&front, input.clone(), &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt closure differs from current original observations"
+            ))
+        ));
+        context.input = saved_input;
+        let mut wrong = input.clone();
+        wrong.statement = u32::MAX;
+        assert!(matches!(
+            factory_closure(
+                &front,
+                wrong,
+                &hirsel_types::TypeMemo::new(),
+                &mut |_, _, _| Ok(vec![])
+            ),
+            Err(SourceError::Malformed("original closure statement"))
+        ));
+        let saved = context.ports.remove(&capture_port).unwrap();
+        assert!(matches!(
+            context.context().canonical_bytes(),
+            Err(SourceError::Malformed(
+                "receipt context needs a complete ordered port-profile map"
+            ))
+        ));
+        assert!(matches!(
+            context.recheck(&front, input.clone(), &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt closure differs from current original observations"
+            ))
+        ));
+        context.ports.insert(capture_port, saved);
+        simulated.unavailable = true;
+        assert!(matches!(
+            context.recheck(&simulated, input, &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Unsupported("simulated unknown source"))
+        ));
     });
 }
