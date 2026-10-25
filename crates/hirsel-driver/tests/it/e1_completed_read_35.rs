@@ -366,6 +366,16 @@ fn ordinary_prefix_thunk_does_not_authorize_a_post_read_private_site() {
                 "  failure.check(received == 1u64, Arithmetic())",
                 "  let tail_insert: fn(mut Set[String], take String) -> () = set.insert\n  tail_insert(mut keys, \"tail\")\n  failure.check(received == 1u64, Arithmetic())",
             );
+        // Return the prefix callable through the definition's result.
+        // A direct-only use lets LLVM remove its address after devirtualizing
+        // the call, leaving no machine import for the forged-thunk control.
+        let source = source
+            .replace(
+                "-> Result[u64, NetError] {",
+                "-> Result[(u64, fn(mut Set[String], take String) -> ()), NetError] {",
+            )
+            .replace("Ok(work(seed, count))", "Ok((work(seed, count), insert))")
+            .replace("Ok(value) => Ok(value)", "Ok((value, _)) => Ok(value)");
         let file = engine
             .sources
             .add("prefix-thunk-barrier.hir", source.into())
@@ -455,7 +465,11 @@ fn ordinary_prefix_thunk_does_not_authorize_a_post_read_private_site() {
                 })
                 .unwrap();
             assert!(!objects[code].ahead.as_ref().unwrap().bounds.is_empty());
-            assert!(objects[code].imports.iter().any(|s| s.name == thunk));
+            assert!(
+                objects[code].imports.iter().any(|s| s.name == thunk),
+                "{backend:?}: missing {thunk} among {:?}",
+                objects[code].imports
+            );
             // A different machine thunk is still unknown even when a valid
             // ordinary-prefix thunk and coherent object sidecars are present.
             let mut bad = objects.clone();
