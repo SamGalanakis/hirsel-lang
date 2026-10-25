@@ -95,13 +95,25 @@ impl ConcurrentIo {
         for token in tokens {
             deferred[usize::from(token & HOME_TOKEN != 0)].push(token);
         }
+        Ok(Self::take(&mut deferred, home))
+    }
+    /// The service's share of the poll the home binding made at this same
+    /// scheduling point. A point polls the core once: a second poll would
+    /// count a wait-log point that replay, with a single adapter, never takes.
+    pub(crate) fn ready_after_home(&self, home: &Ready) -> Ready {
+        if matches!(home, Ready::Every) {
+            return Ready::Every;
+        }
+        Self::take(&mut self.deferred.lock().unwrap(), false)
+    }
+    fn take(deferred: &mut [Vec<u64>; 2], home: bool) -> Ready {
         let mut mine: Vec<u64> = std::mem::take(&mut deferred[usize::from(home)])
             .into_iter()
             .map(|token| token & !HOME_TOKEN)
             .collect();
         mine.sort_unstable();
         mine.dedup();
-        Ok(Ready::Tokens(mine))
+        Ready::Tokens(mine)
     }
     /// The admitted mounts' pins, for destinations checked after the run.
     pub fn with_mount_pins<T>(
@@ -460,6 +472,9 @@ impl ConcurrentAdapter for ConcurrentIo {
     }
     fn ready(&self) -> Result<Ready, AdapterError> {
         self.ready_for(false)
+    }
+    fn ready_after_home(&self, home: &Ready) -> Result<Ready, AdapterError> {
+        Ok(ConcurrentIo::ready_after_home(self, home))
     }
     fn wait_sources(&self) -> Result<crate::io::WaitSources, AdapterError> {
         Ok(self

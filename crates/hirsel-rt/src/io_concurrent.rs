@@ -92,6 +92,12 @@ pub trait ConcurrentAdapter: Send + Sync {
     fn ready(&self) -> Result<crate::io::Ready, AdapterError> {
         Ok(crate::io::Ready::Tokens(Vec::new()))
     }
+    /// The ready tokens after the home binding polled at this scheduling point
+    /// (`home` is what that poll found). An adapter whose core home shares
+    /// returns its share of that poll; any other polls as [`Self::ready`].
+    fn ready_after_home(&self, _home: &crate::io::Ready) -> Result<crate::io::Ready, AdapterError> {
+        self.ready()
+    }
     fn readiness(&self) -> Option<crate::readiness::Readiness> {
         None
     }

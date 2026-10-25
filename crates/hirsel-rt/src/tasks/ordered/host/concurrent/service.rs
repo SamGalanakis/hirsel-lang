@@ -123,8 +123,17 @@ impl Service {
         }
     }
 
-    pub(crate) fn ready(&self) -> Stopped<Vec<crate::host_waits::ReadyHost>> {
-        let ready = self.adapter.ready().map_err(Stop::refusal)?;
+    /// `home` is what the home binding's poll found at this scheduling point,
+    /// if it polled: the service then takes its share instead of polling again.
+    pub(crate) fn ready(
+        &self,
+        home: Option<&crate::io::Ready>,
+    ) -> Stopped<Vec<crate::host_waits::ReadyHost>> {
+        let ready = match home {
+            Some(home) => self.adapter.ready_after_home(home),
+            None => self.adapter.ready(),
+        }
+        .map_err(Stop::refusal)?;
         // Job completions publish through rows; their tokens need no merge.
         self.jobs.drain();
         Ok(self

@@ -656,3 +656,40 @@ fn host_provider_constructors_remain_absent_until_their_entries_select_them() {
     io.process(|| panic!("selected process provider must be retained"));
     assert!(io.core.lock().unwrap().children.is_some());
 }
+
+/// A live Ordered scheduling point polls the shared core once: home's poll
+/// counts the wait-log point and the service takes its share of that poll.
+/// SimIo replay counts one point per scheduling point, so a second core poll
+/// recorded `ready` points no replay reaches (batchrun mixed ReplayMismatch).
+#[test]
+fn one_scheduling_point_counts_one_wait_log_point_for_home_and_service() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut real = RealIo::grant(temp.path()).unwrap();
+    real.set_cooperative(crate::readiness::Readiness::default());
+    let io = real
+        .into_concurrent()
+        .unwrap_or_else(|_| panic!("Send streams"));
+    let parked = 5;
+    {
+        let mut core = io.core.lock().unwrap();
+        let log = &mut core.cooperative.as_mut().unwrap().1;
+        log.enter(parked);
+        log.park(false);
+        log.parked(parked);
+    }
+    let points = || {
+        let core = io.core.lock().unwrap();
+        core.cooperative.as_ref().unwrap().1.next_points(parked)
+    };
+    for _ in 0..3 {
+        let home = io.ready_for(true).unwrap();
+        assert_eq!(
+            ConcurrentAdapter::ready_after_home(&io, &home).unwrap(),
+            Ready::Tokens(vec![])
+        );
+    }
+    assert_eq!(points(), Some(3));
+    // A point where home has nothing to poll still polls once, for the service.
+    ConcurrentAdapter::ready(&io).unwrap();
+    assert_eq!(points(), Some(4));
+}

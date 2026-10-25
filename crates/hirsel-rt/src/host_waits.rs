@@ -1171,19 +1171,21 @@ pub(crate) unsafe fn ready_home_canceled(
     run: *mut crate::context::RunShared,
     canceled: &[u64],
 ) -> Stopped<HomeReady> {
-    let mut ready = if unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) } != 0
-    {
-        unsafe { ready_binding_home(run, canceled) }?
-    } else {
-        HomeReady {
-            expired: Vec::new(),
-            hosts: Vec::new(),
-        }
-    };
+    let (mut ready, polled) =
+        if unsafe { (*run).host_waits.load(std::sync::atomic::Ordering::Acquire) } != 0 {
+            let (ready, polled) = unsafe { ready_binding_home(run, canceled) }?;
+            (ready, Some(polled))
+        } else {
+            let ready = HomeReady {
+                expired: Vec::new(),
+                hosts: Vec::new(),
+            };
+            (ready, None)
+        };
     if unsafe { ordered_concurrent::pending(run) } {
         ready
             .hosts
-            .extend(unsafe { (*run).ordered_io.get().unwrap() }.ready()?);
+            .extend(unsafe { (*run).ordered_io.get().unwrap() }.ready(polled.as_ref())?);
     }
     Ok(ready)
 }
@@ -1191,7 +1193,7 @@ pub(crate) unsafe fn ready_home_canceled(
 unsafe fn ready_binding_home(
     run: *mut crate::context::RunShared,
     canceled: &[u64],
-) -> Stopped<HomeReady> {
+) -> Stopped<(HomeReady, Ready)> {
     let binding = unsafe { &mut *(*run).io_binding().cast::<Binding>() };
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
     let expired = expired_binding(binding, &ready)?;
@@ -1203,9 +1205,9 @@ unsafe fn ready_binding_home(
     }
     let hosts = if unsafe { (*run).free_mode } {
         let mut available = crate::id_map::IdSet::default();
-        match ready {
+        match &ready {
             Ready::Tokens(tokens) => {
-                for token in tokens {
+                for &token in tokens {
                     if binding.waits.parked.contains_key(&token) {
                         available.insert(token);
                     }
@@ -1287,7 +1289,7 @@ unsafe fn ready_binding_home(
             std::sync::atomic::Ordering::Release,
         )
     };
-    Ok(HomeReady { expired, hosts })
+    Ok((HomeReady { expired, hosts }, ready))
 }
 
 /// # Safety
@@ -1574,7 +1576,7 @@ pub(crate) unsafe fn ready(ctx: *mut TaskCtx) -> Stopped<Ready> {
 }
 
 unsafe fn ready_here(ctx: *mut TaskCtx) -> Stopped<Ready> {
-    let home = unsafe { ready_binding(ctx) }?;
+    let (home, polled) = unsafe { ready_binding(ctx) }?;
     if !unsafe { ordered_concurrent::pending((*ctx).run_ptr()) } {
         return Ok(home);
     }
@@ -1583,7 +1585,8 @@ unsafe fn ready_here(ctx: *mut TaskCtx) -> Stopped<Ready> {
     } else {
         Vec::new()
     };
-    let concurrent = unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.ready()?;
+    let concurrent =
+        unsafe { (*ctx).run_ref().ordered_io.get().unwrap() }.ready(polled.then_some(&home))?;
     Ok(ordered_ready_union(home, home_tokens, concurrent))
 }
 
@@ -1598,27 +1601,28 @@ fn ordered_ready_union(home: Ready, every: Vec<u64>, concurrent: Vec<ReadyHost>)
     Ready::Tokens(tokens)
 }
 
-unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<Ready> {
+/// The home binding's ready tokens, and whether it polled its adapter.
+unsafe fn ready_binding(ctx: *mut TaskCtx) -> Stopped<(Ready, bool)> {
     // SAFETY: the context is live.
     if unsafe { (*ctx).io_data() }.is_null() {
-        return Ok(Ready::Tokens(Vec::new()));
+        return Ok((Ready::Tokens(Vec::new()), false));
     }
     let binding = unsafe { Binding::get(ctx) };
     if binding.waits.parked.is_empty()
         && binding.waits.armed.is_empty()
         && !binding.adapter.process_sources()
     {
-        return Ok(Ready::Tokens(Vec::new()));
+        return Ok((Ready::Tokens(Vec::new()), false));
     }
     let ready = binding.adapter.ready().map_err(Stop::refusal)?;
     // Injected waits are derived, never recorded: each point re-issues them.
     let Ready::Tokens(mut tokens) = ready else {
-        return Ok(ready);
+        return Ok((ready, true));
     };
     tokens.extend(binding.waits.parked_injected.members_unordered());
     tokens.sort_unstable();
     tokens.dedup();
-    Ok(Ready::Tokens(tokens))
+    Ok((Ready::Tokens(tokens), true))
 }
 
 /// Phase B/C on home's binding, after the scheduler has applied scope expiry.
