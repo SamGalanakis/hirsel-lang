@@ -129,48 +129,48 @@ pub fn last_sender_close_cannot_overtake_its_queued_message() {
     });
 }
 
-/// The role-free replayed receive (tasks/free/objects.rs `channel_receive`) against a send: a
-/// receive that finds nothing ready under the cell lock stays unbegun, and its role path
-/// registers the park (`Channels::wait`) and rechecks under the lock, while the sender reads
-/// `parked` under the same lock and touches the channel for the next scheduling point. The
-/// receiver always gets the message: by its recheck, or by the touch's wake.
+/// An empty receive (tasks/free/objects.rs `channel_receive`) against a send: a receive that
+/// finds nothing ready keeps its wake token under the cell lock, so register and recheck are
+/// one step, while the sender takes the oldest token under the same lock and wakes it after
+/// the unlock. The receiver always gets the message: by its recheck, or by the token's wake.
 pub fn a_role_free_receive_that_finds_nothing_rechecks_or_is_woken() {
+    use crate::pool::free::Token;
     crate::sync::model(|| {
         let (channels, _, _, index) = channel();
         let cell = channels.payload(index);
-        let role = Arc::new(loom::sync::Mutex::new(channels));
-        let point = Arc::new(loom::sync::Notify::new());
         let sender = loom::thread::spawn({
-            let (cell, role, point) = (cell.clone(), role.clone(), point.clone());
+            let cell = cell.clone();
             move || {
                 let mut image = [1u64, 55];
-                let parked = {
+                let token = {
                     let mut state = cell.lock();
                     cell.prepare_send(&mut state);
                     let sent = unsafe { cell.send(&mut state, image.as_mut_ptr().cast(), false) };
                     assert_eq!(sent.0, DONE);
-                    cell.parked()
+                    state.next_token()
                 };
-                if parked {
-                    role.lock().unwrap().touch(index);
-                    point.notify();
+                if let Some(Token(wake)) = token {
+                    wake.notify();
                 }
             }
         });
+        let wake = Arc::new(loom::sync::Notify::new());
         let mut out = [0u64; 2];
-        let attempt = |out: &mut [u64; 2]| {
-            let mut state = cell.lock();
-            cell.ready(&state)
-                && unsafe { cell.receive(&mut state, out.as_mut_ptr().cast()) } == Ok(true)
-        };
-        // Role-free: act only on a ready outcome; otherwise the op stays unbegun.
-        if !attempt(&mut out) {
-            role.lock().unwrap().wait(index, 1, 0);
-            // A spurious scheduling point reruns the recheck, as a woken poll does.
-            while !attempt(&mut out) {
-                point.wait();
+        loop {
+            {
+                let mut state = cell.lock();
+                // A send took the token; any other wake left it.
+                state.drop_token(0);
+                if cell.ready(&state) {
+                    assert_eq!(
+                        unsafe { cell.receive(&mut state, out.as_mut_ptr().cast()) },
+                        Ok(true)
+                    );
+                    break;
+                }
+                state.keep_token(0, Token(wake.clone()));
             }
-            role.lock().unwrap().unwait(index, 1);
+            wake.wait();
         }
         sender.join().unwrap();
         assert_eq!(out, [1, 55]);
