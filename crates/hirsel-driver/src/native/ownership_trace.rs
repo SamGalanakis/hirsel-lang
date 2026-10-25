@@ -350,10 +350,9 @@ impl LeafObjects {
     }
 }
 
-/// `hirsel run --native --trace-ownership`: build the checked source, emit its
-/// diagnostic objects on `backend` and run them with the selected ownership
-/// runtime product and no grants. Programs outside the leaf adapter refuse
-/// before anything runs; ordinary native objects never stand in for them.
+/// `hirsel run --native --trace-ownership`: select the source-owned diagnostic
+/// graph and execute its original Value-to-Ready plans with the opt-in runtime.
+/// Unsupported ownership transport refuses before any executable runs.
 pub fn run_path(
     path: &std::path::Path,
     backend: Backend,
@@ -361,31 +360,41 @@ pub fn run_path(
     event_limit: usize,
 ) -> Result<Result<LeafExecution, NativeError>, crate::ToolError> {
     hirsel_engine::with_compiler_stack(|| {
-        let mut loaded = crate::COMPILER
-            .with_verify(verify)
-            .with_owned_engines()
-            .load_program(path)?;
-        loaded.check_for_execution()?;
-        let input =
-            loaded
-                .engine
-                .export_native_input()
-                .map_err(|error| crate::ToolError::Query {
-                    error,
-                    phase: loaded.engine.unavailable,
-                    sources: loaded.engine.sources.clone(),
-                })?;
+        use crate::requests::{
+            CompileOperation, CompileResult, CompilerRequests, OwnershipRequest,
+        };
+        let compiler = crate::COMPILER.with_verify(verify).with_owned_engines();
+        let config = compiler.configuration();
+        let selector = CompilerRequests::for_host(compiler.clone(), config.clone());
+        let limits = selector.input_limits();
+        let attempts = selector.capture_attempts();
+        let mut host = crate::resident::ObservedSession::new(
+            path.to_owned(),
+            compiler,
+            config,
+            selector,
+            limits,
+            attempts,
+        );
+        let target = super::TargetSpec::x86_64_unknown_linux_gnu();
+        let output = host.request(CompileOperation::NativeOwnership(OwnershipRequest {
+            definition: None,
+            target: target.clone(),
+            validation: super::Validation::EveryStage,
+            launch: Default::default(),
+        }))?;
+        let CompileResult::Ownership(execution) = &output.result else {
+            return Err(crate::ToolError::Runtime(
+                "ownership request returned another operation".into(),
+            ));
+        };
+        let execution = execution.clone();
+        drop(output);
+        drop(host);
         Ok((|| {
-            let checked = loaded.engine.import_native_input(input).map_err(|error| {
-                NativeError::new(
-                    StageName::Manifest,
-                    format!("the native snapshot: {error:?}"),
-                )
-            })?;
-            let target = super::TargetSpec::x86_64_unknown_linux_gnu();
-            let ready = super::build(&checked, &super::Options::new(target.clone()))?;
-            let sites = Sites::new(checked.snapshot());
-            let objects = emit_leaf(&ready, &loaded.entry, &sites, backend, OptLevel::None)?;
+            let objects = execution
+                .emit(backend)
+                .map_err(|error| NativeError::new(StageName::Emission, error))?;
             let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(super::runtime_cache::default_directory);
@@ -398,7 +407,9 @@ pub fn run_path(
                 },
             )?;
             let scratch = super::executable::Scratch::new()?;
-            objects.launch(&ready, &toolchain, &scratch.0, event_limit)
+            execution
+                .launch(&objects, &toolchain, &scratch.0, event_limit)
+                .map_err(|error| NativeError::new(StageName::Link, error))
         })())
     })
 }
