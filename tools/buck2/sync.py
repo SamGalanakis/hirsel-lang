@@ -266,12 +266,17 @@ def shards(binary: str) -> tuple[int, str | None]:
     table = COSTS / f"{binary}.tsv"
     if not READS.is_file(table):
         raise SystemExit(f"{binary} is sharded but has no {relative(table)}; measure it (tools/buck2/test_costs.py)")
-    total = sum(float(line.split("\t")[1]) for line in READS.text(table).splitlines())
+    rows = READS.text(table).splitlines()
+    total = sum(float(line.split("\t")[1]) for line in rows)
     sizes = json.loads(READS.text(HERE / "test-sizes.json"))
     cpu = sizes[binary]["cpu_count"]
     if type(cpu) is not int or not 1 <= cpu <= 4:
         raise ValueError(f"{binary}: cpu_count must be in 1..4 (test launcher's thread ceiling)")
-    return max(1, math.ceil(total / (cpu * SHARD_SECONDS))), f"//tools/buck2:{table.relative_to(HERE)}"
+    # A case is indivisible: once each measured case has its own partition,
+    # more shards cannot reduce its wall time. Refreshed CLI costs can exceed
+    # the work budget individually; do not create thousands of empty actions.
+    count = max(1, min(len(rows), math.ceil(total / (cpu * SHARD_SECONDS))))
+    return count, f"//tools/buck2:{table.relative_to(HERE)}"
 
 
 def cost_coverage(inventories: dict[str, set[str]]) -> list[str]:

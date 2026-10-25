@@ -317,11 +317,23 @@ class ShardSizing(unittest.TestCase):
             here = Path(scratch)
             binary = sync.SHARDED[0]
             (here / 'test-costs').mkdir()
-            (here / f'test-costs/{binary}.tsv').write_text('case\t640.0\n')
+            (here / f'test-costs/{binary}.tsv').write_text(''.join(f'case{i}\t40.0\n' for i in range(16)))
             for cpus, expected in [(1, 16), (2, 8), (4, 4)]:
                 (here / 'test-sizes.json').write_text(json.dumps({binary: {'cpu_count': cpus}}))
                 with patch.object(sync, 'HERE', here), patch.object(sync, 'COSTS', here / 'test-costs'):
                     self.assertEqual(sync.shards(binary)[0], expected)
+
+    def test_expensive_cases_do_not_create_more_shards_than_measured_cases(self):
+        # Each case already exceeds the shard work budget; extra partitions
+        # cannot split it and only add empty remote actions to the main run.
+        with tempfile.TemporaryDirectory() as scratch:
+            here = Path(scratch)
+            binary = sync.SHARDED[0]
+            (here / 'test-costs').mkdir()
+            (here / f'test-costs/{binary}.tsv').write_text('native_a\t1700.0\nnative_b\t650.0\n')
+            (here / 'test-sizes.json').write_text(json.dumps({binary: {'cpu_count': 2}}))
+            with patch.object(sync, 'HERE', here), patch.object(sync, 'COSTS', here / 'test-costs'):
+                self.assertEqual(sync.shards(binary)[0], 2)
 
     def test_exactly_five_percent_missing_is_allowed_but_stale_rows_do_not_help(self):
         with tempfile.TemporaryDirectory() as scratch, patch.object(sync, 'SHARDED', ['binary']), \
