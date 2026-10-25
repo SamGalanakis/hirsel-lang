@@ -343,6 +343,7 @@ fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputatio
                     || before = Some(counts()),
                 );
                 assert_eq!(hit.hits, hit.objects.len());
+                assert_eq!(hit.instance_imports, 0);
                 assert_eq!(
                     before.unwrap(),
                     counts(),
@@ -350,7 +351,6 @@ fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputatio
                 );
                 assert_eq!(cold.summaries, hit.summaries);
                 assert_eq!(cold.objects, hit.objects);
-                let before = counts();
                 let verified = compile_source(
                     store.clone(),
                     workers,
@@ -361,7 +361,10 @@ fn original_whole_plan_cross_open_skips_all_value_work_and_compares_recomputatio
                 );
                 assert_eq!(cold.summaries, verified.summaries);
                 assert_eq!(cold.objects, verified.objects);
-                assert!(counts()[4] > before[4]);
+                // The batch NativeAppendExpand controller is gone. Its
+                // replacement must perform the actual instance imports when
+                // recomputation is explicitly requested.
+                assert!(verified.instance_imports > 0);
                 observed.push(
                     cold.products
                         .iter()
