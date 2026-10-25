@@ -8,23 +8,23 @@ pub(super) trait Reporter {
     fn prelude(&mut self, _ed: &Editor<Ready>) -> Result<(), PassError> {
         Ok(())
     }
-    fn inserted(&mut self, _block: BlockId, _index: usize) -> Result<(), PassError> {
-        Ok(())
-    }
     fn versions(&mut self, _ed: &Editor<Ready>, _before: bool) -> Result<(), PassError> {
         Ok(())
     }
-    fn splice(
-        &mut self,
-        _block: BlockId,
-        _index: usize,
-        _tail: BlockId,
-        _start: usize,
-        _replacement: Option<Point>,
-    ) -> Result<(), PassError> {
+    fn splice(&mut self, _splice: Splice<'_>) -> Result<(), PassError> {
         Ok(())
     }
     fn finish(self, ed: Editor<Ready>) -> Result<(LirUnit<Ready>, Self::Output), PassError>;
+}
+
+/// Positions authored by the lowering pass, with insertion order preserved.
+pub(super) struct Splice<'a> {
+    pub block: BlockId,
+    pub index: usize,
+    pub tail: BlockId,
+    pub start: usize,
+    pub replacement: Option<Point>,
+    pub insertions: &'a [(BlockId, usize)],
 }
 
 pub(super) struct NoObservations;
@@ -37,7 +37,7 @@ impl Reporter for NoObservations {
 
 pub(super) struct Observations {
     plan: Plan,
-    versions: Option<ContentHash>,
+    versions: Option<(LirUnit<Ready>, Plan)>,
 }
 impl Observations {
     pub(super) fn new(plan: &Plan) -> Self {
@@ -66,27 +66,67 @@ impl Reporter for Observations {
         trace::check(&unit, &self.plan).map_err(refused)?;
         Ok(())
     }
-    fn inserted(&mut self, _block: BlockId, _index: usize) -> Result<(), PassError> {
-        // Auxiliary address insertion needs an explicit interleaving map.
-        Err(refused("auxiliary insertion needs a transport recipe"))
-    }
     fn versions(&mut self, ed: &Editor<Ready>, before: bool) -> Result<(), PassError> {
-        let digest = snapshot(ed).digest();
+        let unit = snapshot(ed);
         if before {
-            self.versions = Some(digest);
-        } else if self.versions != Some(digest) {
-            return Err(refused("version repair needs a transport recipe"));
+            let plan = Plan::new(&unit, self.plan.observations.clone());
+            trace::check(&unit, &plan).map_err(refused)?;
+            self.versions = Some((unit, plan));
+        } else {
+            let (input, plan) = self
+                .versions
+                .take()
+                .ok_or_else(|| refused("missing version input"))?;
+            // join_read_versions changes reaching-version names and appends
+            // Plain phi parameters/arguments. Instruction and existing owned
+            // parameter coordinates stay fixed. Author an explicit identity
+            // recipe and check every original marker against both boundaries.
+            let (_, output, _) =
+                crate::observation::identity(&input, &plan, unit).map_err(refused)?;
+            self.plan = output;
         }
         Ok(())
     }
-    fn splice(
-        &mut self,
-        block: BlockId,
-        index: usize,
-        tail: BlockId,
-        start: usize,
-        replacement: Option<Point>,
-    ) -> Result<(), PassError> {
+    fn splice(&mut self, splice: Splice<'_>) -> Result<(), PassError> {
+        let Splice {
+            block,
+            index,
+            tail,
+            start,
+            replacement,
+            insertions,
+        } = splice;
+        // The suffix is detached before auxiliary instructions are inserted.
+        // Its final start and the replacement already include those insertions;
+        // only points still in the editor need the chronological index shifts.
+        let inserted = |point: Point| -> Result<Point, PassError> {
+            let shift = |block, mut index: u32| -> Result<u32, PassError> {
+                for &(b, at) in insertions {
+                    if b == block && index as usize >= at {
+                        index = index
+                            .checked_add(1)
+                            .ok_or_else(|| refused("instruction index overflow"))?;
+                    }
+                }
+                Ok(index)
+            };
+            Ok(match point {
+                Point::Instruction {
+                    block,
+                    index,
+                    moment,
+                } => Point::Instruction {
+                    block,
+                    index: shift(block, index)?,
+                    moment,
+                },
+                Point::ReleaseDrop { block, index } => Point::ReleaseDrop {
+                    block,
+                    index: shift(block, index)?,
+                },
+                _ => point,
+            })
+        };
         for observation in &mut self.plan.observations {
             let relocate = |old: u32| start as u32 + old - index as u32 - 1;
             observation.point = match observation.point {
@@ -109,7 +149,7 @@ impl Reporter for Observations {
                             moment,
                         }
                     } else {
-                        observation.point
+                        inserted(observation.point)?
                     }
                 }
                 Point::ReleaseDrop { block: b, index: i } if b == block && i as usize > index => {
@@ -124,7 +164,7 @@ impl Reporter for Observations {
                 Point::FinalizerDrop { block: b } if b == block => {
                     Point::FinalizerDrop { block: tail }
                 }
-                _ => observation.point,
+                _ => inserted(observation.point)?,
             };
         }
         Ok(())

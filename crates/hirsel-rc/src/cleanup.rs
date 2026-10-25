@@ -195,7 +195,8 @@ pub fn lower_indexed<S: Stage>(
 }
 
 /// Checked cleanup lowering with pass-authored splice locations. Unsupported
-/// compound drops and version-repair changes fail rather than rebuilding plans.
+/// compound drops fail; coordinate-preserving version repairs use a checked
+/// identity recipe rather than rebuilding observations.
 pub fn lower_observed<S: Stage>(
     unit: LirUnit<S>,
     finalizers: &Finalizers,
@@ -294,7 +295,6 @@ fn lower_reporting<S: Stage, R: Reporter>(
     while let Some((b, i, st, flag)) = drops.pop() {
         lowering.drop(b, i, &st, flag, &mut report)?;
         for (block, at) in lowering.inserted.drain(..) {
-            report.inserted(block, at)?;
             for d in drops.iter_mut().filter(|d| d.0 == block && d.1 >= at) {
                 d.1 += 1;
             }
@@ -1591,7 +1591,14 @@ impl Lowering<'_, '_> {
                 whole_finalizer
                     .then_some(hirsel_lir::ownership_trace::Point::FinalizerDrop { block: b })
             });
-        report.splice(b, i, at, self.ed.code[at.index()].len(), release)?;
+        report.splice(observation::Splice {
+            block: b,
+            index: i,
+            tail: at,
+            start: self.ed.code[at.index()].len(),
+            replacement: release,
+            insertions: &self.inserted,
+        })?;
         self.ed.code[at.index()].extend(tail);
         self.ed.unit.terminators[at.index()] = terminator;
         Ok(())
@@ -1636,7 +1643,14 @@ impl Lowering<'_, '_> {
         let mut there = st.clone();
         there.slots[slot.index()].live = Tri::Yes;
         there.slots[slot.index()].init = Tri::Yes;
-        report.splice(b, i, after, 0, None)?;
+        report.splice(observation::Splice {
+            block: b,
+            index: i,
+            tail: after,
+            start: 0,
+            replacement: None,
+            insertions: &[],
+        })?;
         self.drop(full, 0, &there, flags, report)
     }
 
@@ -1721,6 +1735,20 @@ impl Lowering<'_, '_> {
         Ok(())
     }
 
+    /// Record the editor's exact entry insertion alongside cleanup's splices.
+    fn whole(&mut self, slot: SlotId) -> AddressId {
+        let before = self.ed.code[self.ed.unit.entry.index()].len();
+        let insertion = self.ed.code[self.ed.unit.entry.index()]
+            .iter()
+            .position(|inst| matches!(inst, Inst::Address { .. }))
+            .unwrap_or(0);
+        let address = self.ed.whole(self.facts, slot);
+        if self.ed.code[self.ed.unit.entry.index()].len() > before {
+            self.inserted.push((self.ed.unit.entry, insertion));
+        }
+        address
+    }
+
     fn retire_flag(
         &mut self,
         site: &Site,
@@ -1745,15 +1773,7 @@ impl Lowering<'_, '_> {
             kind: hirsel_lir::ir::SlotKind::Temporary,
             scope: self.ed.unit.slots[site.slot.index()].scope,
         });
-        let before = self.ed.code[self.ed.unit.entry.index()].len();
-        let insertion = self.ed.code[self.ed.unit.entry.index()]
-            .iter()
-            .position(|inst| matches!(inst, Inst::Address { .. }))
-            .unwrap_or(0);
-        let address = self.ed.whole(self.facts, slot);
-        if self.ed.code[self.ed.unit.entry.index()].len() > before {
-            self.inserted.push((self.ed.unit.entry, insertion));
-        }
+        let address = self.whole(slot);
         let reaching = self.ed.value(ty, Holding::Plain);
         let flag = (slot, address, reaching);
         self.retire_flags.insert(key, flag);
@@ -1909,7 +1929,7 @@ impl Lowering<'_, '_> {
                 Ok(joined)
             }
             Action::EmptyVariant { layout } => {
-                let whole = self.ed.whole(self.facts, site.slot);
+                let whole = self.whole(site.slot);
                 let ty = type_of(&mut self.ed.unit, ValueRepr::Aggregate, *layout);
                 let value = self.ed.value(ty, Holding::Owned);
                 self.ed.code[at.index()].extend([
@@ -2304,15 +2324,7 @@ impl Lowering<'_, '_> {
             kind: hirsel_lir::ir::SlotKind::Temporary,
             scope: self.ed.unit.slots[site.slot.index()].scope,
         });
-        let before = self.ed.code[self.ed.unit.entry.index()].len();
-        let insertion = self.ed.code[self.ed.unit.entry.index()]
-            .iter()
-            .position(|inst| matches!(inst, Inst::Address { .. }))
-            .unwrap_or(0);
-        let whole = self.ed.whole(self.facts, slot);
-        if self.ed.code[self.ed.unit.entry.index()].len() > before {
-            self.inserted.push((self.ed.unit.entry, insertion));
-        }
+        let whole = self.whole(slot);
         let value = self.ed.value(ty, Holding::Owned);
         let version = self.ed.value(ty, Holding::Plain);
         self.ed.code[at.index()].extend([
@@ -2814,7 +2826,7 @@ impl Lowering<'_, '_> {
         {
             return Ok(*address);
         }
-        let whole = self.ed.whole(self.facts, slot);
+        let whole = self.whole(slot);
         if path.is_empty() {
             return Ok(whole);
         }
@@ -2865,6 +2877,7 @@ impl Lowering<'_, '_> {
                 failure,
             },
         );
+        self.inserted.push((self.ed.unit.entry, at + 1));
         Ok(id)
     }
 
