@@ -349,6 +349,9 @@ impl LoadedProgram {
             .sources
             .add_snapshot(old, text)
             .ok_or(ToolError::SourceTooLarge)?;
+        // Source replacement precedes indexing and its memo revision. Until
+        // the next complete check, no prior receipt describes these inputs.
+        self.engine.checked_scope = Default::default();
         self.files[index].0 = file;
         if self.primary == old {
             self.primary = file;
