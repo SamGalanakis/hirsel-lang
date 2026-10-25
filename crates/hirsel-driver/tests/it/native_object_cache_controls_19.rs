@@ -61,6 +61,11 @@ fn compile(
     backend: native::Backend,
     verification: VerifyStore,
 ) -> crate::native_object_products_19::Objects {
+    let transport_budget = runtime::ProcessBudget::new(24 << 20);
+    let store: Arc<dyn ResultStore> = Arc::new(store::RequestStore::new(
+        store,
+        transport_budget.reserve(24 << 20).unwrap(),
+    ));
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
     let file = engine
