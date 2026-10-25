@@ -529,6 +529,68 @@ fn every_runtime_primitive_row_matches_its_export() {
         );
         assert!(used_exports.contains("hirsel_rt_v2_out_print_at_site"));
         assert!(used_exports.insert(legacy_print.symbol.into()));
+        // Source-aware process calls use the _at_site exports. The original
+        // public entries retain these physical compatibility contracts, derived
+        // from process.rs: ChildWordResult, ChildPairResult and GroupResult.
+        for legacy in [
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_proc_spawn",
+                destination: true,
+                result: Some((16, 8)),
+                parameters: &[Physical::Pointer, Physical::Pointer],
+            },
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_child_write",
+                destination: true,
+                result: Some((12, 4)),
+                parameters: &[
+                    Physical::Pointer,
+                    Physical::Pointer,
+                    Physical::Pointer,
+                    Physical::I64,
+                    Physical::I64,
+                ],
+            },
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_child_close_stdin",
+                destination: false,
+                result: None,
+                parameters: &[Physical::Pointer, Physical::Pointer],
+            },
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_child_wait",
+                destination: true,
+                result: Some((12, 4)),
+                parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+            },
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_proc_spawn_pipeline",
+                destination: true,
+                result: Some((16, 8)),
+                parameters: &[Physical::Pointer, Physical::Pointer, Physical::I64],
+            },
+            AbiExport {
+                caller_site: false,
+                symbol: "hirsel_rt_v2_proc_wait_group",
+                destination: true,
+                result: Some((24, 8)),
+                parameters: &[Physical::Pointer, Physical::Pointer, Physical::Pointer],
+            },
+        ] {
+            assert_eq!(
+                HIRSEL_ABI_EXPORTS
+                    .iter()
+                    .find(|export| export.symbol == legacy.symbol),
+                Some(&legacy)
+            );
+            assert!(used_exports.contains(&format!("{}_at_site", legacy.symbol)));
+            assert!(used_exports.insert(legacy.symbol.into()));
+        }
         assert_eq!(
             used_exports
                 .iter()
