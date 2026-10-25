@@ -448,6 +448,82 @@ if not marker.exists():
         self.assertEqual(self.landed(outputs[2]), [self.git(self.origin, 'rev-parse', 'main').strip()])
         self.assertEqual(self.queued(), [])
 
+    def test_withdraw_checks_two_fake_tickets_and_refuses_a_reused_pid(self):
+        queue = runpy.run_path(str(ROOT / 'tools/land'))['LandQueue']
+        directory = self.lane / '.git/land-queue'
+        directory.mkdir()
+        holders = []
+        for _ in range(2):
+            proc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+            holders.append(proc)
+            def cleanup(proc=proc):
+                if proc.poll() is None:
+                    proc.terminate()
+                proc.wait(timeout=10)
+            self.addCleanup(cleanup)
+        own, other = holders
+        paths = [directory / f'{i:020d}' for i in (1, 2)]
+        for path, proc, worktree in zip(paths, holders, (self.lane, self.top / 'another-lane')):
+            # Even a reused lane name cannot override another checkout's path.
+            path.write_text(json.dumps(dict(pid=proc.pid, process_start=queue.process(proc.pid),
+                                            lane='my-lane', worktree=str(worktree))))
+        untouched = paths[1].read_bytes()
+        result = subprocess.run([sys.executable, 'tools/land', '--withdraw'], cwd=self.lane,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'withdrew ticket {paths[0].name} pid {own.pid}', result.stdout)
+        self.assertEqual(own.wait(timeout=10), -signal.SIGTERM)
+        self.assertIsNone(other.poll())
+        self.assertEqual(paths[1].read_bytes(), untouched)
+        # Reuse the surviving process's PID with an old identity in our ticket.
+        paths[0].write_text(json.dumps(dict(pid=other.pid, process_start=['old boot', '0'],
+                                           lane='my-lane', worktree=str(self.lane))))
+        result = subprocess.run([sys.executable, 'tools/land', '--withdraw'], cwd=self.lane,
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('process start does not match', result.stdout)
+        self.assertIn('nothing is queued', result.stdout)
+        self.assertIsNone(other.poll())
+        self.assertEqual(paths[1].read_bytes(), untouched)
+
+    def test_withdraw_waiting_lane_releases_only_its_ticket(self):
+        checks, lanes = self.queue_lanes()
+        first = self.start_land(lanes[0])
+        self.wait_for(lambda: (checks / 'holding').exists())
+        second = self.start_land(lanes[1])
+        self.wait_for(lambda: len(self.queued()) == 2)
+        # Withdrawal must work even with local edits or a detached branch.
+        self.git(lanes[1], 'checkout', '-q', '--detach')
+        (lanes[1] / 'uncommitted.txt').touch()
+        result = subprocess.run([sys.executable, 'tools/land', '--withdraw'], cwd=lanes[1],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f'pid {second[0].pid}', result.stdout)
+        self.assertIn('queue ticket released', self.finish_land(second, 143))
+        self.assertEqual(len(self.queued()), 1)
+        self.assertIsNone(first[0].poll())
+        (checks / 'release').touch()
+        self.finish_land(first)
+        self.assertEqual(self.main_log()[0], 'lane 0')
+        self.assertEqual(self.queued(), [])
+
+    def test_withdraw_running_lane_cancels_checks_and_restores_its_branch(self):
+        checks, lanes = self.queue_lanes()
+        first = self.start_land(lanes[0])
+        self.wait_for(lambda: (checks / 'holding').exists())
+        result = subprocess.run([sys.executable, 'tools/land', '--withdraw'], cwd=lanes[0],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('queue ticket released', self.finish_land(first, 143))
+        self.assertEqual(self.queued(), [])
+        self.assertEqual(self.git(lanes[0], 'branch', '--show-current').strip(), 'my-lane')
+        self.assertEqual(self.main_log(), ['base'])
+        self.assertEqual(self.git(lanes[0], 'status', '--porcelain'), '')
+        result = subprocess.run([sys.executable, 'tools/land', '--withdraw'], cwd=lanes[0],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('nothing is queued', result.stdout)
+
     def test_killed_holder_is_reaped_and_the_next_lane_lands(self):
         checks, lanes = self.queue_lanes()
         first = self.start_land(lanes[0])

@@ -2,6 +2,7 @@
 """Land this worktree's commits on origin/main.
 
     tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
+    tools/land --withdraw  # stop this checkout's queued or running land
 
 Join the common git directory's FIFO ticket queue, then fetch and rebase
 onto origin/main (the files many lanes add to merge with the
@@ -34,6 +35,7 @@ from pathlib import Path
 import re
 import random
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -144,6 +146,45 @@ class LandQueue:
     def tickets(self):
         return sorted((p for p in self.directory.iterdir() if p.name.isdecimal()),
                       key=lambda p: int(p.name))
+
+    def withdraw(self):
+        """Signal only this checkout's tickets, pinned to their recorded process identity."""
+        sent = 0
+        with self.locked():
+            for path in self.tickets():
+                record = json.loads(path.read_text())
+                worktree = record.get('worktree')
+                # A worktree path is authoritative, even if a lane name was reused.
+                if (Path(worktree).resolve() != ROOT.resolve() if worktree else
+                        record.get('lane') != self.lane):
+                    continue
+                pid = record['pid']
+                if not isinstance(pid, int) or pid <= 0:
+                    say(f'refused ticket {path.name}: invalid pid')
+                    continue
+                try:
+                    # Pin the process before checking /proc: PID reuse between
+                    # the check and the signal must never target a new process.
+                    descriptor = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    say(f'refused ticket {path.name} pid {pid}: process is gone')
+                    continue
+                try:
+                    identity = self.process(pid)
+                    if identity is None or identity != tuple(record['process_start']):
+                        say(f'refused ticket {path.name} pid {pid}: process start does not match')
+                        continue
+                    try:
+                        signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                    except ProcessLookupError:
+                        continue
+                    say(f'withdrew ticket {path.name} pid {pid}')
+                    sent += 1
+                finally:
+                    os.close(descriptor)
+        if not sent:
+            say('nothing is queued for this checkout')
+        return 0
 
     def stale(self, record):
         if self.process(record['pid']) != tuple(record['process_start']):
@@ -883,7 +924,23 @@ def delivered(queue, branch):
     return result['code']
 
 
+class Withdrawn(BaseException):
+    """SIGTERM unwinds the queue and active checks before the client exits."""
+
+
+def withdraw_signal(signum, frame):
+    # A repeated withdrawal must not interrupt cleanup.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    raise Withdrawn()
+
+
 def main():
+    if sys.argv[1:] == ['--withdraw']:
+        try:
+            return LandQueue(git('branch', '--show-current').stdout.strip()).withdraw()
+        except (OSError, ValueError, KeyError) as error:
+            say(f'withdraw failed: {error}')
+            return 1
     if sys.argv[1:]:
         print(__doc__, file=sys.stderr)
         return 2
@@ -893,20 +950,33 @@ def main():
         return 1
     merging.install(ROOT)
     branch = git('branch', '--show-current').stdout.strip()
+    previous_signal = signal.signal(signal.SIGTERM, withdraw_signal)
     try:
         with LandQueue(branch) as queue:
             if queue.result:
                 return delivered(queue, branch)
             return land(queue, branch)
+    except Withdrawn:
+        say('withdrawn; queue ticket released')
+        return 128 + signal.SIGTERM
     except (OSError, ValueError) as error:
         say(f'queue failed: {error}')
         return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_signal)
 
 
 def land(queue, branch):
     slots = []
+    head = revision('HEAD')
     try:
         return train(queue, branch, slots)
+    except BaseException:
+        for slot in slots:
+            slot.cancel()
+        git('rebase', '--abort')
+        git('checkout', '-q', *([branch] if branch else ['--detach', head]))
+        raise
     finally:
         for slot in slots:
             slot.release()

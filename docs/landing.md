@@ -6,6 +6,8 @@ Run the tests your change can break, commit it, then run:
 tools/land > /tmp/<lane>-land.log 2>&1; echo EXIT $? >> /tmp/<lane>-land.log
 ```
 
+`tools/land --withdraw` stops this checkout's queued or running land after verifying its recorded process start time.
+
 Land first joins a FIFO ticket queue shared by every worktree under
 `$(git rev-parse --git-common-dir)/land-queue/`. Only its head fetches,
 rebases, checks and pushes, and it lands the waiting tickets with its own
