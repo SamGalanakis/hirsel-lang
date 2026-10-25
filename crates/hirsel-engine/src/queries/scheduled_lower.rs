@@ -2,11 +2,13 @@
 //! preparation and interpreter state on the admitted home worker. Publication
 //! into a source namespace remains a separate ordered transaction.
 use super::*;
+mod dependencies;
 mod evidence;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
 use crate::store::{Domain, EntryKey, Reference, ResultStore};
+use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
 use std::{
@@ -55,7 +57,7 @@ struct LowerProduct {
     definition: DefId,
     body: Reference,
     diagnostics: Vec<Diagnostic>,
-    dependencies: Vec<SignatureDependency>,
+    dependencies: Dependencies,
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     materialized: Vec<(hirsel_syntax::ExprId, Materialized)>,
@@ -67,7 +69,7 @@ impl LowerProduct {
         (definition.path == self.definition).then(|| QueryOutput {
             value: definition,
             diagnostics: self.diagnostics.clone(),
-            dependencies: self.dependencies.clone(),
+            dependencies: self.dependencies.to_vec(),
         })
     }
 }
@@ -92,13 +94,11 @@ impl Outcome {
         match &self.result {
             Ok(Value::Lower(lower)) => {
                 weight.add(
-                    crate::memo::retained_lowering_output_bytes(
-                        &lower.diagnostics,
-                        &lower.dependencies,
-                    )
-                    .try_into()
-                    .ok()?,
+                    crate::memo::retained_lowering_output_bytes(&lower.diagnostics, &Vec::new())
+                        .try_into()
+                        .ok()?,
                 );
+                weight.add(lower.dependencies.retained_bytes());
                 weight.vec(&lower.materialized, |w, (_, value)| w.materialized(value));
                 if let Some(verified) = &lower.verified {
                     weight.add(verified.retained_bytes()?.try_into().ok()?);
@@ -775,7 +775,7 @@ impl FrontLowerQueries {
             definition: definition.path,
             body,
             diagnostics: output.diagnostics,
-            dependencies,
+            dependencies: dependencies.into(),
             verified,
             acceptance,
             materialized: constants,
@@ -922,7 +922,7 @@ impl s1::AsyncDependencySource for Source {
     async fn definition(&mut self, path: &DefPath) -> s1::DependencyProduct<DefinitionRef> {
         let result = match self.value(path, FRONT_LOWER_KIND, Span::default()).await {
             Ok(Value::Lower(lower)) => {
-                for d in &lower.dependencies {
+                for d in lower.dependencies.iter() {
                     self.record(ReadKey::ExecutedSignature(d.definition), d.fingerprint);
                 }
                 lower
