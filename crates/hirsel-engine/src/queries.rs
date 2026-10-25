@@ -48,7 +48,8 @@ pub use parallel::{
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
 pub use scheduled_lower::{
-    FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FrontLowerOutput, FrontLowerQueries, FrontLowerWork,
+    DefinitionDecodeLayout, FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FrontLowerOutput,
+    FrontLowerQueries, FrontLowerWork,
 };
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.

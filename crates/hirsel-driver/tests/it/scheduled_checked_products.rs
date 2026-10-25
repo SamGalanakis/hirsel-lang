@@ -11,6 +11,15 @@ fn products_case_with_admission(
     failed_lower: bool,
     admitted: bool,
 ) {
+    products_case_with_decode_layout(source, failed_front, failed_lower, admitted, false);
+}
+fn products_case_with_decode_layout(
+    source: &str,
+    failed_front: bool,
+    failed_lower: bool,
+    admitted: bool,
+    layout_control: bool,
+) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
@@ -232,6 +241,42 @@ fn products_case_with_admission(
             );
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
+            if layout_control {
+                let before_reads = counted.reads.load(Ordering::Relaxed);
+                let layouts = scope
+                    .lowered()
+                    .iter()
+                    .filter(|path| !scope.failed_lowered().contains(*path))
+                    .map(|path| {
+                        let layout = lower.settled_definition_decode_layout(path).unwrap();
+                        assert_eq!(
+                            lower.settled_definition_decode_bytes(path).unwrap(),
+                            layout.total().unwrap()
+                        );
+                        assert!(layout.retained > 0 && layout.transient >= layout.retained);
+                        layout
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    layouts.len() >= 2,
+                    "exercise overlapping retained outputs and one reused decoder workspace"
+                );
+                let all: u64 = layouts.iter().map(|layout| layout.total().unwrap()).sum();
+                let held: u64 = layouts.iter().map(|layout| layout.retained).sum();
+                let stage = held + layouts.iter().map(|layout| layout.transient).max().unwrap();
+                assert!(stage < all);
+                assert!(
+                    scope
+                        .checked_product_input_bytes(&headers, &program.entry)
+                        .unwrap()
+                        >= stage
+                );
+                assert_eq!(
+                    counted.reads.load(Ordering::Relaxed),
+                    before_reads,
+                    "layout inspection is metadata only"
+                );
+            }
             let owned = if admitted {
                 let before_reads = counted.reads.load(Ordering::Relaxed);
                 let required = scope
@@ -361,6 +406,17 @@ fn completed_checked_input_admission_refuses_before_body_reads_and_preserves_sca
         "pub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
         false,
         false,
+        true,
+    );
+}
+
+#[test]
+fn completed_checked_input_reuses_one_decode_workspace_while_retaining_all_originals() {
+    products_case_with_decode_layout(
+        "const A:u8=comptime 1u8; const B:u8=comptime 2u8; pub fn main()->u8{A+B}",
+        false,
+        false,
+        true,
         true,
     );
 }
