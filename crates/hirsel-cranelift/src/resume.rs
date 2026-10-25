@@ -1,8 +1,9 @@
 //! Resumable continuation alternates (r6 S7) of validated continuation plans.
 //!
 //! A resumable body gets one alternate per resume state and a dispatcher,
-//! each with the body's own signature plus a trailing frame pointer. Storage
-//! live at any boundary lives in the frame. At each boundary the alternate
+//! each with the body's own signature plus a trailing frame pointer. Declared
+//! parameters, region records and storage live at any boundary live in the
+//! frame; state 0 stores the parameters once. At each boundary the alternate
 //! materializes the state's live values and writes the state into the frame
 //! header before anything else: an operation boundary then asks
 //! `hirsel_rt_v2_resume_point` whether to suspend, and a resumable callee runs
@@ -14,6 +15,7 @@ use cranelift_codegen::Context;
 use cranelift_codegen::ir::{self, InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
+use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
     ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_name,
 };
@@ -54,19 +56,84 @@ impl FnEmitter<'_, '_, '_> {
         })
     }
 
-    /// Storage live at a boundary is frame-resident in every state.
+    /// Storage live at a boundary and every region record are frame-resident
+    /// in every state.
     pub(crate) fn resume_storage(&mut self) -> Emitted {
         let Some(plan) = self.resume.as_ref().map(|r| r.plan) else {
             return Ok(());
         };
         for storage in &plan.storage {
             let place = self.frame_place(storage.offset, storage.layout)?;
-            match self.unit.slots[storage.slot.index()].kind {
-                SlotKind::Parameter(_) | SlotKind::Capture(_) => {}
-                _ => self.slots[storage.slot.index()] = Some(place),
+            if !matches!(
+                self.unit.slots[storage.slot.index()].kind,
+                SlotKind::Capture(_)
+            ) {
+                self.slots[storage.slot.index()] = Some(place);
             }
         }
+        if plan.records.len() != self.regions.len() {
+            return self.invalid("a resumable plan without every region record");
+        }
+        for record in &plan.records {
+            let frame = self.frame();
+            self.regions[record.region.index()] = self.offset(frame, record.offset);
+        }
         Ok(())
+    }
+
+    /// Declared parameters, materialized once: state 0 stores each incoming
+    /// value (an address parameter's bytes) in its frame record, and every
+    /// state binds the parameter from that record, never from a re-entry's
+    /// arguments, which the caller passes again unchanged.
+    pub(crate) fn resume_parameters(&mut self) -> Emitted {
+        let (plan, state) = {
+            let resume = self.resume.as_ref().unwrap();
+            (resume.plan, resume.state)
+        };
+        let abi = self.sig.abi;
+        if plan.parameters.len() != abi.parameters.len() {
+            return self.invalid("a resumable plan off its body's parameters");
+        }
+        for (i, (parameter, record)) in abi.parameters.iter().zip(&plan.parameters).enumerate() {
+            let shape = self.layout_shape(record.layout)?;
+            let place = self.frame_place(record.offset, record.layout)?;
+            if state == 0 {
+                let first = self.sig.first[i];
+                let value = match parameter.passing {
+                    ParameterPassing::ByValue => {
+                        let args = self.entry_params[first..first + parameter.slots.len()].to_vec();
+                        self.assemble(record.layout, &args)?
+                    }
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress => {
+                        let incoming = Place {
+                            columns: None,
+                            ptr: self.entry_params[first],
+                            layout: record.layout,
+                            align: self.layout(record.layout)?.align,
+                            block: None,
+                        };
+                        self.load(shape, incoming)
+                    }
+                    _ => return self.invalid("a resumable parameter the frame cannot hold"),
+                };
+                self.store(shape, value, place)?;
+            }
+            // A value the state reloads is defined by its reload.
+            let reloaded = state
+                .checked_sub(1)
+                .and_then(|k| plan.states.get(k as usize))
+                .is_some_and(|s| s.live.iter().any(|l| l.value == record.value));
+            match record.slot {
+                Some(slot) => self.slots[slot.index()] = Some(place),
+                None if reloaded => {}
+                None => {
+                    let value = self.load(shape, place);
+                    self.define(record.value, value)?;
+                }
+            }
+        }
+        self.bind_captures()?;
+        self.bind_receipt_entry()
     }
 
     /// A resumable task body's ordinary entry: the runtime runs its dispatcher

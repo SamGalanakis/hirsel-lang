@@ -1,7 +1,8 @@
 //! Resumable continuation alternates (r6 S7), as `hirsel-cranelift`'s `resume`
 //! emits them: one alternate per resume state and a dispatcher, each with the
-//! body's signature plus a trailing frame pointer. Storage live at any boundary
-//! lives in the frame; each boundary materializes its state's live values and
+//! body's signature plus a trailing frame pointer. Declared parameters, region
+//! records and storage live at any boundary live in the frame; state 0 stores
+//! the parameters once, and each boundary materializes its state's live values and
 //! state number first, and state k reloads them and reissues its boundary call.
 //! Alternates keep sequence lengths in memory: no register state survives a
 //! suspension.
@@ -39,28 +40,92 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         })
     }
 
-    /// Storage live at a boundary is frame-resident in every state.
+    /// Storage live at a boundary and every region record are frame-resident
+    /// in every state.
     pub(super) fn resume_storage(&mut self) -> Emitted {
-        let Some(plan) = self.resume.as_ref().map(|r| r.plan) else {
+        let Some(resume) = self.resume.as_ref() else {
             return Ok(());
         };
+        let (plan, frame) = (resume.plan, resume.frame);
         for storage in &plan.storage {
-            match self.unit.slots[storage.slot.index()].kind {
-                SlotKind::Parameter(_) | SlotKind::Capture(_) => {}
-                _ => {
-                    let frame = self.resume.as_ref().unwrap().frame;
-                    let align = self.layout(storage.layout)?.align;
-                    self.slots[storage.slot.index()] = Some(Place {
-                        columns: None,
-                        ptr: self.prologue.offset(frame, self.const_u64(storage.offset)),
-                        layout: storage.layout,
-                        align: align.min(low_bit(storage.offset)).min(16),
-                        block: None,
-                    });
+            if let SlotKind::Capture(_) = self.unit.slots[storage.slot.index()].kind {
+                continue;
+            }
+            let align = self.layout(storage.layout)?.align;
+            self.slots[storage.slot.index()] = Some(Place {
+                columns: None,
+                ptr: self.prologue.offset(frame, self.const_u64(storage.offset)),
+                layout: storage.layout,
+                align: align.min(low_bit(storage.offset)).min(16),
+                block: None,
+            });
+        }
+        if plan.records.len() != self.regions.len() {
+            return self.invalid("a resumable plan without every region record");
+        }
+        for record in &plan.records {
+            self.regions[record.region.index()] =
+                self.prologue.offset(frame, self.const_u64(record.offset));
+        }
+        Ok(())
+    }
+
+    /// Declared parameters, materialized once: state 0 stores each incoming
+    /// value (an address parameter's bytes) in its frame record, and every
+    /// state binds the parameter from that record, never from a re-entry's
+    /// arguments, which the caller passes again unchanged.
+    pub(super) fn resume_parameters(&mut self) -> Emitted {
+        let (plan, state) = {
+            let resume = self.resume.as_ref().unwrap();
+            (resume.plan, resume.state)
+        };
+        let abi = self.signature.abi;
+        if plan.parameters.len() != abi.parameters.len() || !self.signature.roots.is_empty() {
+            return self.invalid("a resumable plan off its body's parameters");
+        }
+        self.builder.position(self.prologue_block);
+        for (i, (parameter, record)) in abi.parameters.iter().zip(&plan.parameters).enumerate() {
+            let shape = self.layout_shape(record.layout)?;
+            let place = self.frame_place(record.offset, record.layout)?;
+            if state == 0 {
+                let first = self.signature.first[i];
+                let value = match parameter.passing {
+                    ParameterPassing::ByValue => {
+                        let args: Vec<_> = (0..parameter.slots.len() as u32)
+                            .map(|k| self.module.parameter(self.function, first + k))
+                            .collect();
+                        self.assemble(record.layout, &args)?
+                    }
+                    ParameterPassing::ReadOnlyAddress | ParameterPassing::TransferAddress => {
+                        let incoming = Place {
+                            columns: None,
+                            ptr: self.module.parameter(self.function, first),
+                            layout: record.layout,
+                            align: self.layout(record.layout)?.align,
+                            block: None,
+                        };
+                        self.load(shape, incoming)
+                    }
+                    _ => return self.invalid("a resumable parameter the frame cannot hold"),
+                };
+                self.store(shape, value, place);
+            }
+            // A value the state reloads is defined by its reload.
+            let reloaded = state
+                .checked_sub(1)
+                .and_then(|k| plan.states.get(k as usize))
+                .is_some_and(|s| s.live.iter().any(|l| l.value == record.value));
+            match record.slot {
+                Some(slot) => self.slots[slot.index()] = Some(place),
+                None if reloaded => {}
+                None => {
+                    let value = self.load(shape, place);
+                    self.define(record.value, value)?;
                 }
             }
         }
-        Ok(())
+        self.bind_captures()?;
+        self.bind_receipt_entry()
     }
 
     /// Store a state's live values and number before its boundary call.
@@ -214,9 +279,6 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             let resume = self.resume.as_ref().unwrap();
             (resume.plan, resume.state)
         };
-        if !self.unit.parameters.is_empty() {
-            return self.unsupported("a resumable body with declared parameters");
-        }
         self.find_versions()?;
         for _ in &self.unit.blocks {
             self.blocks.push(self.module.append_block(self.function));

@@ -65,6 +65,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// Binds each declared parameter: its value, or its slot's storage.
     pub(super) fn bind_parameters(&mut self) -> Emitted {
+        if self.resume.is_some() {
+            return self.resume_parameters();
+        }
         let unit = self.unit;
         let abi = self.signature.abi;
         if unit.parameters.len() != abi.parameters.len() {

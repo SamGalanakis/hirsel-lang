@@ -13,6 +13,10 @@ pub enum ContinuationError {
     States(ContentHash),
     Boundary(ContentHash, u32),
     LiveOwner(ContentHash, u32),
+    /// A declared parameter's record (by parameter index).
+    Parameter(ContentHash, u32),
+    /// A region's frame record (by region index).
+    RegionRecord(ContentHash, u32),
     Storage(ContentHash, u32),
     Loan(ContentHash, u32),
     RegionToken(ContentHash, u32),
@@ -360,7 +364,8 @@ fn check_state(
     {
         return Err(ContinuationError::LiveOwner(id, n));
     }
-    let (slots, loans) = storage(u, b);
+    let (mut slots, loans) = storage(u, b);
+    slots.retain(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)));
     let expected_storage: Vec<_> = frame
         .iter()
         .filter(|s| slots.contains(&s.slot))
@@ -433,6 +438,86 @@ fn check_state(
     Ok(())
 }
 
+/// Every declared parameter's record against the body's own ABI, then every
+/// region's record, packed from the header on; where storage may start.
+fn check_fixed(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    plan: &ContinuationPlan,
+) -> Result<u64, ContinuationError> {
+    let id = u.header.instance;
+    let Some(abi) = table.fn_abis.get(u.header.abi.0 as usize) else {
+        return Err(ContinuationError::Representation(id));
+    };
+    if abi.parameters.len() != u.parameters.len() || plan.parameters.len() != u.parameters.len() {
+        return Err(ContinuationError::Parameter(
+            id,
+            plan.parameters.len() as u32,
+        ));
+    }
+    let mut end = FRAME_HEADER_BYTES;
+    for (i, ((p, &value), record)) in abi
+        .parameters
+        .iter()
+        .zip(&u.parameters)
+        .zip(&plan.parameters)
+        .enumerate()
+    {
+        let refused = ContinuationError::Parameter(id, i as u32);
+        // Only a parameter received as bytes the frame can hold: never the
+        // caller's storage (an exclusive address) or a dynamic extent.
+        if !matches!(
+            p.passing,
+            ParameterPassing::ByValue
+                | ParameterPassing::ReadOnlyAddress
+                | ParameterPassing::TransferAddress
+        ) {
+            return Err(refused);
+        }
+        let slots: Vec<_> = (0..u.slots.len() as u32)
+            .map(SlotId)
+            .filter(|s| u.slots[s.index()].kind == SlotKind::Parameter(p.source))
+            .collect();
+        let Some((size, align)) = fixed(table, p.layout) else {
+            return Err(refused);
+        };
+        if record.value != value
+            || record.source != p.source
+            || record.convention != p.convention
+            || record.passing != p.passing
+            || record.holding != u.values[value.index()].holding
+            || record.layout != p.layout
+            || record.slot != slots.first().copied()
+            || slots.len() > 1
+            || record
+                .slot
+                .is_some_and(|s| u.types[u.slots[s.index()].ty.index()].layout != p.layout)
+            || record.offset < end
+            || record.offset % align != 0
+        {
+            return Err(refused);
+        }
+        end = record.offset + size;
+    }
+    end = end.next_multiple_of(8);
+    if plan.records.len() != u.tables.regions.len() {
+        return Err(ContinuationError::RegionRecord(
+            id,
+            plan.records.len() as u32,
+        ));
+    }
+    for (r, record) in plan.records.iter().enumerate() {
+        if record.region != RegionInstanceId(r as u32)
+            || record.offset < end
+            || record.offset % 8 != 0
+        {
+            return Err(ContinuationError::RegionRecord(id, r as u32));
+        }
+        end = record.offset + REGION_RECORD_BYTES;
+    }
+    Ok(end)
+}
+
 /// Recompute and check every plan against the complete Ready bodies.
 pub fn validate(
     units: &[&ValidatedUnit<Ready>],
@@ -498,7 +583,7 @@ pub fn validate(
                 let Ok(sites) = sites else {
                     return Err(ContinuationError::Representation(*id));
                 };
-                if sites.is_empty() || !u.parameters.is_empty() {
+                if sites.is_empty() {
                     return Err(ContinuationError::Representation(*id));
                 }
                 if plan.states.len() != sites.len() {
@@ -524,15 +609,19 @@ pub fn validate(
                         }
                     }
                 }
-                // Fixed storage: every slot live at some boundary, in slot order.
-                let union: BTreeSet<SlotId> =
-                    sites.iter().flat_map(|s| storage(u, s.block).0).collect();
+                let mut end = check_fixed(u, inputs.table, plan)?;
+                // Fixed storage: every slot live at some boundary, in slot
+                // order, but a parameter's, which its record holds.
+                let union: BTreeSet<SlotId> = sites
+                    .iter()
+                    .flat_map(|s| storage(u, s.block).0)
+                    .filter(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)))
+                    .collect();
                 if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
                     != union.iter().copied().collect::<Vec<_>>()
                 {
                     return Err(ContinuationError::Storage(*id, 0));
                 }
-                let mut end = FRAME_HEADER_BYTES;
                 for s in &plan.storage {
                     let ty = &u.types[u.slots[s.slot.index()].ty.index()];
                     let Some((size, align)) = fixed(inputs.table, s.layout) else {
@@ -566,19 +655,24 @@ pub fn validate(
                         &plan.storage,
                         base,
                     )?;
-                    if !state.regions.is_empty() {
-                        return Err(ContinuationError::RegionToken(*id, i as u32));
-                    }
                 }
             }
             // A refused compact form is always safe.
             Representation::Stackful(_) => {
-                if !plan.states.is_empty() || !plan.storage.is_empty() {
+                if !plan.states.is_empty()
+                    || !plan.storage.is_empty()
+                    || !plan.parameters.is_empty()
+                    || !plan.records.is_empty()
+                {
                     return Err(ContinuationError::States(*id));
                 }
             }
             Representation::Direct => {
-                if !matches!(sites, Ok(ref s) if s.is_empty()) || !plan.states.is_empty() {
+                if !matches!(sites, Ok(ref s) if s.is_empty())
+                    || !plan.states.is_empty()
+                    || !plan.parameters.is_empty()
+                    || !plan.records.is_empty()
+                {
                     return Err(ContinuationError::Representation(*id));
                 }
             }
@@ -597,6 +691,7 @@ pub fn validate(
             &effects,
             &digests,
             &plan.representation,
+            (&plan.parameters, &plan.records),
             &plan.storage,
             &plan.states,
             plan.captures,

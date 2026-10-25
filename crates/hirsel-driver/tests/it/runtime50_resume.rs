@@ -6,7 +6,12 @@
 //! stack and activates on another worker's (resume-dispatch-51).
 use hirsel_driver::native::{self, *};
 use hirsel_engine::*;
-use hirsel_lir::continuation::Representation;
+use hirsel_lir::continuation::{
+    ContinuationError, ContinuationPlan, ContinuationPlans, RegionKind, RegionTokenLayout,
+    Representation,
+};
+
+use hirsel_syntax::ContentHash;
 
 use super::runtime50_continuation::{TWO_BOUNDARY, child, ready};
 
@@ -70,6 +75,56 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 }
 "#;
 
+/// A parameterized child: `relay`, entered with its declared parameters (a
+/// borrowed sender, the child's unique buffer taken and a scalar seed), keeps
+/// a list in its compiler-local region and the buffer across two sends.
+const PARAMETERIZED: &str = r#"
+fn relay(tasks:Tasks, owned:Sender[u64], take held:List[u64], seed:u64)->u64 {
+  let mut tx=sender.dup(tasks,owned)
+  let kept:List[u64]=[seed,seed+4u64,seed+6u64]
+  let _=channel.send(tasks,mut tx,held[0]+kept[0])
+  let _=channel.send(tasks,mut tx,held[1]+kept[1])
+  held[2]+held[3]+kept[2]
+}
+
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let total=task.scope(tasks,fn(s:Scope)->u64 {
+    let (sender,receiver):(Sender[u64],Receiver[u64])=channel.open(tasks)
+    let mut rx=take receiver
+    let buffer:List[u64]=[3u64,5u64,7u64]
+    let child=task.async(s,fn()->u64 {
+      let owned=take sender
+      let mut held=take buffer
+      list.push(mut held,11u64)
+      relay(tasks,owned,take held,13u64)
+    })
+    let mut sum=0u64
+    for _ in 0u64..RECEIVES {
+      match channel.receive(tasks,mut rx) {Ok(x)=>{sum=sum+x}, Error(_)=>{}}
+    }
+    CANCEL
+    sum+task.await(s,take child)
+  })
+  let _=out.print(output,f"{total}\n")
+  Ok(())
+}
+"#;
+
+/// The parameterized program, completed or canceled while `relay` waits at
+/// its second send: its region exits and the buffer drops from its records.
+fn parameterized_source(canceled: bool) -> String {
+    let (receives, cancel) = if canceled {
+        ("1u64", "task.cancel(s,child)")
+    } else {
+        ("2u64", "")
+    };
+    PARAMETERIZED
+        .replace("RECEIVES", receives)
+        .replace("CANCEL", cancel)
+}
+
 /// The resumable symbols a backend's objects export, and whether a task body
 /// enters through the runtime's resume loop.
 fn routing(program: &ReadyProgram, backend: Backend, partition: Partition) -> (usize, bool) {
@@ -94,8 +149,13 @@ fn routing(program: &ReadyProgram, backend: Backend, partition: Partition) -> (u
     (exported, entered)
 }
 
-/// Every native backend agrees with the reference under `fixture`.
+/// Every native backend agrees with the reference under `fixture`, and with
+/// `replay`, its recorded run replays to the same observation.
 fn agree(source: &str, fixture: &Fixture, label: &str) {
+    agree_replayed(source, fixture, label, false)
+}
+
+fn agree_replayed(source: &str, fixture: &Fixture, label: &str, replay: bool) {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -159,6 +219,18 @@ fn agree(source: &str, fixture: &Fixture, label: &str) {
             Outcome::Agree,
             "{label} {configuration}: {outcome:?} (expected {expected:?})"
         );
+    }
+    if replay {
+        let outcome = real_io_replay_in(
+            &validated,
+            &entry,
+            &expected,
+            &toolchain,
+            scratch.path(),
+            Default::default(),
+            fixture,
+        );
+        assert_eq!(outcome, Outcome::Agree, "{label} replay: {outcome:?}");
     }
 }
 
@@ -363,6 +435,233 @@ fn runtime50_compact_frames_migrate_off_released_stacks_and_replay() {
                 // first saves at its second too.
                 assert!(activations >= children, "{cell}: {activations}");
             }
+        }
+    });
+}
+
+/// `relay` (declared parameters, a region record, both sends) and the child
+/// that nests its frame.
+fn parameterized(plans: &ContinuationPlans) -> (&ContinuationPlan, &ContinuationPlan) {
+    let summary = || {
+        plans
+            .plans
+            .values()
+            .map(|p| {
+                format!(
+                    "{:?} parameters {:?} records {} states {:?}",
+                    p.representation,
+                    p.parameters
+                        .iter()
+                        .map(|r| (r.passing, r.convention, r.slot.is_some()))
+                        .collect::<Vec<_>>(),
+                    p.records.len(),
+                    p.states
+                        .iter()
+                        .map(|s| (s.boundary.operation.to_string(), s.callee.is_some()))
+                        .collect::<Vec<_>>()
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let relay = plans
+        .plans
+        .values()
+        .find(|p| {
+            p.representation == Representation::Resumable
+                && p.parameters.len() == 4
+                && p.states
+                    .iter()
+                    .filter(|s| s.boundary.operation.to_string().ends_with("channel/send"))
+                    .count()
+                    == 2
+        })
+        .unwrap_or_else(|| panic!("resumable parameterized relay: {:#?}", summary()));
+    let child = plans
+        .plans
+        .values()
+        .find(|p| {
+            p.states
+                .iter()
+                .any(|s| s.callee.is_some_and(|c| c.body == relay.body))
+        })
+        .unwrap_or_else(|| panic!("the relay's caller: {:#?}", summary()));
+    (relay, child)
+}
+
+/// Rayon's join vectors (`join/test.rs:60-109`) as continuation forms: the
+/// local form runs where it started, the migrated one moves at every
+/// suspension, the canceled one propagates its failure through cleanup.
+#[test]
+fn runtime51_parameterized_region_continuation() {
+    with_compiler_stack(|| {
+        let program = ready(&parameterized_source(false));
+        let plans = native::continuation::plans(&program);
+        native::continuation::validate(&program, &plans).unwrap();
+        let (relay, child) = parameterized(&plans);
+        assert_eq!(child.representation, Representation::Resumable);
+        // Every declared parameter is a frame record under its ownership
+        // mode, first after the header; the taken buffer's slot is its record.
+        assert_eq!(
+            relay.parameters[0].offset,
+            hirsel_lir::continuation::FRAME_HEADER_BYTES
+        );
+        let held = &relay.parameters[2];
+        assert_eq!(held.convention, hirsel_core_contract::Passing::Take);
+        assert!(held.slot.is_some(), "{held:#?}");
+        // The local region's record is in the frame, and both sends retain
+        // its mark.
+        assert_eq!(relay.records.len(), 1, "{relay:#?}");
+        let record = relay.records[0];
+        assert!(relay.parameters.iter().all(|p| record.offset > p.offset));
+        let sends: Vec<_> = relay
+            .states
+            .iter()
+            .filter(|s| s.boundary.operation.to_string().ends_with("channel/send"))
+            .collect();
+        for state in &sends {
+            assert!(
+                state.regions.iter().any(|r| r.kind == RegionKind::Mark),
+                "{state:#?}"
+            );
+            assert!(state.storage.iter().all(|s| s.offset >= record.offset + 64));
+        }
+        assert!(relay.cost.frame_bytes <= hirsel_lir::continuation::MAX_FRAME_BYTES);
+        for backend in [Backend::Llvm, Backend::Cranelift] {
+            for partition in [Partition::Whole, Partition::Singleton] {
+                let (exported, entered) = routing(&program, backend, partition);
+                assert!(
+                    exported >= 3 && entered,
+                    "{backend:?} {partition:?}: {exported} {entered}"
+                );
+            }
+        }
+
+        // Forged parameter owners, region lifetimes and resume targets.
+        let refused = |edit: &dyn Fn(&mut ContinuationPlan)| {
+            let mut bad = plans.clone();
+            edit(bad.plans.get_mut(&relay.body).unwrap());
+            native::continuation::validate(&program, &bad).expect_err("a forged plan was imported")
+        };
+        let checks: Vec<(&str, ContinuationError, fn(&ContinuationError) -> bool)> = vec![
+            (
+                "parameter holding",
+                refused(&|p| {
+                    let r = &mut p.parameters[2];
+                    r.holding = if r.holding == hirsel_lir::ir::Holding::Owned {
+                        hirsel_lir::ir::Holding::Plain
+                    } else {
+                        hirsel_lir::ir::Holding::Owned
+                    }
+                }),
+                |e| matches!(e, ContinuationError::Parameter(_, 2)),
+            ),
+            (
+                "parameter ownership mode",
+                refused(&|p| p.parameters[2].convention = hirsel_core_contract::Passing::Borrow),
+                |e| matches!(e, ContinuationError::Parameter(_, 2)),
+            ),
+            (
+                "parameter passed by the caller's storage",
+                refused(&|p| {
+                    p.parameters[1].passing =
+                        hirsel_lir::abi_types::ParameterPassing::ExclusiveAddress
+                }),
+                |e| matches!(e, ContinuationError::Parameter(_, 1)),
+            ),
+            (
+                "parameter value",
+                refused(&|p| p.parameters.swap(1, 2)),
+                |e| matches!(e, ContinuationError::Parameter(_, 1)),
+            ),
+            (
+                "parameter record in the header",
+                refused(&|p| p.parameters[0].offset = 0),
+                |e| matches!(e, ContinuationError::Parameter(_, 0)),
+            ),
+            (
+                "dropped parameter record",
+                refused(&|p| {
+                    p.parameters.pop();
+                }),
+                |e| matches!(e, ContinuationError::Parameter(_, _)),
+            ),
+            (
+                "region record left on the stack",
+                refused(&|p| {
+                    p.records.clear();
+                }),
+                |e| matches!(e, ContinuationError::RegionRecord(_, _)),
+            ),
+            (
+                "region record over a parameter",
+                refused(&|p| p.records[0].offset = p.parameters[3].offset),
+                |e| matches!(e, ContinuationError::RegionRecord(_, 0)),
+            ),
+            (
+                "region token outlives its region",
+                refused(&|p| {
+                    let n = p.states.len() - 1;
+                    let l = p.states[n].live[0].clone();
+                    p.states[n].regions.push(RegionTokenLayout {
+                        value: l.value,
+                        layout: l.layout,
+                        kind: RegionKind::Arena,
+                    })
+                }),
+                |e| matches!(e, ContinuationError::RegionToken(..)),
+            ),
+            (
+                "dropped region token",
+                refused(&|p| {
+                    let n = p.states.len() - 1;
+                    p.states[n].regions.clear()
+                }),
+                |e| matches!(e, ContinuationError::RegionToken(..)),
+            ),
+            (
+                "resume target",
+                refused(&|p| {
+                    let n = p.states.len() - 1;
+                    p.states[n].target.block = p.states[0].target.block
+                }),
+                |e| matches!(e, ContinuationError::ResumeLabel(..)),
+            ),
+            (
+                "certificate over the records",
+                refused(&|p| p.certificate.identity = ContentHash::of_bytes(b"cached")),
+                |e| matches!(e, ContinuationError::Certificate(_)),
+            ),
+        ];
+        for (name, error, expected) in &checks {
+            assert!(expected(error), "{name}: {error:?}");
+        }
+        let mut bad = plans.clone();
+        bad.identity = ContentHash::of_bytes(b"other partition");
+        assert_eq!(
+            native::continuation::validate(&program, &bad),
+            Err(ContinuationError::Identity)
+        );
+
+        let local = Fixture::default();
+        let published = Fixture {
+            resume_save: true,
+            ..Fixture::default()
+        };
+        let migrate = Fixture {
+            migrate: true,
+            ..Fixture::default()
+        };
+        let (done, canceled) = (parameterized_source(false), parameterized_source(true));
+        agree(&done, &local, "parameterized local");
+        agree_replayed(&done, &published, "parameterized published", true);
+        agree(&done, &migrate, "parameterized migrate");
+        agree(&canceled, &published, "parameterized canceled");
+        // Under the shared dispatcher the saved frame, its parameter and
+        // region records included, leaves its stack and activates on another
+        // worker's, live and replayed.
+        for (index, trace) in compact_runs(&done, "parameterized").iter().enumerate() {
+            let cell = format!("parameterized run {index}");
+            assert!(exact_compact_custody(trace, &cell) >= 1, "{cell}");
         }
     });
 }

@@ -995,9 +995,6 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let (plan, state) = (resume.plan, resume.state);
         let frame = *self.entry_params.last().unwrap();
         self.resume.as_mut().unwrap().frame = Some(frame);
-        if !self.unit.parameters.is_empty() {
-            return self.unsupported("a resumable body with declared parameters");
-        }
         self.find_versions()?;
         for _ in &self.unit.blocks {
             let block = self.b.create_block();
@@ -1065,6 +1062,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
     /// Binds each declared parameter: its value, or its slot's storage.
     fn bind_parameters(&mut self) -> Emitted {
+        if self.resume.is_some() {
+            return self.resume_parameters();
+        }
         let unit = self.unit;
         let abi = self.sig.abi;
         if unit.parameters.len() != abi.parameters.len() {
@@ -1170,7 +1170,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     /// Binds each capture slot to its field of the environment the body was entered with:
     /// the captures in ordinal order, each at the layout of its slot, behind the counted
     /// block header.
-    fn bind_captures(&mut self) -> Emitted {
+    pub(crate) fn bind_captures(&mut self) -> Emitted {
         let unit = self.unit;
         let mut captures: Vec<(u32, usize, LayoutId)> = Vec::new();
         for (s, slot) in unit.slots.iter().enumerate() {

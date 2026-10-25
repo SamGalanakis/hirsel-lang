@@ -4,7 +4,10 @@
 //! A body whose calls are all classified is *closed*. A closed body with at
 //! least one existing operation boundary gets one [`ResumeState`] per boundary:
 //! the values and storage live across it, its region tokens, the cleanup that a
-//! stop or cancellation runs from it and the label execution resumes at. A body
+//! stop or cancellation runs from it and the label execution resumes at. Its
+//! declared parameters and region records live in the frame for the whole
+//! body: a re-entry binds parameters from their records instead of its
+//! arguments, and a region token, its record's address, survives a save. A body
 //! reaching an unknown call, or suspending inside a nested frame, keeps the
 //! general stackful representation. Both use the same Saved/Active ownership
 //! protocol in the runtime; the representation never changes semantics.
@@ -17,10 +20,13 @@
 //! from a cache or another partition is never trusted by its identity alone.
 use std::collections::{BTreeMap, BTreeSet};
 
+use hirsel_core_contract::Passing;
 use hirsel_syntax::{ContentHash, DefPath};
 
+use crate::abi_types::ParameterPassing;
 use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutTable, SizeSpec, TargetSpec};
+use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
 mod validate;
@@ -181,6 +187,33 @@ pub enum RegionKind {
     Arena,
 }
 
+/// A declared parameter, materialized once: state 0 stores its incoming value
+/// (an address parameter's bytes) here and every state binds the parameter
+/// from this record, so a re-entry never takes its arguments again. As Rayon's
+/// `StackJob::new` does before the job is pushed (`join/mod.rs:132-138`), it is
+/// in the frame before the first point a continuation can move.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FrameParameter {
+    pub value: ValueId,
+    pub source: u32,
+    /// The ownership mode the parameter was received under.
+    pub convention: Passing,
+    pub passing: ParameterPassing,
+    pub holding: Holding,
+    /// The parameter's slot, whose storage this record is.
+    pub slot: Option<SlotId>,
+    pub layout: LayoutId,
+    pub offset: u64,
+}
+
+/// A compiler-local region's record, in the frame for the whole body: a
+/// region token is its record's address, so it stays valid across a save.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct FrameRegion {
+    pub region: RegionInstanceId,
+    pub offset: u64,
+}
+
 /// A live region token: the resumed body still owns that region.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct RegionTokenLayout {
@@ -260,6 +293,10 @@ pub struct ContinuationPlan {
     pub body: ContentHash,
     pub digest: ContentHash,
     pub representation: Representation,
+    /// Every declared parameter, in order, first after the frame header.
+    pub parameters: Vec<FrameParameter>,
+    /// Every compiler-local region's record, in region order.
+    pub records: Vec<FrameRegion>,
     /// Storage live at any boundary. It lives in the frame at fixed offsets
     /// for the whole body, so addresses into it stay valid across a suspension.
     pub storage: Vec<LiveStorage>,
@@ -703,11 +740,84 @@ pub(crate) struct Site {
     pub(crate) callee: Option<(ContentHash, u64)>,
 }
 
-/// Lay out every state over one fixed storage area.
+/// Whether a slot is homed outside the plan's storage: a parameter's slot is
+/// its frame record.
+fn parameter_slot(u: &LirUnit<Ready>, s: SlotId) -> bool {
+    matches!(u.slots[s.index()].kind, SlotKind::Parameter(_))
+}
+
+/// The fixed area after the header: each declared parameter's record, then
+/// each region's, and where storage starts. A parameter the frame cannot hold
+/// by value (an exclusive address names the caller's storage; a pointer/length
+/// extent is dynamic) refuses the compact form.
+fn fixed_area(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+) -> Result<(Vec<FrameParameter>, Vec<FrameRegion>, u64), String> {
+    let abi = table
+        .fn_abis
+        .get(u.header.abi.0 as usize)
+        .ok_or("a body outside the ABI table")?;
+    if abi.parameters.len() != u.parameters.len() {
+        return Err("parameter count differs from the FnAbi".into());
+    }
+    for p in &abi.parameters {
+        match p.passing {
+            ParameterPassing::ByValue
+            | ParameterPassing::ReadOnlyAddress
+            | ParameterPassing::TransferAddress => {}
+            ParameterPassing::ExclusiveAddress => return Err("exclusive parameter".into()),
+            ParameterPassing::PointerLength => return Err("pointer/length parameter".into()),
+        }
+    }
+    let (offsets, end) = place(
+        table,
+        FRAME_HEADER_BYTES,
+        &abi.parameters.iter().map(|p| p.layout).collect::<Vec<_>>(),
+    )
+    .ok_or("dynamic parameter")?;
+    let parameters = abi
+        .parameters
+        .iter()
+        .zip(&u.parameters)
+        .zip(offsets)
+        .map(|((p, &value), offset)| FrameParameter {
+            value,
+            source: p.source,
+            convention: p.convention,
+            passing: p.passing,
+            holding: u.values[value.index()].holding,
+            slot: u
+                .slots
+                .iter()
+                .position(|s| s.kind == SlotKind::Parameter(p.source))
+                .map(|s| SlotId(s as u32)),
+            layout: p.layout,
+            offset,
+        })
+        .collect();
+    let mut at = end;
+    let mut records = Vec::new();
+    for r in 0..u.tables.regions.len() {
+        records.push(FrameRegion {
+            region: RegionInstanceId(r as u32),
+            offset: at,
+        });
+        at = at
+            .checked_add(REGION_RECORD_BYTES)
+            .ok_or("oversize live image")?;
+    }
+    Ok((parameters, records, at))
+}
+
+type Fixed = (Vec<FrameParameter>, Vec<FrameRegion>);
+
+/// Lay out every state over one fixed storage area from `base`.
 fn states(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
     sites: &[Site],
+    base: u64,
 ) -> Result<(Vec<LiveStorage>, Vec<ResumeState>), String> {
     let live = crate::liveness::liveness(u);
     let mut at_sites = Vec::new();
@@ -724,13 +834,13 @@ fn states(
             return Err("boundary on a cycle".into());
         }
         let (slots, loans) = storage_at(u, site.block);
-        union.extend(slots.iter().copied());
+        union.extend(slots.iter().copied().filter(|s| !parameter_slot(u, *s)));
         at_sites.push((slots, loans));
     }
     let slots: Vec<_> = union.into_iter().collect();
     let (offsets, base) = place(
         table,
-        FRAME_HEADER_BYTES,
+        base,
         &slots
             .iter()
             .map(|s| slot_layout(u, *s).0)
@@ -839,6 +949,7 @@ pub(crate) fn certify(
     effects: &[CallEffect],
     callee_digests: &BTreeMap<ContentHash, ContentHash>,
     representation: &Representation,
+    (parameters, records): (&[FrameParameter], &[FrameRegion]),
     storage: &[LiveStorage],
     states: &[ResumeState],
     captures: Option<LayoutId>,
@@ -861,11 +972,12 @@ pub(crate) fn certify(
         bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
     }
-    let tail = format!("{representation:?}{storage:?}{states:?}{captures:?}");
+    let tail =
+        format!("{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{captures:?}");
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
     ValidatedContinuation {
-        identity: ContentHash::of_parts("hirsel.continuation.plan.v2", [bytes.as_slice()]),
+        identity: ContentHash::of_parts("hirsel.continuation.plan.v3", [bytes.as_slice()]),
     }
 }
 
@@ -923,30 +1035,23 @@ fn plan_unit(
         .get(&u.header.instance)
         .copied()
         .flatten();
-    let built = sites(u, &effects, done).and_then(|sites| states(u, inputs.table, &sites));
-    let (representation, storage, states) = match built {
-        Err(why) => (Representation::Stackful(why), Vec::new(), Vec::new()),
-        Ok((_, states)) if states.is_empty() => (Representation::Direct, Vec::new(), states),
-        Ok((_, states)) if states.iter().any(|s| s.bytes > MAX_FRAME_BYTES) => (
+    let built = sites(u, &effects, done).and_then(|sites| {
+        if sites.is_empty() {
+            return Ok((Fixed::default(), Vec::new(), Vec::new()));
+        }
+        let (parameters, records, base) = fixed_area(u, inputs.table)?;
+        let (storage, states) = states(u, inputs.table, &sites, base)?;
+        Ok(((parameters, records), storage, states))
+    });
+    let none = || (Fixed::default(), Vec::new(), Vec::new());
+    let (representation, (fixed, storage, states)) = match built {
+        Err(why) => (Representation::Stackful(why), none()),
+        Ok((_, _, states)) if states.is_empty() => (Representation::Direct, none()),
+        Ok((_, _, states)) if states.iter().any(|s| s.bytes > MAX_FRAME_BYTES) => (
             Representation::Stackful("oversize live image".into()),
-            Vec::new(),
-            Vec::new(),
+            none(),
         ),
-        // Each re-entry passes a body's declared parameters again; until the
-        // alternates take them from the frame instead, such a body stays stackful.
-        Ok(_) if !u.parameters.is_empty() => (
-            Representation::Stackful("declared parameters".into()),
-            Vec::new(),
-            Vec::new(),
-        ),
-        // A compiler-local region's record is a stack slot of the frame that
-        // entered it; until records are frame-resident its body stays stackful.
-        Ok((_, states)) if states.iter().any(|s| !s.regions.is_empty()) => (
-            Representation::Stackful("region record live across a boundary".into()),
-            Vec::new(),
-            Vec::new(),
-        ),
-        Ok((storage, states)) => (Representation::Resumable, storage, states),
+        Ok(built) => (Representation::Resumable, built),
     };
     let cost = PlacementCost {
         instructions: (u.instructions.len() + u.terminators.len()) as u32,
@@ -969,6 +1074,7 @@ fn plan_unit(
         &effects,
         digests,
         &representation,
+        (&fixed.0, &fixed.1),
         &storage,
         &states,
         captures,
@@ -977,6 +1083,8 @@ fn plan_unit(
         body: u.header.instance,
         digest: u.digest(),
         representation,
+        parameters: fixed.0,
+        records: fixed.1,
         storage,
         states,
         captures,
