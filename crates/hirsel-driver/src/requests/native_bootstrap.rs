@@ -373,6 +373,7 @@ impl NativeBootstrap {
             self.weight,
             admission.instances,
         )?
+        .with_store_verification(plan.verify_store)?
         .with_front_lower(front)?;
         let arena = ArenaTasks::new(
             instances.clone(),
