@@ -10,6 +10,7 @@ struct Branch {
     expression: Option<ast::ExprId>,
     guard: Option<ast::ExprId>,
     pattern: Option<ast::PatternId>,
+    borrowed_pattern: bool,
     tail: bool,
     barrier: bool,
 }
@@ -19,6 +20,7 @@ impl Branch {
             expression: Some(id),
             guard: None,
             pattern: None,
+            borrowed_pattern: false,
             tail,
             barrier,
         }
@@ -28,6 +30,7 @@ impl Branch {
             expression: None,
             guard: None,
             pattern: None,
+            borrowed_pattern: false,
             tail: false,
             barrier: false,
         }
@@ -36,7 +39,7 @@ impl Branch {
 enum Visit {
     Expression(ast::ExprId, bool, bool, usize),
     Statement(ast::StmtId, bool, usize),
-    Introduce(ast::PatternId, usize),
+    Introduce(ast::PatternId, bool, usize),
     Hold(ast::ExprId, usize),
     Consume(ast::ExprId, usize),
     ReleaseTemporary(ast::ExprId, usize),
@@ -83,6 +86,7 @@ impl Checker<'_, '_> {
             ..State::default()
         };
         let mut states = vec![initial];
+        let mut borrowed_bindings = BTreeSet::new();
         let exits = self.input.syntax.tree.block_exits(*root);
         let mut breaks: BTreeMap<ast::ExprId, Vec<State>> = BTreeMap::new();
         let mut todo = vec![Visit::Expression(*root, true, false, 0)];
@@ -136,12 +140,28 @@ impl Checker<'_, '_> {
                             todo.push(Visit::Expression(condition, false, barrier, state));
                         }
                         E::Match { value, arms } => {
+                            // A match of a borrowed parameter introduces views,
+                            // not owners whose cleanup must survive the call.
+                            let borrowed_pattern = !self.tail_owned_expression(value)
+                                && self.source_place(value).is_some_and(|place| {
+                                    let SourceRoot::Binding { owner, binding } = &place.root else {
+                                        return false;
+                                    };
+                                    place.projections.is_empty()
+                                        && matches!(binding, ResolvedName::Parameter(_))
+                                        && self.body.bindings.iter().any(|b| {
+                                            b.owner == *owner
+                                                && b.binding == *binding
+                                                && b.usage == UseKind::Borrow
+                                        })
+                                });
                             let branches = arms
                                 .into_iter()
                                 .map(|a| Branch {
                                     expression: Some(a.body),
                                     guard: a.guard,
                                     pattern: Some(a.pattern),
+                                    borrowed_pattern,
                                     tail,
                                     barrier,
                                 })
@@ -245,7 +265,7 @@ impl Checker<'_, '_> {
                             otherwise,
                             ..
                         } => {
-                            todo.push(Visit::Introduce(pattern, state));
+                            todo.push(Visit::Introduce(pattern, false, state));
                             if let Some(otherwise) = otherwise {
                                 // The refused initializer remains owned until the
                                 // else block exits, just as a match scrutinee does.
@@ -304,15 +324,17 @@ impl Checker<'_, '_> {
                         ),
                     }
                 }
-                Visit::Introduce(pattern, state) => {
+                Visit::Introduce(pattern, borrowed, state) => {
                     let mut patterns = vec![pattern];
                     while let Some(pattern) = patterns.pop() {
-                        states[state].live.extend(
-                            self.body.bindings.iter().enumerate().filter_map(|(i, b)| {
-                                (b.owner == owner && b.site == NameSite::Pattern(pattern))
-                                    .then_some(i)
-                            }),
-                        );
+                        for (i, b) in self.body.bindings.iter().enumerate() {
+                            if b.owner == owner && b.site == NameSite::Pattern(pattern) {
+                                states[state].live.insert(i);
+                                if borrowed && b.usage == UseKind::Borrow {
+                                    borrowed_bindings.insert(i);
+                                }
+                            }
+                        }
                         if let Some(p) = self.body.patterns.iter().find(|p| p.pattern == pattern) {
                             patterns.extend(p.subpatterns());
                         }
@@ -386,7 +408,12 @@ impl Checker<'_, '_> {
                         }
                         for index in states[state].live.iter().copied() {
                             let b = &self.body.bindings[index];
-                            if (matches!(b.binding, ResolvedName::Local(_))
+                            // A temporary loop argument can retain a view of a
+                            // pattern binding; only parameter restarts may leave
+                            // these borrowed bindings behind.
+                            let borrowed = borrowed_bindings.contains(&index)
+                                && owned_loop_arguments.is_empty();
+                            if (matches!(b.binding, ResolvedName::Local(_)) && !borrowed
                                 || !matches!(b.usage, UseKind::Borrow | UseKind::Mut))
                                 && !self.bound(b.ty, ast::Bound::Plain)?
                             {
@@ -428,7 +455,7 @@ impl Checker<'_, '_> {
                         states.push(states[state].clone());
                         children.push(child);
                         if let Some(pattern) = branch.pattern {
-                            visits.push(Visit::Introduce(pattern, child));
+                            visits.push(Visit::Introduce(pattern, branch.borrowed_pattern, child));
                         }
                         if let Some(guard) = branch.guard {
                             visits.push(Visit::Expression(guard, false, branch.barrier, child));
