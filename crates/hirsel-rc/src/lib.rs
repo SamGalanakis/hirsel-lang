@@ -17,6 +17,7 @@ pub mod legalize;
 pub mod library;
 pub mod liveness;
 pub mod normalize;
+mod observation;
 pub mod placement;
 pub mod ready;
 #[cfg(test)]

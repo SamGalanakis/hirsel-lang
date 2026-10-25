@@ -670,3 +670,158 @@ fn ownership_trace_elide_refuses_to_silently_delete_an_observed_copy() {
     assert!(error.contains("observed marker MarkerId(0)"), "{error}");
     assert!(error.contains("explicit semantic transport"), "{error}");
 }
+
+#[test]
+fn ownership_trace_legalize_emits_a_recipe_for_unchanged_resource_flow() {
+    let (unit, mut input, table) = fixture_with_table();
+    let unit = unit.into_stage::<hirsel_lir::stage::Ready>();
+    input.unit = unit.digest();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let ordinary = hirsel_rc::legalize::legalize_indexed(unit.clone(), &index).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::legalize::legalize_observed(unit.clone(), &index, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    check_transform(&unit, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+fn scalar_legalization_fixture(
+    observe_call: bool,
+) -> (
+    LirUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+    LirUnit<hirsel_lir::stage::Ready>,
+) {
+    use hirsel_lir::stage::{Ready, Reuse};
+    let mut t = Lir::<Reuse>::new(
+        &[(Passing::Take, l::BLK), (Passing::Borrow, l::I64)],
+        Some(l::BLK),
+    );
+    let resource = t.owned(l::BLK);
+    t.param(resource);
+    let scalar = t.plain(l::I64);
+    t.param(scalar);
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.releasing(&[resource]);
+    let abi = t.abi(&[(Passing::Borrow, l::I64)], Some(l::I32));
+    t.declare_operation(
+        super::operation_abi::scalar_signature(
+            "int.truncate",
+            &[(
+                hirsel_syntax::PassingMode::Borrow,
+                hirsel_types::Primitive::I64,
+            )],
+            Some(hirsel_types::Primitive::I32),
+        ),
+        Default::default(),
+        abi,
+    );
+    let scalar_result = t
+        .call_to(
+            ENTRY,
+            Callee::Operation(OperationRef(0)),
+            abi,
+            &[(Passing::Borrow, l::I64)],
+            Some(l::I32),
+            &[ArgumentValue::Value(scalar)],
+            (normal, &[]),
+            failure,
+        )
+        .unwrap();
+    t.builder.ret(normal, Some(resource));
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
+        .unwrap()
+        .into_raw()
+        .into_stage::<Ready>();
+    let ordinary = hirsel_rc::legalize::legalize(unit.clone(), &table).unwrap();
+    let violations = hirsel_lir::validate::check(&ordinary, &inputs);
+    assert!(
+        violations.is_empty(),
+        "legalized output must independently pass Ready: {violations:?}"
+    );
+    assert!(ordinary.instructions.iter().any(|inst| matches!(
+        inst,
+        Inst::Convert {
+            mode: ConvertMode::Truncate,
+            ..
+        }
+    )));
+    assert!(
+        !ordinary
+            .terminators
+            .iter()
+            .any(|term| matches!(term, Terminator::Call { .. }))
+    );
+    let site = unit.tables.source_anchors[0].site;
+    let mut observations = vec![Observation {
+        point: Point::Entry,
+        marker: ObserveOwnership {
+            id: MarkerId(0),
+            site,
+            kind: Kind::Move,
+            token: Location::Parameter(0),
+            owner: Location::Value(resource),
+        },
+    }];
+    if observe_call {
+        observations.push(Observation {
+            point: Point::CallReturned(ENTRY),
+            marker: ObserveOwnership {
+                id: MarkerId(1),
+                site,
+                kind: Kind::Move,
+                token: Location::Return,
+                owner: Location::Value(scalar_result),
+            },
+        });
+    }
+    observations.push(Observation {
+        point: Point::Return(normal),
+        marker: ObserveOwnership {
+            id: MarkerId(2),
+            site,
+            kind: Kind::Move,
+            token: Location::Value(resource),
+            owner: Location::Return,
+        },
+    });
+    let plan = Plan::new(&unit, observations);
+    (unit, plan, table, ordinary)
+}
+
+#[test]
+fn ownership_trace_legalize_preserves_markers_while_a_scalar_call_becomes_code() {
+    let (before, input, table, ordinary) = scalar_legalization_fixture(false);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, recipe) =
+        hirsel_rc::legalize::legalize_observed(before.clone(), &index, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    check_transform(&before, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+#[test]
+fn ownership_trace_legalize_refuses_to_lose_a_marker_on_an_expanded_call() {
+    let (before, input, table, _) = scalar_legalization_fixture(true);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let error = hirsel_rc::legalize::legalize_observed(before, &index, &input).unwrap_err();
+    assert!(error.contains("InvalidPoint(MarkerId(1))"), "{error}");
+}

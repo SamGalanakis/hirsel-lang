@@ -100,8 +100,13 @@ pub fn legalize_indexed(
     unit: LirUnit<Ready>,
     index: &hirsel_lir::LayoutIndex<'_>,
 ) -> Result<LirUnit<Ready>, PassError> {
-    let table = index.table();
     let mut ed = Editor::new(unit);
+    lower(&mut ed, index)?;
+    Ok(ed.finish())
+}
+
+fn lower(ed: &mut Editor<Ready>, index: &hirsel_lir::LayoutIndex<'_>) -> Result<(), PassError> {
+    let table = index.table();
     let sites: Vec<(BlockId, Site)> = ed
         .unit
         .terminators
@@ -123,7 +128,7 @@ pub fn legalize_indexed(
         .collect();
     for (b, site) in sites {
         let mut lowering = Lowering {
-            ed: &mut ed,
+            ed: &mut *ed,
             table,
             index,
         };
@@ -132,7 +137,51 @@ pub fn legalize_indexed(
             Site::Scalar(op) => lowering.scalar(b, op)?,
         }
     }
-    Ok(ed.finish())
+    Ok(())
+}
+
+/// Legalize with an explicit preservation recipe. Original instructions stay
+/// as a prefix in their original blocks; scalar/SIMD expansion only appends.
+/// Observed calls removed by expansion require a separate transport rule.
+pub fn legalize_observed(
+    unit: LirUnit<Ready>,
+    index: &hirsel_lir::LayoutIndex<'_>,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Ready>,
+        hirsel_lir::ownership_trace::Plan,
+        hirsel_lir::ownership_trace::Recipe,
+    ),
+    String,
+> {
+    hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
+    let before = unit.clone();
+    let mut ed = Editor::new(unit);
+    let mut origins: Vec<Vec<Option<u32>>> = ed
+        .code
+        .iter()
+        .map(|code| (0..code.len()).map(|i| Some(i as u32)).collect())
+        .collect();
+    lower(&mut ed, index).map_err(|error| error.to_string())?;
+    for (b, code) in ed.code.iter().enumerate() {
+        let original = before
+            .blocks
+            .get(b)
+            .and_then(|block| block.instructions.get(&before.instructions))
+            .unwrap_or(&[]);
+        if !code.starts_with(original) {
+            return Err(
+                "ownership trace: legalization rewrote an original instruction without transport"
+                    .into(),
+            );
+        }
+        if b >= origins.len() {
+            origins.push(vec![]);
+        }
+        origins[b].resize(code.len(), None);
+    }
+    crate::observation::finish(&before, input, ed, &origins)
 }
 
 fn scalar_op(definition: &DefPath) -> Option<ScalarOp> {
