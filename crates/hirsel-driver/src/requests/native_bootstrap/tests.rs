@@ -1648,21 +1648,23 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
         let path = directory.path().join("plan.hir");
         let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
         let budget = ProcessBudget::new(1 << 30);
-        let reference = store
-            .put_content(
-                Domain {
-                    kind: 0x5200_0001,
-                    schema: 1,
-                },
-                b"input binding refusal",
-            )
-            .unwrap();
+        let diagnostic = |message: &[u8]| {
+            store
+                .put_content(
+                    Domain {
+                        kind: 0x5200_0001,
+                        schema: 1,
+                    },
+                    message,
+                )
+                .unwrap()
+        };
         let errors = RuntimeErrors {
-            resource: reference,
-            cycle: reference,
-            cancelled: reference,
-            protocol: reference,
-            panicked: reference,
+            resource: diagnostic(b"manifest resource refusal"),
+            cycle: diagnostic(b"manifest dependency cycle"),
+            cancelled: diagnostic(b"manifest cancelled"),
+            protocol: diagnostic(b"manifest protocol refusal"),
+            panicked: diagnostic(b"manifest producer panic"),
         };
         let weight = MemoryWeight {
             retained: 1 << 20,
@@ -1671,26 +1673,24 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
         };
         let source_output = |text: &str| {
             std::fs::write(&path, text).unwrap();
-            // These original vectors are ordinary u64 functions, not launch
-            // entries. Settle their native declarations directly; the Run-root
-            // helper used by evidence controls has executable entry policy.
-            let mut program = crate::COMPILER
-                .with_config(CompileConfig {
-                    jobs: Jobs::ONE,
-                    store: store.clone(),
-                    hold_bytes: 0,
-                    ..Default::default()
-                })
-                .with_owned_engines()
-                .load_program(&path)
+            // Match the original vector's two local declarations. Loading an
+            // ordinary std package here would demand thousands of unrelated
+            // native roots before this fixture can test its input bindings.
+            let mut engine = hirsel_engine::QueryEngine::new(
+                hirsel_engine::default_environment(),
+                crate::compiler_adapters(),
+            )
+            .with_result_store(store.clone());
+            let file = engine.sources.add("plan.hir", text.into()).unwrap();
+            engine
+                .parse_file(file, &hirsel_engine::default_context())
                 .unwrap();
-            let paths = program.engine.front_source_roots();
-            let front = program
-                .engine
+            let paths = engine.front_source_roots();
+            assert_eq!(paths.len(), if text.contains("fn other") { 3 } else { 2 });
+            let front = engine
                 .front_body_queries(&paths, weight, budget.reserve(24 << 20).unwrap(), errors)
                 .unwrap();
-            let lower = program
-                .engine
+            let lower = engine
                 .front_lower_queries(
                     &paths,
                     front.clone(),
@@ -1700,8 +1700,7 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
                     errors,
                 )
                 .unwrap();
-            let definitions = program
-                .engine
+            let definitions = engine
                 .front_native_definition_queries(
                     &paths,
                     front.clone(),
@@ -1733,11 +1732,19 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
                 .iter()
                 .map(|path| definitions.query(path).unwrap())
                 .collect::<Vec<_>>();
-            drop(program);
+            drop(engine);
             let request = runtime.request(&queries);
             runtime
                 .wait(request)
-                .unwrap()
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{}; paths={}; runtime={:?}; producer={:?}",
+                        String::from_utf8_lossy(&store.get_content(error).unwrap()),
+                        paths.len(),
+                        runtime.stats(),
+                        definitions.failure(error)
+                    )
+                })
                 .iter()
                 .map(|product| product.record)
                 .collect::<Vec<_>>()
