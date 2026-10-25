@@ -44,8 +44,30 @@ fn package(root: &Path) -> std::path::PathBuf {
     manifest
 }
 
+// Each scenario retains both recording backends, widths 1/2/4 and every
+// replay/tamper assertion. Separate bodies bound the cumulative cold replay
+// checks: one cell alone takes about 70 s on the host.
 #[test]
-fn unix_listen_snapshot_and_stale_host_tapes_replay_at_each_width() {
+fn script_listen_replays_at_each_width() {
+    replay_case("script-listen");
+}
+
+#[test]
+fn script_remove_stale_replays_at_each_width() {
+    replay_case("script-remove-stale");
+}
+
+#[test]
+fn host_stale_granted_replays_at_each_width() {
+    replay_case("host-stale-granted");
+}
+
+#[test]
+fn host_stale_denied_replays_at_each_width() {
+    replay_case("host-stale-denied");
+}
+
+fn replay_case(case: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let base = std::env::var_os("UNIX_LISTEN_REPLAY_31_EVIDENCE")
             .map(std::path::PathBuf::from)
@@ -87,190 +109,181 @@ fn unix_listen_snapshot_and_stale_host_tapes_replay_at_each_width() {
                 .unwrap(),
             ));
         }
-        for case in [
-            "script-listen",
-            "script-remove-stale",
-            "host-stale-granted",
-            "host-stale-denied",
-        ] {
-            let host = case.starts_with("host");
-            let denied = case.ends_with("denied");
-            let remove = case.contains("granted") || case == "script-remove-stale";
-            let socket = root.join("app.sock");
-            let socket = socket.to_str().unwrap();
-            let mut net = json!({"provider":if host {"net.stream@1"} else {"net.script@2"},"rules":[{"address":socket,"service":"0","operation":if remove {"unix_listen_remove_stale"} else {"unix_listen"}}]});
-            if !host {
-                net["peers"] = json!([]);
-                net["listeners"] = json!([{"address":socket,"port":0,"clients":[{"address":"0.0.0.0","port":0,"tls":"plain","steps":[{"send":[113]},{"expect":[97]},"close"]}]}]);
-            }
-            let fixture = Fixture {
-                args: vec![
-                    socket.into(),
-                    if denied { "denied" } else { "accept" }.into(),
-                ],
-                mounts: Default::default(),
-                net: Some(serde_json::from_value(net).unwrap()),
-                ..Default::default()
-            };
-            let unavailable = Fixture {
-                net: None,
-                ..fixture.clone()
-            };
-            let expected: &[u8] = if denied { b"denied\n" } else { b"accepted\n" };
-            let mut runnables = Vec::new();
-            for (backend, objects) in &objects {
-                let dir = root.join(format!("{case}-{backend:?}"));
-                fs::create_dir(&dir).unwrap();
-                let runnable =
-                    link_fixture_runnable(&ready, &loaded.entry, objects, &tools, &dir, &fixture)
-                        .unwrap();
-                runnables.push((backend, runnable, dir));
-            }
-            for (backend, runnable, dir) in &runnables {
-                for width in [1, 2, 4] {
-                    tools.wrapper = vec![
-                        "/usr/bin/env".into(),
-                        format!("HIRSEL_RT_WORKERS={width}"),
-                        "HIRSEL_JOBS=4".into(),
-                    ];
-                    if host {
-                        // A closed listener leaves a stale socket inode on Linux.
-                        drop(std::os::unix::net::UnixListener::bind(socket).unwrap());
-                    }
-                    let client = (host && !denied).then(|| {
-                        let socket = socket.to_owned();
-                        std::thread::spawn(move || {
-                            use std::io::{Read, Write};
-                            let end = Instant::now() + Duration::from_secs(20);
-                            let mut stream = loop {
-                                if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket)
-                                {
-                                    break stream;
-                                }
-                                assert!(Instant::now() < end, "listener never opened");
-                                std::thread::sleep(Duration::from_millis(2));
-                            };
-                            stream
-                                .set_read_timeout(Some(Duration::from_secs(20)))
-                                .unwrap();
-                            stream.write_all(b"q").unwrap();
-                            let mut reply = [0];
-                            stream.read_exact(&mut reply).unwrap();
-                            assert_eq!(reply, *b"a");
-                        })
-                    });
-                    let tape = dir.join(format!("width-{width}.tape"));
-                    let recorded = launch_fixture(
-                        runnable,
+        let host = case.starts_with("host");
+        let denied = case.ends_with("denied");
+        let remove = case.contains("granted") || case == "script-remove-stale";
+        let socket = root.join("app.sock");
+        let socket = socket.to_str().unwrap();
+        let mut net = json!({"provider":if host {"net.stream@1"} else {"net.script@2"},"rules":[{"address":socket,"service":"0","operation":if remove {"unix_listen_remove_stale"} else {"unix_listen"}}]});
+        if !host {
+            net["peers"] = json!([]);
+            net["listeners"] = json!([{"address":socket,"port":0,"clients":[{"address":"0.0.0.0","port":0,"tls":"plain","steps":[{"send":[113]},{"expect":[97]},"close"]}]}]);
+        }
+        let fixture = Fixture {
+            args: vec![
+                socket.into(),
+                if denied { "denied" } else { "accept" }.into(),
+            ],
+            mounts: Default::default(),
+            net: Some(serde_json::from_value(net).unwrap()),
+            ..Default::default()
+        };
+        let unavailable = Fixture {
+            net: None,
+            ..fixture.clone()
+        };
+        let expected: &[u8] = if denied { b"denied\n" } else { b"accepted\n" };
+        let mut runnables = Vec::new();
+        for (backend, objects) in &objects {
+            let dir = root.join(format!("{case}-{backend:?}"));
+            fs::create_dir(&dir).unwrap();
+            let runnable =
+                link_fixture_runnable(&ready, &loaded.entry, objects, &tools, &dir, &fixture)
+                    .unwrap();
+            runnables.push((backend, runnable, dir));
+        }
+        for (backend, runnable, dir) in &runnables {
+            for width in [1, 2, 4] {
+                tools.wrapper = vec![
+                    "/usr/bin/env".into(),
+                    format!("HIRSEL_RT_WORKERS={width}"),
+                    "HIRSEL_JOBS=4".into(),
+                ];
+                if host {
+                    // A closed listener leaves a stale socket inode on Linux.
+                    drop(std::os::unix::net::UnixListener::bind(socket).unwrap());
+                }
+                let client = (host && !denied).then(|| {
+                    let socket = socket.to_owned();
+                    std::thread::spawn(move || {
+                        use std::io::{Read, Write};
+                        let end = Instant::now() + Duration::from_secs(20);
+                        let mut stream = loop {
+                            if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket) {
+                                break stream;
+                            }
+                            assert!(Instant::now() < end, "listener never opened");
+                            std::thread::sleep(Duration::from_millis(2));
+                        };
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(20)))
+                            .unwrap();
+                        stream.write_all(b"q").unwrap();
+                        let mut reply = [0];
+                        stream.read_exact(&mut reply).unwrap();
+                        assert_eq!(reply, *b"a");
+                    })
+                });
+                let tape = dir.join(format!("width-{width}.tape"));
+                let recorded = launch_fixture(
+                    runnable,
+                    &ready.target,
+                    &tools,
+                    dir,
+                    true,
+                    Tape::Live {
+                        record: Some(&tape),
+                        revocations: None,
+                    },
+                    &fixture,
+                )
+                .unwrap();
+                if let Some(client) = client {
+                    client.join().unwrap();
+                }
+                let observed = observe(&recorded, &ready, &sites).unwrap();
+                assert_eq!(observed.output, expected, "{case}/{backend:?}/{width}");
+                assert_eq!(observed.exit_code, Some(0));
+                assert!(observed.failures.is_empty() && !observed.blocked);
+                if denied {
+                    fs::remove_file(socket).unwrap();
+                }
+                assert!(!Path::new(socket).exists(), "recording left a socket");
+                // A regular file at the socket path must survive every replay untouched.
+                fs::write(socket, b"replay must not bind or unlink").unwrap();
+                let bytes = fs::read(&tape).unwrap();
+                let record = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+                let listen = record
+                    .events
+                    .iter()
+                    .find(|e| matches!(e.request, Request::UnixListen { .. }))
+                    .unwrap();
+                assert!(
+                    matches!(
+                        listen.completion,
+                        Completion::Listened(Err(hirsel_rt::net::NetError::AddrInUse))
+                    ) == denied
+                );
+                for (name, replay) in [
+                    (
+                        "reference",
+                        hirsel_driver::replay_observations as fn(&Path, &Path, Option<u64>) -> _,
+                    ),
+                    ("checked", hirsel_driver::replay_observations_checked),
+                ] {
+                    let value = replay(&manifest, &tape, Some(1_000_000)).unwrap();
+                    assert_eq!(value.output, expected, "{name}");
+                    assert_eq!(value.exit_code, Some(0));
+                }
+                for (target, executable, replay_dir) in &runnables {
+                    let replayed = launch_fixture(
+                        executable,
                         &ready.target,
                         &tools,
-                        dir,
+                        replay_dir,
                         true,
-                        Tape::Live {
-                            record: Some(&tape),
-                            revocations: None,
-                        },
-                        &fixture,
+                        Tape::Replay(&tape),
+                        &unavailable,
                     )
                     .unwrap();
-                    if let Some(client) = client {
-                        client.join().unwrap();
-                    }
-                    let observed = observe(&recorded, &ready, &sites).unwrap();
-                    assert_eq!(observed.output, expected, "{case}/{backend:?}/{width}");
-                    assert_eq!(observed.exit_code, Some(0));
-                    assert!(observed.failures.is_empty() && !observed.blocked);
-                    if denied {
-                        fs::remove_file(socket).unwrap();
-                    }
-                    assert!(!Path::new(socket).exists(), "recording left a socket");
-                    // A regular file at the socket path must survive every replay untouched.
-                    fs::write(socket, b"replay must not bind or unlink").unwrap();
-                    let bytes = fs::read(&tape).unwrap();
-                    let record = hirsel_rt::host_launch::read_recording(&tape).unwrap();
-                    let listen = record
-                        .events
-                        .iter()
-                        .find(|e| matches!(e.request, Request::UnixListen { .. }))
-                        .unwrap();
-                    assert!(
-                        matches!(
-                            listen.completion,
-                            Completion::Listened(Err(hirsel_rt::net::NetError::AddrInUse))
-                        ) == denied
+                    assert_eq!(
+                        observe(&replayed, &ready, &sites).unwrap(),
+                        observed,
+                        "{case}/{backend:?}->{target:?}/{width}"
                     );
-                    for (name, replay) in [
-                        (
-                            "reference",
-                            hirsel_driver::replay_observations
-                                as fn(&Path, &Path, Option<u64>) -> _,
-                        ),
-                        ("checked", hirsel_driver::replay_observations_checked),
-                    ] {
-                        let value = replay(&manifest, &tape, Some(1_000_000)).unwrap();
-                        assert_eq!(value.output, expected, "{name}");
-                        assert_eq!(value.exit_code, Some(0));
-                    }
-                    for (target, executable, replay_dir) in &runnables {
-                        let replayed = launch_fixture(
-                            executable,
-                            &ready.target,
-                            &tools,
-                            replay_dir,
-                            true,
-                            Tape::Replay(&tape),
-                            &unavailable,
-                        )
-                        .unwrap();
-                        assert_eq!(
-                            observe(&replayed, &ready, &sites).unwrap(),
-                            observed,
-                            "{case}/{backend:?}->{target:?}/{width}"
-                        );
-                    }
-                    // An otherwise valid tape with a changed path still mismatches.
-                    let mut bad = record;
-                    let event = bad
-                        .events
-                        .iter_mut()
-                        .find(|e| matches!(e.request, Request::UnixListen { .. }))
-                        .unwrap();
-                    let Request::UnixListen { path, .. } = &mut event.request else {
-                        unreachable!()
-                    };
-                    path.push_str(".changed");
-                    let tampered = dir.join("tampered.tape");
-                    fs::write(
-                        &tampered,
-                        hirsel_rt::launch::render_recording(&bad).unwrap(),
-                    )
-                    .unwrap();
-                    assert!(
-                        hirsel_driver::replay_observations(&manifest, &tampered, Some(1_000_000))
-                            .unwrap_err()
-                            .to_string()
-                            .contains("ReplayMismatch")
-                    );
-                    for (_, executable, replay_dir) in &runnables {
-                        let refused = launch_fixture(
-                            executable,
-                            &ready.target,
-                            &tools,
-                            replay_dir,
-                            true,
-                            Tape::Replay(&tampered),
-                            &unavailable,
-                        )
-                        .unwrap();
-                        assert_eq!(refused.exit, Some(3));
-                        let error = observe(&refused, &ready, &sites).unwrap_err();
-                        assert!(error.to_string().contains("ReplayMismatch"), "{error}");
-                    }
-                    assert_eq!(fs::read(&tape).unwrap(), bytes);
-                    assert_eq!(fs::read(socket).unwrap(), b"replay must not bind or unlink");
-                    fs::remove_file(socket).unwrap();
-                    eprintln!("UNIX_LISTEN_REPLAY_31_PASS {case}/{backend:?}/width-{width}");
                 }
+                // An otherwise valid tape with a changed path still mismatches.
+                let mut bad = record;
+                let event = bad
+                    .events
+                    .iter_mut()
+                    .find(|e| matches!(e.request, Request::UnixListen { .. }))
+                    .unwrap();
+                let Request::UnixListen { path, .. } = &mut event.request else {
+                    unreachable!()
+                };
+                path.push_str(".changed");
+                let tampered = dir.join("tampered.tape");
+                fs::write(
+                    &tampered,
+                    hirsel_rt::launch::render_recording(&bad).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    hirsel_driver::replay_observations(&manifest, &tampered, Some(1_000_000))
+                        .unwrap_err()
+                        .to_string()
+                        .contains("ReplayMismatch")
+                );
+                for (_, executable, replay_dir) in &runnables {
+                    let refused = launch_fixture(
+                        executable,
+                        &ready.target,
+                        &tools,
+                        replay_dir,
+                        true,
+                        Tape::Replay(&tampered),
+                        &unavailable,
+                    )
+                    .unwrap();
+                    assert_eq!(refused.exit, Some(3));
+                    let error = observe(&refused, &ready, &sites).unwrap_err();
+                    assert!(error.to_string().contains("ReplayMismatch"), "{error}");
+                }
+                assert_eq!(fs::read(&tape).unwrap(), bytes);
+                assert_eq!(fs::read(socket).unwrap(), b"replay must not bind or unlink");
+                fs::remove_file(socket).unwrap();
+                eprintln!("UNIX_LISTEN_REPLAY_31_PASS {case}/{backend:?}/width-{width}");
             }
         }
     });
