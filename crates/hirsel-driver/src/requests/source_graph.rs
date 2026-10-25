@@ -26,6 +26,7 @@ struct SourceProducts {
     launch_entry: Option<DefPath>,
     foreign_unreplayable: bool,
     run: Option<Arc<FrontRunQueries>>,
+    native: Option<Arc<super::native_selection::NativeSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
@@ -44,6 +45,12 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some(),
+            CompileOperation::NativeBuild(request) => self.native.as_ref().is_some_and(|native| {
+                native.accepts(request, super::native_platform::NativePurpose::Build)
+            }),
+            CompileOperation::NativeRun(request) => self.native.as_ref().is_some_and(|native| {
+                native.accepts(request, super::native_platform::NativePurpose::Run)
+            }),
             _ => false,
         }
     }
@@ -52,6 +59,9 @@ impl GraphProducts for SourceProducts {
         operation: &CompileOperation,
     ) -> Result<(Vec<QueryId>, CompilerReadiness), ToolError> {
         let roots = match operation {
+            CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
+                vec![self.native.as_ref().ok_or_else(uninstalled)?.query()]
+            }
             CompileOperation::SafeCheck => {
                 vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
             }
@@ -80,12 +90,21 @@ impl GraphProducts for SourceProducts {
         let selected = roots.first().copied();
         let operation = operation.clone();
         let run = self.run.clone();
+        let native = self.native.clone();
         let safe = self.safe.clone();
         let lower = self.lower.clone();
         let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
         let expected = check.query();
         let entry = match &operation {
+            CompileOperation::NativeBuild(request) | CompileOperation::NativeRun(request) => {
+                request
+                    .definition
+                    .as_ref()
+                    .or(self.launch_entry.as_ref())
+                    .cloned()
+                    .ok_or_else(uninstalled)?
+            }
             CompileOperation::Tir { definition } => definition
                 .as_ref()
                 .or(self.launch_entry.as_ref())
@@ -108,6 +127,23 @@ impl GraphProducts for SourceProducts {
                     }
                     let work = meter.flush()?;
                     let result = match &operation {
+                        CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|query| query.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            match native
+                                .as_ref()
+                                .ok_or_else(uninstalled)?
+                                .readiness
+                                .materialize(*product)
+                            {
+                                Ok(execution) => CompileResult::Native(execution),
+                                Err(error) => CompileResult::NativeError(error),
+                            }
+                        }
                         CompileOperation::SafeCheck => {
                             let [product] = products else {
                                 return Err(uninstalled());
@@ -191,7 +227,14 @@ impl SourceProducts {
         let errors = self.errors;
         let growth = self._growth.clone();
         let run = self.run.clone();
+        let native = self.native.clone();
         Arc::new(move |reference| {
+            if let Some(error) = native
+                .as_ref()
+                .and_then(|native| native.assembly.failure(reference))
+            {
+                return error;
+            }
             let selected = check
                 .failure(reference)
                 .or_else(|| {
@@ -254,6 +297,7 @@ struct Plan {
     body: MemoryWeight,
     root: MemoryWeight,
     run: MemoryWeight,
+    native: Option<super::native_selection::Footprint>,
 }
 impl Plan {
     fn new(
@@ -263,6 +307,7 @@ impl Plan {
         definitions: &[DefPath],
         files: usize,
         needs_run: bool,
+        needs_native: bool,
         needs_safe: bool,
         footprint: FrontInputFootprint,
         inspection_bytes: u64,
@@ -284,6 +329,11 @@ impl Plan {
         } else {
             0
         };
+        let native_inventory = if needs_native {
+            super::native_selection::Footprint::minimum(definitions).ok_or_else(uninstalled)?
+        } else {
+            0
+        };
         let fixed = [
             source,
             footprint.front_inputs,
@@ -291,6 +341,7 @@ impl Plan {
             growth_inventory,
             check_inventory,
             run_inventory,
+            native_inventory,
         ]
         .into_iter()
         .try_fold(0u64, u64::checked_add)
@@ -300,6 +351,16 @@ impl Plan {
                 "compiler immutable input inventory exceeds snapshot admission".into(),
             )
         })?;
+        let native_slack = if needs_native { slack / 2 } else { 0 };
+        let slack = slack - native_slack;
+        let native = if needs_native {
+            Some(
+                super::native_selection::Footprint::new(definitions, native_slack)
+                    .ok_or_else(uninstalled)?,
+            )
+        } else {
+            None
+        };
         let front_slack = slack / 4;
         let lower_slack = if needs_run { slack / 3 } else { slack / 2 };
         let growth_slack = slack / 8;
@@ -313,16 +374,24 @@ impl Plan {
         let lower = lower_inventory + lower_slack;
         let growth = growth_inventory + growth_slack;
         let check = check_inventory + check_slack;
-        let run = run_inventory + run_slack;
+        let run = run_inventory
+            + run_slack
+            + native
+                .as_ref()
+                .map(|native| native.bytes().ok_or_else(uninstalled))
+                .transpose()?
+                .unwrap_or(0);
         let stacks = (config.jobs.get() as u64)
             .checked_mul(hirsel_intern::jobs::COMPILER_STACK_BYTES as u64)
             .ok_or_else(uninstalled)?;
         // Each definition can name P, Lower, Evaluate and, when selected,
-        // Run. Growth/Check and the selected SafeCheck root have separate slots.
+        // Run, and native selection adds its Run and definition rows. Growth/
+        // Check, the selected SafeCheck root and the native bootstrap and
+        // source roots have separate slots.
         // Reserve the same row bound here and in the runtime constructor so
         // task grants cannot spend the scheduler's bookkeeping allocation.
-        let per_definition = 3 + usize::from(needs_run);
-        let roots = 2 + usize::from(needs_safe);
+        let per_definition = 3 + usize::from(needs_run) + 2 * usize::from(needs_native);
+        let roots = 2 + usize::from(needs_safe) + 2 * usize::from(needs_native);
         let inventory = definitions
             .len()
             .checked_mul(per_definition)
@@ -392,6 +461,7 @@ impl Plan {
                 scratch,
                 stack: 0,
             },
+            native,
             run: MemoryWeight {
                 retained: (run_slack / 4).min(retained),
                 scratch,
@@ -409,11 +479,15 @@ pub(super) fn install(
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
     scratch_parent: &std::path::Path,
+    toolchain: Option<&Arc<crate::native::Toolchain>>,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
         CompileOperation::Tir { .. } => (LoweringPolicy::Reachable, true),
         CompileOperation::SafeCheck => (config.lowering, true),
+        CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
+            (LoweringPolicy::Reachable, true)
+        }
         _ => return Err(uninstalled()),
     };
     // The loader reads exactly the supplied immutable observations. Declaration
@@ -464,6 +538,10 @@ pub(super) fn install(
         &definitions,
         program.files.len(),
         needs_run,
+        matches!(
+            request.operation,
+            CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
+        ),
         matches!(request.operation, CompileOperation::SafeCheck),
         footprint,
         GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
@@ -548,7 +626,15 @@ pub(super) fn install(
     } else {
         None
     };
-    let run = if needs_run {
+    let native_allowance = plan
+        .native
+        .as_ref()
+        .map(|native| {
+            run.split(native.bytes().ok_or_else(uninstalled)?)
+                .ok_or_else(uninstalled)
+        })
+        .transpose()?;
+    let mut run = if needs_run {
         Some(
             program
                 .engine
@@ -578,6 +664,50 @@ pub(super) fn install(
             )
         })
         .transpose()?;
+    let native = if let Some(footprint) = &plan.native {
+        let (native_request, purpose) = match &request.operation {
+            CompileOperation::NativeBuild(request) => {
+                (request, super::native_platform::NativePurpose::Build)
+            }
+            CompileOperation::NativeRun(request) => {
+                (request, super::native_platform::NativePurpose::Run)
+            }
+            _ => return Err(uninstalled()),
+        };
+        let entry = native_request
+            .definition
+            .as_ref()
+            .or(launch_entry.as_ref())
+            .cloned()
+            .ok_or_else(uninstalled)?;
+        Some(
+            super::native_selection::NativeSelection::new(
+                &mut program,
+                super::native_assembly::NativeSourceInputs {
+                    definitions: definitions.clone(),
+                    entry,
+                    front: front.clone(),
+                    lower: lower.clone(),
+                    run: run.take().ok_or_else(uninstalled)?,
+                    store: store.clone(),
+                },
+                native_request.clone(),
+                purpose,
+                config.verify_store,
+                toolchain.cloned().ok_or_else(|| {
+                    ToolError::Runtime("native request requires its selected toolchain".into())
+                })?,
+                footprint,
+                &mut native_allowance.ok_or_else(uninstalled)?,
+                plan.body,
+                errors,
+                disk_bytes,
+            )
+            .map_err(|error| super::host_selector::retain_error(error, source.clone()))?,
+        )
+    } else {
+        None
+    };
     // The ordinary source namespace is immutable before the first request.
     // Preserve the original small-graph subscription/factory headroom while
     // admitting every actual P/Lower/Evaluate/Run address of larger packages.
@@ -605,6 +735,11 @@ pub(super) fn install(
     {
         inventory.insert((query.kind, query.address.0));
     }
+    if let Some(native) = &native {
+        for query in native.assembly.queries(&definitions) {
+            inventory.insert((query.kind, query.address.0));
+        }
+    }
     if inventory.len() > plan.query_capacity {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
@@ -628,7 +763,11 @@ pub(super) fn install(
     runtime
         .register(hirsel_engine::FRONT_CHECK_KIND, check.factory())
         .map_err(registration)?;
-    if let Some(run) = &run {
+    if let Some(native) = &native {
+        for (kind, factory) in native.assembly.factories() {
+            runtime.register(kind, factory).map_err(registration)?;
+        }
+    } else if let Some(run) = &run {
         runtime
             .register(hirsel_engine::FRONT_RUN_KIND, run.factory())
             .map_err(registration)?;
@@ -683,6 +822,7 @@ pub(super) fn install(
         launch_entry,
         foreign_unreplayable,
         run,
+        native,
         safe,
         front,
         lower,

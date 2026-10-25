@@ -99,11 +99,6 @@ impl CompileOutput {
                 let execution = Arc::make_mut(execution);
                 execution.sources = execution.sources.clone().retain_owner(owner.clone());
             }
-            CompileResult::Native(execution) => {
-                let execution = Arc::make_mut(execution);
-                execution.sources = execution.sources.clone().retain_owner(owner.clone());
-                execution.owner = Arc::new((execution.owner.clone(), owner.clone()));
-            }
             CompileResult::Inspect(inspection) => {
                 Arc::make_mut(inspection).owner = owner.clone();
             }
@@ -210,10 +205,10 @@ pub struct NativeObservation {
 /// Executable readiness includes a materialized executable and frozen launch
 /// metadata. Construction follows successful Link/materialization checks; the
 /// admission/scratch owner lives until the last output user releases it.
-#[derive(Clone)]
 pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,
+    pub(crate) platform: Arc<super::native_link::FrozenPlatform>,
     pub store: Arc<dyn hirsel_engine::store::ResultStore>,
     pub observation: NativeObservation,
     pub report: Vec<String>,

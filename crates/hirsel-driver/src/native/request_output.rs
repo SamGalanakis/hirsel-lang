@@ -15,6 +15,7 @@ pub(crate) fn materialize_output(
         object_queries::linked_product(input.store.as_ref(), input.product).map_err(error)?;
     object_queries::materialize_executable(input.store.as_ref(), &linked, destination)
         .map_err(error)?;
+    input.platform.validate_image(destination).map_err(error)?;
     Ok(input.report.clone())
 }
 
@@ -47,6 +48,36 @@ pub(crate) fn run_output(
         &input.revision,
         input.code.clone(),
     )?;
+    run_bound_output(input, launch, bound, output, trace_events)
+}
+
+pub(crate) fn run_bound_output(
+    input: &NativeExecution,
+    launch: HostLaunch<'_>,
+    bound: BoundHostRun,
+    output: super::tool::Output<'_>,
+    trace_events: Option<&Path>,
+) -> Result<Result<RunOutcome, NativeError>, ToolError> {
+    if matches!(launch, HostLaunch::Callee { .. }) {
+        return Err(ToolError::Runtime(
+            "launch: a runner host runs its callees interpreted".into(),
+        ));
+    }
+    if (matches!(&bound, BoundHostRun::Replay { .. })
+        || matches!(
+            launch,
+            HostLaunch::Live {
+                record: Some(_),
+                ..
+            }
+        ))
+        && let Some((user, extern_)) = input.foreign.unmodeled.first_key_value()
+    {
+        return Err(ToolError::Runtime(format!(
+            "launch: {user} calls the extern {extern_} and is not a wrapper with a \
+             deterministic model, so this run cannot be recorded or replayed (PROG-4)"
+        )));
+    }
     let (run, tape) = match (bound, launch) {
         (
             BoundHostRun::Live(bound),
@@ -78,20 +109,37 @@ pub(crate) fn run_output(
         super::tool::Output::Streams { stdout, stderr } => (false, false, stdout, stderr),
     };
     let observed = (|| {
+        if input
+            .run
+            .as_ref()
+            .is_none_or(|selected| selected.identity() != run.identity())
+        {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "native launch differs from the selected validated run",
+            ));
+        }
         if run.budgets().is_some_and(|budgets| budgets.fuel.is_some()) && !input.request.fuel {
             return Err(NativeError::new(
                 StageName::Launch,
                 "the selected executable has no fuel checks",
             ));
         }
-        materialize_output(input, &input.executable)?;
+        let scratch = Scratch::new()?;
+        std::fs::write(scratch.0.join("run.json"), run.launch_bytes())
+            .map_err(|error| NativeError::new(StageName::Launch, error.to_string()))?;
+        let executable = scratch.0.join("program");
+        materialize_output(input, &executable)?;
         for line in &input.report {
             writeln!(stderr, "hirsel: {line}")
                 .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
         }
-        let scratch = Scratch::new()?;
+        let runnable = input
+            .platform
+            .executable(executable)
+            .map_err(|message| NativeError::new(StageName::Launch, message))?;
         let launched = link::launch_live(
-            &link::Runnable::Executable(input.executable.clone()),
+            &runnable,
             &input.request.target,
             &input.toolchain,
             &scratch.0,
