@@ -103,6 +103,7 @@ pub struct DemandInstances {
     store: Arc<dyn ResultStore>,
     records: NativeRecords,
     queries: InstanceQueries,
+    verify_store: hirsel_engine::store::VerifyStore,
     target: hirsel_lir::TargetSpec,
     policy: ContentHash,
     requests: BTreeMap<Vec<u8>, Request>,
@@ -130,6 +131,7 @@ impl DemandInstances {
         Self {
             records: NativeRecords::new(source.record_types().clone(), store.clone()),
             queries: InstanceQueries::with_validator(store.clone(), native),
+            verify_store: hirsel_engine::store::VerifyStore::Off,
             store,
             target,
             policy,
@@ -138,6 +140,11 @@ impl DemandInstances {
             imports: 0,
             recipe_decodes: 0,
         }
+    }
+    /// Recompute admitted hits without changing their complete semantic action.
+    pub fn with_store_verification(mut self, policy: hirsel_engine::store::VerifyStore) -> Self {
+        self.verify_store = policy;
+        self
     }
     pub(super) fn registered_requests(&self) -> Result<Vec<(InstanceAddress, Request)>, String> {
         self.requests
@@ -648,7 +655,8 @@ impl DemandInstances {
             manifest: &manifest,
             discharge: Some(&options.discharge),
         };
-        let recompute = options.validation == crate::native::Validation::EveryStage;
+        let recompute = self.verify_store == hirsel_engine::store::VerifyStore::Recompute
+            || options.validation == crate::native::Validation::EveryStage;
         if previous.is_some()
             && !recompute
             && inputs.query_policy().reuse
