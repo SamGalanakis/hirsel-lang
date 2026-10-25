@@ -297,6 +297,7 @@ fn runtime50_resume_import_mutations_refused() {
         // Final-frame certificates of the ahead roots, in both backends.
         let program = ready(SCALAR);
         let plan = native::ahead_plan(&program);
+        let plans = native::continuation::plans(&program);
         for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
             let objects = native::emit_backend_objects(
                 &program,
@@ -311,7 +312,7 @@ fn runtime50_resume_import_mutations_refused() {
             let certificates = native::continuation::ahead_certificates(&program, &objects);
             assert_eq!(certificates.len(), 1, "{backend:?}");
             let certificate = &certificates[0];
-            certificate.check(&plan, &evidence).unwrap();
+            certificate.check(&plan, &plans, &evidence).unwrap();
             assert_ne!(certificate.ordinary_symbol, certificate.ahead_symbol);
             assert_eq!(certificate.caller.spines, None);
             for mutation in 0..7 {
@@ -332,7 +333,7 @@ fn runtime50_resume_import_mutations_refused() {
                     )),
                 }
                 assert!(
-                    bad.check(&plan, &evidence).is_err(),
+                    bad.check(&plan, &plans, &evidence).is_err(),
                     "{backend:?}: final-frame mutation {mutation} accepted"
                 );
             }

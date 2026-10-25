@@ -1,5 +1,6 @@
 use super::*;
 use hirsel_lir::ahead::AheadPlan;
+use hirsel_lir::continuation::ContinuationPlans;
 use hirsel_syntax::ContentHash;
 
 pub(super) fn helper_identity() -> ContentHash {
@@ -65,7 +66,8 @@ pub(super) fn objects(
         .into_iter()
         .filter(|u| plan.bodies.contains_key(&u.unit().header.instance))
         .collect();
-    let inputs = inputs(program, &plan, opt);
+    let plans = super::continuation::plans(program);
+    let inputs = inputs(program, &plan, &plans, opt);
     let failed = |message: String| NativeError::new(StageName::Emission, message);
     let emitted = match backend {
         super::emit::Backend::Llvm => {
@@ -79,16 +81,11 @@ pub(super) fn objects(
     let frames: BTreeMap<_, _> = plan
         .bodies
         .keys()
-        .filter_map(|id| {
-            let symbol = plan.symbols.get(id)?;
-            frames
-                .get(&hirsel_lir::ahead::alternate_name(&symbol.definition, *id))
-                .map(|n| (*id, *n))
-        })
+        .filter_map(|id| Some((*id, body_frame(&plan, &plans, *id, &frames)?)))
         .collect();
     // Backend-created memcpy/division/outlined helpers have no private-work
     // summary. Refuse publication even if their ordinary use is permitted.
-    let machine_helpers = unknown_machine_calls(&object, &plan, program);
+    let machine_helpers = unknown_machine_calls(&object, &plan, &plans, program);
     let bounds: BTreeMap<_, _> = plan
         .roots
         .iter()
@@ -122,15 +119,43 @@ pub(super) fn objects(
     Ok(vec![object, metadata])
 }
 
+/// Whether a body's ahead code also has its resumable state-0 alternate.
+fn resumable(plans: &ContinuationPlans, id: ContentHash) -> bool {
+    plans
+        .get(id)
+        .is_some_and(|p| p.representation == hirsel_lir::continuation::Representation::Resumable)
+}
+
+/// A body's final frame: the larger of its alternates', since a root enters
+/// either. A resumable body without both final frames has none.
+fn body_frame(
+    plan: &AheadPlan,
+    plans: &ContinuationPlans,
+    id: ContentHash,
+    frames: &std::collections::BTreeMap<String, u64>,
+) -> Option<u64> {
+    let symbol = plan.symbols.get(&id)?;
+    let ordinary = *frames.get(&hirsel_lir::ahead::alternate_name(&symbol.definition, id))?;
+    if !resumable(plans, id) {
+        return Some(ordinary);
+    }
+    let resumed = *frames.get(&hirsel_lir::ahead::alternate_resume_name(
+        &symbol.definition,
+        id,
+    ))?;
+    Some(ordinary.max(resumed))
+}
+
 fn inputs<'a>(
     program: &'a ReadyProgram,
     plan: &'a AheadPlan,
+    plans: &'a ContinuationPlans,
     opt: hirsel_lir::emission::OptLevel,
 ) -> hirsel_lir::emission::EmitInputs<'a> {
     static EMPTY: std::collections::BTreeSet<ContentHash> = std::collections::BTreeSet::new();
     hirsel_lir::emission::EmitInputs {
         ahead: Some(plan),
-        continuation: None,
+        continuation: Some(plans),
         alternate: true,
         index: None,
         input: &program.input,
@@ -153,6 +178,7 @@ fn inputs<'a>(
 fn unknown_machine_calls(
     object: &hirsel_lir::stage::ObjectArtifact,
     plan: &AheadPlan,
+    plans: &ContinuationPlans,
     program: &ReadyProgram,
 ) -> bool {
     use hirsel_lir::{ir::*, stage::ObjectSymbolKind};
@@ -236,6 +262,9 @@ fn unknown_machine_calls(
                 && !plan.bodies.keys().any(|id| {
                     let symbol = &plan.symbols[id];
                     s.name == hirsel_lir::ahead::alternate_name(&symbol.definition, *id)
+                        || resumable(plans, *id)
+                            && s.name
+                                == hirsel_lir::ahead::alternate_resume_name(&symbol.definition, *id)
                 })
         }
         ObjectSymbolKind::Runtime => {
@@ -244,6 +273,7 @@ fn unknown_machine_calls(
                     s.name.as_str(),
                     "hirsel_rt_v2_ahead_state"
                         | "hirsel_rt_v2_ahead_handoff"
+                        | "hirsel_rt_v2_resume_point"
                         | "hirsel_rt_v2_depth_enter_at_site"
                         | "hirsel_rt_v2_depth_leave"
                         | "hirsel_rt_v2_failure_begin"
@@ -267,6 +297,7 @@ pub fn check_objects(
 ) -> Result<(), NativeError> {
     use std::collections::BTreeMap;
     let plan = plan(program);
+    let plans = super::continuation::plans(program);
     let fail =
         |reason: &str| NativeError::new(StageName::Link, format!("ahead certificate: {reason}"));
     let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
@@ -302,13 +333,10 @@ pub fn check_objects(
                 let actual = hirsel_lir::object::llvm_stack_sizes(&code.bytes)
                     .map_err(|_| fail("malformed final LLVM frames"))?;
                 for (id, frame) in &frames {
-                    let symbol = plan
-                        .symbols
-                        .get(id)
-                        .ok_or_else(|| fail("unknown frame body"))?;
-                    if actual.get(&hirsel_lir::ahead::alternate_name(&symbol.definition, *id))
-                        != Some(frame)
-                    {
+                    if !plan.symbols.contains_key(id) {
+                        return Err(fail("unknown frame body"));
+                    }
+                    if body_frame(&plan, &plans, *id, &actual) != Some(*frame) {
                         return Err(fail("stale final LLVM frame"));
                     }
                 }
@@ -317,7 +345,7 @@ pub fn check_objects(
                 .roots
                 .iter()
                 .filter_map(|(id, root)| {
-                    if unknown_machine_calls(code, &plan, program) {
+                    if unknown_machine_calls(code, &plan, &plans, program) {
                         return None;
                     }
                     hirsel_lir::ahead::stack_bound_with_depth(
@@ -336,15 +364,21 @@ pub fn check_objects(
             }
             for root in bounds.keys() {
                 for id in plan.roots[root].graph.bodies.keys() {
-                    let name = hirsel_lir::ahead::alternate_name(&plan.symbols[id].definition, *id);
-                    if objects
-                        .iter()
-                        .flat_map(|o| &o.exports)
-                        .filter(|s| s.name == name)
-                        .count()
-                        != 1
-                    {
-                        return Err(fail("missing or duplicate real alternate definition"));
+                    let definition = &plan.symbols[id].definition;
+                    let mut names = vec![hirsel_lir::ahead::alternate_name(definition, *id)];
+                    if resumable(&plans, *id) {
+                        names.push(hirsel_lir::ahead::alternate_resume_name(definition, *id));
+                    }
+                    for name in names {
+                        if objects
+                            .iter()
+                            .flat_map(|o| &o.exports)
+                            .filter(|s| s.name == name)
+                            .count()
+                            != 1
+                        {
+                            return Err(fail("missing or duplicate real alternate definition"));
+                        }
                     }
                 }
             }
@@ -353,7 +387,12 @@ pub fn check_objects(
             BTreeMap::new()
         };
         let expected = hirsel_cranelift::emit_ahead_metadata(
-            &inputs(program, &plan, hirsel_lir::emission::OptLevel::Default),
+            &inputs(
+                program,
+                &plan,
+                &plans,
+                hirsel_lir::emission::OptLevel::Default,
+            ),
             &plan,
             &bounds,
             &registry,

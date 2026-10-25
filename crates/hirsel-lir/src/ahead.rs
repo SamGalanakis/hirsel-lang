@@ -15,7 +15,8 @@ mod host_return;
 mod plan;
 pub use host_return::{HostReturnGraph, ReadContinuation, Spine, read_metadata_name};
 pub use plan::{
-    AheadPlan, CaptureRecipe, RootPlan, alternate_name, environments, metadata_name, prospective,
+    AheadPlan, CaptureRecipe, RootPlan, alternate_name, alternate_resume_name, environments,
+    metadata_name, prospective,
 };
 
 pub const MAX_UNITS: usize = 64;

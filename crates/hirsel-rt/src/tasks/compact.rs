@@ -41,10 +41,12 @@ pub(super) struct ContextHome(std::cell::UnsafeCell<std::mem::MaybeUninit<TaskCt
 unsafe fn movable(ctx: *mut TaskCtx) -> bool {
     // SAFETY: caller contract.
     unsafe {
+        // An ahead body saves only as an admitted v4 resumable body, whose
+        // ahead code hands the saved frame to its ordinary dispatcher.
         if !crate::pool::free::enabled((*ctx).run_ref())
             || (*ctx).callback_depth != 0
-            || (*ctx).ahead.is_some()
-            || !(*ctx).ahead_physical.is_null()
+            || ((*ctx).ahead.is_some() || !(*ctx).ahead_physical.is_null())
+                && !ordered::ahead::native::resumable(ctx)
         {
             return false;
         }
@@ -156,6 +158,14 @@ pub(crate) unsafe fn saved(run: *mut RunShared, task: TaskKey) -> (*mut TaskCtx,
     }
     // SAFETY: as above; the old stack pointer names a stack that is gone.
     unsafe { (*row.ctx).task_sp = std::ptr::null_mut() };
+    // An ahead body's physical record owns nothing once its frame continued
+    // in the ordinary dispatcher: the activation is an ordinary compact one.
+    unsafe {
+        if !(*row.ctx).ahead_physical.is_null() {
+            (*row.ctx).ahead_physical = std::ptr::null_mut();
+            (*row.ctx).ahead = None;
+        }
+    }
     (row.ctx, stack)
 }
 

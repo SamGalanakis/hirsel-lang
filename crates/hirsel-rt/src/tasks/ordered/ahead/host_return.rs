@@ -24,6 +24,18 @@ pub struct HostInfo {
     pub prefix: Info,
     pub host: *const Root,
 }
+/// v4: a host-return root whose body plans Resumable. Its entry is that
+/// body's resumable ahead code over a `frame_bytes` frame; a save at a
+/// boundary continues in `dispatcher`, the body's ordinary dispatcher.
+#[repr(C)]
+pub struct ResumeInfo {
+    pub host: HostInfo,
+    pub frame_bytes: u32,
+    pub reserved: u32,
+    pub dispatcher: Option<crate::continuation::ResumeDispatcher>,
+}
+/// The compact frame bound (`hirsel_lir::continuation::MAX_FRAME_BYTES`).
+const MAX_RESUME_FRAME_BYTES: u32 = 4096;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Pending {
@@ -54,6 +66,10 @@ const _: () = {
     assert!(size_of::<ReadRecipe>() == 16);
     assert!(size_of::<Root>() == 56);
     assert!(size_of::<HostInfo>() == 40);
+    assert!(size_of::<ResumeInfo>() == 56);
+    assert!(std::mem::offset_of!(ResumeInfo, frame_bytes) == 40);
+    assert!(std::mem::offset_of!(ResumeInfo, reserved) == 44);
+    assert!(std::mem::offset_of!(ResumeInfo, dispatcher) == 48);
     assert!(size_of::<Pending>() == 24);
 };
 impl State {
@@ -113,6 +129,26 @@ pub(super) unsafe fn validate(
     Some(cert)
 }
 
+/// The v4 suffix over an exact v3 record: a bounded, aligned frame, a
+/// dispatcher and a zero reserved word.
+pub(super) unsafe fn validate_resumable(
+    ctx: *mut TaskCtx,
+    env: *mut Header,
+    info: *const ResumeInfo,
+) -> Option<Certificate> {
+    let i = unsafe { &*info };
+    let dispatcher = i.dispatcher?;
+    if i.reserved != 0
+        || !(16..=MAX_RESUME_FRAME_BYTES).contains(&i.frame_bytes)
+        || !i.frame_bytes.is_multiple_of(8)
+    {
+        return None;
+    }
+    let mut cert = unsafe { validate(ctx, env, &i.host) }?;
+    cert.resume = Some((dispatcher, i.frame_bytes));
+    Some(cert)
+}
+
 /// Certify a byte sequence, including its holder metadata, before using the
 /// shallow storage release. An empty scan explicitly certifies no holders.
 unsafe fn inert_buffer_layout(ctx: *mut TaskCtx, index: u32) -> bool {
@@ -135,24 +171,52 @@ unsafe fn inert_buffer_layout(ctx: *mut TaskCtx, index: u32) -> bool {
     if layout.scan_words == 0 {
         return true;
     }
-    if layout.scan_words != 2 * WORDS as u64 || layout.scan.is_null() {
-        return false;
-    }
-    let words = unsafe { std::slice::from_raw_parts(layout.scan, 2 * WORDS) };
-    let Ok(child) = u32::try_from(words[2]) else {
+    // Type edges (one per distinct field and element layout) only close the
+    // type graph; each must name an inert scalar, the element among them, and
+    // the value record must be the byte sequence over that element.
+    let Ok(words) = usize::try_from(layout.scan_words) else {
         return false;
     };
-    if child >= unsafe { (*ctx).heap_ref().layout_count() }
-        || words[..WORDS] != [TYPE_EDGE, 0, u64::from(child), 0, 0, 0, 0, 0]
-        || words[WORDS..] != [VALUE, VALUE_SEQUENCE, 16, 1, 16, u64::from(child), 0, 0]
-    {
+    if words < 2 * WORDS || !words.is_multiple_of(WORDS) || layout.scan.is_null() {
         return false;
     }
-    let element = unsafe { &*(*ctx).descriptor(child) };
+    let words = unsafe { std::slice::from_raw_parts(layout.scan, words) };
+    let (edges, value) = words.split_at(words.len() - WORDS);
+    let count = unsafe { (*ctx).heap_ref().layout_count() };
+    let Ok(child) = u32::try_from(value[5]) else {
+        return false;
+    };
+    if child >= count || value != [VALUE, VALUE_SEQUENCE, 16, 1, 16, u64::from(child), 0, 0] {
+        return false;
+    }
+    let mut element = false;
+    for (i, edge) in edges.chunks_exact(WORDS).enumerate() {
+        let Ok(target) = u32::try_from(edge[2]) else {
+            return false;
+        };
+        if target >= count
+            || edge != [TYPE_EDGE, 0, u64::from(target), 0, 0, 0, 0, 0]
+            || edges[..i * WORDS]
+                .chunks_exact(WORDS)
+                .any(|e| e[2] == edge[2])
+            || !unsafe { inert_scalar(ctx, target, target == child) }
+        {
+            return false;
+        }
+        element |= target == child;
+    }
+    element
+}
+
+/// A scalar layout without holders: no finalizer, steps or extent flags, and
+/// at most a plain bits value record. The byte element is exactly one byte.
+unsafe fn inert_scalar(ctx: *mut TaskCtx, index: u32, byte: bool) -> bool {
+    use hirsel_core_contract::handle_scan::*;
+    let element = unsafe { &*(*ctx).descriptor(index) };
     if element.magic != crate::LAYOUT_MAGIC
         || element.version != crate::LAYOUT_VERSION
-        || element.size != 1
-        || element.align != 1
+        || byte && (element.size != 1 || element.align != 1)
+        || !byte && !(1..=16).contains(&element.size)
         || element.finalizer.is_some()
         || element.step_count != 0
         || element.flags & !crate::LAYOUT_NO_EXTENT != 0
@@ -163,7 +227,7 @@ unsafe fn inert_buffer_layout(ctx: *mut TaskCtx, index: u32) -> bool {
         || (element.scan_words == WORDS as u64
             && !element.scan.is_null()
             && unsafe { std::slice::from_raw_parts(element.scan, WORDS) }
-                == [VALUE, VALUE_BITS, 1, 0, 0, 0, 0, 0])
+                == [VALUE, VALUE_BITS, element.size, 0, 0, 0, 0, 0])
 }
 
 /// Check the entire custody record before accounting or destroying any owner.
@@ -331,7 +395,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_host_defer(
 /// Idle, before capturing the current fuel word. Insert each inert free at
 /// its original word, then normal capture accounts the intervening pure points.
 /// Physical storage remains owned by this fixed task record until admission.
-pub(super) unsafe fn flush_logical(ctx: *mut TaskCtx, n: *mut Native) {
+pub(crate) unsafe fn flush_logical(ctx: *mut TaskCtx, n: *mut Native) {
     let state = unsafe { &mut (*n).host };
     if state.root.is_null() {
         return;
@@ -397,9 +461,9 @@ pub(super) unsafe fn admit(ctx: *mut TaskCtx, n: *mut Native) {
     if state.phase == ACTIVE {
         unsafe {
             (*n).admitted = Some(crate::continuation::PrivateSave {
-                pc: crate::continuation::SavedFiber {
+                pc: crate::continuation::SavedPc::Fiber(crate::continuation::SavedFiber {
                     sp: (*n).physical.saved_sp,
-                },
+                }),
                 generation: 0,
                 fuel: 0,
                 descriptor: Some((*state.armed).buffer_descriptor),

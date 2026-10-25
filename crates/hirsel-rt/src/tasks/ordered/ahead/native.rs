@@ -35,6 +35,8 @@ pub(crate) struct Certificate {
     pub entry: TaskCode,
     pub stack_bytes: u64,
     pub(crate) host: *const super::host_return::Root,
+    /// A v4 root: the ordinary dispatcher a save continues in, and its frame.
+    pub(crate) resume: Option<(crate::continuation::ResumeDispatcher, u32)>,
     live: *mut u64,
     mask: u64,
     source: *mut Header,
@@ -54,6 +56,15 @@ pub(crate) struct Native {
     pub(super) host: super::host_return::State,
     /// The last admitted host-return segment.
     pub(crate) admitted: Option<crate::continuation::PrivateSave>,
+    /// The frame a v4 entry runs over (null before v4); `start` passes it.
+    frame: *mut u8,
+    resume: Option<(
+        crate::continuation::ResumeDispatcher,
+        crate::continuation::OwnedResumeFrame,
+    )>,
+    /// The saved frame left for its ordinary dispatcher: this physical record
+    /// no longer owns any of the body's state.
+    continued: bool,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -179,6 +190,7 @@ pub(super) unsafe fn validate_capture(
             entry,
             stack_bytes: info.stack_bytes,
             host: std::ptr::null(),
+            resume: None,
             live,
             mask,
             source,
@@ -260,6 +272,15 @@ impl Native {
         operation_site: u64,
         certificate: Certificate,
     ) -> Box<Self> {
+        let mut resume = certificate.resume.map(|(dispatcher, bytes)| {
+            (
+                dispatcher,
+                crate::continuation::OwnedResumeFrame::new(bytes),
+            )
+        });
+        let frame = resume
+            .as_mut()
+            .map_or(std::ptr::null_mut(), |(_, frame)| frame.as_mut_ptr());
         Box::new(Self {
             physical: Physical {
                 points_left: if certificate.host.is_null() {
@@ -283,7 +304,26 @@ impl Native {
             source: certificate.source,
             host: super::host_return::State::new(certificate.host),
             admitted: None,
+            frame,
+            resume,
+            continued: false,
         })
+    }
+    /// A v4 body saved at a boundary: its exact saved frame and the ordinary
+    /// dispatcher that continues it, taken once.
+    pub(crate) fn take_resume(
+        &mut self,
+    ) -> (
+        crate::continuation::ResumeDispatcher,
+        crate::continuation::OwnedResumeFrame,
+    ) {
+        let (dispatcher, frame) = self
+            .resume
+            .take()
+            .unwrap_or_else(|| crate::fault("an ahead save without its resumable frame"));
+        self.frame = std::ptr::null_mut();
+        self.continued = true;
+        (dispatcher, frame)
     }
     /// The logical owner now drives this physical record without private quanta.
     pub(super) fn adopt(&mut self) {
@@ -319,13 +359,29 @@ pub unsafe extern "C" fn hirsel_rt_v2_ahead_handoff(_state: *mut Physical, _reas
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
 pub(crate) unsafe extern "C" fn start(_ctx: *mut u8, _native: *mut u8) -> ! {
+    // A v4 entry also takes its frame; a suspended one continues in its
+    // ordinary dispatcher instead of completing.
     core::arch::naked_asm!(
         "push rbx","mov rbx, rsi","mov rsi, [rbx + 40]",
-        "mov rdx, [rbx + 48]","mov rcx, rdx","call [rbx + 32]",
-        "mov [rbx + 56], al","mov rdi, rbx","mov esi, 4","call {handoff}",
+        "mov rdx, [rbx + 48]","mov rcx, rdx","mov r8, [rbx + {frame}]","call [rbx + 32]",
+        "mov [rbx + 56], al","cmp al, {suspended}","je 2f",
+        "mov rdi, rbx","mov esi, 4","call {handoff}",
         "mov rdi, [rbx + 64]","movzx esi, byte ptr [rbx + 56]","pop rbx","jmp {complete}",
+        "2:","mov rdi, [rbx + 64]","mov rsi, rbx","pop rbx","jmp {suspended_entry}",
+        frame=const std::mem::offset_of!(Native, frame),
+        suspended=const crate::STATUS_SUSPENDED,
         handoff=sym hirsel_rt_v2_ahead_handoff,complete=sym super::super::super::ahead_complete,
+        suspended_entry=sym super::super::super::ahead_suspended,
     );
+}
+
+/// Whether the running task's admitted ahead record runs a v4 resumable body:
+/// its ahead code saves where an ordinary frame would, and once it handed the
+/// saved frame to the ordinary dispatcher that frame leaves its stack as any
+/// compact frame.
+pub(crate) fn resumable(ctx: *mut TaskCtx) -> bool {
+    let p = unsafe { (*ctx).ahead_physical }.cast::<Native>();
+    !p.is_null() && unsafe { (*p).continued || (*p).resume.is_some() } && !super::private(ctx)
 }
 
 /// The dispatcher owns Running and its permit for this entire call. No

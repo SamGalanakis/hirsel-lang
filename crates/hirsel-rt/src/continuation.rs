@@ -117,10 +117,36 @@ impl Continuation {
     }
 }
 
+/// Where an adopted private segment resumes: a stackful fiber's exact stack
+/// pointer, or a compact frame's resume state, which its frame header names.
+/// A compact save is never at the entry: adoption must not restart work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SavedPc {
+    Fiber(SavedFiber),
+    Compact { state: u32 },
+}
+
+impl SavedPc {
+    /// The resume state of a compact frame saved at a boundary.
+    pub(crate) fn compact(frame: &OwnedResumeFrame) -> Self {
+        let state = frame.state();
+        assert_ne!(state, 0, "a compact private save at its entry");
+        Self::Compact { state }
+    }
+
+    /// The saved stack pointer of a stackful segment.
+    pub(crate) fn sp(&self) -> Option<*mut u8> {
+        match *self {
+            Self::Fiber(fiber) => Some(fiber.sp),
+            Self::Compact { .. } => None,
+        }
+    }
+}
+
 /// What adoption of a private segment took over, exactly once.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PrivateSave {
-    pub(crate) pc: SavedFiber,
+    pub(crate) pc: SavedPc,
     pub(crate) generation: u32,
     pub(crate) fuel: u64,
     /// The selected original result descriptor of a host-return segment.
@@ -180,13 +206,14 @@ impl Custody {
 /// operation, or is published to another worker (forced migration); otherwise
 /// the operation proceeds in place on this stack. `state` carries
 /// [`RESUME_LOGGED`] / [`RESUME_EARLY`] when a non-head is logged for the
-/// operation or may commit it early. The decision is
+/// operation or may commit it early. A private ahead segment proceeds in
+/// place: its handoff stays stackful. The decision is
 /// physical: it adds no operation, charge or observation (Tokio's harness goes
 /// idle only on `Pending`, `runtime/task/harness.rs:193-231`; Go parks only at
 /// `gopark`, `runtime/proc.go:457-492`).
 ///
 /// # Safety
-/// `frame` is the running task's live resumable frame.
+/// `ctx` is the running task's context and `frame` its live resumable frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
     ctx: *mut crate::TaskCtx,
@@ -202,7 +229,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
         early: state & RESUME_EARLY != 0,
     };
     // SAFETY: compiled code calls this at a boundary of the running task.
-    let saves = unsafe { crate::tasks::compact::parks(ctx, ahead) };
+    let saves = !crate::tasks::ordered::ahead::private(ctx)
+        && unsafe { crate::tasks::compact::parks(ctx, ahead) };
     #[cfg(feature = "diagnostic")]
     crate::compact_trace::point(unsafe { (*ctx).task_id }, state & !hints, saves);
     u8::from(saves)
@@ -288,6 +316,60 @@ pub(crate) unsafe fn resume_compact(ctx: *mut crate::TaskCtx) -> (u8, *mut crate
     (status, body.environment, body.operation_site)
 }
 
+/// Continue a resumable ahead body's frame, saved at a boundary by its ahead
+/// code, in its ordinary `dispatcher`: the same save that `drive` performs,
+/// then the same loop. The body never re-enters its entry.
+///
+/// # Safety
+/// As for `drive`; the frame holds the state its ahead code recorded.
+pub(crate) unsafe fn continue_saved(
+    ctx: *mut crate::TaskCtx,
+    dispatcher: ResumeDispatcher,
+    environment: *mut crate::Header,
+    caller_site: u64,
+    operation_site: u64,
+    frame: OwnedResumeFrame,
+) -> u8 {
+    let mut owner = Continuation::Fresh;
+    owner.start();
+    let body = Body {
+        dispatcher,
+        environment,
+        caller_site,
+        operation_site,
+    };
+    // SAFETY: caller contract.
+    let frame = unsafe { park(ctx, body, &mut owner, frame) };
+    unsafe { drive(ctx, body, owner, frame) }
+}
+
+/// Save the suspended frame. The shared dispatcher takes it off this stack
+/// when the task can leave it, else it activates again here.
+///
+/// # Safety
+/// As for `drive`, at the suspension.
+unsafe fn park(
+    ctx: *mut crate::TaskCtx,
+    body: Body,
+    owner: &mut Continuation,
+    frame: OwnedResumeFrame,
+) -> OwnedResumeFrame {
+    if frame.state() == 0 {
+        crate::fault("a resumable frame suspended at its entry");
+    }
+    owner.save(SavedRepr::Resumable(frame));
+    // SAFETY: caller contract; at a resume point no runtime borrow, wait
+    // or address into this stack is live, and its frames own no Drop value.
+    if unsafe { crate::tasks::compact::leave(ctx) } {
+        let owner = std::mem::take(owner);
+        unsafe { crate::pool::free::leave_compact(ctx, Box::new(Compact { owner, body })) }
+    }
+    let SavedRepr::Resumable(saved) = owner.activate() else {
+        crate::fault("a resumable frame changed representation while saved");
+    };
+    saved
+}
+
 /// Run `body`'s dispatcher over the Active owner's frame until it completes.
 /// Each suspension saves the frame. The shared dispatcher then takes the
 /// saved frame off this stack when the task can leave it (the stack goes back
@@ -322,19 +404,8 @@ unsafe fn drive(
             owner.complete();
             return status;
         }
-        if frame.state() == 0 {
-            crate::fault("a resumable frame suspended at its entry");
-        }
-        owner.save(SavedRepr::Resumable(frame));
-        // SAFETY: caller contract; at a resume point no runtime borrow, wait
-        // or address into this stack is live, and its frames own no Drop value.
-        if unsafe { crate::tasks::compact::leave(ctx) } {
-            unsafe { crate::pool::free::leave_compact(ctx, Box::new(Compact { owner, body })) }
-        }
-        let SavedRepr::Resumable(saved) = owner.activate() else {
-            crate::fault("a resumable frame changed representation while saved");
-        };
-        frame = saved;
+        // SAFETY: caller contract.
+        frame = unsafe { park(ctx, body, &mut owner, frame) };
     }
 }
 

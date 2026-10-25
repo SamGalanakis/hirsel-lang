@@ -237,7 +237,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(symbol) = self.unit.tables.symbols.get(symbol.index()) else {
             return self.invalid("a callee outside the symbol table");
         };
-        let name = resume_name(&symbol.definition, callee.body, None);
+        let name = if self.inputs.alternate {
+            hirsel_lir::ahead::alternate_resume_name(&symbol.definition, callee.body)
+        } else {
+            resume_name(&symbol.definition, callee.body, None)
+        };
         self.manifested
             .imports
             .entry(name.clone())
@@ -289,6 +293,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.create_phis()?;
         self.allocate_slots()?;
         self.bind_parameters()?;
+        self.ahead_init()?;
         let start = self.module.append_block(self.function);
         self.builder.position(start);
         let first = match state {
@@ -420,6 +425,37 @@ pub(super) fn declare<'m, 'a>(
         let abi = fn_abi(inputs.layouts, header.abi, &header.definition)?;
         let signature = Signature::of(module, inputs.layouts, abi, &header.definition)?;
         let ty = resume_type(module, &signature);
+        // Ahead code has only its state 0: a save continues in the ordinary
+        // dispatcher, which reissues the boundary.
+        if inputs.alternate {
+            let name =
+                hirsel_lir::ahead::alternate_resume_name(&header.definition, header.instance);
+            if module.defines(&name) {
+                return Err(CodegenError::DuplicateSymbol { name });
+            }
+            let function = module
+                .function(&name, ty)
+                .map_err(|what| CodegenError::Invalid {
+                    definition: header.definition.clone(),
+                    what,
+                })?;
+            module.add_attribute(function, AttributeSlot::Function, Attribute::NoUnwind);
+            module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
+            module.add_attribute(function, AttributeSlot::Function, Attribute::NoRedZone);
+            module.string_attribute(function, "disable-tail-calls", "true");
+            module.string_attribute(function, "frame-pointer", "all");
+            manifested.exports.insert(
+                name.clone(),
+                ObjectSymbol {
+                    name,
+                    kind: ObjectSymbolKind::Function,
+                    definition: Some(header.definition.clone()),
+                    abi: None,
+                },
+            );
+            states.push((unit, plan, 0, function));
+            continue;
+        }
         let mut declared = Vec::new();
         for state in std::iter::once(None).chain((0..=plan.states.len() as u32).map(Some)) {
             let name = resume_name(&header.definition, header.instance, state);

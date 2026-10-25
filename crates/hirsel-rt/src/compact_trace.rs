@@ -11,8 +11,9 @@
 //! (Go's `TestStackMem`, `runtime/stack_test.go:24-79`); each resume point
 //! appends `point <task> <state> <worker> <saves>`. `<task>` is the row index,
 //! `<state>` the frame's saved state and `<worker>` the compute index, or
-//! `home`. The trace is physical: no canonical event, tape entry or
-//! observation depends on it.
+//! `home`. A resumable ahead body whose save continues in its ordinary
+//! dispatcher first appends `ahead <task> <state> <worker>`. The trace is
+//! physical: no canonical event, tape entry or observation depends on it.
 
 use std::io::Write;
 use std::sync::Mutex;
@@ -48,6 +49,12 @@ pub(crate) fn left(task: u32, state: u32, pooled: bool) {
         worker(),
         u8::from(pooled)
     ));
+}
+
+/// A resumable ahead body saved at a boundary handed its frame, at `state`, to
+/// its ordinary dispatcher (`ahead <task> <state> <worker>`).
+pub(crate) fn ahead(task: u32, state: u32) {
+    line(format_args!("ahead {task} {state} {}", worker()));
 }
 
 /// A worker lent a compact frame a stack.

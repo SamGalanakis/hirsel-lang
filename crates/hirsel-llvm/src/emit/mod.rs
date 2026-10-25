@@ -316,12 +316,14 @@ fn emit_object_inner(
     profile: Profile<'_>,
     ownership: Option<hirsel_lir::ownership_trace::native::Request<'_>>,
 ) -> Result<ObjectArtifact, CodegenError> {
+    // Ahead code also carries each resumable plan's state-0 alternate.
+    let resume = inputs.continuation.filter(|_| inputs.alternate);
     let (bytes, manifested, plan) = lower(
         units,
         inputs,
         profile,
         ownership,
-        None,
+        resume,
         |module, machine| {
             optimize_and_emit(
                 module,
@@ -560,7 +562,8 @@ fn lower<T>(
         let mut plan = crate::debug::DebugPlan::default();
         let mut functions = Vec::new();
         for unit in units {
-            if resume.is_some() {
+            // An ahead object carries both alternates; a resume object only states.
+            if resume.is_some() && !inputs.alternate {
                 break;
             }
             let unit = unit.unit();

@@ -132,8 +132,21 @@ pub(crate) fn metadata(
     }
     for (id, root) in &plan.roots {
         let name = hirsel_lir::ahead::metadata_name(*id, plan.identity);
-        let version = if root.host.is_some() { 3u32 } else { 2u32 };
-        let mut info = vec![0u8; if root.host.is_some() { 40 } else { 32 }];
+        // A certified host-return root whose body plans Resumable enters its
+        // resumable ahead code (v4); a save continues in its ordinary dispatcher.
+        let resumable = root
+            .host
+            .as_ref()
+            .filter(|_| bounds.contains_key(id))
+            .and(inputs.continuation)
+            .and_then(|plans| plans.get(*id))
+            .filter(|p| p.representation == hirsel_lir::continuation::Representation::Resumable);
+        let (version, size) = match (&root.host, resumable) {
+            (_, Some(_)) => (4u32, 56),
+            (Some(_), None) => (3u32, 40),
+            (None, None) => (2u32, 32),
+        };
+        let mut info = vec![0u8; size];
         info[..4].copy_from_slice(&version.to_le_bytes());
         let mut description = DataDescription::new();
         if let Some(&bound) = bounds.get(id) {
@@ -187,10 +200,22 @@ pub(crate) fn metadata(
             let (recipe_id, _) = em.declare_data(&recipe_name, Linkage::Local)?;
             em.define_data(&recipe_name, recipe_id, &image)?;
             info[16..24].copy_from_slice(&bound.to_le_bytes());
+            if let Some(resumed) = resumable {
+                let bytes = u32::try_from(resumed.cost.frame_bytes).map_err(|_| {
+                    crate::CodegenError::Object {
+                        message: "a resumable ahead frame beyond u32".into(),
+                    }
+                })?;
+                info[40..44].copy_from_slice(&bytes.to_le_bytes());
+            }
             description.define(info.into_boxed_slice());
             description.set_align(8);
             let symbol = &plan.symbols[id];
-            let alternate = hirsel_lir::ahead::alternate_name(&symbol.definition, *id);
+            let alternate = if resumable.is_some() {
+                hirsel_lir::ahead::alternate_resume_name(&symbol.definition, *id)
+            } else {
+                hirsel_lir::ahead::alternate_name(&symbol.definition, *id)
+            };
             // Only an address relocation: the real definition keeps its original ABI.
             let sig = ir::Signature::new(em.call_conv);
             let code = em.import_function(&alternate, &sig)?;
@@ -229,6 +254,20 @@ pub(crate) fn metadata(
                 em.define_data(&root_name, root_id, &image)?;
                 let data = em.module.declare_data_in_data(root_id, &mut description);
                 description.write_data_addr(32, data, 0);
+            }
+            if resumable.is_some() {
+                let dispatcher =
+                    hirsel_lir::continuation::resume_name(&symbol.definition, *id, None);
+                let sig = ir::Signature::new(em.call_conv);
+                let code = em.import_function(&dispatcher, &sig)?;
+                em.manifest_import(
+                    &dispatcher,
+                    ObjectSymbolKind::Function,
+                    Some(&symbol.definition),
+                    None,
+                );
+                let f = em.module.declare_func_in_data(code, &mut description);
+                description.write_function_addr(48, f);
             }
         } else {
             description.define(info.into_boxed_slice());

@@ -2751,6 +2751,36 @@ unsafe extern "C" fn ahead_complete(ctx: *mut TaskCtx, mut status: u8) -> ! {
     unsafe { complete(&mut *ctx, index, status) }
 }
 
+/// A v4 ahead body saved at a boundary (`ahead::native::start`): its frame
+/// continues in the body's ordinary dispatcher, leaving this stack when the
+/// task can, and the task then ends as its entry would. Never its entry again.
+pub(crate) unsafe extern "C" fn ahead_suspended(
+    ctx: *mut TaskCtx,
+    native: *mut ordered::ahead::native::Native,
+) -> ! {
+    let _role = unsafe { role::Guard::physical(ctx) };
+    assert!(!ordered::ahead::private(ctx), "a private ahead body saved");
+    let index = unsafe { (*ctx).task_id };
+    let (_, environment, site) =
+        role::with_role(ctx, |t| t.task(index).code.take()).expect("ahead closure custody");
+    // Inert cleanup a host segment deferred is task-owned: settle it first.
+    unsafe { ordered::ahead::host_return::flush_logical(ctx, native) };
+    let (dispatcher, frame) = unsafe { (*native).take_resume() };
+    #[cfg(feature = "diagnostic")]
+    crate::compact_trace::ahead(index, frame.state());
+    let mut status = {
+        // SAFETY: the task's body holds the role at depth one, as in resume_run.
+        let _body = unsafe { role::Guard::new(ctx) };
+        unsafe {
+            crate::continuation::continue_saved(ctx, dispatcher, environment, site, site, frame)
+        }
+    };
+    status |= unsafe {
+        crate::release::release_block(&mut *ctx, environment, std::ptr::null(), site, site)
+    };
+    unsafe { complete(&mut *ctx, index, status) }
+}
+
 /// The running child finished its frame (and its environment): record its outcome and run
 /// another task.
 ///

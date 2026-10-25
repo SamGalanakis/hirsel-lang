@@ -998,6 +998,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let (plan, state) = (resume.plan, resume.state);
         let frame = *self.entry_params.last().unwrap();
         self.resume.as_mut().unwrap().frame = Some(frame);
+        self.ahead_init()?;
         self.find_versions()?;
         for _ in &self.unit.blocks {
             let block = self.b.create_block();
@@ -2266,7 +2267,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 return self.invalid("a nested resumable call without a known callee");
             };
             let symbol = &unit.tables.symbols[symbol.index()];
-            let name = hirsel_lir::continuation::resume_name(&symbol.definition, callee.body, None);
+            let name = if self.em.inputs.unit().alternate {
+                hirsel_lir::ahead::alternate_resume_name(&symbol.definition, callee.body)
+            } else {
+                hirsel_lir::continuation::resume_name(&symbol.definition, callee.body, None)
+            };
             self.em
                 .manifest_import(&name, ObjectSymbolKind::Function, None, None);
             Some(name)

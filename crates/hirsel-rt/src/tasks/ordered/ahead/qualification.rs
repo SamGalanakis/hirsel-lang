@@ -28,7 +28,15 @@ unsafe extern "C" fn unused(_: *mut TaskCtx, _: *mut crate::Header, _: u64, _: u
 #[test]
 fn unsupported_metadata_refuses_before_scope_or_environment_access() {
     for width in [1, 2, 4] {
-        for (version, flags) in [(0, 0), (4, 0), (1, 1), (2, 1), (3, 1), (1, u32::MAX)] {
+        for (version, flags) in [
+            (0, 0),
+            (5, 0),
+            (1, 1),
+            (2, 1),
+            (3, 1),
+            (4, 1),
+            (1, u32::MAX),
+        ] {
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
             let outcome = run.run(
@@ -272,7 +280,7 @@ fn version_dispatch_does_not_overread_legacy_or_unsupported_prefixes() {
             libc::mprotect(mapping.cast::<u8>().add(page).cast(), page, libc::PROT_NONE),
             0
         );
-        for version in [1, 4] {
+        for version in [1, 5] {
             // The next byte is inaccessible. v1 has exactly its original16
             // bytes; unsupported metadata has only its8-byte dispatch prefix.
             let bytes = if version == 1 { 16 } else { 8 };

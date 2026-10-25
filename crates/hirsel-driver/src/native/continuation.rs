@@ -15,6 +15,7 @@ pub fn ahead_certificates(
     objects: &[hirsel_lir::stage::ObjectArtifact],
 ) -> Vec<hirsel_lir::continuation::AheadCertificate> {
     let plan = super::ahead::plan(program);
+    let plans = plans(program);
     let Some(evidence) = objects.iter().find_map(|o| o.ahead.as_ref()) else {
         return Vec::new();
     };
@@ -23,6 +24,7 @@ pub fn ahead_certificates(
         .filter_map(|root| {
             hirsel_lir::continuation::AheadCertificate::derive(
                 &plan,
+                &plans,
                 *root,
                 evidence,
                 AHEAD_HELPER_BYTES,

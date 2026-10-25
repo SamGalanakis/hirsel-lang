@@ -41,9 +41,9 @@ fn compact_frames_start_at_entry_with_aligned_whole_images() {
 #[test]
 fn custody_adopts_once_and_withdrawal_is_terminal() {
     let save = PrivateSave {
-        pc: SavedFiber {
+        pc: SavedPc::Fiber(SavedFiber {
             sp: std::ptr::dangling_mut(),
-        },
+        }),
         generation: 3,
         fuel: 11,
         descriptor: None,
@@ -78,4 +78,32 @@ fn custody_adopts_once_and_withdrawal_is_terminal() {
         })
         .is_err()
     );
+}
+
+#[test]
+fn compact_private_saves_adopt_their_resume_state_once_never_the_entry() {
+    let mut frame = OwnedResumeFrame::new(40);
+    assert!(std::panic::catch_unwind(|| SavedPc::compact(&OwnedResumeFrame::new(40))).is_err());
+    // The frame header names the state its boundary resumes at.
+    unsafe { frame.as_mut_ptr().cast::<u32>().write(2) };
+    let pc = SavedPc::compact(&frame);
+    assert_eq!((pc, pc.sp()), (SavedPc::Compact { state: 2 }, None));
+    let save = PrivateSave {
+        pc,
+        generation: 5,
+        fuel: 7,
+        descriptor: None,
+    };
+    let mut custody = Custody::Private { generation: 5 };
+    assert_eq!(custody.adopt(save), save);
+    assert_eq!(custody, Custody::Adopted(save));
+    assert!(
+        std::panic::catch_unwind(move || {
+            let mut c = custody;
+            c.adopt(save)
+        })
+        .is_err()
+    );
+    let mut stale = Custody::Private { generation: 6 };
+    assert!(std::panic::catch_unwind(move || stale.adopt(save)).is_err());
 }

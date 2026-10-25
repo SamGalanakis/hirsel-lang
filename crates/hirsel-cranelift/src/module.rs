@@ -401,6 +401,41 @@ pub(crate) fn emit(
         }
         bodies.push((unit, id, sig));
     }
+    // Ahead code also carries each resumable plan's state-0 alternate: a save
+    // continues in the ordinary dispatcher, which reissues the boundary.
+    let mut resumed = Vec::new();
+    if inputs.alternate
+        && let Some(plans) = inputs.continuation
+    {
+        for unit in &emitted {
+            let unit = unit.unit();
+            let header = &unit.header;
+            let Some(plan) = plans.get(header.instance).filter(|p| {
+                p.representation == hirsel_lir::continuation::Representation::Resumable
+            }) else {
+                continue;
+            };
+            let abi = emitter.fn_abi(header.abi, &header.definition)?;
+            let mut sig = emitter.entry_signature(abi, &header.definition)?;
+            sig.ir.params.push(ir::AbiParam::new(PTR));
+            let name =
+                hirsel_lir::ahead::alternate_resume_name(&header.definition, header.instance);
+            if emitter.functions.contains_key(&name) {
+                return Err(CodegenError::DuplicateSymbol { name });
+            }
+            let id = emitter.declare_function(&name, Linkage::Export, &sig.ir)?;
+            emitter.manifested.exports.insert(
+                name.clone(),
+                ObjectSymbol {
+                    name: name.clone(),
+                    kind: ObjectSymbolKind::Function,
+                    definition: Some(header.definition.clone()),
+                    abi: None,
+                },
+            );
+            resumed.push((unit, plan, name, id, sig));
+        }
+    }
     let depth_leaf =
         hirsel_lir::invocations::room::depth_leaf_units(units.iter().map(|u| u.unit()));
     let mut frames = BTreeMap::new();
@@ -440,6 +475,30 @@ pub(crate) fn emit(
                 unit,
                 context.compiled_code().expect("defined function"),
             ));
+        }
+        emitter.module.clear_context(&mut context);
+    }
+    for (unit, plan, name, id, sig) in resumed {
+        context.func = Function::with_name_signature(ir::UserFuncName::default(), sig.ir.clone());
+        {
+            let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
+            let mut function = crate::function::FnEmitter::new(&mut emitter, unit, builder, sig);
+            function.room = hirsel_lir::invocations::room::RoomChecks::of(unit, &depth_leaf);
+            function.resume = Some(crate::resume::Resume {
+                plan,
+                state: 0,
+                frame: None,
+                resuming: None,
+            });
+            function.emit()?;
+        }
+        emitter.compile(&name, id, &mut context)?;
+        if let Some(extent) = context
+            .compiled_code()
+            .and_then(|c| c.buffer.frame_layout())
+            .and_then(|f| f.frame_to_fp_offset.checked_add(16))
+        {
+            frames.insert(name.clone(), u64::from(extent));
         }
         emitter.module.clear_context(&mut context);
     }

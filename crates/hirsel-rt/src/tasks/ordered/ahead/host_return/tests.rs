@@ -159,6 +159,83 @@ fn v3_binds_capture_and_read_metadata_and_refuses_malformed_records() {
     assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
 }
 
+unsafe extern "C" fn dispatcher(_: *mut TaskCtx, _: *mut Header, _: u64, _: u64, _: *mut u8) -> u8 {
+    crate::STATUS_OK
+}
+
+#[test]
+fn v4_binds_a_resumable_frame_and_refuses_each_mutated_field() {
+    let wrapper = layout(24);
+    let source = layout(8);
+    let bytes = byte_layout();
+    let layouts = [
+        &wrapper as *const _,
+        &source as *const _,
+        &bytes as *const _,
+    ];
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = layouts.len() as u32;
+    let outcome = run.run(
+        |_| {},
+        |ctx| unsafe {
+            let env = crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 24, 8, crate::alloc::DOMAIN_HEAP, 0);
+            let captured =
+                crate::alloc::hirsel_rt_v2_alloc(ctx, 3, 8, 8, crate::alloc::DOMAIN_HEAP, 0);
+            crate::alloc::payload(env).cast::<[u64; 3]>().write([
+                code as usize as u64,
+                captured as u64,
+                1,
+            ]);
+            let read = read_recipe();
+            let reads = [&raw const read];
+            let root = root(&reads);
+            let capture = capture_recipe();
+            let exact = || ResumeInfo {
+                host: HostInfo {
+                    prefix: Info {
+                        prefix: SpawnAheadInfo {
+                            version: 4,
+                            flags: 0,
+                            entry: Some(code),
+                        },
+                        stack_bytes: 1024,
+                        recipe: &capture,
+                    },
+                    host: &root,
+                },
+                frame_bytes: 64,
+                reserved: 0,
+                dispatcher: Some(dispatcher),
+            };
+            let info = exact();
+            let cert = validate_resumable(ctx, env, &info).unwrap();
+            assert_eq!(cert.resume.map(|(_, bytes)| bytes), Some(64));
+            let mutants: [fn(&mut ResumeInfo); 9] = [
+                |i| i.reserved = 1,
+                |i| i.frame_bytes = 0,
+                |i| i.frame_bytes = 8,
+                |i| i.frame_bytes = 68,
+                |i| i.frame_bytes = MAX_RESUME_FRAME_BYTES + 8,
+                |i| i.frame_bytes = 64 * 1024 + 8,
+                |i| i.dispatcher = None,
+                |i| i.host.prefix.prefix.entry = None,
+                |i| i.host.host = std::ptr::null(),
+            ];
+            for mutate in mutants {
+                let mut info = exact();
+                mutate(&mut info);
+                assert!(validate_resumable(ctx, env, &info).is_none());
+            }
+            assert_eq!(read.maximum, 1);
+            crate::release::release_block(&mut *ctx, env, std::ptr::null(), 0, 0);
+            crate::release::release_block(&mut *ctx, captured, std::ptr::null(), 0, 0);
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+}
+
 #[test]
 fn selected_authority_requires_empty_exclusive_buffer_and_exact_read_maximum() {
     let wrapper = layout(24);
@@ -552,6 +629,94 @@ fn inert_cleanup_rejects_malformed_layout_and_holder_metadata() {
 }
 
 #[test]
+fn inert_cleanup_accepts_field_edges_only_to_inert_scalars() {
+    use hirsel_core_contract::handle_scan::*;
+    let mut bytes = byte_layout();
+    let mut element = layout(1);
+    element.align = 1;
+    element.flags = crate::LAYOUT_NO_EXTENT;
+    let scalar = [VALUE, VALUE_BITS, 1, 0, 0, 0, 0, 0];
+    element.scan = scalar.as_ptr();
+    element.scan_words = 8;
+    let mut length = layout(8);
+    let bits = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
+    length.scan = bits.as_ptr();
+    length.scan_words = 8;
+    // The list's length field, then its element, as handle_scan.rs lowers them.
+    let scan = [
+        TYPE_EDGE,
+        0,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0, //
+        TYPE_EDGE,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0, //
+        VALUE,
+        VALUE_SEQUENCE,
+        16,
+        1,
+        16,
+        3,
+        0,
+        0,
+    ];
+    bytes.scan = scan.as_ptr();
+    bytes.scan_words = 24;
+    let layouts = [&raw const bytes, &raw const element, &raw const length];
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = 3;
+    let outcome = run.run(
+        |_| {},
+        move |ctx| unsafe {
+            let bytes = &mut *(*ctx).descriptor(2).cast_mut();
+            let length = &mut *(*ctx).descriptor(4).cast_mut();
+            assert!(inert_buffer_layout(ctx, 2));
+            let good = *length;
+            for bad in [
+                crate::Layout {
+                    step_count: 1,
+                    ..good
+                },
+                crate::Layout {
+                    flags: crate::LAYOUT_DYNAMIC,
+                    ..good
+                },
+                crate::Layout { size: 0, ..good },
+                crate::Layout {
+                    scan_words: 16,
+                    ..good
+                },
+            ] {
+                *length = bad;
+                assert!(!inert_buffer_layout(ctx, 2), "{length:?}");
+            }
+            *length = good;
+            let mut malformed = scan;
+            bytes.scan = malformed.as_ptr();
+            for (word, value) in [(2, 3), (2, 2), (10, 4), (1, 1), (16, TYPE_EDGE)] {
+                malformed = scan;
+                malformed[word] = value;
+                assert!(!inert_buffer_layout(ctx, 2), "{malformed:?}");
+            }
+            bytes.scan_words = 20;
+            assert!(!inert_buffer_layout(ctx, 2), "a partial record");
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+}
+
+#[test]
 fn unmetered_cleanup_consumes_each_owner_once_only_after_admission() {
     // Adapt Tokio task_abort.rs:49-108's retained owner / deferred destruction
     // control to Hirsel's canonical physical admission and inert storage.
@@ -923,7 +1088,7 @@ pub(in crate::tasks::ordered::ahead) fn selected_descriptor_admission() {
                     assert!(admitted.is_ok());
                     let save = n.admitted.expect("admission record");
                     assert_eq!(save.descriptor, Some(read.buffer_descriptor));
-                    assert_eq!(save.pc.sp, n.physical.saved_sp);
+                    assert_eq!(save.pc.sp(), Some(n.physical.saved_sp));
                     // A repeated admission adopts nothing new.
                     n.physical.saved_sp = n.physical.saved_sp.wrapping_add(64);
                     admit(ctx, &raw mut *n);

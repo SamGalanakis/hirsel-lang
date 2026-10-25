@@ -7,6 +7,12 @@ pub fn alternate_name(definition: &DefPath, instance: ContentHash) -> String {
         crate::emission::symbol_name(definition, Some(&instance))
     )
 }
+/// The resumable state-0 alternate of a body with a Resumable plan: the ahead
+/// code with the body's frame appended, which saves at a boundary as the
+/// ordinary state 0 does, so the ordinary dispatcher continues it.
+pub fn alternate_resume_name(definition: &DefPath, instance: ContentHash) -> String {
+    format!("{}_resume", alternate_name(definition, instance))
+}
 pub fn metadata_name(root: ContentHash, identity: ContentHash) -> String {
     let hex = |h: ContentHash| h.0.iter().map(|b| format!("{b:02x}")).collect::<String>();
     format!("hirsel_ahead_{}_{}", hex(root), hex(identity))

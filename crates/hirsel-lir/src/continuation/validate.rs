@@ -740,6 +740,39 @@ pub struct AheadCertificate {
     pub max_stack_bytes: u32,
     pub caller: CallerProof,
     pub result: ResultCleanupProof,
+    /// A host-return root whose body plans Resumable enters its resumable
+    /// ahead code; a save continues in its ordinary dispatcher.
+    pub resume: Option<ResumeProof>,
+}
+
+/// The resumable ahead entry of a root, bound to its ordinary plan: the
+/// entry and dispatcher symbols, the frame both run over and that plan's
+/// certificate. The frame DAG above already measures the entry's final frame.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ResumeProof {
+    pub symbol: String,
+    pub dispatcher: String,
+    pub frame_bytes: u32,
+    pub plan: ContentHash,
+}
+
+fn resume_proof(
+    plan: &AheadPlan,
+    plans: &ContinuationPlans,
+    root: ContentHash,
+) -> Option<ResumeProof> {
+    let r = plan.roots.get(&root)?;
+    r.host.as_ref()?;
+    let symbol = plan.symbols.get(&root)?;
+    let ordinary = plans
+        .get(root)
+        .filter(|p| p.representation == Representation::Resumable)?;
+    Some(ResumeProof {
+        symbol: crate::ahead::alternate_resume_name(&symbol.definition, root),
+        dispatcher: super::resume_name(&symbol.definition, root, None),
+        frame_bytes: u32::try_from(ordinary.cost.frame_bytes).ok()?,
+        plan: ordinary.certificate.identity,
+    })
 }
 
 fn spines_digest(plan: &AheadPlan, root: ContentHash) -> Option<ContentHash> {
@@ -766,6 +799,7 @@ impl AheadCertificate {
     /// Derive from the plan and the final object's machine evidence.
     pub fn derive(
         plan: &AheadPlan,
+        plans: &ContinuationPlans,
         root: ContentHash,
         evidence: &MachineEvidence,
         helpers: [u64; 4],
@@ -792,11 +826,17 @@ impl AheadCertificate {
                 spines: spines_digest(plan, root),
             },
             result: reads(plan, root),
+            resume: resume_proof(plan, plans, root),
         })
     }
 
     /// Independently check every field against the plan and the evidence.
-    pub fn check(&self, plan: &AheadPlan, evidence: &MachineEvidence) -> Result<(), String> {
+    pub fn check(
+        &self,
+        plan: &AheadPlan,
+        plans: &ContinuationPlans,
+        evidence: &MachineEvidence,
+    ) -> Result<(), String> {
         let r = plan.roots.get(&self.root).ok_or("unknown ahead root")?;
         let symbol = plan.symbols.get(&self.root).ok_or("unknown ahead symbol")?;
         if self.plan != plan.identity || evidence.plan != plan.identity {
@@ -840,6 +880,17 @@ impl AheadCertificate {
         }
         if self.result != reads(plan, self.root) {
             return Err("selected result descriptor".into());
+        }
+        let expected = resume_proof(plan, plans, self.root);
+        if self.resume != expected
+            || self.resume.as_ref().is_some_and(|r| {
+                u64::from(r.frame_bytes) > super::MAX_FRAME_BYTES
+                    || r.symbol == self.ahead_symbol
+                    || r.symbol == self.ordinary_symbol
+                    || r.dispatcher == r.symbol
+            })
+        {
+            return Err("resumable ahead entry".into());
         }
         Ok(())
     }

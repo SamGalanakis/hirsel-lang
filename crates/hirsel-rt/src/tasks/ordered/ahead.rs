@@ -7,7 +7,7 @@
 
 use super::super::registry::TaskKey;
 use super::super::{Logical, Scheduler, Task, handle};
-use crate::continuation::{Custody, PrivateSave, SavedFiber};
+use crate::continuation::{Custody, PrivateSave, SavedFiber, SavedPc};
 use crate::{TaskCtx, budget::stretch::Stretch};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,7 +55,7 @@ impl Local {
     pub(crate) fn adopt(&mut self, generation: u32, pc: *mut u8, fuel: u64) -> PrivateSave {
         let mut custody = self.custody.get();
         let save = custody.adopt(PrivateSave {
-            pc: SavedFiber { sp: pc },
+            pc: SavedPc::Fiber(SavedFiber { sp: pc }),
             generation,
             fuel,
             descriptor: None,
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     } else {
         let version = unsafe { std::ptr::addr_of!((*info).version).read() };
         let flags = unsafe { std::ptr::addr_of!((*info).flags).read() };
-        if !matches!(version, 1 | 2 | 3) || flags != 0 {
+        if !matches!(version, 1..=4) || flags != 0 {
             unsafe {
                 crate::stop::raise(
                     ctx,
@@ -357,7 +357,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         } else {
             #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
             let certificate = unsafe {
-                if version == 3 {
+                if version == 4 {
+                    host_return::validate_resumable(ctx, environment, info.cast())
+                } else if version == 3 {
                     host_return::validate(ctx, environment, info.cast())
                 } else {
                     native::validate(ctx, environment, info.cast())
@@ -889,7 +891,7 @@ pub(super) mod tests {
             generation
         };
         *probe.adopted.lock().unwrap() = Some((
-            save.pc.sp as usize,
+            save.pc.sp().expect("a stackful private save") as usize,
             save.generation,
             save.fuel,
             save.descriptor,
