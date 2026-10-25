@@ -247,7 +247,8 @@ impl<'a> Lay<'a> {
             .is_some_and(|l| l.drop.is_empty() && l.finalizer.is_none())
     }
     /// Finalizers reached in this value's inline storage need explicit
-    /// cleanup phases. A counted reference's payload is destroyed separately.
+    /// cleanup phases. A counted reference's payload is destroyed separately;
+    /// borrowed fields never destroy their referents.
     pub fn inline_finalizer(&self, id: LayoutId) -> bool {
         let Some(layout) = self.get(id) else {
             return true;
@@ -270,6 +271,7 @@ impl<'a> Lay<'a> {
                         .flat_map(|tag| &tag.variants)
                         .flat_map(|v| &v.fields),
                 )
+                .filter(|field| !hirsel_lir::layout::field_is_borrowed(self.0, layout, field))
                 .any(|field| self.inline_finalizer(field.layout)),
         }
     }

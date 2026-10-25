@@ -909,7 +909,8 @@ impl<'a> Layouts<'a> {
         }
     }
     /// Whether a finalizer is reachable from this layout without crossing a
-    /// block reference: through inline fields, variants and inline elements.
+    /// block reference: through owned inline fields, variants and inline
+    /// elements. Borrowed captures do not own their referent's destruction.
     pub fn inline_finalizer(&self, id: LayoutId) -> bool {
         let Some(layout) = self.get(id) else {
             return true;
@@ -928,6 +929,7 @@ impl<'a> Layouts<'a> {
                     .fields
                     .iter()
                     .chain(variants.flat_map(|v| &v.fields))
+                    .filter(|f| !crate::layout::field_is_borrowed(self.0, layout, f))
                     .any(|f| self.inline_finalizer(f.layout))
             }
         }

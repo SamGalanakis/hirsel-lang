@@ -128,6 +128,47 @@ fn an_inline_release_reaches_no_finalizer() {
     assert_eq!(release_whole(l::RESBLK), []);
 }
 
+#[test]
+fn inline_release_does_not_finalize_borrowed_fields() {
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep, ScanStep};
+
+    pair(
+        |owned_resource| {
+            let mut t = Lir::<Ready>::new(&[(Passing::Take, l::PAIR)], None);
+            let record = &mut t.table.layouts[l::PAIR.0 as usize];
+            record.fields[1].layout = l::RES;
+            // Like a closure borrowing its scope and owning a capture:
+            // only the counted field is destroyed with this value.
+            record.scan = vec![ScanStep::Counted { offset: 0 }];
+            record.drop = vec![DropStep::Release { offset: 0 }];
+            if owned_resource {
+                record.copy = CopyRecipe::NotCopyable;
+                record.drop.insert(
+                    0,
+                    DropStep::Child {
+                        offset: 8,
+                        layout: l::RES,
+                    },
+                );
+            }
+            assert_eq!(
+                hirsel_lir::layout::field_is_borrowed(
+                    &t.table,
+                    &t.table.layouts[l::PAIR.0 as usize],
+                    &t.table.layouts[l::PAIR.0 as usize].fields[1],
+                ),
+                !owned_resource
+            );
+            let x = t.owned(l::PAIR);
+            t.param(x);
+            let cleanup = t.cleanup_exit(&[Undo::Release(x)], None);
+            t.builder.jump(ENTRY, cleanup, &[]);
+            t.check()
+        },
+        |k| *k == K::Type("released layout"),
+    );
+}
+
 fn drop_on_exit<S: Stage>() -> Vec<K> {
     let mut t = Lir::<S>::new(&[TAKE_BLK], None);
     let s = t.slot(l::BLK, SlotKind::Parameter(0), ROOT);
