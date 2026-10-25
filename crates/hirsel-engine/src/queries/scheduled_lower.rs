@@ -338,6 +338,28 @@ impl FrontLowerQueries {
             _ => Err(QueryError::NotImplemented),
         }
     }
+    pub(crate) fn settled_constant_clone_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        let id = self
+            .evaluate_query(path)
+            .ok_or(QueryError::NotImplemented)?;
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let (_, outcome, _) = outcomes
+            .get(&(id.kind, id.address.0))
+            .ok_or(QueryError::NotImplemented)?;
+        match &outcome.result {
+            Ok(Value::Constant(value, _)) => {
+                let mut weight = crate::NativeMetadataWeight::default();
+                weight.add(std::mem::size_of::<Materialized>() + 2 * std::mem::size_of::<usize>());
+                weight.materialized(value);
+                weight
+                    .bytes()
+                    .checked_mul(2)
+                    .ok_or(QueryError::NotImplemented)
+            }
+            Err(error) => Err(error.clone()),
+            _ => Err(QueryError::NotImplemented),
+        }
+    }
     pub fn settled_constant(
         &self,
         path: &DefPath,
