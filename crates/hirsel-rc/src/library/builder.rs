@@ -121,7 +121,9 @@ pub fn repr_of(kind: &LayoutKind) -> ValueRepr {
             ValueRepr::Block
         }
         LayoutKind::Callable { .. } => ValueRepr::Callable,
-        LayoutKind::Handle | LayoutKind::HostCapability { .. } => ValueRepr::Handle,
+        LayoutKind::Handle
+        | LayoutKind::HostCapability { .. }
+        | LayoutKind::SealedRegion { .. } => ValueRepr::Handle,
         LayoutKind::Path => ValueRepr::Scalar(ScalarKind::U64),
         LayoutKind::Arena => ValueRepr::Arena,
         _ => ValueRepr::Aggregate,
