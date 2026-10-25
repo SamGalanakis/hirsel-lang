@@ -17,6 +17,41 @@ fn engine(text: &str) -> QueryEngine {
 }
 
 #[test]
+fn native_prepared_argument_failure_retires_before_source_finalizers() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let runner = history::Runner::new(directory.path()).unwrap();
+        for index in [0, 1] {
+            let source = format!(
+                r#"resource type R {{}}
+drop(x) {{}}
+fn touch(mut xs: List[u64]) {{}}
+pub fn main() -> Result[(), ()] {{
+  let r = R()
+  let mut xs: List[List[u64]] = [[]]
+  touch(mut xs[{index}u64])
+  Ok(())
+}}
+"#,
+            );
+            let report = runner.run(&format!("prepared-argument-{index}"), &source);
+            assert_eq!(report.cells.len(), 4, "{report:#?}");
+            assert!(report.agrees(), "{report:#?}");
+            for cell in &report.cells {
+                let observation = cell.observation.as_ref().unwrap();
+                if index == 0 {
+                    assert_eq!(observation.exit_code, Some(0));
+                    assert!(observation.failures.is_empty());
+                } else {
+                    assert_eq!(observation.failures.len(), 1);
+                    assert_eq!(observation.failures[0].rule, "MEM-14");
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn native_selected_source_survives_call_and_aggregate_transfer_before_unique_operations() {
     use hirsel_syntax::UnaryOp;
     use hirsel_tir::Rvalue;

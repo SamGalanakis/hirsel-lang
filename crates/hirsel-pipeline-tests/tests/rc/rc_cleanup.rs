@@ -25,6 +25,25 @@ struct Built {
 }
 
 #[test]
+fn operand_cleanup_retires_invocation_before_resource_finalizers() {
+    let (built, observation) = ready(
+        r#"resource type R {}
+drop(x) {}
+fn number() -> u64 { 1u64 }
+fn touch(mut xs: List[u64]) {}
+pub fn main() -> u64 {
+  let r = R()
+  let mut xs: List[List[u64]] = [[number()]]
+  touch(mut xs[0u64])
+  7u64
+}
+"#,
+    );
+    assert!(observation.failures.is_empty());
+    campaign(&built);
+}
+
+#[test]
 fn a_join_keeps_the_untaken_error_payload_for_cleanup() {
     let source = r#"pub fn main(rt: Io, args: Args) -> Result[(), LaunchError] {
   let text: String = match string.from_bytes(b"ok") { Ok(s) => take s, Error(_) => "bad" }

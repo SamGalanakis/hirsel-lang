@@ -1648,7 +1648,7 @@ pub(crate) struct State {
     pub loans: PVec<Tri>,
     pub regions: PVec<Tri>,
     pub credits: BTreeMap<ValueId, u32>,
-    /// Admission remains live through all cleanup synthesized before a call.
+    /// The call admission to retire before failure cleanup releases caller storage.
     pub invocation: Invocation,
 }
 
@@ -2756,9 +2756,10 @@ fn anchor_site<S>(unit: &LirUnit<S>, at: SourceAnchorId) -> (u32, hirsel_lir::ir
 /// active loans end, pending owned values are released, initialized slots
 /// drop in TIR's nested order (inner scopes first, temporaries before names,
 /// each in descending slot order), entered regions exit, then the failure
-/// propagates. None when the state holds something such a cleanup cannot
-/// express (a pending value with user-visible destruction, a region whose
-/// mark is not pending, or slots of unrelated scopes).
+/// propagates. A live call admission retires before caller cleanup, whose
+/// source finalizers admit their own invocations. None when the state holds
+/// something such a cleanup cannot express (a pending value with user-visible
+/// destruction, a region whose mark is not pending, or slots of unrelated scopes).
 pub(crate) fn synthesize_failure<S: Stage>(
     ed: &mut Editor<S>,
     lay: Lay<'_>,
@@ -2858,9 +2859,6 @@ pub(crate) fn synthesize_failure<S: Stage>(
         Some(tail) => tail,
         None => {
             let tail = ed.block(BlockKind::FailureCleanup, &[], at);
-            if active.is_some() {
-                ed.code[tail.index()].push(Inst::FrameLeave);
-            }
             ed.unit.terminators[tail.index()] = Terminator::Propagate;
             if let Some(s) = shared.as_deref_mut() {
                 s.tails.insert(active, tail);
@@ -2981,6 +2979,16 @@ pub(crate) fn synthesize_failure<S: Stage>(
                 b
             },
         );
+    }
+    if active.is_some() {
+        // The failed preparation belongs to the admitted call. Retire it
+        // before releasing caller storage: a resource drop can enter a source
+        // finalizer, which requires its own independent admission.
+        let retired = ed.block(BlockKind::FailureCleanup, &[], at);
+        ed.code[retired.index()].push(Inst::FrameLeave);
+        let edge = ed.edge(next, &[]);
+        ed.unit.terminators[retired.index()] = Terminator::Jump(edge);
+        next = retired;
     }
     let head = ed.edge(next, &[]);
     Some(ed.failure(head, at))
