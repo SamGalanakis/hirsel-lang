@@ -20,7 +20,10 @@ pub fn derive_with_owners(
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     owners: &crate::layout::Owners,
 ) -> Result<Option<ShapeGraph>, QueryError> {
-    Ok(derive_typed_impl(types, root, lookup, Some(owners), false)?.map(|derived| derived.graph))
+    Ok(
+        derive_typed_impl(types, root, lookup, Some(owners), false, false)?
+            .map(|derived| derived.graph),
+    )
 }
 
 /// Transient correspondence for this derivation's interner. Numeric TypeIds
@@ -36,7 +39,7 @@ pub fn derive_typed<'a>(
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
-    derive_typed_impl(types, root, lookup, None, false)
+    derive_typed_impl(types, root, lookup, None, false, false)
 }
 
 /// Reuse the declaration-derived owned graph for source storage profiles.
@@ -48,7 +51,19 @@ pub fn derive_profile_shape<'a>(
     root: TypeId,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
-    derive_typed_impl(types, root, lookup, None, true)
+    derive_typed_impl(types, root, lookup, None, true, false)
+}
+
+/// Boundary profiles may contain Arena grants and affine Region handles inside
+/// original result/record/variant types. This view is never payload admission
+/// or ordinary structural validation; Region's payload still supplies the
+/// callable value edges in its profile.
+pub fn derive_boundary_profile_shape<'a>(
+    types: &'a TypeInterner,
+    root: TypeId,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Option<DerivedShape<'a>>, QueryError> {
+    derive_typed_impl(types, root, lookup, None, true, true)
 }
 
 fn derive_typed_impl<'a>(
@@ -57,6 +72,7 @@ fn derive_typed_impl<'a>(
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     owners: Option<&crate::layout::Owners>,
     callable_leaves: bool,
+    boundary_handles: bool,
 ) -> Result<Option<DerivedShape<'a>>, QueryError> {
     let memo = TypeMemo::new();
     let mut graph = ShapeGraph {
@@ -141,7 +157,17 @@ fn derive_typed_impl<'a>(
                     return Ok(None);
                 }
                 // Path has a declared abstract scalar structural view.
-                if definition.path().is_core("Path") {
+                if boundary_handles && definition.path().is_core("Arena") {
+                    if !arguments.is_empty()
+                        || !declaration.generics.is_empty()
+                        || declaration.representation.is_some()
+                        || declaration.capability != Some(CapabilityKind::Scoped)
+                        || signature.definition != *definition
+                    {
+                        return Ok(None);
+                    }
+                    Shape::Leaf
+                } else if definition.path().is_core("Path") {
                     Shape::Leaf
                 } else {
                     let representation = declaration.representation.or_else(|| {
@@ -217,6 +243,15 @@ fn derive_typed_impl<'a>(
                             return Ok(None);
                         };
                         Shape::Sequence(element)
+                    }
+                    BuiltinType::Region if boundary_handles => {
+                        if arguments.len() != 1 {
+                            return Ok(None);
+                        }
+                        let Some(payload) = argument(0) else {
+                            return Ok(None);
+                        };
+                        Shape::Transparent(payload)
                     }
                     BuiltinType::Packed | BuiltinType::Shared => {
                         let Some(payload) = argument(0) else {

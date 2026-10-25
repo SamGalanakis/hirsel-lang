@@ -575,3 +575,97 @@ pub fn main()->u64 {
         );
     });
 }
+
+#[test]
+fn source_factory_expands_reviewed_arena_callbacks_and_keeps_scope_journal_demand() {
+    with_compiler_stack(|| {
+        for operation in ["arena.with", "arena.bounded"] {
+            let (reader, path) = source(&format!(
+                r#"
+pub fn main()->{} {{
+  {}({}fn(a:Arena)->Region[u64] {{
+    let root=7u64
+    arena.seal(take a,take root)
+  }})
+}}
+"#,
+                if operation == "arena.with" {
+                    "Region[u64]"
+                } else {
+                    "Result[Region[u64],OutOfSpace]"
+                },
+                operation,
+                if operation == "arena.with" {
+                    ""
+                } else {
+                    "0u64,"
+                }
+            ));
+            let front = Front::new(&reader);
+            let mut graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+                panic!("scalar ports")
+            })
+            .unwrap();
+            assert_eq!(graph.contexts.len(), 2);
+            assert_eq!(graph.operations.len(), 2);
+            assert_eq!(graph.closures.len(), 1);
+            assert_eq!(graph.targets.len(), 1);
+            let callback = &graph.requests[graph.closures[0].target.index()];
+            assert_eq!(
+                callback.declaration().contract().unwrap().inventory,
+                [hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(
+                    0
+                )]
+            );
+            assert!(
+                graph.requests[0].aware_key().is_some(),
+                "scope must retain its internal journal demand"
+            );
+            let mut simulated = Simulated {
+                front: &front,
+                unavailable: false,
+                redirect: None,
+                signature_override: None,
+            };
+            graph
+                .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
+                    panic!("scalar ports")
+                })
+                .unwrap();
+            let saved = graph.targets.pop().unwrap();
+            assert!(
+                graph
+                    .recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![]))
+                    .is_err()
+            );
+            graph.targets.push(saved);
+            let original = front.signature(&DefPath::core(operation)).unwrap();
+            let mut forged = (*original).clone();
+            if let hirsel_types::SignatureKind::Function(function) = &mut forged.kind {
+                function.allocation = hirsel_types::Allocation::MayAllocate;
+            } else {
+                unreachable!()
+            }
+            simulated.signature_override = Some(Arc::new(forged));
+            assert!(matches!(
+                named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+                Err(SourceError::Malformed(
+                    "receipt operation declaration differs from reviewed core"
+                ))
+            ));
+        }
+        let (reader, path) = source("pub fn main()->u64 { arena.with(fn(a:Arena)->u64 {7u64}) }");
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar ports")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 2);
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
+    });
+}

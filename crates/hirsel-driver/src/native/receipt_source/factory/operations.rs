@@ -6,14 +6,20 @@ use hirsel_rc::sealed_source::demand::{ExternalDemand, SourceCall};
 use hirsel_tir::Callee;
 use hirsel_types::{GenericArgument, UseKind};
 
+pub(super) enum Demand {
+    Seal(ExternalDemand),
+    ArenaScope { callback: u32 },
+}
+
 pub(super) fn expand(
     provider: &dyn provider::Provider,
     call: &SourceCall,
-) -> Result<Option<(OperationId, ExternalDemand)>, SourceError> {
+) -> Result<Option<(OperationId, Demand)>, SourceError> {
     let Callee::Definition { path, arguments } = &call.callee else {
         return Ok(None);
     };
-    if !path.is_core("arena.seal") {
+    if !path.is_core("arena.seal") && hirsel_types::core_roles::arena_scope_callback(path).is_none()
+    {
         return Ok(None);
     }
     let registry = hirsel_engine::registry::BuiltinRegistry::shared();
@@ -36,6 +42,29 @@ pub(super) fn expand(
             "receipt operation declaration differs from reviewed core",
         ));
     }
+    if let Some(callback) = hirsel_types::core_roles::arena_scope_callback(path) {
+        if !matches!(arguments.as_slice(), [GenericArgument::Type(_)])
+            || call.environment.is_some()
+            || call.arguments.len() != callback as usize + 1
+            || !(0..=callback).all(|ordinal| {
+                call.arguments.get(&ordinal).is_some_and(|argument| {
+                    matches!(argument.usage, UseKind::Borrow | UseKind::Copy)
+                })
+            })
+            || call.result.is_none()
+        {
+            return Err(SourceError::Malformed(
+                "receipt arena scope original call differs",
+            ));
+        }
+        return Ok(Some((
+            OperationId {
+                definition: path.clone(),
+                declaration_digest: reviewed.fingerprint,
+            },
+            Demand::ArenaScope { callback },
+        )));
+    }
     if !matches!(arguments.as_slice(), [GenericArgument::Type(_)])
         || call.environment.is_some()
         || call.arguments.len() != 2
@@ -55,10 +84,10 @@ pub(super) fn expand(
             definition: path.clone(),
             declaration_digest: reviewed.fingerprint,
         },
-        ExternalDemand {
+        Demand::Seal(ExternalDemand {
             parameters: vec![1],
             inventory: vec![0],
             ..Default::default()
-        },
+        }),
     )))
 }

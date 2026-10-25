@@ -374,20 +374,41 @@ pub fn named_graph(
         for block in blocks {
             let context = &contexts[index];
             let call = &context.source.demand().projection().calls()[&block];
-            if let Some((operation, demand)) = operations::expand(provider, call)? {
-                calls.insert(
-                    block,
-                    hirsel_rc::sealed_source::contract::registry::Expansion::External(demand),
-                );
-                operations.push(OperationObservation {
-                    caller: id,
-                    block,
-                    operation,
-                });
-                continue;
-            }
-            let indirect = matches!(call.callee, hirsel_tir::Callee::Indirect { .. });
-            let selected = code.targets(block)?;
+            let operation = operations::expand(provider, call)?;
+            let scope = match operation {
+                Some((operation, operations::Demand::Seal(demand))) => {
+                    calls.insert(
+                        block,
+                        hirsel_rc::sealed_source::contract::registry::Expansion::External(demand),
+                    );
+                    operations.push(OperationObservation {
+                        caller: id,
+                        block,
+                        operation,
+                    });
+                    continue;
+                }
+                Some((operation, operations::Demand::ArenaScope { callback })) => {
+                    operations.push(OperationObservation {
+                        caller: id,
+                        block,
+                        operation,
+                    });
+                    Some(callback)
+                }
+                None => None,
+            };
+            let indirect =
+                scope.is_some() || matches!(call.callee, hirsel_tir::Callee::Indirect { .. });
+            let selected = if let Some(callback) = scope {
+                let argument = call
+                    .arguments
+                    .get(&callback)
+                    .ok_or(SourceError::Malformed("receipt arena callback argument"))?;
+                code.callback_targets(block, callback, argument.local)?
+            } else {
+                code.targets(block)?
+            };
             let mut targets = Vec::new();
             let mut generated = None;
             for selected in selected {
@@ -435,7 +456,12 @@ pub fn named_graph(
             targets.sort_unstable();
             targets.dedup();
             use hirsel_rc::sealed_source::contract::registry::Expansion;
-            let expansion = if let Some((selection, target)) = generated {
+            let expansion = if let Some(callback) = scope {
+                Expansion::ArenaScope {
+                    callback,
+                    targets: targets.clone(),
+                }
+            } else if let Some((selection, target)) = generated {
                 if targets != [target] {
                     return Err(SourceError::Malformed(
                         "receipt direct generated call has multiple targets",

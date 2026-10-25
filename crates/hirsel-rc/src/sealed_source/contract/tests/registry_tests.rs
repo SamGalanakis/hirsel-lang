@@ -693,3 +693,97 @@ fn generated_links_keep_original_declaration_and_selected_body_distinct() {
         .unwrap();
     assert_eq!(registry.solve().unwrap().len(), 2);
 }
+
+#[test]
+fn arena_scope_expansions_refuse_wrong_original_identity_slot_and_grant_entry() {
+    let (types, _, scalar, arena) = types();
+    let callable = types.intern(Type::with_kind(TypeKind::Function(function(
+        &[(PassingMode::Borrow, arena)],
+        scalar,
+    ))));
+    let caller = |operation: &str| {
+        let mut source = body(&[callable, scalar], 1);
+        call(&mut source, 0, &[(0, UseKind::Borrow)], Some(1));
+        if let Terminator::Call { callee, .. } = &mut source.blocks[0].terminator {
+            *callee = Callee::Definition {
+                path: DefPath::core(operation),
+                arguments: vec![],
+            };
+        }
+        Fixture::named(&types, source, &[PassingMode::Borrow], operation, 2)
+    };
+    let scope = caller("arena.with");
+    let foreign = caller("user_arena_with");
+    let good = Fixture::named(
+        &types,
+        body(&[arena, scalar], 1),
+        &[PassingMode::Borrow],
+        "ordinary_arena_callback",
+        2,
+    );
+    let wrong_type = Fixture::named(
+        &types,
+        body(&[scalar, scalar], 1),
+        &[PassingMode::Borrow],
+        "wrong_callback_type",
+        2,
+    );
+    let wrong_arity = Fixture::named(
+        &types,
+        body(&[arena, scalar, scalar], 2),
+        &[PassingMode::Borrow; 2],
+        "wrong_callback_arity",
+        2,
+    );
+    let mut wrong_grant_body = body(&[arena, scalar], 1);
+    wrong_grant_body.arena_scope_grant = Some(ArenaScopeGrant {
+        intrinsic: DefPath::core("arena.bounded"),
+        callback_parameter: ParamId(1),
+        arena_parameter: ParamId(0),
+    });
+    let wrong_grant = Fixture::named(
+        &types,
+        wrong_grant_body,
+        &[PassingMode::Borrow],
+        "wrong_callback_grant",
+        2,
+    );
+    let mut registry = Registry::default();
+    let scope = register(&mut registry, &scope, &types);
+    let foreign = register(&mut registry, &foreign, &types);
+    let good = register(&mut registry, &good, &types);
+    let wrong_type = register(&mut registry, &wrong_type, &types);
+    let wrong_arity = register(&mut registry, &wrong_arity, &types);
+    let wrong_grant = register(&mut registry, &wrong_grant, &types);
+    for (caller, callback, targets) in [
+        (foreign, 0, vec![good]),
+        (scope, 1, vec![good]),
+        (scope, 0, vec![]),
+        (scope, 0, vec![wrong_type]),
+        (scope, 0, vec![wrong_arity]),
+        (scope, 0, vec![wrong_grant]),
+    ] {
+        assert!(
+            registry
+                .resolve(
+                    caller,
+                    BTreeMap::from([(0, Expansion::ArenaScope { callback, targets })]),
+                    BTreeMap::new()
+                )
+                .is_err()
+        );
+    }
+    registry
+        .resolve(
+            scope,
+            BTreeMap::from([(
+                0,
+                Expansion::ArenaScope {
+                    callback: 0,
+                    targets: vec![good],
+                },
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+}

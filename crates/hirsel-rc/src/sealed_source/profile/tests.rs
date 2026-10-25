@@ -386,3 +386,53 @@ fn boundary_handles_keep_payload_profiles_separate_from_seal_admission() {
         Err(SourceError::Malformed("boundary Arena declaration differs"))
     );
 }
+
+#[test]
+fn boundary_nested_region_variants_keep_callable_profiles_without_payload_admission() {
+    let types = TypeInterner::new(None);
+    let leaf = scalar(&types);
+    let callable = function(&types, leaf);
+    let region = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Region,
+        arguments: vec![GenericArgument::Type(callable)].into(),
+    }));
+    // The same graph shape as a Result[Region[fn...], error] representation.
+    let wrapper = types.intern(Type::with_kind(TypeKind::Variant(
+        vec![
+            Variant {
+                name: "Ok".into(),
+                fields: vec![(Some("value".into()), region)].into(),
+            },
+            Variant {
+                name: "Error".into(),
+                fields: vec![(Some("error".into()), leaf)].into(),
+            },
+        ]
+        .into(),
+    )));
+    let profile = boundary(&types, wrapper, &mut |_| Ok(None), &mut |ty| {
+        assert_eq!(ty, callable);
+        Ok(vec![case(&types, "nested_boundary_callable", None)])
+    })
+    .unwrap();
+    assert_eq!(profile.root, closed_storage_type(&types, wrapper).unwrap());
+    assert_eq!(profile.functions.len(), 1);
+    assert!(derive(&types, wrapper, &mut |_| Ok(None), &mut |_| Ok(vec![])).is_err());
+    assert!(
+        hirsel_layout::structural::derive(&types, wrapper, &mut |_| Ok(None))
+            .unwrap()
+            .is_none()
+    );
+    // Allowing a handle in a boundary does not make it a permitted owned
+    // capture inside a resource-free callable payload.
+    assert!(
+        boundary(&types, callable, &mut |_| Ok(None), &mut |_| {
+            Ok(vec![case(
+                &types,
+                "forged_resource_capture",
+                Some(vec![region]),
+            )])
+        })
+        .is_err()
+    );
+}

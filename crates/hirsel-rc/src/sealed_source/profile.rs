@@ -27,19 +27,33 @@ pub fn derive(
     declarations: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
     callables: &mut impl FnMut(TypeId) -> Result<Vec<CallableCase>, SourceError>,
 ) -> Result<ClosedStorageProfile, SourceError> {
+    derive_impl(types, root, declarations, callables, false)
+}
+
+fn derive_impl(
+    types: &TypeInterner,
+    root: TypeId,
+    declarations: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    callables: &mut impl FnMut(TypeId) -> Result<Vec<CallableCase>, SourceError>,
+    boundary: bool,
+) -> Result<ClosedStorageProfile, SourceError> {
     let root_type = closed_storage_type(types, root)?;
-    let mut pending = vec![root];
+    let mut pending = vec![(root, boundary)];
     let mut visited = HashSet::new();
     let mut functions = BTreeMap::new();
-    while let Some(ty) = pending.pop() {
-        if !visited.insert(ty) {
+    while let Some((ty, boundary)) = pending.pop() {
+        if !visited.insert((ty, boundary)) {
             continue;
         }
-        let shape = hirsel_layout::structural::derive_profile_shape(types, ty, declarations)
-            .map_err(|error| SourceError::Type(format!("{error:?}")))?
-            .ok_or(SourceError::Unsupported(
-                "storage profile needs a complete resource-free source shape",
-            ))?;
+        let shape = if boundary {
+            hirsel_layout::structural::derive_boundary_profile_shape(types, ty, declarations)
+        } else {
+            hirsel_layout::structural::derive_profile_shape(types, ty, declarations)
+        }
+        .map_err(|error| SourceError::Type(format!("{error:?}")))?
+        .ok_or(SourceError::Unsupported(
+            "storage profile needs a complete resource-free source shape",
+        ))?;
         for ty in shape.node_types {
             let Some(row) = types.get(ty) else {
                 return Err(SourceError::Malformed("storage profile source type"));
@@ -84,7 +98,9 @@ pub fn derive(
                         }
                     }
                 }
-                pending.extend(observed.captures);
+                // Owned environment payloads remain resource-free even when the
+                // callable itself is a boundary parameter/result.
+                pending.extend(observed.captures.into_iter().map(|ty| (ty, false)));
                 cases.push(observed.case);
             }
             functions.insert(
@@ -153,7 +169,7 @@ pub fn boundary(
                 .map_err(SourceError::Malformed);
             }
             _ => {
-                let mut profile = derive(types, payload, declarations, callables)?;
+                let mut profile = derive_impl(types, payload, declarations, callables, true)?;
                 profile.root = original;
                 return profile.canonical().map_err(SourceError::Malformed);
             }

@@ -596,3 +596,95 @@ fn compact_projection_preserves_reused_closure_expression_owner_ports() {
         ))
     ));
 }
+
+#[test]
+fn arena_scope_connects_fresh_grant_inventory_and_callback_capture_demand() {
+    let t = types();
+    let mut callback = body(&[t.arena, t.bytes], 1);
+    callback.locals[1].storage = Storage::Capture;
+    call(
+        &mut callback,
+        &[(0, UseKind::Take), (1, UseKind::Take)],
+        None,
+    );
+    let mut scope = body(&[t.callable, t.scalar], 1);
+    call(&mut scope, &[(0, UseKind::Borrow)], Some(1));
+    let mut scope = input(&scope);
+    scope.calls.insert(
+        0,
+        CallDemand::ArenaScope {
+            callback: 0,
+            targets: vec![1],
+        },
+    );
+    let mut callback = input(&callback);
+    callback.calls.insert(0, seal());
+    let requirements = analyze(&[scope, callback]).unwrap();
+    assert_eq!(requirements[0].payload_locals, BTreeSet::from([0]));
+    assert!(requirements[0].inventory_locals.is_empty());
+    assert_eq!(requirements[1].payload_locals, BTreeSet::from([1]));
+    assert_eq!(requirements[1].inventory_locals, BTreeSet::from([0]));
+}
+
+#[test]
+fn arena_scope_preserves_callback_result_dependencies_and_empty_demand() {
+    let t = types();
+    let mut callback = body(&[t.arena, t.bytes], 1);
+    callback.locals[1].storage = Storage::Capture;
+    ret(&mut callback, 1);
+    let mut source = body(&[t.arena, t.callable, t.bytes], 2);
+    call(&mut source, &[(1, UseKind::Borrow)], Some(2));
+    let mut inner = body(&[t.arena, t.callable, t.bytes], 2);
+    call(&mut inner, &[(0, UseKind::Take), (2, UseKind::Take)], None);
+    source.blocks.push(inner.blocks.remove(0));
+    let mut scope = input(&source);
+    scope.calls.insert(
+        0,
+        CallDemand::ArenaScope {
+            callback: 0,
+            targets: vec![1],
+        },
+    );
+    scope.calls.insert(1, seal());
+    let requirements = analyze(&[scope, input(&callback)]).unwrap();
+    assert!(requirements[1].result);
+    assert!(requirements[1].payload_locals.contains(&1));
+    assert!(
+        requirements[0]
+            .payload_locals
+            .is_superset(&BTreeSet::from([1, 2]))
+    );
+
+    source.blocks.pop();
+    let mut scope = input(&source);
+    scope.calls.insert(
+        0,
+        CallDemand::ArenaScope {
+            callback: 0,
+            targets: vec![1],
+        },
+    );
+    assert_eq!(
+        analyze(&[scope, input(&callback)]).unwrap(),
+        vec![Requirements::default(); 2]
+    );
+}
+
+#[test]
+fn arena_scope_unknown_targets_and_wrong_callback_arity_are_not_empty() {
+    let t = types();
+    let mut source = body(&[t.callable, t.scalar], 1);
+    call(&mut source, &[(0, UseKind::Borrow)], Some(1));
+    let wrong = body(&[t.arena, t.bytes], 2);
+    for targets in [vec![], vec![1], vec![2]] {
+        let mut scope = input(&source);
+        scope.calls.insert(
+            0,
+            CallDemand::ArenaScope {
+                callback: 0,
+                targets,
+            },
+        );
+        assert!(analyze(&[scope, input(&wrong)]).is_err());
+    }
+}

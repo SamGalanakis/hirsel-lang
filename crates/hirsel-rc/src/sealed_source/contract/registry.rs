@@ -109,6 +109,10 @@ impl Context<'_> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expansion {
     Targets(Vec<ContextId>),
+    ArenaScope {
+        callback: u32,
+        targets: Vec<ContextId>,
+    },
     /// Actual original CT-5 selection. This is dependency data; the source
     /// query owner independently rechecks it against the current catalogue.
     Generated {
@@ -235,6 +239,41 @@ impl Registry {
             ));
         }
         for (&block, expansion) in &mut calls {
+            if let Expansion::ArenaScope { callback, targets } = expansion {
+                let call = &source.calls()[&block];
+                let hirsel_tir::Callee::Definition { path, .. } = &call.callee else {
+                    return Err(SourceError::Malformed("receipt arena scope identity"));
+                };
+                if hirsel_types::core_roles::arena_scope_callback(path) != Some(*callback)
+                    || !call.arguments.contains_key(callback)
+                    || call.environment.is_some()
+                    || targets.is_empty()
+                {
+                    return Err(SourceError::Malformed(
+                        "receipt arena scope expansion differs",
+                    ));
+                }
+                targets.sort_unstable();
+                targets.dedup();
+                for target in targets {
+                    let target = self.rows.get(target.0).ok_or(SourceError::Malformed(
+                        "receipt arena callback context index",
+                    ))?;
+                    if !matches!(target.entry.parameters(), [p]
+                        if matches!(&p.ty.ty, hirsel_lir::operation::NativeType::Named(path, args)
+                            if path.is_core("Arena") && args.is_empty()))
+                        || target.entry.arena_scope_grant().is_some_and(|grant| {
+                            grant.intrinsic != *path
+                                || grant.callback_parameter.0 != *callback
+                                || grant.arena_parameter.0 != 0
+                        })
+                    {
+                        return Err(SourceError::Malformed(
+                            "receipt arena callback entry differs",
+                        ));
+                    }
+                }
+            }
             if let Expansion::Generated { selection, target } = expansion {
                 let target = self
                     .rows
@@ -319,6 +358,12 @@ impl Registry {
                         (
                             block,
                             match expansion {
+                                Expansion::ArenaScope { callback, targets } => {
+                                    CallDemand::ArenaScope {
+                                        callback: *callback,
+                                        targets: targets.iter().map(|id| id.0).collect(),
+                                    }
+                                }
                                 Expansion::Targets(targets) => {
                                     CallDemand::Bodies(targets.iter().map(|id| id.0).collect())
                                 }

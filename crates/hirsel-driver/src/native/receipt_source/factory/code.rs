@@ -26,6 +26,7 @@ pub(super) struct Code {
     calls: BTreeMap<u32, Callee>,
     indirect: BTreeMap<u32, u32>,
     closures: BTreeMap<u32, ClosureInput>,
+    projected_arguments: HashSet<(u32, u32)>,
 }
 fn root(body: &Body, place: PlaceId) -> Result<usize, SourceError> {
     let place = body
@@ -71,6 +72,7 @@ pub(super) fn capture(
         calls: BTreeMap::new(),
         indirect: BTreeMap::new(),
         closures: BTreeMap::new(),
+        projected_arguments: HashSet::new(),
     };
     for (index, value) in body.locals.iter().enumerate() {
         if matches!(value.storage, Storage::Parameter | Storage::Capture) {
@@ -183,6 +185,14 @@ pub(super) fn capture(
                 }
             }
             for argument in arguments {
+                let place = body
+                    .places
+                    .get(argument.value.place.0 as usize)
+                    .ok_or(SourceError::Malformed("receipt argument place"))?;
+                if !place.projection.is_empty() {
+                    code.projected_arguments
+                        .insert((block_index as u32, argument.parameter.0));
+                }
                 if argument.value.usage == UseKind::Mut {
                     let place = body
                         .places
@@ -222,6 +232,22 @@ impl Code {
             .indirect
             .get(&block)
             .ok_or(SourceError::Malformed("receipt indirect source selector"))?;
+        self.local_targets(root)
+    }
+    pub fn callback_targets(
+        &self,
+        block: u32,
+        parameter: u32,
+        local: u32,
+    ) -> Result<Vec<Target>, SourceError> {
+        if self.projected_arguments.contains(&(block, parameter)) {
+            return Err(SourceError::Unsupported(
+                "receipt callback needs original projected producer expansion",
+            ));
+        }
+        self.local_targets(local)
+    }
+    fn local_targets(&self, root: u32) -> Result<Vec<Target>, SourceError> {
         let mut active = HashSet::new();
         let mut done = HashSet::new();
         let mut pending = vec![(root, false)];

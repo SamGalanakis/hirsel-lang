@@ -28,6 +28,10 @@ pub enum CallDemand {
     /// All possible original targets at this call, including indirect targets.
     /// No clone-budget truncation is permitted in this independently built set.
     Bodies(Vec<usize>),
+    /// Reviewed arena scope supplies the callback's Arena parameter. The
+    /// callback operand carries the scope's internal journal requirement;
+    /// it is not a source Arena value or a physical environment recipe.
+    ArenaScope { callback: u32, targets: Vec<usize> },
     /// Source operation expansion, including foreign reconstruction/adapters.
     /// An empty expansion means independently known empty, never unavailable.
     External(ExternalDemand),
@@ -156,6 +160,42 @@ impl Graph<'_> {
                     .ok_or(SourceError::Malformed("demand source argument selector"))
             };
             match expansion {
+                CallDemand::ArenaScope { callback, targets } => {
+                    if targets.is_empty() || call.environment.is_some() {
+                        return Err(SourceError::Unsupported(
+                            "demand arena scope needs complete original callbacks",
+                        ));
+                    }
+                    let callback = actual(*callback)?;
+                    for &target in targets {
+                        self.target(target)?;
+                        let [grant] = bodies[target].source.parameters.as_slice() else {
+                            return Err(SourceError::Malformed("demand arena callback arity"));
+                        };
+                        // A demanded grant journal must reach the source scope
+                        // call even when the callback has no captured payload.
+                        let grant = self.local(target, *grant, true)?;
+                        let scope = self.local(body, callback.local, false)?;
+                        self.edge(grant, scope);
+                        for &local in &bodies[target].source.captures {
+                            let formal = self.local(target, local, false)?;
+                            let input = self.local(body, callback.local, false)?;
+                            self.edge(formal, input);
+                            if callback.usage == UseKind::Mut {
+                                self.edge(input, formal);
+                            }
+                            let formal = self.local(target, local, true)?;
+                            let input = self.local(body, callback.local, true)?;
+                            self.both(formal, input);
+                        }
+                        if let Some(returned) = call.result {
+                            let output = self.local(body, returned, false)?;
+                            self.edge(output, self.result(target, false));
+                            let output = self.local(body, returned, true)?;
+                            self.both(output, self.result(target, true));
+                        }
+                    }
+                }
                 CallDemand::Bodies(targets) => {
                     if targets.is_empty() {
                         return Err(SourceError::Unsupported(
