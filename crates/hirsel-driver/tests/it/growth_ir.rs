@@ -739,9 +739,14 @@ fn a_byte_list_frozen_into_a_built_element_allocates_nothing_per_element() {
         "    list.push(mut items, Message(",
         "    failure.check(list.len(payload) == length, TextInvariant())\n    list.push(mut items, Message(",
     );
+    // The builder's own geometric growth (`hirsel_rt_v2_block_grow` on the
+    // cold edge of a field's capacity check) is the room the variable-length
+    // payloads take in place; it is no payload block.
     let blockwise = |l: &str| {
         callee(l).is_some_and(|c| {
-            ALLOCATING.contains(&c) || c == "hirsel_rt_v2_free" || c == "hirsel_rt_v2_release"
+            (ALLOCATING.contains(&c) && c != "hirsel_rt_v2_block_grow")
+                || c == "hirsel_rt_v2_free"
+                || c == "hirsel_rt_v2_release"
         })
     };
     for target in targets() {
