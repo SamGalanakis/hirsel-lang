@@ -597,6 +597,7 @@ pub(super) fn install(
     ledger: Arc<InspectionLedger>,
     scratch_parent: &std::path::Path,
     toolchain: Option<&Arc<crate::native::Toolchain>>,
+    host_toolchain: bool,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering } => (*lowering, false),
@@ -625,6 +626,19 @@ pub(super) fn install(
     ) {
         Ok(store) => Arc::new(store),
         Err(error) => return Err(loading.failed(ToolError::Io(error))),
+    };
+    // Host requests select tools against this graph's admitted provider before
+    // loading source inputs. Explicit selectors never acquire ambient tools.
+    let selected_toolchain = match (&request.operation, toolchain, host_toolchain) {
+        (
+            CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native),
+            None,
+            true,
+        ) => match crate::native::Toolchain::for_host_request(&native.target, store.clone()) {
+            Ok(tools) => Some(Arc::new(tools)),
+            Err(error) => return Err(loading.failed(ToolError::Runtime(error.to_string()))),
+        },
+        _ => toolchain.cloned(),
     };
     let mut selected_config = config.clone();
     selected_config.store = store.clone();
@@ -862,7 +876,7 @@ pub(super) fn install(
                 native_request.clone(),
                 purpose,
                 config.verify_store,
-                toolchain.cloned().ok_or_else(|| {
+                selected_toolchain.ok_or_else(|| {
                     ToolError::Runtime("native request requires its selected toolchain".into())
                 })?,
                 footprint,

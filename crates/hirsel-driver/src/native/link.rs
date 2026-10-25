@@ -238,6 +238,18 @@ pub(crate) fn checked(stage: StageName, command: &mut Command) -> Result<(), Nat
 }
 
 impl Toolchain {
+    /// Resolve an ordinary host request using its already admitted provider.
+    /// The runtime cache directory holds artifacts, never another store budget.
+    pub(crate) fn for_host_request(
+        target: &TargetSpec,
+        store: std::sync::Arc<dyn hirsel_engine::store::ResultStore>,
+    ) -> Result<Self, NativeError> {
+        let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
+            .map(PathBuf::from)
+            .unwrap_or_else(super::runtime_cache::default_directory);
+        Self::in_tree_with_products(&cache, &[target], &[RuntimeBuild::default()], None, store)
+    }
+
     /// The toolchain of a source checkout: the pinned LLVM prefix
     /// (`LLVM_SYS_231_PREFIX`), explicit cross-tool inputs, and the runtime
     /// archive of each listed target: Buck2's under `HIRSEL_RUNTIME_ARCHIVES`, or

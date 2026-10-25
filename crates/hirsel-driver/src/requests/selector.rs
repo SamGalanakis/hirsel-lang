@@ -25,6 +25,7 @@ pub struct CompilerRequests {
     limits: RequestLimits,
     scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
+    host_toolchain: bool,
 }
 // Host constructors share one process allowance, including different Sessions.
 // Capturing the guard policy once prevents each source revision from creating
@@ -43,7 +44,9 @@ impl CompilerRequests {
             (ProcessBudget::new(cap.saturating_sub(cap / 4)), cap)
         });
         let limits = host_limits(*cap, config.jobs.get());
-        Self::new(compiler, config, budget.clone(), limits)
+        let mut selected = Self::new(compiler, config, budget.clone(), limits);
+        selected.host_toolchain = true;
+        selected
     }
     pub fn input_limits(&self) -> InputLimits {
         InputLimits {
@@ -73,6 +76,7 @@ impl CompilerRequests {
             limits,
             scratch_parent: std::env::temp_dir(),
             toolchain: None,
+            host_toolchain: false,
         }
     }
     /// Physical request transport policy, captured before any source read.
@@ -154,6 +158,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let limits = self.limits;
         let scratch_parent = &self.scratch_parent;
         let toolchain = self.toolchain.as_ref();
+        let host_toolchain = self.host_toolchain;
         self.graphs.select(request, |budget| {
             super::source_graph::install(
                 compiler,
@@ -164,6 +169,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
                 ledger,
                 scratch_parent,
                 toolchain,
+                host_toolchain,
             )
         })
     }
