@@ -1545,6 +1545,8 @@ impl Lowering<'_, '_> {
         }
         let whole_release = matches!(actions.as_slice(), [Action::Release { path: released, moved, .. }]
             if self.facts.slot_of(address).is_some_and(|(_, original)| released == original) && moved.is_empty());
+        let whole_finalizer = matches!(actions.as_slice(), [Action::Finalize { path: finalized, .. }]
+            if self.facts.slot_of(address).is_some_and(|(_, original)| finalized == original));
         let version = match s.versions {
             Versions::One(v) => Some(v),
             _ if actions.is_empty() => None,
@@ -1574,10 +1576,14 @@ impl Lowering<'_, '_> {
                 if_live: false,
             });
         }
-        let release =
-            (whole_release && at == b).then(|| hirsel_lir::ownership_trace::Point::ReleaseDrop {
+        let release = (whole_release && at == b)
+            .then(|| hirsel_lir::ownership_trace::Point::ReleaseDrop {
                 block: at,
                 index: self.ed.code[at.index()].len() as u32 - 1,
+            })
+            .or_else(|| {
+                whole_finalizer
+                    .then_some(hirsel_lir::ownership_trace::Point::FinalizerDrop { block: b })
             });
         report.splice(b, i, at, self.ed.code[at.index()].len(), release)?;
         self.ed.code[at.index()].extend(tail);

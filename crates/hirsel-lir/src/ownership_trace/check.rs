@@ -79,11 +79,16 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
                 return Err(Error::IdentityRewrite(id));
             }
         }
-        if matches!(new.point, Point::ReleaseDrop { .. }) {
+        let form = drop_form(before, old.point);
+        let replacement = drop_form(after, new.point);
+        if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2))) {
+            return Err(Error::InvalidTransport(id));
+        }
+        let old_anchor = drop_anchor(before, old.point);
+        let new_anchor = drop_anchor(after, new.point);
+        if old_anchor.is_some() || new_anchor.is_some() {
             // This typed expansion is not an arbitrary relocation permit. Its
             // source must be the same semantic cleanup action and address.
-            let old_anchor = drop_anchor(before, old.point);
-            let new_anchor = drop_anchor(after, new.point);
             if old_anchor.is_none() || old_anchor != new_anchor {
                 return Err(Error::InvalidTransport(id));
             }
@@ -264,6 +269,12 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 Inst::Release { value, live: MaskRef::All, .. },
             ]) if result == value && same(Drop, Address(*address)))
         }
+        Point::FinalizerDrop { block } => {
+            let Some((address, _)) = super::finalizer::begin(unit, block) else {
+                return Err(Error::InvalidPoint(m.id));
+            };
+            same(Drop, Address(address)) && super::finalizer::exits(unit, block, address).is_some()
+        }
         Point::Edge(id) => {
             let edge = unit
                 .tables
@@ -315,6 +326,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
     match point {
         Point::Entry => block_site(unit.entry),
+        Point::FinalizerDrop { block } => cleanup(super::finalizer::begin(unit, block)?.1),
         Point::Instruction { block, index, .. } | Point::ReleaseDrop { block, index } => {
             let inst = unit
                 .blocks
@@ -350,13 +362,17 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
 // Exact cleanup identity is stricter than equal source ranges: two actions of
 // one source statement may have the same span and still name different drops.
 fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
-    let (block, index, lowered) = match point {
+    if let Point::FinalizerDrop { block } = point {
+        let (_, anchor) = super::finalizer::begin(unit, block)?;
+        return unit.tables.cleanup_anchors.get(anchor.index());
+    }
+    let (block, index, moment) = match point {
         Point::Instruction {
             block,
             index,
-            moment: Moment::Before,
-        } => (block, index, false),
-        Point::ReleaseDrop { block, index } => (block, index, true),
+            moment,
+        } => (block, index, moment),
+        Point::ReleaseDrop { block, index } => (block, index, Moment::Before),
         _ => return None,
     };
     let instruction = unit
@@ -365,14 +381,14 @@ fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnch
         .instructions
         .get(&unit.instructions)?
         .get(index as usize)?;
-    let anchor = match (instruction, lowered) {
+    let anchor = match (instruction, moment) {
         (
             Inst::Drop {
                 anchor,
                 if_live: false,
                 ..
             },
-            false,
+            Moment::Before,
         )
         | (
             Inst::Release {
@@ -380,9 +396,36 @@ fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnch
                 live: MaskRef::All,
                 ..
             },
-            true,
-        ) => *anchor,
+            Moment::Before,
+        )
+        | (Inst::Reset { anchor, .. }, Moment::Before)
+        | (Inst::FinalizeEnd { anchor, .. }, Moment::After) => *anchor,
         _ => return None,
     };
     unit.tables.cleanup_anchors.get(anchor.index())
+}
+
+// A bundled logical drop cannot be reduced to one of its physical exits.
+// Only a semantic Drop may expand to a checked release/finalizer transport.
+fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
+    match point {
+        Point::ReleaseDrop { .. } => Some(1),
+        Point::FinalizerDrop { .. } => Some(2),
+        Point::Instruction {
+            block,
+            index,
+            moment: Moment::Before,
+        } if matches!(
+            unit.blocks
+                .get(block.index())?
+                .instructions
+                .get(&unit.instructions)?
+                .get(index as usize)?,
+            Inst::Drop { .. }
+        ) =>
+        {
+            Some(0)
+        }
+        _ => None,
+    }
 }

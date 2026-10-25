@@ -70,6 +70,9 @@ pub(crate) fn finish<A: Stage, B: Stage>(
                 Point::CallEntered(block) => Point::CallEntered(remap_block(block)?),
                 Point::CallReturned(block) => Point::CallReturned(remap_block(block)?),
                 Point::Return(block) => Point::Return(remap_block(block)?),
+                Point::FinalizerDrop { block } => Point::FinalizerDrop {
+                    block: remap_block(block)?,
+                },
             };
         relocations.push(Relocation {
             id: observation.marker.id,

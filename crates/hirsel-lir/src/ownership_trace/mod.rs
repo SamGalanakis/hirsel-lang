@@ -26,9 +26,10 @@ use std::collections::BTreeMap;
 
 mod check;
 pub use check::{check, check_transform};
+mod finalizer;
 pub mod native;
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -101,6 +102,12 @@ pub enum Point {
         block: BlockId,
         index: u32,
     },
+    /// One semantic drop whose inline finalizer has mutually exclusive normal,
+    /// failed and (for source finalizers) frame-rejection exits. The marker is
+    /// committed after FinalizeEnd on the exit actually taken, never at entry.
+    FinalizerDrop {
+        block: BlockId,
+    },
 }
 snapshot_enum!(Point {
     Entry,
@@ -109,7 +116,8 @@ snapshot_enum!(Point {
     CallEntered(block),
     CallReturned(block),
     Return(block),
-    ReleaseDrop { block, index }
+    ReleaseDrop { block, index },
+    FinalizerDrop { block }
 });
 
 /// At Create/Drop `token == owner`. At Move `token` is the previous shadow
@@ -205,6 +213,30 @@ impl<'a> CheckedPlan<'a> {
     }
     pub fn observation(&self, id: MarkerId) -> Option<&'a Observation> {
         self.markers.get(&id).copied()
+    }
+
+    /// Committed physical points for one logical marker. Alternatives retain
+    /// the same id and cannot authorize a semantic transition. Emitters must
+    /// use the checked unit, not retarget a plan to another body.
+    pub fn commits<S: Stage>(&self, unit: &LirUnit<S>, id: MarkerId) -> Result<Vec<Point>, Error> {
+        if unit.digest() != self.plan.unit {
+            return Err(Error::StalePlan);
+        }
+        let observation = self.observation(id).ok_or(Error::MissingMarker(id))?;
+        match observation.point {
+            Point::FinalizerDrop { block } => {
+                let Location::Address(address) = observation.marker.token else {
+                    return Err(Error::InvalidBinding(id));
+                };
+                finalizer::exits(unit, block, address).ok_or(Error::InvalidBinding(id))
+            }
+            Point::ReleaseDrop { block, index } => Ok(vec![Point::Instruction {
+                block,
+                index,
+                moment: Moment::Before,
+            }]),
+            point => Ok(vec![point]),
+        }
     }
 }
 

@@ -1644,3 +1644,261 @@ fn ownership_trace_pipeline_refuses_forged_attribution_at_the_first_boundary() {
     );
     assert!(matches!(result, Err(ref error) if error.contains("InvalidSite(MarkerId(0))")));
 }
+
+fn finalizer_transport_fixture() -> (
+    LirUnit<Rc>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+    hirsel_rc::cleanup::Finalizers,
+) {
+    let mut t = Lir::<Rc>::new(&[], None);
+    let finalizer_abi = t.abi(&[(Passing::Borrow, l::RES)], None);
+    let slot = t.slot(l::RES, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let scalar = t.int(ENTRY);
+    let symbol = t.symbol(SymbolKind::Type);
+    let placement = t.heap();
+    let construct = t.construct_site(
+        ConstructorKind::Record(symbol),
+        l::RES,
+        &[(0, scalar)],
+        placement,
+    );
+    let resource = t.owned(l::RES);
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Construct {
+            result: resource,
+            construct,
+            failure,
+        },
+    );
+    t.store(ENTRY, address, resource, slot);
+    let cleanup = t.cleanup(&[]);
+    let failure = t.failure(cleanup);
+    let anchor = t.cleanup_anchor();
+    t.builder.push(
+        ENTRY,
+        Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+    );
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let operations = t.operations.clone();
+    let (before, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let before = hirsel_lir::validate::validate(before, &inputs)
+        .unwrap()
+        .into_raw();
+    let index = before.blocks[0]
+        .instructions
+        .get(&before.instructions)
+        .unwrap()
+        .iter()
+        .position(|instruction| matches!(instruction, Inst::Drop { .. }))
+        .unwrap() as u32;
+    let plan = Plan::new(
+        &before,
+        vec![Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index,
+                moment: Moment::Before,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: before.tables.cleanup_anchors[anchor.index()].site,
+                kind: Kind::Drop,
+                token: Location::Address(address),
+                owner: Location::Address(address),
+            },
+        }],
+    );
+    let finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
+        l::RES,
+        hirsel_rc::cleanup::Finalizer {
+            origin: UnitOrigin::Source,
+            definition: support::path("Res"),
+            instance: support::hash("Res.drop"),
+            abi: finalizer_abi,
+        },
+    )]));
+    let ordinary = hirsel_rc::cleanup::lower(before.clone(), &table, &finalizers).unwrap();
+    let violations = hirsel_lir::validate::check(&ordinary, &inputs);
+    assert!(
+        violations.is_empty(),
+        "ordinary finalizer output: {violations:?}"
+    );
+    (before, plan, table, finalizers)
+}
+
+#[test]
+fn ownership_trace_finalizer_has_one_identity_on_all_exclusive_completion_paths() {
+    let (before, input, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let ordinary = hirsel_rc::cleanup::lower_indexed(before.clone(), &finalizers, &index).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::cleanup::lower_observed(before.clone(), &finalizers, &index, &input).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations[0].marker, output.observations[0].marker);
+    assert_eq!(output.observations.len(), 1);
+    assert!(matches!(
+        output.observations[0].point,
+        Point::FinalizerDrop { .. }
+    ));
+    let checked = check_transform(&before, &input, &after, &output, Some(&recipe)).unwrap();
+    let commits = checked.commits(&after, MarkerId(0)).unwrap();
+    assert_eq!(commits.len(), 3, "normal, failure, and rejected frame");
+    for commit in commits {
+        let Point::Instruction {
+            block,
+            index,
+            moment: Moment::After,
+        } = commit
+        else {
+            panic!("{commit:?}")
+        };
+        assert!(matches!(
+            after.blocks[block.index()]
+                .instructions
+                .get(&after.instructions)
+                .unwrap()[index as usize],
+            Inst::FinalizeEnd { .. }
+        ));
+    }
+    let decoded: Plan = hirsel_codec::from_text(&hirsel_codec::to_text(&output)).unwrap();
+    assert_eq!(decoded, output);
+}
+
+#[test]
+fn ownership_trace_finalizer_refuses_a_missing_failure_completion() {
+    let (before, input, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (mut after, mut output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &input).unwrap();
+    let Point::FinalizerDrop { block } = output.observations[0].point else {
+        unreachable!()
+    };
+    let Terminator::Call { failure, .. } = after.terminators[block.index()] else {
+        unreachable!()
+    };
+    let edge = after.tables.failures[failure.index()].cleanup;
+    let target = after.tables.edges[edge.index()].target;
+    let span = after.blocks[target.index()].instructions;
+    let index = span
+        .get(&after.instructions)
+        .unwrap()
+        .iter()
+        .position(|instruction| matches!(instruction, Inst::FinalizeEnd { .. }))
+        .unwrap();
+    after.instructions[span.start as usize + index] = Inst::FrameLeave;
+    output.unit = after.digest();
+    assert!(check(&after, &output).is_err());
+}
+
+#[test]
+fn ownership_trace_finalizer_refuses_a_rejection_with_the_wrong_cleanup_action() {
+    let (before, input, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (mut after, mut output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &input).unwrap();
+    let Point::FinalizerDrop { block } = output.observations[0].point else {
+        unreachable!()
+    };
+    let failure = after.blocks[block.index()]
+        .instructions
+        .get(&after.instructions)
+        .unwrap()
+        .iter()
+        .find_map(|instruction| match instruction {
+            Inst::FrameEnter { failure } => Some(*failure),
+            _ => None,
+        })
+        .unwrap();
+    let target = after.tables.edges[after.tables.failures[failure.index()].cleanup.index()].target;
+    let span = after.blocks[target.index()].instructions;
+    let index = span
+        .get(&after.instructions)
+        .unwrap()
+        .iter()
+        .position(|instruction| matches!(instruction, Inst::FinalizeEnd { .. }))
+        .unwrap();
+    let mut wrong = after.tables.cleanup_anchors[0].clone();
+    wrong.action += 1;
+    let anchor = CleanupAnchorId(after.tables.cleanup_anchors.len() as u32);
+    after.tables.cleanup_anchors.push(wrong);
+    if let Inst::FinalizeEnd { anchor: at, .. } =
+        &mut after.instructions[span.start as usize + index]
+    {
+        *at = anchor;
+    }
+    output.unit = after.digest();
+    assert!(check(&after, &output).is_err());
+}
+
+#[test]
+fn ownership_trace_finalizer_cannot_replace_a_semantic_drop_with_only_its_normal_exit() {
+    let (before, input, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, mut output, _) =
+        hirsel_rc::cleanup::lower_observed(before.clone(), &finalizers, &index, &input).unwrap();
+    let normal = check(&after, &output)
+        .unwrap()
+        .commits(&after, MarkerId(0))
+        .unwrap()[0];
+    output.observations[0].point = normal;
+    check(&after, &output).unwrap();
+    assert_eq!(
+        check_transform(
+            &before,
+            &input,
+            &after,
+            &output,
+            Some(&recipe(&input, &output))
+        )
+        .unwrap_err(),
+        Error::InvalidTransport(MarkerId(0))
+    );
+}
+
+#[test]
+fn ownership_trace_finalizer_commit_api_refuses_a_retargeted_body() {
+    let (before, input, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let (after, output, _) =
+        hirsel_rc::cleanup::lower_observed(before, &finalizers, &index, &input).unwrap();
+    let checked = check(&after, &output).unwrap();
+    let mut changed = after.clone();
+    changed.header.implementation_revision = support::hash("other source");
+    assert_eq!(
+        checked.commits(&changed, MarkerId(0)).unwrap_err(),
+        Error::StalePlan
+    );
+    assert_eq!(
+        checked.commits(&after, MarkerId(9)).unwrap_err(),
+        Error::MissingMarker(MarkerId(9))
+    );
+}

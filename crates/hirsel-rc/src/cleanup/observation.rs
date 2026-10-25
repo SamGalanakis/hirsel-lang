@@ -121,6 +121,9 @@ impl Reporter for Observations {
                 Point::Return(b) if b == block => Point::Return(tail),
                 Point::CallEntered(b) if b == block => Point::CallEntered(tail),
                 Point::CallReturned(b) if b == block => Point::CallReturned(tail),
+                Point::FinalizerDrop { block: b } if b == block => {
+                    Point::FinalizerDrop { block: tail }
+                }
                 _ => observation.point,
             };
         }
