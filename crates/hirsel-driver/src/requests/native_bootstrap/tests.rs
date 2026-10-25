@@ -188,12 +188,12 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                 NativePlan {
                     options: native::Options::new(target.clone()),
                     policy: ContentHash::of_bytes(b"bootstrap control"),
+                    verify_store: hirsel_engine::store::VerifyStore::Off,
                     opt: hirsel_lir::emission::OptLevel::None,
                     debug: false,
                     verify_backend: true,
                     measurement: false,
                     fuel: false,
-                    foreign: BTreeMap::new(),
                     requested_run: None,
                     backends: vec![CompilationBackend {
                         backend: "cranelift".into(),
@@ -553,6 +553,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                 NativePlan {
                     options: native::Options::new(target.clone()),
                     policy: ContentHash::of_bytes(b"bootstrap control"),
+                    verify_store: hirsel_engine::store::VerifyStore::Off,
                     opt: hirsel_lir::emission::OptLevel::None,
                     debug: false,
                     verify_backend: true,

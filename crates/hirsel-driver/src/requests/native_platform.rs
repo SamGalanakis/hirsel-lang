@@ -81,6 +81,7 @@ pub(super) fn profile_options(
 }
 pub(super) struct NativePlatformInputs<'a> {
     pub purpose: NativePurpose,
+    pub verify_store: hirsel_engine::store::VerifyStore,
     pub request: &'a NativeRequest,
     pub entry: &'a DefPath,
     pub tools: &'a Toolchain,
@@ -218,6 +219,11 @@ impl NativePlatformSelection {
             plan: NativePlan {
                 options,
                 policy: profile_options,
+                verify_store: if request.validation == native::Validation::EveryStage {
+                    hirsel_engine::store::VerifyStore::Recompute
+                } else {
+                    inputs.verify_store
+                },
                 opt: inputs.purpose.opt(request),
                 debug: request.profile == BuildProfile::Debug,
                 verify_backend: true,

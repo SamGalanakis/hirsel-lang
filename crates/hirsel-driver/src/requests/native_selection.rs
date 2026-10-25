@@ -86,6 +86,7 @@ impl NativeSelection {
         source: NativeSourceInputs,
         request: NativeRequest,
         purpose: NativePurpose,
+        verify_store: hirsel_engine::store::VerifyStore,
         tools: Arc<native::Toolchain>,
         footprint: &Footprint,
         allowance: &mut MemoryReservation,
@@ -133,6 +134,7 @@ impl NativeSelection {
             store.clone(),
             NativePlatformInputs {
                 purpose,
+                verify_store,
                 request: &request,
                 entry: &entry,
                 tools: &tools,

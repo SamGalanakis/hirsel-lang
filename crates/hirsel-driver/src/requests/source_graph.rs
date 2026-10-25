@@ -650,6 +650,7 @@ pub(super) fn install(
                 },
                 native_request.clone(),
                 purpose,
+                config.verify_store,
                 toolchain.cloned().ok_or_else(|| {
                     ToolError::Runtime("native request requires its selected toolchain".into())
                 })?,

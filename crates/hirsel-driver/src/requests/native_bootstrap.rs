@@ -38,6 +38,7 @@ const FAILURE: Domain = Domain {
 pub(super) struct NativePlan {
     pub options: native::Options,
     pub policy: ContentHash,
+    pub verify_store: hirsel_engine::store::VerifyStore,
     pub opt: hirsel_lir::emission::OptLevel,
     pub debug: bool,
     pub verify_backend: bool,
@@ -380,7 +381,7 @@ impl NativeBootstrap {
             self.weight,
             admission.arena,
         )?;
-        let compilation = CompilationTasks::new(
+        let compilation = CompilationTasks::new_with_store_verification(
             instances,
             arena,
             Arc::new(source),
@@ -389,6 +390,7 @@ impl NativeBootstrap {
             plan.backends,
             self.weight,
             admission.compilation,
+            plan.verify_store,
         )?;
         self.routing
             .bind(compilation.factories())
