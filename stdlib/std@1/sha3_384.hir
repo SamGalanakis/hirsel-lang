@@ -89,9 +89,11 @@ pub fn digest_hex(data: Bytes) -> unique String uses {} {
 }
 
 // The dictionary that keys HMAC, HKDF and PBKDF2 with this hash.
-pub const hash: std@1/digest.Hash[State, 48] = std@1/digest.Hash(
-  new: new,
-  update: update,
-  finish: finish,
-  block_size: 104
-)
+pub implementation hash: std@1/digest.Digest {
+  type State = State
+  size bytes = 48
+  size block = 104
+  new = new
+  update = update
+  finish = finish
+}

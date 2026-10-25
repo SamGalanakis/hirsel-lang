@@ -94,9 +94,9 @@ Go/Go crypto vector copyright and BSD-3-Clause license are recorded in
    Hirsel has no public hash-state serialization. Original input/output bytes,
    iteration counts, table order and identifiers remain. Go's runtime CPU
    implementation selection and `Reset` become fresh Hirsel states; Hirsel has
-   one portable source implementation and consuming `finish`. MD5 has no
-   `hash()` convenience function, so its HMAC fixture supplies the existing
-   public digest dictionary directly (new/update/finish, 64-byte block).
+   one portable source implementation and consuming `finish`. MD5 declares no
+   `digest.Digest` implementation, so its HMAC fixture declares one over its
+   public operations (new/update/finish, 16-byte digest, 64-byte block).
 2. Rust emits small ordinary Hirsel programs using the shared harness instead of
    Go's `testing.T`. Bounded batches avoid giant programs. PBKDF2/Adler use linked
    native execution for full work factors/long inputs, following existing native

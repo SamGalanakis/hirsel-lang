@@ -16,9 +16,11 @@ pub fn main() -> Result[(), ()] {
   same(b"abc", b"abc", true)
   same(b"xbc", b"abc", false)
   same(b"abx", b"abc", false)
-  let tag = std@1/bytes.from_inline(std@1/hmac.mac(std@1/sha1.hash, b"key", b"message"))
+  let tag = std@1/bytes.from_inline(
+    std@1/hmac.mac with (H = std@1/sha1.hash)(b"key", b"message")
+  )
   failure.check(
-    std@1/hmac.verify(std@1/sha1.hash, b"key", b"message", tag),
+    std@1/hmac.verify with (H = std@1/sha1.hash)(b"key", b"message", tag),
     TextInvariant()
   )
   let mut tampered: List[u8] = []
@@ -27,8 +29,7 @@ pub fn main() -> Result[(), ()] {
   }
   tampered[19] = tampered[19] ^ 1
   failure.check(
-    !std@1/hmac.verify(
-      std@1/sha1.hash,
+    !std@1/hmac.verify with (H = std@1/sha1.hash)(
       b"key",
       b"message",
       bytes.from_list(take tampered)

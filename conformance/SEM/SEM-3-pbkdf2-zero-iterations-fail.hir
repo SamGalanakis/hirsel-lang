@@ -1,8 +1,8 @@
 // rule: SEM-3
-// expect: fail SEM-3 at line 13
+// expect: fail SEM-3 at line 12
 // PBKDF2 with zero iterations fails: RFC 8018 requires a positive count.
 pub fn main() -> Result[(), ()] {
-  let key = std@1/pbkdf2.derive(std@1/sha1.hash, b"password", b"salt", 0, 20)
+  let key = std@1/pbkdf2.derive with (H = std@1/sha1.hash)(b"password", b"salt", 0, 20)
   failure.check(bytes.len(key) == 20, TextInvariant())
   Ok(())
 }

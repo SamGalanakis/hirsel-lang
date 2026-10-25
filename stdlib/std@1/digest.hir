@@ -1,8 +1,11 @@
-// A cryptographic hash as an explicit dictionary (GEN-2), like Go's hash.Hash
-// constructor argument to crypto/hmac: HMAC, HKDF and PBKDF2 are generic over it.
-pub type Hash[S: plain + inert, n: size] {
-  new: fn() -> S uses {},
-  update: fn(mut S, Bytes) -> () uses {},
-  finish: fn(take S) -> Inline[u8, n] uses {},
-  block_size: u64,
+// A cryptographic hash as a static implementation contract (GEN-6), like Go's
+// hash.Hash constructor argument to crypto/hmac: HMAC, HKDF and PBKDF2 take an
+// implementation of it and call its operations directly.
+pub signature Digest {
+  type State: plain + inert uses {}
+  size bytes
+  size block
+  fn new() -> State uses {}
+  fn update(mut state: State, data: Bytes) -> () uses {}
+  fn finish(take state: State) -> Inline[u8, bytes] uses {}
 }

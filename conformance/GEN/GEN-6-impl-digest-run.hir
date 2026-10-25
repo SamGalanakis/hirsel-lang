@@ -1,0 +1,34 @@
+// rule: GEN-6
+// expect: run
+// stdout: ok
+// The brief's Digest example over std: a binder function specialized at
+// sha256's implementation calls sha256.finish directly, and reads its size
+// member as a value.
+fn finish[H: implementation std@1/digest.Digest](take s: H.State) -> Inline[u8, H.bytes] uses {} {
+  H.finish(take s)
+}
+
+fn width[H: implementation std@1/digest.Digest]() -> u64 uses {} {
+  H.bytes
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  let s = std@1/sha256.new()
+  let out = finish with (H = std@1/sha256.hash)(take s)
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if width with (H = std@1/sha256.hash)() == 32u64 && out[0] == 0xe3u8 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+fn ignore[E](take e: E) {}

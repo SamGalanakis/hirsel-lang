@@ -122,25 +122,36 @@ blake_shards!("blake2b", GO_BLAKE2B_KEYED, 64;
 blake_shards!("blake2s", GO_BLAKE2S_KEYED, 32;
     blake2s_0: 0, blake2s_1: 1, blake2s_2: 2, blake2s_3: 3);
 
+const MD5_DIGEST: &str = "implementation md5_digest: std@1/digest.Digest {
+  type State = std@1/md5.State
+  size bytes = 16
+  size block = 64
+  new = std@1/md5.new
+  update = std@1/md5.update
+  finish = std@1/md5.finish
+}
+";
+
 fn hmac_case(row: &Value, module: &str, id: String) -> Case {
     let key = bytes(field(row, "key"));
     let msg = bytes(field(row, "msg"));
     let tag = field(row, "tag");
     let len = tag.len() / 2;
-    // MD5 exposes the digest operations but no convenience dictionary constructor.
+    // MD5 exposes the digest operations but no implementation: the suite
+    // declares one (MD5_DIGEST).
     let hash = if module == "md5" {
-        "std@1/digest.Hash(new: std@1/md5.new, update: std@1/md5.update, finish: std@1/md5.finish, block_size: 64)".into()
+        "md5_digest".into()
     } else {
         format!("std@1/{module}.hash")
     };
     let mut body = format!(
-        "let actual = std@1/bytes.from_inline(std@1/hmac.mac({hash}, {key}, {msg}))\n\
+        "let actual = std@1/bytes.from_inline(std@1/hmac.mac with (H = {hash})({key}, {msg}))\n\
          core@1/test.check(t, core@1/bytes.slice(actual, 0, {len}u64) == {})",
         bytes(tag)
     );
     if !id.starts_with("RFC4231.5.") {
         body.push_str(&format!(
-            "\ncore@1/test.check(t, std@1/hmac.verify({hash}, {key}, {msg}, {}))",
+            "\ncore@1/test.check(t, std@1/hmac.verify with (H = {hash})({key}, {msg}, {}))",
             bytes(tag)
         ));
     }
@@ -163,7 +174,7 @@ fn hmac_rfc4231_and_rfc2202() {
         .iter()
         .map(|row| hmac_case(row, field(row, "hash"), field(row, "id").into()))
         .collect();
-    vectors::run("RFC-HMAC", &cases, 0, 1, 8, "");
+    vectors::run("RFC-HMAC", &cases, 0, 1, 8, MD5_DIGEST);
 }
 
 fn wycheproof_hmac(module: &str, json: &str, bits: u64) {
@@ -212,7 +223,7 @@ fn pbkdf2_case(module: &str, row: &Value, id: String) -> Case {
     Case {
         id,
         body: format!(
-            "core@1/test.check(t, std@1/pbkdf2.derive(std@1/{module}.hash, {}, {}, {}u64, {}u64) == {})",
+            "core@1/test.check(t, std@1/pbkdf2.derive with (H = std@1/{module}.hash)({}, {}, {}u64, {}u64) == {})",
             bytes(field(row, "password")),
             bytes(field(row, "salt")),
             row["iterationCount"].as_u64().unwrap(),

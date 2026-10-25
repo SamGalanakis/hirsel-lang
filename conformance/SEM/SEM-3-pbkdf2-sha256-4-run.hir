@@ -2,8 +2,7 @@
 // expect: run
 // RFC 6070 test 6 inputs at 3 iterations under SHA-256: PBKDF2-HMAC-SHA-256, 3 iterations, 16 bytes.
 pub fn main() -> Result[(), ()] {
-  let key = std@1/pbkdf2.derive(
-    std@1/sha256.hash,
+  let key = std@1/pbkdf2.derive with (H = std@1/sha256.hash)(
     b"\x70\x61\x73\x73\x00\x77\x6f\x72\x64",
     b"\x73\x61\x00\x6c\x74",
     3,

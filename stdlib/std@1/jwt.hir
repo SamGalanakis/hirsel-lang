@@ -45,9 +45,15 @@ fn algorithm(key: Key) -> unique String uses {} {
 // golang-jwt ed25519.go:34-78: public keys verify, private keys sign.
 fn make_signature(key: Key, data: Bytes) -> Result[unique Bytes, JwtError] uses {} {
   match key {
-    HS256(secret) => Ok(bytes.from_inline(hmac.mac(sha256.hash, secret, data))),
-    HS384(secret) => Ok(bytes.from_inline(hmac.mac(sha384.hash, secret, data))),
-    HS512(secret) => Ok(bytes.from_inline(hmac.mac(sha512.hash, secret, data))),
+    HS256(secret) => Ok(
+      bytes.from_inline(hmac.mac with (H = sha256.hash)(secret, data))
+    ),
+    HS384(secret) => Ok(
+      bytes.from_inline(hmac.mac with (H = sha384.hash)(secret, data))
+    ),
+    HS512(secret) => Ok(
+      bytes.from_inline(hmac.mac with (H = sha512.hash)(secret, data))
+    ),
     EdDSA(_) => Error(InvalidKey()),
     EdDSAPrivate(private) => {
       if bytes.len(private.seed) != 32 {

@@ -2940,8 +2940,8 @@ Input is absorbed into little-endian lanes, a whole lane at a time where it is
 lane-aligned, and output squeezed a byte at a time. SHA-3 pads with the domain byte
 0x06 and SHAKE with 0x1f, each followed by the final 0x80 bit of pad10*1. The sponge
 has no length field, so update accepts any total length. Keccak has no
-length-extension weakness. The SHA-3 digests declare a `digest.Hash` constant named `hash`,
-whose block size is the rate, so they key HMAC, HKDF and PBKDF2.
+length-extension weakness. The SHA-3 digests declare a `digest.Digest` implementation
+named `hash`, whose block size is the rate, so they key HMAC, HKDF and PBKDF2.
 
 Throughput: one permutation per rate-sized block, each round unrolled over the lanes
 in locals, so SHA3-512 costs nearly twice SHA3-256 per byte and SHAKE128 least; Keccak
@@ -2983,51 +2983,55 @@ slicing-by-8 or carry-less multiply); Adler-32 two additions per byte and two
 remainders per 5552 bytes; xxHash64 four multiply-rotate lanes per 32 bytes. They
 cost a small fraction of a cryptographic digest per byte. There is no bench gate.
 
-## Hash dictionaries, HMAC and key derivation
+## Digest implementations, HMAC and key derivation
 
-`std@1/digest` names a cryptographic hash as an explicit dictionary
-([GEN-2](generics.md#gen-2-dictionaries)), the role Go's `hash.Hash` constructor
-plays for `crypto/hmac`:
+`std@1/digest` names a cryptographic hash as an implementation contract
+([GEN-6](generics.md#implementation-contracts)), the role Go's `hash.Hash`
+constructor plays for `crypto/hmac`:
 
 ```text
-pub type digest.Hash[S: plain + inert, n: size] {
-  new: fn() -> S uses {},
-  update: fn(mut S, Bytes) -> () uses {},
-  finish: fn(take S) -> Inline[u8, n] uses {},
-  block_size: u64,
+pub signature digest.Digest {
+  type State: plain + inert uses {}
+  size bytes
+  size block
+  fn new() -> State uses {}
+  fn update(mut state: State, data: Bytes) -> () uses {}
+  fn finish(take state: State) -> Inline[u8, bytes] uses {}
 }
-const <hash>.hash: digest.Hash[State, n]
+implementation <hash>.hash: digest.Digest
 ```
 
 `sha1`, `sha224`, `sha256`, `sha384`, `sha512`, `sha512_256`, `sha3_224`,
-`sha3_256`, `sha3_384`, `sha3_512`, `blake2b` and `blake2s` each declare `hash`, with block sizes 64, 64, 64, 128, 128, 128, 144, 136, 104, 72, 128 and 64.
-`md5` has none, so it cannot key an HMAC, and the checksums have none. These are explicit [GEN-6](generics.md#gen-6-dictionary-constants) dictionary constants.
-Every operation below is generic over `[S: plain + inert, n: size]`, takes the
-dictionary first, and is ordinary allocating source:
+`sha3_256`, `sha3_384`, `sha3_512`, `blake2b` and `blake2s` each declare `hash`, with
+block sizes 64, 64, 64, 128, 128, 128, 144, 136, 104, 72, 128 and 64. `md5` has none,
+so it keys an HMAC only through an implementation its user declares; the checksums
+have none. Every operation below takes `[H: implementation digest.Digest]`, is called
+as `hmac.mac with (H = sha256.hash)(key, data)`, calls `H`'s operations directly,
+and is ordinary allocating source:
 
 ```text
-fn hmac.new(hash: digest.Hash[S, n], key: Bytes) -> hmac.State[S] uses {}
-fn hmac.update(hash: digest.Hash[S, n], mut state: hmac.State[S], data: Bytes) -> () uses {}
-fn hmac.finish(hash: digest.Hash[S, n], take state: hmac.State[S]) -> Inline[u8, n] uses {}
-fn hmac.mac(hash: digest.Hash[S, n], key: Bytes, data: Bytes) -> Inline[u8, n] uses {}
-fn hmac.verify(hash: digest.Hash[S, n], key: Bytes, data: Bytes, expected: Bytes) -> bool uses {}
-fn hkdf.extract(hash: digest.Hash[S, n], salt: Bytes, secret: Bytes) -> Inline[u8, n] uses {}
-fn hkdf.expand(hash: digest.Hash[S, n], prk: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
-fn hkdf.derive(hash: digest.Hash[S, n], salt: Bytes, secret: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
-fn pbkdf2.derive(hash: digest.Hash[S, n], password: Bytes, salt: Bytes, iterations: u64, length: u64) -> unique Bytes uses {}
+fn hmac.new(key: Bytes) -> hmac.State[H.State] uses {}
+fn hmac.update(mut state: hmac.State[H.State], data: Bytes) -> () uses {}
+fn hmac.finish(take state: hmac.State[H.State]) -> Inline[u8, H.bytes] uses {}
+fn hmac.mac(key: Bytes, data: Bytes) -> Inline[u8, H.bytes] uses {}
+fn hmac.verify(key: Bytes, data: Bytes, expected: Bytes) -> bool uses {}
+fn hkdf.extract(salt: Bytes, secret: Bytes) -> Inline[u8, H.bytes] uses {}
+fn hkdf.expand(prk: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
+fn hkdf.derive(salt: Bytes, secret: Bytes, info: Bytes, length: u64) -> unique Bytes uses {}
+fn pbkdf2.derive(password: Bytes, salt: Bytes, iterations: u64, length: u64) -> unique Bytes uses {}
 fn constant_time.equal(a: Bytes, b: Bytes) -> bool uses {}
 ```
 
 HMAC is RFC 2104: a key longer than the block is hashed first, then the key is
 zero-padded to the block and masked with 0x36 (inner) and 0x5c (outer). The opaque
-`hmac.State[S]` is `plain + inert`, so copying a keyed state reuses its two
+`hmac.State[H.State]` is `plain + inert`, so copying a keyed state reuses its two
 compressed pad blocks; HKDF and PBKDF2 key once and copy per block or iteration.
 `hmac.verify` compares through `constant_time.equal`; comparing tags with `==`
 leaks how many leading bytes match. HKDF is RFC 5869: an empty salt is the RFC's
-default of `n` zero bytes (HMAC pads both identically), and `expand` fails SEM-3
-when `length` exceeds 255 * n. PBKDF2 is RFC 8018 with HMAC as the PRF: block
+default of `H.bytes` zero bytes (HMAC pads both identically), and `expand` fails SEM-3
+when `length` exceeds 255 * H.bytes. PBKDF2 is RFC 8018 with HMAC as the PRF: block
 indices are big-endian 32-bit, `iterations` below 1 and `length` above
-(2^32 - 1) * n fail SEM-3. PBKDF2 is a password-based key derivation function of
+(2^32 - 1) * H.bytes fail SEM-3. PBKDF2 is a password-based key derivation function of
 the 2000s; choose its iteration count for the deployment, as current guidance
 asks for hundreds of thousands with SHA-256.
 

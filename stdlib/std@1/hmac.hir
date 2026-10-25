@@ -1,4 +1,4 @@
-// RFC 2104 HMAC over any digest.Hash, from Go crypto/internal/fips140/hmac
+// RFC 2104 HMAC over any digest.Digest, from Go crypto/internal/fips140/hmac
 // hmac.go (BSD-3-Clause): keys longer than the block are hashed first, then
 // zero-padded to the block and masked with 0x36 and 0x5c.
 pub opaque type State[S: plain + inert]: plain + inert uses {} {
@@ -23,65 +23,61 @@ fn padded(key: Bytes, block_size: u64, pad: u8) -> unique Bytes uses {} {
   core@1/bytes.from_list(take out)
 }
 
-fn keyed[S: plain + inert, n: size](hash: std@1/digest.Hash[S, n], key: Bytes) -> State[
-  S
-] uses {} {
-  let mut inner = hash.new()
-  let mut outer = hash.new()
-  if core@1/bytes.len(key) > hash.block_size {
-    let mut long = hash.new()
-    hash.update(mut long, key)
-    let short = std@1/bytes.from_inline(hash.finish(take long))
-    hash.update(mut inner, padded(short, hash.block_size, 0x36))
-    hash.update(mut outer, padded(short, hash.block_size, 0x5c))
+fn keyed[H: implementation std@1/digest.Digest](key: Bytes) -> State[H.State] uses {} {
+  let mut inner = H.new()
+  let mut outer = H.new()
+  if core@1/bytes.len(key) > H.block {
+    let mut long = H.new()
+    H.update(mut long, key)
+    let short = std@1/bytes.from_inline(H.finish(take long))
+    H.update(mut inner, padded(short, H.block, 0x36))
+    H.update(mut outer, padded(short, H.block, 0x5c))
   } else {
-    hash.update(mut inner, padded(key, hash.block_size, 0x36))
-    hash.update(mut outer, padded(key, hash.block_size, 0x5c))
+    H.update(mut inner, padded(key, H.block, 0x36))
+    H.update(mut outer, padded(key, H.block, 0x5c))
   }
   State(inner: inner, outer: outer)
 }
 
-pub fn new[S: plain + inert, n: size](hash: std@1/digest.Hash[S, n], key: Bytes) -> State[
-  S
-] uses {} {
-  keyed(hash, key)
+pub fn new[H: implementation std@1/digest.Digest](key: Bytes) -> State[H.State] uses {} {
+  keyed with (H = H)(key)
 }
 
-pub fn update[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
-  mut state: State[S],
+pub fn update[H: implementation std@1/digest.Digest](
+  mut state: State[H.State],
   data: Bytes
 ) -> () uses {} {
-  hash.update(mut state.inner, data)
+  H.update(mut state.inner, data)
 }
 
-pub fn finish[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
-  take state: State[S]
-) -> Inline[u8, n] uses {} {
+pub fn finish[H: implementation std@1/digest.Digest](take state: State[H.State]) -> Inline[
+  u8,
+  H.bytes
+] uses {} {
   let State(inner: inner, outer: outer) = take state
   let mut outer_state = outer
-  let inner_digest = hash.finish(take inner)
-  hash.update(mut outer_state, std@1/bytes.from_inline(inner_digest))
-  hash.finish(take outer_state)
+  let inner_digest = H.finish(take inner)
+  H.update(mut outer_state, std@1/bytes.from_inline(inner_digest))
+  H.finish(take outer_state)
 }
 
-pub fn mac[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
-  key: Bytes,
-  data: Bytes
-) -> Inline[u8, n] uses {} {
-  let mut state = new(hash, key)
-  update(hash, mut state, data)
-  finish(hash, take state)
+pub fn mac[H: implementation std@1/digest.Digest](key: Bytes, data: Bytes) -> Inline[
+  u8,
+  H.bytes
+] uses {} {
+  let mut state = new with (H = H)(key)
+  update with (H = H)(mut state, data)
+  finish with (H = H)(take state)
 }
 
 // Compares the MAC of `data` with `expected` through constant_time.equal.
-pub fn verify[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
+pub fn verify[H: implementation std@1/digest.Digest](
   key: Bytes,
   data: Bytes,
   expected: Bytes
 ) -> bool uses {} {
-  std@1/constant_time.equal(std@1/bytes.from_inline(mac(hash, key, data)), expected)
+  std@1/constant_time.equal(
+    std@1/bytes.from_inline(mac with (H = H)(key, data)),
+    expected
+  )
 }

@@ -6,7 +6,10 @@ fn check(key: Bytes, data: Bytes, expected: String) -> () {
     failure.check(false, TextInvariant())
     return
   }
-  failure.check(std@1/hmac.verify(std@1/sha224.hash, key, data, tag), TextInvariant())
+  failure.check(
+    std@1/hmac.verify with (H = std@1/sha224.hash)(key, data, tag),
+    TextInvariant()
+  )
 }
 
 pub fn main() -> Result[(), ()] {

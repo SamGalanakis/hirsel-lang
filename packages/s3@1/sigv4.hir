@@ -27,7 +27,7 @@ fn hash_hex(data: Bytes) -> String uses {} {
 }
 
 fn mac(key: Bytes, data: String) -> Bytes uses {} {
-  bytes.from_inline(hmac.mac(sha256.hash, key, string.as_bytes(data)))
+  bytes.from_inline(hmac.mac with (H = sha256.hash)(key, string.as_bytes(data)))
 }
 
 fn part(text: String, start: u64, end: u64) -> String uses {} {

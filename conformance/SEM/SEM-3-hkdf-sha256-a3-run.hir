@@ -2,8 +2,7 @@
 // expect: run
 // RFC 5869 test case 3 (HKDF-SHA-256), through hkdf.derive.
 pub fn main() -> Result[(), ()] {
-  let okm = std@1/hkdf.derive(
-    std@1/sha256.hash,
+  let okm = std@1/hkdf.derive with (H = std@1/sha256.hash)(
     b"",
     b"\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b\x0b",
     b"",

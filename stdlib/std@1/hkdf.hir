@@ -1,38 +1,36 @@
-// RFC 5869 HKDF over any digest.Hash, from Go crypto/internal/fips140/hkdf
+// RFC 5869 HKDF over any digest.Digest, from Go crypto/internal/fips140/hkdf
 // hkdf.go (BSD-3-Clause).
 // The pseudorandom key: HMAC keyed by `salt` over the input keying material. An
-// empty salt is the RFC's default of `n` zero bytes, which HMAC pads identically.
-pub fn extract[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
-  salt: Bytes,
-  secret: Bytes
-) -> Inline[u8, n] uses {} {
-  std@1/hmac.mac(hash, salt, secret)
+// empty salt is the RFC's default of `H.bytes` zero bytes, which HMAC pads identically.
+pub fn extract[H: implementation std@1/digest.Digest](salt: Bytes, secret: Bytes) -> Inline[
+  u8,
+  H.bytes
+] uses {} {
+  std@1/hmac.mac with (H = H)(salt, secret)
 }
 
 // `length` output bytes, T(1) | T(2) | .. where T(i) = HMAC(prk, T(i-1) | info | i).
-// `length` is at most 255 * n, otherwise SEM-3.
-pub fn expand[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
+// `length` is at most 255 * H.bytes, otherwise SEM-3.
+pub fn expand[H: implementation std@1/digest.Digest](
   prk: Bytes,
   info: Bytes,
   length: u64
 ) -> unique Bytes uses {} {
-  core@1/failure.check(length <= 255 * n, TextInvariant())
-  let keyed = std@1/hmac.new(hash, prk)
+  core@1/failure.check(length <= 255 * H.bytes, TextInvariant())
+  let keyed = std@1/hmac.new with (H = H)(prk)
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, length)
   let mut previous: List[u8] = []
   let mut counter: u8 = 1
   while core@1/list.len(out) < length {
     let mut state = keyed
-    std@1/hmac.update(hash, mut state, core@1/bytes.from_list(take previous))
-    std@1/hmac.update(hash, mut state, info)
-    std@1/hmac.update(hash, mut state, core@1/bytes.from_list([counter]))
-    let block = std@1/hmac.finish(hash, take state)
+    std@1/hmac.update with (H = H)(mut state, core@1/bytes.from_list(take previous))
+    std@1/hmac.update with (H = H)(mut state, info)
+    std@1/hmac.update with (H = H)(mut state, core@1/bytes.from_list([counter]))
+    let block = std@1/hmac.finish with (H = H)(take state)
     previous = []
     let mut i: u64 = 0
-    while i < n {
+    while i < H.bytes {
       core@1/list.push(mut previous, block[i])
       if core@1/list.len(out) < length {
         core@1/list.push(mut out, block[i])
@@ -45,12 +43,15 @@ pub fn expand[S: plain + inert, n: size](
 }
 
 // extract then expand.
-pub fn derive[S: plain + inert, n: size](
-  hash: std@1/digest.Hash[S, n],
+pub fn derive[H: implementation std@1/digest.Digest](
   salt: Bytes,
   secret: Bytes,
   info: Bytes,
   length: u64
 ) -> unique Bytes uses {} {
-  expand(hash, std@1/bytes.from_inline(extract(hash, salt, secret)), info, length)
+  expand with (H = H)(
+    std@1/bytes.from_inline(extract with (H = H)(salt, secret)),
+    info,
+    length
+  )
 }
