@@ -317,6 +317,11 @@ impl RootProducts {
         let environment = snapshot.environment();
         let mut observations = Vec::with_capacity(root.instances.len());
         for owner in &root.instances {
+            let operations = snapshot.instances.operations(owner, &environment)?;
+            let scoped = NativeEnvironment {
+                operations: &operations,
+                ..environment
+            };
             let selected = self
                 .inner
                 .selected
@@ -326,7 +331,7 @@ impl RootProducts {
                 .inner
                 .local
                 .queries
-                .lookup(owner, selected.action, &environment)
+                .lookup(owner, selected.action, &scoped)
                 .ok_or("observation Ready dependency lost current C admission")?;
             if ready.product != *selected || ready.unit_summary.domain != UNIT_SUMMARY_DOMAIN {
                 return Err("observation metadata differs from selected Ready".into());
@@ -569,17 +574,22 @@ impl NativeRoots for RootProducts {
                 .get(&key.address(READY_KIND).0)
                 .ok_or("missing selected link Ready")?;
             let (base, _) = snapshot.instances.admitted(key, &environment)?;
+            let operations = snapshot.instances.operations(key, &environment)?;
+            let scoped = NativeEnvironment {
+                operations: &operations,
+                ..environment
+            };
             let checked = self
                 .inner
                 .local
                 .queries
-                .linkage(key, product.product.action, &environment)
+                .linkage(key, product.product.action, &scoped)
                 .ok_or("link dependency lost C linkage admission")?;
             let closure = self
                 .inner
                 .local
                 .queries
-                .assembly_layouts(key, product, &environment)?;
+                .assembly_layouts(key, product, &scoped)?;
             let bytes = snapshot
                 .store
                 .get_content(product.emission_context)
