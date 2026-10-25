@@ -858,7 +858,7 @@ mod limit_tests {
                     false,
                 );
             }
-            let mut reads = vec![];
+            let mut reads = hirsel_types::SharedPath::default();
             let generics = f.body.resolution.generic_declarations.clone();
             let reader = Reader::new(&mut f.provider, &f.signature);
             let mut read = |d: DefId| reader.borrow_mut().read(d).map(Some);
