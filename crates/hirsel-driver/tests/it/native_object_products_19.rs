@@ -35,6 +35,28 @@ pub(super) fn compile(
     debug: bool,
     jobs: hirsel_intern::jobs::Jobs,
 ) -> Objects {
+    compile_entry(
+        engine,
+        store,
+        &entry_path(&default_context()),
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+    )
+}
+
+pub(super) fn compile_entry(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    entry: &hirsel_syntax::DefPath,
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+) -> Objects {
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
     let mut declarations = NativeDeclarations::collect(engine, &mut cache, &[]).unwrap();
     let paths = declarations
@@ -51,7 +73,6 @@ pub(super) fn compile(
             .input(path)
             .and_then(|(output, _, _, _)| output.cloned());
     }
-    let entry = entry_path(&default_context());
     let semantic = Arc::new(
         engine
             .native_semantic_program(declarations.roots.definitions.clone())
@@ -78,7 +99,7 @@ pub(super) fn compile(
                 anchors: &declarations.source_anchors,
                 signatures: engine.signature_snapshot(),
                 semantic,
-                selected: std::slice::from_ref(&entry),
+                selected: std::slice::from_ref(entry),
                 callees: None,
             },
             &original,
@@ -171,7 +192,7 @@ pub(super) fn compile(
         native.clone(),
         source.clone(),
         NativeRootKey {
-            roots: vec![entry],
+            roots: vec![entry.clone()],
             target_abi: target.digest(),
             policy,
         },
