@@ -68,6 +68,7 @@ struct LowerProduct {
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     materialized: Reference,
     definition_decode_bytes: u64,
+    constant_selection_bytes: u64,
 }
 impl LowerProduct {
     fn decode(&self, owner: &FrontLowerQueries) -> Option<QueryOutput<DefinitionRef>> {
@@ -126,6 +127,36 @@ impl Outcome {
         Some(weight.bytes())
     }
 }
+// Upper bound for products.rs's temporary required-constant map. Count every
+// occurrence, including duplicates and references that will eventually refuse.
+fn constant_selection_bytes(definition: &hirsel_tir::Definition) -> Result<u64, QueryError> {
+    let mut weight = crate::NativeMetadataWeight::default();
+    let mut rows = 1usize; // a constant definition may also require its own value
+    weight.path(definition.path.path());
+    weight.path(definition.path.path());
+    for value in definition.bodies.iter().flat_map(|body| &body.rvalues) {
+        if let hirsel_tir::Rvalue::ReadConstant {
+            definition,
+            arguments,
+        } = value
+        {
+            rows = rows.checked_add(1).ok_or(QueryError::NotImplemented)?;
+            weight.path(definition);
+            weight.path(definition);
+            weight.path(definition); // constant_instance_path's temporary clone
+            weight.add(
+                arguments
+                    .len()
+                    .checked_mul(3 * size_of::<u64>() + size_of::<String>() + 80)
+                    .ok_or(QueryError::NotImplemented)?,
+            );
+            weight.add(definition.0.name.len().saturating_mul(2).saturating_add(32));
+        }
+    }
+    weight.tree::<DefPath, (DefPath, Vec<u64>)>(rows);
+    Ok(weight.bytes())
+}
+
 fn outcome_table_bytes(rows: usize) -> u64 {
     if rows == 0 {
         return 0;
@@ -302,6 +333,44 @@ impl FrontLowerQueries {
             _ => Err(QueryError::NotImplemented),
         }
     }
+    /// Prospective constant-selection maps captured while original TIR was live.
+    /// This reads no archive and reconstructs no body.
+    pub(crate) fn settled_constant_selection_bytes(
+        &self,
+        path: &DefPath,
+    ) -> Result<u64, QueryError> {
+        let id = self.query(path).ok_or(QueryError::NotImplemented)?;
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        match &outcomes
+            .get(&(id.kind, id.address.0))
+            .ok_or(QueryError::NotImplemented)?
+            .1
+            .result
+        {
+            Ok(Value::Lower(lower)) => Ok(lower.constant_selection_bytes),
+            Err(error) => Err(error.clone()),
+            _ => Err(QueryError::NotImplemented),
+        }
+    }
+    /// Bound all settled constant clones without copying their payloads or paths.
+    pub(crate) fn settled_constants_input_bytes(&self) -> Result<u64, QueryError> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.tree::<DefPath, Materialized>(outcomes.len());
+        for (path, input) in &self.inputs {
+            let Some((_, outcome, _)) = outcomes.get(&(FRONT_EVALUATE_KIND, input.evaluate.0))
+            else {
+                continue;
+            };
+            if let Ok(Value::Constant(value, _)) = &outcome.result {
+                weight.path(path);
+                weight.materialized(value);
+                weight.materialized(value);
+                weight.add(size_of::<Materialized>() + 2 * size_of::<usize>());
+            }
+        }
+        Ok(weight.bytes())
+    }
     /// Decode under an explicitly retained caller working reservation. The
     /// precheck precedes provider I/O; callers keep this grant alive while any
     /// returned body clone is held. No Lower work or query is requested.
@@ -371,15 +440,13 @@ impl FrontLowerQueries {
         let id = self
             .evaluate_query(path)
             .ok_or(QueryError::NotImplemented)?;
-        let selected = self
-            .outcomes
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let selected = outcomes
             .get(&(id.kind, id.address.0))
-            .cloned()
             .ok_or(QueryError::NotImplemented)?;
-        match selected.1.result? {
-            Value::Constant(value, _) => Ok(Arc::new(value)),
+        match &selected.1.result {
+            Ok(Value::Constant(value, _)) => Ok(Arc::new(value.clone())),
+            Err(error) => Err(error.clone()),
             _ => Err(QueryError::NotImplemented),
         }
     }
@@ -882,7 +949,9 @@ impl FrontLowerQueries {
             .ok_or(QueryError::NotImplemented)?;
         let mut dependencies = analyzed.dependencies.clone();
         dependencies.extend(output.dependencies);
+        let constant_selection_bytes = constant_selection_bytes(&definition)?;
         Ok(Value::Lower(LowerProduct {
+            constant_selection_bytes,
             definition: definition.path,
             body,
             diagnostics: output.diagnostics,
