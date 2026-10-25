@@ -35,10 +35,19 @@ pub(crate) fn offer(
         .items
         .iter()
         .filter_map(|syntax| {
-            engine
-                .check_definition(&syntax.item.definition)
+            // Generic mode inference refines the structural check's rows.
+            // Prefer that ordinary front result when proposing an inferred row.
+            let body = engine
+                .mode_definition(&syntax.item.definition)
                 .ok()
-                .map(|body| (syntax.item.definition.clone(), body.value))
+                .map(|body| (*body.value.typed).clone())
+                .or_else(|| {
+                    engine
+                        .check_definition(&syntax.item.definition)
+                        .ok()
+                        .map(|body| body.value)
+                })?;
+            Some((syntax.item.definition.clone(), body))
         })
         .collect();
     let direct_calls: BTreeSet<_> = typed
