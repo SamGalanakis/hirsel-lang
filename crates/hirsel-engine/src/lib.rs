@@ -1,8 +1,10 @@
 //! Per-definition queries and phase adapters (LANG-6, PROG-5).
 
 #[cfg(test)]
-hirsel_guard::install!();
+hirsel_guard::install!(test_alloc::Counting: test_alloc::Counting);
 
+#[cfg(test)]
+mod test_alloc;
 mod work;
 pub use work::WorkStats;
 mod operations;
