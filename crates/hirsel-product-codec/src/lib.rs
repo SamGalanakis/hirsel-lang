@@ -83,12 +83,57 @@ pub fn canonical_bytes<T: Serialize>(
         .ok()?;
     bincode::serialize(&(anchor_owners(anchors, owner)?, table.finish(), payload)).ok()
 }
+/// Peak outer-record decode storage, excluding the caller's typed payload.
+/// Source interner rows retain their existing owners; this covers the copied
+/// input/payload, anchor paths, anchor handles and type-reference array.
+fn record_decode_bytes(record: &Record, encoded: usize) -> Option<u64> {
+    let mut bytes = encoded
+        .checked_add(record.payload.len())?
+        .checked_add(std::mem::size_of::<Record>())?;
+    let product_types = std::alloc::Layout::new::<[usize; 2]>()
+        .extend(std::alloc::Layout::new::<ProductTypes>())
+        .ok()?
+        .0
+        .pad_to_align()
+        .size();
+    bytes = bytes.checked_add(product_types)?;
+    // Serde's cautious vectors can grow geometrically; collecting decoded
+    // anchor Options also uses Vec's minimum non-zero allocation of four rows.
+    let anchor_slots = record.anchors.len().checked_mul(2)?.max(4);
+    let type_slots = record.types.len().checked_mul(2)?.max(4);
+    bytes =
+        bytes
+            .checked_add(anchor_slots.checked_mul(
+                std::mem::size_of::<(DefPath, u32)>() + std::mem::size_of::<Anchor>(),
+            )?)?
+            .checked_add(type_slots.checked_mul(std::mem::size_of::<TypeRef>())?)?;
+    for (path, _) in &record.anchors {
+        bytes = bytes
+            .checked_add(path.0.package.name.len())?
+            .checked_add(path.0.package.version.len())?
+            .checked_add(path.0.name.len())?
+            .checked_add(
+                path.0
+                    .modules
+                    .len()
+                    .checked_mul(2)?
+                    .max(4)
+                    .checked_mul(std::mem::size_of::<String>())?,
+            )?;
+        for module in &path.0.modules {
+            bytes = bytes.checked_add(module.len())?;
+        }
+    }
+    bytes.try_into().ok()
+}
 impl TypeRecords {
-    pub fn encode_record<T: Serialize>(
+    /// The ordinary record plus metadata to pre-admit its outer decode buffers.
+    /// Typed payload layout must be supplied by its producing phase separately.
+    pub fn encode_record_with_decode_bytes<T: Serialize>(
         &self,
         value: &T,
         owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
-    ) -> Option<Vec<u8>> {
+    ) -> Option<(Vec<u8>, u64)> {
         let mut anchors = AnchorCodec::Collect(vec![]);
         let mut table = TableBuilder::new(self.types.clone());
         let payload = table
@@ -96,14 +141,24 @@ impl TypeRecords {
                 hirsel_span::with_anchor_codec(&mut anchors, || bincode::serialize(value))
             })
             .ok()?;
-        let anchors = anchor_owners(anchors, owner)?;
-        bincode::serialize(&Record {
-            anchors,
+        let record = Record {
+            anchors: anchor_owners(anchors, owner)?,
             types: self.encode(table.roots())?,
             payload,
-        })
-        .ok()
+        };
+        let bytes = bincode::serialize(&record).ok()?;
+        let working = record_decode_bytes(&record, bytes.len())?;
+        Some((bytes, working))
     }
+    pub fn encode_record<T: Serialize>(
+        &self,
+        value: &T,
+        owner: impl FnMut(Anchor) -> Option<(DefPath, u32)>,
+    ) -> Option<Vec<u8>> {
+        self.encode_record_with_decode_bytes(value, owner)
+            .map(|(bytes, _)| bytes)
+    }
+
     pub fn decode_record<T: serde::de::DeserializeOwned>(
         self: &Arc<Self>,
         bytes: &[u8],
@@ -155,7 +210,7 @@ impl DecodeOptions {
 mod tests {
     use super::*;
     use hirsel_artifact_store::Memory;
-    use hirsel_syntax::{ItemPath, PackageId};
+    use hirsel_syntax::{ContentHash, ItemPath, PackageId};
     use hirsel_types::{Type, TypeId};
     fn path() -> DefPath {
         DefPath(ItemPath {
@@ -166,6 +221,49 @@ mod tests {
             modules: vec![],
             name: "owner".into(),
         })
+    }
+    #[test]
+    fn captured_record_decode_layout_covers_small_and_growing_transport_vectors() {
+        for rows in [0, 1, 2, 17, 129] {
+            let record = Record {
+                anchors: (0..rows).map(|n| (path(), n)).collect(),
+                types: (0..rows)
+                    .map(|n| TypeRef {
+                        output: ContentHash::default(),
+                        len: 0,
+                        member: n,
+                    })
+                    .collect(),
+                payload: vec![7; rows as usize],
+            };
+            let bytes = bincode::serialize(&record).unwrap();
+            let decoded: Record = options(bytes.len()).deserialize(&bytes).unwrap();
+            let handles = decoded
+                .anchors
+                .iter()
+                .map(|_| Some(Anchor(0)))
+                .collect::<Option<Vec<_>>>()
+                .unwrap();
+            let mut actual = bytes.len()
+                + decoded.payload.capacity()
+                + std::mem::size_of::<Record>()
+                + decoded.anchors.capacity() * std::mem::size_of::<(DefPath, u32)>()
+                + decoded.types.capacity() * std::mem::size_of::<TypeRef>()
+                + handles.capacity() * std::mem::size_of::<Anchor>()
+                + std::mem::size_of::<ProductTypes>()
+                + 2 * std::mem::size_of::<usize>();
+            for (path, _) in &decoded.anchors {
+                actual += path.0.package.name.capacity()
+                    + path.0.package.version.capacity()
+                    + path.0.name.capacity()
+                    + path.0.modules.capacity() * std::mem::size_of::<String>()
+                    + path.0.modules.iter().map(String::capacity).sum::<usize>();
+            }
+            assert!(
+                record_decode_bytes(&record, bytes.len()).unwrap() >= actual as u64,
+                "captured layout must cover decoded capacities for {rows} rows"
+            );
+        }
     }
     #[test]
     fn record_payload_accepts_bulk_bytes_and_preserves_wire_limits() {
