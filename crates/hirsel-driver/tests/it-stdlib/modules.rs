@@ -125,3 +125,4 @@ mod numeric_work_38;
 mod sha_primitive_38;
 mod markdown_owned_ast_40;
 mod markdown_source_map_41;
+mod bounded_work_laws_24;
