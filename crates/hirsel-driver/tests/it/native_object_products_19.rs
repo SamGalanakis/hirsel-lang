@@ -116,6 +116,73 @@ pub(super) fn compile_roots<R>(
     verification: hirsel_engine::store::VerifyStore,
     use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
 ) -> (Objects, R) {
+    compile_roots_inspect(
+        engine,
+        store,
+        source_selection,
+        requested,
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        verification,
+        |_, _, _| (),
+        use_context,
+    )
+}
+
+pub(super) fn compile_with_context_inspect<R>(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    entry: &hirsel_syntax::DefPath,
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
+    inspect: impl FnOnce(
+        &mut queries::roots::RootProducts,
+        &Arc<queries::NativeRootProduct>,
+        &[Arc<queries::ReadyProduct>],
+    ),
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
+    compile_roots_inspect(
+        engine,
+        store,
+        std::slice::from_ref(entry),
+        &[],
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        verification,
+        inspect,
+        use_context,
+    )
+}
+
+pub(super) fn compile_roots_inspect<R>(
+    engine: &mut QueryEngine,
+    store: Arc<dyn ResultStore>,
+    source_selection: &[hirsel_syntax::DefPath],
+    requested: &[hirsel_syntax::DefPath],
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
+    inspect: impl FnOnce(
+        &mut queries::roots::RootProducts,
+        &Arc<queries::NativeRootProduct>,
+        &[Arc<queries::ReadyProduct>],
+    ),
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
     let mut declarations = NativeDeclarations::collect(engine, &mut cache, requested).unwrap();
     let paths = declarations.sources.keys().cloned().collect::<Vec<_>>();
@@ -336,6 +403,7 @@ pub(super) fn compile_roots<R>(
         .map(|product| queries::ready_product(store.as_ref(), *product).map(Arc::new))
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
+    inspect(&mut products, &root, &readies);
     let link_objects = products
         .backend_objects(&root, &readies, backend, &artifacts)
         .unwrap();

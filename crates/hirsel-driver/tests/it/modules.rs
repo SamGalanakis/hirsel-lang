@@ -226,3 +226,4 @@ mod sealed_region_scope_custody_33;
 mod arena_named_callback_33;
 mod ownership_execution_49;
 mod native_publication_faults_19;
+mod native_ready_descriptor_19;
