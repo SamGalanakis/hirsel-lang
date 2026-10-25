@@ -1,7 +1,7 @@
 //! The existing per-object template closure over compact instance facts.
 //! Ready transformations never depend on other Ready bodies merely for LLVM
 //! copying: those are Codegen reads, avoiding artificial recursive Ready cycles.
-use hirsel_lir::ir::{LirUnit, UnitOrigin};
+use hirsel_lir::ir::{Callee, Inst, LirUnit, Symbol, UnitOrigin};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -15,7 +15,7 @@ pub struct TemplateFacts {
 }
 impl TemplateFacts {
     pub(super) fn of<S>(unit: &LirUnit<S>, finalizers: impl Iterator<Item = Function>) -> Self {
-        let mut references = crate::native::units::references(unit)
+        let mut references = references(unit)
             .filter_map(|symbol| symbol.instance.map(|id| (symbol.definition, id)))
             .chain(finalizers)
             .collect::<Vec<_>>();
@@ -48,4 +48,25 @@ pub(crate) fn copy_closure<K: Ord + Clone>(
         }
     }
     seen.into_iter().collect()
+}
+
+/// Every function the unit names directly, by a function reference or as closure code.
+pub(crate) fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
+    let calls = unit.tables.calls.iter().filter_map(|c| match c.callee {
+        Callee::Direct(s) | Callee::Bound { code: s, .. } => Some(s),
+        _ => None,
+    });
+    let closures = unit
+        .tables
+        .closures
+        .iter()
+        .filter_map(|site| site.code.map(|code| code.symbol));
+    let refs = unit.instructions.iter().filter_map(|inst| match *inst {
+        Inst::FunctionRef { symbol, .. } => Some(symbol),
+        _ => None,
+    });
+    calls
+        .chain(refs)
+        .chain(closures)
+        .filter_map(|s| unit.tables.symbols.get(s.index()).cloned())
 }

@@ -10,12 +10,13 @@
 //! their content keys enter the caller key. Cranelift and LLVM O0 import owner symbols.
 
 use super::emit::Backend;
+use super::queries::optimizer::references;
 use super::stages::{NativeError, Options, StageName, timed};
 use hirsel_intern::timings::{self, Count, Phase};
 use hirsel_lir::LayoutKeys;
 use hirsel_lir::emission::{EmitInputs, OptLevel};
 use hirsel_lir::fragment::{UnitFragment, UnitSummary};
-use hirsel_lir::ir::{Callee, Inst, LirUnit, Symbol, UnitOrigin};
+use hirsel_lir::ir::{LirUnit, Symbol, UnitOrigin};
 use hirsel_lir::layout_types::{LayoutId, LayoutTable};
 use hirsel_lir::objects::{ObjectStore, UnitKey, object_key};
 use hirsel_lir::stage::{Ready, ValidatedUnit, Value};
@@ -600,27 +601,6 @@ fn symbol_of<S>(unit: &LirUnit<S>) -> Symbol {
 
 fn symbol_name<S>(unit: &LirUnit<S>) -> String {
     hirsel_lir::emission::symbol_name(&unit.header.definition, Some(&unit.header.instance))
-}
-
-/// Every function the unit names directly, by a function reference or as closure code.
-pub(crate) fn references<S>(unit: &LirUnit<S>) -> impl Iterator<Item = Symbol> + '_ {
-    let calls = unit.tables.calls.iter().filter_map(|c| match c.callee {
-        Callee::Direct(s) | Callee::Bound { code: s, .. } => Some(s),
-        _ => None,
-    });
-    let closures = unit
-        .tables
-        .closures
-        .iter()
-        .filter_map(|site| site.code.map(|code| code.symbol));
-    let refs = unit.instructions.iter().filter_map(|inst| match *inst {
-        Inst::FunctionRef { symbol, .. } => Some(symbol),
-        _ => None,
-    });
-    calls
-        .chain(refs)
-        .chain(closures)
-        .filter_map(|s| unit.tables.symbols.get(s.index()).cloned())
 }
 
 #[cfg(test)]
