@@ -273,3 +273,42 @@ pub(super) fn compile(
         hits,
     }
 }
+
+#[test]
+fn generic_lexical_callable_keeps_its_original_recipe_dependency() {
+    with_compiler_stack(|| {
+        let store: Arc<dyn ResultStore> = Arc::new(store::MemStore::default());
+        let mut engine =
+            QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters())
+                .with_result_store(store.clone());
+        let file = engine
+            .sources
+            .add(
+                "generic-lexical.hir",
+                r#"
+pub fn main()->Result[(),()] {
+  let tag=9u64
+  fn tagged[T](take value:T)->(u64,T) { (tag,value) }
+  let pair:fn(take u64)->(u64,u64) uses {}=tagged
+  failure.check(pair(4u64)==(9u64,4u64),Bounds())
+  Ok(())
+}
+"#
+                .into(),
+            )
+            .unwrap();
+        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let actual = compile(
+            &mut engine,
+            store,
+            native::Backend::Cranelift,
+            native::OptLevel::None,
+            native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
+            false,
+            hirsel_intern::jobs::Jobs::ONE,
+        );
+        assert!(!actual.objects.is_empty());
+        assert_eq!(actual.objects.len(), actual.summaries.len());
+    });
+}

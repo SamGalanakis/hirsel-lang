@@ -232,6 +232,7 @@ impl SourceRecipe {
         if instances.view(current).key != root {
             return Err("source recipe actuals differ from its root key".into());
         }
+        let mut expanded = BTreeSet::new();
         for (position, step) in self.steps.iter().enumerate() {
             let expected = step.key(&self.definition)?;
             if instances.view(current).key != expected {
@@ -239,17 +240,43 @@ impl SourceRecipe {
             }
             // Reconstruct only original lexical discovery metadata. No import,
             // Value materialization or native pass is performed for ancestors.
-            (instances, _) = discover_instance(
-                program,
-                context,
-                layouts,
-                instances,
-                current,
-                original.clone(),
-            )
-            .map_err(|e| format!("source recipe discovery: {e:?}"))?;
+            if expanded.insert(current) {
+                (instances, _) = discover_instance(
+                    program,
+                    context,
+                    layouts,
+                    instances,
+                    current,
+                    original.clone(),
+                )
+                .map_err(|e| format!("source recipe discovery: {e:?}"))?;
+            }
             if let Some(next) = self.steps.get(position + 1) {
                 let key = next.key(&self.definition)?;
+                // As in instance::expand, a generic nested function may be
+                // instantiated by a coercion wrapper rather than its lexical
+                // parent. Follow only already discovered closures of this
+                // original source; this opens no other Definition or Value.
+                while instances.get(&key).is_none() {
+                    let sibling = instances.ids().find(|id| {
+                        !expanded.contains(id)
+                            && instances.view(*id).key.definition() == &self.definition
+                            && matches!(instances.roles[id.index()], InstanceRole::Closure { .. })
+                    });
+                    let Some(sibling) = sibling else {
+                        break;
+                    };
+                    expanded.insert(sibling);
+                    (instances, _) = discover_instance(
+                        program,
+                        context,
+                        layouts,
+                        instances,
+                        sibling,
+                        original.clone(),
+                    )
+                    .map_err(|e| format!("source recipe lexical discovery: {e:?}"))?;
+                }
                 let child = instances
                     .get(&key)
                     .ok_or("source recipe closure no longer discovered")?;
