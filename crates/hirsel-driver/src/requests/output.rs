@@ -33,11 +33,36 @@ pub struct DefinitionWork {
 }
 /// Read-only observations of the selected engine graph. Producing this value
 /// neither runs compilation nor changes memo validity or retention.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CompileInspection {
     pub stats: hirsel_engine::memo::MemoStats,
     pub memos: Vec<(hirsel_engine::memo::MemoKey, Arc<hirsel_engine::Reads>)>,
     pub definitions: Vec<DefinitionWork>,
+    owner: Arc<dyn Send + Sync>,
+}
+impl CompileInspection {
+    pub(crate) fn new(
+        stats: hirsel_engine::memo::MemoStats,
+        memos: Vec<(hirsel_engine::memo::MemoKey, Arc<hirsel_engine::Reads>)>,
+        definitions: Vec<DefinitionWork>,
+    ) -> Self {
+        Self {
+            stats,
+            memos,
+            definitions,
+            owner: Arc::new(()),
+        }
+    }
+}
+impl std::fmt::Debug for CompileInspection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CompileInspection")
+            .field("stats", &self.stats)
+            .field("memos", &self.memos)
+            .field("definitions", &self.definitions)
+            .finish()
+    }
 }
 /// One completed operation. Its metadata belongs to the same immutable input
 /// snapshot as its result and does not ask the disk for newer observations.
@@ -69,6 +94,18 @@ impl CompileOutput {
             | CompileResult::SafeCheck { checked, .. }
             | CompileResult::CheckedProducts { checked, .. } => {
                 checked.sources = checked.sources.clone().retain_owner(owner.clone());
+            }
+            CompileResult::Tir(execution) => {
+                let execution = Arc::make_mut(execution);
+                execution.sources = execution.sources.clone().retain_owner(owner.clone());
+            }
+            CompileResult::Native(execution) => {
+                let execution = Arc::make_mut(execution);
+                execution.sources = execution.sources.clone().retain_owner(owner.clone());
+                execution.owner = Arc::new((execution.owner.clone(), owner.clone()));
+            }
+            CompileResult::Inspect(inspection) => {
+                Arc::make_mut(inspection).owner = owner.clone();
             }
             _ => {}
         }
@@ -112,6 +149,7 @@ pub trait TirProducts: Send + Sync {
 /// The selected TIR root and the immutable closure needed to execute it. The
 /// runtime contains the exact type, private-view and checked-H metadata for
 /// this snapshot; semantic revision remains independent of native artifacts.
+#[derive(Clone)]
 pub struct TirExecution {
     pub entry: DefPath,
     pub definition: DefinitionRef,
@@ -172,6 +210,7 @@ pub struct NativeObservation {
 /// Executable readiness includes a materialized executable and frozen launch
 /// metadata. Construction follows successful Link/materialization checks; the
 /// admission/scratch owner lives until the last output user releases it.
+#[derive(Clone)]
 pub struct NativeExecution {
     pub executable: PathBuf,
     pub product: hirsel_engine::runtime::ProductRef,

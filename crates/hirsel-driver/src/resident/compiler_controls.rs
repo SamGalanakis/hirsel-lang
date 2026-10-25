@@ -146,3 +146,511 @@ fn real_compiler_requests_refuse_a_zero_process_allowance() {
         assert!(host.request(&request).is_err());
     });
 }
+
+#[test]
+fn physical_inspection_counts_survive_revisions_eviction_and_detached_snapshot_owners() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let original = request(&entry);
+        let budget = ProcessBudget::new(600 << 20);
+        let mut host = Host::new(selector(budget.clone()));
+        let mut held = None;
+        let mut previous = 0;
+        for revision in 0..4 {
+            let text: Arc<[u8]> = format!("pub fn main()->u8{{{}u8}}\n", revision + 1)
+                .into_bytes()
+                .into();
+            let mut selected = original.clone();
+            selected.inputs = original
+                .inputs
+                .replace_sources(&BTreeMap::from([(source.clone(), text)]), 1 << 20)
+                .unwrap();
+            let completed = host.request(&selected).unwrap().wait().unwrap();
+            assert!(checked(&completed).diagnostics.is_empty());
+            let definition = completed.entry.clone();
+            drop(completed);
+            selected.operation = CompileOperation::Inspect {
+                definitions: vec![definition.clone()],
+            };
+            let inspected = host.request(&selected).unwrap().wait().unwrap();
+            assert_eq!(
+                inspected.work.recomputations, 0,
+                "inspection must execute no compiler phase"
+            );
+            assert_eq!(
+                inspected.work.store_adoptions, 0,
+                "inspection must restore no compiler product"
+            );
+            let CompileResult::Inspect(inspection) = &inspected.result else {
+                panic!("wrong inspection result")
+            };
+            let count = inspection.definitions[0]
+                .recomputations
+                .iter()
+                .find(|(kind, _)| *kind == hirsel_engine::QueryKind::Check)
+                .unwrap()
+                .1;
+            assert!(
+                count > previous,
+                "each changed body contributes its actual new Check work"
+            );
+            assert!(
+                inspection
+                    .memos
+                    .iter()
+                    .any(|(key, _)| key.kind == hirsel_engine::QueryKind::Check)
+            );
+            if revision == 0 {
+                held = Some(inspection.clone());
+            }
+            selected.operation = CompileOperation::RecomputeCounts {
+                queries: vec![(definition, hirsel_engine::QueryKind::Check)],
+            };
+            let repeated = host.request(&selected).unwrap().wait().unwrap();
+            assert_eq!(repeated.work.recomputations, 0);
+            let CompileResult::RecomputeCounts(counts) = &repeated.result else {
+                panic!("wrong counter result")
+            };
+            assert_eq!(
+                counts[0].2, count,
+                "metadata reads must not count a producer twice"
+            );
+            previous = count;
+        }
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "detached inspection retains its admitted read inventory"
+        );
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn production_host_policy_admits_a_small_real_check_with_its_existing_cap() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let request = request(&entry);
+        let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
+        let output = host.request(&request).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            checked(&output).completion,
+            hirsel_engine::CheckCompletion::Complete
+        );
+    });
+}
+
+fn run_selector(budget: Arc<ProcessBudget>) -> CompilerRequests {
+    CompilerRequests::new(
+        crate::COMPILER,
+        config(),
+        budget,
+        RequestLimits {
+            runtime_bytes: 256 << 20,
+            snapshot_bytes: 64 << 20,
+            transport_bytes: 32 << 20,
+        },
+    )
+}
+
+#[test]
+fn selected_run_executes_tir_and_checked_after_host_drop() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(&source, "pub fn main()->Result[(),()]{Ok(())}\n").unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let budget = ProcessBudget::new(768 << 20);
+        let mut host = Host::new(run_selector(budget.clone()));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("run returned another operation")
+        };
+        let input = input.clone();
+        drop(output);
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "execution retains its admitted source products"
+        );
+        let mut prior = None;
+        for checked in [false, true] {
+            let launch = crate::HostLaunch::empty();
+            let mut observed = None;
+            let (outcome, callee) = crate::tir_execution::run_tir_on_host(
+                &input,
+                launch,
+                crate::launch_binding::LaunchSelection::read(launch).unwrap(),
+                Some(10000),
+                Some(&mut observed),
+                None,
+                checked,
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                crate::RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+            );
+            assert!(callee.is_none());
+            let observed = observed.expect("settled execution has an observation");
+            if let Some(prior) = prior {
+                assert_eq!(prior, observed);
+            }
+            prior = Some(observed);
+        }
+        drop(input);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn selected_run_callee_identity_and_cancellation_keep_the_shared_check_live() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(
+            &source,
+            "fn callee()->Result[(),()]{Ok(())}\npub fn main()->Result[(),()]{Ok(())}\n",
+        )
+        .unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let metadata = crate::COMPILER
+            .with_config(config())
+            .load_check_package_inputs(&entry, &selected.inputs, false)
+            .unwrap();
+        let mut callee = metadata.entry.clone();
+        callee.0.name = "callee".into();
+        drop(metadata);
+        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
+        let pending_main = host.request(&selected).unwrap();
+        selected.operation = CompileOperation::Tir {
+            definition: Some(callee.clone()),
+        };
+        let selected_callee = host.request(&selected).unwrap();
+        assert!(Arc::ptr_eq(
+            &pending_main.subscription.runtime,
+            &selected_callee.subscription.runtime
+        ));
+        drop(pending_main);
+        let output = selected_callee.wait().unwrap();
+        assert_eq!(output.entry, callee);
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("callee returned another operation")
+        };
+        assert_eq!(input.entry, callee);
+        assert_eq!(input.definition.path.path(), &callee);
+    });
+}
+
+#[test]
+fn selected_safe_check_preserves_rejection_and_library_checks_without_run() {
+    hirsel_engine::with_compiler_stack(|| {
+        for library in [false, true] {
+            let (_directory, entry, source) = fixture();
+            if library {
+                std::fs::write(&entry, r#"{"schema":1,"package":{"name":"request","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
+            } else {
+                std::fs::write(&source, "pub fn main()->u8{true}\n").unwrap();
+            }
+            let mut selected = request(&entry);
+            selected.operation = CompileOperation::SafeCheck;
+            let budget = ProcessBudget::new(768 << 20);
+            let mut host = Host::new(run_selector(budget.clone()));
+            let output = host.request(&selected).unwrap().wait().unwrap();
+            let CompileResult::SafeCheck { checked, reach } = &output.result else {
+                panic!("safe check returned another operation");
+            };
+            assert!(reach.is_none());
+            assert_eq!(checked.diagnostics.is_empty(), library);
+            let mut inspect = selected.clone();
+            inspect.operation = CompileOperation::RecomputeCounts {
+                queries: vec![(output.entry.clone(), hirsel_engine::QueryKind::Lower)],
+            };
+            let counters = host.request(&inspect).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(counts) = &counters.result else {
+                panic!("inspection returned another operation");
+            };
+            assert_eq!(
+                counts[0].2, 0,
+                "rejected and library checks never execute the Run closure"
+            );
+            drop(counters);
+            drop(output);
+            drop(host);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn selected_safe_check_reports_the_settled_entry_escape() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::SafeCheck;
+        let mut host = Host::new(run_selector(ProcessBudget::new(768 << 20)));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::SafeCheck { checked, reach } = &output.result else {
+            panic!("safe check returned another operation");
+        };
+        assert!(checked.diagnostics.is_empty());
+        assert_eq!(
+            reach
+                .as_ref()
+                .map(|(entry, escape)| (entry, escape.is_none())),
+            Some((&output.entry, true))
+        );
+    });
+}
+
+#[test]
+fn selected_private_layout_cache_matches_cold_and_preserves_unread_reader_work() {
+    hirsel_engine::with_compiler_stack(|| {
+        for (opaque, reads_field) in [(true, true), (true, false), (false, true)] {
+            let (_directory, entry, source) = fixture();
+            let visibility = if opaque { "opaque " } else { "" };
+            let body = if reads_field { "x.level" } else { "1" };
+            let parameter = if reads_field { "x:Secret" } else { "" };
+            let initial = format!(
+                "pub {visibility}type Secret: data uses {{}} {{ level:u64, }}\nfn view({parameter})->u64{{{body}}}\npub fn main()->u64{{1}}\n"
+            );
+            std::fs::write(&source, &initial).unwrap();
+            let selected = request(&entry);
+            let budget = ProcessBudget::new(768 << 20);
+            let mut configured = config();
+            configured.store = Arc::new(hirsel_engine::store::MemStore::default());
+            let make = |configured: CompileConfig| {
+                CompilerRequests::new(
+                    crate::COMPILER,
+                    configured,
+                    budget.clone(),
+                    RequestLimits {
+                        runtime_bytes: 192 << 20,
+                        snapshot_bytes: 32 << 20,
+                        transport_bytes: 32 << 20,
+                    },
+                )
+            };
+            let mut host = Host::new(make(configured));
+            let first = host.request(&selected).unwrap().wait().unwrap();
+            assert!(checked(&first).diagnostics.is_empty());
+            let mut view = first.entry.clone();
+            view.0.name = "view".into();
+            drop(first);
+            let mut counter_request = selected.clone();
+            counter_request.operation = CompileOperation::RecomputeCounts {
+                queries: [
+                    hirsel_engine::QueryKind::Resolve,
+                    hirsel_engine::QueryKind::Check,
+                ]
+                .map(|kind| (view.clone(), kind))
+                .to_vec(),
+            };
+            let before = host.request(&counter_request).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(before) = &before.result else {
+                panic!("wrong counter result")
+            };
+            let before = before.clone();
+            let mut edited = selected.clone();
+            edited.inputs = selected
+                .inputs
+                .replace_sources(
+                    &BTreeMap::from([(
+                        source.clone(),
+                        initial
+                            .replace("level:u64", "level:u32")
+                            .into_bytes()
+                            .into(),
+                    )]),
+                    1 << 20,
+                )
+                .unwrap();
+            let actual = host.request(&edited).unwrap().wait().unwrap();
+            counter_request.inputs = edited.inputs.clone();
+            let after = host.request(&counter_request).unwrap().wait().unwrap();
+            let CompileResult::RecomputeCounts(after) = &after.result else {
+                panic!("wrong counter result")
+            };
+            if !reads_field {
+                assert_eq!(
+                    after, &before,
+                    "unread opaque representation preserves actual reader P work"
+                );
+                assert!(
+                    actual.work.store_adoptions > 0,
+                    "the immutable graph actually restored source products"
+                );
+            } else {
+                assert!(
+                    after[1].2 > before[1].2,
+                    "private layout reads must invalidate the cached Check"
+                );
+            }
+            let mut cold = Host::new(make(config()));
+            let expected = cold.request(&edited).unwrap().wait().unwrap();
+            let normalized = |output: &crate::requests::CompileOutput| {
+                checked(output)
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.to_json(&checked(output).sources))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                normalized(&actual),
+                normalized(&expected),
+                "opaque={opaque},reads_field={reads_field}"
+            );
+            assert_eq!(checked(&actual).completion, checked(&expected).completion);
+        }
+    });
+}
+
+#[test]
+fn selected_run_bounds_lower_mailboxes_by_the_immutable_query_inventory() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        std::fs::write(
+            &source,
+            "fn a()->u8{1u8}\nfn b()->u8{2u8}\npub fn main()->Result[(),()]{Ok(())}\n",
+        )
+        .unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::Tir { definition: None };
+        let budget = ProcessBudget::new(768 << 20);
+        let mut host = Host::new(run_selector(budget.clone()));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::Tir(input) = &output.result else {
+            panic!("run returned another operation");
+        };
+        assert_eq!(input.entry, output.entry);
+        assert_eq!(input.definition.path.path(), &output.entry);
+        drop(output);
+        drop(host);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn selected_footprint_planner_admits_many_small_definitions_under_the_same_snapshot_bound() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let mut text = String::new();
+        for index in 0..256 {
+            text.push_str(&format!("fn f{index}()->u8{{1u8}}\n"));
+        }
+        text.push_str("pub fn main()->u8{1u8}\n");
+        std::fs::write(&source, text).unwrap();
+        let selected = request(&entry);
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host = Host::new(CompilerRequests::new(
+            crate::COMPILER,
+            config(),
+            budget.clone(),
+            RequestLimits {
+                runtime_bytes: 192 << 20,
+                snapshot_bytes: 4 << 20,
+                transport_bytes: 16 << 20,
+            },
+        ));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            checked(&output).completion,
+            hirsel_engine::CheckCompletion::Complete
+        );
+        assert!(output.work.recomputations > 0);
+        drop(host);
+        assert!(
+            budget.reserved() > 0,
+            "held check sources retain their exact admitted source owner"
+        );
+        drop(output);
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn source_transport_scratch_keeps_the_selected_provider_and_lives_through_detached_source_files() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let selected = request(&entry);
+        let parent = tempfile::tempdir().unwrap();
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host =
+            Host::new(selector(budget.clone()).with_scratch_parent(parent.path().to_owned()));
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 0);
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        assert!(checked(&output).diagnostics.is_empty());
+        assert_eq!(
+            output.work.store_adoptions, 0,
+            "none@1 must not claim a persistent adoption"
+        );
+        let held_file = checked(&output)
+            .sources
+            .anchors()
+            .find_map(|(_, file, _)| {
+                checked(&output)
+                    .sources
+                    .file(file)
+                    .filter(|file| file.path == source)
+                    .cloned()
+            })
+            .expect("checked source file");
+        assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
+        drop(host);
+        drop(output);
+        assert_eq!(held_file.text(), ORIGINAL);
+        assert_eq!(
+            std::fs::read_dir(parent.path()).unwrap().count(),
+            1,
+            "an external source file retains its original graph transport"
+        );
+        assert!(budget.reserved() > 0);
+        drop(held_file);
+        assert_eq!(
+            std::fs::read_dir(parent.path()).unwrap().count(),
+            0,
+            "last source owner removes its private request files"
+        );
+        assert_eq!(budget.reserved(), 0);
+    });
+}
+
+#[test]
+fn immutable_query_capacity_preserves_sixteen_real_coalesced_subscribers() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, _source) = fixture();
+        let mut selected = request(&entry);
+        let budget = ProcessBudget::new(512 << 20);
+        let mut host = Host::new(selector(budget.clone()));
+        let leases = (0..16)
+            .map(|_| host.request(&selected).unwrap())
+            .collect::<Vec<_>>();
+        assert!(Arc::ptr_eq(
+            &leases[0].subscription.runtime,
+            &leases[15].subscription.runtime
+        ));
+        let outputs = leases
+            .into_iter()
+            .map(|lease| lease.wait().unwrap())
+            .collect::<Vec<_>>();
+        for output in &outputs {
+            assert!(checked(output).diagnostics.is_empty());
+        }
+        selected.operation = CompileOperation::RecomputeCounts {
+            queries: vec![(outputs[0].entry.clone(), hirsel_engine::QueryKind::Check)],
+        };
+        let counts = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::RecomputeCounts(counts) = &counts.result else {
+            panic!("unexpected counter output");
+        };
+        assert_eq!(
+            counts[0].2, 1,
+            "sixteen subscriptions must share one real source check"
+        );
+        drop(outputs);
+        drop(host);
+    });
+}
