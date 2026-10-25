@@ -239,6 +239,7 @@ impl Library {
                 cause: None,
             }];
             super::tasks::append_chain(&mut failures, cause.clone());
+            self.free_dead_mutex(id);
             OperationResult::FailureChain {
                 failures,
                 released: vec![],

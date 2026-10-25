@@ -1502,6 +1502,39 @@ fn free51_close_kill_cause_cross_engine_replay_durable() {
     });
 }
 
+/// A dead take and reading its cause are distinct native operations. Keep the
+/// root's final observation aligned even when no channel exposes the offset.
+#[test]
+fn native_dead_mutex_cause_cross_engine_replay() {
+    f1_corpus_matrix_cells(
+        "dead-mutex-cause",
+        r#"pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let own: Mutex[u32] = mutex.create(tasks, 0)
+  let killed: Result[(), Failure] = task.isolate(tasks, fn() -> () {
+    mutex.with(tasks, own, fn(mut value: unique u32) -> () uses {} {
+      let n: u8 = 255
+      let broken = n + 1
+    })
+  })
+  let observed: Result[u32, Failure] = task.isolate(tasks, fn() -> u32 {
+    mutex.with(tasks, own, fn(mut value: unique u32) -> u32 uses {} { value })
+  })
+  Ok(())
+}
+"#,
+        |_| serde_json::json!({"io":{"tasks":"tasks.free@1", "dirs":[]},"args":[]}),
+        (0, |_, _, _, _| {}),
+        b"",
+        || Box::new(|| {}),
+        Cells {
+            levels: &["record", "durable"],
+            engines: &ENGINES,
+            dimensions: &[("1", 1)],
+        },
+    );
+}
+
 #[test]
 fn f1_task_set_corpus_full_projection_width_and_permit_matrix() {
     f1_corpus_matrix(

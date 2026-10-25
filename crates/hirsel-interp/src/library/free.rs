@@ -67,14 +67,27 @@ pub(super) struct Free {
     closes: Vec<Close>,
     /// Calling ops publish Done only after their admitted child rests return.
     after_rests: BTreeSet<u64>,
+    /// A native dead take publishes before the separate cause operation.
+    causes: BTreeMap<u64, u64>,
 }
 
 /// An op that waits replay-pending, with what its action needs.
 pub(super) enum Retry {
-    Send { channel: u64, payload: Value },
-    Dup { channel: u64 },
-    Thaw { root: SharedRoot },
+    Send {
+        channel: u64,
+        payload: Value,
+    },
+    Dup {
+        channel: u64,
+    },
+    Thaw {
+        root: SharedRoot,
+    },
     Write(FreeWrite),
+    Cause {
+        mutex: u64,
+        result: Box<OperationResult>,
+    },
 }
 
 /// A free-mode host write between its claim and its end.
@@ -164,6 +177,7 @@ impl Free {
             retries: BTreeMap::new(),
             closes: Vec::new(),
             after_rests: BTreeSet::new(),
+            causes: BTreeMap::new(),
         }
     }
 }
@@ -442,7 +456,50 @@ impl Library {
         if self.free.as_ref().unwrap().session.at_cut(&path) {
             return Ok(self.free_final(context));
         }
+        let cause = self
+            .free
+            .as_mut()
+            .unwrap()
+            .causes
+            .remove(&self.tasks.current);
+        if let Some(mutex) = cause {
+            return match self.free_enter(Phase::Done, context)? {
+                Enter::Run => self.free_cause(mutex, result, context),
+                Enter::Park(park) => Ok(park),
+                Enter::Off => unreachable!("a native dead take has a Free session"),
+            };
+        }
         Ok(result)
+    }
+
+    /// The native take returns Dead before the caller reads the immutable cause.
+    pub(super) fn free_dead_mutex(&mut self, mutex: u64) {
+        if let Some(free) = &mut self.free
+            && free.native
+        {
+            free.causes.insert(self.tasks.current, mutex);
+        }
+    }
+
+    fn free_cause(
+        &mut self,
+        mutex: u64,
+        result: OperationResult,
+        context: &OperationContext<'_>,
+    ) -> Result<OperationResult, Error> {
+        if self.free_enabled((MUTEX, mutex))? {
+            self.free_touch((MUTEX, mutex), "cause")?;
+            self.free_done(result, context)
+        } else {
+            Ok(self.free_retry(
+                Retry::Cause {
+                    mutex,
+                    result: Box::new(result),
+                },
+                "mutex.cause",
+                context,
+            ))
+        }
     }
 
     pub(super) fn free_rests_completed(
@@ -849,6 +906,14 @@ impl Library {
                     Some(self.free_thaw(root, context)?)
                 } else {
                     self.free_requeue(token, Retry::Thaw { root });
+                    None
+                }
+            }
+            Retry::Cause { mutex, result } => {
+                if self.free_enabled((MUTEX, mutex))? {
+                    Some(self.free_cause(mutex, *result, context)?)
+                } else {
+                    self.free_requeue(token, Retry::Cause { mutex, result });
                     None
                 }
             }

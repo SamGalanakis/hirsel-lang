@@ -606,6 +606,12 @@ impl Library {
             vec![],
             context,
         )?;
+        // Native isolate changes only the task's failure handler. Its body
+        // supplies every Free operation; entering isolate adds no ordinal.
+        if self.native_free() && name == "task.isolate" {
+            self.tasks.yield_now = false;
+            return self.task_action(name, call, context, None);
+        }
         // The compiled await_at body checks and removes a member in two
         // administrative operations before joining its handle. Keep these
         // native F1 ordinals without changing the cooperative F0 convention.
