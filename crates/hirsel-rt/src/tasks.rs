@@ -1699,6 +1699,22 @@ pub(crate) unsafe fn resumed(run: *mut crate::context::RunShared, task: u32) -> 
     true
 }
 
+/// A stale token's dispatch returned a frame to Saved unstarted (`resumed`
+/// false) and nothing else is queued on it. Its task's save deferred the quiet
+/// verdict to that remembered wake (`Frame::quiet`), so take it here: without
+/// this recheck a run whose every task is parked waits forever instead of
+/// reporting Blocked.
+/// # Safety
+/// The caller is on an idle stack and holds no role or runtime borrow; its
+/// dispatch still holds the frame's Lease, whose drop wakes home.
+pub(crate) unsafe fn returned_unstarted(run: *mut crate::context::RunShared) {
+    let _role = unsafe { role::IdleGuard::new(run) };
+    if unsafe { (*run).control.stopped().is_some() } {
+        return;
+    }
+    unsafe { free::check_quiet(run, None) };
+}
+
 /// # Safety
 /// Admission only; no worker has started a task.
 pub(crate) unsafe fn install_cancel_metrics(ctx: *mut TaskCtx) {

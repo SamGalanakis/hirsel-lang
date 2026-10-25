@@ -1098,6 +1098,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                     true,
                 );
             } else {
+                crate::tasks::returned_unstarted(run);
                 drop(lease);
             }
             wake(&execs.home);

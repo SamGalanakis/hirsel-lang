@@ -822,3 +822,40 @@ fn runtime50_object_custody_race_matrix() {
         }
     }
 }
+
+/// A role-free token taken while its task runs, then notified before that
+/// task parks on a wait no object wake ends: the save remembers the wake and
+/// defers its quiet verdict, and the wake's dispatch returns the frame
+/// unstarted. That return still reaches the verdict, so a run whose only task
+/// is parked for good reports Blocked instead of waiting forever.
+#[test]
+fn a_stale_wake_returned_unstarted_still_reaches_the_quiet_verdict() {
+    let mut run = crate::host::BodyRun::new(2, false);
+    run.free = true;
+    unsafe { run.use_physical_dispatch() };
+    let outcome = run.run(
+        |ctx| unsafe { super::super::enable(ctx) },
+        |ctx| unsafe {
+            let token = role::with_role(ctx, |s| {
+                let me = s.current;
+                let row = s.task(me);
+                let owner = if row.pinned { Owner::Any } else { row.owner };
+                crate::pool::free::token((*ctx).run_ptr(), me, owner)
+            })
+            .expect("physical dispatch");
+            crate::pool::free::notify((*ctx).run_ptr(), &token);
+            drop(token);
+            crate::tasks::park_final(ctx)
+        },
+    );
+    let Err(crate::stop::Stop::Blocked(waits)) = outcome.ended else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(
+        waits
+            .iter()
+            .map(|wait| wait.kind.as_str())
+            .collect::<Vec<_>>(),
+        ["free.final"]
+    );
+}
