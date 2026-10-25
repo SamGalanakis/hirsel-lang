@@ -171,9 +171,35 @@ impl Metrics {
     }
 }
 
-/// The registered executor slots of one recording: which section words have an owner.
+/// The registered executor slots of one recording: which section words have an owner. Slot
+/// [`HOME`] belongs to the run's home executor: only a caller preferring it takes it, so home
+/// never waits behind another executor's registration.
 struct Executors {
     held: Box<[std::sync::atomic::AtomicBool]>,
+    /// Executors blocked in [`Recorder::register`]; a retirement wakes them only when nonzero.
+    waiting: std::sync::atomic::AtomicUsize,
+    retired: (Mutex<()>, std::sync::Condvar),
+}
+
+/// The home executor's section word.
+pub const HOME: usize = 0;
+
+impl Executors {
+    fn release(&self, index: usize) {
+        use std::sync::atomic::{Ordering, fence};
+        self.held[index].store(false, Ordering::Release);
+        // Paired with `register`'s fence: a waiter either sees this word free in its search,
+        // or is counted here and woken.
+        fence(Ordering::SeqCst);
+        if self.waiting.load(Ordering::Relaxed) != 0 {
+            self.wake();
+        }
+    }
+
+    fn wake(&self) {
+        drop(self.retired.0.lock().unwrap());
+        self.retired.1.notify_all();
+    }
 }
 
 /// One registered physical executor's section word, owned for the executor's registered
@@ -197,7 +223,7 @@ impl ExecutorSlot {
 
 impl Drop for ExecutorSlot {
     fn drop(&mut self) {
-        self.executors.held[self.index].store(false, std::sync::atomic::Ordering::Release);
+        self.executors.release(self.index);
     }
 }
 
@@ -222,6 +248,8 @@ impl<S: TapeSink, B> Recorder<S, B> {
                 held: (0..slots)
                     .map(|_| std::sync::atomic::AtomicBool::new(false))
                     .collect(),
+                waiting: std::sync::atomic::AtomicUsize::new(0),
+                retired: Default::default(),
             }),
             requests: Requests::default(),
             root_started: std::sync::atomic::AtomicBool::new(false),
@@ -260,14 +288,62 @@ impl<S: TapeSink, B> Recorder<S, B> {
     }
 
     /// Register an executor on the preferred section word, or another free one when an old
-    /// retiring executor still owns it. No section is open while searching; a caller retries
-    /// outside sections if all are held.
+    /// retiring executor still owns it ([`HOME`] only when preferred). No section is open while
+    /// searching. `None` when every word is held: a caller that may hold a scheduler role or
+    /// section never waits for one, and an executor starting outside both uses [`register`].
+    ///
+    /// [`register`]: Self::register
     pub fn executor_available(&self, preferred: usize) -> Option<ExecutorSlot> {
         self.executor(preferred).or_else(|| {
             (0..self.executors.held.len())
-                .filter(|&index| index != preferred)
+                .filter(|&index| index != preferred && index != HOME)
                 .find_map(|index| self.executor(index))
         })
+    }
+
+    /// Register a starting executor once, for its whole lifetime, outside any scheduler role or
+    /// section. When every word is held by live or retiring executors it blocks until one
+    /// retires, never spinning; `None` once the run stopped, when no section can open again.
+    pub fn register(&self, preferred: usize) -> Option<ExecutorSlot> {
+        use std::sync::atomic::{Ordering, fence};
+        if let Some(slot) = self.executor_available(preferred) {
+            return Some(slot);
+        }
+        let executors = &self.executors;
+        let mut guard = executors.retired.0.lock().unwrap();
+        executors.waiting.fetch_add(1, Ordering::Relaxed);
+        // Paired with `Executors::release`; a later release wakes under this lock.
+        fence(Ordering::SeqCst);
+        let slot = loop {
+            if self.arbiter.stopped().is_some() {
+                break None;
+            }
+            if let Some(slot) = self.executor_available(preferred) {
+                break Some(slot);
+            }
+            guard = executors.retired.1.wait(guard).unwrap();
+        };
+        executors.waiting.fetch_sub(1, Ordering::Relaxed);
+        slot
+    }
+
+    /// Retire an executor's registration. Its section word was acknowledged inactive: a slot
+    /// borrows mutably into each section, so none can be open on it here, and a cut never
+    /// waits for it again. Only then may another executor register the word.
+    pub fn retire_executor(&self, slot: ExecutorSlot) {
+        self.check_worker(&slot);
+        assert!(
+            self.arbiter.gate().unwrap().inactive(slot.index),
+            "an executor retires with its section closed"
+        );
+        drop(slot);
+    }
+
+    /// The section words registered now: live, retiring or nested executors.
+    pub fn registered(&self) -> Vec<usize> {
+        (0..self.executors.held.len())
+            .filter(|&index| self.executors.held[index].load(std::sync::atomic::Ordering::Acquire))
+            .collect()
     }
 
     /// Whether `slot` was registered with this recording.
@@ -464,6 +540,8 @@ impl<S: TapeSink, B> Recorder<S, B> {
         let Some(terminal) = self.arbiter.stop(0, &[&self.requests]) else {
             return Ok(None);
         };
+        // No section opens again: an executor waiting to register starts unregistered.
+        self.executors.wake();
         let mut cut = terminal.cut.unwrap();
         let mut scanned: BTreeMap<_, _> =
             cut.scan().into_iter().map(|s| (s.path, s.bytes)).collect();

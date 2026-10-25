@@ -303,6 +303,11 @@ impl Gate {
         self.stopped.load(Ordering::Acquire)
     }
 
+    /// Whether no section is open on `slot`: its retiring owner's acknowledgement.
+    pub fn inactive(&self, slot: usize) -> bool {
+        sc_load(&self.slots[slot].active) == 0
+    }
+
     /// Open a section on `slot`, waiting out a flush's cut. The caller is the only thread
     /// using `slot` and is not already in a section on it.
     pub fn enter(&self, slot: usize) -> Result<Section<'_>, Stopped> {

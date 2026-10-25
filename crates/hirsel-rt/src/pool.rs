@@ -141,6 +141,8 @@ pub(crate) struct Exec {
     /// the notification carries no adapter or context pointer.
     home_driver: std::sync::OnceLock<crate::readiness::Readiness>,
     home_signal: std::sync::OnceLock<Arc<crate::readiness::Signal>>,
+    /// This executor's recording slot, from its start serving the run until it leaves.
+    recording: crate::tasks::free::record::Registration,
 }
 
 // SAFETY: the cells are touched only by the exec's own thread while it runs.
@@ -175,6 +177,7 @@ impl Exec {
             exit_pending: Cell::new(false),
             home_driver: Default::default(),
             home_signal: Default::default(),
+            recording: Default::default(),
         })
     }
 
@@ -722,10 +725,41 @@ pub(crate) fn compute_index() -> Option<u16> {
     }
 }
 
-/// Preferred recording section slot. A retiring compute exec and its
-/// replacement may share an index; the recorder reserves an exclusive token
-/// and falls back to an idle slot in that case. Home and pool have disjoint
-/// preferred ranges, and no slot token crosses a physical suspension.
+/// The calling thread's executor registration, or `None` on a thread serving no exec.
+pub(crate) fn registration<T>(
+    f: impl FnOnce(Option<&crate::tasks::free::record::Registration>) -> T,
+) -> T {
+    let exec = own_exec();
+    // SAFETY: the calling thread owns this exec until it exits the run, and only it touches
+    // the registration.
+    f(unsafe { exec.as_ref() }.map(|exec| &exec.recording))
+}
+
+/// A test executor that a thread enters as serve_home and poll_home_posts enter home.
+#[cfg(test)]
+pub(crate) struct TestExec(Arc<Exec>);
+
+#[cfg(test)]
+impl TestExec {
+    pub(crate) fn new() -> Self {
+        Self(Exec::new(Kind::Home, std::ptr::null_mut(), false))
+    }
+
+    /// Run `f` with this as the calling thread's exec, then restore the enclosing one.
+    pub(crate) fn enter<T>(
+        &self,
+        f: impl FnOnce(&crate::tasks::free::record::Registration) -> T,
+    ) -> T {
+        let enclosing = EXEC.with(|e| e.replace(Arc::as_ptr(&self.0)));
+        let result = f(&self.0.recording);
+        EXEC.with(|e| e.set(enclosing));
+        result
+    }
+}
+
+/// Preferred recording section slot of the calling executor, as it registers. A retiring
+/// compute exec and its replacement may share an index; the replacement then registers an
+/// idle slot. Home and pool have disjoint preferred ranges.
 pub(crate) fn recorder_slot() -> usize {
     let exec = own_exec();
     if exec.is_null() {
@@ -1194,9 +1228,14 @@ unsafe impl Send for RunPtr {}
 fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
     let run = run.0;
     EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
+    // SAFETY: this exec's own thread, before its first post: no role or section is held. A
+    // starting executor may wait for a retiring one's slot.
+    unsafe { exec.recording.register(&*run, recorder_slot(), true) };
     // The idle fiber of a worker thread is the thread's own stack, here.
     // SAFETY: this is the exec's own thread, idle between posts.
     while unsafe { serve(run, &exec) } {}
+    // SAFETY: the exec's last phase ended; `exited` below acknowledges its retirement.
+    unsafe { exec.recording.retire(&*run) };
     EXEC.with(|e| e.set(std::ptr::null()));
     if matches!(exec.kind, Kind::Compute(_)) {
         unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
@@ -1392,6 +1431,8 @@ pub(crate) unsafe fn serve_home(run: *mut RunShared, finished: &dyn Fn() -> bool
     // Saved-frame cleanup and immediate-child lending need this idle Exec,
     // including when home itself is the single compute worker.
     let enclosing_exec = EXEC.with(|e| e.replace(Arc::as_ptr(&home)));
+    // SAFETY: the home thread, idle: home registers once and never waits for a slot.
+    unsafe { home.recording.register(&*run, recorder_slot(), false) };
     loop {
         // SAFETY: this is the home thread, idle on its own stack.
         unsafe { post_deferred(run, &home) };
@@ -1463,6 +1504,8 @@ pub(crate) unsafe fn close_home(run: *mut RunShared) {
             None => break,
         }
     }
+    // SAFETY: the home thread after its last call; its slot leaves with the run.
+    unsafe { home.recording.retire(&*run) };
 }
 
 /// Publish an execution's shared readiness before this child starts. Posts
@@ -1494,6 +1537,8 @@ pub(crate) unsafe fn poll_home_posts(run: *mut RunShared) -> bool {
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     let home = &execs.home;
     let enclosing = EXEC.with(|e| e.replace(Arc::as_ptr(home)));
+    // SAFETY: as in serve_home.
+    unsafe { home.recording.register(&*run, recorder_slot(), false) };
     unsafe { post_deferred(run, home) };
     unsafe { free::saved(run, home) };
     let progress = if let Some(saved) = free::next(execs, home) {

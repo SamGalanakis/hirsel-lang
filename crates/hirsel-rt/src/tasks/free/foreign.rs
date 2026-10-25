@@ -169,8 +169,17 @@ mod tests {
                                 hirsel_rt_v2_callback_leave(ctx);
                                 hirsel_rt_v2_foreign_leave(interval.as_ptr().cast());
                                 assert_eq!(scheduler(ctx).task((*ctx).task_id).owner, Owner::Any);
+                                own_slot(recorded);
                                 migrate(ctx);
                                 assert_ne!(std::thread::current().id(), thread);
+                                // The task's encoder migrated; its next phase runs on the new
+                                // executor's own registration, never a carried slot.
+                                own_slot(recorded);
+                                let mut canceled = 99;
+                                assert_eq!(
+                                    hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
+                                    STATUS_OK
+                                );
                                 STATUS_OK
                             },
                         );
@@ -178,6 +187,7 @@ mod tests {
                         assert_eq!(outcome.pending, 0);
                         if let Some(recording) = recording {
                             recording.recorder.stop("returned", None).unwrap().unwrap();
+                            assert_executors_retired(&recording);
                             assert!(std::sync::Arc::try_unwrap(recording).is_ok());
                         }
                     }
@@ -255,11 +265,31 @@ mod tests {
                         );
                         std::thread::yield_now();
                     }
+                    assert_executors_retired(&recording);
                     assert!(std::sync::Arc::try_unwrap(recording).is_ok());
                 }
             }
         }
     }
+
+    /// The calling executor's own registered slot in a recorded run; `None` unrecorded.
+    fn own_slot(recorded: bool) -> Option<usize> {
+        let own = crate::pool::registration(|own| own.and_then(|own| own.index()));
+        assert_eq!(
+            own.is_some(),
+            recorded,
+            "a recorded run's executor is registered"
+        );
+        own
+    }
+
+    /// Every phase ran on its executor's own registration, and every executor retired.
+    fn assert_executors_retired(recording: &super::super::record::Recording) {
+        use std::sync::atomic::Ordering;
+        assert_eq!(recording.transients.load(Ordering::Relaxed), 0);
+        assert!(recording.recorder.registered().is_empty());
+    }
+
     #[test]
     fn home_and_pool_callbacks_record_on_their_executing_thread() {
         for width in [2, 8] {
@@ -311,6 +341,9 @@ mod tests {
                             // while a replacement runs (unless this executor's own
                             // registration already holds it). The phase must run on
                             // an exclusive registered slot, never alias or panic.
+                            // Home and blocking callbacks phase on their own executor's
+                            // registration, distinct from the posting compute worker's.
+                            assert!(own_slot(true).is_some());
                             let occupied = inspect.recorder.executor(crate::pool::recorder_slot());
                             assert_eq!(
                                 hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0),
@@ -338,6 +371,7 @@ mod tests {
                     cut.progress[&Vec::new()],
                     hirsel_free::phase::Progress::new(8, Phase::Done)
                 );
+                assert_executors_retired(&recording);
                 assert!(std::sync::Arc::try_unwrap(recording).is_ok());
             }
         }

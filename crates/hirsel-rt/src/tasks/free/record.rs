@@ -22,36 +22,124 @@ use std::sync::{Arc, Mutex};
 /// positions and payloads explicitly with [`reserve`].
 const PHASE: RecordBound = RecordBound::records(4);
 
-thread_local! {
-    /// This physical executor's registered section slot in the recording it last ran a phase
-    /// for. A phase checks it out for its section and returns it; a nested callback that finds
-    /// it checked out registers a distinct slot. Thread exit retires it.
-    static EXECUTOR: std::cell::Cell<Option<ExecutorSlot>> = const { std::cell::Cell::new(None) };
-}
+/// A physical executor's registration in its run's recording, owned by its dispatcher `Exec`:
+/// registered once when the executor starts serving the run and retired when it leaves, after
+/// its section word is acknowledged inactive. Each phase on the executor checks the slot out
+/// and returns it; a nested callback that finds it checked out, a caller on no executor of
+/// this run and a thread serving another run's recording use a distinct transient slot.
+/// Touched only by the executor's own thread.
+#[derive(Default)]
+pub(crate) struct Registration(std::cell::Cell<Option<ExecutorSlot>>);
 
-/// This executor's registered slot in `recorder`, registering one on first use. No section is
-/// open while registering; retiring executors may briefly hold every slot, so wait outside.
-fn checkout(recorder: &Recorder<Sink, crate::io::Request>) -> ExecutorSlot {
-    if let Ok(Some(slot)) = EXECUTOR.try_with(std::cell::Cell::take) {
+impl Registration {
+    /// Register a starting executor that prefers `preferred`. A compute or blocking executor
+    /// may wait for a retiring one (`wait`); home never waits behind another executor.
+    /// # Safety
+    /// The executor's own thread, as it starts serving `run`, outside any role or section.
+    pub(crate) unsafe fn register(
+        &self,
+        run: &crate::context::RunShared,
+        preferred: usize,
+        wait: bool,
+    ) {
+        if let Some(recording) = run.recording.get() {
+            unsafe { self.register_with(recording, preferred, wait) };
+        }
+    }
+
+    /// # Safety
+    /// As for [`register`](Self::register), in `recording`'s run.
+    pub(crate) unsafe fn register_with(&self, recording: &Recording, preferred: usize, wait: bool) {
+        let recorder = &recording.recorder;
+        if let Some(slot) = self.0.take() {
+            // Registered once: a home owner that polls again keeps its slot.
+            assert!(recorder.owns(&slot), "an executor serves one recording");
+            self.0.set(Some(slot));
+            return;
+        }
+        self.0.set(if wait {
+            recorder.register(preferred)
+        } else {
+            recorder.executor_available(preferred)
+        });
+    }
+
+    /// Retire the executor's registration as it leaves `run`.
+    /// # Safety
+    /// The executor's own thread, after its last phase for `run`.
+    pub(crate) unsafe fn retire(&self, run: &crate::context::RunShared) {
+        if let Some(recording) = run.recording.get() {
+            unsafe { self.retire_from(recording) };
+        }
+    }
+
+    /// # Safety
+    /// As for [`retire`](Self::retire), in `recording`'s run.
+    pub(crate) unsafe fn retire_from(&self, recording: &Recording) {
+        if let Some(slot) = self.0.take() {
+            recording.recorder.retire_executor(slot);
+        }
+    }
+
+    /// The executor's own slot when it is registered with `recorder` and not checked out.
+    fn take(&self, recorder: &Recorder<Sink, crate::io::Request>) -> Option<ExecutorSlot> {
+        let slot = self.0.take()?;
         if recorder.owns(&slot) {
-            return slot;
+            return Some(slot);
         }
-        // A previous recording's registration retires here.
-        drop(slot);
+        self.0.set(Some(slot));
+        None
     }
-    loop {
-        if let Some(slot) = recorder.executor_available(crate::pool::recorder_slot()) {
-            return slot;
-        }
-        std::thread::yield_now();
+
+    #[cfg(test)]
+    pub(crate) fn index(&self) -> Option<usize> {
+        let slot = self.0.take();
+        let index = slot.as_ref().map(ExecutorSlot::index);
+        self.0.set(slot);
+        index
     }
 }
 
-/// Return a slot after its section closed. A nested registration made while it was checked out
-/// retires instead.
-fn checkin(slot: ExecutorSlot) {
-    let nested = EXECUTOR.try_with(|cached| cached.replace(Some(slot)));
-    drop(nested);
+/// The first section word past every executor's preferred one: transient registrations
+/// search from here.
+const TRANSIENT: usize = crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2;
+
+/// A phase's executor slot: the running executor's own, or a transient one.
+struct Checkout {
+    slot: ExecutorSlot,
+    own: bool,
+}
+
+/// The slot for one phase on this thread, outside any section. Registration never waits here:
+/// a phase may hold the scheduler role. Capacity holds every live, retiring, home and blocking
+/// executor beside the transient ones, so exhaustion is a runtime fault, not a wait.
+fn checkout(recording: &Recording) -> Checkout {
+    let recorder = &recording.recorder;
+    if let Some(slot) = crate::pool::registration(|own| own.and_then(|own| own.take(recorder))) {
+        return Checkout { slot, own: true };
+    }
+    #[cfg(test)]
+    recording
+        .transients
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slot = recorder
+        .executor_available(TRANSIENT)
+        .unwrap_or_else(|| crate::fault("recording executor slots exhausted"));
+    Checkout { slot, own: false }
+}
+
+/// Return a slot after its section closed: the executor keeps its own; a transient one
+/// retires at once.
+fn checkin(recording: &Recording, checkout: Checkout) {
+    if checkout.own {
+        crate::pool::registration(|own| {
+            own.expect("the executor still runs")
+                .0
+                .set(Some(checkout.slot))
+        });
+    } else {
+        recording.recorder.retire_executor(checkout.slot);
+    }
 }
 
 /// Production recordings stream to a pinned file; explicit runtime tests keep
@@ -174,6 +262,9 @@ pub(crate) struct Recording {
     pub(super) host_keys: crate::io_keys::KeyTable,
     pub(super) authorities: super::host::requests::Authorities,
     production: bool,
+    /// Phases that ran on a transient slot rather than their executor's registration.
+    #[cfg(test)]
+    pub(crate) transients: std::sync::atomic::AtomicU64,
 }
 
 pub(crate) struct Task {
@@ -297,18 +388,18 @@ impl Task {
         request: &hirsel_free::claim::Request<crate::io::Request>,
     ) -> Stopped<bool> {
         self.log.reserve(PHASE);
-        let mut worker = checkout(&self.shared.recorder);
+        let mut worker = checkout(&self.shared);
         let claimed = self
             .shared
             .recorder
             .phase(
-                &mut worker,
+                &mut worker.slot,
                 &mut self.log,
                 Progress::new(self.ordinal, Phase::Claimed),
                 |writer| self.shared.recorder.claim(writer, request),
             )
             .map_err(|_| Stop::Requested);
-        checkin(worker);
+        checkin(&self.shared, worker);
         claimed
     }
 }
@@ -389,12 +480,12 @@ fn publish_phase<T>(
     let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
     let shared = task.shared.clone();
     task.log.reserve(PHASE);
-    let mut worker = checkout(&shared.recorder);
+    let mut worker = checkout(&shared);
     let progress = Progress::new(task.ordinal, phase);
     let mut action = Some(action);
     let result = loop {
         let attempt = shared.recorder.phase_if(
-            &mut worker,
+            &mut worker.slot,
             &mut task.log,
             progress,
             || roots.apply(ctx),
@@ -406,7 +497,7 @@ fn publish_phase<T>(
             Ok(None) => crate::roots::wait_phase(ctx),
         }
     };
-    checkin(worker);
+    checkin(&shared, worker);
     if result.is_ok() {
         // The entry is now published and no section/writer survives. A cut
         // admitting it also admits its full deterministic frozen-graph tail.
@@ -649,9 +740,9 @@ impl Recording {
         let mut recorder = Recorder::new(
             sink,
             binding,
-            // Every physical executor keeps its registered slot while it lives: room for a
-            // full topology plus as many retiring executors not yet exited.
-            2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 1),
+            // Home, a full compute topology and the blocking pool register for their lifetime;
+            // the second half holds retiring executors not yet exited and transient callers.
+            2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2),
             durable,
             trace,
             None,
@@ -666,6 +757,8 @@ impl Recording {
             requests: std::sync::atomic::AtomicU64::new(1),
             host_keys: Default::default(),
             authorities: Default::default(),
+            #[cfg(test)]
+            transients: Default::default(),
         }))
     }
 
@@ -686,8 +779,21 @@ impl Recording {
             self.authorities
                 .root(unsafe { (*ctx).run_ref().free_root_env });
         }
-        let mut worker = self.recorder.executor(0).unwrap();
+        // Admission is the home thread before any executor starts: it registers home's word
+        // for the root's START, then retires it before home registers for the run.
+        assert!(
+            unsafe { (*ctx).run_ref() }
+                .recording
+                .set(self.clone())
+                .is_ok(),
+            "a run has one recording"
+        );
+        let mut worker = self
+            .recorder
+            .executor(hirsel_free::concurrent::HOME)
+            .unwrap();
         let log = self.recorder.root(&mut worker).unwrap();
+        self.recorder.retire_executor(worker);
         unsafe {
             (*ctx).recording = Some(Box::new(Task {
                 shared: self.clone(),
@@ -1089,3 +1195,7 @@ mod tests {
 
 #[cfg(test)]
 mod root_tests;
+
+#[cfg(test)]
+#[path = "record/executor_tests.rs"]
+mod executor_tests;
