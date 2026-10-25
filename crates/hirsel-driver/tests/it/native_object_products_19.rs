@@ -24,6 +24,8 @@ pub(super) struct Objects {
     pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
     pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
     pub hits: usize,
+    pub products: Vec<(CodegenKey, ProductRef)>,
+    pub ready_transformations: u64,
 }
 
 pub(super) fn compile(
@@ -244,7 +246,7 @@ pub(super) fn compile_with_context<R>(
     drop(discovery);
     let mut runtime =
         AdmittedRuntime::new(jobs, budget.reserve(runtime_bytes).unwrap(), errors).unwrap();
-    let factory = Arc::new(NativeTaskFactory::new(native));
+    let factory = Arc::new(NativeTaskFactory::new(native.clone()));
     for kind in [
         queries::INSTANCE_KIND,
         queries::ARENA_CANDIDATES_KIND,
@@ -319,6 +321,13 @@ pub(super) fn compile_with_context<R>(
             summaries,
             objects: artifacts,
             hits,
+            products: keys
+                .into_iter()
+                .zip(selected[..count].iter().copied())
+                .collect(),
+            ready_transformations: native
+                .ready_transformations
+                .load(std::sync::atomic::Ordering::Relaxed),
         },
         output,
     )
