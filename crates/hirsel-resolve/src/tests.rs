@@ -412,10 +412,11 @@ fn recursive_header_retains_other_declarations_failed_signature_reads() {
     );
     clean(&output);
     assert_eq!(fake.reads, vec![own("Other")]);
-    assert!(output.reads.iter().any(|read| read == &DependencyRead::Signature {
-        definition: DefId::intern(&own("Other")),
-        fingerprint: None,
-    }));
+    assert!(output.reads.iter().any(|read| read
+        == &DependencyRead::Signature {
+            definition: DefId::intern(&own("Other")),
+            fingerprint: None,
+        }));
 }
 
 #[test]
@@ -698,10 +699,11 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
         output.query.value.dependencies,
         vec![own("good"), own("unavailable")]
     );
-    assert!(output.reads.iter().any(|read| read == &DependencyRead::Signature {
-        definition: hirsel_syntax::DefId::intern(&own("unavailable")),
-        fingerprint: None
-    }));
+    assert!(output.reads.iter().any(|read| read
+        == &DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&own("unavailable")),
+            fingerprint: None
+        }));
     assert!(output.reads.iter().any(|r| matches!(r,DependencyRead::Lookup { segments,result: Err(LookupError::Missing),manifest,.. } if segments == &["missing"] && *manifest == index.revision)));
     assert_eq!(fake.reads.len(), 2);
 }
