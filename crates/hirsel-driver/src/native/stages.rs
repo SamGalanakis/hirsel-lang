@@ -1122,7 +1122,9 @@ fn entries(unit: &hirsel_lir::ir::LirUnit<Ready>) -> impl Iterator<Item = (Strin
 }
 
 /// The definitions `unit` names as C callbacks: `FunctionRef`s at a pointer scalar (PROG-4).
-pub(crate) fn callbacks<S>(unit: &hirsel_lir::ir::LirUnit<S>) -> impl Iterator<Item = DefPath> + '_ {
+pub(crate) fn callbacks<S>(
+    unit: &hirsel_lir::ir::LirUnit<S>,
+) -> impl Iterator<Item = DefPath> + '_ {
     use hirsel_lir::ir::{Inst, ValueRepr};
     unit.instructions.iter().filter_map(|inst| match *inst {
         Inst::FunctionRef { result, symbol }
