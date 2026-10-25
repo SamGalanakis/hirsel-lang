@@ -1,0 +1,12 @@
+// rule: MEM-7
+// expect: accept
+// A resource held through a block keeps its owner; the column is the carrier.
+resource type Token {
+  id: u32,
+}
+
+@soa
+type Row {
+  id: u32,
+  tokens: List[Token],
+}

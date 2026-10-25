@@ -1,0 +1,8 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 5
+// twin: MEM/MEM-7-soa-flat-field-ok.hir
+// A flat type takes no layout attribute: its bytes have no columns.
+@soa
+flat type Row {
+  text: String,
+}

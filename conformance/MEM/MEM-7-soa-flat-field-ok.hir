@@ -1,0 +1,13 @@
+// rule: MEM-7
+// expect: accept
+// A fixed-size flat field is a fixed-stride column.
+flat type Point {
+  x: u32,
+  y: u32,
+}
+
+@soa
+type Row {
+  id: u32,
+  at: Point,
+}

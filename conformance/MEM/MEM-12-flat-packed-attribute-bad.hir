@@ -1,0 +1,7 @@
+// rule: MEM-12
+// expect: reject MEM-12 at line 4
+// twin: MEM/MEM-7-packed.hir
+@packed
+flat type Row {
+  id: u32,
+}

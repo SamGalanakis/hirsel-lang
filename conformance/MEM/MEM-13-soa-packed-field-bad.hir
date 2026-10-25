@@ -1,0 +1,10 @@
+// rule: MEM-13
+// expect: reject MEM-13 at line 6
+// twin: MEM/MEM-7-soa-flat-field-ok.hir
+type Shape = Dot(u8) | Line(u64, u64)
+
+@soa
+type Row {
+  id: u32,
+  form: Packed[Shape],
+}

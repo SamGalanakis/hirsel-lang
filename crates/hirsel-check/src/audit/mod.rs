@@ -7,6 +7,7 @@ use hirsel_types::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod allocation;
+mod composition;
 mod layout;
 mod packed;
 
@@ -56,6 +57,8 @@ pub fn check(
     };
     audit.declaration();
     audit.inline_layout()?;
+    audit.layout_composition()?;
+    audit.inline_soa()?;
     audit.allocations()?;
     audit.variant_places()?;
     for row in &audit.input.checked.expressions {

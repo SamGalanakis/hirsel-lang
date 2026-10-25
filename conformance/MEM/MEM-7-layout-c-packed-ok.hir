@@ -1,0 +1,15 @@
+// rule: MEM-7
+// expect: accept
+// An ordinary record may combine @layout(c) with @packed, or with @align.
+@layout(c)
+@packed
+type Pair {
+  a: u32,
+  b: u8,
+}
+
+@layout(c)
+@align(16)
+type Wide {
+  a: u32,
+}

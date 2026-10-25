@@ -197,8 +197,7 @@ than supply a language-visible answer.
 - The optimizer-independent compile-time step budget and its charges
   ([CT-4](compile-time.md#ct-4-order)).
 - Constructor-tail loop eligibility ([LANG-10](language.md#lang-10-recursion)).
-- Complete layout composition rules for `@soa`, variants and flat types, and the native
-  data ABI ([MEM-7](memory.md#mem-7-layout)).
+- The native data ABI ([MEM-7](memory.md#mem-7-layout)).
 
 The [coverage ledger](../../conformance/coverage-ledger.md) distinguishes these
 open decisions from missing instrumentation, current defects and resolved feature

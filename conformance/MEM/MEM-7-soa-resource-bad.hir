@@ -1,0 +1,7 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 4
+// twin: MEM/MEM-7-soa-resource-field-ok.hir
+@soa
+resource type Token {
+  id: u32,
+}

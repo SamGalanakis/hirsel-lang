@@ -1,0 +1,9 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 5
+// twin: MEM/MEM-7-layout-c-packed-ok.hir
+@packed
+@align(8)
+type Pair {
+  a: u32,
+  b: u8,
+}

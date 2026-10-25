@@ -1,0 +1,9 @@
+// rule: MEM-7
+// expect: reject MEM-7 at line 5
+// twin: MEM/MEM-7-soa-flat-field-ok.hir
+@soa
+@align(16)
+type Pair {
+  a: u32,
+  b: u8,
+}

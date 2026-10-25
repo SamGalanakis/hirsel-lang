@@ -281,8 +281,22 @@ explicit unbox syntax and no implicit boxing conversion. `String`, `Bytes`, `Lis
 `@noalloc` holds for every instantiation. Borrows never alias a `mut` argument, so there are
 no runtime overlap checks.
 
-**Unspecified:** the complete composition rules for `@soa`, variants and flat types, and
-the native data ABI. The attribute metadata is parsed and checked.
+**Composition.** On one declaration, `flat` excludes every layout attribute
+([MEM-12](#mem-12-flat-types)), `@soa` excludes `@layout(c)`, `@packed` and `@align`, and
+`@packed` excludes `@align`; any other record or variant may combine `@layout(c)` with
+`@packed` or with `@align`. Attributes never propagate into nested types: a field's type
+keeps its own declaration's layout.
+
+`@soa T` changes only the storage of a direct `List[T]` or `Array[T]`; a standalone `T`, and
+`T` inside any other type, stays an ordinary value. Every column has a fixed stride, so an
+`@soa` declaration whose inline storage holds a `Packed` value
+([MEM-13](#mem-13-packed-variants)), a variable-size flat value or a resource, or that is
+itself a resource, is rejected, and so is `Inline[T, n]` of an `@soa` `T`. Ordinary `String`,
+`Bytes`, `List` and `box` fields are fixed-size carriers that keep their owners. Each
+rejection is a MEM-7 error at the `@soa` attribute, except a `Packed` occurrence, which is
+MEM-13.
+
+The native data ABI is unspecified.
 
 ### MEM-8: Vectors
 
@@ -401,7 +415,8 @@ The sole growable field is spelled `items: List[T] @ growable`, where `T` has
 flat-compatible layout (sized scalars or flat elements); the marker is field metadata,
 never a value mode. MEM-12 rejects a growable marker on a non-flat owner, on a field that
 is not a `List`, with an element whose layout is not flat-compatible, or in a position that
-is not last.
+is not last. A flat type cannot hold, inline or as a sequence element, a type declared with
+`@layout(c)`, `@packed`, `@align` or `@soa`: flat bytes have no columns and no target layout.
 
 ```hirsel
 flat type Item { sku: String, qty: u32 }
