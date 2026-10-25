@@ -613,6 +613,9 @@ fn prepare_product_inputs(root: &Path, manifest: &Path) -> PathBuf {
         hirsel_driver::load_program_source(manifest, None)
             .unwrap_or_else(|e| panic!("ordinary package setup: {e}"));
     });
+    if recovery_plan().is_some() {
+        return products;
+    }
     let closure = Command::new("python3")
         .arg(root.join("seal_inputs.py"))
         .arg(&root)
