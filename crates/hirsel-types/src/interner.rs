@@ -10,6 +10,7 @@ use std::hash::{Hash, Hasher};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock};
+mod retained;
 
 /// A row of the session interner. It carries no provenance and has no order.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
