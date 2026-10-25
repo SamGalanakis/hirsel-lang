@@ -43,30 +43,30 @@ pub struct LeafPlan {
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
-        Self::from_unit(unit.unit(), layouts)
+        Self::from_unit(unit.unit(), layouts, false)
     }
 
     /// Initial observations precede placement, RC insertion and cleanup. The
     /// native producer must transport this plan through those passes, then
     /// consume it with from_relocated; Ready enumeration cannot replace it.
+    /// Owned direct-call operands use existing semantic commit points here;
+    /// native execution still refuses them until its commit transport exists.
     pub fn prepare_value(
         unit: &ValidatedUnit<crate::stage::Value>,
         layouts: &LayoutTable,
     ) -> Result<Plan, String> {
-        Self::from_unit(unit.unit(), layouts).map(|plan| plan.plan)
+        Self::from_unit(unit.unit(), layouts, true).map(|plan| plan.plan)
     }
 
     fn from_unit<S: crate::stage::Stage>(
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
+        call_transport: bool,
     ) -> Result<Self, String> {
         let owned = |v: ValueId| unit.values[v.index()].holding == Holding::Owned;
         let layout = |v: ValueId| unit.types[unit.values[v.index()].ty.index()].layout;
-        if unit
-            .parameters
-            .iter()
-            .chain(&unit.captures)
-            .any(|&v| owned(v))
+        if unit.captures.iter().any(|&v| owned(v))
+            || (!call_transport && unit.parameters.iter().any(|&v| owned(v)))
         {
             return Err(
                 "native ownership tracing: owned entry transport is not implemented".into(),
@@ -101,21 +101,23 @@ impl LeafPlan {
             );
             let site =
                 super::check::site(unit, point).ok_or("ownership observation has no source")?;
-            markers.insert(
-                id,
-                NativeMarker {
+            if !call_transport {
+                markers.insert(
                     id,
-                    kind: match kind {
-                        Kind::Create => 0,
-                        Kind::Move => 1,
-                        Kind::Drop => 2,
+                    NativeMarker {
+                        id,
+                        kind: match kind {
+                            Kind::Create => 0,
+                            Kind::Move => 1,
+                            Kind::Drop => 2,
+                        },
+                        token: location(unit, from)?,
+                        owner: location(unit, to)?,
+                        site,
+                        layout,
                     },
-                    token: location(unit, from)?,
-                    owner: location(unit, to)?,
-                    site,
-                    layout,
-                },
-            );
+                );
+            }
             observations.push(Observation {
                 point,
                 marker: ObserveOwnership {
@@ -128,6 +130,19 @@ impl LeafPlan {
             });
             Ok(())
         };
+        if call_transport {
+            for (parameter, &value) in unit.parameters.iter().enumerate() {
+                if owned(value) {
+                    push(
+                        Point::Entry,
+                        Kind::Move,
+                        Location::Parameter(parameter as u32),
+                        Location::Value(value),
+                        layout(value),
+                    )?;
+                }
+            }
+        }
         for (b, block) in unit.blocks.iter().enumerate() {
             if block
                 .parameters
@@ -304,25 +319,53 @@ impl LeafPlan {
                 }
             }
             match unit.terminators[b.index()] {
-                Terminator::Call { call, .. } => {
+                Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
-                    if !matches!(call.callee, Callee::Direct(_))
-                        || call.result.is_some_and(owned)
-                        || call
-                            .arguments
-                            .get(&unit.pools.call_arguments)
-                            .unwrap_or(&[])
-                            .iter()
-                            .any(|argument| match argument.value {
-                                ArgumentValue::Value(value) => owned(value),
-                                ArgumentValue::Address { .. } => true,
-                            })
+                    if !matches!(call.callee, Callee::Direct(_)) {
+                        return Err("native ownership tracing: mutable or indirect call transport is not implemented".into());
+                    }
+                    for argument in call
+                        .arguments
+                        .get(&unit.pools.call_arguments)
+                        .unwrap_or(&[])
                     {
-                        return Err("native ownership tracing: owned, mutable or indirect call transport is not implemented".into());
+                        match argument.value {
+                            ArgumentValue::Address { .. } => return Err("native ownership tracing: mutable or indirect call transport is not implemented".into()),
+                            ArgumentValue::Value(value) if owned(value) => {
+                                if !call_transport || argument.passing != hirsel_core_contract::Passing::Take {
+                                    return Err("native ownership tracing: owned call transport is not implemented".into());
+                                }
+                                push(Point::CallEntered(b), Kind::Move, Location::Value(value), Location::Parameter(argument.parameter), layout(value))?;
+                            }
+                            _ => (),
+                        }
+                    }
+                    if let Some(result) = call.result.filter(|&value| owned(value)) {
+                        if !call_transport || normal.is_none() {
+                            return Err("native ownership tracing: owned call result transport is not implemented".into());
+                        }
+                        push(
+                            Point::CallReturned(b),
+                            Kind::Move,
+                            Location::Return,
+                            Location::Value(result),
+                            layout(result),
+                        )?;
                     }
                 }
-                Terminator::Return(Some(v)) if owned(v) => {
-                    return Err("native ownership tracing: owned return is not implemented".into());
+                Terminator::Return(Some(value)) if owned(value) => {
+                    if !call_transport {
+                        return Err(
+                            "native ownership tracing: owned return is not implemented".into()
+                        );
+                    }
+                    push(
+                        Point::Return(b),
+                        Kind::Move,
+                        Location::Value(value),
+                        Location::Return,
+                        layout(value),
+                    )?;
                 }
                 _ => (),
             }

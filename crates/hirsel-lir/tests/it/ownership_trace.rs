@@ -2161,15 +2161,112 @@ fn ownership_trace_value_producer_starts_before_every_lowering_recipe() {
 }
 
 #[test]
-fn ownership_trace_value_producer_refuses_unimplemented_owned_entry_transport() {
+fn ownership_trace_value_producer_keeps_owned_entry_return_and_ready_refusal() {
     let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
     let value = t.owned(l::BLK);
     t.param(value);
     t.builder.ret(ENTRY, Some(value));
     let (unit, table, _) = t.finish();
     let unit = checked_native_fixture(unit, &table);
-    let error = native::LeafPlan::prepare_value(&unit, &table).unwrap_err();
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    assert_eq!(
+        plan.observations
+            .iter()
+            .map(|o| (o.point, o.marker.kind, o.marker.token, o.marker.owner))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                Point::Entry,
+                Kind::Move,
+                Location::Parameter(0),
+                Location::Value(value)
+            ),
+            (
+                Point::Return(ENTRY),
+                Kind::Move,
+                Location::Value(value),
+                Location::Return
+            ),
+        ]
+    );
+    check(unit.unit(), &plan).unwrap();
+    let ready = checked_native_fixture(
+        unit.into_raw().into_stage::<hirsel_lir::stage::Ready>(),
+        &table,
+    );
+    let error = native::LeafPlan::from_relocated(
+        &ready,
+        &table,
+        &Plan {
+            unit: ready.unit().digest(),
+            ..plan
+        },
+    )
+    .unwrap_err();
     assert!(error.contains("owned entry transport"), "{error}");
+}
+
+#[test]
+fn ownership_trace_value_producer_records_owned_call_commit_points_and_refuses_forgery() {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
+    let value = t.owned(l::BLK);
+    t.param(value);
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.builder.propagate();
+    let result = t
+        .call(
+            ENTRY,
+            &[(Passing::Take, l::BLK)],
+            Some(l::BLK),
+            &[ArgumentValue::Value(value)],
+            (normal, &[]),
+            failure,
+        )
+        .unwrap();
+    t.builder.ret(normal, Some(result));
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    let expected = [
+        (Point::Entry, Location::Parameter(0), Location::Value(value)),
+        (
+            Point::CallEntered(ENTRY),
+            Location::Value(value),
+            Location::Parameter(0),
+        ),
+        (
+            Point::CallReturned(ENTRY),
+            Location::Return,
+            Location::Value(result),
+        ),
+        (
+            Point::Return(normal),
+            Location::Value(result),
+            Location::Return,
+        ),
+    ];
+    assert_eq!(plan.observations.len(), expected.len());
+    for (observation, (point, token, owner)) in plan.observations.iter().zip(expected) {
+        assert_eq!(
+            (
+                observation.point,
+                observation.marker.token,
+                observation.marker.owner,
+                observation.marker.kind
+            ),
+            (point, token, owner, Kind::Move)
+        );
+    }
+    check(unit.unit(), &plan).unwrap();
+    let mut forged = plan.clone();
+    forged.observations[1].marker.owner = Location::Parameter(1);
+    assert!(matches!(
+        check(unit.unit(), &forged),
+        Err(Error::InvalidBinding(MarkerId(1)))
+    ));
+    let mut wrong_result = plan.clone();
+    wrong_result.observations[2].point = Point::CallReturned(normal);
+    assert!(check(unit.unit(), &wrong_result).is_err());
 }
 
 fn native_plan_binding_case(corrupt_body: bool) {
