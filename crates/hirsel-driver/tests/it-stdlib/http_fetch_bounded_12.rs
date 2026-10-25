@@ -7,6 +7,8 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 fn fixture(name: &str) -> PathBuf {
@@ -401,6 +403,10 @@ fn assert_closed(events: &[hirsel_rt::io::Event], count: usize) {
 fn loopback_boundaries_decoding_legacy_and_offline_replay() {
     with_compiler_stack(|| {
         let path = fixture("main");
+        // Each live row arms a 30 s accept window. Check the program before any
+        // is armed and keep it resident, so every run of this path reuses it.
+        hirsel_driver::session::enable_resident(1);
+        check_safe_path(&path).unwrap();
         let mut loaded = checked(&path);
         let program = ready(&mut loaded);
         let retain = std::env::var_os("HTTP_FETCH_BOUNDED_12_EVIDENCE");
@@ -487,6 +493,8 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                 let url = format!("http://127.0.0.1:{port}{target}");
                 let expected = row.expected.replace("{url}", &url);
                 let denied = row.name == "denied";
+                // Set once the caller has returned, so a helper whose caller failed stops early.
+                let returned = Arc::new(AtomicBool::new(false));
                 let peer = if denied {
                     drop(listener);
                     None
@@ -496,6 +504,7 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                     let coding = row.coding;
                     let label = format!("row {row_index} {} engine {engine}", row.name);
                     let wire_path = dir.join(format!("{row_index}-{}-{engine}.request", row.name));
+                    let returned = returned.clone();
                     Some(std::thread::spawn(move || {
                         listener.set_nonblocking(true).unwrap();
                         for exchange in 0..if redirect { 2 } else { 1 } {
@@ -507,6 +516,7 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                                         Ok((stream, _)) => break stream,
                                         Err(error)
                                             if error.kind() == std::io::ErrorKind::WouldBlock
+                                                && !returned.load(Ordering::Acquire)
                                                 && std::time::Instant::now() < deadline =>
                                         {
                                             std::thread::sleep(Duration::from_millis(5))
@@ -606,7 +616,7 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                 let tape = dir.join(format!("{row_index}-{}-{engine}.tape", row.name));
                 eprintln!("loopback row {row_index} {} engine {engine}", row.name);
                 if engine == 0 {
-                    ok(run_path_on_host(
+                    let outcome = run_path_on_host(
                         &path,
                         HostLaunch::Live {
                             config: LaunchConfig::Grants {
@@ -618,8 +628,9 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                         },
                         Some(20_000_000),
                         Verify::On,
-                    )
-                    .unwrap());
+                    );
+                    returned.store(true, Ordering::Release);
+                    ok(outcome.unwrap());
                 } else {
                     let mut command = Command::new(&executables[engine - 1]);
                     if !row.native_only {
@@ -629,8 +640,9 @@ fn loopback_boundaries_decoding_legacy_and_offline_replay() {
                         .arg("--hirsel-grants")
                         .arg(&grants)
                         .args(&args)
-                        .output()
-                        .unwrap();
+                        .output();
+                    returned.store(true, Ordering::Release);
+                    let output = output.unwrap();
                     assert!(
                         output.status.success(),
                         "{} engine {engine}: {output:?}",
