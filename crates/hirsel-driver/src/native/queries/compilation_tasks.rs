@@ -17,8 +17,8 @@ use crate::native::object_queries::{
     CODEGEN_KIND, CodegenKey, LINK_KIND, LinkKey, ObjectTaskFactory,
 };
 use crate::native::root_source::NativeLinkSource;
-use hirsel_artifact_store::{Action, Address, Domain};
 use hirsel_engine::runtime::*;
+use hirsel_engine::store::{Action, Address, Domain};
 use std::{collections::BTreeMap, sync::OnceLock, task::Poll};
 
 pub const COMPILATION_KIND: u32 = 0x4e00_0023;

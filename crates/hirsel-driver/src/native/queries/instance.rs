@@ -3,8 +3,8 @@
 //! the complete action. Ordinary producer associations alone never accept a hit.
 use super::arena::EQUATIONS_DOMAIN;
 use super::*;
-use hirsel_artifact_store::{Action, Contents, Domain, Reference};
 use hirsel_engine::store::ResultStore;
+use hirsel_engine::store::{Action, Contents, Domain, Reference};
 use hirsel_lir::stage::{StageKind, ValidatedUnit, Value};
 use hirsel_lir::validate::{Inputs, NativeCache, NativeEnvironment};
 
@@ -45,7 +45,7 @@ type Metadata = (Reference, Reference, Reference);
 
 struct SelectedContents(Arc<dyn ResultStore>);
 impl Contents for SelectedContents {
-    fn get_content(&self, reference: Reference) -> Option<hirsel_artifact_store::Bytes> {
+    fn get_content(&self, reference: Reference) -> Option<hirsel_engine::store::Bytes> {
         self.0.get_content(reference)
     }
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
@@ -87,7 +87,7 @@ impl InstanceQueries {
         let native = Self::validator(&store);
         Self::with_phase(store, native, Phase::Callable)
     }
-    pub fn address(&self, key: &InstanceAddress) -> hirsel_artifact_store::Address {
+    pub fn address(&self, key: &InstanceAddress) -> hirsel_engine::store::Address {
         key.address(self.phase.kind())
     }
     pub(super) fn validator(store: &Arc<dyn ResultStore>) -> Arc<NativeCache> {

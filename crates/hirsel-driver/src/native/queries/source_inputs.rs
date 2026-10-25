@@ -1,7 +1,7 @@
 //! Immutable settled Lower inputs for worker-local native instance misses.
 //! Source V and native C retain separate authority; transport creates neither.
 use super::declarations::NativeDeclarations;
-use hirsel_artifact_store::Reference;
+use hirsel_engine::store::Reference;
 use hirsel_engine::{
     NativeOriginalReader, NativeQueryPolicy, NativeRecordContext, NativeRecordSource, QueryError,
     Verify,
