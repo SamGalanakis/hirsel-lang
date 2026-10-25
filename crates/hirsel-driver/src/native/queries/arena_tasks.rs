@@ -7,7 +7,7 @@ use super::{
     instance_tasks::InstanceTasks,
     *,
 };
-use hirsel_artifact_store::{Action, Address, Domain};
+use hirsel_engine::store::{Action, Address, Domain};
 use hirsel_engine::{runtime::*, store::ResultStore};
 use std::{
     collections::BTreeMap,

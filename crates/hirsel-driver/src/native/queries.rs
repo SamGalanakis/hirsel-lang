@@ -401,18 +401,18 @@ type ReadyRecord = (
     Reference,
     Vec<(ContentHash, Reference)>,
 );
-pub mod instance;
-pub mod source_inputs;
+pub mod arena_tasks;
 pub mod demand;
 pub mod emission;
+pub mod instance;
 pub mod instance_tasks;
-pub mod optimizer;
-pub mod ready_source;
 pub mod local;
+pub mod optimizer;
 pub mod products;
 pub mod ready;
+pub mod ready_source;
+pub mod source_inputs;
 pub mod tasks;
-pub mod arena_tasks;
 
 /// Ordinary descriptor publication, after the native query has obtained its
 /// own authority. It does not manufacture any native receipt or stage seal.
