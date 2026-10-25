@@ -225,3 +225,4 @@ mod sealed_region_read_entry_33;
 mod sealed_region_scope_custody_33;
 mod arena_named_callback_33;
 mod ownership_execution_49;
+mod source_index_loader;

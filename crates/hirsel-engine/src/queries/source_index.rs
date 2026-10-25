@@ -6,6 +6,7 @@ use crate::runtime::MemoryReservation;
 
 pub struct SourceIndexState {
     sources: SourceMap,
+    indexed_sources: BTreeMap<FileId, (FileContext, QueryEnvironment)>,
     items: BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
@@ -80,6 +81,20 @@ impl QueryEngine {
             weight.add(value.retained_bytes());
         }
         weight.tree::<DefId, ()>(self.vanished.len());
+        weight.map(&self.indexed_sources, |w, _, (context, environment)| {
+            w.add(context.package.name.capacity());
+            w.add(context.package.version.capacity());
+            w.add(
+                context
+                    .modules
+                    .capacity()
+                    .saturating_mul(size_of::<String>()),
+            );
+            for module in &context.modules {
+                w.add(module.capacity());
+            }
+            w.add(environment.compiler_version.capacity());
+        });
         weight.map(&self.syntax_keys, |w, (path, _), _| w.path(path));
         weight.map(&self.package_manifests, |w, package, _| {
             w.add(package.name.capacity());
@@ -143,6 +158,7 @@ impl QueryEngine {
         let sources = std::mem::take(&mut self.sources).replace_owner(allowance.clone());
         let state = SourceIndexState {
             sources,
+            indexed_sources: std::mem::take(&mut self.indexed_sources),
             items: std::mem::take(&mut self.items),
             builtins: std::mem::take(&mut self.builtins),
             syntax_keys: std::mem::take(&mut self.syntax_keys),
@@ -183,6 +199,7 @@ impl SourceIndexState {
         if self.compiler != engine.store_identity
             || !engine.graph.is_empty()
             || !engine.items.is_empty()
+            || !engine.indexed_sources.is_empty()
             || engine.sources.file(hirsel_span::FileId(0)).is_some()
             || !engine.s1.is_empty()
             || !engine.active.is_empty()
@@ -191,6 +208,7 @@ impl SourceIndexState {
         }
         let Self {
             sources,
+            indexed_sources,
             items,
             builtins,
             syntax_keys,
@@ -211,6 +229,7 @@ impl SourceIndexState {
             allowance: _,
         } = self;
         engine.sources = sources;
+        engine.indexed_sources = indexed_sources;
         engine.items = items;
         engine.builtins = builtins;
         engine.syntax_keys = syntax_keys;
