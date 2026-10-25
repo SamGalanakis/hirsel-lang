@@ -273,7 +273,7 @@ unsafe extern "C" fn dispatcher(
             }
             state += 1;
             header.write(state);
-            let hint = if ahead { crate::RESUME_AHEAD } else { 0 };
+            let hint = if ahead { crate::RESUME_EARLY } else { 0 };
             if crate::continuation::hirsel_rt_v2_resume_point(ctx, frame, state | hint) == 0 {
                 continue;
             }

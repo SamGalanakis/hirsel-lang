@@ -23,7 +23,7 @@
 //! dispatcher's saved-fiber cutover (S2), so only tests save a `Fiber` here.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use crate::RESUME_AHEAD;
+use crate::{RESUME_EARLY, RESUME_LOGGED};
 
 /// The resume point of a stackful frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -179,7 +179,8 @@ impl Custody {
 /// saves exactly when the task would wait here before issuing the boundary's
 /// operation, or is published to another worker (forced migration); otherwise
 /// the operation proceeds in place on this stack. `state` carries
-/// [`RESUME_AHEAD`] when a non-head can issue the operation. The decision is
+/// [`RESUME_LOGGED`] / [`RESUME_EARLY`] when a non-head is logged for the
+/// operation or may commit it early. The decision is
 /// physical: it adds no operation, charge or observation (Tokio's harness goes
 /// idle only on `Pending`, `runtime/task/harness.rs:193-231`; Go parks only at
 /// `gopark`, `runtime/proc.go:457-492`).
@@ -192,11 +193,19 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_point(
     frame: *mut u8,
     state: u32,
 ) -> u8 {
-    if unsafe { frame.cast::<u32>().read() } != state & !RESUME_AHEAD {
+    let hints = RESUME_LOGGED | RESUME_EARLY;
+    if unsafe { frame.cast::<u32>().read() } != state & !hints {
         crate::fault("a resume point before its state was recorded");
     }
+    let ahead = crate::tasks::compact::Ahead {
+        logged: state & RESUME_LOGGED != 0,
+        early: state & RESUME_EARLY != 0,
+    };
     // SAFETY: compiled code calls this at a boundary of the running task.
-    u8::from(unsafe { crate::tasks::compact::parks(ctx, state & RESUME_AHEAD != 0) })
+    let saves = unsafe { crate::tasks::compact::parks(ctx, ahead) };
+    #[cfg(feature = "diagnostic")]
+    crate::compact_trace::point(unsafe { (*ctx).task_id }, state & !hints, saves);
+    u8::from(saves)
 }
 
 /// A resumable body's dispatcher: its task entry's arguments and its frame.

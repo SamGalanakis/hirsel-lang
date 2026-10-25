@@ -18,12 +18,12 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, issues_ahead,
+    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_hint,
     resume_name,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
-use hirsel_lir::runtime_abi::{RESUME_AHEAD, RuntimeEntry, STATUS_SUSPENDED};
+use hirsel_lir::runtime_abi::{RuntimeEntry, STATUS_SUSPENDED};
 use hirsel_lir::stage::{ObjectArtifact, ObjectSymbol, ObjectSymbolKind, Ready, ValidatedUnit};
 
 pub(crate) struct Resume<'a> {
@@ -233,11 +233,7 @@ impl FnEmitter<'_, '_, '_> {
         }
         if !resuming {
             self.materialize(state)?;
-            let hint = if issues_ahead(&state.boundary.operation) {
-                RESUME_AHEAD
-            } else {
-                0
-            };
+            let hint = resume_hint(&state.boundary.operation);
             let number = self
                 .b
                 .ins()

@@ -50,11 +50,16 @@ pub const STATUS_PRETRANSFER_FAILURE: u8 = 3;
 /// its live state is materialized at the frame header's state and the boundary call
 /// has not run. Only continuation alternates and their callers see it.
 pub const STATUS_SUSPENDED: u8 = 4;
-/// Set in `hirsel_rt_v2_resume_point`'s state argument when the boundary's operation can
-/// be issued by a task that is not the Ordered head without waiting for it (every op it
-/// performs commits early or is logged). A physical hint: without it the runtime assumes
-/// the operation waits, which changes no observation.
-pub const RESUME_AHEAD: u32 = 1 << 31;
+/// Set in `hirsel_rt_v2_resume_point`'s state argument when a task that is not the
+/// Ordered head is logged for the boundary's operation (every op it performs is class D).
+/// A physical hint, like [`RESUME_EARLY`]: without either the runtime assumes the
+/// operation waits for the head, which changes no observation.
+pub const RESUME_LOGGED: u32 = 1 << 31;
+/// Set when every op the boundary's operation performs commits early (§4.1 E) or is
+/// logged: a non-head proceeds when nothing ahead of it can refuse the early commit.
+pub const RESUME_EARLY: u32 = 1 << 30;
+/// Both resume hints.
+pub const RESUME_HINTS: u32 = RESUME_LOGGED | RESUME_EARLY;
 /// Bytes of a resumable frame's header: the u32 resume state and a reserved u32.
 pub const RESUME_FRAME_HEADER_BYTES: u64 = 8;
 /// Launch uses a separate channel from language failure.
@@ -574,7 +579,7 @@ pub enum RuntimeEntry {
     ReceiptRelease,
     /// A resumable frame reached a boundary with its live state materialized: proceed
     /// with the boundary call (0) or return `STATUS_SUSPENDED` (1). The state argument
-    /// carries [`RESUME_AHEAD`] for an operation a non-head can issue.
+    /// carries [`RESUME_HINTS`] for an operation a non-head can issue.
     ResumePoint,
     /// A resumable task body: run its dispatcher over an owned compact frame, saving and
     /// resuming the frame at each `STATUS_SUSPENDED`, until it returns.

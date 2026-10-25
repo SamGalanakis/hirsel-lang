@@ -371,12 +371,42 @@ impl<P, R> Frontier<P, R> {
         row.state = State::Running(worker);
     }
 
-    /// Whether an offer from non-head `task` can be accepted now rather than
-    /// returned Full (`offer`).
-    pub(crate) fn accepts(&self, task: TaskId) -> bool {
+    /// Whether an offer of a class D op from non-head `task` is logged now
+    /// rather than returned Full or Pending (`offer`).
+    pub(crate) fn logs(&self, task: TaskId) -> bool {
         !self.stopped
             && self.polling.is_none()
-            && self.tasks[&task].log.len() <= usize::from(self.policy.run_ahead)
+            && self.tasks[&task].log.len() < usize::from(self.policy.run_ahead)
+    }
+
+    /// Whether non-head `task`'s next E op commits early whatever its
+    /// footprint (`eligible`'s rules 1 and 3 with every footprint): the head
+    /// and every task before it hold nothing an op could touch.
+    pub(crate) fn commits_early(&self, task: TaskId) -> bool {
+        let row = &self.tasks[&task];
+        if self.stopped
+            || self.polling.is_some()
+            || row.log.len() > usize::from(self.policy.run_ahead)
+            || self.policy.reorder == Reorder::Off
+            || !self.auto
+            || self.eligible_turns.get(&task) != Some(&row.producing)
+        {
+            return false;
+        }
+        let Some(head) = self.head else {
+            return false;
+        };
+        let holds_nothing = |task: &TaskId| {
+            self.held
+                .get(task)
+                .is_some_and(|h| !h.unknown && h.objects.is_empty() && h.obtains.is_empty() && h.holding.is_empty() && h.caller.is_none())
+        };
+        holds_nothing(&head)
+            && self
+                .queue
+                .iter()
+                .take_while(|&&earlier| earlier != task)
+                .all(holds_nothing)
     }
 
     /// Apply M0b's measured fallback. Neither this nor placement can relax E.

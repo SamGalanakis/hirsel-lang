@@ -384,6 +384,15 @@ pub(crate) fn compact_runs_with(source: &str, label: &str, migrate: bool) -> Vec
                     .lines()
                     .map(|line| {
                         let words: Vec<&str> = line.split(' ').collect();
+                        if words[0] == "point" {
+                            return (
+                                words[0].to_owned(),
+                                words[1].parse().unwrap(),
+                                words[2].parse().unwrap(),
+                                words[3].to_owned(),
+                                words.get(4) == Some(&"1"),
+                            );
+                        }
                         if matches!(words[0], "hold" | "resume") {
                             return (
                                 words[0].to_owned(),
@@ -432,7 +441,7 @@ pub(crate) fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
                 assert_ne!(*worker, from, "{label}: task {task} did not migrate");
                 activations += 1;
             }
-            "hold" | "resume" => {}
+            "hold" | "resume" | "point" => {}
             other => panic!("{label}: {other}"),
         }
     }
@@ -684,10 +693,9 @@ fn runtime51_parameterized_region_continuation() {
     });
 }
 
-/// `CHILDREN` children, each waiting for its turn at a receive before it
-/// answers: while the root holds the head, every child is parked at a
-/// boundary whose operation needs the head.
-const PARKED_FANOUT: &str = r#"
+/// `CHILDREN` children (the bound is one past them), each sending twice on a
+/// channel the root holds, whose results the root collects with `task.all`.
+const DEFAULT_FANOUT: &str = r#"
 pub fn main(rt:Io)->Result[(),GrantError] {
   let tasks=io.tasks(rt)?
   let output=io.stdout(rt)?
@@ -720,46 +728,38 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 }
 "#;
 
-/// The most stacks suspended children held at once: a child holds its stack
-/// from a `hold` until its next `resume`. Task row 0 is the root.
-fn peak_held(trace: &[Line]) -> usize {
-    let mut held = std::collections::BTreeSet::new();
-    let mut peak = 0;
-    for (kind, task, ..) in trace {
-        match kind.as_str() {
-            "hold" if *task != 0 => {
-                held.insert(*task);
-                peak = peak.max(held.len());
-            }
-            "resume" => {
-                held.remove(task);
-            }
-            _ => {}
-        }
-    }
-    peak
-}
-
-/// Go's `TestStackMem` (`runtime/stack_test.go:24-79`) as a native fanout:
-/// with no runtime knob, N children parked at boundaries hold at most one
-/// stack per worker, not one each, on both backends, live and replayed, and
-/// every observation equals the reference interpreter's.
+/// With no runtime knob the fanout runs under default routing on both
+/// backends, live and replayed, and every observation equals the reference
+/// interpreter's (`compact_runs_with`). Every resume point is decided, every
+/// frame that leaves gives its stack back to its worker's pool, and each
+/// leave is activated once at its saved state.
 #[test]
-fn runtime52_parked_fanout_holds_worker_stacks() {
+fn runtime52_default_routing_fanout_agrees_live_and_replayed() {
     with_compiler_stack(|| {
         for children in [8u64, 32] {
-            let source = PARKED_FANOUT.replace("CHILDREN", &format!("{}u64", children + 1));
-            let label = format!("parked fanout {children}");
+            let source = DEFAULT_FANOUT.replace("CHILDREN", &format!("{}u64", children + 1));
+            let label = format!("default fanout {children}");
             for (index, trace) in compact_runs_with(&source, &label, false)
                 .iter()
                 .enumerate()
             {
-                let leaves = trace.iter().filter(|line| line.0 == "leave").count();
-                let holds = trace.iter().filter(|line| line.0 == "hold").count();
-                eprintln!(
-                    "{label} run {index}: leaves {leaves} holds {holds} peak {}",
-                    peak_held(trace)
-                );
+                let cell = format!("{label} run {index}");
+                let points = trace.iter().filter(|line| line.0 == "point").count();
+                assert!(points as u64 >= 2 * children, "{cell}: {points} resume points");
+                let mut saved = std::collections::BTreeMap::new();
+                for (kind, task, state, _, flag) in trace {
+                    match kind.as_str() {
+                        "leave" => {
+                            assert!(*flag, "{cell}: task {task} kept the stack it left");
+                            assert!(saved.insert(*task, *state).is_none(), "{cell}");
+                        }
+                        "activate" => {
+                            assert_eq!(saved.remove(task), Some(*state), "{cell}: task {task}");
+                        }
+                        _ => {}
+                    }
+                }
+                assert!(saved.is_empty(), "{cell}: frames never activated: {saved:?}");
             }
         }
     });

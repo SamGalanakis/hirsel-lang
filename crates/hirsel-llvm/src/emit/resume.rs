@@ -8,10 +8,10 @@
 //! suspension.
 use super::*;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, issues_ahead,
+    ContinuationPlan, ContinuationPlans, NestedFrame, Representation, ResumeState, resume_hint,
     resume_name,
 };
-use hirsel_lir::runtime_abi::{RESUME_AHEAD, STATUS_SUSPENDED};
+use hirsel_lir::runtime_abi::STATUS_SUSPENDED;
 
 pub(super) struct Resume<'a, 'm> {
     pub(super) plan: &'a ContinuationPlan,
@@ -204,11 +204,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if !resuming {
             self.materialize(state)?;
             let point = self.runtime(RuntimeEntry::ResumePoint)?;
-            let hint = if issues_ahead(&state.boundary.operation) {
-                RESUME_AHEAD
-            } else {
-                0
-            };
+            let hint = resume_hint(&state.boundary.operation);
             let number = self.module.const_int(
                 self.module.int_type(32),
                 u128::from(state.target.state | hint),

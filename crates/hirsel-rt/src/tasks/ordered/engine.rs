@@ -583,10 +583,12 @@ pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
 
 /// Whether the running task would wait at a boundary before it could issue
 /// the boundary's operation. A head waits only for a physical save or a
-/// retirement poll; a non-head waits for the head unless it can issue the
-/// operation ahead (`ahead`) and the frontier takes an offer from it now.
-/// Reads only: no claim, charge or event.
-pub(crate) fn waits(ctx: *mut TaskCtx, ahead: bool) -> bool {
+/// retirement poll. A non-head waits for the head unless the frontier would
+/// log the operation now, or commit it early whatever its footprint: an offer
+/// that turns Pending would park inside the operation, on this stack (the
+/// Pending→idle transition belongs before the operation, as in Tokio's
+/// harness). Reads only: no claim, charge or event.
+pub(crate) fn waits(ctx: *mut TaskCtx, ahead: super::super::compact::Ahead) -> bool {
     with_current_driver(ctx, |task, driver| {
         let head_wait = driver.awaiting_save || driver.host_poll || driver.poll_deferred();
         let Some(frontier) = driver.frontier.as_ref() else {
@@ -596,10 +598,9 @@ pub(crate) fn waits(ctx: *mut TaskCtx, ahead: bool) -> bool {
             return false;
         }
         if frontier.head() == Some(task) {
-            head_wait
-        } else {
-            !ahead || !frontier.accepts(task)
+            return head_wait;
         }
+        !((ahead.logged && frontier.logs(task)) || (ahead.early && frontier.commits_early(task)))
     })
 }
 

@@ -8,7 +8,8 @@
 //! own stack appends `hold <task> <worker>` once saved, and `resume <task>
 //! <worker>` when a worker switches back into a saved stack (a task's first
 //! start included), so a reader bounds the stacks suspended tasks hold
-//! (Go's `TestStackMem`, `runtime/stack_test.go:24-79`). `<task>` is the row index,
+//! (Go's `TestStackMem`, `runtime/stack_test.go:24-79`); each resume point
+//! appends `point <task> <state> <worker> <saves>`. `<task>` is the row index,
 //! `<state>` the frame's saved state and `<worker>` the compute index, or
 //! `home`. The trace is physical: no canonical event, tape entry or
 //! observation depends on it.
@@ -52,6 +53,11 @@ pub(crate) fn left(task: u32, state: u32, pooled: bool) {
 /// A worker lent a compact frame a stack.
 pub(crate) fn activated(task: u32, state: u32) {
     line(format_args!("activate {task} {state} {}", worker()));
+}
+
+/// A resume point's decision: whether the task's frame saves there.
+pub(crate) fn point(task: u32, state: u32, saves: bool) {
+    line(format_args!("point {task} {state} {} {}", worker(), u8::from(saves)));
 }
 
 /// A task suspended on its own stack, which it keeps.

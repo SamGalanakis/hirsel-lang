@@ -154,22 +154,28 @@ fn core_ops(name: &str) -> Option<&'static [&'static str]> {
     d::entry_descriptor(&symbol).map(|entry| entry.ops)
 }
 
-/// Whether a task that is not the Ordered head can issue the boundary
-/// operation `definition` without first waiting for the head: every op it
-/// performs commits early (§4.1 E) or is logged (class D). The emitters pass
-/// it to the resume point as [`crate::runtime_abi::RESUME_AHEAD`]; it is a
-/// physical hint and decides no observation.
-pub fn issues_ahead(definition: &DefPath) -> bool {
+/// The resume point's hints for boundary operation `definition`: whether a
+/// task that is not the Ordered head is logged for it (every op it performs
+/// is class D) or may commit it early (every op is in §4.1 E or class D).
+/// Physical only; they decide no observation.
+pub fn resume_hint(definition: &DefPath) -> u32 {
+    use crate::runtime_abi::{RESUME_EARLY, RESUME_LOGGED};
     use hirsel_rt_operations::descriptors::{self as d, Class};
-    core_name(definition)
-        .and_then(|name| core_ops(&name))
-        .is_some_and(|ops| {
-            !ops.is_empty()
-                && ops.iter().all(|op| {
-                    d::E.contains(op)
-                        || d::op_descriptor(op).is_some_and(|o| o.class() == Class::D)
-                })
-        })
+    let Some(ops) = core_name(definition).and_then(|name| core_ops(&name)) else {
+        return 0;
+    };
+    if ops.is_empty() {
+        return 0;
+    }
+    let logged = |op: &&str| d::op_descriptor(op).is_some_and(|o| o.class() == Class::D);
+    let mut hint = 0;
+    if ops.iter().all(logged) {
+        hint |= RESUME_LOGGED;
+    }
+    if ops.iter().all(|op| d::E.contains(op) || logged(op)) {
+        hint |= RESUME_EARLY;
+    }
+    hint
 }
 
 /// What a call does to its caller's continuation, as the runtime's reviewed

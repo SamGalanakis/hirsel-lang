@@ -67,18 +67,27 @@ unsafe fn movable(ctx: *mut TaskCtx) -> bool {
     })
 }
 
+/// How a non-head can issue a boundary's operation without waiting for head.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Ahead {
+    /// Every op it performs is logged (class D).
+    pub(crate) logged: bool,
+    /// Every op commits early (§4.1 E) or is logged.
+    pub(crate) early: bool,
+}
+
 /// Whether the running task saves its frame at this resume point: it is
 /// published to another worker (forced migration, which saves every frame,
 /// in place where it cannot leave), or it can leave its stack and would wait
 /// here before issuing the boundary's operation (Ordered: it is not a ready
-/// head, and the operation needs the head or the frontier takes no offer from
-/// it now). `ahead` says a non-head can issue the operation. Free waits only
+/// head, and the frontier would neither log the operation nor commit it
+/// early now). `ahead` says how a non-head can issue it. Free waits only
 /// inside its operations, so a Free frame saves only when published. Reads
 /// only; the save itself is [`leave`].
 ///
 /// # Safety
 /// The running task is at a resume point of the body its task entry called.
-pub(crate) unsafe fn parks(ctx: *mut TaskCtx, ahead: bool) -> bool {
+pub(crate) unsafe fn parks(ctx: *mut TaskCtx, ahead: Ahead) -> bool {
     // SAFETY: caller contract.
     if crate::pool::free::migrating(unsafe { (*ctx).run_ref() }) {
         return true;
