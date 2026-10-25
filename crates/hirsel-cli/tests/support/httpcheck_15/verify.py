@@ -21,6 +21,33 @@ import threading
 import time
 
 
+# Exact-name lookup follows CPython Lib/unittest/loader.py:125-215;
+# method/nonexistent-method vectors: test_loader.py:518-553. No prefix matching.
+ENGINES = ('h', 'llvm', 'cranelift')
+SCENARIOS = (
+    'ordered-methods', 'mismatch-continues', '404-exact', 'body-cap', 'steps-cap',
+    'bad-json', 'utf8', 'redirect', 'body-over', 'chunk-over', 'eof-over',
+    'head-over', 'headers-over', 'truncated', 'deadline', 'transport-stops',
+    'request-body-cap', 'request-budget-under', 'scenario-byte-cap',
+    *('invalid-' + str(i) for i in range(29)),
+    'denied', 'missing-net', 'missing-tasks', 'missing-monotonic_clock',
+    'missing-stdout', 'outside-grant',
+    'record-pass', 'record-assertion', 'record-transport',
+)
+SELECTIONS = {engine + '.' + label: (engine, label)
+              for engine in ENGINES for label in SCENARIOS}
+SELECTIONS['h-body-cap'] = ('h', 'body-cap')
+
+
+def resolve_case(name):
+    if name is None:
+        return None, None
+    try:
+        return SELECTIONS[name]
+    except KeyError:
+        raise ValueError('unknown exact HTTP case: ' + name) from None
+
+
 class Server(socketserver.TCPServer):
     allow_reuse_address = False
 
@@ -156,12 +183,25 @@ def rendered(rows, passed=0, failed=0, errors=0, skipped=0):
 
 
 def verify(hirsel, root, output, case=None):
+    selected_engine, selected_label = resolve_case(case)
+    record_phase = selected_label is not None and selected_label.startswith('record-')
+    active_engines = ENGINES if case is None else (selected_engine,)
+    needed_binaries = ('llvm', 'cranelift') if case is None or record_phase else tuple(
+        engine for engine in active_engines if engine != 'h')
     output.mkdir(parents=True, exist_ok=False)
     commands, tapes = [], []
     counts = {'h': 0, 'llvm': 0, 'cranelift': 0}
     builds = {'llvm': 0, 'cranelift': 0}
     result = {'state': 'setup', 'observations': 0, 'records': 0, 'replays': 0,
-              'executed': counts, 'builds': builds}
+              'executed': counts, 'builds': builds, 'case': case,
+              'cells': {engine + '.' + label: 'unrun' for engine in active_engines
+                        for label in SCENARIOS if selected_label is None or label == selected_label}}
+
+    for source in active_engines:
+        for label in ('pass', 'assertion', 'transport'):
+            if selected_label is None or selected_label == 'record-' + label:
+                for target in ENGINES:
+                    result['cells'][target + '.replay-' + source + '-' + label] = 'unrun'
 
     def save():
         (output / 'results.json').write_text(json.dumps(result, indent=2) + '\n')
@@ -212,7 +252,10 @@ def verify(hirsel, root, output, case=None):
     denied_policy['io']['net']['rules'] = []
     denied.write_text(json.dumps(denied_policy))
     base, manifest = server.base, root / 'hirsel.json'
-    binaries = {b: output / ('httpcheck-' + b) for b in builds}
+    binaries = {b: output / ('httpcheck-' + b) for b in needed_binaries}
+
+    def selected(engine, label):
+        return case is None or (engine, label) == (selected_engine, selected_label)
 
     def command(engine, raw=None, tape=None, replay=False, authority=None):
         if engine == 'h':
@@ -230,6 +273,9 @@ def verify(hirsel, root, output, case=None):
     def expect(label, engine, scenario, triple, requests, tape=None, authority=None):
         raw = scenario if isinstance(scenario, str) else json.dumps(scenario, separators=(',', ':'))
         (output / (label + '.scenario.json')).write_text(raw)
+        cell = engine + '.' + label.removeprefix(engine + '-')
+        result['cells'][cell] = 'running'
+        save()
         before = len(server.requests)
         actual = run(label, command(engine, raw, tape, authority=authority))
         counts[engine] += 1
@@ -238,6 +284,7 @@ def verify(hirsel, root, output, case=None):
         assert not server.errors, server.errors
         if label.endswith('-deadline'):
             assert commands[-1]['seconds'] < 8, ('whole-request deadline did not bound trickle', commands[-1])
+        result['cells'][cell] = 'passed'
         result['observations'] += 1
         save()
 
@@ -247,11 +294,11 @@ def verify(hirsel, root, output, case=None):
     transport = (2, rendered([('transport_error', [])], errors=1), b'')
     invalid = (2, b'{"result":"scenario_error"}\n{"summary":{"passed":0,"failed":0,"errors":1,"skipped":0}}\n', b'')
     try:
-        for backend, binary in (binaries.items() if case is None else []):
+        for backend, binary in binaries.items():
             actual = run('build-' + backend, [hirsel, 'build', manifest, '--backend', backend, '-o', binary])
             assert actual[0] == 0, ('build', backend, actual, str(output))
             builds[backend] += 1
-        result['binary_hashes'] = {b: hashlib.sha256(p.read_bytes()).hexdigest() for b, p in binaries.items()} if case is None else {}
+        result['binary_hashes'] = {b: hashlib.sha256(p.read_bytes()).hexdigest() for b, p in binaries.items()}
         frozen_binaries = dict(result['binary_hashes'])
         result['state'] = 'running'
         good = [step(base, contains='User-agent:'),
@@ -331,32 +378,32 @@ def verify(hirsel, root, output, case=None):
             del missing_policy['io'][capability]
             missing[capability] = output / ('missing-' + capability + '.json')
             missing[capability].write_text(json.dumps(missing_policy))
-        if case == 'h-body-cap':
-            # Select the original vector and its complete request/output oracle.
-            _, scenario, triple, requests = next(c for c in cases if c[0] == 'body-cap')
-            expect('h-body-cap', 'h', scenario, triple, requests)
-            assert counts == {'h': 1, 'llvm': 0, 'cranelift': 0}, result
-            assert result['observations'] == 1, result
-            result.update(state='passed', requests=len(server.requests), engines={'h': 1})
-            save()
-            print("case=h-body-cap engines={'h': 1} observations=1", flush=True)
-            return
-        for engine in counts:
+        for engine in active_engines:
             for label, scenario, triple, requests in cases:
-                expect(engine + '-' + label, engine, scenario, triple, requests)
+                if selected(engine, label):
+                    expect(engine + '-' + label, engine, scenario, triple, requests)
             for i, scenario in enumerate(malformed):
-                expect(engine + '-invalid-' + str(i), engine, scenario, invalid, [])
-            expect(engine + '-denied', engine, {'steps': [step(base)]}, transport, [], authority=denied)
+                if selected(engine, 'invalid-' + str(i)):
+                    expect(engine + '-invalid-' + str(i), engine, scenario, invalid, [])
+            if selected(engine, 'denied'):
+                expect(engine + '-denied', engine, {'steps': [step(base)]}, transport, [], authority=denied)
             for capability, no_grant in missing.items():
                 triple = (1, b'', b'error: Authority\n') if capability == 'stdout' else transport
-                expect(engine + '-missing-' + capability, engine, {'steps': [step(base)]}, triple, [], authority=no_grant)
-            expect(engine + '-outside-grant', engine, {'steps': [step('http://127.0.0.1:1')]}, transport, [])
+                if selected(engine, 'missing-' + capability):
+                    expect(engine + '-missing-' + capability, engine, {'steps': [step(base)]}, triple, [], authority=no_grant)
+            if selected(engine, 'outside-grant'):
+                expect(engine + '-outside-grant', engine, {'steps': [step('http://127.0.0.1:1')]}, transport, [])
             for label, scenario, triple, requests in [('pass', {'steps': good}, positive, good_requests),
                     ('assertion', {'steps': mismatches}, negative, [request(route='/404'), request(), request(route='/json'), request()]),
                     ('transport', stopped, stopped_triple, [request(), request(route='/truncated')])]:
+                if not selected(engine, 'record-' + label):
+                    continue
                 tape = output / (engine + '-' + label + '.tape')
                 expect(engine + '-record-' + label, engine, scenario, triple, requests, tape)
                 tapes.append((tape, triple))
+                result['cells'][engine + '.record-' + label] = 'recorded'
+                for replay_engine in ENGINES:
+                    result['cells'][replay_engine + '.replay-' + tape.stem] = 'unrun'
                 result['records'] += 1
         # Stop and close only this owned server; seccomp disables networking
         # in every replay child, independent of the tape's admitted grants.
@@ -373,22 +420,38 @@ def verify(hirsel, root, output, case=None):
             no_grant.unlink()
         for tape, triple in tapes:
             for engine in counts:
+                cell = engine + '.replay-' + tape.stem
+                result['cells'][cell] = 'running'
                 actual = run(engine + '-replay-' + tape.stem, command(engine, tape=tape, replay=True), offline=True)
                 assert actual == triple, (engine, tape, actual, triple)
+                result['cells'][cell] = 'passed'
                 result['replays'] += 1
                 save()
         assert not server.errors, server.errors
-        assert result['records'] == 9 and result['replays'] == 27, result
-        assert counts == {'h': 57, 'llvm': 57, 'cranelift': 57}, result
-        assert result['observations'] == 171, result
+        expected_records = 9 if case is None else int(record_phase)
+        assert result['records'] == expected_records, result
+        assert result['replays'] == expected_records * 3, result
+        expected_counts = {engine: (57 if case is None else int(engine == selected_engine))
+                           for engine in ENGINES}
+        assert counts == expected_counts, result
+        assert result['observations'] == (171 if case is None else 1), result
         assert frozen_binaries == {b: hashlib.sha256(p.read_bytes()).hexdigest() for b, p in binaries.items()}
         assert tape_hashes == {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p, _ in tapes}
+        for cell, state in result['cells'].items():
+            if state == 'recorded':
+                result['cells'][cell] = 'passed'
+        assert all(state == 'passed' for state in result['cells'].values()), result
         result['state'] = 'passed'
         result['requests'] = len(server.requests)
         result['engines'] = {engine: 1 for engine, count in counts.items() if count > 0}
         save()
-        print(f"engines={result['engines']} executed={counts} builds={builds} observations={result['observations']} records={result['records']} replays={result['replays']}")
+        if case == 'h-body-cap':
+            print("case=h-body-cap engines={'h': 1} observations=1", flush=True)
+        print(f"case={case} engines={result['engines']} executed={counts} builds={builds} observations={result['observations']} records={result['records']} replays={result['replays']}")
     except BaseException as error:
+        for cell, state in result['cells'].items():
+            if state == 'running':
+                result['cells'][cell] = 'failed'
         result.update(state='failed', error=repr(error))
         save()
         print(json.dumps(result, sort_keys=True), flush=True)
@@ -405,6 +468,6 @@ if __name__ == '__main__':
     parser.add_argument('--hirsel', required=True, type=Path)
     parser.add_argument('--root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--case', choices=['h-body-cap'])
+    parser.add_argument('--case', choices=tuple(SELECTIONS))
     args = parser.parse_args()
     verify(args.hirsel.resolve(), args.root.resolve(), args.output.resolve(), args.case)
