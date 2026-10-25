@@ -46,7 +46,20 @@ impl LeafPlan {
         Self::from_unit(unit.unit(), layouts)
     }
 
-    fn from_unit(unit: &LirUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
+    /// Initial observations precede placement, RC insertion and cleanup. The
+    /// native producer must transport this plan through those passes, then
+    /// consume it with from_relocated; Ready enumeration cannot replace it.
+    pub fn prepare_value(
+        unit: &ValidatedUnit<crate::stage::Value>,
+        layouts: &LayoutTable,
+    ) -> Result<Plan, String> {
+        Self::from_unit(unit.unit(), layouts).map(|plan| plan.plan)
+    }
+
+    fn from_unit<S: crate::stage::Stage>(
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+    ) -> Result<Self, String> {
         let owned = |v: ValueId| unit.values[v.index()].holding == Holding::Owned;
         let layout = |v: ValueId| unit.types[unit.values[v.index()].ty.index()].layout;
         if unit
@@ -222,6 +235,29 @@ impl LeafPlan {
                             layout,
                         )?;
                     }
+                    Inst::Drop {
+                        address,
+                        if_live: false,
+                        ..
+                    } => {
+                        let layout = unit.types[unit.addresses[address.index()].ty.index()].layout;
+                        push(
+                            before,
+                            Kind::Drop,
+                            Location::Address(address),
+                            Location::Address(address),
+                            layout,
+                        )?;
+                    }
+                    Inst::CopyValue { result, .. } if owned(result) => {
+                        push(
+                            after,
+                            Kind::Create,
+                            Location::Value(result),
+                            Location::Value(result),
+                            layout(result),
+                        )?;
+                    }
                     Inst::StorageLive { .. }
                     | Inst::StorageDead { .. }
                     | Inst::EndScope { .. }
@@ -252,6 +288,9 @@ impl LeafPlan {
                     | Inst::IsWritable { .. }
                     | Inst::SeqLen { .. }
                     | Inst::SeqCapacity { .. }
+                    | Inst::Copy { .. }
+                    | Inst::CopyValue { .. }
+                    | Inst::FlatCopy { .. }
                         if inst.defs().iter().all(|&v| !owned(v)) =>
                     {
                         ()

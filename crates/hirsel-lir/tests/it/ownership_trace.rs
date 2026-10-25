@@ -1969,10 +1969,10 @@ fn native_semantic_plan(unit: &LirUnit<Rc>) -> Plan {
     Plan::new(unit, observations)
 }
 
-fn checked_native_fixture(
-    unit: LirUnit<hirsel_lir::stage::Ready>,
+fn checked_native_fixture<S: hirsel_lir::stage::Stage>(
+    unit: LirUnit<S>,
     table: &hirsel_lir::layout_types::LayoutTable,
-) -> hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready> {
+) -> hirsel_lir::stage::ValidatedUnit<S> {
     let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
     let operations = support::registry();
     let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
@@ -2097,4 +2097,77 @@ fn ownership_trace_relocated_native_release_does_not_invent_a_temporary_move() {
             index: slot.0
         }
     );
+}
+
+#[test]
+fn ownership_trace_value_producer_starts_before_every_lowering_recipe() {
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let mut before = before.into_stage::<hirsel_lir::stage::Value>();
+    for construct in &mut before.tables.constructs {
+        construct.placement = None;
+    }
+    let before = checked_native_fixture(before, &table);
+    let input = native::LeafPlan::prepare_value(&before, &table).unwrap();
+    assert_eq!(
+        input
+            .observations
+            .iter()
+            .map(|o| o.marker.kind)
+            .collect::<Vec<_>>(),
+        vec![Kind::Create, Kind::Move, Kind::Drop]
+    );
+    let original: Vec<_> = input
+        .observations
+        .iter()
+        .map(|o| o.marker.clone())
+        .collect();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let lowered = hirsel_rc::observed::lower(
+        before.into_raw(),
+        &input,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &placement,
+            proofs: &proofs,
+            elide: true,
+            reuse: &reuse,
+            finalizers: &finalizers,
+        },
+    )
+    .unwrap();
+    assert_eq!(lowered.recipes.len(), 10);
+    assert_eq!(
+        lowered
+            .plan
+            .observations
+            .iter()
+            .map(|o| o.marker.clone())
+            .collect::<Vec<_>>(),
+        original
+    );
+    assert_eq!(lowered.recipes[0].before, input.unit);
+    assert_eq!(lowered.recipes.last().unwrap().after, lowered.plan.unit);
+    let ready = checked_native_fixture(lowered.unit, &table);
+    let native = native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+    assert_eq!(native.plan(), &lowered.plan);
+    let drops = check(ready.unit(), &lowered.plan)
+        .unwrap()
+        .commits(ready.unit(), MarkerId(2))
+        .unwrap();
+    assert_eq!(drops.len(), 3);
+}
+
+#[test]
+fn ownership_trace_value_producer_refuses_unimplemented_owned_entry_transport() {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
+    let value = t.owned(l::BLK);
+    t.param(value);
+    t.builder.ret(ENTRY, Some(value));
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let error = native::LeafPlan::prepare_value(&unit, &table).unwrap_err();
+    assert!(error.contains("owned entry transport"), "{error}");
 }
