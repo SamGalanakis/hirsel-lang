@@ -49,6 +49,10 @@ mod channels;
 #[cfg(not(test))]
 #[path = "../../../../crates/hirsel-free/src/record.rs"]
 pub mod record;
+#[cfg(not(test))]
+#[path = "../../../../crates/hirsel-rt/src/slots.rs"]
+#[allow(dead_code)]
+mod slots;
 // Channel wake tokens are runtime pool handles; a model's token wakes its parked receiver.
 #[cfg(not(test))]
 pub mod pool {

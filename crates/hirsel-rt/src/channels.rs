@@ -22,7 +22,7 @@ use std::ptr::NonNull;
 
 use crate::fault;
 use crate::release::{LAYOUT_DYNAMIC, Layout};
-use crate::tasks::registry::Slots;
+use crate::slots::Slots;
 
 /// The tag of a channel endpoint's handle word.
 pub(crate) const ENDPOINT: u64 = 1 << 63;

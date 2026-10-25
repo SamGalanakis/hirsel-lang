@@ -109,6 +109,7 @@ mod root_trace;
 pub mod roots;
 pub mod sealed_region;
 pub mod shared;
+mod slots;
 pub mod stop;
 mod sync;
 pub mod tape_binary;
