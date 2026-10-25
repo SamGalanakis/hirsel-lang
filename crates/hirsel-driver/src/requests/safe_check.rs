@@ -83,6 +83,26 @@ impl SafeCheck {
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
+    /// The settled check and, when it was accepted, the entry's Run product.
+    pub fn settled(
+        &self,
+        product: ProductRef,
+    ) -> Result<(CheckOutput, Option<ProductRef>), ToolError> {
+        let selected = self
+            .completed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .filter(|selected| selected.product == product)
+            .ok_or_else(|| {
+                ToolError::Runtime("selected safe-check product is unavailable".into())
+            })?;
+        let checked = self
+            .check
+            .outcome(selected.check)
+            .ok_or_else(|| ToolError::Runtime("safe-check source product is unavailable".into()))?
+            .checked;
+        Ok((checked, selected.run))
+    }
     pub fn outcome(
         &self,
         product: ProductRef,
