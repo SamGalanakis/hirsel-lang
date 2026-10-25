@@ -44,6 +44,26 @@ impl FrontCheckedSignatures {
     pub fn matches(&self, front: &Arc<FrontBodyQueries>) -> bool {
         Arc::ptr_eq(&self.front, front)
     }
+    pub(crate) fn signature(&self, path: &DefPath) -> Option<&hirsel_types::SignatureRef> {
+        self.inputs.get(path).map(|input| &input.public)
+    }
+    pub(crate) fn sections_clone_bytes(&self) -> Option<u64> {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.tree::<DefPath, SignatureSection>(self.inputs.len());
+        let mut payload_bytes = 0u64;
+        for (path, input) in &self.inputs {
+            weight.path(path);
+            weight.path(path);
+            weight.flat_vec(&input.coverage);
+            let mut payloads = crate::memo::retained::Weight::default();
+            payloads.signature(&input.public);
+            if let Some(owner) = &input.owner {
+                payloads.signature(owner);
+            }
+            payload_bytes = payload_bytes.checked_add(payloads.bytes)?;
+        }
+        weight.bytes().checked_add(payload_bytes)
+    }
     /// Format one already captured section in the caller's admitted scratch.
     /// No signature query, source read or compiler phase runs here.
     pub fn section(&self, path: &DefPath) -> Option<SignatureSection> {

@@ -2,16 +2,46 @@ use hirsel_driver::*;
 use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
 
-fn export_case(source: &str, attach_native: bool) {
+fn export_case(source: &str, attach_native: bool, admitted: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"scope","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         for jobs in [1, 2] {
+            use hirsel_engine::store::{Bytes, EntryKey, ResultStore};
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            struct CountReads {
+                inner: MemStore,
+                reads: AtomicUsize,
+            }
+            impl ResultStore for CountReads {
+                fn get(&self, key: &EntryKey) -> Option<Bytes> {
+                    self.reads.fetch_add(1, Ordering::Relaxed);
+                    self.inner.get(key)
+                }
+                fn put(&self, key: &EntryKey, bytes: &[u8]) {
+                    self.inner.put(key, bytes);
+                }
+                fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+                    self.inner.verifier()
+                }
+                fn name(&self) -> &'static str {
+                    "export-admission-control"
+                }
+            }
+            let counted = Arc::new(CountReads {
+                inner: MemStore::default(),
+                reads: AtomicUsize::new(0),
+            });
+            let store: Arc<dyn ResultStore> = if admitted {
+                counted.clone()
+            } else {
+                Arc::new(MemStore::default())
+            };
             let mut program = COMPILER
                 .with_config(CompileConfig {
-                    store: Arc::new(MemStore::default()),
+                    store,
                     hold_bytes: 0,
                     ..Default::default()
                 })
@@ -192,11 +222,48 @@ fn export_case(source: &str, attach_native: bool) {
             assert!(export.input(unknown).is_err());
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
-            let input = match &native {
-                Some(native) => export.input_for_native(native, completed).unwrap(),
-                None => export.input(product).unwrap(),
+            let owned = if admitted {
+                let before_reads = counted.reads.load(Ordering::Relaxed);
+                let required = export.input_bytes(product).unwrap();
+                assert!(required > 0);
+                assert_eq!(
+                    counted.reads.load(Ordering::Relaxed),
+                    before_reads,
+                    "predecode sizing never opens a provider"
+                );
+                assert!(export.input_bytes(unknown).is_err());
+                assert!(
+                    export
+                        .input_with_allowance(product, budget.reserve(required - 1).unwrap())
+                        .is_err()
+                );
+                assert_eq!(
+                    counted.reads.load(Ordering::Relaxed),
+                    before_reads,
+                    "N-1 export input refuses before any original decode"
+                );
+                Some(
+                    export
+                        .input_with_allowance(product, budget.reserve(required).unwrap())
+                        .unwrap(),
+                )
+            } else {
+                None
             };
-            let actual = hirsel_proof_export::export(&input);
+            let ordinary = if owned.is_none() {
+                Some(match &native {
+                    Some(native) => export.input_for_native(native, completed).unwrap(),
+                    None => export.input(product).unwrap(),
+                })
+            } else {
+                None
+            };
+            let input = owned
+                .as_ref()
+                .map(FrontProofInput::input)
+                .or(ordinary.as_ref())
+                .unwrap();
+            let actual = hirsel_proof_export::export(input);
             assert_eq!(lower.work_snapshot(), before_lower);
             assert_eq!(front.work_snapshot(), before_front);
             assert!(!input.annotations.is_empty());
@@ -212,7 +279,8 @@ fn export_case(source: &str, attach_native: bool) {
             assert_eq!(actual, hirsel_proof_export::export(&expected));
             let read_rows = export.reads(product).unwrap();
             assert!(read_rows.contains_key(&unused));
-            drop(input);
+            drop(owned);
+            drop(ordinary);
             runtime.shutdown();
             drop(program);
             assert_eq!(
@@ -228,6 +296,7 @@ fn source_export_matches_full_ps9_package_closure_private_views_annotations_and_
     export_case(
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
         false,
+        false,
     );
 }
 
@@ -235,6 +304,16 @@ fn source_export_matches_full_ps9_package_closure_private_views_annotations_and_
 fn source_export_shares_exact_native_selected_run_and_completed_originals() {
     export_case(
         "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        true,
+        false,
+    );
+}
+
+#[test]
+fn complete_ps9_input_admission_precedes_body_reads_and_matches_scalar_export() {
+    export_case(
+        "@analysis(example: retain = yes)\npub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nfn unused(x:u64)->u64{x+1u64}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        true,
         true,
     );
 }
