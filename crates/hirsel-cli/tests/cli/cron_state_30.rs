@@ -305,6 +305,15 @@ fn cron_state_30_reference_checked() {
 }
 fn native(backend: &str) {
     let temp = scratch();
+    let _evidence = super::width_capacity_36::Evidence(temp.path().to_owned());
+    let selected = std::env::var("CRON_STATE_30_CELL").ok();
+    assert!(selected.as_ref().is_none_or(|selected| {
+        ["success", "error", "cancel"].into_iter().any(|mode| {
+            [1, 2, 4]
+                .into_iter()
+                .any(|width| *selected == format!("{mode}-{width}"))
+        })
+    }));
     let manifest = package(temp.path());
     let script = temp.path().join("native.py");
     fs::write(&script, include_str!("../support/cron_state_30/native.py")).unwrap();
@@ -340,6 +349,12 @@ fn native(backend: &str) {
     hirsel_engine::with_compiler_stack(|| {
         for mode in ["success", "error", "cancel"] {
             for width in [1, 2, 4] {
+                if selected
+                    .as_ref()
+                    .is_some_and(|selected| *selected != format!("{mode}-{width}"))
+                {
+                    continue;
+                }
                 let d = retained.join(format!("native/{backend}-{mode}-{width}"));
                 let ordinary = hirsel_driver::replay_observations(
                     &manifest,

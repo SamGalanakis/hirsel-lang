@@ -17,8 +17,11 @@ def main(a):
  assert done.returncode==0,(build,done.stderr.decode())
  child=root/'child.py';child.write_text('''import socket,sys\ns=socket.socket(socket.AF_UNIX);s.connect(sys.argv[1]);s.sendall(b'ready\\n');s.recv(1)\nsys.stdout.write('O'*100000);sys.stderr.write('E'*100000)\nsys.exit(7 if sys.argv[2]=='error' else 0)\n''')
  receipts=[]
+ selected=os.environ.get('CRON_STATE_30_CELL')
+ assert selected is None or selected in [f'{mode}-{width}' for mode in ['success','error','cancel'] for width in [1,2,4]], 'invalid native cell'
  for mode in ['success','error','cancel']:
   for width in [1,2,4]:
+   if selected is not None and selected!=f'{mode}-{width}':continue
    id=f'{a.backend}-{mode}-{width}';d=root/id;d.mkdir();data=d/'config';data.mkdir();state=d/'state';state.mkdir()
    # Unix path lengths are independent of long evidence paths.
    import tempfile
