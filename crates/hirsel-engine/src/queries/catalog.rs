@@ -185,6 +185,28 @@ impl Clone for Catalog {
     }
 }
 impl Catalog {
+    pub(super) fn retained_payload_bytes(&self) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        let facts = |weight: &mut crate::NativeMetadataWeight, facts: &SourceFacts| {
+            weight.flat_vec(&facts.comptime);
+            weight.flat_vec(&facts.associations);
+            weight.vec(&facts.arms, |w, (name, _, _)| w.add(name.capacity()));
+        };
+        weight.map(&self.files, |w, _, context| {
+            w.add(context.package.name.capacity());
+            w.add(context.package.version.capacity());
+            w.vec(&context.modules, |w, module| w.add(module.capacity()));
+        });
+        weight.map(&self.candidates, |w, path, candidates| {
+            w.path(path);
+            w.vec(candidates, |w, candidate| facts(w, &candidate.facts));
+        });
+        weight.map(
+            &self.facts_cache.read().unwrap_or_else(|e| e.into_inner()),
+            |w, _, (_, value)| facts(w, value),
+        );
+        weight.bytes()
+    }
     pub(super) fn input_bytes(&self) -> Option<u64> {
         let mut n = std::mem::size_of::<Self>() as u64;
         for candidates in self.candidates.values() {
