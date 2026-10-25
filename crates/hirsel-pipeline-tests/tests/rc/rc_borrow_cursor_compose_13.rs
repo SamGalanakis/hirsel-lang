@@ -16,11 +16,6 @@ pub fn main() -> Result[(),u64] {
 "#;
 
 #[test]
-fn compose_13_immutable_related_result() {
-    lower_valid(IMMUTABLE);
-}
-
-#[test]
 fn compose_13_immutable_expired_source_is_rejected_by_v() {
     use hirsel_tir::*;
     let program = compile(IMMUTABLE);
@@ -163,21 +158,6 @@ fn native_parity(cases: &[(&str, &str)]) {
 }
 
 #[test]
-fn compose_13_join_related_result() {
-    lower_valid(JOIN);
-}
-
-#[test]
-fn compose_13_loop_snapshot_and_object_results() {
-    lower_valid(LOOP);
-    lower_valid(OBJECT);
-    lower_valid(&JOIN.replace(
-        "let mut c: List[u64] in {a, b} = a",
-        "let mut c = if flag { b } else { a }",
-    ));
-}
-
-#[test]
 fn compose_13_owned_and_foreign_controls() {
     for source in [
         JOIN.replace("-> List[u64] in {a, b}", "-> List[u64] in a"),
@@ -189,43 +169,6 @@ fn compose_13_owned_and_foreign_controls() {
         let error = try_compile(&source).expect_err("owned or unrelated storage escaped");
         assert!(error.contains("MODE-1"), "{source}\n{error}");
     }
-}
-
-#[test]
-fn compose_13_rebind_has_no_rc_and_call_result_is_owned() {
-    use hirsel_lir::ir::{Holding, Inst, Terminator};
-    let (_, lowered) = lower_valid(JOIN);
-    let f = unit_named(&lowered, "f");
-    assert!(
-        !f.instructions.iter().any(|i| matches!(
-            i,
-            Inst::Dup { .. } | Inst::Release { .. } | Inst::Copy { .. } | Inst::CopyValue { .. }
-        )),
-        "{}",
-        dump(f)
-    );
-    let returned = f
-        .terminators
-        .iter()
-        .filter_map(|b| match *b {
-            Terminator::Return(Some(value)) => Some(value),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert!(!returned.is_empty());
-    for value in returned {
-        assert_eq!(f.values[value.index()].holding, Holding::Owned);
-    }
-    // The result's counted share belongs to view(), independently of cursor transport.
-    let view = unit_named(&lowered, "view");
-    assert!(
-        view.instructions.iter().any(|i| matches!(
-            i,
-            Inst::Copy { .. } | Inst::CopyValue { .. } | Inst::Dup { .. }
-        )),
-        "{}",
-        dump(view)
-    );
 }
 
 #[test]

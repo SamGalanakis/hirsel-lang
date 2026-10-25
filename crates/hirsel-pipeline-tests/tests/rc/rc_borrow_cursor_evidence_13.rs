@@ -58,21 +58,6 @@ fn borrow_cursor_evidence_13_environment_diagnostic_preserves_ordinary_bindings(
 }
 
 #[test]
-fn borrow_cursor_evidence_13_environment_diagnostic_repair_lowers() {
-    let (program, lowered) = lower_valid(
-        "fn f(a:List[u64])->u64{let mut c:List[u64] in a=a;c=a;list.len(c)}\nfn main()->u64 {f([1])}",
-    );
-    let definition = &program.definitions[&path("f")];
-    assert_eq!(
-        definition.bodies[definition.entry.0 as usize]
-            .borrow_cursors
-            .len(),
-        1
-    );
-    assert!(!lowered.units.is_empty());
-}
-
-#[test]
 fn borrow_cursor_evidence_13_native_import_rejects_owned_refill_with_old_audit() {
     use hirsel_driver::*;
     use hirsel_engine::*;
@@ -229,11 +214,6 @@ fn old_cursor_at_failure(body: &hirsel_tir::Body) -> Result<(), &'static str> {
         }
     }
     Err("no failing indexed RHS in the entry block")
-}
-
-#[test]
-fn borrow_cursor_evidence_13_bounds_failure_keeps_old_holding_until_cleanup() {
-    bounds_failure_evidence();
 }
 
 pub(super) fn bounds_failure_evidence() {

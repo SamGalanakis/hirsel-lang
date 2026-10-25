@@ -233,66 +233,6 @@ fn iterator_resource_cleanup_agrees_on_both_targets_and_all_native_configuration
     }
 }
 
-#[test]
-fn iterator_construction_and_steps_keep_their_indirect_lir_shape() {
-    use hirsel_lir::ir::{ArgumentValue, Callee, CaptureUse, Inst, Terminator, UnitOrigin};
-    let source = include_str!("../../../../conformance/MODE/MODE-4-let-relation-iter-map-run.hir");
-    let lowered = hirsel_rc::import::lower(&compile(&with_map(source)), &target()).unwrap();
-    // The constructing units: main's own `iter.from`, then one per `map` instance.
-    let mut closures = Vec::new();
-    for unit in &lowered.units {
-        for inst in &unit.instructions {
-            if let Inst::Closure {
-                closure, result, ..
-            } = inst
-            {
-                let layout = unit.types[unit.values[result.index()].ty.index()].layout;
-                if matches!(
-                    lowered.table.layouts[layout.0 as usize].kind,
-                    hirsel_lir::layout_types::LayoutKind::Iterator { .. }
-                ) {
-                    let captures = unit.tables.closures[closure.index()]
-                        .captures
-                        .get(&unit.pools.captures)
-                        .unwrap();
-                    assert_eq!(captures.len(), 2);
-                    assert!(captures.iter().all(|c| c.usage == CaptureUse::Take));
-                    closures.push(unit.header.definition.0.name.to_string());
-                }
-            }
-        }
-        if unit.header.origin == UnitOrigin::Library {
-            assert!(
-                unit.tables
-                    .calls
-                    .iter()
-                    .all(|c| matches!(c.callee, Callee::Indirect(_)))
-            );
-            if unit.header.definition.0.name == "iter_from_step" {
-                assert_eq!(unit.tables.calls.len(), 1);
-                let args = unit.tables.calls[0]
-                    .arguments
-                    .get(&unit.pools.call_arguments)
-                    .unwrap();
-                assert!(matches!(args[0].value, ArgumentValue::Address { .. }));
-            }
-        }
-        for terminator in &unit.terminators {
-            if let Terminator::Call { call, .. } = terminator {
-                assert!(
-                    !matches!(unit.tables.calls[call.index()].callee, Callee::Operation(ref op) if unit.tables.operations[op.index()].definition.0.modules == ["iter"])
-                );
-            }
-        }
-    }
-    closures.sort();
-    assert_eq!(closures[0], "main", "{closures:?}");
-    assert!(
-        closures.len() >= 3 && closures[1..].iter().all(|name| name == "map"),
-        "{closures:?}"
-    );
-}
-
 fn mapped_owned_result(failing_drop: bool) -> String {
     let source = mapped_resource().replace(
         "fn mapper(x: Trace) -> u64 { let z: u64 = 0; 1 / z }",

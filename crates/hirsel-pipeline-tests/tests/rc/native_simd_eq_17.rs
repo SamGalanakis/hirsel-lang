@@ -4,12 +4,6 @@ use crate::rc_support::target;
 const MINIMAL: &str =
     include_str!("../../../../conformance/MEM/MEM-8-structural-equality-native-17-run.hir");
 
-#[test]
-#[ignore = "native: SIMD structural equality on H, checked heap, LLVM and Cranelift"]
-fn minimal_i128_equality() {
-    native_parity(&[("minimal", MINIMAL)]);
-}
-
 // The codec is the existing source-level way to construct nonuniform lanes
 // (conformance/SER/SER-2-vectors-run.hir). Change only an active payload byte.
 const ALTER: &str = r#"

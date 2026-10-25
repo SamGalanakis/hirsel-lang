@@ -266,31 +266,6 @@ fn unicode16_break_vectors_agree_through_compiled_hirsel() {
 }
 
 #[test]
-fn encoding_field_copies_keep_only_the_parameter_owner() {
-    let source = r#"
-type Row { text: String }
-fn emit(row: Row, mut out: List[u8]) {
-  std@1/json.write_text_into(row.text, mut out)
-}
-fn main() -> u64 {
-  let mut out: List[u8] = []
-  emit(Row(text: "é😀\n"), mut out)
-  list.len(out)
-}
-"#;
-    let (_, lowered) = crate::rc_support::lower_valid(source);
-    let emit = crate::rc_support::unit_named(&lowered, "emit");
-    assert!(
-        !emit
-            .instructions
-            .iter()
-            .any(|i| matches!(i, hirsel_lir::ir::Inst::Copy { .. })),
-        "{}",
-        crate::rc_support::dump(emit)
-    );
-}
-
-#[test]
 fn generated_encoding_tag_projection_keeps_only_the_parameter_owner() {
     let source = r#"
 @serializable

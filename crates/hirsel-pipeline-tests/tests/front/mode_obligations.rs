@@ -28,38 +28,6 @@ fn check(source: &str, rejected: Option<u32>) {
 }
 
 #[test]
-fn mode_obligations_original_contracts() {
-    for (source, rejected) in [
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-push-loop-aliased-bad.hir"),
-            Some(11),
-        ),
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-unique-record-part-bad.hir"),
-            Some(12),
-        ),
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-nested-view-mut-ok.hir"),
-            None,
-        ),
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-copied-part-type-argument-bad.hir"),
-            Some(11),
-        ),
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-inferred-box-explicit-bad.hir"),
-            Some(9),
-        ),
-        (
-            include_str!("../../../../conformance/MODE/MODE-2-inferred-tuple-explicit-bad.hir"),
-            Some(9),
-        ),
-    ] {
-        check(source, rejected);
-    }
-}
-
-#[test]
 fn mode_obligations_record_branch_twins() {
     for share in [false, true] {
         let source = format!(

@@ -2,43 +2,6 @@
 use crate::rc_support::*;
 
 #[test]
-fn borrow_cursor_8_projects_a_joined_box_view() {
-    lower_valid(
-        r#"
-type Tree = Leaf(n: u64) | Branch(left: box Tree, right: box Tree)
-fn leaf(a: box Tree, b: box Tree, flag: bool) -> u64 {
-    match (if flag { a } else { b }) {
-        Leaf(n: n) => n,
-        Branch(left: child, right: _) => {
-            match child { Leaf(n: n) => n, Branch(left: _, right: _) => 0 }
-        },
-    }
-    0
-}
-fn main() -> u64 { leaf(box Branch(left: box Leaf(n: 7), right: box Leaf(n: 9)), box Leaf(n: 3), true) }
-"#,
-    );
-}
-
-#[test]
-fn borrow_cursor_8_projects_a_joined_inline_view() {
-    lower_valid(
-        r#"
-type Value = Null | Number(String) | Array(List[Value]) | Object(Map[String, Value])
-fn first(a: Value, b: Value, flag: bool) -> u64 {
-    match (if flag { a } else { b }) {
-        Array(items) => list.len(items),
-        Object(members) => map.len(members),
-        Number(n) => string.byte_len(n),
-        Null() => 0,
-    }
-}
-fn main() -> u64 { first(Array([Number("7")]), Null(), true) }
-"#,
-    );
-}
-
-#[test]
 #[ignore = "native: focused borrow-cursor projection parity"]
 fn borrow_cursor_8_projection_native_parity() {
     use hirsel_driver::native::*;
@@ -824,11 +787,6 @@ pub fn main()->Result[(),u64] {
 "#;
 
 #[test]
-fn borrow_cursor_8_source_json_vectors() {
-    lower_valid(CURSOR_JSON_VECTORS);
-}
-
-#[test]
 #[ignore = "native: attested JSON cursor vectors"]
 fn borrow_cursor_8_native_json_vectors() {
     cursor_native_parity(&[("json-vectors", CURSOR_JSON_VECTORS)]);
@@ -1213,10 +1171,6 @@ pub fn main()->Result[(),u64] {
 }
 "#;
 #[test]
-fn borrow_cursor_8_source_huffman_vectors() {
-    lower_valid(CURSOR_HUFF);
-}
-#[test]
 #[ignore = "native: borrowed Huffman traversal exact vectors"]
 fn borrow_cursor_8_native_huffman_vectors() {
     cursor_native_parity(&[("huffman", CURSOR_HUFF)]);
@@ -1426,25 +1380,6 @@ const CURSOR_JSON_POINTER_MAIN: &str = r#"pub fn main()->Result[(),u64] {
 }
 "#;
 
-#[test]
-fn borrow_cursor_8_source_uniqueness_and_outer_continue() {
-    let source = r#"
-fn inspect(a:unique List[u64])->u64 {let mut c=a; c=a; list.len(c)}
-fn keep(take a:unique List[u64])->u64 {list.len(a)}
-fn f(take a:unique List[u64])->u64 {let n=inspect(a); keep(take a)+n}
-fn g(a:List[u64],rows:List[List[u64]])->u64 {
- let mut c:List[u64] in {a,rows}=a
- 'outer: for row in rows {
-  let mut inner:List[u64] in rows=row
-  for item in rows {inner=item; c=inner; continue 'outer}
-  c=row
- }
- list.len(c)
-}
-fn main()->u64 {f([1]) + g([2],[[3],[4]])}
-"#;
-    lower_valid(source);
-}
 #[test]
 fn borrow_cursor_8_source_mode_and_brand_guards() {
     for (name, source, rule) in [

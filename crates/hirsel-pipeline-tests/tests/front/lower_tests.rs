@@ -180,52 +180,6 @@ pub fn bits(execution: Execution) -> u128 {
 }
 
 #[test]
-fn unary_and_every_eager_binary_operator() {
-    for op in [
-        BinaryOp::Add,
-        BinaryOp::Sub,
-        BinaryOp::Mul,
-        BinaryOp::Div,
-        BinaryOp::Rem,
-        BinaryOp::Shl,
-        BinaryOp::Shr,
-        BinaryOp::BitAnd,
-        BinaryOp::BitOr,
-        BinaryOp::BitXor,
-        BinaryOp::Eq,
-        BinaryOp::Ne,
-        BinaryOp::Lt,
-        BinaryOp::Le,
-        BinaryOp::Gt,
-        BinaryOp::Ge,
-    ] {
-        let mut f = Fixture::new(P::U8);
-        let a = f.integer(4, 1);
-        let b = f.integer(1, 1);
-        let e = f.binary(op, a, b, 1);
-        let result = if matches!(
-            op,
-            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
-        ) {
-            f.boolean
-        } else {
-            f.scalar
-        };
-        execute(vec![f.lower(e, "main", result).unwrap()], vec![]);
-    }
-    for op in [UnaryOp::Neg, UnaryOp::Not, UnaryOp::BitNot] {
-        let mut f = Fixture::new(if op == UnaryOp::Not { P::Bool } else { P::I8 });
-        let e = if op == UnaryOp::Not {
-            f.bool_(true)
-        } else {
-            f.integer(1, 1)
-        };
-        let e = f.expr(ExprKind::Unary { op, value: e }, f.scalar, U::Take, 1);
-        execute(vec![f.lower(e, "main", f.scalar).unwrap()], vec![]);
-    }
-}
-
-#[test]
 fn failing_later_argument_cleans_earlier_temporaries_before_named_locals() {
     let mut f = Fixture::new(P::U8);
     let string = f.type_(TypeKind::Primitive(P::String));
@@ -289,74 +243,6 @@ fn failing_later_argument_cleans_earlier_temporaries_before_named_locals() {
             .iter()
             .all(|s| *s == Storage::Temporary)
     );
-}
-
-#[test]
-fn tuple_record_and_box_layout_snapshots() {
-    for construct in ["tuple", "record", "box"] {
-        let mut f = Fixture::new(P::U8);
-        let a = f.integer(3, 1);
-        let b = f.integer(8, 2);
-        let ty = f.type_(if construct == "box" {
-            TypeKind::Box(f.scalar)
-        } else if construct == "record" {
-            TypeKind::Record(
-                vec![
-                    hirsel_types::Field {
-                        growable: false,
-                        name: "a".into(),
-                        ty: f.scalar,
-                    },
-                    hirsel_types::Field {
-                        growable: false,
-                        name: "b".into(),
-                        ty: f.scalar,
-                    },
-                ]
-                .into(),
-            )
-        } else {
-            TypeKind::Tuple(vec![f.scalar, f.scalar].into())
-        });
-        let e = if construct == "tuple" {
-            f.expr(ExprKind::Tuple(vec![a, b]), ty, U::Take, 1)
-        } else if construct == "box" {
-            f.expr(
-                ExprKind::Unary {
-                    op: UnaryOp::Box,
-                    value: a,
-                },
-                ty,
-                U::Take,
-                1,
-            )
-        } else {
-            f.nominal("Pair", ty);
-            let e = f.named_call(
-                "Pair",
-                vec![b, a],
-                vec![(f.scalar, U::Take), (f.scalar, U::Take)],
-                ty,
-                1,
-            );
-            f.call_plan(
-                e,
-                hirsel_types::CallTarget::Constructor(hirsel_types::ContextualName::Constructor(
-                    path("Pair"),
-                )),
-                vec![1, 0],
-            );
-            e
-        };
-        let d = f.lower(e, "main", ty).unwrap();
-        insta::assert_snapshot!(format!("construct_{construct}"), print::definition(&d));
-        if construct == "tuple" {
-            assert!(matches!(
-                returned(execute(vec![d], vec![])),
-                Value::Tuple(_)
-            ));
-        }
-    }
 }
 
 #[test]

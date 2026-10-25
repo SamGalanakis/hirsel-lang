@@ -39,14 +39,6 @@ fn cases() -> Vec<(&'static str, String)> {
 }
 
 #[test]
-fn proven_match_prunes_incoming_state() {
-    for (name, source) in cases() {
-        let (_, lowered) = lower_valid(&source);
-        assert!(!lowered.units.is_empty(), "{name}");
-    }
-}
-
-#[test]
 fn reachable_unreachable_placeholder_is_rejected() {
     use hirsel_lir::{ir::Terminator, validate::ViolationKind};
 

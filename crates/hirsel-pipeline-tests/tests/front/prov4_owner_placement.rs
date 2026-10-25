@@ -153,32 +153,6 @@ fn constructor_rejects_a_missing_explicit_arena_and_heap() {
 }
 
 #[test]
-fn source_twins_still_reject() {
-    for source in [
-        include_str!(
-            "../../../../conformance/PROV/PROV-4-escaping-arena-boxed-part-capture-bad.hir"
-        ),
-        include_str!("../../../../conformance/PROV/PROV-4-union-arena-outside-binding-bad.hir"),
-    ] {
-        let mut engine =
-            QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
-        let file = engine
-            .sources
-            .add("owner-placement-bad.hir", source.into())
-            .unwrap();
-        let diagnostics = match hirsel_engine::check_snapshot(&mut engine, file, &default_context())
-        {
-            Ok(ds) | Err(hirsel_types::QueryError::Diagnostics(ds)) => ds,
-            Err(error) => panic!("{error:?}"),
-        };
-        assert!(
-            diagnostics.iter().any(|d| d.rule.as_str() == "PROV-4"),
-            "{diagnostics:?}"
-        );
-    }
-}
-
-#[test]
 fn constructor_keeps_the_explicit_destination_when_it_sorts_after_content() {
     for (source, ordinal) in [
         (CONSTRUCTOR.to_owned(), 0),

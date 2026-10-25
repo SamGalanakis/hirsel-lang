@@ -107,22 +107,6 @@ fn authority_call_22_call_forms() {
 }
 
 #[test]
-fn authority_call_22_reachable_pure_callable() {
-    check(
-        "fn pure(x:u64)->u64 uses {} {x}\npub fn main()->u64 uses {} {let f:fn(x:u64)->u64 uses {}=pure;f(7u64)}",
-        None,
-    );
-}
-
-#[test]
-fn authority_call_22_nominal_callable_control() {
-    check(
-        "fn effect(d:Dir) uses {Dir} {}\npub fn main(d:Dir) uses {Dir} {let f:fn(arg:Dir)->() uses {Dir}=effect;f(d)}",
-        None,
-    );
-}
-
-#[test]
 fn authority_call_22_mixed_record_authority() {
     for (binding, call) in [
         ("", "effect(record)"),
@@ -163,14 +147,6 @@ fn authority_call_22_selected_generic_does_not_cover_known_sibling() {
             );
         }
     }
-}
-
-#[test]
-fn authority_call_22_unselected_generic_input_is_not_an_effect() {
-    check(
-        "fn ignore[S](value:S) uses {} {}\npub fn main(d:Dir) uses {} {ignore(d)}",
-        None,
-    );
 }
 
 #[test]

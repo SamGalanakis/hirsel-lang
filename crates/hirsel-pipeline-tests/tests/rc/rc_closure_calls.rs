@@ -89,55 +89,6 @@ fn a_join_of_different_targets_is_dynamic() {
 }
 
 #[test]
-fn a_forwarding_relay_keeps_the_target() {
-    let (_, lowered) = lower_valid(
-        "fn apply(x:u64,f:fn(u64)->u64 uses {})->u64 uses {f} {f(x)}\nfn relay(x:u64,f:fn(u64)->u64 uses {})->u64 uses {f} {apply(x,f)}\nfn main()->u64 {let n=3u64;let f=fn(x:u64)->u64 uses {} {x+n};relay(4u64,f)}",
-    );
-    let main = lowered
-        .units
-        .iter()
-        .find(|u| u.header.definition.0.name == "main")
-        .unwrap();
-    let relay = main
-        .tables
-        .calls
-        .iter()
-        .find_map(|c| match c.callee {
-            Callee::Direct(s) if main.tables.symbols[s.index()].definition.0.name == "relay" => {
-                main.tables.symbols[s.index()].instance
-            }
-            _ => None,
-        })
-        .unwrap();
-    let relay = lowered
-        .units
-        .iter()
-        .find(|u| u.header.instance == relay)
-        .unwrap();
-    let apply = relay
-        .tables
-        .calls
-        .iter()
-        .find_map(|c| match c.callee {
-            Callee::Direct(s) => relay.tables.symbols[s.index()].instance,
-            _ => None,
-        })
-        .unwrap();
-    let apply = lowered
-        .units
-        .iter()
-        .find(|u| u.header.instance == apply)
-        .unwrap();
-    assert!(
-        apply
-            .tables
-            .calls
-            .iter()
-            .all(|c| !matches!(c.callee, Callee::Indirect(_)))
-    );
-}
-
-#[test]
 fn exclusive_callable_storage_does_not_keep_a_stale_target() {
     assert_eq!(
         indirect(

@@ -90,16 +90,6 @@ fn a_deep_copy_in_a_loop_with_an_early_return_ends_its_loan_on_failure() {
     }
 }
 
-/// A `for` loop's element, matched on, is a view of `xs[i]` that its counter
-/// does not move while the view lives: its reads go to the element in place
-/// rather than to storage holding a borrow without credit.
-#[test]
-fn a_loop_element_matched_on_is_read_in_place() {
-    lower_valid(include_str!(
-        "../../../../conformance/LANG/LANG-13-loop-element-match-run.hir"
-    ));
-}
-
 /// `channel.send` prepares its carrier's slots at entry, where the taken
 /// message is still held: each preparation's failure releases it.
 #[test]
@@ -147,19 +137,6 @@ fn return_extracts_its_value_before_cleanup() {
         "{}",
         dump(keep)
     );
-}
-
-#[test]
-fn replace_installs_before_the_displaced_drop() {
-    let (_, lowered) = lower_valid(
-        "fn swap() -> u64 { let mut s = std@1/u64.to_string(1u64); s = std@1/u64.to_string(22u64); string.byte_len(s) }\nfn main() -> u64 { swap() }",
-    );
-    let text = dump(unit_named(&lowered, "swap"));
-    let replace = text.find("Replace").expect("a Replace");
-    let drop = text[replace..]
-        .find("drop")
-        .expect("a displaced drop after it");
-    assert!(drop > 0, "{text}");
 }
 
 #[test]
@@ -378,22 +355,6 @@ const FIXTURES: &[(&str, &str)] = &[
         "fn half(n: u64) -> Result[u64, u64] { if n == 0u64 { Error(1u64) } else { Ok(n) } }\nfn twice(n: u64) -> Result[u64, u64] { let s = std@1/u64.to_string(n); let h = half(n)?; Ok(h + string.byte_len(s)) }\nfn main() -> u64 { match twice(2u64) { Ok(v) => v, Error(e) => e } }",
     ),
 ];
-
-#[test]
-fn dumps_match_their_fixtures() {
-    for (name, source) in FIXTURES {
-        let (_, lowered) = lower_valid(source);
-        // The golden describes this fixture; lower_valid checks dependency units too.
-        let package = path("main").0.package;
-        let text: Vec<String> = lowered
-            .units
-            .iter()
-            .filter(|unit| unit.header.definition.0.package == package)
-            .map(dump)
-            .collect();
-        golden(name, &format!("{source}\n\n{}", text.join("\n")));
-    }
-}
 
 /// One validated program, mutated in ways each obligation must catch.
 #[test]

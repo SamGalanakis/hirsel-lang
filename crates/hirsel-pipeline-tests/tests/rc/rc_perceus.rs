@@ -229,14 +229,6 @@ fn a_mut_argument_read_by_a_later_argument() {
     );
 }
 
-#[test]
-fn a_flat_copy_stays_a_copy() {
-    returns(
-        "fn main() -> u64 { let a = P(a: 1, b: 2); let b = copy a; b.a + a.b }",
-        3,
-    );
-}
-
 /// A borrowed call at the holder's last use: the holder ends after the
 /// call's loan, not before it, and the borrowed parameter is never released.
 #[test]

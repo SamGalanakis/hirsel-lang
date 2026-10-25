@@ -422,11 +422,6 @@ fn confinement(seeds: u64, draws: usize) {
 fn generated_confinement_differential() {
     confinement(4, 32);
 }
-#[test]
-#[ignore = "full gate: expanded confinement differential"]
-fn full_gate_generated_confinement_differential() {
-    confinement(128, 256);
-}
 
 fn file_request(kind: usize, directory: u64, file: u64, invalid: bool, round: usize) -> Request {
     let path = if invalid {

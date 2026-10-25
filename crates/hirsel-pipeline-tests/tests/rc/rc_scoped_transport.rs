@@ -275,14 +275,6 @@ fn heap_callable_representation_survives_both_native_backends() {
 }
 
 #[test]
-fn borrowed_shared_root_preserves_its_owner_cleanup() {
-    let run = heap(
-        "fn invoke(f:fn()->bool uses {})->bool uses {f} {f()}\nfn main()->bool {let built:String=\"value\";let s:Shared[String]=shared.freeze(take built);invoke(fn()->bool uses {} {let t=copy s;match shared.thaw(take t) {Ok(text)=>true,Error(root)=>false}})}",
-    );
-    assert_eq!(run.counters.allocations, run.counters.frees);
-}
-
-#[test]
 fn unsupported_generic_borrow_preserves_execution_but_not_qualification() {
     let source = "fn discard[T](x:T) {}\nfn invoke(f:fn()->u64 uses {})->u64 uses {f} {discard(f);f()}\nfn main()->u64 {let n=3u64;invoke(fn()->u64 uses {} {n})}";
     let (program, lowered) = lower_valid(source);

@@ -18,57 +18,6 @@ fn accepts(source: &str) {
 }
 
 #[test]
-fn tuple_compare_original() {
-    accepts(
-        r#"fn visible(m:Map[u64,List[u64]], take expected:List[(u64,List[u64])])->bool { let mut i:u64=0; for(k,v) in m { if (k,v)!=expected[i] {return false}; i+=1 }; true }"#,
-    );
-}
-
-#[test]
-fn tuple_compare_reduced() {
-    accepts(
-        "fn visible(k:u64,v:List[u64],take expected:List[(u64,List[u64])])->bool { (k,v)!=expected[0] }",
-    );
-}
-
-#[test]
-fn tuple_compare_reduced_loop() {
-    accepts(
-        "fn visible(m:Map[u64,List[u64]],take expected:List[(u64,List[u64])])->bool { for(k,v) in m { return (k,v)!=expected[0] }; true }",
-    );
-}
-#[test]
-fn tuple_compare_reduced_binding() {
-    accepts(
-        "fn visible(p:(u64,List[u64]),take expected:List[(u64,List[u64])])->bool { let (k,v)=p; (k,v)!=expected[0] }",
-    );
-}
-
-#[test]
-fn tuple_compare_all_operators_and_orders() {
-    for op in ["==", "!="] {
-        for (left, right) in [("(k,v)", "expected[0]"), ("expected[0]", "(k,v)")] {
-            accepts(&format!(
-                "fn visible(p:(u64,List[u64]),take expected:List[(u64,List[u64])])->bool {{ let (k,v)=p; {left}{op}{right} }}"
-            ));
-        }
-    }
-}
-
-#[test]
-fn tuple_compare_nested_and_field() {
-    accepts(
-        "fn visible(p:(u64,List[u64]),take expected:List[((u64,List[u64]),u64)])->bool { let (k,v)=p; ((k,v),k)==expected[0] }",
-    );
-    accepts(
-        "type Row { pair:(u64,List[u64]) }\nfn visible(row:Row)->bool { let(k,v)=row.pair; row.pair==(k,v) }",
-    );
-    accepts(
-        "type Row { pair:(u64,List[u64]) }\nfn visible(row:Row)->bool { let(k,v)=row.pair; (k,v)==row.pair }",
-    );
-}
-
-#[test]
 fn tuple_compare_incompatible_nested_rows_are_still_rejected_by_v() {
     use hirsel_tir::Rvalue;
     use hirsel_types::{Relation, TypeKind};

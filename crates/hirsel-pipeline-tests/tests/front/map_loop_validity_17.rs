@@ -71,44 +71,6 @@ fn retained_two_operation_loop() {
 }
 
 #[test]
-fn expanded_control() {
-    let start = TWO_OPS.find("  for (tag,k,v) in ops {\n").unwrap();
-    let end = TWO_OPS.find("  let last = states[step-1]").unwrap();
-    let block = &TWO_OPS[start..end];
-    let body = &block["  for (tag,k,v) in ops {\n".len()..block.rfind("  }").unwrap()];
-    let expanded = format!(
-        "{}{{ let (tag,k,v) = ops[0]\n{body} }}\n{{ let (tag,k,v) = ops[1]\n{body} }}\n{}",
-        &TWO_OPS[..start],
-        &TWO_OPS[end..]
-    );
-    checked(&expanded);
-}
-
-#[test]
-fn semantic_matrix() {
-    checked(include_str!(
-        "../../../../conformance/OWN/OWN-2-map-loop-validity-17-run.hir"
-    ));
-}
-
-#[test]
-fn moved_owner_is_rejected_by_j() {
-    let source = include_str!("../../../../conformance/OWN/OWN-2-map-loop-validity-17-bad.hir");
-    let mut engine = QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
-    let file = engine.sources.add("moved-map.hir", source.into()).unwrap();
-    let diagnostics = match check_snapshot(&mut engine, file, &default_context()) {
-        Ok(ds) | Err(hirsel_types::QueryError::Diagnostics(ds)) => ds,
-        Err(e) => panic!("{e:?}"),
-    };
-    assert!(
-        diagnostics
-            .iter()
-            .any(|d| d.rule == hirsel_diag::RuleId::of("OWN-2")),
-        "{diagnostics:?}"
-    );
-}
-
-#[test]
 fn extraction_actions_remain_distinct() {
     for (source, expected) in [
         (

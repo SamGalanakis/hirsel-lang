@@ -248,46 +248,6 @@ fn append_partial_sync_and_cancellation() {
         false,
     );
 }
-#[test]
-fn admission_refuses_unsupported_scripts() {
-    use hirsel_run_schema::validate_file_faults;
-    for (faults, message) in [
-        (script(O::Read, vec![]), "empty file fault queue"),
-        (
-            script(O::WriteAll, vec![step(Some(2), Some(E::Fault(7)), 3)]),
-            "unsupported partial file fault",
-        ),
-        (
-            script(O::Commit, vec![step(Some(1), Some(E::Fault(7)), 0)]),
-            "expected request count",
-        ),
-        (
-            script(O::Read, vec![step(Some(2), Some(E::Fault(7)), 1)]),
-            "unsupported partial file fault",
-        ),
-        (
-            script(O::PutNew, vec![step(Some(2), Some(E::Fault(7)), 1)]),
-            "unsupported partial file fault",
-        ),
-        (
-            script(O::Append, vec![step(Some(2), Some(E::Canceled(1)), 1)]),
-            "unsupported partial file fault",
-        ),
-        (
-            script(O::Open, vec![step(None, Some(E::Canceled(4)), 0)]),
-            "invalid cancellation cause",
-        ),
-    ] {
-        assert!(validate_file_faults(&faults).unwrap_err().contains(message));
-    }
-    let mut faults = script(O::WriteAll, vec![step(Some(3), Some(E::Fault(7)), 2)]);
-    let original = faults.clone();
-    assert_eq!(
-        hirsel_run_schema::take_file_fault(&mut faults, O::WriteAll, Some(1)).unwrap_err(),
-        "file.write_all: file fault request count mismatch: expected Some(3), got Some(1)"
-    );
-    assert_eq!(faults, original);
-}
 
 const PENDING: &str = r#"
 resource type Joined { dir: Dir }

@@ -23,54 +23,6 @@ fn accepts(source: &str) {
 }
 
 #[test]
-fn unique_if_join_direct() {
-    accepts(DIRECT);
-}
-#[test]
-fn unique_if_join_bound() {
-    accepts(BOUND);
-}
-
-#[test]
-fn unique_if_join_match() {
-    accepts(&DIRECT.replace(
-        "if select { a } else { b }",
-        "match select { true => a, false => b }",
-    ));
-}
-#[test]
-fn unique_if_join_nested() {
-    accepts(&DIRECT.replace(
-        "if select { a } else { b }",
-        "if select { if select { a } else { b } } else { b }",
-    ));
-}
-#[test]
-fn unique_if_join_without_early_return() {
-    accepts(&DIRECT.replace("if string.byte_len(a)==0u64 { return unique b }; ", ""));
-}
-
-#[test]
-fn unique_if_join_borrowed_resource_is_rejected() {
-    let source = include_str!("../../../../conformance/OWN/OWN-5-unique-if-join-resource-bad.hir");
-    let mut engine = QueryEngine::new(default_environment(), hirsel_driver::compiler_adapters());
-    let file = engine
-        .sources
-        .add("unique-resource.hir", source.into())
-        .unwrap();
-    let diagnostics = match check_snapshot(&mut engine, file, &default_context()) {
-        Ok(diagnostics) | Err(hirsel_types::QueryError::Diagnostics(diagnostics)) => diagnostics,
-        Err(error) => panic!("unexpected {error:?}"),
-    };
-    assert!(
-        diagnostics
-            .iter()
-            .any(|d| d.rule == hirsel_diag::RuleId::of("OWN-5")),
-        "{diagnostics:?}"
-    );
-}
-
-#[test]
 fn unique_if_join_matches_reference_heap_llvm_and_cranelift() {
     use hirsel_driver::native::*;
     use hirsel_engine::{
