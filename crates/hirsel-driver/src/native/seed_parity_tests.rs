@@ -288,19 +288,20 @@ fn ordinary_store_delete_has_one_consistent_entry_abi() {
                 hirsel_lir::emission::OptLevel::Default,
                 hirsel_lir::emission::OptLevel::Speed,
             ] {
-                let mut options =
+                let options =
                     super::super::Options::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
-                options.objects = Some(super::super::UnitObjects {
-                    store: Arc::new(NoObjects),
+                let ready = stages::build_full(&input, &options)
+                    .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+                let sources = super::super::profile_sources(input.snapshot());
+                super::super::emit_backend_objects(
+                    &ready,
                     backend,
                     opt,
-                    debug: opt == hirsel_lir::emission::OptLevel::None,
-                    fuel: false,
-                    jobs: hirsel_intern::jobs::Jobs::ONE,
-                    byte_budget: None,
-                });
-                stages::build_full(&input, &options)
-                    .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+                    super::super::Partition::Singleton,
+                    false,
+                    (opt == hirsel_lir::emission::OptLevel::None).then_some(&sources),
+                )
+                .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
             }
         }
     });

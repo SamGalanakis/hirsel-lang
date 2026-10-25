@@ -583,18 +583,19 @@ pub fn main(u: Unsafe) -> Result[(), ()] {{
             let input = loaded.engine.export_native_input().unwrap();
             let validated = loaded.engine.import_native_input(input).unwrap();
             for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-                let mut options =
+                let options =
                     native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
-                options.objects = Some(native::UnitObjects {
-                    store: std::sync::Arc::new(hirsel_lir::objects::NoObjects),
-                    backend,
-                    opt: native::OptLevel::None,
-                    debug: false,
-                    fuel: false,
-                    jobs: hirsel_intern::jobs::Jobs::ONE,
-                    byte_budget: None,
-                });
                 let error = native::build(&validated, &options)
+                    .and_then(|ready| {
+                        native::emit_backend_objects(
+                            &ready,
+                            backend,
+                            native::OptLevel::None,
+                            native::Partition::Singleton,
+                            false,
+                            None,
+                        )
+                    })
                     .err()
                     .expect("callback refusal")
                     .to_string();
