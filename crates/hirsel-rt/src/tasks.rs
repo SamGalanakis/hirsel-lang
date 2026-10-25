@@ -1293,21 +1293,25 @@ pub(crate) unsafe fn issuer_path(ctx: *mut TaskCtx) -> Vec<u32> {
 /// or holding; it returns from here when something resumes it, on whichever worker that is.
 ///
 /// # Safety
-/// `ctx` is the running task's and `next` is a suspended or prepared task.
+/// `ctx` is the running task's, inside an operation whose own entry has
+/// already taken the role; `next` is a suspended or prepared task.
 #[inline(never)]
 unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
-    let next_row = role::with_role(ctx, |t| {
-        let from = t.current;
-        t.task(from).budget.reset();
-        // A suspension ends the running task's hold on the home thread for the Io binding.
-        if let Some(Some(row)) = t.tasks.get_mut(from as usize) {
-            unpin(row);
-        }
-        (from != next).then(|| {
-            let row = t.task(next);
-            (row.owner, row.last, row.ctx)
+    // SAFETY: the operation holds the role and its tables exist.
+    let next_row = unsafe {
+        role::with_held(ctx, |t| {
+            let from = t.current;
+            t.task(from).budget.reset();
+            // A suspension ends the running task's hold on the home thread for the Io binding.
+            if let Some(Some(row)) = t.tasks.get_mut(from as usize) {
+                unpin(row);
+            }
+            (from != next).then(|| {
+                let row = t.task(next);
+                (row.owner, row.last, row.ctx)
+            })
         })
-    });
+    };
     let Some((owner, last, to_ctx)) = next_row else {
         // SAFETY: caller contract.
         unsafe { migrate_self(ctx) };
@@ -1336,8 +1340,8 @@ unsafe fn switch_to(ctx: &mut TaskCtx, next: u32) {
     }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    role::with_role(to_ctx, |t| t.current = next);
-    unsafe { ran_here(&mut *to_ctx, next) };
+    // SAFETY: `next` entered the role above.
+    unsafe { ran_here(to_ctx, next) };
     // SAFETY: `to` is the suspended or prepared stack pointer of `next`.
     unsafe { fiber::switch(save, to) };
     unsafe { role::enter(ctx) };
@@ -1351,17 +1355,25 @@ fn unpin(row: &mut Task) {
     }
 }
 
-/// Task `task` runs on the calling thread from here on: at width > 1, on a compute worker,
-/// it records the worker (counting a migration when it last ran on another).
-fn ran_here(ctx: &mut TaskCtx, task: u32) {
-    if !crate::pool::wide(ctx.run_ref()) {
-        return;
+/// Task `task` becomes the running task on the calling thread: at width > 1, on a compute
+/// worker, it records the worker (counting a migration when it last ran on another).
+/// # Safety
+/// `ctx` is `task`'s, switched in, and holds the role; its run's tables exist.
+unsafe fn ran_here(ctx: *mut TaskCtx, task: u32) {
+    // SAFETY: caller contract; the run outlives its tasks.
+    let run = unsafe { (*ctx).run_ref() };
+    let here = if crate::pool::wide(run) {
+        crate::pool::compute_index()
+    } else {
+        None
+    };
+    // SAFETY: caller contract.
+    unsafe {
+        role::with_held(ctx, |t| {
+            t.current = task;
+            record_worker(t.task(task), here, run.worker_metrics.as_deref())
+        })
     }
-    let here = crate::pool::compute_index();
-    let metrics = ctx.run_ref().worker_metrics.clone();
-    role::with_role(ctx, |t| {
-        record_worker(t.task(task), here, metrics.as_deref())
-    });
 }
 
 fn record_worker(row: &mut Task, here: Option<u16>, metrics: Option<&crate::pool::WorkerMetrics>) {
@@ -1548,10 +1560,15 @@ pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, sp: *mut u8) {
 /// `ctx` is the running task's, `next` is suspended and the running fiber is never resumed.
 #[inline(never)]
 unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
-    let (owner, last, to_ctx) = role::with_role(ctx, |t| {
-        let row = t.task(next);
-        (row.owner, row.last, row.ctx)
-    });
+    // `next` is Ready before this task gives up the role, as at a hand-off.
+    // SAFETY: the completion holds the role and its tables exist.
+    let (owner, last, to_ctx) = unsafe {
+        role::with_held(ctx, |t| {
+            let row = t.task(next);
+            row.state = State::Ready;
+            (row.owner, row.last, row.ctx)
+        })
+    };
     if ctx.failure.active() || ctx.shield != 0 || !ctx.work.is_null() || !ctx.region.is_null() {
         fault("a task completed with context state left");
     }
@@ -1564,8 +1581,6 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     }
     if let Some(to) = crate::pool::target(ctx, owner, last) {
         let permit = crate::pool::resumes_into_hirsel(to_ctx, to);
-        // Before the switch-out: no stop-aware entry follows it on this stack.
-        role::with_role(ctx, |t| t.task(next).state = State::Ready);
         ctx.switch_out();
         let mut abandoned = std::ptr::null_mut();
         // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
@@ -1581,9 +1596,8 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     }
     // SAFETY: `next`'s context is live and nothing else runs on this worker.
     unsafe { TaskCtx::switch_in(to_ctx, ctx.worker_ptr()) };
-    role::with_role(to_ctx, |t| t.current = next);
-    unsafe { ran_here(&mut *to_ctx, next) };
-    role::with_role(to_ctx, |t| t.task(next).state = State::Ready);
+    // SAFETY: `next` entered the role above.
+    unsafe { ran_here(to_ctx, next) };
     let mut abandoned = std::ptr::null_mut();
     // SAFETY: `next` is suspended; nothing resumes the abandoned stack pointer.
     unsafe { fiber::switch(&raw mut abandoned, to) };
@@ -2015,34 +2029,38 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     let ready = unsafe { crate::host_waits::ready(ctx) }?;
     // Scope deadlines first, so the parked tasks' polls see what they cancel (CONC-3).
     for scope in unsafe { crate::host_waits::expired(ctx, &ready) }? {
-        role::with_role(ctx, |t| ordered::events::expire(t, scope));
+        unsafe { role::with_held(ctx, |t| ordered::events::expire(t, scope)) };
     }
-    let canceled: Vec<u64> = role::with_role(ctx, |t| {
-        t.tasks
-            .iter()
-            .enumerate()
-            .filter_map(|(task, row)| {
-                let row = row.as_ref()?;
-                let Wait::Host { token } = row.wait? else {
-                    return None;
-                };
-                t.canceled_task(task as u32, row.shield()).map(|_| token)
-            })
-            .collect()
-    });
+    let canceled: Vec<u64> = unsafe {
+        role::with_held(ctx, |t| {
+            t.tasks
+                .iter()
+                .enumerate()
+                .filter_map(|(task, row)| {
+                    let row = row.as_ref()?;
+                    let Wait::Host { token } = row.wait? else {
+                        return None;
+                    };
+                    t.canceled_task(task as u32, row.shield()).map(|_| token)
+                })
+                .collect()
+        })
+    };
     let batch = unsafe { crate::host_waits::process_batch(ctx, &canceled) }?;
     let ready = crate::host_waits::merge_ready(ready, batch);
     let woken = unsafe { crate::host_waits::woken(ctx, &ready) };
-    let Some(mut woken) = role::with_role(ctx, |t| {
-        for task in woken {
-            t.wake(task);
-        }
-        t.wake_receivers();
-        if t.woken.is_empty() {
-            return None;
-        }
-        let polling = std::mem::take(&mut t.polling);
-        Some(std::mem::replace(&mut t.woken, polling))
+    let Some(mut woken) = (unsafe {
+        role::with_held(ctx, |t| {
+            for task in woken {
+                t.wake(task);
+            }
+            t.wake_receivers();
+            if t.woken.is_empty() {
+                return None;
+            }
+            let polling = std::mem::take(&mut t.polling);
+            Some(std::mem::replace(&mut t.woken, polling))
+        })
     }) else {
         return Ok(());
     };
@@ -2053,10 +2071,12 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
         woken.sort_unstable_by_key(|&task| {
             // The home bridge may release the role and another worker may
             // grow the task table. Copy before it; no row borrow may cross it.
-            let (wait, parked_at) = role::with_role(ctx, |t| {
-                let row = t.task(task);
-                (row.wait, row.parked_at)
-            });
+            let (wait, parked_at) = unsafe {
+                role::with_held(ctx, |t| {
+                    let row = t.task(task);
+                    (row.wait, row.parked_at)
+                })
+            };
             let deadline = match wait {
                 // SAFETY: the context is live and `token` parked.
                 Some(Wait::Host { token }) => unsafe { crate::host_waits::deadline(ctx, token) },
@@ -2067,11 +2087,13 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
     }
     for &task in &woken {
         // A role-free object wake may have ended this wait at its dispatch.
-        let parked = role::with_role(ctx, |t| {
-            let row = t.task(task);
-            row.woken = false;
-            row.state == State::Parked
-        });
+        let parked = unsafe {
+            role::with_held(ctx, |t| {
+                let row = t.task(task);
+                row.woken = false;
+                row.state == State::Parked
+            })
+        };
         if !parked {
             continue;
         }
@@ -2080,13 +2102,13 @@ unsafe fn poll_parked(ctx: *mut TaskCtx) -> Stopped<()> {
             #[cfg(feature = "measurement")]
             if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut()
             {
-                profile.ready(role::with_role(ctx, |t| t.task(task).path.clone()));
+                profile.ready(unsafe { role::with_held(ctx, |t| t.task(task).path.clone()) });
             }
-            role::with_role(ctx, |t| t.unpark(task));
+            unsafe { role::with_held(ctx, |t| t.unpark(task)) };
         }
     }
     woken.clear();
-    role::with_role(ctx, |t| t.polling = woken);
+    unsafe { role::with_held(ctx, |t| t.polling = woken) };
     Ok(())
 }
 
@@ -2103,7 +2125,7 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
     if !unsafe { crate::pool::free::is_saved((*ctx).run_ptr(), task) } {
         return Ok(false);
     }
-    let wait = role::with_role(ctx, |t| t.task(task).wait);
+    let wait = unsafe { role::with_held(ctx, |t| t.task(task).wait) };
     if let Some(Wait::Join { child, .. }) = wait
         // SAFETY: the role owns the child's live row. Its Holding state
         // alone cannot expose the result until its stack has been saved.
@@ -2116,69 +2138,71 @@ unsafe fn poll(ctx: *mut TaskCtx, task: u32, ready: &crate::io::Ready) -> Stoppe
         Host(u64, Option<u32>),
         Pool,
     }
-    let polled = role::with_role(ctx, |s| {
-        Ok(match wait {
-            Some(Wait::Join { child, slot, size }) => match s.task(child).state {
-                State::Holding => {
-                    let held = s.task(child).slot.take().unwrap();
-                    // SAFETY: the child is in its finish and the awaiter parked, both slots live.
-                    unsafe { deliver(held, slot, size) };
-                    true
-                }
-                State::Done => true,
-                State::Ready | State::Parked => false,
-            },
-            Some(Wait::Exit { scope }) => s.settled(scope),
-            Some(Wait::Receive { channel, slot }) => {
-                let shield = s.task(task).shield();
-                // SAFETY: the slot is in the parked task's frame.
-                match unsafe { receive_ready(s, task, shield, channel, slot) } {
-                    Some(status) => {
-                        s.task(task).status = status;
-                        // SAFETY: saved-frame checks above protect the slot;
-                        // capture before the owner can be unparked.
-                        unsafe { ordered::events::record_receive_poll(s, task, slot, status) };
+    let polled = unsafe {
+        role::with_held(ctx, |s| {
+            Ok(match wait {
+                Some(Wait::Join { child, slot, size }) => match s.task(child).state {
+                    State::Holding => {
+                        let held = s.task(child).slot.take().unwrap();
+                        // SAFETY: the child is in its finish and the awaiter parked, both slots live.
+                        deliver(held, slot, size);
                         true
                     }
-                    None => false,
+                    State::Done => true,
+                    State::Ready | State::Parked => false,
+                },
+                Some(Wait::Exit { scope }) => s.settled(scope),
+                Some(Wait::Receive { channel, slot }) => {
+                    let shield = s.task(task).shield();
+                    // SAFETY: the slot is in the parked task's frame.
+                    match receive_ready(s, task, shield, channel, slot) {
+                        Some(status) => {
+                            s.task(task).status = status;
+                            // SAFETY: saved-frame checks above protect the slot;
+                            // capture before the owner can be unparked.
+                            ordered::events::record_receive_poll(s, task, slot, status);
+                            true
+                        }
+                        None => false,
+                    }
                 }
-            }
-            Some(Wait::ReceiveReady { channel }) => {
-                let shield = s.task(task).shield();
-                s.canceled_task(task, shield).is_some() || s.channels.ready(channel)
-            }
-            Some(Wait::Host { token }) => {
-                let shield = s.task(task).shield();
-                return Err(Outside::Host(token, s.canceled_task(task, shield)));
-            }
-            Some(Wait::Any { set, member: None }) => s.first_completed(set).is_some(),
-            Some(Wait::Any {
-                set,
-                member: Some(index),
-            }) => s.member_completed(set, index),
-            // SAFETY: the parked task holds the set's row.
-            Some(Wait::Drain { set }) => unsafe { poll_drained(s, set) },
-            Some(Wait::Final) => false,
-            Some(Wait::Gate { gate }) => {
-                let row = s.gate(gate);
-                if row.owner.is_none() {
-                    row.owner = Some(task);
-                    row.depth = 1;
-                    row.version += 1;
-                    true
-                } else {
-                    false
+                Some(Wait::ReceiveReady { channel }) => {
+                    let shield = s.task(task).shield();
+                    s.canceled_task(task, shield).is_some() || s.channels.ready(channel)
                 }
-            }
-            Some(Wait::Pool) => return Err(Outside::Pool),
-            Some(Wait::Retry { cancelable }) => {
-                let shield = s.task(task).shield();
-                let canceled = cancelable && s.canceled_task(task, shield).is_some();
-                std::mem::take(&mut s.task(task).retried) || canceled
-            }
-            None => fault("a parked task without a wait"),
+                Some(Wait::Host { token }) => {
+                    let shield = s.task(task).shield();
+                    return Err(Outside::Host(token, s.canceled_task(task, shield)));
+                }
+                Some(Wait::Any { set, member: None }) => s.first_completed(set).is_some(),
+                Some(Wait::Any {
+                    set,
+                    member: Some(index),
+                }) => s.member_completed(set, index),
+                // SAFETY: the parked task holds the set's row.
+                Some(Wait::Drain { set }) => poll_drained(s, set),
+                Some(Wait::Final) => false,
+                Some(Wait::Gate { gate }) => {
+                    let row = s.gate(gate);
+                    if row.owner.is_none() {
+                        row.owner = Some(task);
+                        row.depth = 1;
+                        row.version += 1;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Some(Wait::Pool) => return Err(Outside::Pool),
+                Some(Wait::Retry { cancelable }) => {
+                    let shield = s.task(task).shield();
+                    let canceled = cancelable && s.canceled_task(task, shield).is_some();
+                    std::mem::take(&mut s.task(task).retried) || canceled
+                }
+                None => fault("a parked task without a wait"),
+            })
         })
-    });
+    };
     Ok(match polled {
         Ok(done) => done,
         // SAFETY: the context is live and `token` is this task's parked request.
@@ -2220,25 +2244,27 @@ unsafe fn run_next(ctx: &mut TaskCtx) -> Stopped<()> {
 unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
     // SAFETY: the context is live.
     queued(unsafe { &*ctx });
-    let picked = role::with_role(ctx, |s| {
-        if s.schedule.algorithm() == Algorithm::Fifo || s.runnable.is_empty() {
-            return Err(s.runnable.pop_front());
-        }
-        let current = s.current as usize;
-        if let Some(priority) = s.schedule.point()
-            && let Some(Some(ran)) = s.tasks.get_mut(current)
-        {
-            ran.priority = priority;
-        }
-        let priorities: Vec<u64> = s
-            .runnable
-            .iter()
-            .map(|&task| s.tasks[task as usize].as_ref().map_or(0, |t| t.priority))
-            .collect();
-        let choice = s.schedule.choose(&priorities);
-        let recorded = s.schedule.recorded(priorities.len());
-        Ok((choice, priorities.len(), recorded))
-    });
+    let picked = unsafe {
+        role::with_held(ctx, |s| {
+            if s.schedule.algorithm() == Algorithm::Fifo || s.runnable.is_empty() {
+                return Err(s.runnable.pop_front());
+            }
+            let current = s.current as usize;
+            if let Some(priority) = s.schedule.point()
+                && let Some(Some(ran)) = s.tasks.get_mut(current)
+            {
+                ran.priority = priority;
+            }
+            let priorities: Vec<u64> = s
+                .runnable
+                .iter()
+                .map(|&task| s.tasks[task as usize].as_ref().map_or(0, |t| t.priority))
+                .collect();
+            let choice = s.schedule.choose(&priorities);
+            let recorded = s.schedule.recorded(priorities.len());
+            Ok((choice, priorities.len(), recorded))
+        })
+    };
     let (mut choice, count, recorded) = match picked {
         Ok(picked) => picked,
         Err(next) => return Ok(next),
@@ -2260,7 +2286,7 @@ unsafe fn pick(ctx: *mut TaskCtx) -> Stopped<Option<u32>> {
             Err(error) => return Err(Stop::refusal(error)),
         };
     }
-    Ok(role::with_role(ctx, |t| t.runnable.remove(choice)))
+    Ok(unsafe { role::with_held(ctx, |t| t.runnable.remove(choice)) })
 }
 
 /// Poll the parked tasks and take the next task to run ([`pick`]).
@@ -2273,7 +2299,7 @@ unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
     if unsafe { crate::runners::driving(ctx) } {
         // An execution of several runs: with nothing runnable here, the others run until
         // this run is next, and only the execution is Blocked (RUN-12).
-        while role::with_role(ctx, |t| t.runnable.is_empty()) {
+        while unsafe { role::with_held(ctx, |t| t.runnable.is_empty()) } {
             unsafe {
                 crate::runners::idle(ctx)?;
                 poll_parked(ctx)?;
@@ -2281,7 +2307,7 @@ unsafe fn next_task(ctx: *mut TaskCtx) -> Stopped<u32> {
         }
     }
     // With nothing runnable, sleep until a parked host request may complete, then poll again.
-    while role::with_role(ctx, |t| t.runnable.is_empty())
+    while unsafe { role::with_held(ctx, |t| t.runnable.is_empty()) }
         && unsafe { crate::host_waits::wait(ctx) }?
     {
         // A host's stop ends the wait too (`crate::host::RunControl`).
@@ -2438,10 +2464,12 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // every op, while immediate ops keep this worker for at most 128 ops.
     // F0's injected schedule retains its one-op quantum for reference tests.
     if ctx.run_ref().free_mode && ctx.run_ref().free.is_none() {
-        if role::with_role(ctx, |t| {
-            let me = t.current;
-            t.task(me).budget.proceed()
-        }) {
+        if unsafe {
+            role::with_held(ctx, |t| {
+                let me = t.current;
+                t.task(me).budget.proceed()
+            })
+        } {
             if let Some(metrics) = &ctx.run_ref().worker_metrics {
                 metrics.elision();
             }
@@ -2453,23 +2481,27 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
     // runnable root without entering the driver. Hirsel additionally preserves
     // explicit scope deadlines and free-mode phase recording at every point.
     if unsafe { single_worker_fast_path(ctx) }
-        && role::with_role(ctx, |t| {
-            t.tasks.len() == 1 && t.runnable.is_empty() && t.woken.is_empty()
-        })
+        && unsafe {
+            role::with_held(ctx, |t| {
+                t.tasks.len() == 1 && t.runnable.is_empty() && t.woken.is_empty()
+            })
+        }
         && unsafe { crate::host_waits::idle(ctx) }
     {
         return Ok(());
     }
     // SAFETY: the context is live.
     unsafe { poll_parked(ctx) }?;
-    let alone = role::with_role(ctx, |t| {
-        let alone = t.runnable.is_empty();
-        if !alone {
-            let current = t.current;
-            t.runnable.push_back(current);
-        }
-        alone
-    });
+    let alone = unsafe {
+        role::with_held(ctx, |t| {
+            let alone = t.runnable.is_empty();
+            if !alone {
+                let current = t.current;
+                t.runnable.push_back(current);
+            }
+            alone
+        })
+    };
     if alone {
         // SAFETY: the context is live; the caller holds nothing a stop must drop.
         unsafe { go_on(ctx) };
@@ -2488,12 +2520,14 @@ pub(crate) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// `ctx` is the running task's; the caller holds nothing a stop must drop.
 pub(crate) unsafe fn go_on(ctx: &mut TaskCtx) {
-    role::with_role(ctx, |t| {
-        let me = t.current;
-        if let Some(Some(row)) = t.tasks.get_mut(me as usize) {
-            unpin(row);
-        }
-    });
+    unsafe {
+        role::with_held(ctx, |t| {
+            let me = t.current;
+            if let Some(Some(row)) = t.tasks.get_mut(me as usize) {
+                unpin(row);
+            }
+        })
+    };
     // SAFETY: caller contract.
     unsafe { migrate_self(ctx) };
 }
@@ -2533,16 +2567,18 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
         metrics.op();
     }
     if free::enabled(ctx) {
-        let (me, generation) = role::with_role(ctx, |t| {
-            let me = t.current;
-            let row = t.task(me);
-            // The chain budget continues only through this worker's LIFO slot.
-            row.wait_site = site;
-            unpin(row);
-            let generation = row.generation;
-            t.park(wait);
-            (me, generation)
-        });
+        let (me, generation) = unsafe {
+            role::with_held(ctx, |t| {
+                let me = t.current;
+                let row = t.task(me);
+                // The chain budget continues only through this worker's LIFO slot.
+                row.wait_site = site;
+                unpin(row);
+                let generation = row.generation;
+                t.park(wait);
+                (me, generation)
+            })
+        };
         if let Wait::Host { token } = wait {
             let concurrent = ctx
                 .run_ref()
@@ -2559,14 +2595,16 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
     if yielded {
         // SAFETY: the context is live.
         unsafe { poll_parked(ctx) }?;
-        if role::with_role(ctx, |t| {
-            let others = !t.runnable.is_empty();
-            if others {
-                let current = t.current;
-                t.runnable.push_back(current);
-            }
-            others
-        }) {
+        if unsafe {
+            role::with_held(ctx, |t| {
+                let others = !t.runnable.is_empty();
+                if others {
+                    let current = t.current;
+                    t.runnable.push_back(current);
+                }
+                others
+            })
+        } {
             queued(ctx);
             // SAFETY: the context is live and the queue is nonempty.
             let next =
@@ -2574,13 +2612,15 @@ unsafe fn try_block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) -> 
             unsafe { switch_to(ctx, next) };
         }
     }
-    let current = role::with_role(ctx, |t| {
-        let current = t.current;
-        t.task(current).budget.reset();
-        t.task(current).wait_site = site;
-        t.park(wait);
-        current
-    });
+    let current = unsafe {
+        role::with_held(ctx, |t| {
+            let current = t.current;
+            t.task(current).budget.reset();
+            t.task(current).wait_site = site;
+            t.park(wait);
+            current
+        })
+    };
     if let Wait::Host { token } = wait {
         // SAFETY: the context is live, its Binding bound, and `token` blocked.
         unsafe { crate::host_waits::park(ctx, token, current) };
@@ -2610,18 +2650,20 @@ pub(crate) unsafe fn park_host(ctx: &mut TaskCtx, token: u64, yielded: bool) -> 
 /// `ctx` is live and `child` is holding.
 unsafe fn hand_off(ctx: &mut TaskCtx, child: u32) {
     let free = free::enabled(ctx);
-    let _path = role::with_role(ctx, |t| {
-        let me = t.current;
-        t.task(me).state = State::Parked;
-        let row = t.task(child);
-        row.state = State::Ready;
-        row.handoff = Some(me);
-        let path = cfg!(feature = "measurement").then(|| row.path.clone());
-        if free {
-            t.runnable.push_back(child);
-        }
-        path
-    });
+    let _path = unsafe {
+        role::with_held(ctx, |t| {
+            let me = t.current;
+            t.task(me).state = State::Parked;
+            let row = t.task(child);
+            row.state = State::Ready;
+            row.handoff = Some(me);
+            let path = cfg!(feature = "measurement").then(|| row.path.clone());
+            if free {
+                t.runnable.push_back(child);
+            }
+            path
+        })
+    };
     if free {
         unsafe { crate::stop::check(ctx, run_next(ctx)) };
         return;
@@ -2722,43 +2764,45 @@ unsafe fn completed(ctx: &mut TaskCtx, index: u32, status: u8) -> Stopped<u32> {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.complete();
     }
-    let (handoff, stack, retired) = role::with_role(ctx, |s| {
-        let row = s.task(index);
-        row.state = State::Done;
-        let scope = row
-            .scope
-            .unwrap_or_else(|| fault("the root task completed as a child"));
-        let handoff = row.handoff.take();
-        let detached = row.detached;
-        if failed {
-            row.failure = Some(chain);
-            s.order(index);
-            // FAIL-2: a failed child cancels its siblings and its scope's later blocking effects.
-            s.cancel_scope(scope, CANCEL_CHILD_FAILED);
-            let siblings = s.scope(scope).children.clone();
-            s.wake_owner(scope);
-            for sibling in siblings {
-                if sibling != index {
-                    s.cancel(sibling, CANCEL_CHILD_FAILED);
+    let (handoff, stack, retired) = unsafe {
+        role::with_held(ctx, |s| {
+            let row = s.task(index);
+            row.state = State::Done;
+            let scope = row
+                .scope
+                .unwrap_or_else(|| fault("the root task completed as a child"));
+            let handoff = row.handoff.take();
+            let detached = row.detached;
+            if failed {
+                row.failure = Some(chain);
+                s.order(index);
+                // FAIL-2: a failed child cancels its siblings and its scope's later blocking effects.
+                s.cancel_scope(scope, CANCEL_CHILD_FAILED);
+                let siblings = s.scope(scope).children.clone();
+                s.wake_owner(scope);
+                for sibling in siblings {
+                    if sibling != index {
+                        s.cancel(sibling, CANCEL_CHILD_FAILED);
+                    }
                 }
             }
-        }
-        s.settle(index);
-        let stack = s.task(index).stack.take();
-        // A detached child's result is gone at its completion; only live children stay rows.
-        let retired = (detached && !failed).then(|| {
-            s.scope(scope).children.retain(|&c| c != index);
-            s.retire_task(index)
-        });
-        (handoff, stack, retired)
-    });
+            s.settle(index);
+            let stack = s.task(index).stack.take();
+            // A detached child's result is gone at its completion; only live children stay rows.
+            let retired = (detached && !failed).then(|| {
+                s.scope(scope).children.retain(|&c| c != index);
+                s.retire_task(index)
+            });
+            (handoff, stack, retired)
+        })
+    };
     ctx.worker().retired = stack;
     drop(retired);
     #[cfg(feature = "measurement")]
     if let Some(next) = handoff
         && let Some(profile) = &mut unsafe { &mut (*(*ctx.run_ptr()).mc_profile.get()) }
     {
-        profile.ready(role::with_role(ctx, |t| t.task(next).path.clone()));
+        profile.ready(unsafe { role::with_held(ctx, |t| t.task(next).path.clone()) });
     }
     match handoff {
         // A join or a discard ran the rest of a holding child: no schedule point.
@@ -3021,31 +3065,35 @@ unsafe fn exit_scope(
         // SAFETY: the context is live; the exit is not a yield.
         unsafe { block(ctx, Wait::Exit { scope: index }, false, caller_site) };
     }
-    let children = role::with_role(ctx, |t| t.scope(index).children.clone());
+    let children = unsafe { role::with_held(ctx, |t| t.scope(index).children.clone()) };
     for &child in children.iter().rev() {
-        let holding = role::with_role(ctx, |t| {
-            let row = t.task(child);
-            let holding = row.state == State::Holding;
-            if holding {
-                row.slot = None;
-            }
-            holding
-        });
+        let holding = unsafe {
+            role::with_held(ctx, |t| {
+                let row = t.task(child);
+                let holding = row.state == State::Holding;
+                if holding {
+                    row.slot = None;
+                }
+                holding
+            })
+        };
         if holding {
             // SAFETY: the child is holding; its own cleanup drops the result.
             unsafe { hand_off(ctx, child) };
         }
     }
-    let (own, chains, retired, deadline) = role::with_role(ctx, |s| {
-        let own = s.task(current).path.clone();
-        let mut chains = Vec::new();
-        let mut retired = Vec::with_capacity(children.len());
-        for &child in &children {
-            chains.extend(s.task(child).failure.take());
-            retired.push(s.retire_task(child));
-        }
-        (own, chains, retired, s.take_scope(index).deadline)
-    });
+    let (own, chains, retired, deadline) = unsafe {
+        role::with_held(ctx, |s| {
+            let own = s.task(current).path.clone();
+            let mut chains = Vec::new();
+            let mut retired = Vec::with_capacity(children.len());
+            for &child in &children {
+                chains.extend(s.task(child).failure.take());
+                retired.push(s.retire_task(child));
+            }
+            (own, chains, retired, s.take_scope(index).deadline)
+        })
+    };
     for chain in chains {
         ctx.failure.merge_chain(&own, chain);
     }
@@ -3136,10 +3184,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn(
     if crate::free::start(ctx, &child) {
         // SAFETY: the context is live.
         queued(unsafe { &*ctx });
-        let _path = role::with_role(ctx, |t| {
-            t.runnable.push_back(index);
-            cfg!(feature = "measurement").then(|| t.task(index).path.clone())
-        });
+        let _path = unsafe {
+            role::with_held(ctx, |t| {
+                t.runnable.push_back(index);
+                cfg!(feature = "measurement").then(|| t.task(index).path.clone())
+            })
+        };
         #[cfg(feature = "measurement")]
         if let Some(profile) = unsafe { &mut (*(*(*ctx).run_ptr()).mc_profile.get()) }.as_mut() {
             profile.ready(_path.unwrap());
@@ -3264,13 +3314,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_finish(
         return STATUS_OK;
     };
     crate::free::end(ctx, &path);
-    role::with_role(ctx, |s| {
-        let row = s.task(current);
-        row.slot = Some(held);
-        row.state = State::Holding;
-        s.order(current);
-        s.settle(current);
-    });
+    unsafe {
+        role::with_held(ctx, |s| {
+            let row = s.task(current);
+            row.slot = Some(held);
+            row.state = State::Holding;
+            s.order(current);
+            s.settle(current);
+        })
+    };
     // SAFETY: the context is live; a join or a discard hands control back here.
     unsafe { crate::stop::check(ctx, run_next(&mut *ctx)) };
     crate::free::resume_rest(ctx);
@@ -3333,13 +3385,13 @@ unsafe fn join(
     size: u64,
     caller_site: u64,
 ) -> u8 {
-    let mut state = role::with_role(ctx, |t| t.task(child).state);
+    let mut state = unsafe { role::with_held(ctx, |t| t.task(child).state) };
     if free::enabled(ctx) && !unsafe { crate::pool::free::is_saved(ctx.run_ptr(), child) } {
         state = State::Parked;
     }
     match state {
         State::Holding => {
-            let held = role::with_role(ctx, |t| t.task(child).slot.take().unwrap());
+            let held = unsafe { role::with_held(ctx, |t| t.task(child).slot.take().unwrap()) };
             // SAFETY: the child is stopped in its finish, its slot live.
             unsafe {
                 deliver(held, slot, size);
@@ -3357,17 +3409,19 @@ unsafe fn join(
             // SAFETY: the slot is in this task's frame, parked with it.
             unsafe { block(ctx, Wait::Join { child, slot, size }, true, caller_site) };
             // The poll moved a holding child's result; its frame finishes now.
-            if role::with_role(ctx, |t| t.task(child).state == State::Holding) {
+            if unsafe { role::with_held(ctx, |t| t.task(child).state == State::Holding) } {
                 unsafe { hand_off(ctx, child) };
             }
             crate::free::done(ctx);
         }
     }
-    let (chain, retired) = role::with_role(ctx, |t| {
-        let chain = t.task(child).failure.take();
-        t.scope(scope).children.retain(|&c| c != child);
-        (chain, t.retire_task(child))
-    });
+    let (chain, retired) = unsafe {
+        role::with_held(ctx, |t| {
+            let chain = t.task(child).failure.take();
+            t.scope(scope).children.retain(|&c| c != child);
+            (chain, t.retire_task(child))
+        })
+    };
     // The row's owned storage is destroyed outside the table borrow.
     drop(retired);
     match chain {
@@ -3408,7 +3462,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_cancel(
     // SAFETY: caller contract.
     let (_, child) = unsafe { child_handle(ctx, scope.read(), task.read()) };
     crate::free::enter(ctx, Phase::Done);
-    role::with_role(ctx, |t| t.cancel(child, CANCEL_REQUESTED));
+    unsafe { role::with_held(ctx, |t| t.cancel(child, CANCEL_REQUESTED)) };
     crate::free::done(ctx);
     // SAFETY: the context is live.
     unsafe { yield_now(&mut *ctx) };

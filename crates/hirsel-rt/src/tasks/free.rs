@@ -68,8 +68,14 @@ pub(crate) fn finalized(base: crate::Layout) -> &'static crate::Layout {
     }
 }
 
+/// Whether the run's logical policy is Free, which admission fixes. Like
+/// `ordered::engine::on`, this mode query takes no role entry, creates no
+/// tables and observes no stop: the operation's own first access does those.
 pub(crate) fn enabled(ctx: *mut TaskCtx) -> bool {
-    role::with_role(ctx, |s| matches!(s.logical, Logical::Free(_)))
+    // SAFETY: the caller's semantic entry holds the role (or W1's token),
+    // which owns the tables; the read keeps no borrow.
+    unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref() }
+        .is_some_and(|s| matches!(s.logical, Logical::Free(_)))
 }
 
 /// # Safety
