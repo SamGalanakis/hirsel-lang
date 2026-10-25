@@ -172,9 +172,18 @@ fn dropped(run: &hirsel_heapcheck::Run) -> Vec<u32> {
 #[test]
 fn finite_exits_reached_h_faults() {
     let mut injections = 0;
+    let mut owned_injections = 0;
     for (index, case) in cases().into_iter().enumerate() {
         let source = source(case, false);
         let expected = model(case);
+        // Admission of main's source call precedes every owner in probe.
+        // Derive its exact location from the source, independently of LIR.
+        let call = format!("probe({})", case.right);
+        let start = source.rfind(&call).unwrap();
+        let base = item_bases(&source)[&path("main")] as usize;
+        let entry_site = ((start - base) as u32, (start + call.len() - base) as u32);
+        let mut entry_injections = 0;
+        let mut case_owned_injections = 0;
         let program = super::noalloc_cleanup_model_16::program(&source);
         let campaign = hirsel_heapcheck::fault_campaign(
             &program,
@@ -228,8 +237,30 @@ fn finite_exits_reached_h_faults() {
             );
             assert_eq!(run.counters.live_heap_bytes, 0);
             assert_eq!(run.counters.allocations, 0);
-            // These noalloc scalar owners are all built before any injectable
-            // operation; injecting inside drop must not change its identity/order.
+            let injected = audit
+                .observation
+                .failures
+                .iter()
+                .find(|failure| failure.rule == hirsel_heapcheck::INJECTED_RULE)
+                .unwrap();
+            if injected.definition == path("main") && injected.site == entry_site {
+                // The source model has not entered probe: it owns nothing.
+                // Only this exact call admission, reached before all its owners,
+                // may have an empty drop trace. Every later fault keeps the
+                // original owner-stack and cause-chain assertions below.
+                assert_eq!(*site, 0, "{case:?}: {injected:?}");
+                assert_eq!(audit.observation.failures.len(), 1);
+                assert!(audit.observation.returned.is_none());
+                assert!(dropped(run).is_empty());
+                assert_eq!(run.counters.finalizers, 0);
+                entry_injections += 1;
+                injections += 1;
+                continue;
+            }
+            case_owned_injections += 1;
+            owned_injections += 1;
+            // All owners are built after entry admission and before the next
+            // injectable operation. Cleanup faults preserve their identity/order.
             assert_eq!(dropped(run), expected.drops, "{case:?} site={site}");
             assert_eq!(run.counters.finalizers, 3);
             // A failure raised before this injected cleanup site stays primary.
@@ -255,6 +286,14 @@ fn finite_exits_reached_h_faults() {
             );
             injections += 1;
         }
+        assert_eq!(
+            entry_injections, 1,
+            "{case:?}: exact pre-owner admission witness"
+        );
+        assert!(
+            case_owned_injections > 0,
+            "{case:?}: owner-live fault witness"
+        );
         persist(
             &std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("failure-cleanup-21"),
             &format!("h-{index}"),
@@ -273,6 +312,7 @@ fn finite_exits_reached_h_faults() {
         );
     }
     assert!(injections >= 42);
+    assert!(owned_injections >= 42);
     eprintln!(
         "failure_cleanup_21: 14 H clean cases; {injections} positively reached injections; fork/replay equal"
     );
