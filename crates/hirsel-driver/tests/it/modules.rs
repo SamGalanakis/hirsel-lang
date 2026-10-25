@@ -196,3 +196,4 @@ mod runtime52_resumed_preparation;
 mod mode2_recipes_52;
 mod storage_sorted_map_33;
 mod native_compilation_tasks_19;
+mod scheduled_runtime_refusal;
