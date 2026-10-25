@@ -24,7 +24,8 @@ pub use scheduled_native_root::{
     FrontNativeQueries,
 };
 pub use scheduled_run::{
-    FRONT_RUN_KIND, FrontProofExport, FrontProofInput, FrontRunInputs, FrontRunOutput, FrontRunQueries,
+    FRONT_RUN_KIND, FrontProofExport, FrontProofInput, FrontRunInputs, FrontRunOutput,
+    FrontRunQueries,
 };
 
 mod scheduled_storage;
@@ -35,6 +36,7 @@ mod scheduled_lower;
 mod scheduled_stage;
 pub use scheduled_check::{
     FRONT_CHECK_KIND, FrontCheckOutput, FrontCheckPlan, FrontCheckQueries, FrontCheckScope,
+    FrontCheckedInput,
 };
 pub use scheduled_stage::{FRONT_STAGE_KIND, FrontStageOutput, FrontStageQueries};
 mod scheduled_growth;

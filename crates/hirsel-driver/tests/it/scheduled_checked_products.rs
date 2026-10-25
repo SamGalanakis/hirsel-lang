@@ -3,15 +3,53 @@ use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
 
 fn products_case(source: &str, failed_front: bool, failed_lower: bool) {
+    products_case_with_admission(source, failed_front, failed_lower, false);
+}
+fn products_case_with_admission(
+    source: &str,
+    failed_front: bool,
+    failed_lower: bool,
+    admitted: bool,
+) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"scope","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         for jobs in [1, 2] {
+            use hirsel_engine::store::{Bytes, EntryKey, ResultStore};
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            struct CountReads {
+                inner: MemStore,
+                reads: AtomicUsize,
+            }
+            impl ResultStore for CountReads {
+                fn get(&self, key: &EntryKey) -> Option<Bytes> {
+                    self.reads.fetch_add(1, Ordering::Relaxed);
+                    self.inner.get(key)
+                }
+                fn put(&self, key: &EntryKey, bytes: &[u8]) {
+                    self.inner.put(key, bytes);
+                }
+                fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+                    self.inner.verifier()
+                }
+                fn name(&self) -> &'static str {
+                    "export-admission-control"
+                }
+            }
+            let counted = Arc::new(CountReads {
+                inner: MemStore::default(),
+                reads: AtomicUsize::new(0),
+            });
+            let store: Arc<dyn ResultStore> = if admitted {
+                counted.clone()
+            } else {
+                Arc::new(MemStore::default())
+            };
             let mut program = COMPILER
                 .with_config(CompileConfig {
-                    store: Arc::new(MemStore::default()),
+                    store: store.clone(),
                     hold_bytes: 0,
                     ..Default::default()
                 })
@@ -144,9 +182,11 @@ fn products_case(source: &str, failed_front: bool, failed_lower: bool) {
                     .completed_scope(product, budget.reserve(0).unwrap())
                     .is_err()
             );
-            let scope = check
-                .completed_scope(product, budget.reserve(1 << 20).unwrap())
-                .unwrap();
+            let scope = Arc::new(
+                check
+                    .completed_scope(product, budget.reserve(1 << 20).unwrap())
+                    .unwrap(),
+            );
             assert!(!scope.reads().is_empty());
             assert!(scope.reads().values().all(|r| !r.is_empty()));
             if failed_front {
@@ -192,7 +232,51 @@ fn products_case(source: &str, failed_front: bool, failed_lower: bool) {
             );
             let before_lower = lower.work_snapshot();
             let before_front = front.work_snapshot();
+            let owned = if admitted {
+                let before_reads = counted.reads.load(Ordering::Relaxed);
+                let required = scope
+                    .checked_product_input_bytes(&headers, &program.entry)
+                    .unwrap();
+                assert!(required > 0);
+                assert!(
+                    scope
+                        .checked_product_input_bytes(&wrong_headers, &program.entry)
+                        .is_err()
+                );
+                assert_eq!(counted.reads.load(Ordering::Relaxed), before_reads);
+                assert!(
+                    scope
+                        .checked_product_input_with_allowance(
+                            headers.clone(),
+                            &program.entry,
+                            budget.reserve(required - 1).unwrap()
+                        )
+                        .is_err()
+                );
+                assert_eq!(
+                    counted.reads.load(Ordering::Relaxed),
+                    before_reads,
+                    "N-1 refuses before original body I/O"
+                );
+                Some(
+                    scope
+                        .checked_product_input_with_allowance(
+                            headers.clone(),
+                            &program.entry,
+                            budget.reserve(required).unwrap(),
+                        )
+                        .unwrap(),
+                )
+            } else {
+                None
+            };
             let actual_products = scope.checked_products(&headers, &program.entry).unwrap();
+            if let Some(owned) = &owned {
+                assert_eq!(
+                    Some(hirsel_proof_export::export(owned.input()).as_str()),
+                    actual_products.canonical.as_deref()
+                );
+            }
             assert_eq!(lower.work_snapshot(), before_lower);
             assert_eq!(front.work_snapshot(), before_front);
             let expected = program.check(LoweringPolicy::Comptime).unwrap();
@@ -226,6 +310,13 @@ fn products_case(source: &str, failed_front: bool, failed_lower: bool) {
             let entry = program.entry.clone();
             runtime.shutdown();
             drop(program);
+            if let Some(owned) = &owned {
+                assert_eq!(
+                    Some(hirsel_proof_export::export(owned.input()).as_str()),
+                    actual_products.canonical.as_deref(),
+                    "admitted input survives loader/runtime shutdown"
+                );
+            }
             assert_eq!(
                 scope.checked_products(&headers, &entry).unwrap().digest,
                 actual_products.digest,
@@ -261,5 +352,15 @@ fn completed_checked_products_preserve_private_headers_and_unused_runtime_bodies
         "pub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
         false,
         false,
+    );
+}
+
+#[test]
+fn completed_checked_input_admission_refuses_before_body_reads_and_preserves_scalar_products() {
+    products_case_with_admission(
+        "pub opaque type Hidden: () uses {} { value:u64 }\nfn read(h:Hidden)->u64{h.value}\nconst A:u8=comptime 1u8; pub fn main()->u8{A}",
+        false,
+        false,
+        true,
     );
 }

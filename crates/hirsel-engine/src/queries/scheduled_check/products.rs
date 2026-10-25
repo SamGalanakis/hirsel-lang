@@ -5,7 +5,83 @@ use super::*;
 use hirsel_proof_export::{ExportInput, Header, Location, Locator};
 use std::rc::Rc;
 
+/// Complete Check receipt input with its original-decode/clone working grant.
+/// A consumer may borrow the input after the loader and runtime are released.
+/// Construction tables and output text require their separate grants.
+pub struct FrontCheckedInput {
+    input: ExportInput,
+    _scope: Arc<FrontCheckScope>,
+    _headers: Arc<FrontCheckedSignatures>,
+    _allowance: MemoryReservation,
+}
+impl FrontCheckedInput {
+    pub fn input(&self) -> &ExportInput {
+        &self.input
+    }
+}
 impl FrontCheckScope {
+    /// Size the exact completed scope's prospective input before fetching an
+    /// original body. All constant values are a conservative upper bound for
+    /// the subset selected by those originals; unrelated bodies stay unopened.
+    pub fn checked_product_input_bytes(
+        &self,
+        headers: &FrontCheckedSignatures,
+        entry: &DefPath,
+    ) -> Result<u64, QueryError> {
+        if !headers.matches(&self.owner().plan.front) {
+            return Err(QueryError::NotImplemented);
+        }
+        let lower = &self.owner().plan.lower;
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(size_of::<FrontCheckedInput>() + 4 * size_of::<usize>());
+        weight.path(entry);
+        weight.add(hirsel_proof_export::FORMAT.len());
+        weight.add(headers.environment().compiler_version.len());
+        weight.source_snapshot(lower.sources());
+        weight.add(size_of::<SourceMap>() + 4 * size_of::<usize>());
+        weight.tree::<DefPath, hirsel_tir::DefinitionRef>(self.lowered().len());
+        let mut required = headers
+            .sections_clone_bytes()
+            .ok_or(QueryError::NotImplemented)?;
+        required = required
+            .checked_add(lower.settled_constants_input_bytes()?)
+            .ok_or(QueryError::NotImplemented)?;
+        for path in self.lowered() {
+            if self.failed_lowered().contains(path) {
+                continue;
+            }
+            weight.path(path);
+            required = required
+                .checked_add(lower.settled_definition_decode_bytes(path)?)
+                .and_then(|n| n.checked_add(lower.settled_constant_selection_bytes(path).ok()?))
+                .ok_or(QueryError::NotImplemented)?;
+        }
+        required
+            .checked_add(weight.bytes())
+            .ok_or(QueryError::NotImplemented)
+    }
+    /// N-1 refuses before original body I/O. The returned wrapper owns the
+    /// complete scope, captured headers and every decoded input allocation.
+    pub fn checked_product_input_with_allowance(
+        self: &Arc<Self>,
+        headers: Arc<FrontCheckedSignatures>,
+        entry: &DefPath,
+        allowance: MemoryReservation,
+    ) -> Result<FrontCheckedInput, QueryError> {
+        if self.checked_product_input_bytes(&headers, entry)? > allowance.bytes() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "checked product input admission".into(),
+                message: "original decode/clone buffers exceed caller admission".into(),
+            }));
+        }
+        let input = self.checked_product_input(&headers, entry)?;
+        Ok(FrontCheckedInput {
+            input,
+            _scope: self.clone(),
+            _headers: headers,
+            _allowance: allowance,
+        })
+    }
     /// Format already settled ordinary obligations in the caller's admitted
     /// scratch/output storage. This never requests a query, accepts a new
     /// namespace, or obtains validation authority from an encoded artifact.
