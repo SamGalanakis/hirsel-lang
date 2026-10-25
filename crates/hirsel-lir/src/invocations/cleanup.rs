@@ -30,9 +30,6 @@ pub(super) fn targets<S: Stage>(
         let Some(instance) = symbol.instance else {
             continue;
         };
-        let Some(selected) = declarations.invocation_body(&symbol.definition, instance) else {
-            continue;
-        };
         let instructions = row
             .instructions
             .get(&unit.instructions)
@@ -57,7 +54,16 @@ pub(super) fn targets<S: Stage>(
         let Some(finalizer) = &layout.finalizer else {
             continue;
         };
-        if finalizer.definition != symbol.definition || finalizer.body != selected {
+        if finalizer.definition != symbol.definition {
+            continue;
+        }
+        // Only a typed cleanup target consumes independent body identity.
+        // Ordinary direct calls must not record an absent peer body before
+        // discovery later publishes that peer's source selection.
+        let Some(selected) = declarations.invocation_body(&symbol.definition, instance) else {
+            continue;
+        };
+        if finalizer.body != selected {
             continue;
         }
         let cleanup = unit
