@@ -1,11 +1,13 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
+mod syntax;
 use super::{DepthEvidence, Reads};
 use crate::comptime::StagedRegistration;
 use hirsel_syntax::DefPath;
 use hirsel_tir::*;
 use hirsel_types::{Destination, Origin, OriginRoot, SharedPath, SharedSlice};
 use std::{alloc::Layout, collections::HashSet};
+pub(crate) use syntax::retained_syntax_bytes;
 
 /// Bytes retained by a DefinitionRef, including its Arc allocation. Session
 /// interner rows/DefIds and shared syntax belong to the session, not this hold.
