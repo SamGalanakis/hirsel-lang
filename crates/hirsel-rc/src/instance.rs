@@ -1059,10 +1059,28 @@ pub fn seed_instances(
             e.nominal(path, Actuals::none())?;
         }
     }
-    // Registry callable constants have no source initializer body to request
-    // their library implementations. Expand those named relocations through
-    // the same registry builders used by ordinary function references.
-    for constant in program.constants.values() {
+    register_static_callables(
+        program,
+        context,
+        e.layouts,
+        &mut e.out,
+        program.constants.values(),
+    )?;
+    let roots = e.out.ids().collect();
+    Ok((e.out, roots))
+}
+
+/// Register library implementations named by selected materialized static values.
+/// Like source function-reference discovery, this selects registry recipes only;
+/// it does not import another instance or construct a Value body.
+pub fn register_static_callables<'a>(
+    program: &Program,
+    context: &DiscoveryContext,
+    layouts: &mut LayoutBuilder<'_>,
+    instances: &mut Instances,
+    constants: impl IntoIterator<Item = &'a hirsel_tir::Materialized>,
+) -> Result<(), InstanceError> {
+    for constant in constants {
         let mut pending = vec![&constant.root];
         while let Some(node) = pending.pop() {
             match &node.kind {
@@ -1090,7 +1108,7 @@ pub fn seed_instances(
                         None
                     };
                     if let Some(request) = request {
-                        crate::library::instantiate(e.layouts, &mut e.out, request)?;
+                        crate::library::instantiate(layouts, instances, request)?;
                     }
                 }
                 hirsel_tir::ValueKind::Construct { fields, .. } => pending.extend(fields),
@@ -1098,8 +1116,7 @@ pub fn seed_instances(
             }
         }
     }
-    let roots = e.out.ids().collect();
-    Ok((e.out, roots))
+    Ok(())
 }
 
 /// Expand every instance the program executes. The current whole-program

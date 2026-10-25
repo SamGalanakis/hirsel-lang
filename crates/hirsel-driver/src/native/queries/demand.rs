@@ -758,6 +758,34 @@ impl DemandInstances {
             hirsel_rc::library::instantiate(&mut layouts, &mut instances, request)
                 .map_err(|e| format!("native library registration: {e:?}"))?;
         }
+        // Root registration also selects callable relocations of registry
+        // constants. A worker-local recipe restores only this instance, so
+        // register the callables of the statics it actually reads before the
+        // common encoder resolves those relocations. These are ordinary recipe
+        // dependencies, never source/native validation authority.
+        let static_reads = imported.unit.instructions.iter().filter_map(|instruction| {
+            let hirsel_lir::ir::Inst::ReadStatic { symbol, .. } = instruction else {
+                return None;
+            };
+            let symbol = &imported.unit.tables.symbols[symbol.index()];
+            (symbol.kind == hirsel_lir::ir::SymbolKind::Constant)
+                .then(|| {
+                    inputs
+                        .declarations()
+                        .program
+                        .constants
+                        .get(&symbol.definition)
+                })
+                .flatten()
+        });
+        hirsel_rc::instance::register_static_callables(
+            &inputs.declarations().program,
+            &inputs.declarations().context,
+            &mut layouts,
+            &mut instances,
+            static_reads,
+        )
+        .map_err(|e| format!("native static callable registration: {e:?}"))?;
         // Batch import discovers these prerequisites while building the adapter.
         // A one-instance import must plan them before checking the caller too.
         // Use original instance actuals, never the candidate's direct-call rows.
