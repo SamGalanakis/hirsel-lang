@@ -46,6 +46,9 @@ pub(super) struct NativeAssemblyPlan {
     pub bootstrap: MemoryReservation,
     pub weight: MemoryWeight,
     pub source_weight: MemoryWeight,
+    /// The native source root suspends beside Growth/Check/Run as a planned
+    /// root continuation while it accumulates selected catalogue records.
+    pub root_weight: MemoryWeight,
     pub errors: RuntimeErrors,
 }
 
@@ -111,7 +114,7 @@ impl NativeAssembly {
                     run: inputs.run,
                     definitions: catalogue,
                 },
-                plan.source_weight,
+                plan.root_weight,
                 plan.source,
                 plan.errors,
             )

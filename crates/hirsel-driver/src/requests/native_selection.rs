@@ -51,6 +51,10 @@ impl Footprint {
             proofs: if proofs { share } else { 0 },
         })
     }
+    /// The native source root's partition: whole selected catalogue records.
+    pub fn source(&self) -> u64 {
+        self.source
+    }
     pub fn bytes(&self) -> Option<u64> {
         [
             self.catalogue,
@@ -99,6 +103,7 @@ impl NativeSelection {
         footprint: &Footprint,
         allowance: &mut MemoryReservation,
         weight: MemoryWeight,
+        root_weight: MemoryWeight,
         errors: RuntimeErrors,
         transport_bytes: u64,
     ) -> Result<Arc<Self>, ToolError> {
@@ -186,6 +191,7 @@ impl NativeSelection {
                     stack: 0,
                 },
                 source_weight: weight,
+                root_weight,
                 errors,
             },
         )?;

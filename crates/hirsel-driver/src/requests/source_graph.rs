@@ -298,6 +298,7 @@ struct Plan {
     root: MemoryWeight,
     run: MemoryWeight,
     native: Option<super::native_selection::Footprint>,
+    native_root: MemoryWeight,
 }
 impl Plan {
     fn new(
@@ -423,8 +424,11 @@ impl Plan {
         let jobs = config.jobs.get() as u64;
         let scratch = working / (jobs + 1);
         let suspended = working - jobs * scratch;
-        let root_bound = suspended / (2 * ROOT_CONTINUATIONS);
-        let body_bound = suspended / (2 * BODY_CONTINUATIONS);
+        // A native request adds its source root to the root continuations and
+        // its bootstrap controller to the nested bodies.
+        let native_frames = u64::from(needs_native);
+        let root_bound = suspended / (2 * (ROOT_CONTINUATIONS + native_frames));
+        let body_bound = suspended / (2 * (BODY_CONTINUATIONS + native_frames));
         // Only demanded Lower outputs consume producer retention. Potential
         // addresses carry compact input slots, not maximum future/body grants.
         let output_metadata =
@@ -459,6 +463,13 @@ impl Plan {
             },
             root: MemoryWeight {
                 retained: root_retained,
+                scratch,
+                stack: 0,
+            },
+            native_root: MemoryWeight {
+                retained: native
+                    .as_ref()
+                    .map_or(0, |native| native.source().min(root_bound)),
                 scratch,
                 stack: 0,
             },
@@ -716,6 +727,7 @@ pub(super) fn install(
                 footprint,
                 &mut native_allowance.ok_or_else(uninstalled)?,
                 plan.body,
+                plan.native_root,
                 errors,
                 disk_bytes,
             )
