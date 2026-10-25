@@ -124,6 +124,30 @@ struct Record {
     output: Option<ContentHash>,
 }
 
+/// A broad input invalidates a shared reverse-index snapshot. Confirmations
+/// name only demanded records; adding/removing subscriptions uses Arc::make_mut
+/// so a later mutation cannot change an already published invalidation group.
+#[derive(Default)]
+struct ContextInvalidation {
+    pending: Option<Arc<HashSet<MemoKey>>>,
+    confirmed: HashSet<MemoKey>,
+}
+impl ContextInvalidation {
+    fn contains(&self, key: &MemoKey) -> bool {
+        self.pending.as_ref().is_some_and(|keys| keys.contains(key))
+            && !self.confirmed.contains(key)
+    }
+    fn confirm(&mut self, key: MemoKey) {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|keys| keys.contains(&key))
+        {
+            self.confirmed.insert(key);
+        }
+    }
+}
+
 /// The session's memo bookkeeping: per-memo records, the reverse index
 /// `ReadKey → subscribers`, the per-definition index for text changes, and the
 /// dirty set. Values live in the engine's typed tables.
@@ -133,10 +157,10 @@ pub struct MemoGraph {
     /// by `Durability as usize`.
     last_changed: [Revision; 3],
     records: HashMap<MemoKey, Record>,
-    subscribers: HashMap<ReadKey, HashSet<MemoKey>>,
-    /// Broad V inputs, indexed separately so a changed signature does not
-    /// scan every unrelated signature/body read merely to mark their users.
-    validation_contexts: HashSet<ReadKey>,
+    subscribers: HashMap<ReadKey, Arc<HashSet<MemoKey>>>,
+    /// Broad V inputs invalidate shared reverse-index groups without
+    /// eagerly accessing each subscriber's memo record.
+    validation_contexts: HashMap<ReadKey, ContextInvalidation>,
     by_def: HashMap<DefId, HashSet<MemoKey>, IdHasher>,
     dirty: HashMap<MemoKey, Invalidation>,
     stats: MemoStats,
@@ -150,7 +174,7 @@ impl Default for MemoGraph {
             last_changed: [Revision::FIRST; 3],
             records: HashMap::new(),
             subscribers: HashMap::new(),
-            validation_contexts: HashSet::new(),
+            validation_contexts: HashMap::new(),
             by_def: HashMap::default(),
             dirty: HashMap::new(),
             stats: MemoStats::default(),
@@ -218,11 +242,14 @@ impl MemoGraph {
     }
     /// The memos that read `key`, in unspecified order.
     pub fn subscribers(&self, key: &ReadKey) -> impl Iterator<Item = &MemoKey> {
-        self.subscribers.get(key).into_iter().flatten()
+        self.subscribers
+            .get(key)
+            .into_iter()
+            .flat_map(|keys| keys.iter())
     }
     /// Contextual V read keys that currently have subscribers.
     pub fn validation_context_reads(&self) -> impl Iterator<Item = ReadKey> + '_ {
-        self.validation_contexts.iter().copied()
+        self.validation_contexts.keys().copied()
     }
     /// The memos keyed on `def`.
     pub fn memos_of(&self, def: DefId) -> impl Iterator<Item = &MemoKey> {
@@ -235,12 +262,65 @@ impl MemoGraph {
     /// The definitions with a dirty memo, sorted by DefPath.
     pub fn dirty_definitions(&self) -> Vec<DefId> {
         let mut defs: Vec<DefId> = self.dirty.keys().map(|k| k.def).collect();
+        for context in self.validation_contexts.values() {
+            defs.extend(
+                context
+                    .pending
+                    .iter()
+                    .flat_map(|keys| keys.iter())
+                    .filter(|key| !context.confirmed.contains(key))
+                    .map(|key| key.def),
+            );
+        }
         defs.sort();
         defs.dedup();
         defs
     }
     pub fn is_dirty(&self, key: &MemoKey) -> bool {
-        self.dirty.contains_key(key)
+        self.invalidation(key).is_some()
+    }
+
+    /// Index-only inspection: no per-memo Record or value is read here.
+    fn invalidation(&self, key: &MemoKey) -> Option<Invalidation> {
+        self.dirty.get(key).copied().or_else(|| {
+            self.validation_contexts
+                .iter()
+                .filter_map(|(read, context)| context.contains(key).then_some(read.kind()))
+                .min()
+                .map(Invalidation::Read)
+        })
+    }
+
+    /// As in Salsa's last-changed/verified-at split (ref-salsa
+    /// src/function/maybe_changed_after.rs:358-389), a changed input does not
+    /// verify its subscribers. Here shared reverse-index groups also avoid
+    /// reading their individual memo records during broadcast bookkeeping.
+    fn invalidate_context(&mut self, read: ReadKey) {
+        let Some(subscribers) = self.subscribers.get(&read).cloned() else {
+            return;
+        };
+        // Count logical newly dirty members using indices only. Actual memo
+        // accesses remain counted by touch at demand, adoption and confirmation.
+        let newly_dirty = subscribers
+            .iter()
+            .filter(|key| self.invalidation(key).is_none())
+            .count() as u64;
+        let context = self
+            .validation_contexts
+            .get_mut(&read)
+            .expect("indexed context");
+        context.pending = Some(subscribers);
+        context.confirmed.clear();
+        self.stats.invalidated[read.kind() as usize] += newly_dirty;
+        for _ in 0..newly_dirty {
+            timings::count(invalidation_count(read.kind()));
+        }
+    }
+
+    fn confirm_contexts(&mut self, key: MemoKey) {
+        for context in self.validation_contexts.values_mut() {
+            context.confirm(key);
+        }
     }
 
     /// The canonical output of a settled query, independent of its action.
@@ -271,15 +351,27 @@ impl MemoGraph {
         }
         // Several changed inputs often share subscribers (header, candidate,
         // representation and citation changes in particular). Union the mark
-        // requests before touching records, preserving the first read's reason.
+        // requests before touching records. Direct reads keep their precise
+        // reason; broad V contexts publish shared invalidation groups.
         let mut readers = BTreeMap::new();
+        let mut contexts = BTreeSet::new();
         for (read, _) in &changes.reads {
+            if matches!(
+                read,
+                ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
+            ) {
+                contexts.insert(*read);
+                continue;
+            }
             for key in self.subscribers(read) {
                 readers.entry(*key).or_insert(read.kind());
             }
         }
         for (key, kind) in readers {
             self.mark(key, Invalidation::Read(kind));
+        }
+        for read in contexts {
+            self.invalidate_context(read);
         }
         let texts: BTreeSet<_> = changes
             .texts
@@ -307,7 +399,7 @@ impl MemoGraph {
         // A text mark outranks a read mark: a read-marked memo is deep-verified
         // and may be kept, but one whose own items changed is recomputed. A
         // change set marks its reads first, so the text mark must replace one.
-        match (self.dirty.get(&key), why) {
+        match (self.invalidation(&key), why) {
             (Some(Invalidation::Text), _)
             | (Some(Invalidation::Read(_)), Invalidation::Read(_)) => {
                 return;
@@ -331,8 +423,8 @@ impl MemoGraph {
         if !self.records.contains_key(&memo.key) {
             return Verdict::Missing;
         }
-        if let Some(why) = self.dirty.get(&memo.key) {
-            return Verdict::Dirty(*why);
+        if let Some(why) = self.invalidation(&memo.key) {
+            return Verdict::Dirty(why);
         }
         memo.verified_at.store(self.revision.get(), Relaxed);
         Verdict::Valid
@@ -345,6 +437,7 @@ impl MemoGraph {
             touched.insert(memo.key);
         }
         self.dirty.remove(&memo.key);
+        self.confirm_contexts(memo.key);
         memo.verified_at.store(self.revision.get(), Relaxed);
     }
 
@@ -369,12 +462,12 @@ impl MemoGraph {
         };
         self.unsubscribe(&key);
         for (read, _) in reads.iter() {
-            self.subscribers.entry(*read).or_default().insert(key);
+            Arc::make_mut(self.subscribers.entry(*read).or_default()).insert(key);
             if matches!(
                 read,
                 ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
             ) {
-                self.validation_contexts.insert(*read);
+                self.validation_contexts.entry(*read).or_default();
             }
         }
         self.by_def.entry(key.def).or_default().insert(key);
@@ -388,6 +481,7 @@ impl MemoGraph {
             },
         );
         self.dirty.remove(&key);
+        self.confirm_contexts(key);
         Memo {
             key,
             text,
@@ -447,12 +541,12 @@ impl MemoGraph {
         self.touch(key);
         self.unsubscribe(&key);
         for (read, _) in reads.iter() {
-            self.subscribers.entry(*read).or_default().insert(key);
+            Arc::make_mut(self.subscribers.entry(*read).or_default()).insert(key);
             if matches!(
                 read,
                 ReadKey::ValidationUniverse(_) | ReadKey::UniverseErrors | ReadKey::FirstHeap
             ) {
-                self.validation_contexts.insert(*read);
+                self.validation_contexts.entry(*read).or_default();
             }
         }
         self.by_def.entry(key.def).or_default().insert(key);
@@ -466,6 +560,7 @@ impl MemoGraph {
             },
         );
         self.dirty.remove(&key);
+        self.confirm_contexts(key);
     }
 
     /// Adopts a stored value and its read record, restoring subscribers without
@@ -494,6 +589,7 @@ impl MemoGraph {
     /// registration, an evicted hold).
     pub fn remove(&mut self, key: &MemoKey) {
         self.touch(*key);
+        self.confirm_contexts(*key);
         self.unsubscribe(key);
         self.dirty.remove(key);
         if let Some(keys) = self.by_def.get_mut(&key.def) {
@@ -508,7 +604,7 @@ impl MemoGraph {
         if let Some(previous) = self.records.remove(key) {
             for (read, _) in previous.reads.iter() {
                 if let Some(set) = self.subscribers.get_mut(read) {
-                    set.remove(key);
+                    Arc::make_mut(set).remove(key);
                     if set.is_empty() {
                         self.subscribers.remove(read);
                         self.validation_contexts.remove(read);
@@ -522,7 +618,30 @@ impl MemoGraph {
     pub fn heap_bytes(&self) -> usize {
         let entry = std::mem::size_of::<MemoKey>() + std::mem::size_of::<Record>();
         let read = std::mem::size_of::<(ReadKey, ContentHash)>();
-        self.validation_contexts.capacity() * std::mem::size_of::<ReadKey>()
+        self.validation_contexts.capacity()
+            * (std::mem::size_of::<ReadKey>() + std::mem::size_of::<ContextInvalidation>())
+            + self
+                .validation_contexts
+                .iter()
+                .map(|(read, context)| {
+                    let confirmations =
+                        context.confirmed.capacity() * std::mem::size_of::<MemoKey>();
+                    let frozen = context
+                        .pending
+                        .as_ref()
+                        .filter(|keys| {
+                            self.subscribers
+                                .get(read)
+                                .is_none_or(|current| !Arc::ptr_eq(keys, current))
+                        })
+                        .map_or(0, |keys| {
+                            std::mem::size_of::<HashSet<MemoKey>>()
+                                + 2 * std::mem::size_of::<usize>()
+                                + keys.capacity() * std::mem::size_of::<MemoKey>()
+                        });
+                    confirmations + frozen
+                })
+                .sum::<usize>()
             + self.records.len() * entry
             + self
                 .records
@@ -532,7 +651,13 @@ impl MemoGraph {
             + self
                 .subscribers
                 .values()
-                .map(|s| std::mem::size_of::<ReadKey>() + s.len() * std::mem::size_of::<MemoKey>())
+                .map(|s| {
+                    std::mem::size_of::<ReadKey>()
+                        + std::mem::size_of::<Arc<HashSet<MemoKey>>>()
+                        + std::mem::size_of::<HashSet<MemoKey>>()
+                        + 2 * std::mem::size_of::<usize>()
+                        + s.capacity() * std::mem::size_of::<MemoKey>()
+                })
                 .sum::<usize>()
     }
 }
@@ -576,6 +701,117 @@ mod tests {
     }
     fn reads(list: &[(ReadKey, &str)]) -> Arc<Reads> {
         Arc::new(Reads::from_vec(list.iter().map(|(k, v)| (*k, h(v))).collect()).unwrap())
+    }
+
+    #[test]
+    fn broad_context_changes_keep_subscribers_dirty_without_accessing_their_records() {
+        for width in [1, 4, 16] {
+            let mut graph = MemoGraph::default();
+            let memos = (0..width)
+                .map(|i| {
+                    graph.adopt_value(
+                        MemoKey::new(QueryKind::Lower, def(&format!("root{i}"))),
+                        h("body"),
+                        Ok(Arc::new(())),
+                        reads(&[(ReadKey::UniverseErrors, "old universe")]),
+                        Durability::Low,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let before = graph.stats().touched;
+            graph.begin_touch_tracking();
+            let mut change = ChangeSet::default();
+            change.read(ReadKey::UniverseErrors, Durability::Low);
+            graph.apply(&change);
+            assert_eq!(
+                graph.stats().touched,
+                before,
+                "broadcast reads only reverse indices"
+            );
+            assert!(graph.take_touched_memos().is_empty());
+            assert_eq!(
+                graph.stats().invalidated[ReadKind::UniverseErrors as usize],
+                width
+            );
+            assert_eq!(graph.dirty_definitions().len() as u64, width);
+            assert!(memos.iter().all(|memo| graph.is_dirty(&memo.key)));
+            graph.begin_touch_tracking();
+            for memo in &memos {
+                assert_eq!(
+                    graph.check(memo),
+                    Verdict::Dirty(Invalidation::Read(ReadKind::UniverseErrors))
+                );
+                // Only the caller's complete read verification permits this.
+                graph.confirm(memo);
+                assert_eq!(graph.check(memo), Verdict::Valid);
+            }
+            assert_eq!(graph.stats().touched - before, 2 * width);
+            assert_eq!(graph.take_touched_memos().len() as u64, width);
+            assert!(graph.dirty_definitions().is_empty());
+            graph.apply(&change);
+            assert!(
+                memos.iter().all(|memo| graph.is_dirty(&memo.key)),
+                "a later change invalidates confirmed members again"
+            );
+        }
+    }
+
+    #[test]
+    fn context_snapshots_survive_subscription_replacement_and_keep_scopes_independent() {
+        let mut graph = MemoGraph::default();
+        let a = MemoKey::new(QueryKind::Lower, def("a"));
+        let b = MemoKey::new(QueryKind::Lower, def("b"));
+        let c = MemoKey::new(QueryKind::Lower, def("c"));
+        let keys = [
+            (ReadKey::UniverseErrors, "old"),
+            (ReadKey::FirstHeap, "heap"),
+        ];
+        let first = graph.adopt_value(a, h("a"), Ok(Arc::new(())), reads(&keys), Durability::Low);
+        graph.adopt(b, reads(&keys[..1]), Durability::Low);
+        let mut change = ChangeSet::default();
+        change.read(ReadKey::UniverseErrors, Durability::Low);
+        graph.apply(&change);
+        graph.adopt(
+            b,
+            reads(&[(ReadKey::UniverseErrors, "new")]),
+            Durability::Low,
+        );
+        graph.adopt(
+            c,
+            reads(&[(ReadKey::UniverseErrors, "new")]),
+            Durability::Low,
+        );
+        assert!(graph.is_dirty(&a));
+        assert!(!graph.is_dirty(&b));
+        assert!(
+            !graph.is_dirty(&c),
+            "new subscribers observe the current input"
+        );
+        assert_eq!(graph.dirty_definitions(), vec![a.def]);
+        graph.confirm(&first);
+        let mut heap = ChangeSet::default();
+        heap.read(ReadKey::FirstHeap, Durability::Low);
+        graph.apply(&heap);
+        assert!(graph.is_dirty(&a));
+        assert!(!graph.is_dirty(&b));
+        assert!(!graph.is_dirty(&c));
+        let mut text = ChangeSet::default();
+        text.text(a.def, Durability::Low);
+        graph.apply(&text);
+        assert_eq!(graph.check(&first), Verdict::Dirty(Invalidation::Text));
+        graph.remove(&a);
+        assert!(
+            graph.dirty_definitions().is_empty(),
+            "removed members cannot remain pending"
+        );
+        graph.apply(&change);
+        assert!(graph.is_dirty(&b));
+        assert!(graph.is_dirty(&c));
+        assert!(!graph.is_dirty(&a));
+        graph.remove(&b);
+        graph.remove(&c);
+        assert!(graph.validation_context_reads().next().is_none());
+        assert!(graph.dirty_definitions().is_empty());
     }
 
     #[test]
