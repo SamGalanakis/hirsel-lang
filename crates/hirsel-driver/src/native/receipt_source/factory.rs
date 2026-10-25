@@ -1,6 +1,7 @@
 //! Source-context assembly before native instance restoration. This uses the
 //! existing context registry and demand solver; it creates no native C proof.
 use super::{ReceiptSourceObservation, SourceError, provider, selection};
+mod operations;
 use hirsel_layout::instance::InstanceKey;
 use hirsel_lir::sealed_payload_source::ClosedStorageProfile;
 use hirsel_rc::instance::{Actuals, SelectionRead, substitute};
@@ -72,7 +73,7 @@ pub fn named(
     {
         let ty = substitute(provider.types(), memo, ty, &input.actuals, true)
             .map_err(|error| SourceError::Type(format!("{error:?}")))?;
-        let profile = profile::derive(
+        let profile = profile::boundary(
             provider.types(),
             ty,
             &mut |definition| {
@@ -110,7 +111,15 @@ pub struct CallObservation {
     pub selection: SelectionRead,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OperationObservation {
+    pub caller: ContextId,
+    pub block: u32,
+    pub operation: hirsel_core_contract::OperationId,
+}
+
 pub struct NamedGraph {
+    pub operations: Vec<OperationObservation>,
     pub calls: Vec<CallObservation>,
     pub contexts: Vec<NamedContext>,
     pub roots: Vec<ContextId>,
@@ -133,7 +142,8 @@ impl NamedGraph {
         ) -> Result<Vec<CallableCase>, SourceError>,
     ) -> Result<(), SourceError> {
         let current = named_graph(provider, roots, cases)?;
-        if self.calls != current.calls
+        if self.operations != current.operations
+            || self.calls != current.calls
             || self.roots != current.roots
             || self.contexts.len() != current.contexts.len()
             || self.requests.len() != current.requests.len()
@@ -179,6 +189,7 @@ pub fn named_graph(
     let mut contexts = Vec::new();
     let mut root_ids = Vec::new();
     let mut observations = Vec::new();
+    let mut operations = Vec::new();
     for root in roots {
         let context = named(provider, root, &memo, cases)?;
         let id = registry.register(context.context())?;
@@ -207,6 +218,21 @@ pub fn named_graph(
         let mut calls = BTreeMap::new();
         for block in blocks {
             let context = &contexts[index];
+            if let Some((operation, demand)) = operations::expand(
+                provider,
+                &context.source.demand().projection().calls()[&block],
+            )? {
+                calls.insert(
+                    block,
+                    hirsel_rc::sealed_source::contract::registry::Expansion::External(demand),
+                );
+                operations.push(OperationObservation {
+                    caller: id,
+                    block,
+                    operation,
+                });
+                continue;
+            }
             let target = selection::direct(
                 provider,
                 &context.input.base,
@@ -251,6 +277,7 @@ pub fn named_graph(
         index += 1;
     }
     Ok(NamedGraph {
+        operations,
         calls: observations,
         contexts,
         roots: root_ids,

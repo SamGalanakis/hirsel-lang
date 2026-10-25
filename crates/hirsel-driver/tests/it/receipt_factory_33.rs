@@ -17,6 +17,7 @@ struct Simulated<'a> {
     front: &'a Front<'a>,
     unavailable: bool,
     redirect: Option<(DefId, DefId)>,
+    signature_override: Option<SignatureRef>,
 }
 impl Provider for Simulated<'_> {
     fn types(&self) -> &TypeInterner {
@@ -29,6 +30,11 @@ impl Provider for Simulated<'_> {
         self.front.current(path)
     }
     fn signature(&self, path: &DefPath) -> Result<SignatureRef, SourceError> {
+        if let Some(signature) = &self.signature_override
+            && signature.definition.path() == path
+        {
+            return Ok(signature.clone());
+        }
         self.front.signature(path)
     }
     fn original(&self, path: &DefPath) -> Result<Arc<NativeOriginalBody>, SourceError> {
@@ -50,6 +56,9 @@ impl SelectionProvider for Simulated<'_> {
     }
 }
 fn source(text: &str) -> (NativeOriginalReader, DefPath) {
+    source_at(text, "main")
+}
+fn source_at(text: &str, name: &str) -> (NativeOriginalReader, DefPath) {
     let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
@@ -59,7 +68,8 @@ fn source(text: &str) -> (NativeOriginalReader, DefPath) {
         .unwrap();
     let report = check_progress(&mut engine, file, &default_context()).unwrap();
     assert!(report.diagnostics.is_empty(), "{:?}", report.diagnostics);
-    let path = entry_path(&default_context());
+    let mut path = entry_path(&default_context());
+    path.0.name = name.into();
     let roots = engine.native_source_roots(&[path.clone()]).unwrap();
     let reader = engine
         .native_original_reader(&roots.definitions, store)
@@ -120,6 +130,7 @@ pub fn main()->u64 {
             front: &front,
             unavailable: false,
             redirect: None,
+            signature_override: None,
         };
         let same = named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| {
             panic!("no callable profile query")
@@ -235,6 +246,7 @@ pub fn main()->u64 {pick(true)}
             front: &front,
             unavailable: false,
             redirect: None,
+            signature_override: None,
         };
         graph
             .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
@@ -279,5 +291,82 @@ pub fn main()->u64 {pick(true)}
             graph.recheck(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
             Err(SourceError::Unsupported("simulated unknown source"))
         ));
+    });
+}
+
+#[test]
+fn source_factory_derives_nonempty_seal_demand_from_the_reviewed_original_operation() {
+    with_compiler_stack(|| {
+        let (reader, path) = source_at(
+            r#"
+pub fn pack(take a:Arena in a, take root:u64)->Region[u64] {
+  arena.seal(take a, take root)
+}
+"#,
+            "pack",
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar root has no held callable")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 1);
+        assert!(graph.calls.is_empty());
+        assert_eq!(graph.operations.len(), 1);
+        assert!(
+            graph.operations[0]
+                .operation
+                .definition
+                .is_core("arena.seal")
+        );
+        let request = &graph.requests[0];
+        assert!(request.aware_key().is_some());
+        let contract = request.declaration().contract().unwrap();
+        assert_eq!(contract.parameters.len(), 1);
+        assert_eq!(contract.parameters[0].source, 1);
+        assert_eq!(
+            contract.parameters[0].mode,
+            hirsel_lir::sealed_payload_source::ReceiptMode::Take
+        );
+        assert_eq!(
+            contract.inventory,
+            [hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(
+                0
+            )]
+        );
+        assert!(contract.result.is_none());
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+            signature_override: None,
+        };
+        graph
+            .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![]))
+            .unwrap();
+        let operation = DefPath::core("arena.seal");
+        let original = front.signature(&operation).unwrap();
+        for mutation in 0..3 {
+            let mut signature = (*original).clone();
+            let hirsel_types::SignatureKind::Function(function) = &mut signature.kind else {
+                unreachable!()
+            };
+            match mutation {
+                0 => function.parameters[0].passing = hirsel_types::PassingMode::Borrow,
+                1 => function.allocation = hirsel_types::Allocation::NoAlloc,
+                2 => {
+                    signature.fingerprint =
+                        hirsel_syntax::ContentHash::of_bytes(b"foreign core signature")
+                }
+                _ => unreachable!(),
+            }
+            simulated.signature_override = Some(Arc::new(signature));
+            assert!(matches!(
+                named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+                Err(SourceError::Malformed(
+                    "receipt operation declaration differs from reviewed core"
+                ))
+            ));
+        }
     });
 }

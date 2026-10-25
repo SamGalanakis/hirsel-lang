@@ -102,5 +102,64 @@ pub fn derive(
     .map_err(SourceError::Malformed)
 }
 
+/// Complete boundary type profile for receipt context identity. Arena is a
+/// scoped grant with no owned callable payload; Region owns the profile of T.
+/// These handle rules do not authorize either handle inside sealed contents:
+/// payload admission continues to use the resource-free `derive` above.
+pub fn boundary(
+    types: &TypeInterner,
+    root: TypeId,
+    declarations: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    callables: &mut impl FnMut(TypeId) -> Result<Vec<CallableCase>, SourceError>,
+) -> Result<ClosedStorageProfile, SourceError> {
+    use hirsel_types::{BuiltinType, CapabilityKind, GenericArgument, SignatureKind};
+    let original = closed_storage_type(types, root)?;
+    let mut payload = root;
+    loop {
+        let row = types
+            .get(payload)
+            .ok_or(SourceError::Malformed("boundary profile type"))?;
+        match &row.kind {
+            TypeKind::Builtin {
+                kind: BuiltinType::Region,
+                arguments,
+            } => {
+                let [GenericArgument::Type(ty)] = arguments.as_slice() else {
+                    return Err(SourceError::Malformed("boundary Region type arguments"));
+                };
+                payload = *ty;
+            }
+            TypeKind::Named {
+                definition,
+                arguments,
+            } if definition.path().is_core("Arena") && arguments.is_empty() => {
+                let declaration = declarations(*definition)
+                    .map_err(|error| SourceError::Type(format!("{error:?}")))?
+                    .ok_or(SourceError::Unsupported(
+                        "boundary Arena needs its original declaration",
+                    ))?;
+                if declaration.definition != *definition
+                    || !matches!(&declaration.kind, SignatureKind::Type(ty) if ty.generics.is_empty()
+                        && ty.representation.is_none() && !ty.resource && ty.capability == Some(CapabilityKind::Scoped))
+                {
+                    return Err(SourceError::Malformed("boundary Arena declaration differs"));
+                }
+                return ClosedStorageProfile {
+                    schema: ClosedStorageProfile::SCHEMA,
+                    root: original,
+                    functions: vec![],
+                }
+                .canonical()
+                .map_err(SourceError::Malformed);
+            }
+            _ => {
+                let mut profile = derive(types, payload, declarations, callables)?;
+                profile.root = original;
+                return profile.canonical().map_err(SourceError::Malformed);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -320,3 +320,69 @@ fn generic_nominal_profiles_reuse_substitution_and_refuse_hidden_resources() {
         expected
     );
 }
+
+#[test]
+fn boundary_handles_keep_payload_profiles_separate_from_seal_admission() {
+    let types = TypeInterner::new(None);
+    let value = scalar(&types);
+    let callable = function(&types, value);
+    let region = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Region,
+        arguments: vec![GenericArgument::Type(callable)].into(),
+    }));
+    let profile = boundary(&types, region, &mut |_| Ok(None), &mut |ty| {
+        assert_eq!(ty, callable);
+        Ok(vec![case(&types, "region_profile_owned_code", None)])
+    })
+    .unwrap();
+    assert_eq!(profile.root, closed_storage_type(&types, region).unwrap());
+    assert_eq!(profile.functions.len(), 1);
+    assert!(derive(&types, region, &mut |_| Ok(None), &mut |_| Ok(vec![])).is_err());
+    let definition = DefId::intern(&DefPath::core("Arena"));
+    let arena = types.intern(Type::with_kind(TypeKind::Named {
+        definition,
+        arguments: Default::default(),
+    }));
+    let mut declaration = signature(definition, None, false, false);
+    let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut declaration).kind else {
+        unreachable!()
+    };
+    ty.capability = Some(CapabilityKind::Scoped);
+    let profile = boundary(
+        &types,
+        arena,
+        &mut |_| Ok(Some(declaration.clone())),
+        &mut |_| panic!("grant has no callable payload"),
+    )
+    .unwrap();
+    assert!(profile.functions.is_empty());
+    assert_eq!(profile.root, closed_storage_type(&types, arena).unwrap());
+    assert!(
+        derive(
+            &types,
+            arena,
+            &mut |_| Ok(Some(declaration.clone())),
+            &mut |_| Ok(vec![])
+        )
+        .is_err()
+    );
+    assert_eq!(
+        boundary(&types, arena, &mut |_| Ok(None), &mut |_| Ok(vec![])),
+        Err(SourceError::Unsupported(
+            "boundary Arena needs its original declaration"
+        ))
+    );
+    let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut declaration).kind else {
+        unreachable!()
+    };
+    ty.capability = Some(CapabilityKind::Global);
+    assert_eq!(
+        boundary(
+            &types,
+            arena,
+            &mut |_| Ok(Some(declaration.clone())),
+            &mut |_| Ok(vec![])
+        ),
+        Err(SourceError::Malformed("boundary Arena declaration differs"))
+    );
+}
