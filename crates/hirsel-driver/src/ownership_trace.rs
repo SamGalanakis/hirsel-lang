@@ -113,3 +113,48 @@ pub fn execute_test_resources(
         trace,
     })
 }
+
+pub struct TestResources {
+    pub result: crate::testing::TestResult,
+    pub program: [u8; 32],
+    pub trace: Result<Trace, TraceError>,
+}
+
+/// `hirsel test --trace-ownership`: each selected test runs once under the
+/// ordinary simulator and is judged exactly as an untraced run judges it.
+pub fn test_path_resources(
+    path: &Path,
+    filters: &[String],
+    override_seed: Option<u64>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    event_limit: usize,
+) -> Result<Vec<TestResources>, ToolError> {
+    use crate::testing::{Selection, discover, outcome_failure};
+    let mut program = crate::COMPILER
+        .with_verify(verify)
+        .load_test_package(path)?;
+    let tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
+    let limits = hirsel_interp::Limits {
+        steps: max_steps,
+        ..Default::default()
+    };
+    let mut results = vec![];
+    for test in &tests {
+        let traced = execute_test_resources(&mut program, test, false, 0, limits, event_limit)?;
+        let stdout = match &traced.execution.observation {
+            Some(observation) => observation.output.clone(),
+            None => traced.execution.tooling_output.clone(),
+        };
+        let failure = match &traced.execution.outcome {
+            Ok(outcome) => outcome_failure(outcome, &program.engine.sources),
+            Err(error) => Some(format!("runtime error: {error:?}")),
+        };
+        results.push(TestResources {
+            result: test.result(failure, &stdout, false),
+            program: traced.program,
+            trace: traced.trace,
+        });
+    }
+    Ok(results)
+}

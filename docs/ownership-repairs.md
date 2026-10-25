@@ -248,3 +248,6 @@ Adaptations are the explicit 20-byte wire cap, full i64 range, preserved
 Invalid/OutOfRange errors and Hirsel borrow/unique success modes. These are local
 Hirsel recipes, not an external implementation port; the Rust control-structure
 license and notices above remain applicable.
+
+Resource lifetime diagnostics are available through
+[`--trace-ownership`](ownership-trace.md), including retained-resource move chains.

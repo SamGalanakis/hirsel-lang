@@ -254,3 +254,52 @@ impl LeafObjects {
         })
     }
 }
+
+/// `hirsel run --native --trace-ownership`: build the checked source, emit its
+/// diagnostic objects on `backend` and run them with the selected ownership
+/// runtime product and no grants. Programs outside the leaf adapter refuse
+/// before anything runs; ordinary native objects never stand in for them.
+pub fn run_path(
+    path: &std::path::Path,
+    backend: Backend,
+    verify: hirsel_engine::Verify,
+    event_limit: usize,
+) -> Result<Result<LeafExecution, NativeError>, crate::ToolError> {
+    crate::session::with_program(path, verify, |loaded| {
+        loaded.check_for_execution()?;
+        let input =
+            loaded
+                .engine
+                .export_native_input()
+                .map_err(|error| crate::ToolError::Query {
+                    error,
+                    phase: loaded.engine.unavailable,
+                    sources: loaded.engine.sources.clone(),
+                })?;
+        Ok((|| {
+            let checked = loaded.engine.import_native_input(input).map_err(|error| {
+                NativeError::new(
+                    StageName::Manifest,
+                    format!("the native snapshot: {error:?}"),
+                )
+            })?;
+            let target = super::TargetSpec::x86_64_unknown_linux_gnu();
+            let ready = super::build(&checked, &super::Options::new(target.clone()))?;
+            let sites = Sites::new(checked.snapshot());
+            let objects = emit_leaf(&ready, &loaded.entry, &sites, backend, OptLevel::None)?;
+            let cache = std::env::var_os("HIRSEL_NATIVE_CACHE")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(super::runtime_cache::default_directory);
+            let toolchain = super::Toolchain::in_tree_with_runtime(
+                &cache,
+                &[&target],
+                super::RuntimeBuild {
+                    ownership_trace: true,
+                    ..Default::default()
+                },
+            )?;
+            let scratch = super::executable::Scratch::new()?;
+            objects.launch(&ready, &toolchain, &scratch.0, event_limit)
+        })())
+    })
+}

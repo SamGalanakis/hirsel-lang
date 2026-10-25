@@ -79,23 +79,124 @@ fn ownership_trace_49_run_drops_every_lifetime_and_keeps_the_program_outcome() {
 }
 
 #[test]
-fn ownership_trace_49_run_refuses_engines_it_does_not_trace() {
+fn ownership_trace_49_run_refuses_launches_it_does_not_trace() {
     let path = file("pub fn main() -> Result[(), ()] { Ok(()) }\n");
-    for extra in [["--native", "--native"], ["--simulation", "{}"]] {
+    for extra in [
+        &["--simulation", "{}"][..],
+        &["--native", "--grants", "{}"],
+        &["--native", "--record", "tape"],
+    ] {
         let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
             .arg("run")
-            .args(if extra[0] == "--native" {
-                &extra[..1]
-            } else {
-                &extra[..]
-            })
             .arg(&path)
+            .args(extra)
             .args(["--trace-ownership", "unused.json"])
             .output()
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert_ne!(output.status.code(), Some(0), "{stderr}");
-        assert!(stderr.contains("--trace-ownership"), "{stderr}");
+        assert_eq!(output.status.code(), Some(2), "{extra:?}: {stderr}");
+        assert!(stderr.contains("--trace-ownership"), "{extra:?}: {stderr}");
     }
     std::fs::remove_file(path).unwrap();
+}
+
+/// The reference interpreter, LLVM and Cranelift report the same logical
+/// lifetimes in the same order; storage moves are engine-specific.
+#[test]
+fn ownership_trace_49_run_agrees_on_lifetimes_across_engines() {
+    let path = file(
+        "resource type Token { value: u64 }\ndrop(x) {}\npub fn main() -> Result[(), ()] {\n  let first = Token(value: 7u64)\n  let second = Token(value: 7u64)\n  let moved = take first\n  Ok(())\n}\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut lifetimes = vec![];
+    for engine in [
+        &[][..],
+        &["--native", "--backend", "llvm"],
+        &["--native", "--backend", "cranelift"],
+    ] {
+        let sidecar = dir.path().join(format!("{}.json", lifetimes.len()));
+        let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+            .arg("run")
+            .args(engine)
+            .arg(&path)
+            .arg("--trace-ownership")
+            .arg(&sidecar)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{engine:?}: {stderr}");
+        assert!(
+            stderr.contains("2 created, 2 dropped, 0 live"),
+            "{engine:?}: {stderr}"
+        );
+        let trace: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+        let lifecycle: Vec<_> = trace["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "create" || event["kind"] == "drop")
+            .map(|event| {
+                (
+                    event["kind"].clone(),
+                    event["token"].clone(),
+                    event.get("value_type").cloned(),
+                )
+            })
+            .collect();
+        assert_eq!(lifecycle.len(), 4, "{trace}");
+        lifetimes.push(lifecycle);
+    }
+    assert_eq!(lifetimes[0], lifetimes[1]);
+    assert_eq!(lifetimes[0], lifetimes[2]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn ownership_trace_49_test_traces_each_selected_test_with_its_ordinary_verdict() {
+    let path = file(
+        "resource type Token {}\ndrop(x) {}\n@test\nfn kept(t: Test) {\n  let first = Token()\n  let second = take first\n  test.check(t, true)\n}\n@test\nfn refused(t: Test) {\n  let first = Token()\n  test.check(t, false)\n}\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let traces = dir.path().join("traces");
+    let output = Command::new(env!("CARGO_BIN_EXE_hirsel"))
+        .arg("test")
+        .arg("--trace-ownership")
+        .arg(&traces)
+        .arg(&path)
+        .output()
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let kept = stdout
+        .find("test kept ... ok")
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let refused = stdout
+        .find("test refused ... FAILED")
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let summaries: Vec<_> = stdout
+        .match_indices("1 created, 1 dropped, 0 live")
+        .collect();
+    assert_eq!(summaries.len(), 2, "{stdout}");
+    assert!(
+        kept < summaries[0].0 && summaries[0].0 < refused,
+        "{stdout}"
+    );
+    assert!(stdout[kept..refused].contains("move root#0"), "{stdout}");
+    let mut written: Vec<_> = std::fs::read_dir(&traces)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    written.sort();
+    assert_eq!(written.len(), 2, "{written:?}");
+    assert!(
+        written.iter().all(|name| name.ends_with(".json")),
+        "{written:?}"
+    );
 }

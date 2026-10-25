@@ -1,0 +1,57 @@
+# Ownership diagnostics
+
+To inspect a resource's lifetime, request an ownership trace:
+
+```sh
+hirsel run app.hir --trace-ownership /tmp/ownership.json
+hirsel test app.hir --trace-ownership /tmp/test-ownership
+```
+
+A run prints the lineage to stderr and writes JSON to the requested new file.
+Tests print each selected test's verdict and lineage, and write one JSON file
+per test in the requested directory. Filters and `--seed` work as usual.
+Existing sidecars are never replaced. An incomplete or unsupported trace is a
+tool failure (exit 3), even if the program itself succeeds.
+
+Each event identifies its task, operation, source site, action, token and owner.
+Token identities distinguish equal values and survive storage reuse. A final
+summary lists resources still held and repeats each one's complete move chain.
+For example, this program succeeds but retains its resource through `forget`:
+
+```hirsel
+resource type Token {}
+drop(x) {}
+
+pub fn main() -> Result[(), ()] {
+  let first = Token()
+  let held = take first
+  forget(take held)
+  Ok(())
+}
+```
+
+Its trace has one creation, moves of that same token, no drop, and one live
+resource held by `Forgotten` storage. The trace does not change the program's
+exit status for a retained resource. JSON includes the program binding,
+completeness flag and the same ordered events as the readable output.
+
+Native leaf programs can select either backend:
+
+```sh
+hirsel run app.hir --native --backend llvm --trace-ownership /tmp/llvm.json
+hirsel run app.hir --native --backend cranelift --trace-ownership /tmp/clif.json
+```
+
+Native coverage currently includes local leaf resources and closed direct calls
+without owned inputs or results. Nested ownership, task transport, captures,
+owned parameters and results refuse before launch. Native tracing currently
+requires a grant-free run without recording or other native launch options.
+Interpreted test tracing runs one default schedule; native tests, benchmarks,
+blessing, JSON test reports and custom schedules are not supported by this flag.
+`run --simulation` also refuses the flag.
+
+The current adapters track resources. General unique and owned-value coverage,
+compiler-pass integration and an independent RPC admission witness are still
+in development. Native and interpreted storage moves may differ; logical
+resource creations and drops can be compared across engines. Ownership JSON is
+a diagnostic sidecar, separate from the capability recording used for replay.

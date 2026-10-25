@@ -48,11 +48,137 @@ pub(super) fn run(
         });
     match written {
         Ok(()) => code,
-        Err(error) => {
-            eprintln!("hirsel: ownership trace: {error}");
-            hirsel_engine::RunOutcome::Tooling(error).exit_code() as u8
+        Err(error) => tooling(format!("ownership trace: {error}")),
+    }
+}
+
+/// `hirsel test --trace-ownership <dir>`: the ordinary result line for each
+/// test, then its lineage; `<dir>/<test>.json` holds the complete trace. A
+/// test whose trace cannot be completed fails the command as a tool failure.
+pub(super) fn test(
+    manifest: &Path,
+    filters: &[String],
+    seed: Option<u64>,
+    max_steps: Option<u64>,
+    verify: hirsel_engine::Verify,
+    directory: &Path,
+) -> u8 {
+    let results = match hirsel_driver::ownership_trace::test_path_resources(
+        manifest,
+        filters,
+        seed,
+        max_steps,
+        verify,
+        EVENT_LIMIT,
+    ) {
+        Ok(results) => results,
+        Err(error) => return super::run_error(error, false),
+    };
+    if let Err(error) = std::fs::create_dir_all(directory) {
+        return tooling(format!("ownership trace: {error}"));
+    }
+    let (mut failed, mut untraced) = (0, 0);
+    for traced in results {
+        let result = &traced.result;
+        println!(
+            "test {} ... {} (seed={}){}",
+            result.name,
+            if result.failure.is_some() {
+                "FAILED"
+            } else {
+                "ok"
+            },
+            result.seed,
+            result
+                .failure
+                .as_ref()
+                .map(|f| format!(": {f}"))
+                .unwrap_or_default()
+        );
+        if result.failure.is_some() {
+            failed += 1;
+            for line in result.report.lines() {
+                println!("    {line}");
+            }
+        }
+        let sidecar = directory.join(format!("{}.json", result.name.replace(['/', '\\'], "_")));
+        let mut lineage = vec![];
+        let written = traced
+            .trace
+            .map_err(|error| error.to_string())
+            .and_then(|trace| {
+                write(&trace, traced.program, EVENT_LIMIT, &sidecar, &mut lineage)
+                    .map_err(|error| error.to_string())
+            });
+        match written {
+            Ok(()) => {
+                for line in String::from_utf8_lossy(&lineage).lines() {
+                    println!("    {line}");
+                }
+            }
+            Err(error) => {
+                untraced += 1;
+                println!("    ownership trace: {error}");
+            }
         }
     }
+    if untraced > 0 {
+        return tooling(format!("ownership trace: {untraced} tests were not traced"));
+    }
+    hirsel_engine::RunOutcome::Returned(if failed == 0 {
+        hirsel_run_schema::Returned::Ok
+    } else {
+        hirsel_run_schema::Returned::Error
+    })
+    .exit_code() as u8
+}
+
+/// `hirsel run --native --trace-ownership`: diagnostic objects on the chosen
+/// backend under the ownership runtime product. Their output is forwarded as
+/// the executable wrote it; the exit status is the executable's.
+pub(super) fn run_native(
+    path: &Path,
+    backend: hirsel_driver::native::Backend,
+    verify: hirsel_engine::Verify,
+    sidecar: &Path,
+    json: bool,
+) -> u8 {
+    let run = match hirsel_driver::native::ownership_trace::run_path(
+        path,
+        backend,
+        verify,
+        EVENT_LIMIT,
+    ) {
+        Ok(Ok(run)) => run,
+        Ok(Err(error)) => return tooling(error.to_string()),
+        Err(error) => return super::run_result_for_path(Err(error), path, json),
+    };
+    let _ = std::io::stdout().write_all(&run.execution.stdout);
+    let _ = std::io::stderr().write_all(&run.execution.stderr);
+    let Some(code) = run.execution.exit else {
+        return tooling(format!(
+            "the executable ended by signal {:?}",
+            run.execution.signal
+        ));
+    };
+    match run.trace.and_then(|trace| {
+        write(
+            &trace,
+            run.program,
+            EVENT_LIMIT,
+            sidecar,
+            &mut std::io::stderr().lock(),
+        )
+        .map_err(|error| error.to_string())
+    }) {
+        Ok(()) => code.clamp(0, 255) as u8,
+        Err(error) => tooling(format!("ownership trace: {error}")),
+    }
+}
+
+fn tooling(error: String) -> u8 {
+    eprintln!("hirsel: {error}");
+    hirsel_engine::RunOutcome::Tooling(error).exit_code() as u8
 }
 
 pub(super) fn write(

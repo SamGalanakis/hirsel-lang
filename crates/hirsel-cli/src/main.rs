@@ -9,7 +9,7 @@ use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 
-const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [--trace-ownership <json>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
+const USAGE: &str = "usage: hirsel [--verbose] [--timings[=json]] [--mem-usage] check [--verify-cache] [--watch] [--json | --safe] <source|manifest.json> | serve [--workspace <dir>] [--idle <seconds>] | test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] [--trace-ownership <dir>] <source|manifest.json> [filter...] | run [--verify-cache] [--validate-stages] [--no-verify] [--json] [--native [--backend llvm|cranelift] [--proofs <sidecar> [--trust <tool@version>]...] | --simulation <json>] <source|manifest.json> [(--run <json> | --grants <json>) [--record <tape>] [--revocations <json>] | --replay <tape>] [--max-steps <n|unbounded>] [--cores <n>] [--trace-events <jsonl>] [--trace-ownership <json>] [-- args...] | build [--verify-cache] [--validate-stages] [--no-verify] [--release | --debug] [--lto] [--backend llvm|cranelift] [--fuel] [--target x86_64-linux | aarch64-linux] [--proofs <sidecar> [--trust <tool@version>]...] <source|manifest.json> -o <exe> | new <dir> [--lib] | fmt [--check] <source|manifest.json> | expand <source|manifest.json> | hash <source|manifest.json> | export --tir|--run <source|manifest.json> -o <file> | deps card <manifest.json> [--package name@ver[/module]] [--code-store config.json] [--json] | explain RULE [--json] | explain --list [--json] (docs/rule-explain.md) | doc <source|manifest.json> [-o <out.md>] [--json] | view <tape> --capture <id> -o <file> [--perfetto | --source <program> --analysis <id>] [--timing <sidecar>] | precompute <package manifest.json> -o <directory> | tapes check <tape>... | tapes trial <candidate manifest.json> --grants <json> [--from <n>] <tape> | ctl <socket> (cores <n> | metrics) | serve [--no-verify] <source|manifest.json> --host <json>";
 
 const FMT_HELP: &str = "usage: hirsel fmt [--check] <source|manifest.json>\n\nFormat a source file or a package's direct sources.\nExample: hirsel fmt examples/configctl/hirsel.json\n--check reports differences without writing (exit 1; unchanged: 0).\nAll sources are prepared before writing; unchanged files are skipped.\nWrite errors are reported; writes across files are not atomic.";
 
@@ -69,7 +69,8 @@ Run a source entry; the default engine is the interpreter.
   --cores <n>         Positive core count; incompatible with --simulation
   --trace-events <jsonl> Native canonical Ordered events; requires qualified executor
   --trace-ownership <json> Print where each resource was created, moved and dropped,
-                      and write the complete lineage as JSON; interpreter only
+                      and write the complete lineage as JSON; with --native,
+                      only grant-free programs the native tracer supports
   -- args...          Replace template Args; excludes --run, --replay, --simulation
   --json              Machine-readable diagnostics
   --verify-cache      Recompute cached results and compare
@@ -84,7 +85,7 @@ Example: hirsel run app.hir --grants grants.json -- --help
 Standalone executables use --hirsel-grants, --hirsel-run and --hirsel-replay.
 For recording, --hirsel-record comes before --hirsel-grants.
 See docs/native-verification.md#record-remove-host-access-replay for the recipe.",
-        "test" => "usage: hirsel test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] <source|manifest.json> [filter...]
+        "test" => "usage: hirsel test [--no-verify] [--json] [--seed <u64>] [--scheduler <name@1:seed> | --explore <n> [--scheduler <name@1>]] [--race] [--sim-points <root-release,atomic-store>] [--bless | --bench [--bench-time <ms>]] [--max-steps <n|unbounded> | --native [--backend llvm|cranelift]] [--trace-ownership <dir>] <source|manifest.json> [filter...]
 
 Run matching tests; the default engine is the interpreter.
   --native            Run native tests (LLVM by default)
@@ -97,6 +98,8 @@ Run matching tests; the default engine is the interpreter.
   --bless             Update test snapshots
   --bench             Run benchmarks; excludes bless, max-steps, scheduler, explore
   --bench-time <ms>   Positive benchmark target time; requires --bench
+  --trace-ownership <dir> Print each test's resource lineage and write it to
+                      <dir>/<test>.json; interpreted, one default schedule
   --max-steps         Interpreter budget: unsigned integer or unbounded
   --json              Machine-readable results
   --no-verify         Skip the second checker
@@ -174,6 +177,14 @@ enum Command {
         backend: hirsel_driver::native::Backend,
         schedules: hirsel_driver::testing::Schedules,
         simulation_debug: hirsel_driver::testing::SimulationDebug,
+    },
+    /// `test --trace-ownership <dir>`: interpreted tests, one trace each.
+    TraceTest {
+        manifest: OsString,
+        filters: Vec<String>,
+        seed: Option<u64>,
+        max_steps: Option<u64>,
+        directory: OsString,
     },
     Precompute {
         manifest: OsString,
@@ -445,8 +456,12 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             let mut simulation_debug = hirsel_driver::testing::SimulationDebug::default();
             let mut points_seen = false;
             let (mut scheduler, mut explore) = (None::<String>, None);
+            let mut trace_ownership = None;
             while let Some(arg) = args.next()? {
                 match arg {
+                    Long("trace-ownership") if trace_ownership.is_none() => {
+                        trace_ownership = Some(args.value()?)
+                    }
                     Long("race") if !simulation_debug.races => simulation_debug.races = true,
                     Long("sim-points") if !points_seen => {
                         points_seen = true;
@@ -525,6 +540,25 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
             }
             if bench && (scheduler.is_some() || explore.is_some()) {
                 return Err("--bench takes neither --scheduler nor --explore".into());
+            }
+            if let Some(directory) = trace_ownership {
+                if native
+                    || bench
+                    || bless
+                    || json
+                    || scheduler.is_some()
+                    || explore.is_some()
+                    || simulation_debug != Default::default()
+                {
+                    return Err("--trace-ownership runs interpreted tests once, without --native, --bench, --bless, --json, schedules or simulation points".into());
+                }
+                return Ok(Command::TraceTest {
+                    manifest: manifest.ok_or("test requires a package manifest")?,
+                    filters,
+                    seed,
+                    max_steps: max_steps.unwrap_or(Some(DEFAULT_RUN_MAX_STEPS)),
+                    directory,
+                });
             }
             use hirsel_driver::testing::{Scheduler, Schedules};
             let schedules = match (explore, scheduler) {
@@ -906,8 +940,21 @@ fn parse_command(args: Vec<OsString>) -> Result<Command, lexopt::Error> {
                 if trace_ownership.is_some() && simulation.is_some() {
                     return Err("--trace-ownership cannot combine with --simulation".into());
                 }
-                if trace_ownership.is_some() && native {
-                    return Err("--trace-ownership does not yet run native code".into());
+                if trace_ownership.is_some()
+                    && native
+                    && (config.is_some()
+                        || record.is_some()
+                        || replay.is_some()
+                        || arguments.is_some()
+                        || cores.is_some()
+                        || proofs.sidecar.is_some()
+                        || validate_stages
+                        || trace_events.is_some())
+                {
+                    return Err(
+                        "--native --trace-ownership runs without grants, records or other native options"
+                            .into(),
+                    );
                 }
                 if revocations.is_some() && (config.is_none() || replay.is_some()) {
                     return Err("--revocations requires a live --run or --grants launch".into());
@@ -1139,6 +1186,7 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
         && !matches!(
             command,
             Command::Test { .. }
+                | Command::TraceTest { .. }
                 | Command::Build { .. }
                 | Command::Run { .. }
                 | Command::Simulation { .. }
@@ -1187,6 +1235,22 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
                     1
                 }
             };
+        }
+        Command::TraceTest {
+            manifest,
+            filters,
+            seed,
+            max_steps,
+            directory,
+        } => {
+            return ownership_trace::test(
+                Path::new(&manifest),
+                &filters,
+                seed,
+                max_steps,
+                verify,
+                Path::new(&directory),
+            );
         }
         Command::Test {
             manifest,
@@ -1702,10 +1766,19 @@ fn execute_command(args: Vec<OsString>, verify: Verify) -> u8 {
             proofs,
             arguments,
             trace_events,
-            trace_ownership: _,
+            trace_ownership,
             max_steps: _,
             json,
         } => {
+            if let Some(sidecar) = trace_ownership {
+                return ownership_trace::run_native(
+                    Path::new(&file),
+                    backend.unwrap_or(hirsel_driver::native::Backend::Cranelift),
+                    verify,
+                    Path::new(&sidecar),
+                    json,
+                );
+            }
             let evidence = match proofs.evidence() {
                 Ok(evidence) => evidence,
                 Err(error) => return run_error(error, false),
