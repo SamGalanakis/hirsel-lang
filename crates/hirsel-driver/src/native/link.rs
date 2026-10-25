@@ -1569,6 +1569,33 @@ fn launcher_object(
     standalone: bool,
     main_symbol: &str,
 ) -> Result<Vec<u8>, NativeError> {
+    launcher_object_with_seed(
+        program,
+        entry,
+        objects,
+        dir,
+        requested,
+        standalone,
+        main_symbol,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launcher_object_with_seed(
+    program: &ReadyProgram,
+    entry: &DefPath,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    dir: &Path,
+    requested: Option<&hirsel_run_config::ValidatedRun>,
+    standalone: bool,
+    main_symbol: &str,
+    test_seed: Option<u64>,
+) -> Result<Vec<u8>, NativeError> {
+    let mut launch_inputs = program.launch.clone();
+    if let Some(seed) = test_seed {
+        launch_inputs.test_seed = seed;
+    }
     program.check_semantic_units(objects)?;
     super::ahead::check_objects(program, objects)?;
     let (symbol, result_size, caller_site) = entry_result(program, entry)?;
@@ -1677,7 +1704,7 @@ done:
         hirsel_run_schema::LaunchKind::Main
     };
     let mut record = hirsel_run_config::RunConfig::for_program(revision, launch);
-    record.inputs = program.launch.clone();
+    record.inputs = launch_inputs;
     // The existing conformance launcher supplies this explicit fixture profile.
     // Standalone admission will consume the record at the C entry boundary.
     if matches!(kind, LaunchKind::Main(_)) && !standalone {
@@ -2493,6 +2520,84 @@ refuse:\n ret i32 3\n}}\n",
         &launchers,
     )
     .map(Linked::runnable)
+}
+
+/// Package tests use the same launch ABI and dispatcher as ordinary executable
+/// planning, with an exact bound entry table instead of a reconstructed program.
+pub(crate) fn plan_captured_test_link(
+    program: &ReadyProgram,
+    tests: &[(DefPath, u64)],
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    dir: &Path,
+    inputs: CapturedExecutableLinkInputs<'_>,
+) -> Result<super::object_queries::platform::CapturedPlatformPlan, NativeError> {
+    if tests.is_empty() {
+        return Err(NativeError::new(StageName::Link, "empty native test table"));
+    }
+    let mut declarations = String::new();
+    let mut cases = String::new();
+    let mut launchers = vec![dir.join("tests.o")];
+    let mut entries = Vec::new();
+    for (index, (entry, seed)) in tests.iter().enumerate() {
+        let name = format!("hirsel_test_{index}");
+        entries.push(name.clone());
+        let bytes = launcher_object_with_seed(
+            program,
+            entry,
+            objects,
+            dir,
+            None,
+            false,
+            &name,
+            Some(*seed),
+        )?;
+        launchers.push(write(dir, &format!("test-{index}.o"), &bytes)?);
+        declarations.push_str(&format!("declare i32 @{name}(i32, ptr)\n"));
+        // The test entry sees no process argument but its own name.
+        cases.push_str(&format!(
+            "case{index}:\n %r{index} = call i32 @{name}(i32 1, ptr %slot)\n ret i32 %r{index}\n"
+        ));
+    }
+    // `main <index>` runs adapter `index`; any other argument list exits 3. The
+    // index is decimal digits only, and parsing stops once it names no adapter.
+    let switch: String = (0..tests.len())
+        .map(|index| format!(" i64 {index}, label %case{index}"))
+        .collect();
+    let dispatch = format!(
+        "target triple = \"{triple}\"\n{declarations}\
+define i32 @main(i32 %argc, ptr %argv) {{\n\
+entry:\n %two = icmp eq i32 %argc, 2\n br i1 %two, label %argument, label %refuse\n\
+argument:\n %slot = getelementptr ptr, ptr %argv, i64 1\n %text = load ptr, ptr %slot\n\
+ %first = load i8, ptr %text\n %empty = icmp eq i8 %first, 0\n br i1 %empty, label %refuse, label %digit\n\
+digit:\n %at = phi i64 [0, %argument], [%next, %accumulate]\n %n = phi i64 [0, %argument], [%value, %accumulate]\n\
+ %place = getelementptr i8, ptr %text, i64 %at\n %byte = load i8, ptr %place\n %end = icmp eq i8 %byte, 0\n\
+ br i1 %end, label %dispatch, label %parse\n\
+parse:\n %d = sub i8 %byte, 48\n %decimal = icmp ult i8 %d, 10\n br i1 %decimal, label %accumulate, label %refuse\n\
+accumulate:\n %wide = zext i8 %d to i64\n %tens = mul i64 %n, 10\n %value = add i64 %tens, %wide\n\
+ %next = add i64 %at, 1\n %named = icmp ult i64 %value, {count}\n br i1 %named, label %digit, label %refuse\n\
+dispatch:\n switch i64 %n, label %refuse [{switch} ]\n{cases}\
+refuse:\n ret i32 3\n}}\n",
+        triple = program.target.triple,
+        count = tests.len(),
+    );
+    let dispatcher = if cranelift_objects(objects) {
+        let entries: Vec<_> = entries.iter().map(String::as_str).collect();
+        hirsel_cranelift::test_dispatcher_object(&program.target, &entries)
+            .map_err(|error| NativeError::new(StageName::Emission, error.to_string()))?
+    } else {
+        hirsel_llvm::compile_ir(&dispatch, &program.target, OptLevel::None)
+            .map_err(|e| NativeError::new(StageName::Link, e.to_string()))?
+            .bytes
+    };
+    write(dir, "tests.o", &dispatcher)?;
+    for (entry, _) in tests {
+        check_link_manifest(program, entry, objects)?;
+    }
+    let objects = write_link_objects(dir, objects, &launchers)?;
+    inputs
+        .platform
+        .plan_inputs(inputs.store, &program.target, dir, &objects, inputs.loader)
+        .map_err(|error| NativeError::new(StageName::Link, error))
 }
 
 /// The encoded failure table every source program's descriptor carries.

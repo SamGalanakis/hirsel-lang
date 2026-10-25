@@ -273,6 +273,23 @@ impl Compiler {
             crate::package::EntrySelection::Test,
         )
     }
+    /// Load the same test package from one observed input snapshot.
+    pub fn load_test_package_inputs(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+    ) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_inputs(
+            self,
+            path,
+            inputs,
+            crate::package::Loading {
+                replacement: None,
+                entry_selection: crate::package::EntrySelection::Test,
+                parse_sources: true,
+            },
+        )
+    }
     /// Precompute a package through ordinary query persistence. Every product
     /// remains independently keyed and checked; there is no package image or
     /// whole-program type table. Partial work is a set of ordinary cache misses.

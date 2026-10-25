@@ -258,6 +258,32 @@ impl RootProducts {
         )
     }
 
+    /// Captured package-test link from this root's exact bound entry table.
+    pub fn plan_captured_tests(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        inputs: RootCapturedExecutableInputs<'_>,
+    ) -> Result<crate::native::object_queries::platform::CapturedPlatformPlan, String> {
+        let tests = self.test_entries(root)?;
+        self.with_link_objects(
+            root,
+            products,
+            inputs.backend,
+            inputs.objects,
+            |program, objects| {
+                crate::native::link::plan_captured_test_link(
+                    program,
+                    &tests,
+                    objects,
+                    inputs.directory,
+                    inputs.platform,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )
+    }
+
     fn link_with(
         &mut self,
         root: &Arc<NativeRootProduct>,

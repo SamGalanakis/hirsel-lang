@@ -173,23 +173,25 @@ impl NativeLinkExecutor for FrozenPlatform {
             return Err("native Link received another selected platform".into());
         }
         let scratch = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let plan = native.plan_captured_executable(
-            input.root,
-            input.ready,
-            RootCapturedExecutableInputs {
-                entry: &self.entry,
-                backend: self.backend,
-                objects: input.objects,
-                directory: scratch.path(),
-                requested: self.requested.as_deref(),
-                standalone: self.requested.is_none(),
-                platform: native::CapturedExecutableLinkInputs {
-                    store: self.store.as_ref(),
-                    platform: &self.inputs.platform,
-                    loader: None,
-                },
+        let tests = !native.test_entries(input.root)?.is_empty();
+        let inputs = RootCapturedExecutableInputs {
+            entry: &self.entry,
+            backend: self.backend,
+            objects: input.objects,
+            directory: scratch.path(),
+            requested: self.requested.as_deref(),
+            standalone: self.requested.is_none(),
+            platform: native::CapturedExecutableLinkInputs {
+                store: self.store.as_ref(),
+                platform: &self.inputs.platform,
+                loader: None,
             },
-        )?;
+        };
+        let plan = if tests {
+            native.plan_captured_tests(input.root, input.ready, inputs)
+        } else {
+            native.plan_captured_executable(input.root, input.ready, inputs)
+        }?;
         let capture = plan.capture(
             self.store.as_ref(),
             &self.inputs.platform,
