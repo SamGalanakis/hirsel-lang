@@ -14,6 +14,9 @@ pub use request::{CallableRecipe, TaskCaptureRecipe, TaskCaptureRequest};
 
 pub const MAX_PER_FUNCTION: usize = 16;
 pub const MAX_SPECIALIZATIONS: usize = 256;
+/// Core library bodies that take a callback and call it once with arguments
+/// they own, so a known callback specializes them as an ordinary instance.
+pub const HIGHER_ORDER: &[&str] = &["arena.with"];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallableTarget {
@@ -372,8 +375,16 @@ fn rewrite_seeded_instance(
                 };
                 // Library units are generated templates; source specializations
                 // retain source failure anchors and external entry identity.
-                let spawn = source.key.definition().is_core("task.async");
-                if source.origin != UnitOrigin::Source && !spawn {
+                // A core higher-order body whose callback is known at the call
+                // is specialized like a source body (the collector's
+                // `visit_fn_use`): its callback call becomes direct, so the
+                // continuation plan can nest the callback's frame.
+                let definition = source.key.definition();
+                let spawn = definition.is_core("task.async");
+                if source.origin != UnitOrigin::Source
+                    && !spawn
+                    && !HIGHER_ORDER.iter().any(|name| definition.is_core(name))
+                {
                     continue;
                 }
                 let abi = &table.fn_abis[source.abi.0 as usize];
