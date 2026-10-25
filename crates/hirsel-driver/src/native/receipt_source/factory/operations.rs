@@ -9,6 +9,7 @@ use hirsel_types::{GenericArgument, UseKind};
 pub(super) enum Demand {
     Seal(ExternalDemand),
     ArenaScope { callback: u32 },
+    RegionRead { owner: u32, callback: u32 },
 }
 
 pub(super) fn expand(
@@ -18,7 +19,9 @@ pub(super) fn expand(
     let Callee::Definition { path, arguments } = &call.callee else {
         return Ok(None);
     };
-    if !path.is_core("arena.seal") && hirsel_types::core_roles::arena_scope_callback(path).is_none()
+    if !path.is_core("arena.seal")
+        && !path.is_core("region.with")
+        && hirsel_types::core_roles::arena_scope_callback(path).is_none()
     {
         return Ok(None);
     }
@@ -41,6 +44,37 @@ pub(super) fn expand(
         return Err(SourceError::Malformed(
             "receipt operation declaration differs from reviewed core",
         ));
+    }
+    if path.is_core("region.with") {
+        if !matches!(
+            arguments.as_slice(),
+            [GenericArgument::Type(_), GenericArgument::Type(_)]
+        ) || call.environment.is_some()
+            || call.arguments.len() != 2
+            || !call
+                .arguments
+                .get(&0)
+                .is_some_and(|value| value.usage == UseKind::Mut)
+            || !call
+                .arguments
+                .get(&1)
+                .is_some_and(|value| matches!(value.usage, UseKind::Borrow | UseKind::Copy))
+            || call.result.is_none()
+        {
+            return Err(SourceError::Malformed(
+                "receipt sealed read original call differs",
+            ));
+        }
+        return Ok(Some((
+            OperationId {
+                definition: path.clone(),
+                declaration_digest: reviewed.fingerprint,
+            },
+            Demand::RegionRead {
+                owner: 0,
+                callback: 1,
+            },
+        )));
     }
     if let Some(callback) = hirsel_types::core_roles::arena_scope_callback(path) {
         if !matches!(arguments.as_slice(), [GenericArgument::Type(_)])

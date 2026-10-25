@@ -688,3 +688,49 @@ fn arena_scope_unknown_targets_and_wrong_callback_arity_are_not_empty() {
         assert!(analyze(&[scope, input(&wrong)]).is_err());
     }
 }
+
+#[test]
+fn sealed_read_result_demand_reaches_owner_without_inventing_a_grant() {
+    let t = types();
+    let mut callback = body(&[t.bytes], 1);
+    ret(&mut callback, 0);
+    let mut source = body(&[t.arena, t.list, t.callable, t.bytes], 3);
+    call(
+        &mut source,
+        &[(1, UseKind::Mut), (2, UseKind::Borrow)],
+        Some(3),
+    );
+    let mut sink = source.clone();
+    call(&mut sink, &[(0, UseKind::Take), (3, UseKind::Take)], None);
+    source.blocks.push(sink.blocks.remove(0));
+    let mut read = input(&source);
+    read.calls.insert(
+        0,
+        CallDemand::RegionRead {
+            owner: 0,
+            callback: 1,
+            targets: vec![1],
+        },
+    );
+    read.calls.insert(1, seal());
+    let requirements = analyze(&[read, input(&callback)]).unwrap();
+    assert_eq!(requirements[0].payload_locals, BTreeSet::from([1, 3]));
+    assert_eq!(requirements[0].inventory_locals, BTreeSet::from([0]));
+    assert_eq!(requirements[1].payload_locals, BTreeSet::from([0]));
+    assert!(requirements[1].result);
+    assert!(requirements[1].inventory_locals.is_empty());
+    source.blocks.pop();
+    let mut read = input(&source);
+    read.calls.insert(
+        0,
+        CallDemand::RegionRead {
+            owner: 0,
+            callback: 1,
+            targets: vec![1],
+        },
+    );
+    assert_eq!(
+        analyze(&[read, input(&callback)]).unwrap(),
+        vec![Requirements::default(); 2]
+    );
+}

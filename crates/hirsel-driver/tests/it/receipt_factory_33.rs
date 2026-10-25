@@ -669,3 +669,85 @@ pub fn main()->{} {{
         );
     });
 }
+
+#[test]
+fn source_factory_expands_reviewed_sealed_read_callbacks_from_original_owner_calls() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let mut r=arena.with(fn(a:Arena)->Region[u64] {
+    let root=7u64
+    arena.seal(take a,take root)
+  })
+  region.with(mut r,fn(root:u64)->u64 {root})
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let mut graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar profiles")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 3);
+        assert_eq!(graph.closures.len(), 2);
+        assert_eq!(graph.targets.len(), 2);
+        assert_eq!(graph.operations.len(), 3);
+        assert!(
+            graph
+                .operations
+                .iter()
+                .any(|operation| operation.operation.definition.is_core("region.with"))
+        );
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: false,
+            redirect: None,
+            signature_override: None,
+        };
+        graph
+            .recheck(&simulated, [root(&front, &path)], &mut |_, _, _| {
+                panic!("scalar profiles")
+            })
+            .unwrap();
+        let saved = graph.operations.pop().unwrap();
+        assert!(
+            graph
+                .recheck(&front, [root(&front, &path)], &mut |_, _, _| Ok(vec![]))
+                .is_err()
+        );
+        graph.operations.push(saved);
+        let operation = DefPath::core("region.with");
+        let original = front.signature(&operation).unwrap();
+        let mut forged = (*original).clone();
+        if let hirsel_types::SignatureKind::Function(function) = &mut forged.kind {
+            function.parameters[0].passing = hirsel_types::PassingMode::Borrow;
+        } else {
+            unreachable!()
+        }
+        simulated.signature_override = Some(Arc::new(forged));
+        assert!(matches!(
+            named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+            Err(SourceError::Malformed(
+                "receipt operation declaration differs from reviewed core"
+            ))
+        ));
+
+        let (reader, path) = source_at(
+            "pub fn inspect(mut r:Region[u64])->u64 { region.with(mut r,fn(root:u64)->u64 {root}) }",
+            "inspect",
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar profiles")
+        })
+        .unwrap();
+        assert_eq!(graph.contexts.len(), 2);
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
+    });
+}

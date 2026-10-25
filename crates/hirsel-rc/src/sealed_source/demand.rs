@@ -32,6 +32,13 @@ pub enum CallDemand {
     /// callback operand carries the scope's internal journal requirement;
     /// it is not a source Arena value or a physical environment recipe.
     ArenaScope { callback: u32, targets: Vec<usize> },
+    /// A reviewed sealed read lends the owner's payload to the callback; it
+    /// creates no Arena grant and does not transfer the owner's inventory.
+    RegionRead {
+        owner: u32,
+        callback: u32,
+        targets: Vec<usize>,
+    },
     /// Source operation expansion, including foreign reconstruction/adapters.
     /// An empty expansion means independently known empty, never unavailable.
     External(ExternalDemand),
@@ -160,7 +167,10 @@ impl Graph<'_> {
                     .ok_or(SourceError::Malformed("demand source argument selector"))
             };
             match expansion {
-                CallDemand::ArenaScope { callback, targets } => {
+                CallDemand::ArenaScope { callback, targets }
+                | CallDemand::RegionRead {
+                    callback, targets, ..
+                } => {
                     if targets.is_empty() || call.environment.is_some() {
                         return Err(SourceError::Unsupported(
                             "demand arena scope needs complete original callbacks",
@@ -174,9 +184,15 @@ impl Graph<'_> {
                         };
                         // A demanded grant journal must reach the source scope
                         // call even when the callback has no captured payload.
-                        let grant = self.local(target, *grant, true)?;
-                        let scope = self.local(body, callback.local, false)?;
-                        self.edge(grant, scope);
+                        if let CallDemand::RegionRead { owner, .. } = expansion {
+                            let root = self.local(target, *grant, false)?;
+                            let owner = self.local(body, actual(*owner)?.local, false)?;
+                            self.edge(root, owner);
+                        } else {
+                            let grant = self.local(target, *grant, true)?;
+                            let scope = self.local(body, callback.local, false)?;
+                            self.edge(grant, scope);
+                        }
                         for &local in &bodies[target].source.captures {
                             let formal = self.local(target, local, false)?;
                             let input = self.local(body, callback.local, false)?;

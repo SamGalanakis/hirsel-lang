@@ -375,6 +375,7 @@ pub fn named_graph(
             let context = &contexts[index];
             let call = &context.source.demand().projection().calls()[&block];
             let operation = operations::expand(provider, call)?;
+            let mut read_owner = None;
             let scope = match operation {
                 Some((operation, operations::Demand::Seal(demand))) => {
                     calls.insert(
@@ -387,6 +388,15 @@ pub fn named_graph(
                         operation,
                     });
                     continue;
+                }
+                Some((operation, operations::Demand::RegionRead { owner, callback })) => {
+                    operations.push(OperationObservation {
+                        caller: id,
+                        block,
+                        operation,
+                    });
+                    read_owner = Some(owner);
+                    Some(callback)
                 }
                 Some((operation, operations::Demand::ArenaScope { callback })) => {
                     operations.push(OperationObservation {
@@ -456,7 +466,13 @@ pub fn named_graph(
             targets.sort_unstable();
             targets.dedup();
             use hirsel_rc::sealed_source::contract::registry::Expansion;
-            let expansion = if let Some(callback) = scope {
+            let expansion = if let (Some(owner), Some(callback)) = (read_owner, scope) {
+                Expansion::RegionRead {
+                    owner,
+                    callback,
+                    targets: targets.clone(),
+                }
+            } else if let Some(callback) = scope {
                 Expansion::ArenaScope {
                     callback,
                     targets: targets.clone(),

@@ -113,6 +113,11 @@ pub enum Expansion {
         callback: u32,
         targets: Vec<ContextId>,
     },
+    RegionRead {
+        owner: u32,
+        callback: u32,
+        targets: Vec<ContextId>,
+    },
     /// Actual original CT-5 selection. This is dependency data; the source
     /// query owner independently rechecks it against the current catalogue.
     Generated {
@@ -239,6 +244,45 @@ impl Registry {
             ));
         }
         for (&block, expansion) in &mut calls {
+            if let Expansion::RegionRead {
+                owner,
+                callback,
+                targets,
+            } = expansion
+            {
+                let call = &source.calls()[&block];
+                if !matches!(&call.callee, hirsel_tir::Callee::Definition { path, .. }
+                    if path.is_core("region.with"))
+                    || *owner != 0
+                    || *callback != 1
+                    || call.arguments.len() != 2
+                    || !call
+                        .arguments
+                        .get(owner)
+                        .is_some_and(|operand| operand.usage == hirsel_types::UseKind::Mut)
+                    || !call.arguments.contains_key(callback)
+                    || call.environment.is_some()
+                    || targets.is_empty()
+                {
+                    return Err(SourceError::Malformed(
+                        "receipt sealed read expansion differs",
+                    ));
+                }
+                targets.sort_unstable();
+                targets.dedup();
+                for target in targets {
+                    let target = self.rows.get(target.0).ok_or(SourceError::Malformed(
+                        "receipt read callback context index",
+                    ))?;
+                    if !matches!(target.entry.parameters(), [p] if p.passing == hirsel_core_contract::Passing::Borrow)
+                        || target.entry.arena_scope_grant().is_some()
+                    {
+                        return Err(SourceError::Malformed(
+                            "receipt read callback entry differs",
+                        ));
+                    }
+                }
+            }
             if let Expansion::ArenaScope { callback, targets } = expansion {
                 let call = &source.calls()[&block];
                 let hirsel_tir::Callee::Definition { path, .. } = &call.callee else {
@@ -364,6 +408,15 @@ impl Registry {
                                         targets: targets.iter().map(|id| id.0).collect(),
                                     }
                                 }
+                                Expansion::RegionRead {
+                                    owner,
+                                    callback,
+                                    targets,
+                                } => CallDemand::RegionRead {
+                                    owner: *owner,
+                                    callback: *callback,
+                                    targets: targets.iter().map(|id| id.0).collect(),
+                                },
                                 Expansion::Targets(targets) => {
                                     CallDemand::Bodies(targets.iter().map(|id| id.0).collect())
                                 }
