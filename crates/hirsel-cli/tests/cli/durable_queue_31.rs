@@ -847,3 +847,9 @@ fn durable_queue_31_retained_event_audit() {
         "DURABLE_QUEUE_31_EVENT_AUDIT_PASS {audited} original tapes; final bytes and sync-before-reply"
     );
 }
+
+#[test]
+#[ignore = "full archival native record/replay matrix; select explicitly with retained evidence"]
+fn durable_queue_31_fixture_native_record_replay() {
+    fixture_campaign(true)
+}

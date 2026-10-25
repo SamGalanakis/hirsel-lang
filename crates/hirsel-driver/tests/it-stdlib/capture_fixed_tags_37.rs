@@ -257,3 +257,12 @@ macro_rules! public_test {
         }
     };
 }
+
+backtrack_control!(backtrack_llvm_edges, Llvm, "backtrack25_edges");
+backtrack_control!(backtrack_llvm_ascii, Llvm, "backtrack25_ascii");
+backtrack_control!(backtrack_llvm_random, Llvm, "backtrack25_random");
+backtrack_control!(backtrack_llvm_limits, Llvm, "backtrack25_limits");
+backtrack_control!(backtrack_cranelift_edges, Cranelift, "backtrack25_edges");
+backtrack_control!(backtrack_cranelift_ascii, Cranelift, "backtrack25_ascii");
+backtrack_control!(backtrack_cranelift_random, Cranelift, "backtrack25_random");
+backtrack_control!(backtrack_cranelift_limits, Cranelift, "backtrack25_limits");

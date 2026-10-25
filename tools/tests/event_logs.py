@@ -105,6 +105,37 @@ class Retention(unittest.TestCase):
             self.assertEqual(list(logs.lines(path, buck2=buck)), ['{"event": 1}\n'])
 
 
+class BoundedTests(unittest.TestCase):
+    def test_large_population_retains_every_target_option_log_and_failure(self):
+        targets = [f'root//:cli-shard-{i}' for i in range(566)]
+        prefix = ['test', '-c', 'hirsel.test_seed=123', '--target-platforms', '//tools/buck2:release']
+        suffix = ['--', '--timeout', '1800']
+        calls = []
+        def execute(command, **kwargs):
+            calls.append(command)
+            Path(command[command.index('--event-log') + 1]).write_text('event')
+            return subprocess.CompletedProcess(command, int(len(calls) == 1), str(len(calls)) + '\n', '')
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.dict(os.environ, HIRSEL_TEST_BATCH_SIZE='32', HIRSEL_BUCK2_LOG_DIR=temporary):
+            result = logs.run(prefix + targets + suffix, runner=execute)
+            self.assertEqual(len(logs.discover(temporary, 24)), 18)
+        selected = [[arg for arg in call if arg.startswith('root//:')] for call in calls]
+        self.assertEqual(len(calls), 18)
+        self.assertTrue(all(0 < len(batch) <= 32 for batch in selected))
+        self.assertEqual([target for batch in selected for target in batch], targets)
+        self.assertEqual(len({call[3] for call in calls}), 18)
+        for call in calls:
+            self.assertEqual([call[1], *call[4:8]], prefix)
+            self.assertEqual(call[-3:], suffix)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, ''.join(f'{i}\n' for i in range(1, 19)))
+
+    def test_non_test_and_small_commands_are_unchanged(self):
+        for command in (['test', '//:one', '--', '--test-arg=full_gate_', '--test-arg=--ignored'],
+                        ['build', *[f'//:lib-{i}' for i in range(65)]], ['uquery', '//:']):
+            self.assertEqual(list(logs.test_batches(command, 32)), [command])
+
+
 class Results(unittest.TestCase):
     def decode(self, sources, statuses=(logs.PASS,), all_results=False, exit_code=None):
         events = []

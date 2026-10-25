@@ -1092,3 +1092,9 @@ fn state_model_checker_34_file_faults_reference_checked() {
         assert_eq!(receipts.len(), 10);
     });
 }
+
+#[test]
+#[ignore = "selected exact-capacity pool cell"]
+fn state_model_checker_34_ordered_cranelift() {
+    ordered(Backend::Cranelift);
+}

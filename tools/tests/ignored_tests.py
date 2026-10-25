@@ -254,8 +254,12 @@ class IgnoredTests(unittest.TestCase):
             self.assertEqual(command[-5:], ['--test-arg=--exact', f'--test-arg={case}',
                                            '--test-arg=--ignored', '--test-arg=--test-threads=1',
                                            '--test-arg=--nocapture'])
-            self.assertEqual(command[1:6], ['test', '-c', 'hirsel.tests=host',
-                                           home.get('target', '//:hirsel-cli-test-cli-shard-1'), '--'])
+            self.assertEqual(command[1:command.index('--') + 1], ['test', '-c', 'hirsel.tests=host',
+                                           home.get('target', '//:hirsel-cli-test-cli-shard-1'),
+                                           *[argument for value in home.get('config', []) for argument in ['-c', value]], '--'])
+            for value in home.get('config', []):
+                self.assertIn(value, command)
+                self.assertEqual(command[command.index(value) - 1], '-c')
             for key in home['inputs']:
                 self.assertIn(f'{key}={environment[key]}', command)
                 with self.assertRaises(ValueError):

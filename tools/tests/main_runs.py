@@ -433,13 +433,34 @@ class Tiers(unittest.TestCase):
                 os.environ.update(env)
         fast = [n for n in named['fast'] if not n.startswith('tool tests: ')]
         self.assertEqual(fast, ['Buck2 toolchains and pool configuration', 'Buck2 build files and test-cost coverage',
-                                'workspace build', 'workspace clippy', 'formatting', 'workspace tests'])
+                                'workspace build', 'workspace clippy', 'formatting', 'workspace tests', 'free-mode GenMC models'])
         self.assertEqual(named['full'][:len(named['fast'])], named['fast'])
         self.assertIn('native passing corpus with independent second hash seed', named['full'])
         # A fast tick is skipped by a full run of main; a full tick is not skipped by a fast run.
         covers = tool['covers']
         self.assertTrue(covers({}, 'fast') and covers({'tier': 'full'}, 'fast') and covers({}, 'full'))
         self.assertFalse(covers({'tier': 'fast'}, 'full'))
+
+
+class BoundedTests(unittest.TestCase):
+    def test_run_bounds_buck_requests_without_leaking_the_bound_into_tool_tests(self):
+        tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        environments = []
+        def stages(stage, tier):
+            stage('workspace tests', ['buck2', 'test'])
+            stage('tool tests: isolated', ['python3', 'tool.py'], isolated=True)
+        def execute(command, **kwargs):
+            environments.append(kwargs['env'])
+            return subprocess.CompletedProcess(command, 0)
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.dict(tool['run_stages'].__globals__, stage_plan=lambda tier: {},
+                        exception_tables=lambda: ({}, {}, {}), stages=stages), \
+             patch('subprocess.run', side_effect=execute):
+            directory = Path(temporary)
+            with (directory / 'run.log').open('w+') as log:
+                tool['run_stages'](directory, log, 'fast')
+        self.assertEqual(environments[0]['HIRSEL_TEST_BATCH_SIZE'], '32')
+        self.assertNotIn('HIRSEL_TEST_BATCH_SIZE', environments[1])
 
 
 class PerfChecks(unittest.TestCase):

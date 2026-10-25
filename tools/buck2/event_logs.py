@@ -297,9 +297,46 @@ def test_results(event_log, *, history=None, all_results=False):
     return observed if all_results else results
 
 
-def run(arguments, *, buck2=None, runner=None, **kwargs):
+def test_batches(command, size):
+    """Bound outstanding test requests, including their prepared input trees.
+
+    Buck2 6507dd15's test runner buffers 10,000 requests (app/buck2_test_runner/
+    src/runner.rs:104-106); the RE execution semaphore is acquired only after
+    preparation (app/buck2_execute/src/re/client.rs:1478). Hundreds of queued
+    shards therefore exhaust the scheduled run's 8 GiB before they execute.
+    Keep every explicit target and runner option, with a bounded number per command.
+    """
+    if not command or command[0] != 'test':
+        yield command
+        return
+    end = command.index('--') if '--' in command else len(command)
+    targets = [i for i in range(1, end) if command[i].startswith(('//:', 'root//:'))]
+    if len(targets) <= size:
+        yield command
+        return
+    # Stage constructors put all explicit targets together after Buck options.
+    if targets != list(range(targets[0], targets[-1] + 1)):
+        raise ValueError('test targets must be contiguous for bounded execution')
+    for start in range(targets[0], targets[-1] + 1, size):
+        yield command[:targets[0]] + command[start:min(start + size, targets[-1] + 1)] + command[targets[-1] + 1:]
+
+
+def run(arguments, *, buck2=None, runner=None, batch_size=None, **kwargs):
     """Run Buck2, retaining every build/test unless its caller owns the log."""
     runner = runner or subprocess.run
+    size = int(os.environ.get('HIRSEL_TEST_BATCH_SIZE', '0')) if batch_size is None else batch_size
+    if size < 0:
+        raise ValueError('HIRSEL_TEST_BATCH_SIZE must be nonnegative')
+    if size:
+        results = [run(batch, buck2=buck2, runner=runner, batch_size=0, **kwargs)
+                   for batch in test_batches(arguments, size)]
+        def combined(stream):
+            values = [getattr(result, stream, None) for result in results]
+            values = [value for value in values if value is not None]
+            return (values[0][:0].join(values) if values else None)
+        return subprocess.CompletedProcess([str(buck2 or BUCK2), *arguments],
+                                           next((r.returncode for r in results if r.returncode), 0),
+                                           combined('stdout'), combined('stderr'))
     command = [str(buck2 or BUCK2), *arguments]
     options = list(arguments)
     options = options[:options.index('--')] if '--' in options else options

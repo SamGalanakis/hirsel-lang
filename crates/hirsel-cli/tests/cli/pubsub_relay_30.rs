@@ -711,3 +711,14 @@ fn pubsub_relay_30_registration_completion_contract() {
         assert!(std::panic::catch_unwind(|| native_cell(invalid)).is_err());
     }
 }
+
+#[test]
+#[ignore = "manual historical RE600 diagnostic; bounded cells run by default"]
+fn pubsub_relay_30_native_and_real_unix() {
+    let cases = selected_cases(false);
+    let cells = original_cells(&cases);
+    let selected = std::env::var("PUBSUB_30_CELL")
+        .map(|cell| vec![cell])
+        .unwrap_or(cells);
+    native(&selected, &cases);
+}

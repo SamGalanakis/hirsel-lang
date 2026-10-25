@@ -295,5 +295,12 @@
   "pubsub_relay_30::pubsub_relay_30_native_and_real_unix": {
     "source": "crates/hirsel-cli/tests/cli/pubsub_relay_30.rs",
     "inputs": []
+  },
+  "ownership_trace_49::ownership_trace_49_run_agrees_on_lifetimes_across_engines": {
+    "source": "crates/hirsel-cli/tests/cli/ownership_trace_49.rs",
+    "config": [
+      "hirsel.ownership_trace=true"
+    ],
+    "inputs": []
   }
 }

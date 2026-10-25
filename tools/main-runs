@@ -58,7 +58,7 @@ SLUICE = os.environ.get('HIRSEL_SLUICE', 'sluice')
 PASSED = (event_logs.PASS, event_logs.SKIP, event_logs.OMITTED)
 PERF_MARKER = 'PERF_COUNTS_RECORD '
 # The run's own settings, which the tool tests never inherit.
-RUN_VARIABLES = ('HIRSEL_BUCK2_CONFIG', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_PRIORITY', 'HIRSEL_MAIN_RUNS')
+RUN_VARIABLES = ('HIRSEL_BUCK2_CONFIG', 'HIRSEL_BUCK2_LOG_DIR', 'HIRSEL_PRIORITY', 'HIRSEL_MAIN_RUNS', 'HIRSEL_TEST_BATCH_SIZE')
 
 
 def say(message):
@@ -324,7 +324,7 @@ def run_stages(directory, log, tier):
         logs = directory / 'logs' / re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
         logs.mkdir(parents=True, exist_ok=True)
         env = ({k: v for k, v in os.environ.items() if k not in RUN_VARIABLES} if isolated
-               else os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs)})
+               else os.environ | {'HIRSEL_BUCK2_LOG_DIR': str(logs), 'HIRSEL_TEST_BATCH_SIZE': '32'})
         log.write(f'\n== {name}\n')
         log.flush()
         offset = log.tell()

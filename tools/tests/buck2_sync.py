@@ -123,14 +123,16 @@ class GeneratedParts(unittest.TestCase):
         cls.temp = tempfile.TemporaryDirectory(prefix='hirsel-sync-')
         cls.root = Path(cls.temp.name).resolve()
         archive = subprocess.run(['git', 'archive', 'HEAD', '--', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
-                                  'crates', 'conformance', 'third-party', 'tools/buck2', 'tools/native-toolchain',
+                                  'crates', 'proofs', 'conformance', 'third-party', 'tools/buck2', 'tools/native-toolchain',
                                   'README.md'], cwd=sync.ROOT, check=True, capture_output=True).stdout
         subprocess.run(['tar', '-x', '-C', str(cls.root)], input=archive, check=True)
+        cls.addClassCleanup(cls.temp.cleanup)
         cls.patches = [patch.object(sync, 'ROOT', cls.root), patch.object(sync, 'HERE', cls.root / 'tools/buck2'),
                        patch.object(sync, 'THIRD_PARTY', cls.root / 'third-party'),
                        patch.object(sync, 'COSTS', cls.root / 'tools/buck2/test-costs')]
         for active in cls.patches:
             active.start()
+            cls.addClassCleanup(active.stop)
         cls.sync()
 
     @classmethod
@@ -262,7 +264,11 @@ class NativePoolRouting(unittest.TestCase):
     def test_generated_tests_have_no_host_partition(self):
         buck = (sync.ROOT / 'BUCK').read_text()
         self.assertNotIn('host_cases =', buck)
-        self.assertNotIn('host = True', buck)
+        rust_tests = '\n'.join(block.split('\n)\n', 1)[0] for block in buck.split('hirsel_test(\n')[1:])
+        self.assertNotIn('host = True', rust_tests)
+        hosts = [block for block in buck.split('\n)\n') if 'host = True' in block]
+        self.assertEqual(len(hosts), 1)
+        self.assertIn('name = \"gate-free-genmc\"', hosts[0])
 
 
 class GuardedRoots(unittest.TestCase):
