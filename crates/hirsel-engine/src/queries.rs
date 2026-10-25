@@ -57,9 +57,21 @@ pub(crate) trait AdmittedProofInput {
     fn export_input(&self) -> &hirsel_proof_export::ExportInput;
     fn export_module_bytes(&self) -> usize;
     fn export_clone_bytes(&self) -> u64;
+    fn into_owned(self: std::rc::Rc<Self>) -> Result<OwnedProofInput, QueryError>;
     fn checked_receipt(&self) -> Option<(&FrontCheckScope, &FrontCheckedSignatures)> {
         None
     }
+}
+/// Source owners and the original physical input grant move with an export.
+/// This private seam cannot be implemented by an artifact consumer.
+pub(crate) struct OwnedProofInput {
+    input: hirsel_proof_export::ExportInput,
+    source: OwnedProofSource,
+    allowance: crate::runtime::MemoryReservation,
+}
+pub(crate) struct OwnedProofSource {
+    _proof: Option<Arc<FrontProofExport>>,
+    checked: Option<(Arc<FrontCheckScope>, Arc<FrontCheckedSignatures>)>,
 }
 /// One S1 root's captured outcome. Phase, tooling limit and complete execution
 /// reads belong to this root, including when another root finished afterward.
