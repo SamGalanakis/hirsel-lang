@@ -343,6 +343,19 @@ pub trait CheckerPhase: Send + Sync {
         signature: &Signature,
         signatures: &mut dyn SignatureProvider,
     ) -> Result<QueryOutput<TypedBody>, QueryError>;
+    /// GEN-6: whether `actuals` match the signature `family`, through the one
+    /// matcher implementation declarations use. `Some` is the refusal, naming
+    /// its member and rule. A checker without the matcher cannot decide.
+    fn match_implementation(
+        &self,
+        _t: &hirsel_types::TypeInterner,
+        _m: &hirsel_types::TypeMemo,
+        _family: &DefPath,
+        _actuals: &hirsel_types::ImplementationSignature,
+        _signatures: &mut dyn SignatureProvider,
+    ) -> Result<Option<String>, QueryError> {
+        Err(QueryError::NotImplemented)
+    }
 }
 /// Modes consume the complete typed artifact and refine its shared tables (OWN-1/8).
 pub trait ModesPhase: Send + Sync {

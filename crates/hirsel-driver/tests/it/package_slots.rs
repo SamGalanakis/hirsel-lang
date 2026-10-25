@@ -13,22 +13,42 @@ use hirsel_types::{GenericDeclarations, SignatureKind, serialization::serializab
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-const PROVIDER: &str = "pub type Digest {
-  bits: u64,
+const PROVIDER: &str = "pub signature Digest {
+  fn bits() -> u64 uses {}
+}
+
+pub signature Clock {
+  fn now() -> u64 uses {}
 }
 
 @noalloc
-pub fn fast() -> u64 uses {} {
+pub fn fast_bits() -> u64 uses {} {
   1
 }
 
 @noalloc
-pub fn slow() -> u64 uses {} {
+pub fn slow_bits() -> u64 uses {} {
   2
 }
 
-fn hidden() -> u64 uses {} {
+fn hidden_bits() -> u64 uses {} {
   3
+}
+
+pub implementation fast: Digest {
+  bits = fast_bits
+}
+
+pub implementation slow: Digest {
+  bits = slow_bits
+}
+
+implementation hidden: Digest {
+  bits = hidden_bits
+}
+
+pub implementation tick: Clock {
+  now = fast_bits
 }
 ";
 const MAC: &str = "@serializable
@@ -429,6 +449,51 @@ fn slot_manifests_refuse_structural_errors() {
                 "dependencies":[]}),
         );
         assert!(refusal(&path).contains("unknown field parameters"));
+    });
+}
+
+#[test]
+fn an_incompatible_fill_bad() {
+    with_compiler_stack(|| {
+        let fixture = Fixture::new();
+        let fill = |name: &str| {
+            fixture.app(json!([uses(
+                "mac",
+                json!({"H": implementation("prov", name)})
+            )]))
+        };
+        // An implementation of another signature.
+        assert_eq!(
+            refusal(&fill("tick")),
+            "package manifest: mac@1's slot H needs an implementation of prov@1/api/Digest; \
+             prov@1/api/tick implements prov@1/api/Clock"
+        );
+        // A declaration that is no implementation.
+        assert_eq!(
+            refusal(&fill("fast_bits")),
+            "package manifest: mac@1's slot H names prov@1/api/fast_bits, which is not an \
+             implementation"
+        );
+        // An implementation of the slot's signature that the matcher refuses,
+        // naming the member and its rule.
+        fixture.write(
+            "prov/prov.hir",
+            &format!(
+                "{PROVIDER}\npub fn taking(take x: u64) -> u64 uses {{}} {{\n  x\n}}\n\n\
+                 pub implementation taken: Digest {{\n  bits = taking\n}}\n"
+            ),
+        );
+        let message = refusal(&fill("taken"));
+        assert!(
+            message.starts_with(
+                "package manifest: mac@1's slot H: prov@1/api/taken does not match \
+                 prov@1/api/Digest at member `bits`: [GEN-6]"
+            ),
+            "{message}"
+        );
+        // The default fill conforms.
+        fixture.write("prov/prov.hir", PROVIDER);
+        assert!(load_program(&fixture.app(json!([uses("mac", json!({}))]))).is_ok());
     });
 }
 

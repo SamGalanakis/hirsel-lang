@@ -81,7 +81,10 @@ same declaration are equal, while separately named equal-bodied implementations 
 Every selecting edge must yield an equal map; otherwise loading refuses, naming the two
 shortest selecting paths (ties by spelling) and both maps, independent of manifest and edge
 order. Each slot's signature and implementation must name declarations the slotted package
-can see ([PROG-2](#prog-2-visibility)). Schema-1 manifests declare no slots, and a schema-1
+can see ([PROG-2](#prog-2-visibility)). The signature must be a `signature` and the implementation an
+`implementation` of exactly it, accepted by the [GEN-6](generics.md#implementation-contracts)
+matcher; otherwise loading refuses naming the slot, and for a matcher refusal its member
+and rule. Schema-1 manifests declare no slots, and a schema-1
 edge leaves every slot of its target at its default.
 
 ```json

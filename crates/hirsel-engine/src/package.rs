@@ -129,6 +129,7 @@ pub(crate) fn load_package_declarations(
         }
     }
     slots::check_targets(&engine, &graph.slots)?;
+    slots::check_conformance(&mut engine, &graph.slots)?;
     engine.result_store = result_store;
     Ok(PackageDeclarations {
         package,
@@ -693,6 +694,7 @@ pub(crate) fn load_program_inputs(
                 .map_err(|e| program.error(e))?;
         }
         slots::check_targets(&program.engine, &program.slots)?;
+        slots::check_conformance(&mut program.engine, &program.slots)?;
         // A declared wrapper names an ordinary function of its own package.
         for package in &program.unsafe_ffi {
             // Wrapper classification consumes syntax only for this package.

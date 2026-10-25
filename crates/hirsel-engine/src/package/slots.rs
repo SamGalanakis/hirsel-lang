@@ -551,6 +551,67 @@ pub(super) fn canonical(map: &BTreeMap<String, ImplementationSlot>) -> Vec<u8> {
     out
 }
 
+/// Every slot's implementation implements the slot's signature, and its map
+/// matches that signature through the GEN-6 matcher. A pipeline without
+/// signatures or the matcher cannot decide and leaves this to checking.
+pub(super) fn check_conformance(
+    engine: &mut QueryEngine,
+    slots: &PackageSlots,
+) -> Result<(), ToolError> {
+    let Some(checker) = engine.adapters.checker.clone() else {
+        return Ok(());
+    };
+    let query = |engine: &mut QueryEngine, error: QueryError| ToolError::Query {
+        error,
+        phase: None,
+        sources: engine.sources.clone(),
+    };
+    for (package, map) in slots {
+        for (slot, s) in map {
+            let owner = format!("{}'s slot {slot}", spelling(package));
+            let family = match engine.signature(DefId::intern(&s.signature)) {
+                Err(QueryError::NotImplemented) => return Ok(()),
+                result => result.map_err(|e| query(engine, e))?,
+            };
+            if !matches!(family.kind, hirsel_types::SignatureKind::Family(_)) {
+                return Err(invalid(&format!(
+                    "{owner} names the signature {}, which is not a signature",
+                    s.signature
+                )));
+            }
+            let actual = engine
+                .signature(DefId::intern(&s.implementation))
+                .map_err(|e| query(engine, e))?;
+            let hirsel_types::SignatureKind::Implementation(actuals) = &actual.kind else {
+                return Err(invalid(&format!(
+                    "{owner} names {}, which is not an implementation",
+                    s.implementation
+                )));
+            };
+            if actuals.family != DefId::intern(&s.signature) {
+                return Err(invalid(&format!(
+                    "{owner} needs an implementation of {}; {} implements {}",
+                    s.signature,
+                    s.implementation,
+                    actuals.family.path()
+                )));
+            }
+            let (types, memo) = (engine.types.clone(), engine.memo.clone());
+            match checker.match_implementation(&types, &memo, &s.signature, actuals, engine) {
+                Ok(None) | Err(QueryError::NotImplemented) => {}
+                Ok(Some(refusal)) => {
+                    return Err(invalid(&format!(
+                        "{owner}: {} does not match {} at {refusal}",
+                        s.implementation, s.signature
+                    )));
+                }
+                Err(error) => return Err(query(engine, error)),
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Every slot's signature and implementation name an indexed declaration the
 /// slotted package can see.
 pub(super) fn check_targets(engine: &QueryEngine, slots: &PackageSlots) -> Result<(), ToolError> {

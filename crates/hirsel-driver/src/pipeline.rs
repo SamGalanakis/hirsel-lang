@@ -72,6 +72,20 @@ fn invariant(message: impl Into<String>) -> QueryError {
 }
 pub struct BodyAdapter;
 impl CheckerPhase for BodyAdapter {
+    fn match_implementation(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        family: &DefPath,
+        actuals: &hirsel_types::ImplementationSignature,
+        provider: &mut dyn SignatureProvider,
+    ) -> Result<Option<String>, QueryError> {
+        Ok(
+            hirsel_check::implementation::match_implementation(t, m, family, actuals, provider)?
+                .err()
+                .map(|r| format!("member `{}`: [{}] {}", r.member, r.rule, r.message)),
+        )
+    }
     fn check(
         &self,
         t: &hirsel_types::TypeInterner,
