@@ -1,5 +1,8 @@
 use super::*;
-use hirsel_lir::ownership_trace::{Moment, native::NativeLocation};
+use hirsel_lir::ownership_trace::{
+    Moment, Point,
+    native::{NativeLocation, NativeMarker},
+};
 
 impl<'m, 'a> FnEmitter<'m, 'a> {
     fn ownership_function(
@@ -51,7 +54,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             u128::from(hirsel_lir::ownership_trace::native::ABI_VERSION),
         );
         self.ownership_frame = Some(self.builder.call(enter, &[self.context, version, global]));
-        Ok(())
+        self.ownership_point(Point::Entry)
     }
 
     pub(super) fn ownership_events(
@@ -64,6 +67,25 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             return Ok(());
         };
         let markers: Vec<_> = plan.at(block, index, moment).collect();
+        self.ownership_markers(markers)
+    }
+    pub(super) fn ownership_point(&mut self, point: Point) -> Emitted {
+        let Some(plan) = self.ownership else {
+            return Ok(());
+        };
+        let markers = plan.at_point(point).collect();
+        self.ownership_markers(markers)
+    }
+    pub(super) fn ownership_call(&mut self, call: CallId, returned: bool) -> Emitted {
+        let Some(plan) = self.ownership else {
+            return Ok(());
+        };
+        let markers = plan
+            .at_call(self.unit, call, returned)
+            .or_else(|error| self.invalid(error))?;
+        self.ownership_markers(markers)
+    }
+    fn ownership_markers(&mut self, markers: Vec<NativeMarker>) -> Emitted {
         if markers.is_empty() {
             return Ok(());
         }

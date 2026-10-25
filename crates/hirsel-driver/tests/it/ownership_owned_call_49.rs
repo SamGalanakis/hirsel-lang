@@ -1,0 +1,157 @@
+//! Original Value plans across graph-owned source, call transport and execution.
+use hirsel_driver::{COMPILER, native, requests::*, resident::ObservedSession};
+use hirsel_engine::{CompileConfig, runtime::ProcessBudget, store::MemStore};
+use hirsel_run_schema::ownership_trace::{Action, Trace};
+use std::sync::Arc;
+
+pub(super) fn source_calls(source: &str, created: u64) {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("main.hir"), source).unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let mut traces = Vec::new();
+        for checked in [false, true] {
+            let host = hirsel_driver::ownership_trace::run_resources_on_host(
+                &manifest,
+                hirsel_driver::HostLaunch::Live {
+                    config: hirsel_driver::LaunchConfig::Grants {
+                        input: std::ffi::OsStr::new("{}"),
+                        arguments: None,
+                    },
+                    record: None,
+                    revocations: None,
+                },
+                Some(100_000),
+                hirsel_engine::Verify::On,
+                checked,
+                1000,
+            )
+            .unwrap();
+            assert_eq!(host.outcome.exit_code(), 0);
+            traces.push(host.trace.unwrap());
+        }
+        assert_eq!(traces[0], traces[1]);
+        let config = CompileConfig {
+            jobs: hirsel_intern::jobs::Jobs::ONE,
+            store: Arc::new(MemStore::default()),
+            hold_bytes: 0,
+            ..Default::default()
+        };
+        let budget = ProcessBudget::new(1 << 30);
+        let compiler = COMPILER.with_config(config.clone()).with_owned_engines();
+        let selector = CompilerRequests::new(
+            compiler.clone(),
+            config.clone(),
+            budget.clone(),
+            RequestLimits {
+                runtime_bytes: 256 << 20,
+                snapshot_bytes: 64 << 20,
+                transport_bytes: 32 << 20,
+            },
+        );
+        let limits = selector.input_limits();
+        let mut host = ObservedSession::new(manifest, compiler, config, selector, limits, 3);
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let output = host
+            .request(CompileOperation::NativeOwnership(OwnershipRequest {
+                definition: None,
+                target: target.clone(),
+                validation: native::Validation::EveryStage,
+                launch: Default::default(),
+            }))
+            .unwrap();
+        let CompileResult::Ownership(execution) = &output.result else {
+            panic!("missing ownership output");
+        };
+        let execution = execution.clone();
+        for product in execution.units() {
+            execution
+                .with_unit(*product, |unit| {
+                    let native = hirsel_lir::ownership_trace::native::LeafPlan::from_relocated(
+                        &unit.unit,
+                        &unit.layouts,
+                        &unit.plan,
+                    )?;
+                    for observation in &unit.plan.observations {
+                        if observation.marker.site.source == u32::MAX {
+                            assert!(
+                                native
+                                    .implicit_parameter_cleanup_source(
+                                        unit.unit.unit(),
+                                        observation.marker.id
+                                    )
+                                    .is_some(),
+                                "missing exact parameter cleanup relation: {observation:?}"
+                            );
+                        }
+                    }
+                    assert_eq!(unit.recipes.len(), 10);
+                    assert_eq!(unit.recipes[0].before, unit.initial.unit);
+                    assert_eq!(unit.recipes.last().unwrap().after, unit.plan.unit);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        drop(output);
+        drop(host);
+        let runtime = native::RuntimeBuild {
+            ownership_trace: true,
+            ..Default::default()
+        };
+        let tools = native::Toolchain::in_tree_with_runtime(
+            &directory.path().join("tools"),
+            &[&target],
+            runtime,
+        )
+        .unwrap();
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let objects = execution
+                .emit(backend)
+                .unwrap_or_else(|error| panic!("{backend:?} original plan emission: {error}"));
+            let run = execution
+                .launch(
+                    &objects,
+                    &tools,
+                    &directory.path().join(backend.name()),
+                    1000,
+                )
+                .unwrap();
+            assert_eq!(run.execution.exit, Some(0));
+            assert!(run.execution.stdout.is_empty());
+            assert!(
+                run.execution.stderr.is_empty(),
+                "{}",
+                String::from_utf8_lossy(&run.execution.stderr)
+            );
+            let trace = run
+                .trace
+                .unwrap_or_else(|error| panic!("{backend:?} original plan trace: {error}"));
+            let analysis = trace.analyze(run.program, 1000).unwrap();
+            assert_eq!(
+                (analysis.created, analysis.dropped, analysis.live.len()),
+                (created, created, 0)
+            );
+            traces.push(trace);
+        }
+        assert_eq!(traces[2], traces[3]);
+        let lifecycle = |trace: &Trace| {
+            trace
+                .events
+                .iter()
+                .filter_map(|event| match &event.action {
+                    Action::Create {
+                        token, value_type, ..
+                    } => Some((0, token.clone(), Some(value_type.clone()))),
+                    Action::Drop { token, .. } => Some((1, token.clone(), None)),
+                    Action::Move { .. } => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for trace in &traces[1..] {
+            assert_eq!(lifecycle(&traces[0]), lifecycle(trace));
+        }
+        drop(execution);
+        assert_eq!(budget.reserved(), 0);
+    });
+}

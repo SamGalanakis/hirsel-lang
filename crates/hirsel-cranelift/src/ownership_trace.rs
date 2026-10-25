@@ -3,8 +3,11 @@ use crate::module::{Emitted, PTR};
 use cranelift_codegen::ir::{AbiParam, InstBuilder, Type, types};
 use cranelift_module::{FuncId, Module};
 use hirsel_lir::emission::site_code;
-use hirsel_lir::ir::BlockId;
-use hirsel_lir::ownership_trace::{Moment, native::NativeLocation};
+use hirsel_lir::ir::{BlockId, CallId};
+use hirsel_lir::ownership_trace::{
+    Moment, Point,
+    native::{NativeLocation, NativeMarker},
+};
 use hirsel_lir::stage::ObjectSymbolKind;
 
 impl FnEmitter<'_, '_, '_> {
@@ -50,7 +53,7 @@ impl FnEmitter<'_, '_, '_> {
         );
         let call = self.b.ins().call(enter, &[self.context, version, pointer]);
         self.ownership_frame = Some(self.b.inst_results(call)[0]);
-        Ok(())
+        self.ownership_point(Point::Entry)
     }
 
     pub(crate) fn ownership_events(
@@ -63,6 +66,25 @@ impl FnEmitter<'_, '_, '_> {
             return Ok(());
         };
         let markers: Vec<_> = plan.at(block, index, moment).collect();
+        self.ownership_markers(markers)
+    }
+    pub(crate) fn ownership_point(&mut self, point: Point) -> Emitted {
+        let Some(plan) = self.ownership else {
+            return Ok(());
+        };
+        let markers = plan.at_point(point).collect();
+        self.ownership_markers(markers)
+    }
+    pub(crate) fn ownership_call(&mut self, call: CallId, returned: bool) -> Emitted {
+        let Some(plan) = self.ownership else {
+            return Ok(());
+        };
+        let markers = plan
+            .at_call(self.unit, call, returned)
+            .or_else(|error| self.invalid(error))?;
+        self.ownership_markers(markers)
+    }
+    fn ownership_markers(&mut self, markers: Vec<NativeMarker>) -> Emitted {
         if markers.is_empty() {
             return Ok(());
         }

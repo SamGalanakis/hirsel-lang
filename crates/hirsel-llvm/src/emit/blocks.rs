@@ -41,6 +41,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             hirsel_lir::profile::terminator_site(unit, b),
             &format!("{:?}", terminator.opcode()),
         )?;
+        if matches!(terminator, Terminator::Return(_)) {
+            self.ownership_point(hirsel_lir::ownership_trace::Point::Return(b))?;
+        }
         self.terminator(&terminator)
     }
 

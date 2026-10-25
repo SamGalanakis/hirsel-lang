@@ -1339,6 +1339,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             hirsel_lir::profile::terminator_site(unit, b),
             terminator.opcode(),
         )?;
+        if matches!(terminator, Terminator::Return(_)) {
+            self.ownership_point(hirsel_lir::ownership_trace::Point::Return(b))?;
+        }
         self.terminator(terminator)
     }
 
@@ -2294,6 +2297,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         } else {
             name
         };
+        self.ownership_call(call, false)?;
         let returned = match (&name, code) {
             (Some(name), _) => {
                 let id = self.em.import_function(name, &physical_signature)?;
@@ -2398,6 +2402,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             };
             self.define(result, value)?;
         }
+        self.ownership_call(call, true)?;
         self.jump(normal)
     }
 

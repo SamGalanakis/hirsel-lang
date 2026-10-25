@@ -2161,7 +2161,7 @@ fn ownership_trace_value_producer_starts_before_every_lowering_recipe() {
 }
 
 #[test]
-fn ownership_trace_value_producer_keeps_owned_entry_return_and_ready_refusal() {
+fn ownership_trace_value_producer_keeps_owned_entry_return_through_native_binding() {
     let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
     let value = t.owned(l::BLK);
     t.param(value);
@@ -2194,16 +2194,17 @@ fn ownership_trace_value_producer_keeps_owned_entry_return_and_ready_refusal() {
         unit.into_raw().into_stage::<hirsel_lir::stage::Ready>(),
         &table,
     );
-    let error = native::LeafPlan::from_relocated(
-        &ready,
-        &table,
-        &Plan {
-            unit: ready.unit().digest(),
-            ..plan
-        },
-    )
-    .unwrap_err();
-    assert!(error.contains("owned entry transport"), "{error}");
+    let rebound = Plan {
+        unit: ready.unit().digest(),
+        ..plan
+    };
+    let native = native::LeafPlan::from_relocated(&ready, &table, &rebound).unwrap();
+    assert_eq!(native.markers().count(), 2);
+    assert_eq!(native.at_point(Point::Entry).count(), 1);
+    assert_eq!(native.at_point(Point::Return(ENTRY)).count(), 1);
+    let mut missing = rebound.clone();
+    missing.observations.pop();
+    assert!(native::LeafPlan::from_relocated(&ready, &table, &missing).is_err());
 }
 
 #[test]
@@ -2355,4 +2356,67 @@ fn ownership_trace_native_binding_preserves_original_ids_and_every_finalizer_com
 #[test]
 fn ownership_trace_native_binding_refuses_a_different_independently_checked_body() {
     native_plan_binding_case(true);
+}
+
+#[test]
+fn ownership_trace_parameter_slot_entry_refuses_wrong_parameter_local_slot_and_projection() {
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::BLK)], Some(l::BLK));
+    let slot = t.slot(l::BLK, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(ENTRY, slot, &[], &[support::Undo::Drop(slot)]);
+    let result = t.read(ENTRY, address, version, ReadMode::Take, None);
+    t.builder.ret(ENTRY, Some(result));
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
+        .unwrap()
+        .into_raw();
+    let plan = Plan::new(
+        &unit,
+        vec![Observation {
+            point: Point::Entry,
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: unit.tables.source_anchors[unit.blocks[ENTRY.index()].anchor.index()].site,
+                kind: Kind::Move,
+                token: Location::Parameter(0),
+                owner: Location::Address(address),
+            },
+        }],
+    );
+    check(&unit, &plan).unwrap();
+    let mut wrong_parameter = plan.clone();
+    wrong_parameter.observations[0].marker.token = Location::Parameter(1);
+    assert_eq!(
+        check(&unit, &wrong_parameter).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
+    // Equal layout and payload do not turn a local or another parameter into
+    // the original incoming owner. The ordinary checker remains independent.
+    for kind in [SlotKind::Local, SlotKind::Parameter(1)] {
+        let mut wrong = unit.clone();
+        wrong.slots[slot.index()].kind = kind;
+        let forged = Plan::new(&wrong, plan.observations.clone());
+        assert_eq!(
+            check(&wrong, &forged).unwrap_err(),
+            Error::InvalidBinding(MarkerId(0))
+        );
+    }
+    let mut projected = unit.clone();
+    projected.addresses[address.index()].projection.len = 1;
+    let forged = Plan::new(&projected, plan.observations.clone());
+    assert_eq!(
+        check(&projected, &forged).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
 }

@@ -119,6 +119,36 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
     Ok(output)
 }
 
+/// Source parameters may enter directly into a parameter slot. Their Plain
+/// SSA entry value is its version name, not another language-owned credit.
+pub(super) fn parameter_address<S>(
+    unit: &LirUnit<S>,
+    parameter: u32,
+    mut address: AddressId,
+) -> Option<SlotId> {
+    let value = *unit.parameters.get(parameter as usize)?;
+    if unit.values.get(value.index())?.holding != Holding::Plain {
+        return None;
+    }
+    for _ in 0..unit.addresses.len() {
+        let info = unit.addresses.get(address.index())?;
+        if info.projection.len != 0 {
+            return None;
+        }
+        match info.base {
+            AddressBase::Slot(slot) => {
+                let slot_info = unit.slots.get(slot.index())?;
+                return (slot_info.kind == SlotKind::Parameter(parameter)
+                    && slot_info.ty == unit.values[value.index()].ty)
+                    .then_some(slot);
+            }
+            AddressBase::Address(parent) => address = parent,
+            _ => return None,
+        }
+    }
+    None
+}
+
 fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
     use Kind::{Create, Drop, Move};
     use Location::{Address, Capture, EnvironmentCapture, Field, Parameter, Return, Value};
@@ -137,7 +167,11 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
             unit.parameters
                 .iter()
                 .enumerate()
-                .any(|(i, &v)| moved(Parameter(i as u32), Value(v)))
+                .any(|(i, &v)| {
+                    moved(Parameter(i as u32), Value(v)) || matches!(tuple,
+                        (Move, Parameter(parameter), Address(address))
+                            if parameter == i as u32 && parameter_address(unit, parameter, address).is_some())
+                })
                 || unit
                     .captures
                     .iter()

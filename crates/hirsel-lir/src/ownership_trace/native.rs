@@ -1,6 +1,6 @@
 //! Native emission of leaf ownership transitions. This staged adapter accepts
-//! only whole local storage and leaf values. Direct calls without owned
-//! transport require a closed diagnostic call graph; captures, joins, nested
+//! whole local storage and owned direct arguments/results within a checked
+//! closed diagnostic call graph; captures, joins, nested
 //! ownership and compound operations fail closed. It supplies Ready-local
 //! coverage, not the still-required earlier compiler-pass transport proof.
 use super::*;
@@ -16,7 +16,8 @@ const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 /// identifies shadow storage within a fresh dynamic frame, never a token.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeLocation {
-    /// 0 is an SSA value; 1 is a whole local slot.
+    /// 0 = SSA, 1 = slot, 2/3 = outgoing/incoming argument,
+    /// 4/5 = outgoing/incoming result. Relations name logical call frames.
     pub kind: u32,
     pub index: u32,
 }
@@ -50,7 +51,7 @@ impl LeafPlan {
     /// native producer must transport this plan through those passes, then
     /// consume it with from_relocated; Ready enumeration cannot replace it.
     /// Owned direct-call operands use existing semantic commit points here;
-    /// native execution still refuses them until its commit transport exists.
+    /// Ready enumeration cannot replace their original marker identities.
     pub fn prepare_value(
         unit: &ValidatedUnit<crate::stage::Value>,
         layouts: &LayoutTable,
@@ -61,13 +62,11 @@ impl LeafPlan {
     fn from_unit<S: crate::stage::Stage>(
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
-        call_transport: bool,
+        source_only: bool,
     ) -> Result<Self, String> {
         let owned = |v: ValueId| unit.values[v.index()].holding == Holding::Owned;
         let layout = |v: ValueId| unit.types[unit.values[v.index()].ty.index()].layout;
-        if unit.captures.iter().any(|&v| owned(v))
-            || (!call_transport && unit.parameters.iter().any(|&v| owned(v)))
-        {
+        if unit.captures.iter().any(|&v| owned(v)) {
             return Err(
                 "native ownership tracing: owned entry transport is not implemented".into(),
             );
@@ -101,7 +100,7 @@ impl LeafPlan {
             );
             let site =
                 super::check::site(unit, point).ok_or("ownership observation has no source")?;
-            if !call_transport {
+            if !source_only {
                 markers.insert(
                     id,
                     NativeMarker {
@@ -111,8 +110,8 @@ impl LeafPlan {
                             Kind::Move => 1,
                             Kind::Drop => 2,
                         },
-                        token: location(unit, from)?,
-                        owner: location(unit, to)?,
+                        token: location(unit, from, point)?,
+                        owner: location(unit, to, point)?,
                         site,
                         layout,
                     },
@@ -130,7 +129,7 @@ impl LeafPlan {
             });
             Ok(())
         };
-        if call_transport {
+        {
             for (parameter, &value) in unit.parameters.iter().enumerate() {
                 if owned(value) {
                     push(
@@ -138,6 +137,32 @@ impl LeafPlan {
                         Kind::Move,
                         Location::Parameter(parameter as u32),
                         Location::Value(value),
+                        layout(value),
+                    )?;
+                } else if layouts
+                    .fn_abis
+                    .get(unit.header.abi.0 as usize)
+                    .and_then(|abi| abi.parameters.get(parameter))
+                    .is_some_and(|formal| formal.convention == hirsel_core_contract::Passing::Take)
+                    && layouts
+                        .layout(layout(value))
+                        .is_some_and(|record| !record.drop.is_empty() || record.finalizer.is_some())
+                {
+                    let address = unit
+                        .addresses
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, _)| {
+                            let address = AddressId(index as u32);
+                            super::check::parameter_address(unit, parameter as u32, address)
+                                .map(|_| address)
+                        })
+                        .ok_or("owned parameter has no checked entry slot")?;
+                    push(
+                        Point::Entry,
+                        Kind::Move,
+                        Location::Parameter(parameter as u32),
+                        Location::Address(address),
                         layout(value),
                     )?;
                 }
@@ -321,7 +346,9 @@ impl LeafPlan {
             match unit.terminators[b.index()] {
                 Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
-                    if !matches!(call.callee, Callee::Direct(_)) {
+                    if !matches!(call.callee, Callee::Direct(_))
+                        || call.pretransfer_failure.is_some()
+                    {
                         return Err("native ownership tracing: mutable or indirect call transport is not implemented".into());
                     }
                     for argument in call
@@ -332,7 +359,7 @@ impl LeafPlan {
                         match argument.value {
                             ArgumentValue::Address { .. } => return Err("native ownership tracing: mutable or indirect call transport is not implemented".into()),
                             ArgumentValue::Value(value) if owned(value) => {
-                                if !call_transport || argument.passing != hirsel_core_contract::Passing::Take {
+                                if argument.passing != hirsel_core_contract::Passing::Take {
                                     return Err("native ownership tracing: owned call transport is not implemented".into());
                                 }
                                 push(Point::CallEntered(b), Kind::Move, Location::Value(value), Location::Parameter(argument.parameter), layout(value))?;
@@ -341,7 +368,7 @@ impl LeafPlan {
                         }
                     }
                     if let Some(result) = call.result.filter(|&value| owned(value)) {
-                        if !call_transport || normal.is_none() {
+                        if normal.is_none() {
                             return Err("native ownership tracing: owned call result transport is not implemented".into());
                         }
                         push(
@@ -354,11 +381,6 @@ impl LeafPlan {
                     }
                 }
                 Terminator::Return(Some(value)) if owned(value) => {
-                    if !call_transport {
-                        return Err(
-                            "native ownership tracing: owned return is not implemented".into()
-                        );
-                    }
                     push(
                         Point::Return(b),
                         Kind::Move,
@@ -482,8 +504,8 @@ impl LeafPlan {
                         Kind::Move => 1,
                         Kind::Drop => 2,
                     },
-                    token: location(body, marker.token)?,
-                    owner: location(body, marker.owner)?,
+                    token: location(body, marker.token, observation.point)?,
+                    owner: location(body, marker.owner, observation.point)?,
                     site: marker.site,
                     layout,
                 },
@@ -504,21 +526,111 @@ impl LeafPlan {
         &self.plan
     }
 
+    /// An implicit owned-parameter cleanup has no spelled TIR span. Its
+    /// readable source is the checked parameter Entry binding, not a nearby
+    /// instruction or an arbitrary declaration range. The marker's original
+    /// site remains unchanged for recipes, coverage and native row checks.
+    pub fn implicit_parameter_cleanup_source(
+        &self,
+        unit: &LirUnit<Ready>,
+        id: MarkerId,
+    ) -> Option<(SiteRange, u32)> {
+        if unit.digest() != self.plan.unit {
+            return None;
+        }
+        let observation = self
+            .plan
+            .observations
+            .iter()
+            .find(|row| row.marker.id == id)?;
+        let marker = &observation.marker;
+        if marker.kind != Kind::Drop
+            || marker.site
+                != (SiteRange {
+                    source: u32::MAX,
+                    start: 0,
+                    end: 0,
+                })
+            || !matches!(
+                observation.point,
+                Point::FinalizerDrop { .. } | Point::ReleaseDrop { .. }
+            )
+        {
+            return None;
+        }
+        let Location::Address(mut address) = marker.token else {
+            return None;
+        };
+        let slot = loop {
+            let info = unit.addresses.get(address.index())?;
+            if info.projection.len != 0 {
+                return None;
+            }
+            match info.base {
+                AddressBase::Slot(slot) => break slot,
+                AddressBase::Address(parent) if parent.0 < address.0 => address = parent,
+                _ => return None,
+            }
+        };
+        let SlotKind::Parameter(parameter) = unit.slots.get(slot.index())?.kind else {
+            return None;
+        };
+        let entry = self.plan.observations.iter().find(|row| {
+            row.point == Point::Entry
+                && row.marker.kind == Kind::Move
+                && row.marker.token == Location::Parameter(parameter)
+                && matches!(row.marker.owner, Location::Address(address)
+                    if super::check::parameter_address(unit, parameter, address) == Some(slot))
+        })?;
+        (entry.marker.site.source != u32::MAX).then_some((entry.marker.site, parameter))
+    }
+
+    pub fn markers(&self) -> impl Iterator<Item = NativeMarker> + '_ {
+        self.markers.values().copied()
+    }
+    pub fn at_point(&self, point: Point) -> impl Iterator<Item = NativeMarker> + '_ {
+        self.commits
+            .iter()
+            .filter(move |(at, _)| *at == point)
+            .map(|(_, id)| self.markers[id])
+    }
+    pub fn at_call(
+        &self,
+        unit: &LirUnit<Ready>,
+        call: CallId,
+        returned: bool,
+    ) -> Result<Vec<NativeMarker>, String> {
+        let blocks = unit
+            .terminators
+            .iter()
+            .enumerate()
+            .filter_map(|(b, term)| {
+                matches!(term, Terminator::Call { call: actual, .. } if *actual == call)
+                    .then_some(BlockId(b as u32))
+            })
+            .collect::<Vec<_>>();
+        let [block] = blocks.as_slice() else {
+            return Err("ownership call site must have one checked terminator".into());
+        };
+        Ok(self
+            .at_point(if returned {
+                Point::CallReturned(*block)
+            } else {
+                Point::CallEntered(*block)
+            })
+            .collect())
+    }
     pub fn at(
         &self,
         block: BlockId,
         index: u32,
         moment: Moment,
     ) -> impl Iterator<Item = NativeMarker> + '_ {
-        let point = Point::Instruction {
+        self.at_point(Point::Instruction {
             block,
             index,
             moment,
-        };
-        self.commits
-            .iter()
-            .filter(move |(at, _)| *at == point)
-            .map(|(_, id)| self.markers[id])
+        })
     }
 }
 
@@ -566,7 +678,11 @@ pub fn local_calls(
     Ok(calls)
 }
 
-fn location<S>(unit: &LirUnit<S>, location: Location) -> Result<NativeLocation, String> {
+fn location<S>(
+    unit: &LirUnit<S>,
+    location: Location,
+    point: Point,
+) -> Result<NativeLocation, String> {
     match location {
         Location::Value(value) => Ok(NativeLocation {
             kind: 0,
@@ -591,6 +707,18 @@ fn location<S>(unit: &LirUnit<S>, location: Location) -> Result<NativeLocation, 
             }
             Err("native ownership tracing: projected or nonlocal storage is not implemented".into())
         }
+        Location::Parameter(index) => Ok(NativeLocation {
+            kind: if point == Point::Entry { 3 } else { 2 },
+            index,
+        }),
+        Location::Return => Ok(NativeLocation {
+            kind: if matches!(point, Point::Return(_)) {
+                4
+            } else {
+                5
+            },
+            index: 0,
+        }),
         _ => Err("native ownership tracing: nonlocal transport is not implemented".into()),
     }
 }

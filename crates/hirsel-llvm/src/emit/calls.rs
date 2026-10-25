@@ -714,6 +714,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         self.host_read_boundary(call, false)?;
         self.ahead_flush();
+        self.ownership_call(call, false)?;
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
             None => self.builder.call_typed(signature.ty, callee, &args),
@@ -853,6 +854,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             };
             self.define(result, value)?;
         }
+        self.ownership_call(call, true)?;
         self.jump(normal)
     }
 }

@@ -3,8 +3,8 @@
 //! Earlier rewriting-pass recipes remain a separate qualification obligation.
 use super::{Backend, NativeError, OptLevel, ReadyProgram, Sites, StageName};
 use hirsel_lir::emission::{EmitInputs, site_code};
-use hirsel_lir::ir::{BlockId, ConstructorKind, Inst};
-use hirsel_lir::ownership_trace::{Moment, native::LeafPlan};
+use hirsel_lir::ir::{ConstructorKind, Inst};
+use hirsel_lir::ownership_trace::native::LeafPlan;
 use hirsel_lir::stage::ObjectArtifact;
 use hirsel_run_schema::ownership_trace::native::{LocalCalls, Metadata, Units};
 use hirsel_syntax::DefPath;
@@ -153,45 +153,47 @@ pub(crate) fn emit_relocated(
             }
         }
         let mut markers = BTreeMap::new();
-        for (block, info) in body.blocks.iter().enumerate() {
-            for index in 0..info.instructions.len {
-                for moment in [Moment::Before, Moment::After] {
-                    for marker in plan.at(BlockId(block as u32), index, moment) {
-                        let definition = program
-                            .semantic_owners
-                            .get(&body.header.definition)
-                            .and_then(Option::as_ref)
-                            .unwrap_or(&body.header.definition);
-                        let failure = sites.failure("ownership", definition, marker.site)?;
-                        let mut source = sites
-                            .failure_site(&failure)
-                            .ok_or_else(|| failed("ownership marker has no source projection"))?;
-                        source.definition = name(definition);
-                        let location = |at: hirsel_lir::ownership_trace::native::NativeLocation| {
-                            (u64::from(at.kind) << 32) | u64::from(at.index)
-                        };
-                        markers.insert(
-                            marker.id.0,
-                            Metadata {
-                                action: marker.kind,
-                                token: location(marker.token),
-                                owner: location(marker.owner),
-                                site: site_code(
-                                    &body.header.definition,
-                                    &body.header.implementation_revision,
-                                    marker.site,
-                                ),
-                                layout: marker.layout.0,
-                                source,
-                                value_type: types
-                                    .get(&marker.layout)
-                                    .cloned()
-                                    .unwrap_or_else(|| format!("layout#{}", marker.layout.0)),
-                            },
-                        );
-                    }
-                }
-            }
+        for marker in plan.markers() {
+            let definition = program
+                .semantic_owners
+                .get(&body.header.definition)
+                .and_then(Option::as_ref)
+                .unwrap_or(&body.header.definition);
+            let implicit = plan.implicit_parameter_cleanup_source(body, marker.id);
+            let projected = implicit.map_or(marker.site, |(site, _)| site);
+            let failure = sites.failure("ownership", definition, projected)?;
+            let mut source = sites
+                .failure_site(&failure)
+                .ok_or_else(|| failed("ownership marker has no source projection"))?;
+            source.definition = match implicit {
+                Some((_, parameter)) => format!(
+                    "{} [implicit parameter {parameter} cleanup]",
+                    name(definition)
+                ),
+                None => name(definition),
+            };
+            let location = |at: hirsel_lir::ownership_trace::native::NativeLocation| {
+                (u64::from(at.kind) << 32) | u64::from(at.index)
+            };
+            markers.insert(
+                marker.id.0,
+                Metadata {
+                    action: marker.kind,
+                    token: location(marker.token),
+                    owner: location(marker.owner),
+                    site: site_code(
+                        &body.header.definition,
+                        &body.header.implementation_revision,
+                        marker.site,
+                    ),
+                    layout: marker.layout.0,
+                    source,
+                    value_type: types
+                        .get(&marker.layout)
+                        .cloned()
+                        .unwrap_or_else(|| format!("layout#{}", marker.layout.0)),
+                },
+            );
         }
         if units.insert(plan.plan().unit.0, markers).is_some() {
             return Err(failed(

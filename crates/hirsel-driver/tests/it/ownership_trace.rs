@@ -1295,7 +1295,7 @@ pub fn main() -> Result[(), ()] {
 }
 
 #[test]
-fn ownership_native_call_inputs_owned_transport_remains_explicitly_refused() {
+fn ownership_native_call_inputs_require_original_projection_for_synthetic_moves() {
     hirsel_engine::with_compiler_stack(|| {
         use hirsel_driver::native::{self, Backend, OptLevel, Options, Sites, TargetSpec};
         let dir = tempfile::tempdir().unwrap();
@@ -1320,8 +1320,31 @@ fn ownership_native_call_inputs_owned_transport_remains_explicitly_refused() {
                 OptLevel::None,
             )
             .err()
-            .expect("owned call inputs and returns need their own committed transport");
-            assert!(error.message.contains("owned"), "{backend:?}: {error}");
+            .expect("source-less synthetic Ready moves cannot invent source provenance");
+            assert!(
+                error.message.contains("outside the source"),
+                "{backend:?}: {error}"
+            );
         }
     });
+}
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn ownership_native_owned_direct_calls_keep_arguments_results_and_equal_tokens_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn make() -> Token { Token(value: 7u64) }
+fn identity(take token: Token) -> Token { take token }
+pub fn main() -> Result[(), ()] {
+  let first = identity(make())
+  let second = identity(Token(value: 7u64))
+  let moved = take first
+  Ok(())
+}
+"#,
+        2,
+    );
 }
