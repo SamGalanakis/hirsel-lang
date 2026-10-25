@@ -23,7 +23,7 @@ pub(crate) fn offer(
 ) {
     if !diagnostics
         .iter()
-        .any(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "CONC-5"))
+        .any(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5"))
     {
         return;
     }
@@ -138,6 +138,12 @@ pub(crate) fn offer(
             let task_boundary = typed.checked.calls.iter().any(|call| {
                 matches!(&call.target, hirsel_types::CallTarget::Definition(path)
                     if ["task.spawn", "task.async", "task.select", "task.await"].iter().any(|name| path.is_core(name)))
+            }) || tree.expressions.iter().any(|e| match &e.kind {
+                ExprKind::Path(path) => {
+                    let names = path.segments.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                    matches!(names.as_slice(), ["task", "async" | "spawn" | "select" | "await"])
+                }
+                _ => false,
             });
             if !task_boundary {
                 continue;
@@ -163,6 +169,29 @@ pub(crate) fn offer(
                     candidates.push(Candidate { edits: vec![(site, format!("-> {text} "))], site: expression.origin.span,
                         note: format!("R3 closure literal result rows: write `-> {text}` on this literal at task.async/spawn/select/await; the literal and task boundary check (no copy)") });
                 }
+            }
+            // A generic task call may stop at LANG-2 before it can elaborate
+            // the literal's result. Its enclosing declared result is another
+            // candidate, never evidence: only the complete edited check admits it.
+            if signature.result.is_none()
+                && let ItemKind::Function {
+                    signature: enclosing,
+                    ..
+                } = &syntax.item.kind
+                && let Some(result) = enclosing.result
+                && let Some(row) = engine
+                    .sources
+                    .slice(tree.types[result.0 as usize].origin.span)
+            {
+                let row = if row.starts_with("unique ") {
+                    row.to_owned()
+                } else {
+                    format!("unique {row}")
+                };
+                let mut site = tree.expressions[body.0 as usize].origin.span;
+                site.end = site.start;
+                candidates.push(Candidate { edits: vec![(site, format!("-> {row} "))], site: expression.origin.span,
+                    note: format!("R3 closure literal result rows: write `-> {row}` on this literal at task.async/spawn/select/await; the literal and task boundary check (no copy)") });
             }
         }
         for statement in &tree.statements {
@@ -215,7 +244,7 @@ pub(crate) fn offer(
         if checks(engine, file, context, lowering, &candidate.edits) {
             for diagnostic in diagnostics
                 .iter_mut()
-                .filter(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "CONC-5"))
+                .filter(|d| matches!(d.rule.as_str(), "MODE-2" | "LANG-7" | "LANG-2" | "CONC-5"))
             {
                 diagnostic.secondary.push(hirsel_diag::Label {
                     span: candidate.site,

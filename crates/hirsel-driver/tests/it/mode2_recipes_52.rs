@@ -27,7 +27,18 @@ fn rejected(engine: &mut QueryEngine, source: &str, recipe: &str, offered: bool)
             .collect::<Vec<_>>()
             .join("\n")
     );
-    assert!(output.diagnostics.iter().all(|d| d.fix.is_none()));
+    for diagnostic in output
+        .diagnostics
+        .iter()
+        .filter(|d| d.notes.iter().any(|n| n.starts_with(recipe)))
+    {
+        assert!(
+            diagnostic
+                .secondary
+                .iter()
+                .any(|l| l.message == "checked declaration repair")
+        );
+    }
 }
 fn accepted(engine: &mut QueryEngine, source: &str) {
     let output = checked(engine, source);
