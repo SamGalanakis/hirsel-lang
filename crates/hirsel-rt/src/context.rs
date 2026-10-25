@@ -124,6 +124,10 @@ pub struct Audit {
 #[repr(C)]
 pub struct TaskCtx {
     pub(crate) view: View,
+    /// LANG-10 counters at fixed offsets after the view (runtime ABI 65,
+    /// `CTX_FOREGROUND_COUNT_OFFSET`): a depth-leaf callee's room check reads them.
+    pub(crate) activations: hirsel_core_contract::depth::Activations,
+    pub(crate) cleanup_depth: u32,
     worker: *mut Worker,
     run: *mut RunShared,
     /// Stable scheduler identity and save slot. The task table may grow while
@@ -180,10 +184,8 @@ pub struct TaskCtx {
     /// Private execution ownership; never part of the compiled context view.
     pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
     pub(crate) ahead_physical: *mut crate::tasks::ordered::ahead::native::Physical,
-    pub(crate) activations: hirsel_core_contract::depth::Activations,
     pub(crate) active_invocations:
         Box<[std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>]>,
-    pub(crate) cleanup_depth: u32,
     /// User finalizers retained through their field programs. Allocated at task creation.
     pub(crate) cleanup_invocations: Vec<hirsel_core_contract::depth::Activation>,
     /// Rejected entries cannot execute code; their nested field scopes need no tokens.
@@ -209,6 +211,13 @@ pub struct TaskCtx {
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
+pub const CTX_FOREGROUND_COUNT_OFFSET: usize = std::mem::offset_of!(TaskCtx, activations);
+pub const CTX_CLEANUP_COUNT_OFFSET: usize = CTX_FOREGROUND_COUNT_OFFSET + 2;
+pub const CTX_CLEANUP_MODE_OFFSET: usize = std::mem::offset_of!(TaskCtx, cleanup_depth);
+const _: () = assert!(
+    CTX_FOREGROUND_COUNT_OFFSET == crate::CTX_HEAP_ID_OFFSET + 24
+        && CTX_CLEANUP_MODE_OFFSET == CTX_FOREGROUND_COUNT_OFFSET + 4
+);
 
 /// One OS thread that runs Hirsel code, and what is its own: its heap (with its region pool),
 /// which lives in the run's registry and outlives the worker, and its idle fiber stacks.

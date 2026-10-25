@@ -278,6 +278,61 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     }
 
     /// Branches to `failure` when `failed` holds and continues in a fresh block.
+    /// The index in `LirUnit::instructions` of the instruction being emitted.
+    pub(super) fn instruction_index(&self) -> usize {
+        self.unit.blocks[self.at.0.index()].instructions.start as usize + self.at.1
+    }
+
+    /// A depth-leaf callee's admission (`invocations::room`): whether the task has no
+    /// room for one more activation, as `hirsel_rt_v2_depth_enter_at_site` decides. In
+    /// cleanup mode (nesting or cleanup count nonzero) the cleanup count is tested,
+    /// otherwise the foreground count; the invocation stack's capacity is their sum.
+    ///
+    /// Like Go's stack-split prologue (cmd/internal/obj/x86/obj6.go `stacksplit`), the
+    /// counters are read once, in the prologue: every admission a callee, finalizer or
+    /// callback makes is retired before control returns to this frame, so outside its
+    /// own admission a frame always sees its entry values. One test then serves every
+    /// such call, and a loop's is invariant.
+    pub(super) fn no_room(&mut self) -> Value<'m> {
+        if let Some(full) = self.no_room {
+            return full;
+        }
+        use crate::context::{Access, BinOp, Cast, IntPredicate};
+        use hirsel_core_contract::depth::{CLEANUP_LIMIT, FOREGROUND_LIMIT};
+        use hirsel_lir::runtime_abi::{
+            CTX_CLEANUP_COUNT_OFFSET, CTX_CLEANUP_MODE_OFFSET, CTX_FOREGROUND_COUNT_OFFSET,
+        };
+        let b = &self.prologue;
+        let (i16_ty, i32_ty, i64_ty) = (
+            self.module.int_type(16),
+            self.module.int_type(32),
+            self.module.int_type(64),
+        );
+        let word = |offset: u64, ty, align| {
+            let at = b.offset(self.context, self.module.const_int(i64_ty, offset.into()));
+            b.load_access(ty, at, align, Access::Depth)
+        };
+        let foreground = word(CTX_FOREGROUND_COUNT_OFFSET, i16_ty, 2);
+        let cleanup = word(CTX_CLEANUP_COUNT_OFFSET, i16_ty, 2);
+        let mode = word(CTX_CLEANUP_MODE_OFFSET, i32_ty, 4);
+        let either = b.binary(BinOp::Or, mode, b.cast(Cast::ZExt, cleanup, i32_ty));
+        let cleaning = b.icmp(IntPredicate::Ne, either, self.module.const_zero(i32_ty));
+        let limit = |count, limit: u16| {
+            b.icmp(
+                IntPredicate::Uge,
+                count,
+                self.module.const_int(i16_ty, limit.into()),
+            )
+        };
+        let (cleanup_full, foreground_full) = (
+            limit(cleanup, CLEANUP_LIMIT),
+            limit(foreground, FOREGROUND_LIMIT),
+        );
+        let full = b.select(cleaning, cleanup_full, foreground_full);
+        self.no_room = Some(full);
+        full
+    }
+
     pub(super) fn guard(&mut self, failed: Value<'m>, failure: FailureId) -> Emitted {
         let fail = self.failure_block(failure)?;
         let next = self.module.append_block(self.function);

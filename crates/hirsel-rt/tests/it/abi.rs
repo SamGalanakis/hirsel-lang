@@ -108,6 +108,18 @@ fn header_constants_match_the_runtime() {
         ("CTX_PAGES_OFFSET", CTX_PAGES_OFFSET as u64),
         ("CTX_FUEL_OFFSET", hirsel_rt::CTX_FUEL_OFFSET as u64),
         ("CTX_HEAP_ID_OFFSET", hirsel_rt::CTX_HEAP_ID_OFFSET as u64),
+        (
+            "CTX_FOREGROUND_COUNT_OFFSET",
+            hirsel_rt::CTX_FOREGROUND_COUNT_OFFSET as u64,
+        ),
+        (
+            "CTX_CLEANUP_COUNT_OFFSET",
+            hirsel_rt::CTX_CLEANUP_COUNT_OFFSET as u64,
+        ),
+        (
+            "CTX_CLEANUP_MODE_OFFSET",
+            hirsel_rt::CTX_CLEANUP_MODE_OFFSET as u64,
+        ),
         ("PAGE_OWNER_OFFSET", hirsel_rt::PAGE_OWNER_OFFSET as u64),
         (
             "PAGE_XTHREAD_FREE_OFFSET",

@@ -723,10 +723,13 @@ fn lower<T>(
             });
             emitter.emit()?;
         }
+        let depth_leaf =
+            hirsel_lir::invocations::room::depth_leaf_units(units.iter().map(|u| u.unit()));
         for (unit, function, signature) in functions {
             let rooted = !signature.roots.is_empty();
             let mut emitter =
                 FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
+            emitter.room = hirsel_lir::invocations::room::RoomChecks::of(unit, &depth_leaf);
             emitter.ownership = ownership_plans
                 .as_ref()
                 .and_then(|plans| plans.get(&unit.header.instance));
@@ -1173,6 +1176,10 @@ struct FnEmitter<'m, 'a> {
     ownership_frame: Option<Value<'m>>,
     /// A resumable state alternate (`resume`).
     resume: Option<resume::Resume<'a, 'm>>,
+    /// Admissions of depth-leaf callees, lowered to room checks with no retirement.
+    room: hirsel_lir::invocations::room::RoomChecks,
+    /// The prologue's room test, built at the first room check (`no_room`).
+    no_room: Option<Value<'m>>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;

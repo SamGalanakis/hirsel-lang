@@ -159,6 +159,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) ownership_frame: Option<Value>,
     /// Set while emitting one state of a resumable continuation alternate.
     pub(crate) resume: Option<crate::resume::Resume<'a>>,
+    /// Admissions of depth-leaf callees, lowered to room checks with no retirement.
+    pub(crate) room: hirsel_lir::invocations::room::RoomChecks,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -246,6 +248,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             ownership: None,
             ownership_frame: None,
             resume: None,
+            room: Default::default(),
         }
     }
 
@@ -1365,6 +1368,34 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         self.b.ins().jump(next, &[]);
         self.b.switch_to_block(next);
         Ok(())
+    }
+
+    /// A depth-leaf callee's admission (`invocations::room`): whether the task has no
+    /// room for one more activation, as `hirsel_rt_v2_depth_enter_at_site` decides. In
+    /// cleanup mode (nesting or cleanup count nonzero) the cleanup count is tested,
+    /// otherwise the foreground count.
+    pub(crate) fn no_room(&mut self) -> Value {
+        use hirsel_core_contract::depth::{CLEANUP_LIMIT, FOREGROUND_LIMIT};
+        use hirsel_lir::runtime_abi::{
+            CTX_CLEANUP_COUNT_OFFSET, CTX_CLEANUP_MODE_OFFSET, CTX_FOREGROUND_COUNT_OFFSET,
+        };
+        let foreground = self.load_ty(types::I16, self.context, CTX_FOREGROUND_COUNT_OFFSET);
+        let cleanup = self.load_ty(types::I16, self.context, CTX_CLEANUP_COUNT_OFFSET);
+        let mode = self.load_ty(types::I32, self.context, CTX_CLEANUP_MODE_OFFSET);
+        let wide = self.b.ins().uextend(types::I32, cleanup);
+        let either = self.b.ins().bor(mode, wide);
+        let cleaning = self.b.ins().icmp_imm(IntCC::NotEqual, either, 0);
+        let cleanup_full = self.b.ins().icmp_imm(
+            IntCC::UnsignedGreaterThanOrEqual,
+            cleanup,
+            i64::from(CLEANUP_LIMIT),
+        );
+        let foreground_full = self.b.ins().icmp_imm(
+            IntCC::UnsignedGreaterThanOrEqual,
+            foreground,
+            i64::from(FOREGROUND_LIMIT),
+        );
+        self.b.ins().select(cleaning, cleanup_full, foreground_full)
     }
 
     fn source_location(&mut self, site: SiteRange) {

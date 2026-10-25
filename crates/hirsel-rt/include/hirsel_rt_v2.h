@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 63
+#define HIRSEL_RT_V2_ABI_VERSION 65
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -132,6 +132,14 @@ extern "C" {
  * (the running worker's). A slab's u32 owner is its heap's id; its xthread_free word is the
  * runtime's list of blocks other heaps freed, which compiled code never touches. */
 #define HIRSEL_RT_V2_CTX_HEAP_ID_OFFSET 536
+/* Runtime ABI 65: after the context's view (the words above, then a u32 heap and a u64
+ * epoch), the task's LANG-10 counters, written only by the runtime: the u16 foreground
+ * and cleanup admission counts and the u32 finalizer nesting. Compiled code reads them to
+ * test a depth-leaf callee's room: in cleanup mode (nesting or cleanup count nonzero)
+ * while the cleanup count is below 64, otherwise while the foreground count is below 1024. */
+#define HIRSEL_RT_V2_CTX_FOREGROUND_COUNT_OFFSET 560
+#define HIRSEL_RT_V2_CTX_CLEANUP_COUNT_OFFSET 562
+#define HIRSEL_RT_V2_CTX_CLEANUP_MODE_OFFSET 564
 #define HIRSEL_RT_V2_PAGE_FREE_OFFSET 16
 #define HIRSEL_RT_V2_PAGE_LIVE_OFFSET 24
 #define HIRSEL_RT_V2_PAGE_LOCAL_FREE_OFFSET 72

@@ -127,7 +127,10 @@ pub use alloc::{
 };
 #[cfg(any(feature = "diagnostic", feature = "measurement"))]
 pub use context::Stats;
-pub use context::{Audit, Config, TaskCtx};
+pub use context::{
+    Audit, CTX_CLEANUP_COUNT_OFFSET, CTX_CLEANUP_MODE_OFFSET, CTX_FOREGROUND_COUNT_OFFSET, Config,
+    TaskCtx,
+};
 pub use count::{COUNT_ARENA_SHARED, COUNT_ARENA_UNIQUE, COUNT_IMMORTAL, finite_count_max};
 pub use failure::FailureRecord;
 pub use finalize::{Cleanup, CloseThunk, DropThunk};
@@ -144,7 +147,7 @@ pub use release::{
 pub use roots::ROOT_OVERFLOW;
 
 /// The interface version a caller must request in [`Config::abi_version`].
-pub const ABI_VERSION: u32 = 63;
+pub const ABI_VERSION: u32 = 65;
 /// Success status.
 pub const STATUS_OK: u8 = 0;
 /// A language failure. Substrate entries record it in the run context; a library

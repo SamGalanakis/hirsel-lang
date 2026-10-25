@@ -265,6 +265,8 @@ pub(crate) enum Access {
     Capacity,
     Used,
     Value,
+    /// The task's LANG-10 counters (runtime ABI 65); only runtime calls write them.
+    Depth,
 }
 
 impl Access {
@@ -275,6 +277,7 @@ impl Access {
             Self::Capacity => "sequence capacity",
             Self::Used => "builder used bytes",
             Self::Value => "scalar value",
+            Self::Depth => "invocation depth",
         }
     }
 }

@@ -325,6 +325,30 @@ pub fn main(rt:Io)->Result[(),GrantError] {{let s=io.stdout(rt)?; let _=f({n}u64
         }
     });
 }
+/// A depth-leaf callee (no admission of its own, only leaf calls) is still one
+/// activation: native code tests the room left, read once per frame, instead of
+/// entering and leaving, and overflow fails at the same call site. In a loop the
+/// test is the same for every call, so the first call past the limit fails.
+#[test]
+fn p7_depth_leaf_callees_count_one_activation_at_the_boundary() {
+    hirsel_engine::with_compiler_stack(|| {
+        let step = "fn step(h:u64,v:u64)->u64 {let wide:u128=int.widen(h)*131u128+int.widen(v)\n int.truncate(wide)}";
+        // At f(0), main and the f frames hold n + 2 activations; step adds one.
+        let once = "fn f(n:u64)->u64 {if n==0u64 {step(n,1u64)} else {1u64+f(n-1u64)}}";
+        let looped = "fn f(n:u64)->u64 {if n==0u64 {let mut h=n\n for i in 0u64..=8u64 {h=step(step(h,i),i)}\n h} else {1u64+f(n-1u64)}}";
+        for (name, body, n, rules) in [
+            ("p7-once-exact", once, 1021, &[][..]),
+            ("p7-once-over", once, 1022, &["LANG-10"][..]),
+            ("p7-loop-exact", looped, 1021, &[][..]),
+            ("p7-loop-over", looped, 1022, &["LANG-10"][..]),
+        ] {
+            let source = format!(
+                "{step}\n{body}\npub fn main()->Result[(), ()] {{let _ = f({n}u64); Ok(())}}"
+            );
+            agreement(name, &source, rules);
+        }
+    });
+}
 const P3_CHAIN: &str = r#"
 type Chain = End(value:Option[u64]) | Link(next:box Chain)
 type Alias = Chain

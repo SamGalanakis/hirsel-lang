@@ -440,6 +440,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let failed = self.builder.binary(BinOp::Xor, condition, one);
                 self.guard(failed, failure)
             }
+            Inst::FrameEnter { failure }
+                if self.room.enters.contains(&self.instruction_index()) =>
+            {
+                let failed = self.no_room();
+                self.guard(failed, failure)
+            }
+            Inst::FrameLeave if self.room.leaves.contains(&self.instruction_index()) => Ok(()),
             Inst::FrameEnter { failure } => {
                 let anchor = self.unit.tables.failures[failure.index()].anchor;
                 let (caller, operation) = self.failure_sites(self.anchor_code(anchor)?);

@@ -9,7 +9,7 @@ use crate::stage::{Ready, ValidatedUnit};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 64;
+pub const ABI_VERSION: u32 = 66;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 
 /// Scalar diagnostic operands shared by the two native emitters. A location

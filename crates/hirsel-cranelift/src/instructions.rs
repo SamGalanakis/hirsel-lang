@@ -163,6 +163,11 @@ impl FnEmitter<'_, '_, '_> {
                 let failed = self.b.ins().bxor_imm_s(condition, 1);
                 self.guard(failed, failure)
             }
+            Inst::FrameEnter { failure } if self.room.enters.contains(&self.instruction_index) => {
+                let failed = self.no_room();
+                self.guard(failed, failure)
+            }
+            Inst::FrameLeave if self.room.leaves.contains(&self.instruction_index) => Ok(()),
             Inst::FrameEnter { failure } => {
                 let context = self.context;
                 let anchor = self.unit.tables.failures[failure.index()].anchor;

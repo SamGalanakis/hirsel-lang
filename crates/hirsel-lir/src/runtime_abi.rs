@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 63;
+pub const ABI_VERSION: u32 = 65;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -148,12 +148,22 @@ pub const CTX_FUEL_OFFSET: u64 = CTX_PAGES_OFFSET + 8 * POOL_COUNT;
 /// inline only on a page whose owner equals it, and sends any other to `hirsel_rt_v2_free`,
 /// which publishes it on the page's [`PAGE_XTHREAD_FREE_OFFSET`] list for its owner.
 pub const CTX_HEAP_ID_OFFSET: u64 = CTX_FUEL_OFFSET + 8;
+/// After the view (the compiled words, then its `u32` heap and `u64` epoch stamp), the
+/// task's LANG-10 counters (runtime ABI 65): the `u16` foreground and cleanup admission
+/// counts, then the `u32` finalizer nesting. An admission in cleanup mode (nesting or
+/// cleanup count nonzero) has room while the cleanup count is below
+/// `depth::CLEANUP_LIMIT`, otherwise while the foreground count is below
+/// `depth::FOREGROUND_LIMIT`. Only the runtime writes them; compiled code reads them
+/// for a depth-leaf callee's room check (`invocations::room`).
+pub const CTX_FOREGROUND_COUNT_OFFSET: u64 = CTX_HEAP_ID_OFFSET + 24;
+pub const CTX_CLEANUP_COUNT_OFFSET: u64 = CTX_FOREGROUND_COUNT_OFFSET + 2;
+pub const CTX_CLEANUP_MODE_OFFSET: u64 = CTX_FOREGROUND_COUNT_OFFSET + 4;
 pub const PAGE_FREE_OFFSET: u64 = 16;
 pub const PAGE_LIVE_OFFSET: u64 = 24;
 pub const PAGE_LOCAL_FREE_OFFSET: u64 = 72;
 pub const PAGE_OWNER_OFFSET: u64 = 96;
 pub const PAGE_XTHREAD_FREE_OFFSET: u64 = 104;
-const _: () = assert!(CTX_HEAP_ID_OFFSET == 536);
+const _: () = assert!(CTX_HEAP_ID_OFFSET == 536 && CTX_FOREGROUND_COUNT_OFFSET == 560);
 
 /// The small pool serving `extent` payload bytes at `align`: the size class (16-byte steps to
 /// 256 bytes, then quarter powers of two to [`SMALL_MAX`]), offset by the class count when the

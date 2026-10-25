@@ -7,6 +7,7 @@ use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod cleanup;
+pub mod room;
 
 /// Include cleanup admissions reconstructed from independently selected
 /// finalizer bodies and the supplied physical layouts, never call counters.

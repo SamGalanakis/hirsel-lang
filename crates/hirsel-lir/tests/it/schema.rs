@@ -2240,6 +2240,18 @@ fn runtime_declarations_match_the_landed_c_header() {
         ("CTX_PAGES_OFFSET", runtime_abi::CTX_PAGES_OFFSET),
         ("CTX_FUEL_OFFSET", runtime_abi::CTX_FUEL_OFFSET),
         ("CTX_HEAP_ID_OFFSET", runtime_abi::CTX_HEAP_ID_OFFSET),
+        (
+            "CTX_FOREGROUND_COUNT_OFFSET",
+            runtime_abi::CTX_FOREGROUND_COUNT_OFFSET,
+        ),
+        (
+            "CTX_CLEANUP_COUNT_OFFSET",
+            runtime_abi::CTX_CLEANUP_COUNT_OFFSET,
+        ),
+        (
+            "CTX_CLEANUP_MODE_OFFSET",
+            runtime_abi::CTX_CLEANUP_MODE_OFFSET,
+        ),
         ("PAGE_OWNER_OFFSET", runtime_abi::PAGE_OWNER_OFFSET),
         (
             "PAGE_XTHREAD_FREE_OFFSET",
