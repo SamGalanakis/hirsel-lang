@@ -201,6 +201,7 @@ pub(super) fn request_metadata(
     if let Some(path) = &request.definition {
         weight.path(path);
     }
+    weight.vec(&request.test_entries, |weight, (path, _)| weight.path(path));
     let target = &request.target;
     weight.add(target.triple.capacity());
     weight.add(target.cpu.capacity());

@@ -66,6 +66,7 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
             loaded.unwrap();
             let mut native = NativeRequest {
                 definition: None,
+                test_entries: Vec::new(),
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),
@@ -190,4 +191,42 @@ fn actual_native_selector_coalesces_build_and_bound_run_without_a_retained_contr
             );
         }
     });
+}
+
+#[test]
+fn native_test_table_order_seed_and_definition_are_request_inputs() {
+    let path = hirsel_engine::entry_path(&hirsel_engine::default_context());
+    let mut other = path.clone();
+    other.0.name = "other".into();
+    let mut request = NativeRequest {
+        definition: Some(path.clone()),
+        test_entries: vec![],
+        backend: native::Backend::Cranelift,
+        profile: native::BuildProfile::Default,
+        target: native::TargetSpec::x86_64_unknown_linux_gnu(),
+        validation: native::Validation::Ready,
+        launch: Default::default(),
+        run: None,
+        fuel: false,
+        evidence: None,
+    };
+    let plain = request_key(&request, NativePurpose::Build).unwrap();
+    request.test_entries = vec![(path.clone(), 73), (other.clone(), 91)];
+    let table = request_key(&request, NativePurpose::Build).unwrap();
+    assert_ne!(plain, table);
+    request.test_entries[0].1 += 1;
+    assert_ne!(table, request_key(&request, NativePurpose::Build).unwrap());
+    request.test_entries[0].1 -= 1;
+    request.test_entries.swap(0, 1);
+    assert_ne!(table, request_key(&request, NativePurpose::Build).unwrap());
+    request.test_entries.swap(0, 1);
+    request.test_entries[0].0 = other;
+    assert_ne!(table, request_key(&request, NativePurpose::Build).unwrap());
+    let mut empty_weight = hirsel_engine::NativeMetadataWeight::default();
+    request.test_entries = Vec::new();
+    super::super::native_products::request_metadata(&mut empty_weight, &request);
+    request.test_entries = vec![(path, 73)];
+    let mut table_weight = hirsel_engine::NativeMetadataWeight::default();
+    super::super::native_products::request_metadata(&mut table_weight, &request);
+    assert!(table_weight.bytes() > empty_weight.bytes());
 }

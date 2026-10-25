@@ -47,6 +47,7 @@ pub(super) struct NativePlan {
     pub fuel: bool,
     pub backends: Vec<CompilationBackend>,
     pub requested_run: Option<Arc<hirsel_run_config::ValidatedRun>>,
+    pub test_entries: Vec<(DefPath, u64)>,
 }
 /// Selected evidence and the PS9 export captured over this bootstrap's native
 /// source root. Assessment reads only that root's completed product.
@@ -143,6 +144,7 @@ impl NativeBootstrap {
                 hirsel_lir::emission::OptLevel::Speed => 2,
             },
             plan.requested_run.as_ref().map(|run| run.identity()),
+            &plan.test_entries,
             plan.debug,
             plan.verify_backend,
             plan.measurement,
@@ -164,10 +166,12 @@ impl NativeBootstrap {
                 .collect::<Vec<_>>(),
         ))
         .map_err(|error| error.to_string())?;
+        let mut table_weight = hirsel_engine::NativeMetadataWeight::default();
+        table_weight.vec(&plan.test_entries, |weight, (path, _)| weight.path(path));
         let metadata = definitions
             .iter()
             .try_fold(
-                std::mem::size_of::<Self>() as u64 + selection.len() as u64,
+                std::mem::size_of::<Self>() as u64 + selection.len() as u64 + table_weight.bytes(),
                 |bytes, path| {
                     bytes.checked_add(
                         u64::try_from(serde_json::to_vec(path).ok()?.len())
@@ -360,6 +364,11 @@ impl NativeBootstrap {
             source
                 .bind_run(&facts.run.entry, run)
                 .map_err(|e| e.to_string())?;
+        }
+        if !plan.test_entries.is_empty() {
+            source
+                .bind_tests(&plan.test_entries)
+                .map_err(|error| error.to_string())?;
         }
         let emission = EmissionOptions::request(
             source.input().clone(),

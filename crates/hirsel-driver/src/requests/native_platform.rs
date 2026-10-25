@@ -224,6 +224,7 @@ impl NativePlatformSelection {
                 measurement: inputs.tools.runtime_build.measurement,
                 fuel: request.fuel,
                 requested_run: request.run.clone(),
+                test_entries: request.test_entries.clone(),
                 backends: vec![platform.backend(
                     ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
                     target.digest(),
@@ -245,6 +246,7 @@ mod tests {
         for backend in [Backend::Cranelift, Backend::Llvm] {
             let mut request = NativeRequest {
                 definition: None,
+                test_entries: Vec::new(),
                 backend,
                 profile: BuildProfile::Default,
                 target: native::TargetSpec::x86_64_unknown_linux_gnu(),

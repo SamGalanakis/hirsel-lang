@@ -73,6 +73,9 @@ pub enum CompileOperation {
 pub struct NativeRequest {
     /// Selected launch definition; None uses the observed package entry.
     pub definition: Option<DefPath>,
+    /// Ordered test dispatcher entries and their seeds. Empty for an ordinary
+    /// executable; binding occurs before native metadata admission.
+    pub test_entries: Vec<(DefPath, u64)>,
     pub backend: Backend,
     pub profile: BuildProfile,
     pub target: TargetSpec,

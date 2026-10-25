@@ -246,6 +246,7 @@ fn native_error(error: NativeError) -> ToolError {
 fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<ContentHash, ToolError> {
     let bytes = serde_json::to_vec(&(
         &request.definition,
+        &request.test_entries,
         request.backend.name(),
         super::native_platform::profile_options(request, purpose).map_err(native_error)?,
         request.target.digest(),

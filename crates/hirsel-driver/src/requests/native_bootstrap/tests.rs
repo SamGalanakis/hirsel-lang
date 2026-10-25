@@ -4,11 +4,11 @@ use hirsel_engine::{CompileConfig, FrontCheckPlan, FrontNativePlan, LoweringPoli
 use hirsel_intern::jobs::Jobs;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-struct StopLink(Arc<AtomicU64>);
+struct StopLink(Arc<AtomicU64>, Vec<(DefPath, u64)>);
 impl link_tasks::NativeLinkExecutor for StopLink {
     fn link(
         &self,
-        _: &mut roots::RootProducts,
+        products: &mut roots::RootProducts,
         input: link_tasks::LinkExecution<'_>,
     ) -> Result<Vec<u8>, String> {
         assert!(
@@ -23,6 +23,7 @@ impl link_tasks::NativeLinkExecutor for StopLink {
             !input.objects.is_empty(),
             "actual Codegen objects before Link"
         );
+        assert_eq!(products.test_entries(input.root).unwrap(), self.1);
         self.0.fetch_add(1, Ordering::SeqCst);
         Err("selected bootstrap Link control refusal".into())
     }
@@ -30,12 +31,29 @@ impl link_tasks::NativeLinkExecutor for StopLink {
 
 #[test]
 fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_after_loader_drop() {
+    bootstrap_link_refusal(false);
+}
+
+#[test]
+fn native_test_table_binds_before_admission_and_survives_loader_drop() {
+    bootstrap_link_refusal(true);
+}
+
+fn bootstrap_link_refusal(test_table: bool) {
     hirsel_engine::with_compiler_stack(|| {
         for jobs in [1, 2] {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("main.hir");
             let manifest = directory.path().join("hirsel.json");
-            std::fs::write(&path, "pub fn main()->Result[(),u64]{Ok(())}\n").unwrap();
+            std::fs::write(
+                &path,
+                if test_table {
+                    "pub fn main(t:Test)->Result[(),u64]{Ok(())}\n"
+                } else {
+                    "pub fn main()->Result[(),u64]{Ok(())}\n"
+                },
+            )
+            .unwrap();
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
             let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
             let mut program = crate::COMPILER
@@ -195,6 +213,11 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                     measurement: false,
                     fuel: false,
                     requested_run: None,
+                    test_entries: if test_table {
+                        vec![(program.entry.clone(), 731)]
+                    } else {
+                        vec![]
+                    },
                     backends: vec![CompilationBackend {
                         backend: "cranelift".into(),
                         backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
@@ -206,7 +229,14 @@ fn actual_native_bootstrap_suspends_attaches_once_and_preserves_link_refusal_aft
                         linker_options: ContentHash::of_bytes(b"intentional Link refusal"),
                         runtime_archives: vec![],
                         foreign_inputs: vec![],
-                        executor: Arc::new(StopLink(calls.clone())),
+                        executor: Arc::new(StopLink(
+                            calls.clone(),
+                            if test_table {
+                                vec![(program.entry.clone(), 731)]
+                            } else {
+                                vec![]
+                            },
+                        )),
                     }],
                 },
                 NativeAdmission {
@@ -561,6 +591,7 @@ fn actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop()
                     measurement: false,
                     fuel: false,
                     requested_run: None,
+                    test_entries: Vec::new(),
                     backends: vec![selected_backend],
                 },
                 NativeAdmission {
@@ -923,6 +954,7 @@ fn native_bootstrap_policy_case(bind_run: bool) {
             let policy = NativePlatformPolicy::capture().unwrap();
             let request = NativeRequest {
                 definition: Some(entry.clone()),
+                test_entries: Vec::new(),
                 backend,
                 profile: native::BuildProfile::Default,
                 target: target.clone(),
@@ -1425,6 +1457,7 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
             measurement: false,
             fuel: false,
             requested_run: None,
+            test_entries: Vec::new(),
             backends: vec![CompilationBackend {
                 backend: "cranelift".into(),
                 backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
@@ -1434,7 +1467,7 @@ fn native_bootstrap_assesses_evidence_against_its_settled_source_root_before_ins
                 linker_options: ContentHash::of_bytes(b"intentional Link refusal"),
                 runtime_archives: vec![],
                 foreign_inputs: vec![],
-                executor: Arc::new(StopLink(calls.clone())),
+                executor: Arc::new(StopLink(calls.clone(), vec![])),
             }],
         };
         let admission = || NativeAdmission {

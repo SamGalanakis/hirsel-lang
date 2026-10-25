@@ -100,7 +100,14 @@ impl NativeAssembly {
             .front_native_queries(
                 FrontNativePlan {
                     entry: inputs.entry,
-                    roots: vec![],
+                    roots: plan
+                        .native
+                        .test_entries
+                        .iter()
+                        .map(|(path, _)| path.clone())
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
                     run: inputs.run,
                     definitions: catalogue,
                 },
