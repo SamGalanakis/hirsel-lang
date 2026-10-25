@@ -6,11 +6,14 @@ use hirsel_engine::{LoweringPolicy, loader_inputs::FrozenInputs};
 use hirsel_syntax::DefPath;
 use std::path::PathBuf;
 mod host_selector;
+mod inspection;
 mod native_lower;
 mod native_routing;
 mod output;
+mod safe_check;
 mod selector;
 mod source_graph;
+mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
     NativeExecution, NativeObservation, RequestWork, TirExecution, TirProducts,
@@ -69,6 +72,8 @@ pub struct NativeRequest {
     pub target: TargetSpec,
     pub validation: Validation,
     pub launch: LaunchInputs,
+    /// The independently validated run bound against the selected source facts.
+    pub run: Option<std::sync::Arc<hirsel_run_config::ValidatedRun>>,
     /// Build-time fuel instrumentation is part of native/emission identity.
     pub fuel: bool,
     /// Independently assessed source evidence; its selected discharge policy
