@@ -68,8 +68,50 @@ pub(super) struct OwnershipBootstrap {
     failure: Mutex<Option<(Reference, String)>>,
     errors: RuntimeErrors,
     _allowance: MemoryReservation,
-    output_allowance: Mutex<MemoryReservation>,
+    output_allowance: Arc<OutputAllowance>,
 }
+/// One bounded original grant, reusable after a diagnostic consumer drops its
+/// objects. Dropping a lease returns capacity to this owner, not a larger cap.
+struct OutputAllowance {
+    available: Mutex<u64>,
+    _allowance: MemoryReservation,
+}
+pub(super) struct OutputReservation {
+    owner: Arc<OutputAllowance>,
+    bytes: u64,
+}
+impl OutputAllowance {
+    fn new(allowance: MemoryReservation) -> Arc<Self> {
+        Arc::new(Self {
+            available: Mutex::new(allowance.bytes()),
+            _allowance: allowance,
+        })
+    }
+    fn reserve(self: &Arc<Self>, bytes: u64) -> Result<OutputReservation, String> {
+        let mut available = self
+            .available
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *available = available
+            .checked_sub(bytes)
+            .ok_or("ownership output metadata exceeds original admission")?;
+        Ok(OutputReservation {
+            owner: self.clone(),
+            bytes,
+        })
+    }
+}
+impl Drop for OutputReservation {
+    fn drop(&mut self) {
+        let mut available = self
+            .owner
+            .available
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *available += self.bytes;
+    }
+}
+
 impl OwnershipBootstrap {
     pub fn new(
         source: Source,
@@ -96,7 +138,11 @@ impl OwnershipBootstrap {
         ))
         .map_err(|e| e.to_string())?;
         let mut metadata = hirsel_engine::NativeMetadataWeight::default();
-        metadata.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
+        metadata.add(
+            std::mem::size_of::<Self>()
+                + std::mem::size_of::<OutputAllowance>()
+                + 5 * std::mem::size_of::<usize>(),
+        );
         metadata.vec(&source.definitions, |w, path| w.path(path));
         if metadata.bytes() > allowance.bytes()
             || weight.retained < std::mem::size_of::<Task>() as u64
@@ -126,7 +172,7 @@ impl OwnershipBootstrap {
             failure: Mutex::new(None),
             errors,
             _allowance: allowance,
-            output_allowance: Mutex::new(output_allowance),
+            output_allowance: OutputAllowance::new(output_allowance),
         }))
     }
     pub fn query(&self) -> QueryId {
@@ -135,12 +181,8 @@ impl OwnershipBootstrap {
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
-    pub fn reserve_output(&self, bytes: u64) -> Result<MemoryReservation, String> {
-        self.output_allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .split(bytes)
-            .ok_or("ownership output metadata exceeds original admission".into())
+    pub fn reserve_output(&self, bytes: u64) -> Result<OutputReservation, String> {
+        self.output_allowance.reserve(bytes)
     }
     pub fn outcome(
         &self,
@@ -414,5 +456,32 @@ impl QueryTask for Task {
             Ok(product) => QueryPoll::Complete(product),
             Err(error) => QueryPoll::Failed(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+    #[test]
+    fn diagnostic_output_grant_recycles_released_objects_without_raising_admission() {
+        let budget = ProcessBudget::new(64);
+        let owner = OutputAllowance::new(budget.reserve(64).unwrap());
+        let first = owner.reserve(48).unwrap();
+        assert!(
+            owner.reserve(17).is_err(),
+            "live objects retain the exact bound"
+        );
+        drop(first);
+        let second = owner.reserve(64).unwrap();
+        assert!(owner.reserve(1).is_err());
+        assert_eq!(budget.reserved(), 64);
+        drop(owner);
+        assert_eq!(
+            budget.reserved(),
+            64,
+            "the surviving consumer keeps its original owner"
+        );
+        drop(second);
+        assert_eq!(budget.reserved(), 0);
     }
 }

@@ -32,7 +32,7 @@ pub struct OwnershipExecution {
 struct OutputOwner {
     _bootstrap: Arc<OwnershipBootstrap>,
     _source: Arc<FrontNativeProducts>,
-    _allowance: MemoryReservation,
+    _allowance: ownership_bootstrap::OutputReservation,
 }
 /// Objects remain bound to one selected diagnostic completion and retain its
 /// original owners and an independent debit from the existing output grant.
@@ -40,7 +40,7 @@ pub struct OwnershipObjects {
     objects: native::ownership_trace::LeafObjects,
     root: ProductRef,
     _owner: Arc<OwnershipExecution>,
-    _allowance: MemoryReservation,
+    _allowance: ownership_bootstrap::OutputReservation,
 }
 impl OwnershipObjects {
     pub fn objects(&self) -> &[hirsel_lir::stage::ObjectArtifact] {
