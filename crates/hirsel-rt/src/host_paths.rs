@@ -431,14 +431,15 @@ fn walk_parents(file: &File, result: &mut Ancestry) -> std::io::Result<()> {
     }
 }
 
-struct MountInfo {
+/// One mountinfo row, borrowed: escaped paths are decoded only for the rows a check compares.
+struct MountInfo<'a> {
     id: u64,
-    device: String,
-    root: PathBuf,
-    point: PathBuf,
+    device: &'a str,
+    root: &'a str,
+    point: &'a str,
 }
 fn mount_path(text: &str) -> std::io::Result<PathBuf> {
-    let mut out = vec![];
+    let mut out = Vec::with_capacity(text.len());
     let mut bytes = text.bytes();
     while let Some(byte) = bytes.next() {
         if byte == b'\\' {
@@ -457,18 +458,28 @@ fn mount_path(text: &str) -> std::io::Result<PathBuf> {
     }
     Ok(std::ffi::OsString::from_vec(out).into())
 }
-fn mounts(text: &str) -> std::io::Result<Vec<MountInfo>> {
+/// The leading fields of every row. Mountinfo separates fields with ASCII spaces and escapes
+/// them inside paths, so only a row's first six fields are scanned, never its mount options.
+fn mounts(text: &str) -> std::io::Result<Vec<MountInfo<'_>>> {
     text.lines()
         .map(|line| {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            if fields.len() < 6 {
-                return Err(std::io::Error::other("invalid mountinfo row"));
-            }
+            let mut fields = line.split_ascii_whitespace();
+            let mut next = || {
+                fields
+                    .next()
+                    .ok_or_else(|| std::io::Error::other("invalid mountinfo row"))
+            };
+            let id = next()?.parse().map_err(std::io::Error::other)?;
+            next()?;
+            let device = next()?;
+            let root = next()?;
+            let point = next()?;
+            next()?;
             Ok(MountInfo {
-                id: fields[0].parse().map_err(std::io::Error::other)?,
-                device: fields[2].into(),
-                root: mount_path(fields[3])?,
-                point: mount_path(fields[4])?,
+                id,
+                device,
+                root,
+                point,
             })
         })
         .collect()
@@ -490,30 +501,33 @@ fn ancestors(file: &File) -> std::io::Result<Ancestry> {
     // names only locate candidates. Matching live descriptor dev/inode identity
     // is mandatory before any candidate contributes physical ancestors.
     let id = mount_id(file)?;
-    let mounts = mounts(&std::fs::read_to_string("/proc/self/mountinfo")?)?;
+    let text = std::fs::read_to_string("/proc/self/mountinfo")?;
+    let mounts = mounts(&text)?;
     let mount = mounts
         .iter()
         .find(|m| m.id == id)
         .ok_or_else(|| std::io::Error::other("descriptor mount is unavailable"))?;
+    let (mount_root, mount_point) = (mount_path(mount.root)?, mount_path(mount.point)?);
     let path = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
     let suffix = path
-        .strip_prefix(&mount.point)
+        .strip_prefix(&mount_point)
         .map_err(std::io::Error::other)?;
-    let physical = mount.root.join(suffix);
-    let mut source_ancestry = mount.root == Path::new("/");
+    let physical = mount_root.join(suffix);
+    let mut source_ancestry = mount_root == Path::new("/");
     for view in &mounts {
         if view.device != mount.device || view.id == mount.id {
             continue;
         }
-        let Ok(suffix) = physical.strip_prefix(&view.root) else {
+        let view_root = mount_path(view.root)?;
+        let Ok(suffix) = physical.strip_prefix(&view_root) else {
             continue;
         };
-        let Ok(alias) = PinnedDirectory::open(&view.point.join(suffix)) else {
+        let Ok(alias) = PinnedDirectory::open(&mount_path(view.point)?.join(suffix)) else {
             continue;
         };
         if mount_id(&alias.file)? == view.id && identity(&alias.file)? == identity(file)? {
             walk_parents(&alias.file, &mut result)?;
-            source_ancestry |= mount.root != view.root && mount.root.starts_with(&view.root);
+            source_ancestry |= mount_root != view_root && mount_root.starts_with(&view_root);
         }
     }
     if !source_ancestry {
@@ -522,4 +536,47 @@ fn ancestors(file: &File) -> std::io::Result<Ancestry> {
         ));
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod mountinfo_tests {
+    use super::{mount_path, mounts};
+    use std::path::Path;
+
+    /// proc(5)'s mountinfo example, a row whose paths escape a space and a backslash, and a
+    /// row with kilobytes of options (overlay lowerdirs) that the parser never scans.
+    #[test]
+    fn rows_parse_their_leading_fields_and_decode_paths_on_demand() {
+        let options = "lowerdir=".to_owned() + &"/l".repeat(2000);
+        let text = format!(
+            "36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw,errors=continue\n\
+             37 36 0:5 /a\\040b /m\\134x rw - tmpfs tmpfs rw\n\
+             38 36 0:61 / /merged rw - overlay overlay rw,{options}\n"
+        );
+        let rows = mounts(&text).unwrap();
+        let fields: Vec<_> = rows
+            .iter()
+            .map(|r| (r.id, r.device, r.root, r.point))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                (36, "98:0", "/mnt1", "/mnt2"),
+                (37, "0:5", r"/a\040b", r"/m\134x"),
+                (38, "0:61", "/", "/merged"),
+            ]
+        );
+        assert_eq!(mount_path(rows[1].root).unwrap(), Path::new("/a b"));
+        assert_eq!(mount_path(rows[1].point).unwrap(), Path::new(r"/m\x"));
+        assert!(mount_path(r"/bad\08").is_err());
+        assert!(
+            mounts("36 35 98:0 /mnt1 /mnt2\n").is_err(),
+            "a row has six fields"
+        );
+        assert!(
+            mounts("x 35 98:0 / / rw\n").is_err(),
+            "a row's id is a number"
+        );
+        assert!(mounts("").unwrap().is_empty());
+    }
 }
