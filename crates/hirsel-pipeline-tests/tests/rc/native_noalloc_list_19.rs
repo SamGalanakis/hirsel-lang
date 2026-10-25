@@ -625,6 +625,29 @@ fn capacity_and_hash_native_controls() {
         let input = engine.import_native_input(snapshot).unwrap();
         let entry = entry_path(&context);
         let sites = Sites::new(input.snapshot());
+        let source = input.snapshot();
+        let list_type = source
+            .definitions
+            .iter()
+            .find(|(path, _)| path.0.name == "scratch")
+            .unwrap()
+            .1
+            .bodies
+            .iter()
+            .flat_map(|body| &body.locals)
+            .map(|local| local.ty)
+            .find(|ty| {
+                source.types.get(*ty).is_some_and(|row| {
+                    matches!(
+                        &row.kind,
+                        hirsel_types::TypeKind::Builtin {
+                            kind: hirsel_types::BuiltinType::List,
+                            ..
+                        }
+                    )
+                })
+            })
+            .expect("the checked source declares scratch's List[u64]");
         for observer in ["capacity", "hash"] {
             for regions in [true, false] {
                 let mut options = Options::new(target());
@@ -661,6 +684,18 @@ fn capacity_and_hash_native_controls() {
                         })
                         .unwrap();
                     let failure = observer_failure(&mut unit, failure);
+                    // Hash needs the same independent source-bound access program
+                    // that the production importer supplies for generated observers.
+                    unit.tables.structural.push(
+                        hirsel_layout::structural_access::at_layout(
+                            &source.types,
+                            list_type,
+                            &mut |id| Ok(source.signatures.get(id.path()).cloned()),
+                            &ready.table,
+                            layout,
+                        )
+                        .unwrap(),
+                    );
                     Inst::Hash {
                         result,
                         value,
@@ -676,6 +711,19 @@ fn capacity_and_hash_native_controls() {
                     memo: Default::default(),
                     discharge: None,
                 };
+                if observer == "hash" {
+                    let mut missing_plan = unit.clone();
+                    missing_plan.tables.structural.clear();
+                    match validate(missing_plan, &inputs) {
+                        Err(error) => assert!(
+                            format!("{:?}", error.violations)
+                                .contains("structural operand has no independent access plan"),
+                            "{:?}",
+                            error.violations,
+                        ),
+                        Ok(_) => panic!("injected Hash must require an independent access plan"),
+                    }
+                }
                 let unit = validate(unit, &inputs)
                     .unwrap_or_else(|e| panic!("{observer}: {:?}", e.violations));
                 ready.replace_unit(index, unit).unwrap();
@@ -709,8 +757,9 @@ fn capacity_and_hash_native_controls() {
 }
 
 /// Synthetic Hash can fail while the length call's operand loan is active.
-/// Give it its own failure/edge identities and end that loan before entering
-/// the constructor's older cleanup (which precedes the loan).
+/// Give it its own failure/edge identities, end the loan and retire the active
+/// invocation before entering the constructor's older cleanup. Admission failure
+/// itself still follows its original edge without retirement.
 pub(super) fn observer_failure<S>(
     unit: &mut LirUnit<S>,
     original: hirsel_lir::ir::FailureId,
@@ -735,10 +784,13 @@ pub(super) fn observer_failure<S>(
         parameters: PoolRange::EMPTY,
         instructions: PoolRange::push(
             &mut unit.instructions,
-            [Inst::EndLoan {
-                loan: loans[0],
-                if_active: false,
-            }],
+            [
+                Inst::EndLoan {
+                    loan: loans[0],
+                    if_active: false,
+                },
+                Inst::FrameLeave,
+            ],
         ),
         anchor: failure.anchor,
     });

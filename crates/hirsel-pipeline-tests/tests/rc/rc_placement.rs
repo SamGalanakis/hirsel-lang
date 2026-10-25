@@ -642,6 +642,33 @@ fn payload_observers_accept_uncounted_region_operands() {
                 let layout = main.types[main.values[value.index()].ty.index()].layout;
                 let failure = main.instructions.iter().find_map(Inst::failure).unwrap();
                 let failure = super::native_noalloc_list_19::observer_failure(main, failure);
+                let list_type = program.definitions[&path("main")]
+                    .bodies
+                    .iter()
+                    .flat_map(|body| &body.locals)
+                    .map(|local| local.ty)
+                    .find(|ty| {
+                        program.types.get(*ty).is_some_and(|row| {
+                            matches!(
+                                &row.kind,
+                                hirsel_types::TypeKind::Builtin {
+                                    kind: hirsel_types::BuiltinType::List,
+                                    ..
+                                }
+                            )
+                        })
+                    })
+                    .expect("the checked source declares main's List[u64]");
+                main.tables.structural.push(
+                    hirsel_layout::structural_access::at_layout(
+                        &program.types,
+                        list_type,
+                        &mut |id| Ok(program.signatures.get(id.path()).cloned()),
+                        &lowered.table,
+                        layout,
+                    )
+                    .unwrap(),
+                );
                 Inst::Hash {
                     result,
                     value,
@@ -666,7 +693,12 @@ fn payload_observers_accept_uncounted_region_operands() {
                     &Options::for_instance(regions, &lowered.instances, origin),
                 )
                 .unwrap();
-                assert!(check(&p, &unit).is_empty(), "{observer}: {}", dump(&unit));
+                let violations = check(&p, &unit);
+                assert!(
+                    violations.is_empty(),
+                    "{observer}: {violations:?}\n{}",
+                    dump(&unit),
+                );
                 p.units.push(unit);
                 p.proofs
                     .push(Proofs::for_instance(&lowered.instances, origin));
