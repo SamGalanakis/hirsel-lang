@@ -1789,6 +1789,64 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let status = self.drop_glue(anchor, |walk| walk.release(block, Some(layout)))?;
                 self.status_guard(status, failure)
             }
+            // A constructor-tail box opens at its stand-in layout, which releases
+            // nothing; the hole is its block (LANG-10, LIR schema revision 59).
+            Inst::HoleOpen {
+                result,
+                hole,
+                construct,
+                open,
+                ..
+            } => {
+                let Some(site) = self.unit.tables.constructs.get(construct.index()) else {
+                    return self.invalid("a hole opening outside the construction table");
+                };
+                let anchor = site.anchor;
+                let LayoutKind::Box { payload } = self.layout(open)?.kind else {
+                    return self.invalid("a hole's stand-in is not a box");
+                };
+                let record = self.layout(payload)?;
+                let SizeSpec::Fixed(size) = record.size else {
+                    return self.invalid("an open payload of dynamic extent");
+                };
+                let align = record.align;
+                let block = self.alloc_block(payload, self.const_u64(size), align, anchor)?;
+                self.define(result, block)?;
+                self.define(hole, block)
+            }
+            // The value moves into the open payload; the header then takes the box's layout.
+            Inst::HoleFill { hole, value } => {
+                let LayoutKind::Box { payload } = self.layout(self.value_type(hole)?.layout)?.kind
+                else {
+                    return self.invalid("a hole of no box");
+                };
+                let block = self.get(hole)?;
+                let place = self.payload_of(block, payload)?;
+                self.store(self.value_shape(value)?, self.counted_view(value)?, place);
+                let descriptor = self.descriptor(payload)?;
+                let close = self.runtime(RuntimeEntry::HoleClose)?;
+                self.builder.call(close, &[self.context, block, descriptor]);
+                Ok(())
+            }
+            // The runtime releases the root by its blocks' headers, so no open payload is
+            // read; compiled glue, which follows static layouts, never runs here. Nothing
+            // it releases is destructible, so its status is success.
+            Inst::HoleAbandon { root, .. } => {
+                let Some(root) = root else {
+                    return Ok(());
+                };
+                self.invalidate_uniqueness();
+                let release = self.runtime(RuntimeEntry::Release)?;
+                let block = self.get(root)?;
+                let descriptor = self.block_descriptor(block);
+                let null = self.module.const_zero(self.module.ptr_type());
+                let zero = self.const_u64(0);
+                self.builder.call(
+                    release,
+                    &[self.context, block, descriptor, null, zero, zero],
+                );
+                Ok(())
+            }
             Inst::Release {
                 value,
                 layout: _,

@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 69
+#define HIRSEL_RT_V2_ABI_VERSION 70
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -484,6 +484,11 @@ uint8_t hirsel_rt_v2_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, 
 /* For compiled drop glue (the count word contract above): return the storage of a block whose
  * count the glue read as COUNT_UNIQUE and whose fields it has released. */
 void hirsel_rt_v2_free(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block);
+/* Constructor-tail destinations (LANG-10, runtime ABI 70). A block allocated at an open stand-in
+ * layout (plain bytes of its box payload's size and alignment, nothing to release) has had its
+ * payload written: its header takes the layout at `index`, of the same size and alignment. Until
+ * then a release frees its storage alone. */
+void hirsel_rt_v2_hole_close(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint32_t index);
 
 /* Sequence storage (LIR schema revision 7; runtime ABI 5). A sequence payload is a u64 count, a
  * u64 capacity in elements, then the elements from align_up(16, element_align). The capacity word

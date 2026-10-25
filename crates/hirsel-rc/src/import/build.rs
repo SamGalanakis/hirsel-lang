@@ -239,7 +239,7 @@ impl Importer<'_> {
         let t = &self.out.types[ty.index()];
         match t.repr {
             ValueRepr::PayloadReceipt => true,
-            ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
+            ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark | ValueRepr::Hole => true,
             ValueRepr::Unit
             | ValueRepr::Scalar(_)
             | ValueRepr::InitMask { .. }

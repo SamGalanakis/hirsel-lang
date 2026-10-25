@@ -20,6 +20,9 @@ pub enum ContinuationError {
     Storage(ContentHash, u32),
     Loan(ContentHash, u32),
     RegionToken(ContentHash, u32),
+    /// A constructor-tail hole is live across the boundary, as a value or in
+    /// storage: no frame saves one (LANG-10, LIR schema revision 59).
+    Hole(ContentHash, u32),
     CleanupAnchor(ContentHash, u32),
     ResumeLabel(ContentHash, u32),
     /// A nested callee's exclusive parameter without its call-edge proof, or
@@ -486,6 +489,9 @@ fn check_state(
     }
     values.extend(super::carried(u, b).1);
     let ty = |v: ValueId| &u.types[u.values[v.index()].ty.index()];
+    if values.iter().any(|&v| ty(v).repr == ValueRepr::Hole) {
+        return Err(ContinuationError::Hole(id, n));
+    }
     // Owners: same set, each with its exact layout, representation and holding.
     let planned: Vec<_> = state.live.iter().map(|l| l.value).collect();
     if planned != values.iter().copied().collect::<Vec<_>>()
@@ -498,6 +504,12 @@ fn check_state(
         return Err(ContinuationError::LiveOwner(id, n));
     }
     let (mut slots, loans) = storage(u, b);
+    if slots
+        .iter()
+        .any(|s| u.types[u.slots[s.index()].ty.index()].repr == ValueRepr::Hole)
+    {
+        return Err(ContinuationError::Hole(id, n));
+    }
     let proof = match (exclusive, callee) {
         (None, _) => None,
         (Some(record), Some((body, _))) => Some(

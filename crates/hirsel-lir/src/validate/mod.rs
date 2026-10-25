@@ -54,6 +54,7 @@ pub use discharge::validate_discharge;
 mod flat_open;
 mod flat_walk;
 mod flow;
+mod holes;
 mod ownership;
 mod ready;
 mod scoped_transport;
@@ -818,6 +819,7 @@ fn check_with_context<S: Stage>(
         sealed::check(&cx, &facts, &mut report);
         sealed_payload::check(&cx, &mut report);
         ownership::check(&cx, &facts, &mut report);
+        holes::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
         if strict_scoped {
             scoped_transport::check(&cx, &facts, &mut report);
@@ -865,7 +867,7 @@ impl<S> Cx<'_, S> {
         let ty = &self.unit.types[ty.index()];
         match ty.repr {
             ValueRepr::PayloadReceipt => true,
-            ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
+            ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark | ValueRepr::Hole => true,
             ValueRepr::Unit
             | ValueRepr::Scalar(_)
             | ValueRepr::InitMask { .. }

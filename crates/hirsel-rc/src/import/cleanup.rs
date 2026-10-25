@@ -26,6 +26,14 @@ impl Importer<'_> {
         };
         let abi = &self.layouts.table().fn_abis[self.instances.abis[self.id.index()].0 as usize];
         let mut releases: Vec<Action> = Vec::new();
+        if let Some(h) = self.holes {
+            // The constructor-tail root, past every parameter ordinal: its
+            // shell alone while open, its payload's shares once filled.
+            releases.push(Action::Release {
+                slot: h.root,
+                anchor: (LOOP_RELEASE, plan.homes.len() as u32),
+            });
+        }
         for (k, home) in plan.homes.iter().enumerate().rev() {
             if *home == Home::Loop && abi.parameters[k].convention == Passing::Borrow {
                 let slot = self.loop_slots[k].expect("loop slot");
@@ -319,13 +327,8 @@ impl Importer<'_> {
     /// values, run the failure cleanup, propagate.
     pub(super) fn fail(&mut self, rule: Option<String>) -> R<FailureId> {
         let live = std::mem::replace(&mut self.invocation_live, false);
-        let actions = self.failure_actions()?;
         let pending = self.failure.pending.clone();
-        let mut target = if pending.is_empty() {
-            self.chain(&actions)?
-        } else {
-            self.dispose(&pending, &actions, false)?
-        };
+        let mut target = self.failure_target(&pending)?;
         self.invocation_live = live;
         if live {
             let saved = self.current;
@@ -346,6 +349,35 @@ impl Importer<'_> {
         let anchor = self.anchor_here();
         let edge = self.edge(target, pending);
         Ok(self.failure_edge(edge, rule, anchor))
+    }
+
+    /// Where a failure here continues: open constructor-tail holes are
+    /// abandoned first (LANG-10), then the cleanup runs and `pending` is
+    /// disposed of.
+    fn failure_target(&mut self, pending: &[ValueId]) -> R<BlockId> {
+        if self.holes_open() {
+            let saved = self.save();
+            let block = self.block(BlockKind::FailureCleanup);
+            self.current = block;
+            let mut forwarded = Vec::new();
+            for &value in pending {
+                let param = self.value(self.value_type(value), Holding::Owned);
+                self.out.blocks[block.index()].params.push(param);
+                forwarded.push(param);
+            }
+            self.abandon_holes()?;
+            let target = self.failure_target(&forwarded)?;
+            let edge = self.edge(target, forwarded);
+            self.terminate(Terminator::Jump(edge));
+            self.restore(saved);
+            return Ok(block);
+        }
+        let actions = self.failure_actions()?;
+        if pending.is_empty() {
+            self.chain(&actions)
+        } else {
+            self.dispose(pending, &actions, false)
+        }
     }
 
     /// A failure-cleanup block that receives `pending` owned values and

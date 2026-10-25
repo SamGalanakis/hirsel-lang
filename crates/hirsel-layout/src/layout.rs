@@ -1639,6 +1639,82 @@ impl<'o> LayoutBuilder<'o> {
         self.insert(key, record)
     }
 
+    /// The stand-in of the box layout `boxed` while its payload is a
+    /// constructor-tail hole (LANG-10, LIR schema revision 59): a box over an
+    /// inline array of unsigned words of the payload's alignment spanning its
+    /// size, with nothing to scan or drop, so releasing an open block frees
+    /// its shell alone.
+    pub fn open_box(&mut self, boxed: LayoutId) -> Result<LayoutId, LayoutError> {
+        let LayoutKind::Box { payload } = self.record(boxed).kind else {
+            return invalid("an open box of a layout that is not a box");
+        };
+        let (size, align) = {
+            let p = self.record(payload);
+            (p.size.clone(), p.align)
+        };
+        let instance = self.record(boxed).key.instance.map_or([0; 32], |h| h.0);
+        let mut key = Encoder {
+            bytes: Vec::new(),
+            revisions: true,
+        };
+        key.tag("open-box");
+        key.atom(&instance);
+        key.number(u64::from(payload.0));
+        if let Some(&id) = self.memo_id(&key.bytes) {
+            return Ok(id);
+        }
+        // Unsigned words of the payload's alignment, as many as its size holds.
+        let SizeSpec::Fixed(size) = size else {
+            return invalid("an open box of a payload of dynamic extent");
+        };
+        let mut element = None;
+        for (kind, width) in [
+            (ScalarKind::U8, 1),
+            (ScalarKind::U16, 2),
+            (ScalarKind::U32, 4),
+            (ScalarKind::U64, 8),
+            (ScalarKind::U128, 16),
+        ] {
+            if u64::from(align) != width || size % width != 0 {
+                continue;
+            }
+            let e = self.scalar(kind);
+            if self.record(e).align == align {
+                element = Some(e);
+                break;
+            }
+        }
+        let Some(element) = element else {
+            return invalid("an open box of a payload no word array spans");
+        };
+        let e = self.record(element).clone();
+        let SizeSpec::Fixed(width) = e.size else {
+            return invalid("a scalar of dynamic extent");
+        };
+        let count = size / width;
+        let mut payload_key = key.bytes.clone();
+        payload_key.extend_from_slice(b"-payload");
+        let mut bytes = self.blank(
+            &payload_key,
+            LayoutKind::Inline { element, count },
+            SizeSpec::Fixed(size),
+            align,
+        );
+        bytes.copy = e.copy;
+        bytes.storage = e.storage.clone();
+        let mut leaves = Vec::new();
+        if size <= ABI_LEAF_BYTES {
+            for i in 0..count {
+                leaves.extend(e.abi.scalars.iter().map(|&(o, s)| (o + i * width, s)));
+            }
+        }
+        bytes.abi = abi_inputs(&bytes.size, leaves, e.abi.unaligned);
+        let bytes = self.insert(payload_key, bytes);
+        let mut record = self.block_record(&key.bytes, bytes);
+        record.kind = LayoutKind::Box { payload: bytes };
+        Ok(self.insert(key.bytes, record))
+    }
+
     /// A flat list builder (LIR schema revision 22): a counted block of a
     /// sequential sequence whose elements are the prefixed variable flat
     /// records `element`, appended in their encoding by `Inst::FlatAppend`.

@@ -34,6 +34,11 @@ impl Importer<'_> {
     /// pending at a verified site, so every other slot ends here.
     pub(super) fn back_edge(&mut self, site: &LoopSite, arguments: &[tir::CallArgument]) -> R<()> {
         let plan = self.plan.expect("a loop plan");
+        // A constructor-tail site fills its hole before the arguments move.
+        if let Some(hole) = &site.hole {
+            self.fill_site(hole)?;
+        }
+        let carried = self.holes.map(|h| [h.root, h.hole, h.next]);
         let n = plan.homes.len();
         let mut values: Vec<Option<ValueId>> = vec![None; n];
         for a in arguments {
@@ -71,7 +76,8 @@ impl Importer<'_> {
             if !matches!(
                 info.kind,
                 SlotKind::Local | SlotKind::Temporary | SlotKind::Displaced
-            ) {
+            ) || carried.is_some_and(|c| c.contains(&slot))
+            {
                 continue;
             }
             let st = &self.state.slots[s];

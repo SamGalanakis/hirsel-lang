@@ -57,6 +57,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::FailureReanchor => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // Dup can update saturation/measurement bookkeeping as well as the count.
         R::Dup => (MemoryEffects::ReadWrite, false, &[0, 1]),
+        // A constructor-tail close writes the block's header word (diagnostic mode reads it).
+        R::HoleClose => (MemoryEffects::ReadWrite, false, &[0, 1]),
         // A root dup may key the block in the overflow table, so the block is not nocapture.
         R::RootDup => (MemoryEffects::ReadWrite, false, &[0]),
         // Metadata custody can reclaim a receipt DAG. Keep conservative effects

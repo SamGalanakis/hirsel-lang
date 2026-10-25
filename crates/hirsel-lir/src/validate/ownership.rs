@@ -2905,6 +2905,20 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.create(site, st, cr, result);
             }
             Inst::Dispose { token } => self.consume(site, st, cr, token),
+            Inst::HoleOpen { result, hole, .. } => {
+                self.create(site, st, cr, result);
+                self.create(site, st, cr, hole);
+            }
+            Inst::HoleFill { hole, value } => {
+                self.consume(site, st, cr, hole);
+                self.consume(site, st, cr, value);
+            }
+            Inst::HoleAbandon { hole, root } => {
+                self.consume(site, st, cr, hole);
+                if let Some(root) = root {
+                    self.consume(site, st, cr, root);
+                }
+            }
             Inst::RegionEnter { result, region } => {
                 if st.regions[region.index()] != Tri::No {
                     self.err(site, K::RegionState(region));

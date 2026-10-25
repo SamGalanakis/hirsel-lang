@@ -619,6 +619,7 @@ impl<S: Stage> Checker<'_, '_, S> {
                 (ValueRepr::Arena, LayoutKind::Arena) => true,
                 (ValueRepr::Scalar(ScalarKind::U64), LayoutKind::Path) => true,
                 (ValueRepr::Token, LayoutKind::Header) => true,
+                (ValueRepr::Hole, LayoutKind::Box { .. }) => true,
                 (ValueRepr::RegionMark | ValueRepr::InitMask { .. }, LayoutKind::Scalar(_)) => true,
                 (
                     ValueRepr::Aggregate | ValueRepr::Uncounted,
@@ -659,6 +660,8 @@ impl<S: Stage> Checker<'_, '_, S> {
             let v = ValueId(i as u32);
             let ok = match (unit.types[info.ty.index()].repr, info.holding) {
                 (ValueRepr::Token | ValueRepr::RegionMark, h) => h == Holding::Owned,
+                // A hole is owned; a version of a slot holding one is plain.
+                (ValueRepr::Hole, h) => matches!(h, Holding::Owned | Holding::Plain),
                 (
                     ValueRepr::Unit
                     | ValueRepr::Scalar(_)
@@ -2488,6 +2491,72 @@ impl<S: Stage> Checker<'_, '_, S> {
             Inst::Dispose { token } => {
                 if self.ty(token).repr != ValueRepr::Token {
                     self.add(site, K::Type("disposed token"));
+                }
+            }
+            Inst::HoleOpen {
+                result,
+                hole,
+                construct,
+                open,
+                ..
+            } => {
+                // A field-less box construction; the result is its block and
+                // the hole names the same box layout. The stand-in is a box
+                // over plain bytes of the payload's size and alignment.
+                let c = &unit.tables.constructs[construct.index()];
+                let boxed = self.layout_of(result);
+                let fields = c.fields.get(&unit.pools.fields).unwrap_or(&[]);
+                let payload = |l| match layouts.get(l).map(|r| &r.kind) {
+                    Some(LayoutKind::Box { payload }) => Some(*payload),
+                    _ => None,
+                };
+                let stand_in = payload(open)
+                    .and_then(|o| layouts.get(o))
+                    .zip(payload(boxed).and_then(|p| layouts.get(p)));
+                let ok = c.constructor == ConstructorKind::Box
+                    && fields.is_empty()
+                    && self.ty(result).repr == ValueRepr::Block
+                    && payload(boxed) == Some(c.layout)
+                    && self.ty(hole).repr == ValueRepr::Hole
+                    && self.layout_of(hole) == boxed
+                    && stand_in.is_some_and(|(o, p)| {
+                        o.size == p.size
+                            && o.align == p.align
+                            && o.fields.is_empty()
+                            && o.scan.is_empty()
+                            && o.drop.is_empty()
+                            && o.finalizer.is_none()
+                    });
+                if !ok {
+                    self.add(site, K::Type("hole opening"));
+                }
+                self.fresh_holding(site, result);
+                self.fresh_holding(site, hole);
+            }
+            Inst::HoleFill { hole, value } => {
+                let ok = self.ty(hole).repr == ValueRepr::Hole
+                    && unit.values[hole.index()].holding == Holding::Owned
+                    && match layouts.get(self.layout_of(hole)).map(|r| &r.kind) {
+                        Some(LayoutKind::Box { payload }) => *payload == self.layout_of(value),
+                        _ => false,
+                    };
+                if !ok {
+                    self.add(site, K::Type("hole fill"));
+                }
+            }
+            Inst::HoleAbandon { hole, root } => {
+                // The root is a block of the hole's box layout, which nothing
+                // reachable makes destructible.
+                let boxed = self.layout_of(hole);
+                let ok = self.ty(hole).repr == ValueRepr::Hole
+                    && unit.values[hole.index()].holding == Holding::Owned
+                    && root.is_none_or(|root| {
+                        self.ty(root).repr == ValueRepr::Block
+                            && self.layout_of(root) == boxed
+                            && !layouts.destructible(boxed)
+                    });
+                if !ok {
+                    self.add(site, K::Type("abandoned hole"));
                 }
             }
             Inst::TokenNone { result } => {
@@ -4661,6 +4730,11 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
             }
         }
         Inst::Dispose { token } => out.push(op(token)),
+        Inst::HoleAbandon { hole, root } => {
+            out.push(op(hole));
+            out.extend(root.map(op));
+        }
+        Inst::HoleFill { hole, value } => out.extend([op(hole), op(value)]),
         Inst::RegionReserve { mark, extent, .. } => out.extend([op(mark), op(extent)]),
         Inst::RegionExit { mark, .. } => out.push(op(mark)),
         Inst::ArenaToken { mark, budget, .. } => {
@@ -4793,7 +4867,7 @@ pub(super) fn inst_addresses<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<AddressId> {
     }
 }
 
-fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(ValueId, Usage)> {
+pub(super) fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(ValueId, Usage)> {
     let unit = cx.unit;
     match *term {
         Terminator::Branch { condition, .. } => vec![(condition, Usage::Operand)],

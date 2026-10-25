@@ -80,6 +80,7 @@ impl StageKind {
                 rank < StageKind::Ready as u8
             }
             Opcode::CopyValue => rank <= StageKind::Placed as u8,
+            Opcode::HoleOpen | Opcode::HoleFill | Opcode::HoleAbandon => true,
             Opcode::Copy
             | Opcode::Const
             | Opcode::FunctionRef

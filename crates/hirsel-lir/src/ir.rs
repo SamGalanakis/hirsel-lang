@@ -178,6 +178,10 @@ pub enum ValueRepr {
     },
     /// Private immutable metadata handle, never a language Shared root.
     PayloadReceipt,
+    /// A constructor-tail destination (LANG-10, LIR schema revision 59): the
+    /// open payload of the unique box block of its layout that a `HoleOpen`
+    /// allocated. Linear: one `HoleFill` or `HoleAbandon` consumes it.
+    Hole,
 }
 
 /// A LIR value type: representation plus its physical layout.
@@ -1020,6 +1024,39 @@ pub enum Inst {
     /// An explicit None token for a join edge.
     TokenNone {
         result: ValueId,
+    },
+    /// Constructor-tail destination passing (LANG-10, LIR schema revision
+    /// 59). Allocate the unique block of `construct`, a `Box` construction
+    /// with no field, whose payload stays open: `result` is the ordinary owned
+    /// block reference at the construction's layout and `hole` the linear
+    /// destination of its payload. Until its hole is filled the block carries
+    /// `open`, the box's stand-in layout over plain bytes of the payload's
+    /// size and alignment, so releasing it frees only its shell. Nothing may
+    /// read, borrow, compare, hash, publish, share, send, capture or return the
+    /// block, or a value built from it, while any hole is live.
+    HoleOpen {
+        result: ValueId,
+        hole: ValueId,
+        construct: ConstructId,
+        open: LayoutId,
+        failure: FailureId,
+    },
+    /// Consume `hole` and the owned `value` of its payload layout: the value
+    /// moves into the open payload and the block takes its box layout. It
+    /// cannot fail.
+    HoleFill {
+        hole: ValueId,
+        value: ValueId,
+    },
+    /// On a failure path, consume `hole` and, when present, release `root`,
+    /// the instance's outermost box, by the layouts its blocks' headers
+    /// carry: a block whose payload is still open frees its shell alone and is
+    /// never read, so compiled drop glue, which walks static layouts, never
+    /// reaches an open payload. Without `root` the hole's block is already
+    /// consumed. Nothing `root` holds is destructible: it cannot fail.
+    HoleAbandon {
+        hole: ValueId,
+        root: Option<ValueId>,
     },
     // Compiler-local regions.
     RegionEnter {
@@ -2037,6 +2074,7 @@ impl Inst {
             | Inst::PayloadReceipt { result, .. }
             | Inst::ArenaOpen { result, .. }
             | Inst::ArenaToken { result, .. } => vec![result],
+            Inst::HoleOpen { result, hole, .. } => vec![result, hole],
             Inst::Convert { result, flag, .. } | Inst::IntArith { result, flag, .. } => {
                 std::iter::once(result).chain(flag).collect()
             }
@@ -2069,6 +2107,8 @@ impl Inst {
             | Inst::Share { .. }
             | Inst::Release { .. }
             | Inst::Dispose { .. }
+            | Inst::HoleFill { .. }
+            | Inst::HoleAbandon { .. }
             | Inst::RegionPublish { .. }
             | Inst::ArenaInventory { .. }
             | Inst::RegionExit { .. }
@@ -2103,6 +2143,7 @@ impl Inst {
             | Inst::Release { failure, .. }
             | Inst::Reset { failure, .. }
             | Inst::Reuse { failure, .. }
+            | Inst::HoleOpen { failure, .. }
             | Inst::RegionReserve { failure, .. }
             | Inst::RegionExit { failure, .. }
             | Inst::SealArena { failure, .. }
@@ -2149,6 +2190,8 @@ impl Inst {
             | Inst::IsWritable { .. }
             | Inst::Dispose { .. }
             | Inst::TokenNone { .. }
+            | Inst::HoleFill { .. }
+            | Inst::HoleAbandon { .. }
             | Inst::RegionEnter { .. }
             | Inst::RegionPublish { .. }
             | Inst::ArenaOpen { .. }
@@ -2186,6 +2229,7 @@ impl Inst {
             | Inst::Release { failure, .. }
             | Inst::Reset { failure, .. }
             | Inst::Reuse { failure, .. }
+            | Inst::HoleOpen { failure, .. }
             | Inst::RegionReserve { failure, .. }
             | Inst::RegionExit { failure, .. }
             | Inst::SealArena { failure, .. }
@@ -2232,6 +2276,8 @@ impl Inst {
             | Inst::IsWritable { .. }
             | Inst::Dispose { .. }
             | Inst::TokenNone { .. }
+            | Inst::HoleFill { .. }
+            | Inst::HoleAbandon { .. }
             | Inst::RegionEnter { .. }
             | Inst::RegionPublish { .. }
             | Inst::ArenaOpen { .. }
@@ -2610,6 +2656,29 @@ impl Inst {
             | Self::RegionPublish { value }
             | Self::Dispose { token: value }
             | Self::TokenNone { result: value } => f(R::Value(value)),
+            Self::HoleFill { hole, value } => {
+                f(R::Value(hole));
+                f(R::Value(value));
+            }
+            Self::HoleAbandon { hole, root } => {
+                f(R::Value(hole));
+                if let Some(root) = root {
+                    f(R::Value(root));
+                }
+            }
+            Self::HoleOpen {
+                result,
+                hole,
+                construct,
+                open,
+                failure,
+            } => {
+                f(R::Value(result));
+                f(R::Value(hole));
+                f(R::Construct(construct));
+                f(R::Layout(open));
+                f(R::Failure(failure));
+            }
             Self::SealArena {
                 result,
                 grant,
@@ -3260,6 +3329,7 @@ snapshot_enum!(ValueRepr {
     Arena,
     InitMask { fields },
     PayloadReceipt,
+    Hole,
 });
 snapshot_struct!(LirType { repr, layout });
 snapshot_enum!(Holding {
@@ -3447,6 +3517,9 @@ snapshot_enum!(Inst {
     Reuse { result, token, construct, kept, failure },
     Dispose { token },
     TokenNone { result },
+    HoleOpen { result, hole, construct, open, failure },
+    HoleFill { hole, value },
+    HoleAbandon { hole, root },
     RegionEnter { result, region },
     RegionReserve { result, mark, layout, extent, failure },
     RegionPublish { value },

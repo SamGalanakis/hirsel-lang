@@ -69,6 +69,9 @@ pub trait Layouts {
     ) -> Result<LayoutId, LayoutError>;
     /// The sequence a flat list builder appends `element`'s encoding to.
     fn flat_builder(&mut self, element: LayoutId) -> Result<LayoutId, LayoutError>;
+    /// The stand-in of the box layout `boxed` while its payload is a
+    /// constructor-tail hole (LANG-10).
+    fn open_box(&mut self, boxed: LayoutId) -> Result<LayoutId, LayoutError>;
 }
 
 impl Layouts for LayoutBuilder<'_> {
@@ -122,6 +125,9 @@ impl Layouts for LayoutBuilder<'_> {
     }
     fn flat_builder(&mut self, element: LayoutId) -> Result<LayoutId, LayoutError> {
         LayoutBuilder::flat_builder(self, element)
+    }
+    fn open_box(&mut self, boxed: LayoutId) -> Result<LayoutId, LayoutError> {
+        LayoutBuilder::open_box(self, boxed)
     }
 }
 

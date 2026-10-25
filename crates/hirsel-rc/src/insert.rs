@@ -451,7 +451,7 @@ pub(crate) fn owns_type<S>(unit: &LirUnit<S>, lay: Lay<'_>, ty: LirTypeId) -> bo
     let ty = &unit.types[ty.index()];
     match ty.repr {
         ValueRepr::PayloadReceipt => true,
-        ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark => true,
+        ValueRepr::Block | ValueRepr::Token | ValueRepr::RegionMark | ValueRepr::Hole => true,
         ValueRepr::Unit
         | ValueRepr::Scalar(_)
         | ValueRepr::InitMask { .. }
@@ -1040,6 +1040,8 @@ fn consumed<S>(unit: &LirUnit<S>, lay: Lay<'_>, inst: &Inst) -> Vec<ValueId> {
         Inst::Freeze { value, .. } | Inst::Thaw { value, .. } => vec![value],
         Inst::Dispose { token } => vec![token],
         Inst::RegionExit { mark, .. } => vec![mark],
+        Inst::HoleFill { hole, value } => vec![hole, value],
+        Inst::HoleAbandon { hole, root } => [hole].into_iter().chain(root).collect(),
         _ => Vec::new(),
     }
 }
@@ -2411,6 +2413,17 @@ impl<S: Stage> Flow<'_, S> {
                 if let Some((slot, path)) = self.place(address) {
                     st.slots[slot.index()].remove(path, &self.facts.paths());
                     self.remember_empty(st, slot);
+                }
+            }
+            // A constructor-tail hole and its block are both owned; a fill
+            // consumes the hole and its value, an abandonment the hole.
+            Inst::HoleOpen { result, hole, .. } => {
+                self.create(st, result);
+                self.create(st, hole);
+            }
+            Inst::HoleFill { .. } | Inst::HoleAbandon { .. } => {
+                for v in consumed(unit, self.lay, inst) {
+                    take_credit(&mut st.credits, v);
                 }
             }
             Inst::Dup { value } => *st.credits.entry(value).or_insert(0) += 1,
@@ -3785,6 +3798,18 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
             Inst::ArenaOpen { result, budget } => {
                 *result = map(*result);
                 *budget = budget.map(map);
+            }
+            Inst::HoleOpen { result, hole, .. } => {
+                *result = map(*result);
+                *hole = map(*hole);
+            }
+            Inst::HoleFill { hole, value } => {
+                *hole = map(*hole);
+                *value = map(*value);
+            }
+            Inst::HoleAbandon { hole, root } => {
+                *hole = map(*hole);
+                *root = root.map(map);
             }
             Inst::ArenaToken {
                 result,

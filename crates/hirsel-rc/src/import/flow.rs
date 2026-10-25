@@ -265,6 +265,7 @@ impl Importer<'_> {
                 environment: Some(environment),
             });
         }
+        self.hole_slots()?;
         for (s, slot) in self.out.slots.iter().enumerate() {
             let entered = matches!(slot.kind, SlotKind::Parameter(_) | SlotKind::Capture(_));
             self.state.slots[s] = SlotState {
@@ -278,6 +279,7 @@ impl Importer<'_> {
             };
         }
         self.mark_versioned();
+        self.version_holes();
         if self.out.tables.environment().is_some() {
             let flag = self
                 .out
@@ -300,6 +302,7 @@ impl Importer<'_> {
         self.split(BlockKind::Body);
         if self.plan.is_some() {
             self.enter_loop(&parameter_slots)?;
+            self.enter_holes()?;
         }
         let entry = self.body.entry;
         let e = self.enter(entry);

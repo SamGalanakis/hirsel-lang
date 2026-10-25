@@ -59,6 +59,9 @@ pub(crate) enum Val {
         bits: u128,
     },
     Ptr(Ptr),
+    /// A constructor-tail hole: the open block whose payload it fills. It is
+    /// no holder of the block (LIR schema revision 59).
+    Hole(Ptr),
     /// An inline aggregate, variant or resource: its bytes and cells.
     Image(Extent),
     /// A callable: its code unit (none for a generic nested function's
@@ -321,6 +324,9 @@ pub(crate) struct Machine<'p, S> {
     physical: holders::Physical,
     full_recount_due: bool,
     arena_no_drop: Snapshot<()>,
+    /// Constructor-tail blocks whose payload is still open (LIR schema
+    /// revision 59): their release frees the storage alone, unread.
+    open_holes: Snapshot<()>,
     /// Each flat list builder with an open element, and the field its bytes
     /// are built in (LIR schema revision 24).
     open_elements: BTreeMap<AllocId, u32>,
@@ -386,6 +392,7 @@ fn tracked(repr: ValueRepr) -> bool {
             | ValueRepr::Callable
             | ValueRepr::Handle
             | ValueRepr::Token
+            | ValueRepr::Hole
     )
 }
 
@@ -446,6 +453,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             holders: Default::default(),
             physical: Default::default(),
             arena_no_drop: Default::default(),
+            open_holes: Default::default(),
             open_elements: BTreeMap::new(),
             tasks: None,
             choices: 0,
@@ -1026,6 +1034,27 @@ impl<'p, S: Stage> Machine<'p, S> {
     }
 
     /// An owning use that must transfer a credit when the value holds counted storage.
+    /// Consume a hole: its one credit, never a second use.
+    fn take_hole(&mut self, f: &mut Frame, v: ValueId, what: &str) -> Checked<Ptr> {
+        match self.take_value(f, v)? {
+            Moved {
+                val: Val::Hole(target),
+                credited: true,
+                ..
+            } => Ok(target),
+            Moved {
+                val: Val::Hole(_), ..
+            } => fail(
+                V::CreditUnderflow,
+                format!("hole {v:?} consumed twice at its {what}"),
+            ),
+            _ => fail(
+                V::TypeConfusion,
+                format!("{what} of {v:?}, which is no hole"),
+            ),
+        }
+    }
+
     fn take_owned(&mut self, f: &mut Frame, v: ValueId, what: &str) -> Checked<Moved> {
         let m = self.take_value(f, v)?;
         if !m.credited && self.carries_ref(&m.val) {
@@ -2320,6 +2349,23 @@ impl<'p, S: Stage> Machine<'p, S> {
                     _ => Ok((Val::Callable { code, env: None }, None, false)),
                 }
             }
+            // A hole is an uncounted checked cell.
+            ValueRepr::Hole => {
+                if !e.all_init(0, self.word) {
+                    return Err(uninit());
+                }
+                match e.cells.get(&0) {
+                    Some(Cell::Data {
+                        ptr,
+                        counted: false,
+                        borrow: None,
+                    }) => Ok((Val::Hole(*ptr), None, true)),
+                    _ => fail(
+                        V::ForgedPointer,
+                        "bytes read as a hole are not a checked hole",
+                    ),
+                }
+            }
             // A token is a checked cell; bits alone are a forged arena.
             ValueRepr::Arena => {
                 if !e.all_init(0, self.word) {
@@ -2458,6 +2504,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                     );
                 }
                 let cell = cell_for(self, ptr, m.credited, m.borrow, view)?;
+                let word = self.word;
+                self.ledger
+                    .get_mut(at.alloc)
+                    .extent
+                    .put_cell(at.offset, word, cell);
+            }
+            Val::Hole(ptr) => {
+                if persistent || !matches!(record.kind, LayoutKind::Box { .. }) {
+                    return fail(V::TypeConfusion, "a hole stored outside a frame slot");
+                }
+                let cell = Cell::Data {
+                    ptr,
+                    counted: false,
+                    borrow: None,
+                };
                 let word = self.word;
                 self.ledger
                     .get_mut(at.alloc)
@@ -2712,6 +2773,14 @@ impl<'p, S: Stage> Machine<'p, S> {
         work: &mut Vec<Work>,
     ) -> Checked<()> {
         if self.count_down(ptr)? {
+            if self.open_holes.get(ptr.alloc.0 as usize).is_some() {
+                self.open_holes.remove(ptr.alloc.0 as usize);
+                work.push(Work::Death {
+                    alloc: ptr.alloc,
+                    raw: None,
+                });
+                return Ok(());
+            }
             let layout = self
                 .ledger
                 .get(ptr.alloc)
@@ -5284,6 +5353,54 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
                 let val = self.construct(f, site, None, layout)?;
                 self.define_fresh(f, result, val)?;
+            }
+            // A constructor-tail box opens at its stand-in layout, whose
+            // payload has nothing to release; its fill installs the box's
+            // payload and layout. An abandonment releases the root by each
+            // block's own layout, as the runtime's header walk does, so an
+            // open block frees its shell alone (LIR schema revision 59).
+            Inst::HoleOpen {
+                result,
+                hole,
+                construct,
+                open,
+                ..
+            } => {
+                let site = self.construct_site(unit, construct)?;
+                let LayoutKind::Box { payload } = self.record(open)?.kind else {
+                    return fail(V::Malformed, "a hole's stand-in is not a box");
+                };
+                let target = self.place(f, site.placement, payload)?;
+                self.open_holes.set(target.alloc.0 as usize, ());
+                self.define_fresh(f, result, Val::Ptr(target))?;
+                self.define_fresh(f, hole, Val::Hole(target))?;
+            }
+            Inst::HoleFill { hole, value } => {
+                let target = self.take_hole(f, hole, "fill")?;
+                let LayoutKind::Box { payload } =
+                    self.record(self.value_type(unit, hole)?.layout)?.kind
+                else {
+                    return fail(V::Malformed, "a hole of no box");
+                };
+                let m = self.take_owned(f, value, "hole fill")?;
+                self.ledger.check(target)?;
+                if self.ledger.get(target.alloc).layout == Some(payload) {
+                    return fail(V::StoreOverInitialized, "a fill of a filled hole");
+                }
+                self.ledger.get_mut(target.alloc).layout = Some(payload);
+                self.open_holes.remove(target.alloc.0 as usize);
+                self.write_value(target, payload, m)?;
+            }
+            Inst::HoleAbandon { hole, root } => {
+                self.take_hole(f, hole, "abandonment")?;
+                if let Some(root) = root {
+                    let Val::Ptr(block) = self.take_owned(f, root, "hole abandonment")?.val else {
+                        return fail(V::TypeConfusion, "an abandoned root is no block");
+                    };
+                    let mut work = Vec::new();
+                    self.decrement(block, None, &mut work)?;
+                    return Ok(self.drain(f, work, After::Next, None));
+                }
             }
             Inst::Closure {
                 result,

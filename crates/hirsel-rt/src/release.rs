@@ -1316,6 +1316,51 @@ pub unsafe extern "C" fn hirsel_rt_v2_free(ctx: *mut TaskCtx, block: *mut Header
     }
 }
 
+/// Close a constructor-tail block (LANG-10, runtime ABI 70): its payload now holds a value,
+/// so its header takes the box layout at `index` in place of the open stand-in it was
+/// allocated at, which has the same size and alignment and releases nothing. Until it closes,
+/// a release, which follows the header, frees the block's storage alone.
+///
+/// # Safety
+/// `ctx` is live and `block` a unique heap block of this context, allocated at an open
+/// stand-in, whose payload holds a value of the layout at `index`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_hole_close(
+    ctx: *mut TaskCtx,
+    block: *mut Header,
+    index: u32,
+) {
+    // SAFETY: caller contract.
+    unsafe {
+        if (*ctx).heap().diagnostic {
+            check_hole_close(&*ctx, block, index);
+        }
+        (*block).descriptor = index | ((*block).descriptor & !crate::alloc::INDEX_MASK);
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn check_hole_close(ctx: &TaskCtx, block: *mut Header, index: u32) {
+    // SAFETY: caller contract.
+    unsafe {
+        check_live_block(ctx, block);
+        if (*block).count != 1 || (*block).domain() != DOMAIN_HEAP {
+            fault("a constructor-tail block closes shared or outside the heap");
+        }
+        let open = ctx.descriptor((*block).index());
+        let closed = ctx.descriptor(index);
+        check_layout(closed);
+        if (*open).step_count != 0
+            || (*open).finalizer.is_some()
+            || (*open).size != (*closed).size
+            || (*open).align != (*closed).align
+        {
+            fault("a constructor-tail block closes from no open stand-in of its layout");
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
 unsafe fn free_glue_checked(ctx: *mut TaskCtx, block: *mut Header) {

@@ -53,6 +53,11 @@ impl Importer<'_> {
                     }
                     None => v,
                 };
+                // A constructor-tail instance returns its root's payload.
+                let v = match self.holes {
+                    Some(_) => self.fill_return(v)?,
+                    None => v,
+                };
                 let actions = self.exit_actions(self.chain_actions(*cleanup)?);
                 self.failure = FailureContext {
                     cleanup: None,

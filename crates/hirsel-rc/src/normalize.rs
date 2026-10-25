@@ -1,8 +1,17 @@
 //! Mandatory self-tail loops. Only sites the source published in `Body.tail_sites` are
 //! candidates, and each is re-verified here against the instance it belongs
 //! to, with that instance's layouts: a site that fails stays an ordinary call
-//! and is reported. `ConstructorHole` is reserved until spec #46 rules and is
-//! rejected outright.
+//! and is reported.
+//!
+//! A `ConstructorHole` site (LANG-10) is a back edge too, by destination
+//! passing, as OCaml 4.14's `Constr.with_placeholder` (lambda/tmc.ml:131)
+//! and Koka's `ctailWrapper` (src/Core/CTail.hs:162), which pays one root
+//! allocation instead of duplicating the body. The instance opens a root box
+//! at entry and carries the latest hole across iterations. At the site the
+//! innermost `box` of the chain opens a new hole, the rest of the chain is
+//! built around it from the earlier fields already evaluated, the result
+//! fills the previous hole and the loop restarts. A return fills the hole and
+//! returns the root's payload.
 //!
 //! A verified instance becomes one loop whose header is the TIR entry block.
 //! A parameter every site passes back unchanged by borrow stays in its caller's
@@ -36,6 +45,28 @@ pub enum Home {
 pub struct LoopSite {
     pub call_block: tir::BlockId,
     pub owned: Vec<(u32, tir::PlaceId)>,
+    /// A constructor-tail site's chain; None for a plain self tail.
+    pub hole: Option<HoleSite>,
+}
+
+/// What a constructor-tail site imports of its continuation, in order: every
+/// instruction from the call's successor to the chain's outermost
+/// construction, except those naming the call's result before its `box`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HoleSite {
+    pub steps: Vec<(tir::BlockId, usize, HoleStep)>,
+    /// The place holding the finished chain, which fills the previous hole.
+    pub value: tir::PlaceId,
+    /// The type of the opened box.
+    pub boxed: hirsel_types::TypeId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HoleStep {
+    /// Import the instruction as it is.
+    Import,
+    /// The `box` of the call's result: open a hole there instead.
+    Open,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,6 +80,12 @@ impl LoopPlan {
     pub fn site(&self, block: tir::BlockId) -> Option<&LoopSite> {
         self.sites.iter().find(|s| s.call_block == block)
     }
+    /// The opened box type, when some site is a constructor-tail site.
+    pub fn boxed(&self) -> Option<hirsel_types::TypeId> {
+        self.sites
+            .iter()
+            .find_map(|s| s.hole.as_ref().map(|h| h.boxed))
+    }
 }
 
 /// Why a published site stays a call.
@@ -60,10 +97,12 @@ pub struct Declined {
 
 #[derive(Clone, Debug)]
 pub enum NormalizeError {
-    /// A `ConstructorHole` site: reserved until spec #46 rules.
+    /// A `ConstructorHole` site V accepted that this instance cannot lower:
+    /// every engine must run it in one activation (LANG-10).
     ConstructorHole {
         definition: hirsel_syntax::DefPath,
         call_block: tir::BlockId,
+        reason: &'static str,
     },
     Instance(InstanceError),
 }
@@ -94,12 +133,6 @@ pub fn plan(
     let mut declined = Vec::new();
     let mut seen = BTreeSet::new();
     for site in &body.tail_sites {
-        if let tir::TailKind::ConstructorHole(_) = site.kind {
-            return Err(NormalizeError::ConstructorHole {
-                definition: def.path.path().clone(),
-                call_block: site.call_block,
-            });
-        }
         if site.owner_body != view.body {
             continue;
         }
@@ -110,6 +143,14 @@ pub fn plan(
         };
         match verdict {
             Ok(s) => sites.push(s),
+            // V accepted the site, so its guarantee holds on every engine.
+            Err(reason) if matches!(site.kind, tir::TailKind::ConstructorHole(_)) => {
+                return Err(NormalizeError::ConstructorHole {
+                    definition: def.path.path().clone(),
+                    call_block: site.call_block,
+                    reason,
+                });
+            }
             Err(reason) => declined.push(Declined {
                 call_block: site.call_block,
                 reason,
@@ -258,10 +299,22 @@ fn verify(
     // the frame. Owned content still present at the site is checked against
     // the import's abstract state, where it is an error. A diverging call has
     // no continuation: its loop is the canonical `fn serve() -> Never` shape.
+    if let tir::TailKind::ConstructorHole(path) = &site.kind {
+        let Some(tir::CallReturn { destination, next }) = *returns else {
+            return Err("a diverging constructor-tail call");
+        };
+        let hole = hole_site(body, destination, next, path)?;
+        return Ok(LoopSite {
+            call_block: site.call_block,
+            owned,
+            hole: Some(hole),
+        });
+    }
     let Some(tir::CallReturn { destination, next }) = *returns else {
         return Ok(LoopSite {
             call_block: site.call_block,
             owned,
+            hole: None,
         });
     };
     let same = |a: tir::PlaceId, b: tir::PlaceId| {
@@ -310,6 +363,7 @@ fn verify(
                     Ok(LoopSite {
                         call_block: site.call_block,
                         owned,
+                        hole: None,
                     })
                 } else {
                     Err("returns another value")
@@ -319,6 +373,87 @@ fn verify(
         }
     }
     Err("continuation loops")
+}
+
+/// The chain a constructor-tail call's continuation builds, as V derived it
+/// (`hirsel_validate::tail::constructor_path`): the instructions naming the
+/// call's result up to its `box` are skipped, the `box` opens the hole, and
+/// everything else up to the outermost level is imported. The innermost
+/// level must be that `box`, so every hole is a payload of the same layout.
+fn hole_site(
+    body: &tir::Body,
+    destination: tir::PlaceId,
+    next: tir::BlockId,
+    path: &[u32],
+) -> Result<HoleSite, &'static str> {
+    let place = |p: tir::PlaceId| &body.places[p.0 as usize];
+    let same = |a: tir::PlaceId, b: tir::PlaceId| {
+        let (a, b) = (place(a), place(b));
+        a.root == b.root && a.projection == b.projection
+    };
+    let mut values = vec![destination];
+    let mut steps = Vec::new();
+    let mut levels = 0usize;
+    let mut boxed = None;
+    let mut block = next;
+    let mut visited = BTreeSet::new();
+    while visited.insert(block.0) {
+        let Some(b) = body.blocks.get(block.0 as usize) else {
+            return Err("continuation outside the body");
+        };
+        for (i, instruction) in b.instructions.iter().enumerate() {
+            use tir::InstructionKind as K;
+            let derived = |o: &tir::Operand| values.iter().any(|v| same(*v, o.place));
+            match &instruction.kind {
+                K::Assign { destination, value } => match &body.rvalues[value.0 as usize] {
+                    tir::Rvalue::Use(o) if derived(o) => {
+                        if boxed.is_some() {
+                            steps.push((block, i, HoleStep::Import));
+                        }
+                        values.push(*destination);
+                    }
+                    tir::Rvalue::Construct {
+                        constructor,
+                        fields,
+                        ..
+                    } if fields.last().is_some_and(|f| derived(&f.value)) => {
+                        if boxed.is_none() {
+                            if *constructor != tir::Constructor::Box {
+                                return Err("the innermost constructor-tail level is not a box");
+                            }
+                            boxed = Some(place(*destination).ty);
+                            steps.push((block, i, HoleStep::Open));
+                        } else {
+                            steps.push((block, i, HoleStep::Import));
+                        }
+                        levels += 1;
+                        values = vec![*destination];
+                        if levels == path.len() {
+                            return Ok(HoleSite {
+                                steps,
+                                value: *destination,
+                                boxed: boxed.expect("opened"),
+                            });
+                        }
+                    }
+                    _ if boxed.is_some() => steps.push((block, i, HoleStep::Import)),
+                    _ => return Err("the continuation computes before its box"),
+                },
+                K::BindOrigin { source, place, .. } if values.iter().any(|v| same(*v, *source)) => {
+                    if boxed.is_some() {
+                        steps.push((block, i, HoleStep::Import));
+                    }
+                    values.push(*place);
+                }
+                _ => steps.push((block, i, HoleStep::Import)),
+            }
+        }
+        match &b.terminator {
+            tir::Terminator::Goto(n) => block = *n,
+            _ => return Err("the constructor chain ends before its outermost level"),
+        }
+    }
+    Err("the constructor chain loops")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

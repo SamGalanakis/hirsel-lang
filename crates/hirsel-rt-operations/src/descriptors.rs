@@ -926,6 +926,8 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_free", DROPS),
     ops("hirsel_rt_v2_release", DROPS),
     ops("hirsel_rt_v2_reset", DROPS),
+    // A constructor-tail block's header takes its box layout (LANG-10).
+    entry("hirsel_rt_v2_hole_close", Local),
     // shared.rs
     entry("hirsel_rt_v2_freeze", Local),
     entry("hirsel_rt_v2_thaw", Local),

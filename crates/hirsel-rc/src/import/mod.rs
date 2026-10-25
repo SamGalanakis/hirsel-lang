@@ -73,6 +73,7 @@ mod flat_builder;
 mod flat_field;
 mod flat_views;
 mod flow;
+mod holes;
 mod inline;
 mod instructions;
 mod loops;
@@ -1267,6 +1268,7 @@ fn import_body(
         views: PVec::default(),
         entry_views: Vec::new(),
         loop_slots: Vec::new(),
+        holes: None,
         loan_map: Vec::new(),
         elided_loans: body
             .blocks
@@ -1431,6 +1433,8 @@ struct Importer<'a> {
     entry_views: Vec<Option<PVec<Option<ValueId>>>>,
     /// Self-tail loop slot of each TIR parameter ordinal (LANG-10).
     loop_slots: Vec<Option<SlotId>>,
+    /// Constructor-tail root and hole slots (LANG-10, LIR 59).
+    holes: Option<holes::Holes>,
     loan_map: Vec<LoanId>,
     elided_loans: std::collections::HashSet<tir::LoanId>,
     /// Lists built in their flat encoding (LIR schema revision 22).
