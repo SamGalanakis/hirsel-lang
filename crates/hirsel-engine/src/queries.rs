@@ -151,7 +151,7 @@ pub struct DependencyReads {
     pub failed_signature_keys: Vec<(DefPath, Option<ContentHash>)>,
     pub lookups: Vec<(DefPath, bool)>,
     pub manifest_lookups: Vec<hirsel_types::DependencyRead>,
-    pub resolver: Arc<Vec<hirsel_resolve::DependencyRead>>,
+    pub resolver: Arc<hirsel_types::SharedPath<hirsel_resolve::DependencyRead>>,
     /// Other items' name sites a result cites, as read (`cite_name`).
     pub citations: Vec<(DefPath, Option<Span>)>,
 }

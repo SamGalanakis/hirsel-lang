@@ -65,14 +65,21 @@ fn canonical_reads(reads: &mut [hirsel_types::DependencyRead]) {
         *manifest = ContentHash::default();
     }
 }
+// Canonicalization owns a serialization copy; live phase snapshots keep their
+// shared prefixes and their original provenance fields unchanged.
+fn canonical_read_log(reads: &mut Arc<hirsel_types::SharedPath<hirsel_types::DependencyRead>>) {
+    let mut canonical = reads.iter().cloned().collect::<Vec<_>>();
+    canonical_reads(&mut canonical);
+    *reads = Arc::new(canonical.into());
+}
 fn canonical_checked(checked: &CheckedBody) -> CheckedBody {
     let mut checked = checked.clone();
-    canonical_reads(Arc::make_mut(&mut checked.resolution.reads).as_mut_slice());
+    canonical_read_log(&mut checked.resolution.reads);
     checked
 }
 fn canonical_detail(mut detail: DependencyReads) -> DependencyReads {
     canonical_reads(&mut detail.manifest_lookups);
-    canonical_reads(Arc::make_mut(&mut detail.resolver).as_mut_slice());
+    canonical_read_log(&mut detail.resolver);
     detail
 }
 
@@ -105,7 +112,7 @@ impl SignatureRecord {
             covered: entry.covered.clone(),
             resolution: entry.products.resolution.as_ref().map(|r| {
                 let mut output = r.output.clone();
-                canonical_reads(Arc::make_mut(&mut output.value.reads).as_mut_slice());
+                canonical_read_log(&mut output.value.reads);
                 (r.syntax.occurrence, output)
             }),
             owner: entry.products.representation.as_ref().map(|owner| {

@@ -153,19 +153,21 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
     };
     let owner = NameSite::Item;
     let resolution = Resolution {
-        reads: vec![
-            DependencyRead::ProviderLookup {
-                context,
-                package: None,
-                segments: vec!["absent".into()],
-                output: lookup.clone(),
-            },
-            DependencyRead::Signature {
-                definition: hirsel_syntax::DefId::intern(&path("absent")),
-                fingerprint: None,
-            },
-        ]
-        .into(),
+        reads: std::sync::Arc::new(
+            vec![
+                DependencyRead::ProviderLookup {
+                    context,
+                    package: None,
+                    segments: vec!["absent".into()],
+                    output: lookup.clone(),
+                },
+                DependencyRead::Signature {
+                    definition: hirsel_syntax::DefId::intern(&path("absent")),
+                    fingerprint: None,
+                },
+            ]
+            .into(),
+        ),
         types: vec![
             (
                 TypeExprId(0),
@@ -198,8 +200,8 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
     let cloned = resolution.clone();
     assert_eq!(cloned, resolution);
     assert_eq!(
-        cloned.reads.as_ptr(),
-        resolution.reads.as_ptr(),
+        std::sync::Arc::as_ptr(&cloned.reads),
+        std::sync::Arc::as_ptr(&resolution.reads),
         "resolution clone copied dependency evidence"
     );
     let mut edited = cloned;
@@ -217,7 +219,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         serde_json::to_vec(&resolution.reads).unwrap(),
         serde_json::to_vec(resolution.reads.as_ref()).unwrap()
     );
-    let decoded: std::sync::Arc<Vec<DependencyRead>> =
+    let decoded: std::sync::Arc<SharedPath<DependencyRead>> =
         serde_json::from_slice(&serde_json::to_vec(&resolution.reads).unwrap()).unwrap();
     assert_eq!(decoded, resolution.reads);
     assert!(lookup.result.is_err());
@@ -2036,5 +2038,52 @@ fn an_unrelated_borrow_accepts_structural_payloads_in_the_actual_environment() {
             &mut lookup,
         )
         .unwrap()
+    );
+}
+
+#[test]
+fn appended_resolution_reads_share_prior_lookup_payloads_and_keep_ordered_bytes() {
+    let mut resolution = Resolution::default();
+    for i in 0..32 {
+        std::sync::Arc::make_mut(&mut resolution.reads).push(DependencyRead::ProviderLookup {
+            context: FileContext {
+                package: path("owner").0.package,
+                modules: vec!["nested".repeat(16)],
+            },
+            package: None,
+            segments: vec![format!("missing_{i}").repeat(16)],
+            output: LookupOutput {
+                manifest: ContentHash::of_bytes(b"selected"),
+                result: Err(QueryError::NotImplemented),
+            },
+        });
+    }
+    let original_bytes = serde_json::to_vec(&resolution.reads).unwrap();
+    let original_first = &resolution.reads[0] as *const DependencyRead;
+    let mut branch = resolution.clone();
+    std::sync::Arc::make_mut(&mut branch.reads).push(DependencyRead::Signature {
+        definition: hirsel_syntax::DefId::intern(&path("later")),
+        fingerprint: None,
+    });
+    assert_eq!(resolution.reads.len(), 32);
+    assert_eq!(branch.reads.len(), 33);
+    assert_eq!(
+        serde_json::to_vec(&resolution.reads).unwrap(),
+        original_bytes
+    );
+    assert!(
+        std::ptr::eq(original_first, &branch.reads[0]),
+        "appending a phase read deep-copied the prior immutable lookup log"
+    );
+    let expected: Vec<_> = branch.reads.iter().cloned().collect();
+    assert_eq!(
+        serde_json::to_vec(&branch.reads).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
+    );
+    drop(resolution);
+    assert!(std::ptr::eq(original_first, &branch.reads[0]));
+    assert_eq!(
+        serde_json::to_vec(&branch.reads).unwrap(),
+        serde_json::to_vec(&expected).unwrap()
     );
 }
