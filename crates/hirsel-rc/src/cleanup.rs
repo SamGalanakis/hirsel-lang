@@ -2303,7 +2303,7 @@ impl Lowering<'_, '_> {
         let origin = hirsel_lir::ir::SourceAnchor {
             body: cleanup.body,
             block: u32::MAX,
-            statement: self.ed.unit.tables.calls.len() as u32,
+            statement: self.ed.unit.tables.source_anchors.len() as u32,
             site: cleanup.site,
         };
         let anchor = match self

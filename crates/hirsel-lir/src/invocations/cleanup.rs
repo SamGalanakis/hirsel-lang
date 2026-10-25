@@ -73,7 +73,7 @@ pub(super) fn references<S: Stage>(
         if cleanup.body != body
             || origin.body != body
             || origin.block != u32::MAX
-            || origin.statement != call.0
+            || origin.statement != site.anchor.0
             || origin.site != cleanup.site
         {
             return Err("finalizer invocation differs from its cleanup origin".into());
@@ -96,7 +96,7 @@ pub(super) fn references<S: Stage>(
         references.push(ReferenceInvocation {
             body,
             block: u32::MAX,
-            statement: call.0,
+            statement: site.anchor.0,
             restart: false,
             primitive: None,
             callee: Some(finalizer.definition.clone()),
