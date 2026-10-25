@@ -3,8 +3,8 @@
 //! an ordinary item over its source item's syntax, so each later phase and
 //! engine sees ordinary declarations and direct calls.
 use hirsel_syntax::{
-    DefPath, Generated, GenericKind, GenericParam, ItemKind, ItemSyntax, MemberDefinition,
-    MemberSpec, TypeArgument, TypeBody, TypeExprKind, TypeFlavor,
+    DefPath, ExprKind, Generated, GenericKind, GenericParam, ItemKind, ItemSyntax, Literal,
+    MemberDefinition, MemberSpec, TypeArgument, TypeBody, TypeExprKind, TypeFlavor,
 };
 use std::sync::Arc;
 
@@ -179,6 +179,17 @@ pub(crate) fn specialization(
             (rewritten, &mut tree.types[index].kind)
         {
             *arguments = rewritten;
+        }
+    }
+    // A size member used as a value is its `u64` literal.
+    for expression in &mut tree.expressions {
+        let ExprKind::Path(path) = &expression.kind else {
+            continue;
+        };
+        if let (true, [binder, member]) = (path.package.is_none(), path.segments.as_slice())
+            && let Some(value) = sizes(binder.as_str(), member.as_str())
+        {
+            expression.kind = ExprKind::Literal(Literal::Integer(format!("{value}u64")));
         }
     }
     Some(Arc::new(syntax))

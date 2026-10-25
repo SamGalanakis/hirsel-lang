@@ -2859,10 +2859,17 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                         .expressions
                         .push((id, ResolvedName::Definition(target)));
                 }
+                // LANG-2: a size member used as a value is a `u64`.
+                Some((_, BoundMember::SizeParameter(parameter))) => self
+                    .output
+                    .query
+                    .value
+                    .expressions
+                    .push((id, ResolvedName::Size(parameter))),
                 Some(_) => self.diagnostic(
                     const { RuleId::of("GEN-6") },
                     span,
-                    "a type or size member is not a value",
+                    "a type member is not a value",
                 ),
                 None => {}
             }

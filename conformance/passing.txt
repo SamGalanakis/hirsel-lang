@@ -1516,7 +1516,11 @@ conformance/GEN/GEN-6-impl-extra-bad.hir
 conformance/GEN/GEN-6-impl-kind-bad.hir
 conformance/GEN/GEN-6-impl-match-ok.hir
 conformance/GEN/GEN-6-impl-missing-bad.hir
+conformance/GEN/GEN-6-impl-opacity-bad.hir
+conformance/GEN/GEN-6-impl-operation-value-bad.hir
 conformance/GEN/GEN-6-impl-passing-bad.hir
+conformance/GEN/GEN-6-impl-recursion-run.hir
+conformance/GEN/GEN-6-impl-sharing-run.hir
 conformance/GEN/GEN-6-impl-target-bad.hir
 conformance/GEN/GEN-6-impl-type-bad.hir
 conformance/GEN/GEN-6-literal-run.hir

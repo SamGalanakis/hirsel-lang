@@ -1570,14 +1570,16 @@ impl Checker<'_, '_> {
             .clone();
         let mut usage = UseKind::Borrow;
         let ty = match kind {
+            // Its header names no declaration a value could reference.
+            E::Path(_) if self.static_callee(id) => {
+                self.report(
+                    const { RuleId::of("GEN-6") },
+                    self.span(id),
+                    "an abstract implementation operation is only ever called",
+                );
+                self.error()
+            }
             E::Path(path) => {
-                if self.static_callee(id) {
-                    self.report(
-                        const { RuleId::of("GEN-6") },
-                        self.span(id),
-                        "an abstract implementation operation is only ever called",
-                    );
-                }
                 let ty = self.path_type(id, &path, expected, frame, false, true)?;
                 if let TypeKind::Function(f) = self.kind(ty)
                     && !f.generics.is_empty()

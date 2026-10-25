@@ -1,0 +1,63 @@
+// rule: GEN-6
+// expect: reject LANG-7 at line 43
+// twin: GEN/GEN-6-impl-sharing-run.hir
+// Inside the binder function, A.Item is abstract even though five maps it to u64.
+signature Source {
+  type Item: plain
+  fn make() -> Item uses {}
+}
+
+signature Sink {
+  type Item: plain
+  fn weigh(x: Item) -> u64 uses {}
+}
+
+fn make_u64() -> u64 uses {} {
+  5
+}
+
+fn make_u32() -> u32 uses {} {
+  5
+}
+
+fn weigh_u64(x: u64) -> u64 uses {} {
+  x * 2
+}
+
+implementation five: Source {
+  type Item = u64
+  make = make_u64
+}
+
+implementation five32: Source {
+  type Item = u32
+  make = make_u32
+}
+
+implementation double: Sink {
+  type Item = u64
+  weigh = weigh_u64
+}
+
+fn leak[A: implementation Source]() -> u64 uses {} {
+  A.make() + 1u64
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), ()] {
+  out.print(
+    io.stdout(rt) ? grant_error,
+    if leak with (A = five)() == 6u64 {
+      "ok\n"
+    } else {
+      "bad\n"
+    }
+  ) ? ignore
+  Ok(())
+}
+
+@noalloc
+fn grant_error(refusal: GrantError) -> () uses {} {
+  ()
+}
+
+fn ignore[E](take e: E) {}
