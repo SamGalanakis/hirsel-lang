@@ -280,6 +280,22 @@ impl MemoGraph {
         self.invalidation(key).is_some()
     }
 
+    /// Pending broad-context notifications, inspected through indices only.
+    /// A direct input/text change or an absent memo cannot use this shortcut.
+    /// The caller must compare every returned input with its completed facts;
+    /// this neither verifies nor confirms the memo itself.
+    pub(crate) fn pending_context_reads(&self, key: &MemoKey) -> Option<Vec<ReadKey>> {
+        if self.dirty.contains_key(key) || !self.by_def.get(&key.def)?.contains(key) {
+            return None;
+        }
+        let reads: Vec<_> = self
+            .validation_contexts
+            .iter()
+            .filter_map(|(read, context)| context.contains(key).then_some(*read))
+            .collect();
+        Some(reads)
+    }
+
     /// Index-only inspection: no per-memo Record or value is read here.
     fn invalidation(&self, key: &MemoKey) -> Option<Invalidation> {
         self.dirty.get(key).copied().or_else(|| {

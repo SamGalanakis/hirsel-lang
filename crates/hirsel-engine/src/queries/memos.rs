@@ -560,6 +560,9 @@ impl QueryEngine {
         detail: DependencyReads,
         observed: &Observed,
     ) -> Entry<T> {
+        if key.kind == QueryKind::Lower {
+            self.front_products.forget(&key);
+        }
         if key.kind == QueryKind::Check && result.is_err() {
             self.retire_after_check_rejection(key.def);
         }

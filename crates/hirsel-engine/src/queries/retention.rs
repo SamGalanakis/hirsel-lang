@@ -210,6 +210,7 @@ impl QueryEngine {
         };
         let id = DefId::intern(path);
         let key = MemoKey::new(QueryKind::Lower, id);
+        self.front_products.forget(&key);
         let durability = outcome.reads.durability(|read| self.durability_of(read));
         let mut detail = self
             .summaries
