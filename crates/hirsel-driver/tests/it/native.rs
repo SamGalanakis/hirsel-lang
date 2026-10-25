@@ -1544,10 +1544,11 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                 let compile = |text: &str, store: Arc<dyn ResultStore>, link: bool| {
                     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
                         .with_result_store(store.clone());
-                    engine.verify_store = match validation {
+                    let verification = match validation {
                         Validation::Ready => VerifyStore::Off,
                         Validation::EveryStage => VerifyStore::Recompute,
                     };
+                    engine = engine.with_verify_store(verification);
                     let checked = checked_in(&mut engine, text);
                     let mut options = Options::new(x86());
                     options.validation = validation;
@@ -1560,6 +1561,7 @@ fn copied_callee_edits_invalidate_warm_owner_objects_at_one_two_eight_workers() 
                         options,
                         false,
                         hirsel_intern::jobs::Jobs::new(jobs),
+                        verification,
                         |ready, artifacts| {
                             link.then(|| {
                                 let registry =

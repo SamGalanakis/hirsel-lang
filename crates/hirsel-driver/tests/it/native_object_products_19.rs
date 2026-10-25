@@ -66,6 +66,7 @@ pub(super) fn compile_entry(
         options,
         debug,
         jobs,
+        hirsel_engine::store::VerifyStore::Off,
         |_, _| (),
     )
     .0
@@ -80,56 +81,16 @@ pub(super) fn compile_with_context<R>(
     options: native::Options,
     debug: bool,
     jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
     use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
 ) -> (Objects, R) {
-    let verification = engine.verify_store;
     let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
     let mut declarations = NativeDeclarations::collect(engine, &mut cache, &[]).unwrap();
-    let preliminary = engine
-        .native_semantic_program(declarations.roots.definitions.clone())
-        .unwrap();
-    let mut paths = declarations
-        .context
-        .sources
-        .keys()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    paths.extend(
-        preliminary
-            .source_bindings()
-            .map(|(path, _, _)| path.clone()),
-    );
-    // Semantic revisions also bind compile-time generators. Retain their source
-    // declarations/anchors without registering them as runtime instances.
-    let mut link_declarations = declarations.sources.clone();
-    let mut link_anchors = declarations.source_anchors.clone();
-    for path in &paths {
-        if link_declarations.contains_key(path) {
-            continue;
-        }
-        let product = cache.definition(engine, path, &paths).unwrap();
-        link_anchors.insert(
-            path.clone(),
-            product.contracts.as_ref().map_or_else(
-                || vec![product.source.source.syntax.anchor],
-                |contracts| contracts.source_anchors.clone(),
-            ),
-        );
-        declarations
-            .program
-            .signatures
-            .insert(path.clone(), product.source.signature.clone());
-        link_declarations.insert(path.clone(), product.source);
-    }
+    let paths = declarations.sources.keys().cloned().collect::<Vec<_>>();
     let original = engine
-        .native_original_reader(&paths.into_iter().collect::<Vec<_>>(), store.clone())
+        .native_original_reader(&paths, store.clone())
         .unwrap();
     for (path, source) in &mut declarations.sources {
-        source.lower = original
-            .input(path)
-            .and_then(|(output, _, _, _)| output.cloned());
-    }
-    for (path, source) in &mut link_declarations {
         source.lower = original
             .input(path)
             .and_then(|(output, _, _, _)| output.cloned());
@@ -155,9 +116,9 @@ pub(super) fn compile_with_context<R>(
                 program: &declarations.program,
                 operations: Arc::new(declarations.program.operation_registry()),
                 roots: &declarations.roots,
-                declarations: &link_declarations,
+                declarations: &declarations.sources,
                 entries: &entries,
-                anchors: &link_anchors,
+                anchors: &declarations.source_anchors,
                 signatures: engine.signature_snapshot(),
                 semantic,
                 selected: std::slice::from_ref(entry),
