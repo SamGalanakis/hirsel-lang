@@ -1861,7 +1861,7 @@ fn ordinary_parse_heads_restore_names_and_signatures_without_syntax_or_type_tabl
         // separate Parse output now. Its absence must still require a parser.
         let mut removed_syntax = 0;
         for (key, bytes) in store.take() {
-            if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+            if key.2 == QueryKind::Parse && bytes.starts_with(&2u32.to_le_bytes()) {
                 removed_syntax += 1;
             } else {
                 store::ResultStore::put(&*store, &key, &bytes);
@@ -1947,7 +1947,7 @@ fn ordinary_parse_heads_materialize_only_demanded_files_and_preserve_resident_ed
         // output; keep its exact parser-work and edit assertions below.
         let mut removed_syntax = 0;
         for (key, bytes) in store.take() {
-            if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+            if key.2 == QueryKind::Parse && bytes.starts_with(&2u32.to_le_bytes()) {
                 removed_syntax += 1;
             } else {
                 store::ResultStore::put(&*store, &key, &bytes);
@@ -2001,7 +2001,7 @@ fn ordinary_parse_heads_preserve_duplicate_order_when_cached_and_new_files_mix()
                 // before Parse outputs were independently persisted.
                 let mut removed_syntax = 0;
                 for (key, bytes) in store.take() {
-                    if key.2 == QueryKind::Parse && bytes.starts_with(&1u32.to_le_bytes()) {
+                    if key.2 == QueryKind::Parse && bytes.starts_with(&2u32.to_le_bytes()) {
                         removed_syntax += 1;
                     } else {
                         store::ResultStore::put(&*store, &key, &bytes);
