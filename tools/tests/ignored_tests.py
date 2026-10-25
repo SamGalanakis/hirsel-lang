@@ -53,6 +53,39 @@ DELEGATED = {
 # These Buck proof targets supply their own immutable tool inputs, rather than
 # the archival runner's environment. Each probe checks exact identity/counts.
 PROOFS = {
+    'requests::native_selection::tests::actual_native_selector_coalesces_build_and_bound_run_without_a_retained_controller': {
+        'source': 'crates/hirsel-driver/src/requests/native_selection/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-selector-proof',
+        'probe': 'tools/buck2/native-toolchain/native_selector_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
+    'requests::native_bootstrap::tests::actual_native_bootstrap_binds_run_identity_and_delivers_live_output': {
+        'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-bound-bootstrap-proof',
+        'probe': 'tools/buck2/native-toolchain/native_bound_bootstrap_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
+    'requests::native_bootstrap::tests::actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen': {
+        'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
+        'target': '//tools/buck2/native-toolchain:native-closed-bootstrap-proof',
+        'probe': 'tools/buck2/native-toolchain/native_closed_bootstrap_proof.py',
+        'arguments': ['/original pinned llvm', '/original packaged linker', '/selected kit', '/selected runtime', '/selected auditors', '/selected floor', '/selected qemu', '/selected harness'],
+        'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm',
+                        'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
+                        'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
+                        'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
+                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+    },
     'native::object_queries::platform::closure_tests::selected_virtual_inputs_keep_scripts_thin_members_and_absolute_dso_names': {
         'source': 'crates/hirsel-driver/tests/native-validation/platform_closure.rs',
         'target': '//tools/buck2/native-toolchain:platform-closure-proof',
