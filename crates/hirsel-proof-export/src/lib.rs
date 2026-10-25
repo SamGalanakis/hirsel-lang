@@ -673,6 +673,25 @@ pub fn encode_with_output_limit(
     Some(body)
 }
 
+/// Emit directly into the final exact-length Arc, retaining no String copy.
+/// Context tables still require the caller's separate construction workspace.
+pub fn encode_arc_with_output_limit(
+    export: &Export,
+    locator: &Locator,
+    limit: usize,
+) -> Option<Arc<str>> {
+    let length = encoded_bytes(export, locator)?;
+    if length > limit {
+        return None;
+    }
+    let mut writer =
+        Writer::with_exact_arc(Cx::new(locator.clone(), export.types.clone()), length)?;
+    export.write(&mut writer);
+    let digest = digest_node(writer.written_text()?);
+    writer.append_raw(&digest);
+    writer.finish_arc_checked().0
+}
+
 /// PS-8/PS-9: build and encode.
 pub fn export(input: &ExportInput) -> String {
     encode(&build(input), &input.locator)
