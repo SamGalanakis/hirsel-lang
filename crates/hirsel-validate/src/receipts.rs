@@ -200,6 +200,17 @@ enum Backend {
         Arc<hirsel_artifact_store::Memory>,
     ),
     Directory(Store),
+    Hosted(
+        Arc<dyn VerifierRows>,
+        Arc<dyn hirsel_artifact_store::Contents>,
+    ),
+}
+/// A host-owned, bounded home for verifier rows and their content. Only this
+/// cache publishes rows, so product bytes in the same host cannot supply them.
+/// Either may be dropped by the host's bound; a missing row is a miss.
+pub trait VerifierRows: hirsel_artifact_store::Contents {
+    fn row(&self, key: ContentHash) -> Option<hirsel_artifact_store::Reference>;
+    fn set_row(&self, key: ContentHash, reference: hirsel_artifact_store::Reference);
 }
 /// Only `validate` can issue a receipt. There is no producer/import/seed method.
 /// Directory associations are trusted local state; exchanging output bytes
@@ -233,11 +244,15 @@ impl VerifierCache {
     pub fn directory_store(store: Store) -> Self {
         Self(Backend::Directory(store), Mutex::default())
     }
+    /// Keep rows, receipts and type records in the host's bounded storage.
+    pub fn hosted<T: VerifierRows + 'static>(rows: Arc<T>) -> Self {
+        Self(Backend::Hosted(rows.clone(), rows), Mutex::default())
+    }
 
     pub(crate) fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
         match &self.0 {
             Backend::Directory(store) => Some(store.batch()),
-            Backend::Memory(..) => None,
+            Backend::Memory(..) | Backend::Hosted(..) => None,
         }
     }
 
@@ -266,6 +281,10 @@ impl VerifierCache {
                 let bytes = opened.get()?;
                 store.touch(Address(key), association.reference);
                 (association.reference, bytes)
+            }
+            Backend::Hosted(rows, contents) => {
+                let reference = rows.row(key)?;
+                (reference, contents.get_content(reference)?)
             }
         };
         if reference.domain != domain {
@@ -303,6 +322,11 @@ impl VerifierCache {
                 let _batch = store.batch();
                 if let Ok(reference) = store.put(domain, &bytes) {
                     let _ = store.associate(Address(key), Action(key), reference);
+                }
+            }
+            Backend::Hosted(rows, contents) => {
+                if let Some(reference) = contents.put_content(domain, &bytes) {
+                    rows.set_row(key, reference);
                 }
             }
         }
@@ -361,9 +385,15 @@ impl VerifierCache {
         match &self.0 {
             Backend::Memory(_, contents) => contents.clone(),
             Backend::Directory(store) => Arc::new(store.clone()),
+            Backend::Hosted(_, contents) => contents.clone(),
         }
     }
     fn records(&self, types: Arc<TypeInterner>) -> Arc<hirsel_product_codec::TypeRecords> {
+        // Hosted storage bounds bytes only; a cached codec would keep its type
+        // maps and interner alive beyond the host's bound and revision.
+        if let Backend::Hosted(..) = &self.0 {
+            return hirsel_product_codec::TypeRecords::new(types, self.contents());
+        }
         let mut current = self.1.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(records) = &*current
             && Arc::ptr_eq(&records.types, &types)
@@ -881,6 +911,52 @@ mod tests {
         );
         let (report, ran) = check(&f, &cache, policy);
         assert!(ran && !report.violations.is_empty());
+    }
+
+    #[test]
+    fn hosted_verifier_retains_no_type_records_beyond_its_callers() {
+        #[derive(Default)]
+        struct Rows(
+            hirsel_artifact_store::Memory,
+            Mutex<HashMap<ContentHash, hirsel_artifact_store::Reference>>,
+        );
+        impl hirsel_artifact_store::Contents for Rows {
+            fn get_content(
+                &self,
+                reference: hirsel_artifact_store::Reference,
+            ) -> Option<hirsel_artifact_store::Bytes> {
+                self.0.get_content(reference)
+            }
+            fn put_content(
+                &self,
+                domain: Domain,
+                bytes: &[u8],
+            ) -> Option<hirsel_artifact_store::Reference> {
+                self.0.put_content(domain, bytes)
+            }
+        }
+        impl VerifierRows for Rows {
+            fn row(&self, key: ContentHash) -> Option<hirsel_artifact_store::Reference> {
+                self.1.lock().unwrap().get(&key).copied()
+            }
+            fn set_row(&self, key: ContentHash, reference: hirsel_artifact_store::Reference) {
+                self.1.lock().unwrap().insert(key, reference);
+            }
+        }
+        let cache = VerifierCache::hosted(Arc::new(Rows::default()));
+        let types = session();
+        let baseline = Arc::strong_count(&types);
+        let records = cache.records(types.clone());
+        assert!(Arc::strong_count(&types) > baseline);
+        drop(records);
+        assert_eq!(Arc::strong_count(&types), baseline, "no hosted codec cache");
+        let directory = Directory::new();
+        let cached = VerifierCache::directory(directory.0.clone());
+        drop(cached.records(types.clone()));
+        assert!(
+            Arc::strong_count(&types) > baseline,
+            "directory caches keep their codec"
+        );
     }
 
     #[test]

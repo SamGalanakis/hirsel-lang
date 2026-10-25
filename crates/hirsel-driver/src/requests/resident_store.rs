@@ -1,0 +1,318 @@
+//! Host-owned transient products shared by one Session's source revisions while
+//! no durable store is selected. Hits are ordinary ResultStore variants, so the
+//! engine adopts one only when every recorded read still validates; this store
+//! changes how much is recomputed, never what a program means.
+use hirsel_engine::{
+    runtime::{MemoryReservation, ProcessBudget},
+    store::{Bytes, Contents, Domain, EntryKey, Reference, ResultStore},
+};
+use hirsel_syntax::ContentHash;
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex, PoisonError},
+};
+
+/// The payload region and Bytes headers beside each payload, owned by its bytes.
+const PAYLOAD_CHARGE: u64 = 128;
+/// One HashMap slot plus one BTreeMap order entry. Evicting an entry leaves
+/// both maps' allocations behind, so slots stay charged at their high water.
+const SLOT_CHARGE: u64 = 192;
+
+/// Disjoint key spaces: ResultStore get/put never reach verifier rows.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum Key {
+    Result(ContentHash),
+    VerifierRow(ContentHash),
+    VerifierContent(ContentHash),
+}
+enum Value {
+    /// Retains its reservation through every clone and range a get returns,
+    /// so an evicted payload stays charged until its last reader drops it.
+    Bytes(Bytes),
+    Row(Reference, MemoryReservation),
+}
+struct Entry {
+    value: Value,
+    charge: u64,
+    stamp: u64,
+}
+#[derive(Default)]
+struct State {
+    entries: HashMap<Key, Entry>,
+    /// Stamps, least recently used first.
+    order: BTreeMap<u64, Key>,
+    clock: u64,
+    /// Charges of the entries this store still retains.
+    used: u64,
+    /// Doubling slot reservations, held until the store drops.
+    slots: Vec<MemoryReservation>,
+    slot_count: u64,
+}
+impl State {
+    fn remove(&mut self, key: &Key) {
+        if let Some(entry) = self.entries.remove(key) {
+            self.order.remove(&entry.stamp);
+            self.used -= entry.charge;
+        }
+    }
+    fn slot_bytes(&self) -> u64 {
+        self.slot_count * SLOT_CHARGE
+    }
+}
+
+/// Least recently used entries within `capacity` bytes, slots included, each
+/// charged to the shared process budget. A put that does not fit or that the
+/// budget refuses is dropped.
+struct Bounded {
+    budget: Arc<ProcessBudget>,
+    capacity: u64,
+    state: Mutex<State>,
+}
+impl Bounded {
+    /// Read one entry and mark it most recently used.
+    fn read<T>(&self, key: Key, read: impl FnOnce(&Value) -> Option<T>) -> Option<T> {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let previous = state.entries.get(&key)?.stamp;
+        state.order.remove(&previous);
+        state.clock += 1;
+        let stamp = state.clock;
+        state.order.insert(stamp, key);
+        let entry = state.entries.get_mut(&key)?;
+        entry.stamp = stamp;
+        read(&entry.value)
+    }
+    fn put(&self, key: Key, value: impl FnOnce(MemoryReservation) -> Value, len: u64) {
+        let charge = len + PAYLOAD_CHARGE;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        // An entry that cannot fit even alone never evicts the others.
+        if charge + state.slot_count.max(16) * SLOT_CHARGE > self.capacity {
+            return;
+        }
+        state.remove(&key);
+        // Evict until this entry and the slots it needs fit, then commit growth.
+        let slots = loop {
+            let len = state.entries.len() as u64;
+            let slots = if len >= state.slot_count {
+                (2 * state.slot_count).max(16)
+            } else {
+                state.slot_count
+            };
+            if state.used + charge + slots * SLOT_CHARGE <= self.capacity {
+                break slots;
+            }
+            let Some(oldest) = state.order.first_key_value().map(|(_, key)| *key) else {
+                return;
+            };
+            state.remove(&oldest);
+        };
+        if slots > state.slot_count {
+            let Ok(grown) = self
+                .budget
+                .reserve((slots - state.slot_count) * SLOT_CHARGE)
+            else {
+                return;
+            };
+            state.slots.push(grown);
+            state.slot_count = slots;
+        }
+        let Ok(memory) = self.budget.reserve(charge) else {
+            return;
+        };
+        state.used += charge;
+        state.clock += 1;
+        let stamp = state.clock;
+        state.order.insert(stamp, key);
+        state.entries.insert(
+            key,
+            Entry {
+                value: value(memory),
+                charge,
+                stamp,
+            },
+        );
+    }
+    fn get_bytes(&self, key: Key) -> Option<Bytes> {
+        self.read(key, |value| match value {
+            Value::Bytes(bytes) => Some(bytes.clone()),
+            Value::Row(..) => None,
+        })
+    }
+    fn put_bytes(&self, key: Key, bytes: &[u8]) {
+        self.put(
+            key,
+            |memory| Value::Bytes(Bytes::from(bytes).retain_owner(Arc::new(memory))),
+            bytes.len() as u64,
+        );
+    }
+}
+impl Contents for Bounded {
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        let bytes = self.get_bytes(Key::VerifierContent(reference.output.0))?;
+        (reference.domain.reference(&bytes)? == reference).then_some(bytes)
+    }
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        let reference = domain.reference(bytes)?;
+        self.put_bytes(Key::VerifierContent(reference.output.0), bytes);
+        Some(reference)
+    }
+}
+impl hirsel_validate::VerifierRows for Bounded {
+    fn row(&self, key: ContentHash) -> Option<Reference> {
+        self.read(Key::VerifierRow(key), |value| match value {
+            Value::Row(reference, _) => Some(*reference),
+            Value::Bytes(_) => None,
+        })
+    }
+    fn set_row(&self, key: ContentHash, reference: Reference) {
+        self.put(
+            Key::VerifierRow(key),
+            |memory| Value::Row(reference, memory),
+            std::mem::size_of::<Reference>() as u64,
+        );
+    }
+}
+
+/// `resident@1`: products and the local verifier's rows share one bound.
+pub struct ResidentStore {
+    bounded: Arc<Bounded>,
+    verifier: Arc<hirsel_validate::VerifierCache>,
+}
+impl ResidentStore {
+    pub fn new(budget: Arc<ProcessBudget>, capacity: u64) -> Self {
+        let bounded = Arc::new(Bounded {
+            budget,
+            capacity,
+            state: Mutex::new(State::default()),
+        });
+        Self {
+            verifier: Arc::new(hirsel_validate::VerifierCache::hosted(bounded.clone())),
+            bounded,
+        }
+    }
+    /// Bytes this store retains: its entries and slot high water.
+    pub fn used(&self) -> u64 {
+        let state = self
+            .bounded
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.used + state.slot_bytes()
+    }
+}
+impl ResultStore for ResidentStore {
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        Some(self.verifier.clone())
+    }
+    fn get(&self, key: &EntryKey) -> Option<Bytes> {
+        self.bounded.get_bytes(Key::Result(key.0))
+    }
+    fn put(&self, key: &EntryKey, value: &[u8]) {
+        self.bounded.put_bytes(Key::Result(key.0), value);
+    }
+    fn name(&self) -> &'static str {
+        "resident@1"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hirsel_engine::QueryKind;
+    use hirsel_validate::VerifierRows;
+
+    fn key(byte: u8) -> EntryKey {
+        let hash = ContentHash::of_parts("resident-store-test", [&[byte][..]]);
+        EntryKey(hash, hash, QueryKind::Check)
+    }
+    const SLOTS: u64 = 16 * SLOT_CHARGE;
+    const ENTRY: u64 = 100 + PAYLOAD_CHARGE;
+
+    #[test]
+    fn resident_store_evicts_least_recent_within_capacity_and_releases_its_charge() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), SLOTS + 2 * ENTRY);
+        store.put(&key(1), &[1; 100]);
+        store.put(&key(2), &[2; 100]);
+        assert!(store.get(&key(1)).is_some());
+        store.put(&key(3), &[3; 100]);
+        assert!(
+            store.get(&key(2)).is_none(),
+            "least recently used entry is evicted"
+        );
+        assert_eq!(&store.get(&key(1)).unwrap()[..], &[1; 100]);
+        assert_eq!(&store.get(&key(3)).unwrap()[..], &[3; 100]);
+        assert_eq!(store.used(), SLOTS + 2 * ENTRY);
+        assert_eq!(budget.reserved(), store.used());
+        store.put(&key(4), &[4; 1 << 10]);
+        assert!(
+            store.get(&key(4)).is_none(),
+            "an entry beyond capacity is dropped"
+        );
+        drop(store);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn resident_store_keeps_an_evicted_payload_charged_until_its_reader_drops_it() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), SLOTS + ENTRY);
+        store.put(&key(1), &[1; 100]);
+        let held = store.get(&key(1)).unwrap();
+        store.put(&key(2), &[2; 100]);
+        assert!(store.get(&key(1)).is_none());
+        assert_eq!(store.used(), SLOTS + ENTRY);
+        assert_eq!(
+            budget.reserved(),
+            SLOTS + 2 * ENTRY,
+            "the held payload stays charged"
+        );
+        drop(store);
+        assert_eq!(budget.reserved(), ENTRY);
+        assert_eq!(&held[..], &[1; 100]);
+        drop(held);
+        assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn resident_store_never_charges_slots_beyond_its_capacity() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), SLOTS - 1);
+        store.put(&key(1), &[1; 10]);
+        assert!(store.get(&key(1)).is_none());
+        assert_eq!((store.used(), budget.reserved()), (0, 0));
+        let refused = ProcessBudget::new(SLOTS - 1);
+        let store = ResidentStore::new(refused.clone(), 1 << 20);
+        store.put(&key(1), &[1; 10]);
+        assert_eq!((store.used(), refused.reserved()), (0, 0));
+    }
+
+    #[test]
+    fn resident_store_drops_puts_the_process_budget_refuses() {
+        let budget = ProcessBudget::new(SLOTS + 10 + PAYLOAD_CHARGE);
+        let store = ResidentStore::new(budget.clone(), 1 << 20);
+        store.put(&key(1), &[1; 10]);
+        store.put(&key(2), &[2; 10]);
+        assert!(store.get(&key(1)).is_some());
+        assert!(store.get(&key(2)).is_none());
+        assert_eq!(budget.reserved(), SLOTS + 10 + PAYLOAD_CHARGE);
+    }
+
+    #[test]
+    fn resident_verifier_rows_share_the_bound_and_product_keys_cannot_reach_them() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), 1 << 16);
+        let domain = Domain { kind: 1, schema: 1 };
+        let reference = store.bounded.put_content(domain, b"receipt").unwrap();
+        let row = key(9).0;
+        store.bounded.set_row(row, reference);
+        assert_eq!(store.bounded.row(row), Some(reference));
+        assert_eq!(
+            &store.bounded.get_content(reference).unwrap()[..],
+            b"receipt"
+        );
+        assert!(store.get(&EntryKey(row, row, QueryKind::Check)).is_none());
+        assert_eq!(budget.reserved(), store.used());
+        drop(store);
+        assert_eq!(budget.reserved(), 0);
+    }
+}
