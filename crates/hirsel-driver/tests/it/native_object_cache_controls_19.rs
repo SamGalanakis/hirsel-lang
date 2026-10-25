@@ -1,7 +1,6 @@
 //! Original unit-cache warm/recompute vectors using admitted native tasks.
 use hirsel_driver::{compiler_adapters, native};
 use hirsel_engine::{
-    runtime::ProductRef,
     store::{self, Address, Association, Bytes, EntryKey, ResultStore, VerifyStore},
     *,
 };
@@ -17,7 +16,7 @@ use std::sync::{
 const SOURCE: &str = "fn helper(x:u64)->u64{x+1u64}\nfn main()->u64{helper(7u64)}";
 struct Store {
     inner: store::DirStore,
-    substituted: Mutex<Option<(Address, Association)>>,
+    substituted: Mutex<Vec<(Address, Association)>>,
     fragment_puts: AtomicUsize,
 }
 impl ResultStore for Store {
@@ -51,10 +50,14 @@ impl ResultStore for Store {
         self.inner.verifier()
     }
     fn lookup_product(&self, address: Address) -> Option<Association> {
-        if let Some((selected, association)) = *self.substituted.lock().unwrap()
-            && selected == address
+        if let Some((_, association)) = self
+            .substituted
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(selected, _)| *selected == address)
         {
-            return Some(association);
+            return Some(*association);
         }
         self.inner.lookup_product(address)
     }
@@ -139,7 +142,7 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                 let directory = tempfile::tempdir().unwrap();
                 let store = Arc::new(Store {
                     inner: store::DirStore::new(directory.path().join("products")),
-                    substituted: Mutex::new(None),
+                    substituted: Mutex::new(vec![]),
                     fragment_puts: AtomicUsize::new(0),
                 });
                 let before = calls();
@@ -204,24 +207,28 @@ fn original_warm_ready_skips_work_and_recompute_compares_actual_fragments() {
                     native::Backend::Llvm,
                     VerifyStore::Off,
                 );
-                let (key, original): &(_, ProductRef) = cold
+                // The old fixture corrupts every fragment lookup, so retain
+                // that scope: no independently valid sibling fragment rewrites
+                // its row while the selected mismatches refuse.
+                *store.substituted.lock().unwrap() = cold
                     .products
                     .iter()
-                    .find(|(key, _)| key.owner.instance.definition().0.name == "main")
-                    .unwrap();
-                let (_, replacement) = other
-                    .products
-                    .iter()
-                    .find(|(other, _)| other.owner == key.owner)
-                    .unwrap();
-                assert_ne!(original.record, replacement.record);
-                *store.substituted.lock().unwrap() = Some((
-                    key.address(),
-                    Association {
-                        action: original.action,
-                        reference: replacement.record,
-                    },
-                ));
+                    .map(|(key, original)| {
+                        let (_, replacement) = other
+                            .products
+                            .iter()
+                            .find(|(other, _)| other.owner == key.owner)
+                            .unwrap();
+                        assert_ne!(original.record, replacement.record);
+                        (
+                            key.address(),
+                            Association {
+                                action: original.action,
+                                reference: replacement.record,
+                            },
+                        )
+                    })
+                    .collect();
                 let before_refusal = store.fragment_puts.load(Ordering::Relaxed);
                 let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     compile(
