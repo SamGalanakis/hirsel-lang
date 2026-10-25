@@ -620,23 +620,19 @@ impl DemandInstances {
         {
             return Ok(output.clone());
         }
+        let mut original_source = None;
         let mut operations = if request.recipe.domain == SOURCE_RECIPE {
-            let output = inputs
-                .source_output(&request.key.definition)?
-                .ok_or("native source instance needs current V invocation observations")?;
             let selected = hirsel_lir::ir::Symbol {
                 kind: hirsel_lir::ir::SymbolKind::Function,
                 definition: key.instance.definition().clone(),
                 instance: Some(key.instance.digest()),
             };
-            let evidence = hirsel_rc::invocations::source_instance_from_output(
-                &output.invocations(),
+            let (evidence, original) = inputs.source_invocations(
                 &request.key.definition,
-                &inputs.declarations().program.operations,
                 &selected,
                 hirsel_tir::BodyId(key.instance.body()),
-            )
-            .map_err(str::to_owned)?;
+            )?;
+            original_source = original;
             let mut operations = inputs.declarations().program.operation_registry();
             operations
                 .invocations
@@ -694,7 +690,10 @@ impl DemandInstances {
             if recipe.key()? != key.instance {
                 return Err("source recipe differs from demanded key".into());
             }
-            let (original, source_input) = inputs.original_source(&request.key.definition)?;
+            let (original, source_input) = match original_source {
+                Some(original) => original,
+                None => inputs.original_source(&request.key.definition)?,
+            };
             if let Some(input) = &source_input {
                 input
                     .demand_body(&key.instance)

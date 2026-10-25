@@ -30,6 +30,52 @@ pub trait NativeSourceProvider: NativeRecordSource {
         &self,
         path: &DefPath,
     ) -> Result<Option<&hirsel_validate::VerifiedDefinitionOutput>, String>;
+    /// Independent original call evidence. A V envelope supplies compact rows;
+    /// without one, the ordinary reader rechecks the original TIR. Neither path
+    /// reads candidate LIR or manufactures a verifier-owned source token.
+    fn source_invocations(
+        &mut self,
+        path: &DefPath,
+        selected: &hirsel_lir::ir::Symbol,
+        body: hirsel_tir::BodyId,
+    ) -> Result<
+        (
+            hirsel_rc::invocations::SourceInstance,
+            Option<OriginalSource>,
+        ),
+        String,
+    > {
+        if let Some(output) = self.source_output(path)? {
+            let evidence = hirsel_rc::invocations::source_instance_from_output(
+                &output.invocations(),
+                path,
+                &self.declarations().program.operations,
+                selected,
+                body,
+            )
+            .map_err(str::to_owned)?;
+            return Ok((evidence, None));
+        }
+        let original = self.original_source(path)?;
+        let program = &self.declarations().program;
+        let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
+        signatures.extend(
+            program
+                .signatures
+                .iter()
+                .map(|(path, signature)| (path, (**signature).clone())),
+        );
+        let evidence = hirsel_rc::invocations::source_instance(
+            &program.types,
+            &original.0,
+            &signatures,
+            &program.operations,
+            selected,
+            body,
+        )
+        .map_err(str::to_owned)?;
+        Ok((evidence, Some(original)))
+    }
     fn source_observation(&self, path: &DefPath) -> Result<SourceObservation, String>;
     fn original_source(&mut self, path: &DefPath) -> Result<OriginalSource, String>;
 }

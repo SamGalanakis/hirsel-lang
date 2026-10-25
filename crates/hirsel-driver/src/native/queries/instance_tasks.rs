@@ -350,7 +350,7 @@ impl InstanceTasks {
             return Err("source operation inputs require settled native discovery".into());
         }
         let entries = self.entries();
-        let source = if let Some(front) = &self.front {
+        let mut source = if let Some(front) = &self.front {
             let mut selected = BTreeMap::new();
             for entry in &entries {
                 if let Some(path) = entry.request.source_definition() {
@@ -385,22 +385,16 @@ impl InstanceTasks {
             let Some(path) = entry.request.source_definition() else {
                 continue;
             };
-            let output = source
-                .source_output(path)?
-                .ok_or("completed source instance has no independent V invocation output")?;
             let selected = hirsel_lir::ir::Symbol {
                 kind: hirsel_lir::ir::SymbolKind::Function,
                 definition: entry.key.instance.definition().clone(),
                 instance: Some(entry.key.instance.digest()),
             };
-            let evidence = hirsel_rc::invocations::source_instance_from_output(
-                &output.invocations(),
+            let (evidence, _) = source.source_invocations(
                 path,
-                &self.source.declarations.program.operations,
                 &selected,
                 hirsel_tir::BodyId(entry.key.instance.body()),
-            )
-            .map_err(str::to_owned)?;
+            )?;
             if let Some(previous) = registry.invocations.insert(
                 evidence.body.definition.clone(),
                 evidence.invocations.clone(),
