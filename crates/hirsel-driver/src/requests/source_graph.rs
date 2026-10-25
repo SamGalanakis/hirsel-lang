@@ -239,6 +239,12 @@ fn uninstalled() -> ToolError {
     ToolError::Runtime("selected compiler operation has no installed producer".into())
 }
 
+/// Root continuations a request can hold at once: Growth, Check, Run and the
+/// selected SafeCheck root.
+const ROOT_CONTINUATIONS: u64 = 4;
+/// Nested Lower/Evaluate continuations admitted under the active frames.
+const BODY_CONTINUATIONS: u64 = 32;
+
 /// Retained bounds come from the caller's existing snapshot partition. These
 /// are hard producer allowances: constructors and completions refuse overflow.
 /// Runtime scratch is separate, and shared across the admitted worker width.
@@ -338,27 +344,34 @@ impl Plan {
                     "compiler runtime cannot admit its worker stacks and query inventory".into(),
                 )
             })?;
-        // Root continuations remain live while their P/Lower dependencies run.
+        // Every admitted worker may hold one active scratch frame. Suspended
+        // continuations keep only their retained grant, so they share what
+        // the active frames leave: half for the root continuations (Growth,
+        // Check, Run, SafeCheck), half for a chain of nested Lower/Evaluate
+        // bodies, such as a constant read by a constant read by a function.
         // A snapshot partition is not one task's executable memory allowance.
-        let continuation_bound = working / (config.jobs.get() as u64 + 8);
+        let jobs = config.jobs.get() as u64;
+        let scratch = working / (jobs + 1);
+        let suspended = working - jobs * scratch;
+        let root_bound = suspended / (2 * ROOT_CONTINUATIONS);
+        let body_bound = suspended / (2 * BODY_CONTINUATIONS);
         // Only demanded Lower outputs consume producer retention. Potential
         // addresses carry compact input slots, not maximum future/body grants.
         let output_metadata =
             FrontLowerQueries::output_bytes(MemoryWeight::default()).ok_or_else(uninstalled)?;
         let retained = lower_slack
             .checked_sub(output_metadata)
-            .map(|bytes| (bytes / 2).min(continuation_bound))
+            .map(|bytes| (bytes / 2).min(body_bound))
             .filter(|bytes| *bytes != 0)
             .ok_or_else(|| {
                 ToolError::Runtime("compiler Lower continuation exceeds admission".into())
             })?;
-        let root_retained = growth_slack.min(check_slack).min(continuation_bound);
+        let root_retained = growth_slack.min(check_slack).min(root_bound);
         if root_retained == 0 {
             return Err(ToolError::Runtime(
                 "compiler root continuation exceeds admission".into(),
             ));
         }
-        let scratch = working / (config.jobs.get() as u64 + 1);
         Ok(Self {
             snapshots: SnapshotPlan {
                 source,
