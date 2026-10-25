@@ -29,6 +29,15 @@ pub struct ConcurrentIo {
     before_path: Option<Arc<dyn Fn(&Request) + Send + Sync>>,
 }
 
+/// The request words [`ConcurrentIo::attempt_observed`] publishes after the call.
+#[derive(Clone, Copy)]
+enum Published {
+    Split(u64),
+    Alias(u64),
+    Join(u64),
+    Other,
+}
+
 #[derive(Debug)]
 pub(super) enum FileResult {
     Read(Result<Vec<u8>, IoError>),
@@ -226,7 +235,18 @@ impl ConcurrentIo {
         if let Request::Close { handle } = &request {
             self.tls_pem.lock().unwrap().remove(handle);
         }
-        let result = core.call(request.clone());
+        // Publication needs only these handle words: the call consumes the request.
+        let published = match &request {
+            Request::NetSplit { stream, .. } => Published::Split(*stream),
+            Request::NarrowFile { file, .. }
+            | Request::ReadOnlyDir { directory: file }
+            | Request::NarrowDir {
+                directory: file, ..
+            } => Published::Alias(*file),
+            Request::NetJoin { read, .. } => Published::Join(*read),
+            _ => Published::Other,
+        };
+        let result = core.call(request);
         *observed = core.disk.observed_output.take();
         debug_assert!(
             core.disk.prefetched.is_none()
@@ -234,29 +254,24 @@ impl ConcurrentIo {
                 && core.disk.prefetched_path.is_none()
         );
         let mut registry = self.registry.lock().unwrap();
-        if let Request::NetSplit { stream, .. } = &request
+        if let Published::Split(stream) = published
             && let Ok(Completion::Halves(Ok((read, write)))) = &result
         {
             if tls_split {
-                let (parent, _) = registry.identity(*stream).expect("registered TLS stream");
+                let (parent, _) = registry.identity(stream).expect("registered TLS stream");
                 registry.bind(*read, parent, Kind::Other);
                 registry.bind(*write, parent, Kind::Other);
             } else {
-                registry.split(*stream, *read, *write);
+                registry.split(stream, *read, *write);
             }
         }
-        if let Request::NarrowFile { file, .. }
-        | Request::ReadOnlyDir { directory: file }
-        | Request::NarrowDir {
-            directory: file, ..
-        } = &request
+        if let Published::Alias(file) = published
+            && let Ok(Completion::OptionalFile(Some(to)) | Completion::Handle(Ok(to))) = &result
         {
-            if let Ok(Completion::OptionalFile(Some(to)) | Completion::Handle(Ok(to))) = &result {
-                registry.alias(*file, *to);
-            }
+            registry.alias(file, *to);
         }
-        if let Request::NetJoin { read, .. } = &request
-            && let Some((key, kind)) = registry.identity(*read)
+        if let Published::Join(read) = published
+            && let Some((key, kind)) = registry.identity(read)
             && let Ok(Completion::NetHandle(Ok(joined))) = &result
         {
             let parent = match kind {
