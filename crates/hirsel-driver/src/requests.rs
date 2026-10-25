@@ -20,6 +20,7 @@ mod output;
 mod ownership_admission;
 mod ownership_bootstrap;
 mod ownership_selection;
+mod resident_store;
 mod safe_check;
 mod selector;
 mod source_graph;

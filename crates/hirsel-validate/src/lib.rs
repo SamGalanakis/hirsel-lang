@@ -52,7 +52,7 @@ mod proofs;
 mod receipts;
 pub use receipts::{
     AcceptedArtifact, Artifact, ExecutionReceipt, ReplayEnvironment, SourceInvocation,
-    VerifiedDefinition, VerifiedDefinitionOutput, VerifiedInvocations, VerifierCache,
+    VerifiedDefinition, VerifiedDefinitionOutput, VerifiedInvocations, VerifierCache, VerifierRows,
     validate_cached, validate_definition, validate_with_receipt,
 };
 mod protocol;

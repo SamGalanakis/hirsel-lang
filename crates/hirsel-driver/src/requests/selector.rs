@@ -60,10 +60,18 @@ impl CompilerRequests {
 
     pub fn new(
         compiler: Compiler,
-        config: CompileConfig,
+        mut config: CompileConfig,
         budget: Arc<ProcessBudget>,
         limits: RequestLimits,
     ) -> Self {
+        // Without a durable store, this selector's source revisions share a
+        // bounded transient one, so an edit revalidates rather than recomputes.
+        if !config.store.enabled() {
+            config.store = Arc::new(super::resident_store::ResidentStore::new(
+                budget.clone(),
+                limits.transport_bytes,
+            ));
+        }
         let graphs = super::host_selector::GraphSelections::new(&budget);
         let ledger =
             super::inspection::InspectionLedger::new(budget.clone(), limits.snapshot_bytes / 8);
