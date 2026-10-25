@@ -41,6 +41,13 @@ const CONTEXT_BYTES: usize = size_of::<TaskCtx>().next_multiple_of(64);
 /// mapping if advice is unsupported, since retaining idle pages is harmless.
 const STACK_HOT_BYTES: usize = 64 << 10;
 
+/// Idle stacks a worker keeps. A stack a compact frame leaves returns to the
+/// worker it left on, and another worker activating the frame maps its own,
+/// so unbounded pools grow toward one stack per task per worker. A full pool
+/// unmaps down to half before it takes another, as Go's per-P stack cache
+/// releases half to the global pool (`runtime/stack.go:301-317,519-521`).
+const IDLE_STACKS: usize = 4;
+
 #[derive(Default)]
 pub(crate) struct StackPool(Vec<Stack>);
 
@@ -51,6 +58,9 @@ impl StackPool {
 
     /// The previous context has been destroyed and no continuation can resume.
     pub(crate) fn put(&mut self, stack: Stack) {
+        if self.0.len() >= IDLE_STACKS {
+            self.0.truncate(IDLE_STACKS / 2);
+        }
         stack.release_cold_pages();
         self.0.push(stack);
     }
@@ -398,6 +408,19 @@ unsafe extern "C" fn fiber_start() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Stacks returned to one worker, as compact leaves return them, stay
+    /// mapped only up to its idle bound; the rest are unmapped.
+    #[test]
+    fn a_worker_keeps_at_most_its_idle_stacks_mapped() {
+        let mut pool = StackPool::default();
+        for returned in 1..=4 * IDLE_STACKS {
+            pool.put(Stack::new());
+            assert!(pool.0.len() <= IDLE_STACKS, "{returned} returned");
+        }
+        let taken: Vec<_> = (0..pool.0.len()).map(|_| pool.take()).collect();
+        assert!(!taken.is_empty() && pool.0.is_empty());
+    }
 
     #[test]
     fn pooled_stacks_preserve_the_hot_prefix_and_can_start_another_fiber() {
