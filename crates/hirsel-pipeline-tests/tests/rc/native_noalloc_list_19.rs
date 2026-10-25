@@ -757,9 +757,10 @@ fn capacity_and_hash_native_controls() {
 }
 
 /// Synthetic Hash can fail while the length call's operand loan is active.
-/// Give it its own failure/edge identities, end the loan and retire the active
-/// invocation before entering the constructor's older cleanup. Admission failure
-/// itself still follows its original edge without retirement.
+/// Give it its own failure/edge identities and end the operand loan. These
+/// straight-line observer fixtures retire an invocation only if their imported
+/// body admits one; leaf operations have none. Admission failure itself retains
+/// its original edge without retirement.
 pub(super) fn observer_failure<S>(
     unit: &mut LirUnit<S>,
     original: hirsel_lir::ir::FailureId,
@@ -778,20 +779,27 @@ pub(super) fn observer_failure<S>(
         })
         .collect();
     assert_eq!(loans.len(), 1);
+    let admissions = unit
+        .instructions
+        .iter()
+        .filter(|inst| matches!(inst, Inst::FrameEnter { .. }))
+        .count();
+    assert!(
+        admissions <= 1,
+        "observer fixture must have at most one invocation admission"
+    );
+    let mut cleanup = vec![Inst::EndLoan {
+        loan: loans[0],
+        if_active: false,
+    }];
+    if admissions == 1 {
+        cleanup.push(Inst::FrameLeave);
+    }
     let block = BlockId(unit.blocks.len() as u32);
     unit.blocks.push(Block {
         kind: BlockKind::FailureCleanup,
         parameters: PoolRange::EMPTY,
-        instructions: PoolRange::push(
-            &mut unit.instructions,
-            [
-                Inst::EndLoan {
-                    loan: loans[0],
-                    if_active: false,
-                },
-                Inst::FrameLeave,
-            ],
-        ),
+        instructions: PoolRange::push(&mut unit.instructions, cleanup),
         anchor: failure.anchor,
     });
     unit.terminators.push(Terminator::Jump(edge));
