@@ -164,9 +164,16 @@ pub(super) fn keep_image(ctx: *mut TaskCtx, word: u64, image: &Arc<crate::sync::
 /// the role-free registrations that lease's cell keeps.
 fn keep_wake(ctx: *mut TaskCtx) {
     if unsafe { (*ctx).free_ops.wake.is_none() } {
-        let key = role::with_role(ctx, |s| s.key(s.current));
-        unsafe { (*ctx).free_ops.wake = crate::pool::free::own_token((*ctx).run_ptr(), key) };
+        take_wake(ctx);
     }
+}
+
+/// Out of line: it runs once per task, inside role-path ops.
+#[cold]
+#[inline(never)]
+fn take_wake(ctx: *mut TaskCtx) {
+    let key = role::with_role(ctx, |s| s.key(s.current));
+    unsafe { (*ctx).free_ops.wake = crate::pool::free::own_token((*ctx).run_ptr(), key) };
 }
 
 /// Drop this task's own wake token at its body's end: a fast child's
@@ -324,7 +331,12 @@ pub(crate) unsafe fn mutex_take(
     let mut state = cell.lock();
     // A reserved front waiter owns the next permit; never overtake it.
     if !state.permit.ready_for(me) {
-        return None;
+        // Recorded and replayed waits keep the role path, which publishes
+        // Entered under the latch.
+        if replay.is_some() || super::record::on(ctx) {
+            return None;
+        }
+        return unsafe { mutex_wait(ctx, cell, state, me, payload, out) };
     }
     begin(ctx, replay.as_ref().map(|object| object.token()));
     let mut result = Acquired::Pending;
@@ -344,6 +356,65 @@ pub(crate) unsafe fn mutex_take(
     );
     drop(state);
     drop(replay);
+    Some(publication.and_then(|()| {
+        unsafe { out.write(u32::from(result == Acquired::Dead)) };
+        unsafe { tail(ctx) }
+    }))
+}
+
+/// A live contended take on a resolved lease. With its own token, the task
+/// joins the FIFO under the latch that found the permit held, as Tokio's
+/// `poll_acquire` links its waiter under the wait list's lock that checked
+/// the permits (`batch_semaphore.rs:432-579`, ce685ee6); a put reserves for
+/// the oldest, then wakes after the unlock (`:334-402`). Tokio stores the
+/// poll's waker each time; the token here is the task's own for life. Kept
+/// out of line: the uncontended take is the hot path.
+/// # Safety
+/// As for hirsel_rt_v2_mutex_take; `state` is `cell`'s latch, live, unbegun.
+#[cold]
+#[inline(never)]
+unsafe fn mutex_wait(
+    ctx: *mut TaskCtx,
+    cell: &crate::sync::MutexCell,
+    mut state: std::sync::MutexGuard<'_, crate::sync::MutexImage>,
+    me: u32,
+    payload: *mut u8,
+    out: *mut u32,
+) -> Option<Stopped<()>> {
+    let token = unsafe { (*ctx).free_ops.wake.as_ref() }?.clone();
+    begin(ctx, None);
+    state.permit.reserve_waiter();
+    state.reserve_token();
+    let mut queued = false;
+    assert_eq!(state.permit.acquire(me, &mut queued), Acquired::Pending);
+    state.keep_token(me, token);
+    drop(state);
+    // No latch crosses the save: a put or kill that beats it notifies the
+    // running frame, whose save republishes it (`after_park`).
+    let mut state = loop {
+        if let Err(stop) =
+            unsafe { super::park_registered(&mut *ctx, Wait::Retry { cancelable: false }) }
+        {
+            return Some(Err(stop));
+        }
+        let state = cell.lock();
+        if state.permit.ready_for(me) {
+            break state;
+        }
+    };
+    let mut result = Acquired::Pending;
+    // A token the action takes back is dropped after the section.
+    let mut stale = None;
+    let publication = super::mutex::touched(ctx, Phase::Done, cell, &mut state, None, |state| {
+        result = state.permit.acquire(me, &mut queued);
+        if result == Acquired::Payload {
+            unsafe { cell.take(state, payload) };
+        }
+        stale = state.take_token(me);
+        "take"
+    });
+    drop(state);
+    drop(stale);
     Some(publication.and_then(|()| {
         unsafe { out.write(u32::from(result == Acquired::Dead)) };
         unsafe { tail(ctx) }

@@ -1038,3 +1038,216 @@ fn a_stale_wake_returned_unstarted_still_reaches_the_quiet_verdict() {
         ["free.final"]
     );
 }
+
+/// Waiters that already hold a resolved lease contend for it: each registers
+/// in the cell's FIFO with its own token and parks with no role on its stack.
+struct Registering {
+    mutex: AtomicU64,
+    /// Each waiter's task id, by label.
+    ids: [AtomicU32; REGISTERING],
+    labels: AtomicU32,
+    resolved: AtomicU32,
+    /// Waiters below this label may take.
+    go: AtomicU32,
+    /// Labels in acquisition order, with each take's status.
+    order: Mutex<Vec<(u32, u32)>>,
+    finished: AtomicU32,
+    release: AtomicBool,
+    /// The first waiter's save is held until the holder's put or kill.
+    saving: AtomicBool,
+    ended: AtomicBool,
+}
+
+const REGISTERING: usize = 3;
+
+unsafe extern "C" fn registering_child(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
+    let shared = unsafe { data::<Registering>(env) };
+    let handle = shared.mutex.load(Ordering::Acquire);
+    let label = shared.labels.fetch_add(1, Ordering::AcqRel);
+    shared.ids[label as usize].store(unsafe { (*ctx).task_id }, Ordering::Release);
+    let mut payload = [0u64; 2];
+    let mut status = 99;
+    // Resolve the lease while the mutex is free.
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
+    assert_eq!(status, 0);
+    unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
+    shared.resolved.fetch_add(1, Ordering::AcqRel);
+    wait_until("this waiter's turn to register", || {
+        shared.go.load(Ordering::Acquire) > label
+    });
+    unsafe { hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast()) };
+    shared.order.lock().unwrap().push((label, status));
+    if status == 0 {
+        assert_eq!(payload[0], 1);
+        payload[1] += 1;
+        unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
+    } else {
+        assert_eq!(payload, [0, 0], "a dead take moves no payload");
+    }
+    shared.finished.fetch_add(1, Ordering::AcqRel);
+    wait_until("the root releases its waiters", || {
+        shared.release.load(Ordering::Acquire)
+    });
+    STATUS_OK
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum End {
+    Put,
+    /// Role-path kill: tokenless retried wakes under the role.
+    RoleKill,
+    /// Lease kill: token wakes after the unlock.
+    LeaseKill,
+}
+
+/// Tokio's readiness and FIFO vectors (`tests/sync_mutex.rs:41-63,184-205`,
+/// ce685ee6) on the lease path: with the guard held, waiters register in a
+/// forced order; the first waiter's save is held while the holder puts or
+/// kills, so its wake beats its park. A put serves them oldest first, each
+/// seeing its predecessor's write; a kill wakes them all dead. Live, each
+/// contended take costs the run its save callback's and its dispatch's role
+/// acquisitions, and an idle save's quiet recheck: registration, park,
+/// retry and its put take none.
+#[test]
+fn contended_lease_takes_register_and_park_without_role() {
+    if !isolated(
+        "contended_lease_takes_register_and_park_without_role",
+        "HIRSEL_LEASE_REGISTRATION",
+    ) {
+        return;
+    }
+    let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
+    for recorded in [false, true] {
+        for end in [End::Put, End::RoleKill, End::LeaseKill] {
+            let recording = recorded.then(|| record::Recording::new(b"lease registration", false));
+            let install = recording.clone();
+            let shared = Arc::new(Registering {
+                mutex: AtomicU64::new(0),
+                ids: Default::default(),
+                labels: AtomicU32::new(0),
+                resolved: AtomicU32::new(0),
+                go: AtomicU32::new(0),
+                order: Mutex::default(),
+                finished: AtomicU32::new(0),
+                release: AtomicBool::new(false),
+                saving: AtomicBool::new(false),
+                ended: AtomicBool::new(false),
+            });
+            let body = shared.clone();
+            let roles = Arc::new(AtomicU64::new(u64::MAX));
+            let window = roles.clone();
+            let mut run = crate::host::BodyRun::new(4, false);
+            run.free = true;
+            let mut pointers = Vec::new();
+            layouts.install(&mut run, &mut pointers);
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    super::super::enable(ctx);
+                    if let Some(recording) = &install {
+                        recording.root(ctx);
+                    }
+                },
+                move |ctx| unsafe {
+                    let shared = &*body;
+                    let handle = mutex(ctx, 0);
+                    shared.mutex.store(handle, Ordering::Release);
+                    let word = mutex_word(&handle);
+                    let hook = body.clone();
+                    crate::pool::free::test_before_save(ctx, move |task, completed| {
+                        if completed
+                            || hook.go.load(Ordering::Acquire) == 0
+                            || hook.ids[0].load(Ordering::Acquire) != task
+                            || hook.ended.load(Ordering::Acquire)
+                        {
+                            return;
+                        }
+                        hook.saving.store(true, Ordering::Release);
+                        wait_until("the holder puts or kills", || {
+                            hook.ended.load(Ordering::Acquire)
+                        });
+                    });
+                    let mut scope = 0;
+                    hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0);
+                    let data = (shared as *const Registering).cast();
+                    for _ in 0..REGISTERING {
+                        spawn(ctx, &scope, registering_child, data);
+                    }
+                    wait_until("every waiter resolves its lease", || {
+                        shared.resolved.load(Ordering::Acquire) == REGISTERING as u32
+                    });
+                    let mut payload = [0u64; 2];
+                    let mut status = 99;
+                    hirsel_rt_v2_mutex_take(ctx, &mut status, &handle, payload.as_mut_ptr().cast());
+                    assert_eq!(status, 0);
+                    let value = payload[1];
+                    let role = &(*(*ctx).run_ptr()).role;
+                    let before = role.acquisitions();
+                    for label in 0..REGISTERING {
+                        shared.go.store(label as u32 + 1, Ordering::Release);
+                        wait_until("the waiter registers in FIFO order", || {
+                            waiting(ctx, word) == label + 1
+                        });
+                    }
+                    wait_until("the first waiter reaches its save", || {
+                        shared.saving.load(Ordering::Acquire)
+                    });
+                    // No waiter is served while the guard is held.
+                    assert!(shared.order.lock().unwrap().is_empty());
+                    match end {
+                        End::Put => {
+                            hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                        }
+                        End::RoleKill => {
+                            let _role = role::Guard::new(ctx);
+                            super::super::mutex::kill(ctx, word).unwrap();
+                        }
+                        End::LeaseKill => super::mutex_kill(ctx, word)
+                            .expect("an admitted lease kill")
+                            .unwrap(),
+                    }
+                    shared.ended.store(true, Ordering::Release);
+                    wait_until("every waiter is served", || {
+                        shared.finished.load(Ordering::Acquire) == REGISTERING as u32
+                    });
+                    window.store(role.acquisitions() - before, Ordering::Release);
+                    shared.release.store(true, Ordering::Release);
+                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
+                    let order = shared.order.lock().unwrap().clone();
+                    if end == End::Put {
+                        assert_eq!(order, [(0, 0), (1, 0), (2, 0)], "oldest first");
+                        hirsel_rt_v2_mutex_take(
+                            ctx,
+                            &mut status,
+                            &handle,
+                            payload.as_mut_ptr().cast(),
+                        );
+                        assert_eq!((status, payload), (0, [1, value + REGISTERING as u64]));
+                        hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast());
+                    } else {
+                        let mut statuses = order.clone();
+                        statuses.sort_unstable();
+                        assert_eq!(statuses, [(0, 1), (1, 1), (2, 1)], "every waiter died");
+                    }
+                    STATUS_OK
+                },
+            );
+            assert_eq!(outcome.ended, Ok(STATUS_OK), "recorded {recorded} {end:?}");
+            assert_eq!(outcome.pending, 0);
+            let roles = roles.load(Ordering::Acquire);
+            eprintln!("lease registration: recorded {recorded} {end:?}: {roles} role acquisitions");
+            if !recorded && end != End::RoleKill {
+                // A save that leaves its frame idle also reruns the quiet
+                // verdict (`tasks::saved_idle`); one woken first does not.
+                let waiters = REGISTERING as u64;
+                assert!(
+                    (2 * waiters..=3 * waiters).contains(&roles),
+                    "{end:?}: {roles}"
+                );
+            }
+            if let Some(recording) = recording {
+                recording.recorder.stop("returned", None).unwrap().unwrap();
+            }
+        }
+    }
+}
