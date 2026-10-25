@@ -53,7 +53,7 @@ rule, compiler, std API or runtime ABI was changed.
 | `Record { result: String }` | LANG-14 reserved postcondition name | Explicit pre-runtime schema revision: JSON field `digest_result`; domains remain `dagbuild-1`/`dagbuild-result-1` | 2 min; intended; attempt-02/check-03.log, CONTRACT.md |
 | `fn key(...); fn check(key: String)` | LANG-4 local shadows module value | Rename function `compute_key` | 1 min; intended; attempt-03/check-04.log |
 | `lookup(...)->Option[V] { Some(copy row.value) }` | MODE-1 returned value must be global | Declare result `in rows`; cache records remain borrowed, avoids deep copy | 2 min; intended; attempt-03/check-04.log |
-| `Ok(take dag)` after declaration views | MODE-2 deep uniqueness not proved | `Ok(unique dag)`, bounded declaration copy | 2 min; intended; attempt-03/check-04.log |
+| `Ok(take dag)` after declaration views | Compiler bug: borrowed `dag.tasks` / `node.argv` loops copied their source instead of lending it | `Ok(take dag)` and a borrowing executable-name validator; no whole-declaration deep copy | 2 min; bug, fixed by e5e974f27a4c; attempt-03/check-04.log |
 | Task result with String reason; shared.with Command | MODE-4/CLO-3/MODE-2 result/capture not sendable/unique | Plain numeric reason formatted by parent; explicit unique owned command snapshot, <=4096 argv bytes/job | 3 min; intended; attempt-04/check-05.log |
 | Rust `ObservedSimulation.files` | E0609; actual state is `trees[0].1` | Use public actual adapter shape | 2 min; fixed harness; test-01.log |
 | CLI `check manifest --json` | invalid option | `check --json manifest` | 1 min; intended; check-02.log |
