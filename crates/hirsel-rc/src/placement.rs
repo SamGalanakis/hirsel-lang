@@ -167,6 +167,28 @@ pub fn place(
     Ok(unit)
 }
 
+/// Placement with an explicit identity recipe for observations whose exact
+/// coordinates and operands survive. Regional/arena rewrites that move a
+/// tracked point refuse until their own relocation transport is implemented.
+pub fn place_observed(
+    unit: LirUnit<Value>,
+    table: &LayoutTable,
+    options: &Options,
+    input: &hirsel_lir::ownership_trace::Plan,
+) -> Result<
+    (
+        LirUnit<Placed>,
+        hirsel_lir::ownership_trace::Plan,
+        hirsel_lir::ownership_trace::Recipe,
+    ),
+    String,
+> {
+    hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
+    let before = unit.clone();
+    let after = place(unit, table, options).map_err(|error| error.to_string())?;
+    crate::observation::identity(&before, input, after)
+}
+
 /// Whether construction `i` builds a counted block (its result is one).
 fn constructs_block<S>(unit: &LirUnit<S>, i: usize) -> bool {
     unit.instructions.iter().any(|inst| match *inst {

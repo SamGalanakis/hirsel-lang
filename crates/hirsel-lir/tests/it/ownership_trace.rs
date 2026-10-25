@@ -825,3 +825,109 @@ fn ownership_trace_legalize_refuses_to_lose_a_marker_on_an_expanded_call() {
     let error = hirsel_rc::legalize::legalize_observed(before, &index, &input).unwrap_err();
     assert!(error.contains("InvalidPoint(MarkerId(1))"), "{error}");
 }
+
+fn placement_resource_fixture() -> (
+    LirUnit<hirsel_lir::stage::Value>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+) {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[], Some(l::RESBLK));
+    let resource = t.new_block_of(ENTRY, l::RES, &[]);
+    t.builder.ret(ENTRY, Some(resource));
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let unit = hirsel_lir::validate::validate(unit, &inputs)
+        .unwrap()
+        .into_raw();
+    let site = unit.tables.source_anchors[0].site;
+    let index = unit.blocks[0]
+        .instructions
+        .get(&unit.instructions)
+        .unwrap()
+        .iter()
+        .position(|instruction| matches!(instruction, Inst::Construct { .. }))
+        .unwrap() as u32;
+    let plan = Plan::new(
+        &unit,
+        vec![
+            Observation {
+                point: Point::Instruction {
+                    block: ENTRY,
+                    index,
+                    moment: Moment::After,
+                },
+                marker: ObserveOwnership {
+                    id: MarkerId(0),
+                    site,
+                    kind: Kind::Create,
+                    token: Location::Value(resource),
+                    owner: Location::Value(resource),
+                },
+            },
+            Observation {
+                point: Point::Return(ENTRY),
+                marker: ObserveOwnership {
+                    id: MarkerId(1),
+                    site,
+                    kind: Kind::Move,
+                    token: Location::Value(resource),
+                    owner: Location::Return,
+                },
+            },
+        ],
+    );
+    (unit, plan, table)
+}
+
+#[test]
+fn ownership_trace_placement_keeps_resource_identity_while_binding_its_destination() {
+    let (before, input, table) = placement_resource_fixture();
+    assert!(
+        before
+            .tables
+            .constructs
+            .iter()
+            .all(|site| site.placement.is_none())
+    );
+    let options = hirsel_rc::placement::Options {
+        regions: true,
+        noalloc: false,
+    };
+    let ordinary = hirsel_rc::placement::place(before.clone(), &table, &options).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::placement::place_observed(before.clone(), &table, &options, &input).unwrap();
+    assert!(
+        after
+            .tables
+            .constructs
+            .iter()
+            .all(|site| site.placement.is_some())
+    );
+    assert_eq!(
+        hirsel_codec::to_text(&after),
+        hirsel_codec::to_text(&ordinary)
+    );
+    assert_eq!(input.observations, output.observations);
+    check_transform(&before, &input, &after, &output, Some(&recipe)).unwrap();
+}
+
+#[test]
+fn ownership_trace_placement_checks_incoming_sites_instead_of_rebuilding_markers() {
+    let (before, mut input, table) = placement_resource_fixture();
+    input.observations[0].marker.site.start += 1;
+    let options = hirsel_rc::placement::Options {
+        regions: true,
+        noalloc: false,
+    };
+    let error = hirsel_rc::placement::place_observed(before, &table, &options, &input).unwrap_err();
+    assert!(error.contains("InvalidSite(MarkerId(0))"), "{error}");
+}

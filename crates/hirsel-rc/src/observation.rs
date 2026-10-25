@@ -73,3 +73,31 @@ pub(crate) fn finish<A: Stage, B: Stage>(
         .map_err(|error| error.to_string())?;
     Ok((after, output, recipe))
 }
+
+/// A pass explicitly retaining marker coordinates. Local correspondence is
+/// checked again against its output, so this cannot guess a moved identity.
+pub(crate) fn identity<A: Stage, B: Stage>(
+    before: &LirUnit<A>,
+    input: &Plan,
+    after: LirUnit<B>,
+) -> Result<(LirUnit<B>, Plan, Recipe), String> {
+    let mut output = input.clone();
+    output.unit = after.digest();
+    let recipe = Recipe {
+        before: input.unit,
+        after: output.unit,
+        relocations: input
+            .observations
+            .iter()
+            .map(|observation| Relocation {
+                id: observation.marker.id,
+                point: observation.point,
+                token: observation.marker.token,
+                owner: observation.marker.owner,
+            })
+            .collect(),
+    };
+    trace::check_transform(before, input, &after, &output, Some(&recipe))
+        .map_err(|error| error.to_string())?;
+    Ok((after, output, recipe))
+}
