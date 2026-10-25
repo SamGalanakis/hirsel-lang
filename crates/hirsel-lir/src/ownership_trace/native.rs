@@ -812,7 +812,7 @@ impl Request<'_> {
                     .map(|(unit, plan)| {
                         (
                             *unit,
-                            hirsel_codec::digest("hirsel.ownership-plan.v3", "Plan", plan),
+                            hirsel_codec::digest("hirsel.ownership-plan.v4", "Plan", plan),
                         )
                     })
                     .collect();

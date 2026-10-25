@@ -2420,3 +2420,48 @@ fn ownership_trace_parameter_slot_entry_refuses_wrong_parameter_local_slot_and_p
         Error::InvalidBinding(MarkerId(0))
     );
 }
+
+#[test]
+fn ownership_trace_conditional_drop_requires_its_explicit_moment_and_current_schema() {
+    let (mut unit, mut plan, _, _) = drop_transport_fixture();
+    let Point::Instruction {
+        block,
+        index,
+        moment,
+    } = &mut plan.observations[0].point
+    else {
+        unreachable!()
+    };
+    let at = unit.blocks[block.index()].instructions.start as usize + *index as usize;
+    let Inst::Drop { if_live, .. } = &mut unit.instructions[at] else {
+        unreachable!()
+    };
+    *if_live = true;
+    *moment = Moment::IfLive;
+    plan.unit = unit.digest();
+    check(&unit, &plan).unwrap();
+    let decoded: Plan = hirsel_codec::from_text(&hirsel_codec::to_text(&plan)).unwrap();
+    assert_eq!(decoded, plan);
+    let mut old = decoded;
+    old.version = 3;
+    assert_eq!(check(&unit, &old).unwrap_err(), Error::Version(3));
+    unit.instructions[at] = match unit.instructions[at] {
+        Inst::Drop {
+            address,
+            anchor,
+            failure,
+            ..
+        } => Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+        _ => unreachable!(),
+    };
+    plan.unit = unit.digest();
+    assert_eq!(
+        check(&unit, &plan).unwrap_err(),
+        Error::InvalidBinding(MarkerId(0))
+    );
+}

@@ -29,7 +29,7 @@ pub use check::{check, check_transform};
 mod finalizer;
 pub mod native;
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -78,8 +78,15 @@ pub enum Moment {
     Before,
     /// Reached only after success, never on the instruction's failure edge.
     After,
+    /// The semantic Drop commits only on its live path. Cleanup must relocate
+    /// this marker to the actual release/finalizer, never the bypass.
+    IfLive,
 }
-snapshot_enum!(Moment { Before, After });
+snapshot_enum!(Moment {
+    Before,
+    After,
+    IfLive
+});
 
 /// A commit point, rather than a scheduling point. In particular CallEntered is
 /// not the attempted call: pretransfer rejection leaves its actuals with caller.

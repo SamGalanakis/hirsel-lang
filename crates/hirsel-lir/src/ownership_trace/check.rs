@@ -282,6 +282,14 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                         ..
                     },
                     Moment::Before,
+                )
+                | (
+                    Inst::Drop {
+                        address,
+                        if_live: true,
+                        ..
+                    },
+                    Moment::IfLive,
                 ) => same(Drop, Address(address)),
                 (Inst::FinalizeEnd { address, .. }, Moment::After) => same(Drop, Address(address)),
                 // Conditional Drop, Replace, generic runtime operations and other
@@ -425,6 +433,14 @@ fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnch
             Moment::Before,
         )
         | (
+            Inst::Drop {
+                anchor,
+                if_live: true,
+                ..
+            },
+            Moment::IfLive,
+        )
+        | (
             Inst::Release {
                 anchor,
                 live: MaskRef::All,
@@ -448,7 +464,7 @@ fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
         Point::Instruction {
             block,
             index,
-            moment: Moment::Before,
+            moment: Moment::Before | Moment::IfLive,
         } if matches!(
             unit.blocks
                 .get(block.index())?
