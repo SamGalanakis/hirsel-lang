@@ -473,6 +473,7 @@ impl NativeProducts for DemandProducts {
         let index = hirsel_lir::LayoutIndex::new(&binding.table);
         let emit = EmitInputs {
             ahead: None,
+            continuation: None,
             alternate: false,
             index: Some(&index),
             input: &snapshot.emission.input,
