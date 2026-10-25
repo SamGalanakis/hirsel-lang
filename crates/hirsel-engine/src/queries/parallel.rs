@@ -740,7 +740,7 @@ impl QueryEngine {
                 .materialize(&definition)
                 .and_then(|_| self.snapshot(&definition))
             {
-                Ok(syntax) if generation::generator(&syntax).is_none() => frontier.push(definition),
+                Ok(syntax) if !generation::serial(&syntax) => frontier.push(definition),
                 state => {
                     let materialization_phase = self.unavailable.or(self.last_phase);
                     let materialization_failed = state.is_err();
@@ -804,7 +804,7 @@ impl QueryEngine {
                 .materialize(&definition)
                 .and_then(|_| self.snapshot(&definition));
             match syntax {
-                Ok(syntax) if generation::generator(&syntax).is_none() => {
+                Ok(syntax) if !generation::serial(&syntax) => {
                     sources.push((index, definition, syntax))
                 }
                 Ok(_) => {

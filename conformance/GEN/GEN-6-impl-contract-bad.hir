@@ -1,0 +1,19 @@
+// rule: GEN-6
+// expect: reject FACT-1 at line 18
+// twin: GEN/GEN-6-impl-match-ok.hir
+signature Counter {
+  type T: plain
+  size width
+  fn get(x: T) -> u64 uses {}
+}
+
+fn get_u64(x: u64) -> u64 uses {}
+  requires x > 0 {
+  x
+}
+
+implementation direct: Counter {
+  type T = u64
+  size width = 8
+  get = get_u64
+}

@@ -248,6 +248,33 @@ impl<'a> Printer<'a> {
                         GenericKind::Type(bs) if !bs.is_empty() => {
                             ds.extend([token(":"), Space, self.bounds(bs)])
                         }
+                        GenericKind::Implementation { signature, sharing } => {
+                            ds.extend([
+                                token(":"),
+                                Space,
+                                token("implementation"),
+                                Space,
+                                self.path(signature)?,
+                            ]);
+                            for (i, equation) in sharing.iter().enumerate() {
+                                ds.extend([
+                                    if i == 0 {
+                                        cat([Space, token("where"), Space])
+                                    } else {
+                                        cat([token(","), Space])
+                                    },
+                                    self.name(p.name)?,
+                                    token("."),
+                                    self.name(equation.member)?,
+                                    Space,
+                                    token("="),
+                                    Space,
+                                    self.name(equation.binder)?,
+                                    token("."),
+                                    self.name(equation.other)?,
+                                ]);
+                            }
+                        }
                         _ => {}
                     }
                     Some(cat(ds))
@@ -402,6 +429,100 @@ impl<'a> Printer<'a> {
                         _ => ds.extend([Space, self.expr(*e, 0)?]),
                     }
                 }
+            }
+            ItemKind::Signature { members } => {
+                ds.extend([
+                    token("signature"),
+                    Space,
+                    self.name(item.name)?,
+                    Space,
+                    token("{"),
+                ]);
+                if !members.is_empty() {
+                    let members = members
+                        .iter()
+                        .map(|member| {
+                            Some(match member {
+                                MemberSpec::Type {
+                                    name,
+                                    bounds,
+                                    authority,
+                                    ..
+                                } => {
+                                    let mut ds = vec![token("type"), Space, self.name(*name)?];
+                                    if !bounds.is_empty() {
+                                        ds.extend([token(":"), Space, self.bounds(bounds)]);
+                                    }
+                                    if let Some(u) = authority {
+                                        ds.extend([Space, self.uses(u)?]);
+                                    }
+                                    cat(ds)
+                                }
+                                MemberSpec::Size { name, .. } => {
+                                    cat([token("size"), Space, self.name(*name)?])
+                                }
+                                MemberSpec::Operation {
+                                    name, signature, ..
+                                } => cat([
+                                    token("fn"),
+                                    Space,
+                                    self.name(*name)?,
+                                    self.header(signature)?,
+                                ]),
+                            })
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    ds.extend([nest(cat([Line, join(members, Line)])), Line]);
+                }
+                ds.push(token("}"));
+            }
+            ItemKind::Implementation { signature, members } => {
+                ds.extend([
+                    token("implementation"),
+                    Space,
+                    self.name(item.name)?,
+                    token(":"),
+                    Space,
+                    self.path(signature)?,
+                    Space,
+                    token("{"),
+                ]);
+                if !members.is_empty() {
+                    let members = members
+                        .iter()
+                        .map(|member| {
+                            Some(match member {
+                                MemberDefinition::Type { name, ty, .. } => cat([
+                                    token("type"),
+                                    Space,
+                                    self.name(*name)?,
+                                    Space,
+                                    token("="),
+                                    Space,
+                                    self.ty(*ty)?,
+                                ]),
+                                MemberDefinition::Size { name, value, .. } => cat([
+                                    token("size"),
+                                    Space,
+                                    self.name(*name)?,
+                                    Space,
+                                    token("="),
+                                    Space,
+                                    token(&value.to_string()),
+                                ]),
+                                MemberDefinition::Operation { name, target, .. } => cat([
+                                    self.name(*name)?,
+                                    Space,
+                                    token("="),
+                                    Space,
+                                    self.path(target)?,
+                                ]),
+                            })
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    ds.extend([nest(cat([Line, join(members, Line)])), Line]);
+                }
+                ds.push(token("}"));
             }
             ItemKind::Const { ty, value } => ds.extend([
                 token("const"),
@@ -917,6 +1038,7 @@ impl<'a> Printer<'a> {
             ExprKind::Unary { .. } | ExprKind::Comptime(_) => 11,
             ExprKind::Return(_) | ExprKind::Break { value: Some(_), .. } => 0,
             ExprKind::Call { .. }
+            | ExprKind::With { .. }
             | ExprKind::Index { .. }
             | ExprKind::Field { .. }
             | ExprKind::Try { .. } => 12,
@@ -954,6 +1076,29 @@ impl<'a> Printer<'a> {
                             }
                             ds.push(self.expr(a.value, 0)?);
                             Some(cat(ds))
+                        })
+                        .collect::<Option<Vec<_>>>()?,
+                    ")",
+                    false,
+                ),
+            ]),
+            ExprKind::With { callee, bindings } => cat([
+                self.expr(*callee, 12)?,
+                Space,
+                token("with"),
+                Space,
+                list(
+                    "(",
+                    bindings
+                        .iter()
+                        .map(|b| {
+                            Some(cat([
+                                self.name(b.name)?,
+                                Space,
+                                token("="),
+                                Space,
+                                self.path(&b.implementation)?,
+                            ]))
                         })
                         .collect::<Option<Vec<_>>>()?,
                     ")",

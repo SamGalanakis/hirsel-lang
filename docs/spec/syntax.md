@@ -274,7 +274,8 @@ brand-path   = [ "." ], value-path ;                     (* PROV-1/5 *)
 file         = { NL | item, END }, EOF ;                 (* LANG-6, PROG-1 *)
 visibility   = "pub", [ "opaque" ] ;                     (* PROG-2 *)
 item         = { attribute | analysis }, [ visibility ],
-               ( function | const-def | type-def ) ;     (* LANG-6, PROG-2 *)
+               ( function | const-def | type-def
+               | signature-def | implementation-def ) ;  (* LANG-6, PROG-2, GEN-6 *)
 attribute    = "@", ( "test" | "noalloc" | "soa" | "packed" | "blocking" | "incomplete"
              | "serializable", [ "(", "check", "=", value-path, ")" ]
              | "layout", "(", "c", ")"
@@ -298,7 +299,10 @@ parameter    = { analysis }, [ name ], [ passing ], name, ":", type ; (* LANG-12
 passing      = "take" | "mut" ;                          (* OWN-1/2/3 *)
 const-def    = "const", name, ":", type, "=", expression ; (* LANG-6, CT-1 *)
 generics     = "[", nonempty(generic), "]" ;             (* LANG-7, GEN-1 *)
-generic      = name, [ ":", ( "size" | bounds ) ] ;      (* LANG-7, GEN-1 *)
+generic      = name, [ ":", ( "size" | bounds | binder ) ] ; (* LANG-7, GEN-1/6 *)
+binder       = "implementation", type-path,
+               [ "where", sharing, { ",", sharing } ] ;  (* GEN-6 *)
+sharing      = name, ".", name, "=", name, ".", name ;   (* GEN-6 *)
 bounds       = bound, { "+", bound } ;                   (* GEN-1 *)
 bound        = "plain" | "flat" | "data" | "key" | "sendable" | "inert" | "copyable"
              | "noalloc_drop" | "serializable" ;         (* GEN-1, MEM-5, SER-1 *)
@@ -318,6 +322,16 @@ type-rhs     = variant, "|", variant, { "|", variant }
 variant      = name, [ "(", list(payload), ")" ] ;       (* LANG-7/12 *)
 payload      = { analysis }, [ name, ":" ], part-type ; (* LANG-12, PS-17 *)
 opaque-end   = empty ;                                   (* PROG-2 *)
+signature-def = "signature", name, "{", [ spec-member, { entry-sep, spec-member },
+               [ entry-sep ] ], "}" ;                    (* GEN-6 *)
+spec-member  = "type", name, [ ":", type-bounds ], [ uses ]
+             | "size", name
+             | "fn", name, fn-header ;                   (* GEN-6 *)
+implementation-def = "implementation", name, ":", type-path, "{",
+               [ impl-member, { entry-sep, impl-member }, [ entry-sep ] ], "}" ; (* GEN-6 *)
+impl-member  = "type", name, "=", type
+             | "size", name, "=", integer
+             | name, "=", value-path ;                   (* GEN-6 *)
 drop-def     = [ "@", "noalloc" ], "drop", "(", name, ")", block ; (* DROP-2/3 *)
 ```
 
@@ -417,7 +431,9 @@ allocation contract.
 Names used as type arguments parse identically whether they resolve to a type parameter
 or a size parameter. Size literals are unsuffixed nonnegative `u64` values; there is no
 size arithmetic. No type argument appears at a call site: `f[T]` in an expression is
-always indexing.
+always indexing. The one static actual a call site writes is an implementation, in a
+`with` clause directly before the call's arguments: `finish with (H = sha256_impl)(take s)`
+([GEN-6](generics.md#implementation-contracts)).
 
 A relation names places: parameters and their field paths (`in p.a`), bindings in scope,
 arenas, and `env`, the environment of a closure or function type. Which places are valid
@@ -458,8 +474,10 @@ additive     = product, { ("+" | "-"), product } ;       (* SEM-1/2 *)
 product      = prefix, { ("*" | "/" | "%"), prefix } ;   (* SEM-1/2 *)
 prefix       = ("-" | "!" | "~" | "take" | "mut" | "copy" | "unique" | "box" | "comptime"), prefix
              | postfix ;                                 (* LANG-14, OWN-1/8, MEM-7, CT-1 *)
-postfix      = primary, { "(", list(argument), ")" | "[", expression, "]"
-             | ".", member | "?", [ same-line-value-path ] } ; (* LANG-2/8/12 *)
+postfix      = primary, { [ with-clause ], "(", list(argument), ")" | "[", expression, "]"
+             | ".", member | "?", [ same-line-value-path ] } ; (* LANG-2/8/12, GEN-6 *)
+with-clause  = "with", "(", nonempty(static-actual), ")" ; (* GEN-6 *)
+static-actual = name, "=", value-path ;                 (* GEN-6 *)
 argument     = [ name, ":" ], expression ;               (* LANG-12 *)
 primary      = literal | f-string | value-path | "heap" | "result"
              | "(", ")" | "(", expression, ")"

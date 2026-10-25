@@ -15,7 +15,9 @@ impl Checker<'_, '_> {
                 .map(|p| p.ty)
                 .chain([f.result])
                 .any(|t| mentions_compile_time_only(types, t)),
-            SignatureKind::Type(_) => false,
+            SignatureKind::Type(_)
+            | SignatureKind::Family(_)
+            | SignatureKind::Implementation(_) => false,
         };
         if compile_time_only {
             return;

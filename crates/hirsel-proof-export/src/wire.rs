@@ -25,14 +25,16 @@ use hirsel_tir::{
 };
 use hirsel_types::{
     Allocation, AllocationTarget, AuthoritySummary, AuthorityTerm, BinderRef, Brand,
-    CapabilityKind, CaptureContext, Contract, Destination, DropAllocation, ErasedCaptures, Field,
-    FieldId, ForeignContract, ForeignWrapper, FunctionType, GenericArgument, GenericParameter,
-    HeapRole, Layout, LoopSourceDeclaration, Modes, Multiplicity, NameSite, NominalRoles, Origin,
-    OriginRoot, ParamId, Parameter, ProtocolAssociation, Reach, RegionId, Relation, RelationPlace,
-    ScalarDomain, SchemaConstraint, Sendability, SendabilityRequirement, SerializableCheck,
-    SharedPath, SharedSlice, Signature, SignatureDependency, SignatureKind, SignatureMetadata,
-    Size, SizeParamId, StatePromise, Type, TypeDefinition, TypeId, TypeInterner, TypeKind,
-    TypeParamId, Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
+    CapabilityKind, CaptureContext, Contract, Destination, DropAllocation, ErasedCaptures,
+    FamilyMember, FamilyMemberKind, FamilySignature, Field, FieldId, ForeignContract,
+    ForeignWrapper, FunctionType, GenericArgument, GenericParameter, HeapRole,
+    ImplementationBinder, ImplementationSignature, Layout, LoopSourceDeclaration, MemberActual,
+    Modes, Multiplicity, NameSite, NominalRoles, Origin, OriginRoot, ParamId, Parameter,
+    ProtocolAssociation, Reach, RegionId, Relation, RelationPlace, ScalarDomain, SchemaConstraint,
+    Sendability, SendabilityRequirement, SerializableCheck, SharedPath, SharedSlice, Signature,
+    SignatureDependency, SignatureKind, SignatureMetadata, Size, SizeParamId, StatePromise, Type,
+    TypeDefinition, TypeId, TypeInterner, TypeKind, TypeParamId, Uniqueness, UseKind, Uses,
+    Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -728,10 +730,18 @@ snapshot_struct!(SerializableCheck {
     function,
     representation
 } in Cx);
+snapshot_enum!(FamilyMemberKind { Type { bounds }, Size, Operation } in Cx);
+snapshot_struct!(FamilyMember { name, kind } in Cx);
+snapshot_struct!(FamilySignature { members } in Cx);
+snapshot_enum!(MemberActual { Type(t), Size(n), Operation(p) } in Cx);
+snapshot_struct!(ImplementationSignature { family, members } in Cx);
+snapshot_struct!(ImplementationBinder { name, family, members } in Cx);
 snapshot_enum!(SignatureKind {
     Function(f),
     Type(t),
-    Const { ty, generics }
+    Const { ty, generics },
+    Family(f),
+    Implementation(i)
 } in Cx);
 snapshot_struct!(HeapRole { arena, operation } in Cx);
 /// Under a content hash encoding each role is written as its role name, not its
@@ -801,6 +811,11 @@ impl Snapshot<Cx> for SignatureMetadata {
         {
             group.write(w);
         }
+        // Binders follow only when present, so other signatures encode as before;
+        // a list opens a node where a group key is bytes.
+        if !self.implementations.is_empty() {
+            self.implementations.write(w);
+        }
         w.close();
     }
     fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
@@ -814,10 +829,15 @@ impl Snapshot<Cx> for SignatureMetadata {
             wrapper: Snapshot::read(r)?,
             roles: Snapshot::read(r)?,
             schema: Snapshot::read(r)?,
-            recursive_group: if r.at_close() {
-                None
-            } else {
+            recursive_group: if r.next_kind() == hirsel_codec::Next::Bytes {
                 Some(Snapshot::read(r)?)
+            } else {
+                None
+            },
+            implementations: if r.at_close() {
+                vec![]
+            } else {
+                Snapshot::read(r)?
             },
         };
         r.close()?;

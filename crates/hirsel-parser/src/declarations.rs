@@ -214,6 +214,9 @@ impl Parser<'_> {
             let kind = if p.eat(":") {
                 if p.eat("size") {
                     GenericKind::Size
+                } else if p.at("implementation") && p.ident(1) {
+                    p.pos += 1;
+                    p.implementation_binder(name)?
                 } else {
                     GenericKind::Type(p.bounds()?)
                 }
@@ -222,6 +225,159 @@ impl Parser<'_> {
             };
             Ok(GenericParam { name, kind })
         })
+    }
+    /// `implementation Sig [where H.X = A.X, ..]` after `H:` (GEN-6). A sharing
+    /// equation starts `name . member =`, which no generic parameter does.
+    fn implementation_binder(&mut self, binder: Symbol) -> Parsed<GenericKind> {
+        let signature = self.path(true)?;
+        let mut sharing = vec![];
+        if self.eat("where") {
+            loop {
+                let start = self.pos;
+                let own = self.name()?;
+                if own != binder {
+                    return self.fail_at(
+                        const { RuleId::of("GEN-6") },
+                        self.origin(start).span,
+                        "a sharing equation starts with its own binder's member",
+                    );
+                }
+                self.expect(".", const { RuleId::of("GEN-6") })?;
+                let member = self.member()?;
+                self.expect("=", const { RuleId::of("GEN-6") })?;
+                let other = self.name()?;
+                self.expect(".", const { RuleId::of("GEN-6") })?;
+                let other_member = self.member()?;
+                if other_member != member {
+                    return self.fail_at(
+                        const { RuleId::of("GEN-6") },
+                        self.origin(start).span,
+                        "a sharing equation relates members of the same name",
+                    );
+                }
+                sharing.push(Sharing {
+                    member,
+                    binder: other,
+                    other: other_member,
+                    origin: self.origin(start),
+                });
+                if !(self.at(",")
+                    && self.ident(1)
+                    && self.text_at(2) == "."
+                    && self.text_at(4) == "=")
+                {
+                    break;
+                }
+                self.pos += 1;
+            }
+        }
+        Ok(GenericKind::Implementation { signature, sharing })
+    }
+    /// `signature Name { member* }` (GEN-6).
+    fn signature_item(&mut self) -> Parsed<(Symbol, ItemKind)> {
+        self.expect("signature", const { RuleId::of("LANG-1") })?;
+        let name = self.name()?;
+        self.expect("{", const { RuleId::of("GEN-6") })?;
+        let mut members = vec![];
+        while !self.eat("}") {
+            let start = self.pos;
+            let member = if self.eat("type") {
+                let name = self.name()?;
+                let bounds = if self.eat(":") {
+                    if self.eat("(") {
+                        self.expect(")", const { RuleId::of("GEN-1") })?;
+                        vec![]
+                    } else {
+                        self.bounds()?
+                    }
+                } else {
+                    vec![]
+                };
+                let authority = self.uses()?;
+                MemberSpec::Type {
+                    name,
+                    bounds,
+                    authority,
+                    origin: self.origin(start),
+                }
+            } else if self.eat("size") {
+                let name = self.name()?;
+                MemberSpec::Size {
+                    name,
+                    origin: self.origin(start),
+                }
+            } else if self.eat("fn") {
+                let name = self.name()?;
+                let signature = self.header(false, true)?;
+                MemberSpec::Operation {
+                    name,
+                    signature,
+                    origin: self.origin(start),
+                }
+            } else {
+                return self.fail(
+                    const { RuleId::of("GEN-6") },
+                    "a signature member is `type`, `size` or `fn`",
+                );
+            };
+            members.push(member);
+            self.entry_end("}")?;
+        }
+        Ok((name, ItemKind::Signature { members }))
+    }
+    /// `implementation name: Sig { member = .. }` (GEN-6).
+    fn implementation_item(&mut self) -> Parsed<(Symbol, ItemKind)> {
+        self.expect("implementation", const { RuleId::of("LANG-1") })?;
+        let name = self.name()?;
+        self.expect(":", const { RuleId::of("GEN-6") })?;
+        let signature = self.path(true)?;
+        self.expect("{", const { RuleId::of("GEN-6") })?;
+        let mut members = vec![];
+        while !self.eat("}") {
+            let start = self.pos;
+            let member = if self.eat("type") {
+                let name = self.name()?;
+                self.expect("=", const { RuleId::of("GEN-6") })?;
+                let ty = self.ty()?;
+                MemberDefinition::Type {
+                    name,
+                    ty,
+                    origin: self.origin(start),
+                }
+            } else if self.eat("size") {
+                let name = self.name()?;
+                self.expect("=", const { RuleId::of("GEN-6") })?;
+                let value = if matches!(self.token(0).map(|t| &t.kind), Some(TokenKind::Integer)) {
+                    size_value(self.text_at(0))
+                } else {
+                    None
+                };
+                let Some(value) = value else {
+                    return self.fail(
+                        const { RuleId::of("GEN-6") },
+                        "a size member is an unsuffixed u64 literal",
+                    );
+                };
+                self.pos += 1;
+                MemberDefinition::Size {
+                    name,
+                    value,
+                    origin: self.origin(start),
+                }
+            } else {
+                let name = self.member()?;
+                self.expect("=", const { RuleId::of("GEN-6") })?;
+                let target = self.path(false)?;
+                MemberDefinition::Operation {
+                    name,
+                    target,
+                    origin: self.origin(start),
+                }
+            };
+            members.push(member);
+            self.entry_end("}")?;
+        }
+        Ok((name, ItemKind::Implementation { signature, members }))
     }
     fn bounds(&mut self) -> Parsed<Vec<Bound>> {
         const BOUNDS: &[(&str, Bound)] = &[
@@ -468,6 +624,18 @@ impl Parser<'_> {
             (name, ItemKind::Const { ty, value })
         } else if matches!(self.text_at(0), "type" | "distinct" | "resource" | "flat") {
             self.type_item(visibility)?
+        } else if self.family_item_start() {
+            if visibility == Visibility::PublicOpaque {
+                return self.fail(
+                    const { RuleId::of("PROG-2") },
+                    "`pub opaque` applies only to type declarations",
+                );
+            }
+            if self.at("signature") {
+                self.signature_item()?
+            } else {
+                self.implementation_item()?
+            }
         } else if self.at("|") {
             return self.fail(
                 const { RuleId::of("LANG-1") },
@@ -476,7 +644,7 @@ impl Parser<'_> {
         } else {
             return self.fail(
                 const { RuleId::of("LANG-1") },
-                "expected a top-level definition (fn, const, type)",
+                "expected a top-level definition (fn, const, type, signature, implementation)",
             );
         };
         self.validate_attributes(&attributes, opaque_span, &kind)?;
@@ -501,8 +669,10 @@ impl Parser<'_> {
                     !matches!(
                         t.kind,
                         TokenKind::Keyword(Keyword::Fn | Keyword::Type | Keyword::Const)
-                    )
+                    ) && !matches!(t.kind, TokenKind::Ident(s)
+                        if matches!(s.as_str(), "signature" | "implementation"))
                 })
+                .skip(1)
                 .find(|t| matches!(t.kind, TokenKind::Ident(s) if s == name))
                 .map(|t| self.local_span(t.span))
                 .unwrap_or(self.origin(begin).span),

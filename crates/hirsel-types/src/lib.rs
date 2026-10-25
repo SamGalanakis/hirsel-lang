@@ -737,6 +737,160 @@ pub enum SignatureKind {
         ty: TypeId,
         generics: SharedSlice<GenericParameter>,
     },
+    /// A `signature` declaration (GEN-6).
+    Family(FamilySignature),
+    /// An `implementation` declaration (GEN-6).
+    Implementation(ImplementationSignature),
+}
+/// A `signature`: its members in declaration order. Its type and size members,
+/// in order, are the generic parameters of every operation's declaration
+/// (GEN-6), so instantiating an operation at an implementation's actuals is
+/// ordinary substitution.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct FamilySignature {
+    pub members: Vec<FamilyMember>,
+}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct FamilyMember {
+    pub name: String,
+    pub kind: FamilyMemberKind,
+}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub enum FamilyMemberKind {
+    /// An abstract type with its required bounds.
+    Type {
+        bounds: SharedSlice<Bound>,
+    },
+    Size,
+    /// A complete operation header: the bodyless declaration
+    /// [`family_operation_path`] names, generic over the family's types and sizes.
+    Operation,
+}
+impl FamilySignature {
+    /// The generic parameters a family's operations declare: its type and
+    /// size members in declaration order, named by the member.
+    pub fn parameters(&self) -> Vec<GenericParameter> {
+        self.members
+            .iter()
+            .filter_map(|member| match &member.kind {
+                FamilyMemberKind::Type { bounds } => Some(GenericParameter::Type {
+                    name: member.name.clone(),
+                    bounds: bounds.clone(),
+                }),
+                FamilyMemberKind::Size => Some(GenericParameter::Size {
+                    name: member.name.clone(),
+                }),
+                FamilyMemberKind::Operation => None,
+            })
+            .collect()
+    }
+    /// The parameter ordinal of a type or size member.
+    pub fn parameter(&self, name: &str) -> Option<usize> {
+        self.members
+            .iter()
+            .filter(|m| !matches!(m.kind, FamilyMemberKind::Operation))
+            .position(|m| m.name == name)
+    }
+    pub fn member(&self, name: &str) -> Option<&FamilyMember> {
+        self.members.iter().find(|m| m.name == name)
+    }
+}
+/// The bodyless declaration that holds a family operation's header (GEN-6).
+pub fn family_operation_path(family: &DefPath, operation: &str) -> DefPath {
+    let mut path = family.clone();
+    path.0.name = format!("{}$member${operation}", family.0.name);
+    path
+}
+/// The specialization of `base` at closed implementation actuals (GEN-6):
+/// `f$with$H=pkg@1/m/impl$..`, one entry per binder in declaration order.
+pub fn specialization_path(base: &DefPath, bindings: &[(String, DefPath)]) -> DefPath {
+    let mut path = base.clone();
+    path.0.name = std::iter::once(format!("{}$with", base.0.name))
+        .chain(
+            bindings
+                .iter()
+                .map(|(binder, implementation)| format!("{binder}={implementation}")),
+        )
+        .collect::<Vec<_>>()
+        .join("$");
+    path
+}
+/// The base declaration and bindings of a [`specialization_path`].
+pub fn specialization_parts(path: &DefPath) -> Option<(DefPath, Vec<(String, DefPath)>)> {
+    let (name, rest) = path.0.name.split_once("$with$")?;
+    let mut base = path.clone();
+    base.0.name = name.to_owned();
+    let bindings = rest
+        .split('$')
+        .map(|binding| {
+            let (binder, implementation) = binding.split_once('=')?;
+            let mut parts = implementation.split('/');
+            let (package, version) = parts.next()?.split_once('@')?;
+            let mut rest: Vec<String> = parts.map(str::to_owned).collect();
+            let name = rest.pop()?;
+            Some((
+                binder.to_owned(),
+                DefPath(hirsel_syntax::ItemPath {
+                    package: hirsel_syntax::PackageId {
+                        name: package.to_owned(),
+                        version: version.to_owned(),
+                    },
+                    modules: rest,
+                    name,
+                }),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((base, bindings))
+}
+/// The transparent alias that names an implementation's type member (GEN-6).
+pub fn implementation_type_path(implementation: &DefPath, member: &str) -> DefPath {
+    let mut path = implementation.clone();
+    path.0.name = format!("{}$member${member}", implementation.0.name);
+    path
+}
+/// An `implementation`: the family it implements and each member's actual,
+/// in the family's member order. Type actuals are the transparent aliases'
+/// representations; operations name their exact target (GEN-6).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct ImplementationSignature {
+    pub family: DefId,
+    pub members: Vec<(String, MemberActual)>,
+}
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub enum MemberActual {
+    Type(TypeId),
+    Size(u64),
+    Operation(DefPath),
+}
+impl ImplementationSignature {
+    pub fn member(&self, name: &str) -> Option<&MemberActual> {
+        self.members
+            .iter()
+            .find(|(member, _)| member == name)
+            .map(|(_, actual)| actual)
+    }
+    /// The type actuals' rows, in member order.
+    pub fn types(&self) -> Vec<TypeId> {
+        self.members
+            .iter()
+            .filter_map(|(_, actual)| match actual {
+                MemberActual::Type(ty) => Some(*ty),
+                _ => None,
+            })
+            .collect()
+    }
+    /// The family generic actuals: type and size members in order.
+    pub fn arguments(&self) -> Vec<GenericArgument> {
+        self.members
+            .iter()
+            .filter_map(|(_, actual)| match actual {
+                MemberActual::Type(ty) => Some(GenericArgument::Type(*ty)),
+                MemberActual::Size(n) => Some(GenericArgument::Size(Size::Constant(*n))),
+                MemberActual::Operation(_) => None,
+            })
+            .collect()
+    }
 }
 mod parameters;
 pub use parameters::*;
@@ -808,6 +962,19 @@ pub struct Resolution {
     pub types: Vec<(TypeExprId, ResolvedName)>,
     pub bindings: Vec<(PatternId, Symbol, LocalId)>,
     pub dependencies: Vec<DefPath>,
+    /// Generic actuals an implementation binder supplies (GEN-6), by the
+    /// callee expression (a member path or a `with` clause) and the callee's
+    /// generic ordinal; never inferred.
+    pub static_arguments: Vec<(ExprId, Vec<(u32, StaticArgument)>)>,
+    /// The item's implementation binders (GEN-6), as its signature records them.
+    pub implementation_binders: Vec<ImplementationBinder>,
+}
+/// One generic actual an implementation binder supplies (GEN-6): an
+/// enclosing binder's member parameter, or a bound implementation's actual.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub enum StaticArgument {
+    Parameter(GenericParameterName),
+    Actual(GenericArgument),
 }
 /// Checker elaboration of one use, consumed by modes and lowering (OWN-1/2/3/4/8).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, Eq, PartialEq)]

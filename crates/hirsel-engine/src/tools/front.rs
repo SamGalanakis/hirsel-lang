@@ -229,7 +229,7 @@ impl QueryEngine {
             else {
                 return false;
             };
-            if crate::queries::generation::generator(&syntax).is_some()
+            if crate::queries::generation::serial(&syntax)
                 || crate::queries::generation::instance_bodied(&syntax)
             {
                 return false;

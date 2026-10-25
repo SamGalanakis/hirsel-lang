@@ -936,7 +936,7 @@ impl QueryEngine {
             }
             self.materialize(definition)?;
             let syntax = self.snapshot(definition)?;
-            if generation::generator(&syntax).is_some() {
+            if generation::serial(&syntax) {
                 return Err(refusal());
             }
             let text = self.key_text(definition, QueryKind::Modes)?;

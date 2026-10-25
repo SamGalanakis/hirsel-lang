@@ -594,7 +594,9 @@ fn instantiation_never_reuses_a_result_across_signature_or_private_shape_edits()
         {
             SignatureKind::Function(f) => f.result,
             SignatureKind::Type(d) => d.representation.unwrap(),
-            SignatureKind::Const { .. } => unreachable!(),
+            SignatureKind::Const { .. }
+            | SignatureKind::Family(_)
+            | SignatureKind::Implementation(_) => unreachable!(),
         }
     };
     // A resident edit of `f[T](x: T) -> T` to `-> (T, T)`.

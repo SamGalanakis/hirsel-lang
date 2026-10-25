@@ -617,6 +617,8 @@ impl QueryEngine {
                 ..
             } => 2,
             ItemKind::Type { .. } => 3,
+            ItemKind::Signature { .. } => 4,
+            ItemKind::Implementation { .. } => 5,
         };
         Some(DefInputs {
             body: first.text_hash,

@@ -438,7 +438,11 @@ impl Weight {
             roles,
             schema,
             recursive_group: _,
+            implementations,
         } = metadata;
+        for binder in implementations {
+            self.def_path(binder.family.path());
+        }
         if let Some(path) = constant_alias {
             self.def_path(path);
         }
@@ -468,6 +472,20 @@ impl Weight {
         match kind {
             hirsel_types::SignatureKind::Const { generics, ty: _ } => {
                 self.shared_values(generics, Weight::generic)
+            }
+            hirsel_types::SignatureKind::Family(family) => {
+                for member in &family.members {
+                    self.add(member.name.capacity());
+                }
+            }
+            hirsel_types::SignatureKind::Implementation(implementation) => {
+                self.def_path(implementation.family.path());
+                for (name, actual) in &implementation.members {
+                    self.add(name.capacity());
+                    if let hirsel_types::MemberActual::Operation(target) = actual {
+                        self.def_path(target);
+                    }
+                }
             }
             hirsel_types::SignatureKind::Function(function) => {
                 let hirsel_types::FunctionType {

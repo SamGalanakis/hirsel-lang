@@ -1083,6 +1083,7 @@ impl QueryEngine {
                 from_source(self, old)
                     && hirsel_check_protocol::fact::fact_owner(&old.item.definition).is_none()
                     && !old.item.definition.0.name.starts_with("$dictionary$")
+                    && !crate::families::derived(&old.item.definition)
             })
             .cloned()
             .collect();
@@ -1246,7 +1247,10 @@ impl QueryEngine {
                     .or_default()
                     .push(helper);
             }
-            for helper in crate::dictionaries::literal_snapshots(new) {
+            for helper in crate::dictionaries::literal_snapshots(new)
+                .into_iter()
+                .chain(crate::families::snapshots(new))
+            {
                 affected.insert(helper.item.definition.clone());
                 self.items
                     .entry(helper.item.definition.clone())

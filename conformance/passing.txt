@@ -1508,6 +1508,15 @@ conformance/GEN/GEN-6-dependent-named-run.hir
 conformance/GEN/GEN-6-effects-bad.hir
 conformance/GEN/GEN-6-factory-bad.hir
 conformance/GEN/GEN-6-generic-bound-bad.hir
+conformance/GEN/GEN-6-impl-bound-bad.hir
+conformance/GEN/GEN-6-impl-contract-bad.hir
+conformance/GEN/GEN-6-impl-extra-bad.hir
+conformance/GEN/GEN-6-impl-kind-bad.hir
+conformance/GEN/GEN-6-impl-match-ok.hir
+conformance/GEN/GEN-6-impl-missing-bad.hir
+conformance/GEN/GEN-6-impl-passing-bad.hir
+conformance/GEN/GEN-6-impl-target-bad.hir
+conformance/GEN/GEN-6-impl-type-bad.hir
 conformance/GEN/GEN-6-literal-run.hir
 conformance/GEN/GEN-6-mismatch-bad.hir
 conformance/GEN/GEN-6-non-data-bad.hir

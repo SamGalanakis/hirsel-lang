@@ -1,0 +1,29 @@
+// rule: GEN-6
+// expect: accept
+signature Counter {
+  type T: plain
+  size width
+  fn get(x: T) -> u64 uses {}
+}
+
+fn get_u64(x: u64) -> u64 uses {} {
+  x
+}
+
+fn get_any[A: plain](x: A) -> u64 uses {} {
+  let _ = x
+  1u64
+}
+
+implementation direct: Counter {
+  type T = u64
+  size width = 8
+  get = get_u64
+}
+
+// A generic target is instantiated from the header.
+implementation generic: Counter {
+  type T = bool
+  size width = 1
+  get = get_any
+}

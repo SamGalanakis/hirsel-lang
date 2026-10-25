@@ -8,7 +8,10 @@ ownership are in [Ownership and modes](ownership.md).
 ### LANG-2: Prefix law
 
 Every type judgment is decided by the text to its left plus the expected type. Type
-arguments are never written in expressions, so a postfix `[` is always indexing.
+arguments are never written in expressions, so a postfix `[` is always indexing. The one
+static actual an expression writes is an implementation, in a `with` clause directly before
+a call's arguments ([GEN-6](generics.md#implementation-contracts)); a type or size
+actual is still inferred.
 `shape(T)` names a type in an expression only to read its shape at compile time
 ([CT-3](compile-time.md#ct-3-shapes)); it is not a type argument.
 
@@ -262,6 +265,8 @@ is the one separate program-level check.
   local to themselves, taken parameters and results are global, values are aliased,
   closures are many;
 - relations, brands and contracts are absent unless written;
+- implementation binders, their families and their sharing equations are exactly those
+  written ([GEN-6](generics.md#implementation-contracts));
 - authority comes from the declared capability-bearing parameters, and a closure's
   authority is unrestricted unless `uses` restricts it;
 - the error type is the `E` of a declared `Result[T, E]`; otherwise there is no

@@ -695,6 +695,31 @@ impl Checker<'_, '_> {
                     Err(e) => return Err(e),
                 };
                 match &s.kind {
+                    SignatureKind::Family(_) | SignatureKind::Implementation(_) => {
+                        self.report(
+                            const { RuleId::of("GEN-6") },
+                            self.span(id),
+                            "a signature or implementation is not a value; name an implementation only in a `with` clause",
+                        );
+                        Ok(self.error())
+                    }
+                    SignatureKind::Function(_)
+                        if !s.metadata.implementations.is_empty() && !self.static_callee(id) =>
+                    {
+                        let binders = s
+                            .metadata
+                            .implementations
+                            .iter()
+                            .map(|b| format!("{} = ..", b.name))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.report(
+                            const { RuleId::of("GEN-6") },
+                            self.span(id),
+                            &format!("`{p}` declares implementation binders; call it as `{} with ({binders})(..)`", p.0.name),
+                        );
+                        Ok(self.error())
+                    }
                     SignatureKind::Function(f) => {
                         let f = self.import_function(f)?;
                         let callable = f.generics.is_empty() && f.foreign.is_none();
@@ -1397,9 +1422,12 @@ impl Checker<'_, '_> {
                         name: self.name(g.name),
                         bounds: bounds.clone().into(),
                     },
-                    ast::GenericKind::Size => GenericParameter::Size {
-                        name: self.name(g.name),
-                    },
+                    // The resolver reports a local implementation binder (GEN-6).
+                    ast::GenericKind::Size | ast::GenericKind::Implementation { .. } => {
+                        GenericParameter::Size {
+                            name: self.name(g.name),
+                        }
+                    }
                 })
                 .collect(),
             parameters: parameters.into(),

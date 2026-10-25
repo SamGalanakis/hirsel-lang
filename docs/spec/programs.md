@@ -140,7 +140,11 @@ Definitions are package-private by default, `pub`, or `pub opaque` (constructors
 hidden; bounds stated). `internal/` path segments are visible only beneath their parent. A
 public signature cannot mention a private type. The opacity owner is the defining package
 at the exact selected version; file, module partition and compilation topology do not
-change it. The representation, and a sealed capability's implementation authority ceiling,
+change it. A `signature` or `implementation` is private or `pub`, never `pub opaque`.
+An implementation's type member is a transparent alias of the type it names, so
+it exposes no more than that type: an opaque provider type stays opaque through it, and a
+dictionary's `of` identity is unchanged ([GEN-6](generics.md#implementation-contracts)).
+The representation, and a sealed capability's implementation authority ceiling,
 are visible only in this owner's view. [DROP-4](failure.md#drop-4-commit) and resource
 destructuring keep their defining-module restrictions.
 

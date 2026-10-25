@@ -150,6 +150,52 @@ fn check_inner(
                     .push(Work::Enter(*body, c.frames[frame].result, frame));
             }
         }
+        (
+            ast::ItemKind::Implementation { signature, .. },
+            SignatureKind::Implementation(actuals),
+        ) => {
+            let family = actuals.family.path().clone();
+            // Record every declaration the matcher reads as a dependency.
+            if let SignatureKind::Family(declared) = &c.snapshot(&family)?.kind {
+                for member in &declared.members {
+                    if matches!(member.kind, FamilyMemberKind::Operation) {
+                        c.snapshot(&family_operation_path(&family, &member.name))?;
+                    }
+                }
+            }
+            for (_, actual) in &actuals.members {
+                if let MemberActual::Operation(target) = actual {
+                    c.snapshot(target)?;
+                }
+            }
+            let types = c.types;
+            let memo = c.memo;
+            let refusal = crate::implementation::match_implementation(
+                types,
+                memo,
+                &family,
+                actuals,
+                &mut *c.provider,
+            )?;
+            if let Err(refusal) = refusal {
+                let span = match item.kind {
+                    ast::ItemKind::Implementation { ref members, .. } => members
+                        .iter()
+                        .find(|m| m.name().as_str() == refusal.member)
+                        .map_or(item.name_span, |m| m.origin().span),
+                    _ => item.name_span,
+                };
+                let _ = signature;
+                c.report(
+                    refusal.rule,
+                    span,
+                    &format!(
+                        "implementation does not match `{family}` at member `{}`: {}",
+                        refusal.member, refusal.message
+                    ),
+                );
+            }
+        }
         (ast::ItemKind::Const { value, .. }, SignatureKind::Const { ty: ty, .. }) => {
             let ty = c.import(*ty)?;
             let frame = c.empty_frame(owner, None, Some(ty), None, false);
@@ -1119,6 +1165,15 @@ impl Checker<'_, '_> {
                 let ty = self.literal(&lit, expected, self.span(id), false);
                 self.put(id, ty, expected, UseKind::Copy)?;
             }
+            E::With { .. } => {
+                self.report(
+                    const { RuleId::of("GEN-6") },
+                    self.span(id),
+                    "a `with` clause is followed by the call's arguments",
+                );
+                let error = self.error();
+                self.put(id, error, expected, UseKind::Borrow)?;
+            }
             E::Path(_)
             | E::Formatter(_)
             | E::Heap
@@ -1149,7 +1204,20 @@ impl Checker<'_, '_> {
             E::Call { callee, .. } => {
                 self.work
                     .push(Work::AfterChild(After::CallCallee(id, expected, frame)));
-                if let ast::ExprKind::Path(path) = self.input.syntax.tree.expressions
+                if let ast::ExprKind::With { callee: base, .. } =
+                    self.input.syntax.tree.expressions[callee.0 as usize].kind
+                    && let ast::ExprKind::Path(path) = self.input.syntax.tree.expressions
+                        [base.0 as usize]
+                        .kind
+                        .clone()
+                {
+                    // GEN-6: the call checks against the declaration with its
+                    // binders' static actuals; a closed clause's target is the
+                    // specialization.
+                    let t = self.path_type(base, &path, expected, frame, true, true)?;
+                    self.put(base, t, None, UseKind::Borrow)?;
+                    self.put(callee, t, None, UseKind::Borrow)?;
+                } else if let ast::ExprKind::Path(path) = self.input.syntax.tree.expressions
                     [callee.0 as usize]
                     .kind
                     .clone()
@@ -1503,6 +1571,13 @@ impl Checker<'_, '_> {
         let mut usage = UseKind::Borrow;
         let ty = match kind {
             E::Path(path) => {
+                if self.static_callee(id) {
+                    self.report(
+                        const { RuleId::of("GEN-6") },
+                        self.span(id),
+                        "an abstract implementation operation is only ever called",
+                    );
+                }
                 let ty = self.path_type(id, &path, expected, frame, false, true)?;
                 if let TypeKind::Function(f) = self.kind(ty)
                     && !f.generics.is_empty()
@@ -2049,6 +2124,7 @@ impl Checker<'_, '_> {
                 unreachable!("specialized continuation finishes this expression")
             }
             E::Formatter(_) => unreachable!("the parser builds a formatter only as a callee"),
+            E::With { .. } => unreachable!("a `with` clause is entered only as a callee"),
         };
         if usage == UseKind::Borrow && self.bound(ty, ast::Bound::Plain)? {
             usage = UseKind::Copy;

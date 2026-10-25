@@ -113,6 +113,8 @@ impl DeclarationHead {
                     ..
                 } => 2,
                 ItemKind::Type { .. } => 3,
+                ItemKind::Signature { .. } => 4,
+                ItemKind::Implementation { .. } => 5,
             },
             visibility: item.visibility,
             name: item.name_span,

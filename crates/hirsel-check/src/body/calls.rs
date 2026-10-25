@@ -449,6 +449,28 @@ impl Checker<'_, '_> {
         bad |= ordinals.iter().any(Option::is_none)
             || (!missing_capabilities && arguments.len() != f.parameters.len());
         let mut inferred = vec![None; f.generics.len()];
+        // GEN-6: an implementation binder's members are supplied, never inferred.
+        let static_callee = match self.input.syntax.tree.expressions[callee.0 as usize].kind {
+            ast::ExprKind::With { callee: base, .. } => base,
+            _ => callee,
+        };
+        for (ordinal, argument) in self.static_arguments(static_callee).unwrap_or_default() {
+            let argument = match argument {
+                StaticArgument::Parameter(GenericParameterName::Type(p)) => {
+                    GenericArgument::Type(self.ty(TypeKind::Parameter(*p)))
+                }
+                StaticArgument::Parameter(GenericParameterName::Size(p)) => {
+                    GenericArgument::Size(Size::Parameter(*p))
+                }
+                StaticArgument::Actual(GenericArgument::Type(t)) => {
+                    GenericArgument::Type(self.import(*t)?)
+                }
+                StaticArgument::Actual(argument) => argument.clone(),
+            };
+            if let Some(slot) = inferred.get_mut(*ordinal as usize) {
+                *slot = Some(argument);
+            }
+        }
         if let Some(e) = expected {
             let constraint = self.crossing_inference_constraint(&f, f.result, e, false)?;
             self.infer(f.result, constraint, &mut inferred)?;
@@ -1273,13 +1295,32 @@ impl Checker<'_, '_> {
         {
             bad = true;
         }
+        // GEN-6: a specialization binds its binders' members, so it takes only
+        // the declaration's own leading generics.
+        let target_args = match &target {
+            CallTarget::Definition(path) if hirsel_types::specialization_parts(path).is_some() => {
+                let hidden = match &self.input.syntax.tree.expressions[id.0 as usize].kind {
+                    ast::ExprKind::Call { callee, .. } => {
+                        match self.input.syntax.tree.expressions[callee.0 as usize].kind {
+                            ast::ExprKind::With { callee, .. } => {
+                                self.static_arguments(callee).map_or(0, <[_]>::len)
+                            }
+                            _ => 0,
+                        }
+                    }
+                    _ => 0,
+                };
+                args[..args.len().saturating_sub(hidden)].to_vec()
+            }
+            _ => args.clone(),
+        };
         if !bad {
             if let CallTarget::Definition(callee) = &target {
-                if !args.is_empty() {
+                if !target_args.is_empty() {
                     self.body.instantiations.push(Instantiation {
                         expression: id,
                         callee: callee.clone(),
-                        arguments: args.clone(),
+                        arguments: target_args.clone(),
                     });
                 }
             }
@@ -1334,7 +1375,7 @@ impl Checker<'_, '_> {
             expression: id,
             target,
             arguments,
-            generic_arguments: args.clone(),
+            generic_arguments: target_args,
             contextual_contracts,
             result,
             state: if bad {

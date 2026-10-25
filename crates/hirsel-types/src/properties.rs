@@ -26,6 +26,7 @@ impl Signature {
             SignatureKind::Function(f) => &f.generics,
             SignatureKind::Type(t) => &t.generics,
             SignatureKind::Const { generics, .. } => generics,
+            SignatureKind::Family(_) | SignatureKind::Implementation(_) => &[],
         }
     }
 }
@@ -219,7 +220,7 @@ pub(crate) trait ProofContext {
 }
 
 /// The flags of a `structural_property` proof.
-pub(crate) const STRUCTURAL: ProofFlags = ProofFlags {
+pub const STRUCTURAL: ProofFlags = ProofFlags {
     check_root_locality: true,
     use_evidence: true,
     shared_storage: false,

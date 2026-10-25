@@ -544,7 +544,10 @@ pub(super) fn selectors(
     match &signature.kind {
         SignatureKind::Type(d) => pending.extend(d.representation.map(|ty| (ty, vec![]))),
         SignatureKind::Const { ty: ty, .. } => pending.push((*ty, vec![])),
-        SignatureKind::Function(_) => (),
+        SignatureKind::Implementation(i) => {
+            pending.extend(i.types().into_iter().map(|ty| (ty, vec![])))
+        }
+        SignatureKind::Function(_) | SignatureKind::Family(_) => (),
     }
     if let SignatureKind::Function(f) = &signature.kind {
         pending.extend(f.parameters.iter().map(|p| (p.ty, vec![f])));

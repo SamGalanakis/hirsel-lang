@@ -69,6 +69,7 @@ fn encode_signature(
         roles,
         schema,
         recursive_group,
+        implementations,
     } = metadata;
     let NominalRoles {
         unsafe_capability,
@@ -187,6 +188,20 @@ fn encode_signature(
         e.tag("recursive-group-v1");
         e.atom(&group.0);
     }
+    // Absent without binders, so existing vectors are unchanged.
+    if !implementations.is_empty() {
+        e.tag("implementation-binders-v1");
+        e.number(implementations.len() as u64);
+        for binder in implementations {
+            e.atom(binder.name.as_bytes());
+            e.path(binder.family.path());
+            e.number(binder.members.len() as u64);
+            for (member, ordinal) in &binder.members {
+                e.atom(member.as_bytes());
+                e.number(u64::from(*ordinal));
+            }
+        }
+    }
     match kind {
         SignatureKind::Function(f) => {
             e.tag("function");
@@ -277,6 +292,44 @@ fn encode_signature(
             e.tag("const");
             e.generics(generics);
             e.ty(*t, types)?;
+        }
+        SignatureKind::Family(family) => {
+            e.tag("family-v1");
+            e.number(family.members.len() as u64);
+            for member in &family.members {
+                e.atom(member.name.as_bytes());
+                match &member.kind {
+                    FamilyMemberKind::Type { bounds } => {
+                        e.tag("type");
+                        e.bounds(bounds);
+                    }
+                    FamilyMemberKind::Size => e.tag("size"),
+                    // The header is its own declaration, a dependency.
+                    FamilyMemberKind::Operation => e.tag("operation"),
+                }
+            }
+        }
+        SignatureKind::Implementation(implementation) => {
+            e.tag("implementation-v1");
+            e.path(implementation.family.path());
+            e.number(implementation.members.len() as u64);
+            for (name, actual) in &implementation.members {
+                e.atom(name.as_bytes());
+                match actual {
+                    MemberActual::Type(ty) => {
+                        e.tag("type");
+                        e.ty(*ty, types)?;
+                    }
+                    MemberActual::Size(n) => {
+                        e.tag("size");
+                        e.number(*n);
+                    }
+                    MemberActual::Operation(target) => {
+                        e.tag("operation");
+                        e.path(target);
+                    }
+                }
+            }
         }
     }
     let mut deps = dependencies.to_vec();

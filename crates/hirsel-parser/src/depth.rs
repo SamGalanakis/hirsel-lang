@@ -38,7 +38,7 @@ impl Heights {
                 .chain([self.expr(*callee)])
                 .max()
                 .unwrap(),
-            ExprKind::Field { base, .. } => self.expr(*base),
+            ExprKind::Field { base, .. } | ExprKind::With { callee: base, .. } => self.expr(*base),
             ExprKind::Index { base, index } => self.expr(*base).max(self.expr(*index)),
             ExprKind::Unary { value, .. }
             | ExprKind::Try { value, .. }

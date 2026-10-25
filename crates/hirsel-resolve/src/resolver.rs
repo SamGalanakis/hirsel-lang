@@ -5,7 +5,7 @@ use hirsel_span::Span;
 use hirsel_syntax::*;
 use hirsel_types::{
     self as ty, LocalId, ParamId, Resolution, ResolvedName, SignatureProvider, SizeParamId,
-    SizeParameterRef, TypeParamId, TypeParameterRef,
+    SizeParameterRef, StaticArgument, TypeParamId, TypeParameterRef,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,8 +79,45 @@ struct Binding {
 struct Scope {
     values: BTreeMap<Symbol, Binding>,
     generics: BTreeMap<Symbol, GenericName>,
+    implementations: BTreeMap<Symbol, ImplementationBinding>,
     future: BTreeSet<Symbol>,
     owner: Option<NameSite>,
+}
+/// An implementation binder in scope (GEN-6): abstract in its declaration,
+/// where each type or size member is a generic parameter and each operation
+/// its family's header, or bound to `implementation` in a specialization,
+/// where every member names the implementation's exact actual.
+#[derive(Clone)]
+struct ImplementationBinding {
+    family: DefPath,
+    implementation: Option<DefPath>,
+    members: BTreeMap<String, BoundMember>,
+    /// An abstract binder's member parameter ordinals, for sharing.
+    ordinals: BTreeMap<String, u32>,
+}
+#[derive(Clone, PartialEq)]
+enum BoundMember {
+    Type(ResolvedName),
+    /// A concrete type member's representation, for sharing and static actuals.
+    TypeActual(ResolvedName, ty::TypeId),
+    SizeParameter(SizeParameterRef),
+    SizeConstant(u64),
+    Operation(DefPath),
+}
+impl BoundMember {
+    fn static_argument(&self) -> Option<StaticArgument> {
+        Some(match self {
+            Self::Type(ResolvedName::TypeParameter(p)) => {
+                StaticArgument::Parameter(GenericParameterName::Type(*p))
+            }
+            Self::TypeActual(_, ty) => StaticArgument::Actual(ty::GenericArgument::Type(*ty)),
+            Self::SizeParameter(p) => StaticArgument::Parameter(GenericParameterName::Size(*p)),
+            Self::SizeConstant(n) => {
+                StaticArgument::Actual(ty::GenericArgument::Size(ty::Size::Constant(*n)))
+            }
+            _ => return None,
+        })
+    }
 }
 #[derive(Clone)]
 enum GenericName {
@@ -770,24 +807,17 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             .owner
             .expect("generic declaration has an owner");
         let name_spans = self.syntax.tree.generic_name_spans(self.origin(owner));
-        let declarations = generics
-            .iter()
-            .map(|p| match &p.kind {
-                GenericKind::Type(bounds) => ty::GenericParameter::Type {
-                    name: p.name.as_str().to_owned(),
-                    bounds: bounds.clone().into(),
-                },
-                GenericKind::Size => ty::GenericParameter::Size {
-                    name: p.name.as_str().to_owned(),
-                },
-            })
-            .collect();
         let scope = self.lexical.site(owner);
-        if !generics.is_empty() {
-            self.output.generic_declarations.insert(scope, declarations);
-        }
+        // GEN-6: ordinary parameters keep their written order; each abstract
+        // implementation binder's unshared type and size members follow, so a
+        // specialization (whose binders add none) keeps the same ordinals.
+        let mut declarations = vec![];
         for (ordinal, parameter) in generics.iter().enumerate() {
-            if self.generic(parameter.name).is_some() || self.value(parameter.name).is_some() {
+            if self.generic(parameter.name).is_some()
+                || self.value(parameter.name).is_some()
+                || self.implementation(parameter.name).is_some()
+                || generics[..ordinal].iter().any(|p| p.name == parameter.name)
+            {
                 self.diagnostic(
                     const { RuleId::of("GEN-1") },
                     name_spans.get(ordinal).copied().unwrap_or(span),
@@ -795,23 +825,23 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 );
                 continue;
             }
-            let name = match parameter.kind {
-                GenericKind::Type(_) => {
-                    let id = TypeParameterRef::body(scope, TypeParamId(ordinal as u32));
-                    GenericName::Type(id)
+            let position = declarations.len() as u32;
+            let name = match &parameter.kind {
+                GenericKind::Type(bounds) => {
+                    declarations.push(ty::GenericParameter::Type {
+                        name: parameter.name.as_str().to_owned(),
+                        bounds: bounds.clone().into(),
+                    });
+                    GenericName::Type(TypeParameterRef::body(scope, TypeParamId(position)))
                 }
                 GenericKind::Size => {
-                    let id = SizeParameterRef::body(scope, SizeParamId(ordinal as u32));
-                    GenericName::Size(id)
+                    declarations.push(ty::GenericParameter::Size {
+                        name: parameter.name.as_str().to_owned(),
+                    });
+                    GenericName::Size(SizeParameterRef::body(scope, SizeParamId(position)))
                 }
+                GenericKind::Implementation { .. } => continue,
             };
-            let owner = self
-                .scopes
-                .last()
-                .unwrap()
-                .owner
-                .clone()
-                .expect("generic declaration has an owner");
             let resolved = match name {
                 GenericName::Type(id) => GenericParameterName::Type(id),
                 GenericName::Size(id) => GenericParameterName::Size(id),
@@ -827,12 +857,576 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 .generics
                 .insert(parameter.name, name);
         }
+        for (ordinal, parameter) in generics.iter().enumerate() {
+            let GenericKind::Implementation { signature, sharing } = &parameter.kind else {
+                continue;
+            };
+            let at = name_spans.get(ordinal).copied().unwrap_or(span);
+            if owner != NameSite::Item
+                || !matches!(self.syntax.item.kind, ItemKind::Function { .. })
+            {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    at,
+                    "only a top-level function declares implementation binders",
+                );
+                continue;
+            }
+            if self
+                .scopes
+                .last()
+                .unwrap()
+                .implementations
+                .contains_key(&parameter.name)
+            {
+                continue;
+            }
+            if let Some(binding) = self.implementation_binder(
+                parameter,
+                signature,
+                sharing,
+                scope,
+                at,
+                &mut declarations,
+            ) {
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .implementations
+                    .insert(parameter.name, binding);
+            }
+        }
+        if !declarations.is_empty() {
+            self.output.generic_declarations.insert(scope, declarations);
+        }
+    }
+    /// The binder's family and member denotations (GEN-6). A specialization
+    /// item binds it to the implementation its `Generated::Specialization`
+    /// names; otherwise each unshared type or size member is a new parameter.
+    fn implementation_binder(
+        &mut self,
+        parameter: &GenericParam,
+        signature: &Path,
+        sharing: &[Sharing],
+        scope: ty::SiteRef,
+        at: Span,
+        declarations: &mut Vec<ty::GenericParameter>,
+    ) -> Option<ImplementationBinding> {
+        let family_path = match self.lookup(signature, at) {
+            Ok(path) => path,
+            Err(error) => {
+                self.lookup_diagnostic(&error, signature, at);
+                return None;
+            }
+        };
+        let family = match self.signature(&family_path).map(|s| s.kind.clone()) {
+            Some(ty::SignatureKind::Family(family)) => family,
+            Some(_) => {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    at,
+                    format!("`{family_path}` is not a signature"),
+                );
+                return None;
+            }
+            None => return None,
+        };
+        let implementation = match &self.syntax.item.generated {
+            Some(Generated::Specialization(bindings)) => bindings
+                .iter()
+                .find(|(name, _)| *name == parameter.name)
+                .map(|(_, implementation)| implementation.clone()),
+            _ => None,
+        };
+        let actuals = match &implementation {
+            Some(path) => match self.signature(path).map(|s| s.kind.clone()) {
+                Some(ty::SignatureKind::Implementation(actuals))
+                    if actuals.family.path() == &family_path =>
+                {
+                    Some(actuals)
+                }
+                _ => {
+                    self.diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        at,
+                        format!("`{path}` does not implement `{family_path}`"),
+                    );
+                    return None;
+                }
+            },
+            None => None,
+        };
+        for equation in sharing {
+            if family
+                .member(equation.member.as_str())
+                .is_none_or(|m| matches!(m.kind, ty::FamilyMemberKind::Operation))
+            {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    equation.origin.span,
+                    format!(
+                        "`{family_path}` has no type or size member `{}` to share",
+                        equation.member
+                    ),
+                );
+                return None;
+            }
+        }
+        let mut binding = ImplementationBinding {
+            family: family_path.clone(),
+            implementation: implementation.clone(),
+            members: BTreeMap::new(),
+            ordinals: BTreeMap::new(),
+        };
+        for member in &family.members {
+            let name = member.name.clone();
+            let bound = if let Some(equation) =
+                sharing.iter().find(|e| e.member.as_str() == member.name)
+            {
+                let other = self.implementation(equation.binder);
+                let Some(shared) = other
+                    .as_ref()
+                    .and_then(|other| other.members.get(&member.name).cloned())
+                else {
+                    self.diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        equation.origin.span,
+                        format!(
+                            "`{}` is not an earlier implementation binder with member `{}`",
+                            equation.binder, member.name
+                        ),
+                    );
+                    return None;
+                };
+                let kind_matches = matches!(
+                    (&member.kind, &shared),
+                    (
+                        ty::FamilyMemberKind::Type { .. },
+                        BoundMember::Type(_) | BoundMember::TypeActual(..)
+                    ) | (
+                        ty::FamilyMemberKind::Size,
+                        BoundMember::SizeParameter(_) | BoundMember::SizeConstant(_)
+                    )
+                );
+                if !kind_matches {
+                    self.diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        equation.origin.span,
+                        "a sharing equation relates two type members or two size members",
+                    );
+                    return None;
+                }
+                if let Some(ordinal) = other.and_then(|o| o.ordinals.get(&member.name).copied()) {
+                    binding.ordinals.insert(name.clone(), ordinal);
+                }
+                shared
+            } else {
+                match (&member.kind, &actuals) {
+                    (ty::FamilyMemberKind::Operation, Some(actuals)) => {
+                        match actuals.member(&member.name) {
+                            Some(ty::MemberActual::Operation(target)) => {
+                                self.output.query.value.dependencies.push(target.clone());
+                                BoundMember::Operation(target.clone())
+                            }
+                            _ => return None,
+                        }
+                    }
+                    (ty::FamilyMemberKind::Operation, None) => {
+                        let path = ty::family_operation_path(&family_path, &member.name);
+                        self.output.query.value.dependencies.push(path.clone());
+                        BoundMember::Operation(path)
+                    }
+                    (ty::FamilyMemberKind::Type { .. }, Some(actuals)) => {
+                        let alias = ty::implementation_type_path(
+                            implementation.as_ref().unwrap(),
+                            &member.name,
+                        );
+                        self.output.query.value.dependencies.push(alias.clone());
+                        match actuals.member(&member.name) {
+                            Some(ty::MemberActual::Type(actual)) => {
+                                BoundMember::TypeActual(ResolvedName::Definition(alias), *actual)
+                            }
+                            _ => return None,
+                        }
+                    }
+                    (ty::FamilyMemberKind::Size, Some(actuals)) => {
+                        match actuals.member(&member.name) {
+                            Some(ty::MemberActual::Size(n)) => BoundMember::SizeConstant(*n),
+                            _ => return None,
+                        }
+                    }
+                    (ty::FamilyMemberKind::Type { bounds }, None) => {
+                        let position = declarations.len() as u32;
+                        declarations.push(ty::GenericParameter::Type {
+                            name: format!("{}.{}", parameter.name, member.name),
+                            bounds: bounds.clone(),
+                        });
+                        binding.ordinals.insert(name.clone(), position);
+                        BoundMember::Type(ResolvedName::TypeParameter(TypeParameterRef::body(
+                            scope,
+                            TypeParamId(position),
+                        )))
+                    }
+                    (ty::FamilyMemberKind::Size, None) => {
+                        let position = declarations.len() as u32;
+                        declarations.push(ty::GenericParameter::Size {
+                            name: format!("{}.{}", parameter.name, member.name),
+                        });
+                        binding.ordinals.insert(name.clone(), position);
+                        BoundMember::SizeParameter(SizeParameterRef::body(
+                            scope,
+                            SizeParamId(position),
+                        ))
+                    }
+                }
+            };
+            binding.members.insert(name, bound);
+        }
+        if implementation.is_none() {
+            let members = family
+                .members
+                .iter()
+                .filter_map(|m| Some((m.name.clone(), *binding.ordinals.get(&m.name)?)))
+                .collect();
+            self.output
+                .implementation_binders
+                .push(ty::ImplementationBinder {
+                    name: parameter.name.as_str().to_owned(),
+                    family: DefId::intern(&family_path),
+                    members,
+                });
+        }
+        Some(binding)
+    }
+    fn implementation(&self, name: Symbol) -> Option<ImplementationBinding> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.implementations.get(&name))
+            .cloned()
+    }
+    /// `H.member` where `H` is an implementation binder in scope (GEN-6):
+    /// None for any other path, `Some(None)` for a missing member (reported).
+    #[allow(clippy::option_option)]
+    fn binder_member(
+        &mut self,
+        path: &Path,
+        span: Span,
+    ) -> Option<Option<(ImplementationBinding, BoundMember)>> {
+        let [binder, member] = path.segments.as_slice() else {
+            return None;
+        };
+        if path.package.is_some() || self.value(*binder).is_some() {
+            return None;
+        }
+        let binding = self.implementation(*binder)?;
+        let bound = binding.members.get(member.as_str()).cloned();
+        if bound.is_none() {
+            self.diagnostic(
+                const { RuleId::of("GEN-6") },
+                span,
+                format!("signature `{}` has no member `{member}`", binding.family),
+            );
+        }
+        Some(bound.map(|bound| (binding, bound)))
+    }
+    fn binder_member_quiet(&self, path: &Path) -> Option<BoundMember> {
+        let [binder, member] = path.segments.as_slice() else {
+            return None;
+        };
+        self.implementation(*binder)?
+            .members
+            .get(member.as_str())
+            .cloned()
+    }
+    /// `f with (H = impl, ..)` (GEN-6). Every binder of `f` is named once, by an
+    /// implementation of its family or an enclosing binder, and shared members
+    /// agree. With every actual closed, the clause names the specialization,
+    /// an ordinary definition; otherwise `f` with each member's static actual.
+    fn with_clause(&mut self, id: ExprId, callee: ExprId, bindings: &[StaticBinding], span: Span) {
+        let Some((_, ResolvedName::Definition(base))) = self
+            .output
+            .expressions
+            .iter()
+            .rev()
+            .find(|(e, _)| *e == callee)
+            .cloned()
+        else {
+            self.diagnostic(
+                const { RuleId::of("GEN-6") },
+                span,
+                "a `with` clause follows a function declaring implementation binders",
+            );
+            return;
+        };
+        let binders = match self.signature(&base) {
+            Some(signature) if matches!(signature.kind, ty::SignatureKind::Function(_)) => {
+                signature.metadata.implementations.clone()
+            }
+            _ => vec![],
+        };
+        if binders.is_empty() {
+            self.diagnostic(
+                const { RuleId::of("GEN-6") },
+                span,
+                format!("`{base}` declares no implementation binders"),
+            );
+            return;
+        }
+        for (i, binding) in bindings.iter().enumerate() {
+            if bindings[..i].iter().any(|b| b.name == binding.name) {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    binding.origin.span,
+                    format!("implementation binder `{}` is bound twice", binding.name),
+                );
+                return;
+            }
+            if !binders.iter().any(|b| b.name == binding.name.as_str()) {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    binding.origin.span,
+                    format!("`{base}` has no implementation binder `{}`", binding.name),
+                );
+                return;
+            }
+        }
+        let mut actuals = vec![];
+        for binder in &binders {
+            let Some(binding) = bindings.iter().find(|b| b.name.as_str() == binder.name) else {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    span,
+                    format!(
+                        "implementation actual for `{}` is required: write `with ({} = ..)`",
+                        binder.name, binder.name
+                    ),
+                );
+                return;
+            };
+            let at = binding.origin.span;
+            let path = &binding.implementation;
+            let actual = if path.package.is_none()
+                && let [name] = path.segments.as_slice()
+                && let Some(enclosing) = self.implementation(*name)
+            {
+                enclosing
+            } else {
+                let implementation = match self.lookup(path, at) {
+                    Ok(definition) => definition,
+                    Err(error) => {
+                        self.lookup_diagnostic(&error, path, at);
+                        return;
+                    }
+                };
+                let Some(ty::SignatureKind::Implementation(signature)) =
+                    self.signature(&implementation).map(|s| s.kind.clone())
+                else {
+                    self.diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        at,
+                        format!("`{implementation}` is not an implementation"),
+                    );
+                    return;
+                };
+                let members = signature
+                    .members
+                    .iter()
+                    .map(|(name, actual)| {
+                        let bound = match actual {
+                            ty::MemberActual::Type(ty) => BoundMember::TypeActual(
+                                ResolvedName::Definition(ty::implementation_type_path(
+                                    &implementation,
+                                    name,
+                                )),
+                                *ty,
+                            ),
+                            ty::MemberActual::Size(n) => BoundMember::SizeConstant(*n),
+                            ty::MemberActual::Operation(target) => {
+                                BoundMember::Operation(target.clone())
+                            }
+                        };
+                        (name.clone(), bound)
+                    })
+                    .collect();
+                ImplementationBinding {
+                    family: signature.family.path().clone(),
+                    implementation: Some(implementation),
+                    members,
+                    ordinals: BTreeMap::new(),
+                }
+            };
+            if actual.family != *binder.family.path() {
+                self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    at,
+                    format!(
+                        "binder `{}` requires an implementation of `{}`, not of `{}`",
+                        binder.name,
+                        binder.family.path(),
+                        actual.family
+                    ),
+                );
+                return;
+            }
+            actuals.push((binder, actual, at));
+        }
+        // Sharing: binders whose members denote one ordinal take equal actuals.
+        let mut statics: BTreeMap<u32, (BoundMember, Span)> = BTreeMap::new();
+        for (binder, actual, at) in &actuals {
+            for (member, ordinal) in &binder.members {
+                let Some(bound) = actual.members.get(member) else {
+                    continue;
+                };
+                match statics.get(ordinal) {
+                    Some((earlier, _)) if !self.same_member(earlier, bound) => {
+                        self.diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            *at,
+                            format!(
+                                "binder `{}` shares member `{member}`, but its actual's `{member}` differs",
+                                binder.name
+                            ),
+                        );
+                        return;
+                    }
+                    Some(_) => {}
+                    None => {
+                        statics.insert(*ordinal, (bound.clone(), *at));
+                    }
+                }
+            }
+        }
+        // The call checks against the declaration with every member supplied;
+        // a closed clause then targets the specialization (GEN-6).
+        let arguments = statics
+            .into_iter()
+            .filter_map(|(ordinal, (bound, _))| Some((ordinal, bound.static_argument()?)))
+            .collect();
+        self.output.static_arguments.push((callee, arguments));
+        let closed = actuals.iter().all(|(_, a, _)| a.implementation.is_some());
+        if closed {
+            let named = actuals
+                .iter()
+                .map(|(b, a, _)| (b.name.clone(), a.implementation.clone().unwrap()))
+                .collect::<Vec<_>>();
+            let specialization = ty::specialization_path(&base, &named);
+            self.output
+                .query
+                .value
+                .dependencies
+                .push(specialization.clone());
+            self.output
+                .expressions
+                .push((id, ResolvedName::Definition(specialization)));
+        } else {
+            self.output
+                .expressions
+                .push((id, ResolvedName::Definition(base)));
+        }
+    }
+    fn same_member(&self, a: &BoundMember, b: &BoundMember) -> bool {
+        match (a, b) {
+            (BoundMember::TypeActual(_, x), BoundMember::TypeActual(_, y)) => {
+                self.types.semantic_eq(*x, *y)
+            }
+            _ => a == b,
+        }
+    }
+    /// The static actuals an abstract binder supplies to its family's
+    /// operation headers: each type and size member, in family order.
+    fn operation_arguments(
+        &mut self,
+        binding: &ImplementationBinding,
+    ) -> Vec<(u32, StaticArgument)> {
+        let Some(ty::SignatureKind::Family(family)) =
+            self.signature(&binding.family).map(|s| s.kind.clone())
+        else {
+            return vec![];
+        };
+        family
+            .members
+            .iter()
+            .filter(|m| !matches!(m.kind, ty::FamilyMemberKind::Operation))
+            .enumerate()
+            .filter_map(|(ordinal, m)| {
+                Some((
+                    ordinal as u32,
+                    binding.members.get(&m.name)?.static_argument()?,
+                ))
+            })
+            .collect()
     }
     fn item(&mut self) {
         let item = self.syntax.item.clone();
         self.scopes.last_mut().unwrap().owner = Some(NameSite::Item);
         self.exported = item.visibility != Visibility::Private;
         match item.kind {
+            ItemKind::Signature { members } => {
+                // Operation headers are their own declarations (GEN-6).
+                let mut names = BTreeSet::new();
+                for member in &members {
+                    if !names.insert(member.name()) {
+                        self.diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            member.origin().span,
+                            format!("duplicate signature member `{}`", member.name()),
+                        );
+                    }
+                    if let MemberSpec::Type {
+                        authority: Some(paths),
+                        origin,
+                        ..
+                    } = member
+                        && !paths.is_empty()
+                    {
+                        self.diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            origin.span,
+                            "a type member's authority is empty: write `uses {}` or a bound",
+                        );
+                    }
+                }
+            }
+            ItemKind::Implementation { signature, members } => {
+                // Paths: the family, then each operation target in member order.
+                let span = item.name_span;
+                match self.lookup(&signature, span) {
+                    Ok(family) => self
+                        .output
+                        .paths
+                        .push((NameSite::Item, ResolvedName::Definition(family))),
+                    Err(error) => self.lookup_diagnostic(&error, &signature, span),
+                }
+                let mut names = BTreeSet::new();
+                for member in &members {
+                    if !names.insert(member.name()) {
+                        self.diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            member.origin().span,
+                            format!("duplicate implementation member `{}`", member.name()),
+                        );
+                    }
+                    match member {
+                        MemberDefinition::Type { ty, .. } => {
+                            self.type_expr(*ty);
+                        }
+                        MemberDefinition::Size { .. } => {}
+                        MemberDefinition::Operation { target, origin, .. } => {
+                            match self.lookup(target, origin.span) {
+                                Ok(definition) => {
+                                    self.signature(&definition);
+                                    self.output.paths.push((
+                                        NameSite::Item,
+                                        ResolvedName::Definition(definition),
+                                    ))
+                                }
+                                Err(error) => self.lookup_diagnostic(&error, target, origin.span),
+                            }
+                        }
+                    }
+                }
+            }
             ItemKind::Function {
                 signature, body, ..
             } => {
@@ -1122,6 +1716,27 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
     fn type_expr(&mut self, id: TypeExprId) -> ExpectedType {
         let node = self.syntax.tree.types[id.0 as usize].clone();
         match node.kind {
+            TypeExprKind::Named { path, .. }
+                if self.binder_member(&path, node.origin.span).is_some() =>
+            {
+                // Resolved again to read it; the first call reported a missing member.
+                let member = self.binder_member_quiet(&path);
+                let name = match member {
+                    Some(BoundMember::Type(name) | BoundMember::TypeActual(name, _)) => name,
+                    Some(BoundMember::SizeParameter(parameter)) => ResolvedName::Size(parameter),
+                    Some(BoundMember::SizeConstant(_) | BoundMember::Operation(_)) => {
+                        self.diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            node.origin.span,
+                            "an operation member is not a type",
+                        );
+                        return ExpectedType::Unknown;
+                    }
+                    None => return ExpectedType::Unknown,
+                };
+                self.output.query.value.types.push((id, name));
+                ExpectedType::Unknown
+            }
             TypeExprKind::Named { path, arguments } => {
                 let expected = if path.package.is_none() && path.segments.len() == 1 {
                     let name = path.segments[0];
@@ -2046,6 +2661,12 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 expected
             }
             ExprKind::Call { callee, arguments } => self.call(callee, arguments, expected),
+            ExprKind::With { callee, bindings } => {
+                self.callees.insert(callee);
+                let hint = self.expr(callee, ExpectedType::Unknown);
+                self.with_clause(id, callee, &bindings, span);
+                hint
+            }
             ExprKind::Field { base, field } => {
                 if let Some(path) = self.dot_path(id)
                     && self.module_path(&path)
@@ -2224,6 +2845,29 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
         expected: ExpectedType,
         span: Span,
     ) -> ExpectedType {
+        if let Some(member) = self.binder_member(path, span) {
+            match member {
+                Some((binding, BoundMember::Operation(target))) => {
+                    if binding.implementation.is_none() {
+                        let arguments = self.operation_arguments(&binding);
+                        self.output.static_arguments.push((id, arguments));
+                    }
+                    self.signature(&target);
+                    self.output
+                        .query
+                        .value
+                        .expressions
+                        .push((id, ResolvedName::Definition(target)));
+                }
+                Some(_) => self.diagnostic(
+                    const { RuleId::of("GEN-6") },
+                    span,
+                    "a type or size member is not a value",
+                ),
+                None => {}
+            }
+            return ExpectedType::Unknown;
+        }
         if let Some((name, expected)) = self.local_projection(path, NameSite::Expression(id), span)
         {
             self.output.query.value.expressions.push((id, name));
@@ -2349,7 +2993,9 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                             ),
                         }),
                         ItemKind::Const { ty, .. } => Some(self.syntax_expected(ty)),
-                        ItemKind::Type { .. } => None,
+                        ItemKind::Type { .. }
+                        | ItemKind::Signature { .. }
+                        | ItemKind::Implementation { .. } => None,
                     };
                     self.syntax = old_syntax;
                     if let Some(written) = written {
@@ -3162,6 +3808,15 @@ fn signature_roots(signature: &ty::Signature) -> Vec<ty::TypeId> {
             .collect(),
         ty::SignatureKind::Type(declaration) => declaration.representation.into_iter().collect(),
         ty::SignatureKind::Const { ty, .. } => vec![*ty],
+        ty::SignatureKind::Family(_) => vec![],
+        ty::SignatureKind::Implementation(implementation) => implementation
+            .members
+            .iter()
+            .filter_map(|(_, actual)| match actual {
+                ty::MemberActual::Type(ty) => Some(*ty),
+                _ => None,
+            })
+            .collect(),
     }
 }
 fn primitive(name: &str) -> Option<ty::Primitive> {

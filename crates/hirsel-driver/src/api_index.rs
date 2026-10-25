@@ -200,6 +200,21 @@ fn core_entries(core_docs: &str) -> Vec<Entry> {
                 )
             }
             SignatureKind::Const { ty: id, .. } => format!("const {name}: {}", printer.ty(*id)),
+            SignatureKind::Family(family) => format!(
+                "signature {name} {{ {} }}",
+                family
+                    .members
+                    .iter()
+                    .map(|m| m.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            SignatureKind::Implementation(implementation) => {
+                format!(
+                    "implementation {name}: {}",
+                    short(implementation.family.path())
+                )
+            }
         };
         out.push(Entry {
             identity: s.definition.to_string(),

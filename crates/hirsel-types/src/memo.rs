@@ -196,6 +196,10 @@ pub fn instantiate(
                     .transpose()?;
                 SignatureKind::Type(declaration)
             }
+            SignatureKind::Family(family) => SignatureKind::Family(family.clone()),
+            SignatureKind::Implementation(implementation) => {
+                SignatureKind::Implementation(implementation.clone())
+            }
         };
         Ok(Instantiated { kind })
     })

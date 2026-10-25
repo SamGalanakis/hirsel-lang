@@ -126,7 +126,9 @@ impl StdSurface {
                                 g.name.as_str(),
                                 match g.kind {
                                     GenericKind::Size => "4".to_string(),
-                                    GenericKind::Type(_) => type_arg.to_string(),
+                                    GenericKind::Type(_) | GenericKind::Implementation { .. } => {
+                                        type_arg.to_string()
+                                    }
                                 },
                             )
                         })

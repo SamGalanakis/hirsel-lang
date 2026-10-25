@@ -133,6 +133,12 @@ pub fn sites(source: &str) -> Result<Vec<usize>, String> {
                 }
                 _ => {}
             },
+            ItemKind::Signature { members } => {
+                out.extend(members.iter().map(|m| at(m.origin().span).start as usize));
+            }
+            ItemKind::Implementation { members, .. } => {
+                out.extend(members.iter().map(|m| at(m.origin().span).start as usize));
+            }
             ItemKind::Const { .. } => {}
         }
     }

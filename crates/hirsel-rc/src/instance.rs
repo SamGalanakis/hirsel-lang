@@ -1829,7 +1829,9 @@ impl Expander<'_, '_, '_> {
                     }
                 }
                 SignatureKind::Type(_) => self.nominal(callee, callee_actuals)?,
-                SignatureKind::Const { ty: _, .. } => {}
+                SignatureKind::Const { ty: _, .. }
+                | SignatureKind::Family(_)
+                | SignatureKind::Implementation(_) => {}
             }
         }
         Ok(())

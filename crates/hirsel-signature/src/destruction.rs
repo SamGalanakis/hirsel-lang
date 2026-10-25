@@ -169,7 +169,9 @@ impl Normalizer<'_, '_> {
         self.generics = match kind {
             SignatureKind::Function(f) => f.generics.to_vec(),
             SignatureKind::Type(t) => t.generics.clone(),
-            SignatureKind::Const { ty: _, .. } => vec![],
+            SignatureKind::Const { ty: _, .. }
+            | SignatureKind::Family(_)
+            | SignatureKind::Implementation(_) => vec![],
         };
         let mut roots: Vec<TypeId> = self.own_representation.into_iter().collect();
         match &*kind {
@@ -183,6 +185,8 @@ impl Normalizer<'_, '_> {
                 roots.extend(t.serializable_check.as_ref().map(|c| c.representation));
             }
             SignatureKind::Const { ty, .. } => roots.push(*ty),
+            SignatureKind::Implementation(i) => roots.extend(i.types()),
+            SignatureKind::Family(_) => {}
         }
         let map = hirsel_check_protocol::rows::rebuild(self.types, roots, |id, row| Type {
             drop_allocation: self.drop_summary(id),
@@ -215,6 +219,14 @@ impl Normalizer<'_, '_> {
                 }
             }
             SignatureKind::Const { ty, .. } => remap(ty),
+            SignatureKind::Implementation(i) => {
+                for (_, actual) in &mut i.members {
+                    if let MemberActual::Type(ty) = actual {
+                        remap(ty);
+                    }
+                }
+            }
+            SignatureKind::Family(_) => {}
         }
     }
 }

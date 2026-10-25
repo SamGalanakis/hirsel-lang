@@ -346,6 +346,19 @@ impl Normalizer<'_, '_> {
                 });
             }
             ast::ExprKind::Result => e.tag("result"),
+            ast::ExprKind::With { callee, bindings } => {
+                e.tag("with");
+                self.expression(*callee, e, active, locals)?;
+                for binding in bindings {
+                    e.tag(binding.name.as_str());
+                    if let Some(package) = &binding.implementation.package {
+                        e.tag(&format!("{}@{}", package.name, package.version));
+                    }
+                    for segment in &binding.implementation.segments {
+                        e.tag(segment.as_str());
+                    }
+                }
+            }
             ast::ExprKind::Todo(_) | ast::ExprKind::Error => {
                 return Err(diagnostic(
                     const { RuleId::of("LANG-6") },

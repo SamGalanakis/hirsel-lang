@@ -33,6 +33,18 @@ impl<'a, 'p> Checker<'a, 'p> {
             .get(&id)
             .map(|i| &self.input.resolution.expressions[*i])
     }
+    /// The static actuals an implementation binder supplies to callee `id` (GEN-6).
+    pub(super) fn static_arguments(&self, id: ast::ExprId) -> Option<&'a [(u32, StaticArgument)]> {
+        self.input
+            .resolution
+            .static_arguments
+            .iter()
+            .find(|(e, _)| *e == id)
+            .map(|(_, arguments)| arguments.as_slice())
+    }
+    pub(super) fn static_callee(&self, id: ast::ExprId) -> bool {
+        self.static_arguments(id).is_some()
+    }
     pub(super) fn body_name(&self, id: ast::ExprId) -> Option<&(ast::ExprId, ResolvedName)> {
         work::count(Counter::BodySourceRows);
         self.source_rows

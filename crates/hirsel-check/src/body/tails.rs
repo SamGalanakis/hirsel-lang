@@ -236,6 +236,7 @@ impl Checker<'_, '_> {
                         E::Closure { .. }
                         | E::Literal(_)
                         | E::Path(_)
+                        | E::With { .. }
                         | E::Formatter(_)
                         | E::Shape(_)
                         | E::Heap

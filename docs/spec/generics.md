@@ -10,6 +10,8 @@ fn same[T: data](a: T, b: T) -> bool { a == b }
 ```
 
 Without `copyable`, `copy x` of a `T` is GEN-1; without `data`, `a == b` is GEN-1.
+A third kind, `[H: implementation Sig]`, binds a static family of types, sizes and
+operations ([GEN-6](#implementation-contracts)).
 
 ### GEN-1: Bounds
 
@@ -28,6 +30,10 @@ copy is a count on the root or run-owned cell and never copies the contents.
   pointers; structural `==`, IEEE on floats) and `key` (`data` without floats; hashable).
 - Crossing: `sendable` ([MODE-4](ownership.md#mode-4-sendable)); for `sendable`, "type"
   includes the actual modes.
+
+Inside a function with an implementation binder `H`, a type member `H.T` has exactly the
+bounds its signature declares, and generic code may rely on no others. An actual whose
+type misses a declared bound is refused at the implementation, citing the bound's rule.
 - Authority: `inert` (empty authority summary,
   [CAP-2](capabilities.md#cap-2-charged-at-use)).
 - Destruction: `noalloc_drop` promises nonallocating destruction. Primitives qualify;
@@ -160,7 +166,9 @@ fn example() -> u64 {
 Behaviour is explicit values: `Order[T]`, `Hasher[T]`, `Eq[T]` and user records of
 functions. `Order` is never derived. Dictionaries are pure. A container whose invariant
 depends on a dictionary is `of` it; a top-level dictionary such as `u32.order` is one
-identity everywhere.
+identity everywhere. An implementation ([GEN-6](#implementation-contracts)) is not a
+dictionary: it is a static map chosen at each call and is never a value, so it has no
+identity a container can be `of`.
 
 ```hirsel
 fn larger(a: u32, b: u32, by: Order[u32]) -> u32 {
@@ -183,7 +191,9 @@ operation to the shaped type. Generated function bodies read shapes
 ### GEN-4: Representation
 
 Generic code never boxes: `T` is laid out as `T` in every instantiation. Foreign functions
-and exported C functions are monomorphic.
+and exported C functions are monomorphic. An implementation binder has no runtime operand:
+every engine compiles a call `f with (H = m)(..)` as a direct call to `f` specialized at
+`m`, and each `H.op` in it as a direct call to `m`'s target, before any optimization.
 
 ### GEN-5: Polymorphic recursion
 
@@ -191,7 +201,9 @@ A cycle of calls whose type arguments grow (`f[T]` calling `g[(T, T)]` calling `
 rejected. This is the one program-level check: it runs over the instantiation graph
 assembled from each definition's recorded calls and type arguments, and its verdict does
 not depend on compilation topology ([PROG-5](programs.md#prog-5-topology)). The diagnostic
-cites the earliest type-growing call edge of the cycle.
+cites the earliest type-growing call edge of the cycle. A specialization at an
+implementation map is one node of this graph; a function calling itself under the same
+map (`f with (H = H)(..)`) is ordinary recursion and never grows.
 
 ### GEN-6: Dictionary constants
 
@@ -215,3 +227,54 @@ GEN-6 with the complete chain. Reading a constant materializes its checked field
 graph in the interpreter and native backends, including non-scalar data fields.
 This declaration form does not permit publishing callable results from arbitrary
 `comptime` evaluation: that boundary remains data-only under CT-2.
+
+#### Implementation contracts
+
+A `signature` declares a first-order family: type members with bounds and an optional
+authority ceiling (`type State: plain + inert uses {}`), size members (`size bytes`) and
+complete operation headers (`fn finish(take state: State) -> Inline[u8, bytes] uses {}`).
+An operation header declares no generics of its own. An `implementation` maps every
+member by name: each type to a type, each size to a literal and each operation to a
+declared function path. It has no initializer, captures or other members.
+
+```hirsel
+signature Digest {
+  type State: plain + inert uses {}
+  size bytes
+  fn finish(take state: State) -> Inline[u8, bytes] uses {}
+}
+implementation sha256_impl: Digest {
+  type State = std@1/sha256.State
+  size bytes = 32
+  finish = std@1/sha256.finish
+}
+fn finish[H: implementation Digest](take s: H.State) -> Inline[u8, H.bytes] uses {} {
+  H.finish(take s)
+}
+fn digest(take s: std@1/sha256.State) -> Inline[u8, 32] {
+  finish with (H = sha256_impl)(take s)
+}
+```
+
+One matcher checks an implementation against its signature, once, at the implementation.
+Members pair by name and kind; a missing, extra or wrong-kind member is GEN-6. Each type
+actual meets its member's bounds. Each operation target is instantiated from the header
+at the actuals and must stand where the header is specified: passing modes (OWN-1),
+types (GEN-6), allocation (MEM-5), authority within the header's (CAP-2), result
+relations (MODE-1), brands (PROV-1) and value modes (MODE-2). Contracts must be implied:
+a target may not require, nor a header ensure, anything the matcher cannot show (FACT-1);
+write an adapter function where implication cannot be shown. Every refusal names the
+member.
+
+Implementation binders appear only on top-level functions, after their ordinary
+generics. `H.T`, `H.n` and `H.op` name the binder's members; a size member used as a
+value is a `u64`. The function's body is checked once against the abstract members, and
+its signature records each binder and its members' identities. A call writes every
+implementation actual in a `with` clause: a declared implementation path, or an enclosing
+function's binder. Omitting one, binding a binder twice, naming an implementation of
+another signature, or calling or naming a binder function without the clause is GEN-6.
+An abstract operation `H.op` is only ever called.
+
+Two binders denote equal members only where written: `B: implementation Sink where
+B.Key = A.Key`. Sharing is never inferred from a body, and a `with` clause whose actuals
+break a written equation is GEN-6.

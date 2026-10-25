@@ -19,6 +19,7 @@ fn every_declared_signature_matches_the_review_table_and_canonical_hash() {
             SignatureKind::Function(f)=>format!("{:?} {}",f.generics,describe_function(types(),f)),
             SignatureKind::Const { ty: id, .. }=>format!("const {}",describe_type(types(),*id)),
             SignatureKind::Type(t)=>format!("type {:?} {} ; bounds={:?} ; authority={:?} ; capability={:?} ; resource={} ; drop={:?}",t.generics,t.representation.map(|id|describe_type(types(),id)).unwrap_or_else(||"opaque".into()),t.bounds,t.authority,t.capability,t.resource,t.destructor_allocation),
+            SignatureKind::Family(_)|SignatureKind::Implementation(_)=>unreachable!("core declares no family"),
         };
         let hash=s.fingerprint.0.iter().map(|b|format!("{b:02x}")).collect::<String>();format!("{path} | {declaration} | {hash}\n")
     }).collect::<String>();

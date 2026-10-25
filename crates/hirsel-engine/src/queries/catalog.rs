@@ -272,6 +272,7 @@ impl Catalog {
                 .filter(|item| {
                     hirsel_check_protocol::fact::fact_owner(&item.definition).is_none()
                         && !item.definition.0.name.starts_with("$dictionary$")
+                        && !crate::families::derived(&item.definition)
                 })
                 .collect()
         })
@@ -687,6 +688,11 @@ impl QueryEngine {
         self.retire_snapshot();
     }
     pub(crate) fn materialize(&mut self, path: &DefPath) -> Result<(), QueryError> {
+        if !self.items.contains_key(path)
+            && let Some((base, bindings)) = hirsel_types::specialization_parts(path)
+        {
+            return self.materialize_specialization(path, &base, &bindings);
+        }
         let files: BTreeSet<_> = self
             .catalog
             .candidates
@@ -698,6 +704,43 @@ impl QueryEngine {
         for file in files {
             self.materialize_source(file)?;
         }
+        Ok(())
+    }
+    /// Install the specialization item a closed `with` clause names (GEN-6).
+    fn materialize_specialization(
+        &mut self,
+        path: &DefPath,
+        base: &DefPath,
+        bindings: &[(String, DefPath)],
+    ) -> Result<(), QueryError> {
+        self.materialize(base)?;
+        let mut implementations = vec![];
+        for (binder, implementation) in bindings {
+            self.materialize(implementation)?;
+            let syntax = self
+                .items
+                .get(implementation)
+                .and_then(|i| i.first())
+                .cloned();
+            implementations.push((binder.clone(), syntax));
+        }
+        let unavailable = |message: &str| {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "specialization".into(),
+                message: format!("{path}: {message}"),
+            })
+        };
+        let Some(base_syntax) = self.items.get(base).and_then(|i| i.first()).cloned() else {
+            return Err(unavailable("its declaration is not indexed"));
+        };
+        let Some(syntax) = crate::families::specialization(path, &base_syntax, &implementations)
+        else {
+            return Err(unavailable(
+                "its bindings do not name the declaration's binders",
+            ));
+        };
+        self.items.insert(path.clone(), vec![syntax]);
+        self.note_inputs([path.clone()]);
         Ok(())
     }
     pub(crate) fn materialize_source(&mut self, file: FileId) -> Result<(), QueryError> {
@@ -754,6 +797,9 @@ impl QueryEngine {
                 add(helper);
             }
             for helper in crate::dictionaries::literal_snapshots(syntax) {
+                add(helper);
+            }
+            for helper in crate::families::snapshots(syntax) {
                 add(helper);
             }
             add(syntax.clone());

@@ -297,6 +297,22 @@ fn arenas(item: &ItemSyntax, map: &SourceMap) -> Checked<()> {
                 e(x.body)?;
             }
         }
+        ItemKind::Signature { members } => {
+            for member in members {
+                origin(map, member.origin(), t)?;
+                if let MemberSpec::Operation { signature, .. } = member {
+                    sig(signature)?;
+                }
+            }
+        }
+        ItemKind::Implementation { members, .. } => {
+            for member in members {
+                origin(map, member.origin(), t)?;
+                if let MemberDefinition::Type { ty: x, .. } = member {
+                    ty(*x)?;
+                }
+            }
+        }
     }
     for x in &t.expressions {
         origin(map, x.origin, t)?;
@@ -313,6 +329,12 @@ fn arenas(item: &ItemSyntax, map: &SourceMap) -> Checked<()> {
                 }
             }
             ExprKind::Field { base, .. } => e(*base)?,
+            ExprKind::With { callee, bindings } => {
+                e(*callee)?;
+                for b in bindings {
+                    origin(map, b.origin, t)?;
+                }
+            }
             ExprKind::Index { base, index } => {
                 e(*base)?;
                 e(*index)?;

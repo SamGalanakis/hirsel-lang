@@ -40,6 +40,12 @@ pub(crate) fn generator(syntax: &ItemSyntax) -> Option<ExprId> {
     }
 }
 
+/// Whether a declaration's front work runs serially: a generator, or a body
+/// whose `with` clause names a specialization (GEN-6).
+pub(crate) fn serial(syntax: &ItemSyntax) -> bool {
+    generator(syntax).is_some() || crate::families::closes(syntax)
+}
+
 /// Whether a declaration is generic and generated: it has no body of its own,
 /// and each selected instance is a monomorphic generated declaration.
 pub(crate) fn instance_bodied(syntax: &ItemSyntax) -> bool {
@@ -51,7 +57,9 @@ pub(crate) fn instance_bodied(syntax: &ItemSyntax) -> bool {
 }
 
 /// Whether an item has a body to lower: a function with one, a constant or a
-/// finalizer. A generic generated declaration has none; its instances do.
+/// finalizer. A generic generated declaration has none; its instances do. A
+/// declaration with implementation binders has none either; its
+/// specializations do (GEN-6).
 pub(crate) fn executable(syntax: &ItemSyntax) -> bool {
     matches!(
         &syntax.item.kind,
@@ -59,6 +67,19 @@ pub(crate) fn executable(syntax: &ItemSyntax) -> bool {
             | ItemKind::Const { .. }
             | ItemKind::Type { drop: Some(_), .. }
     ) && !instance_bodied(syntax)
+        && !abstract_family(syntax)
+}
+
+/// Whether an item declares implementation binders it does not bind (GEN-6).
+pub(crate) fn abstract_family(syntax: &ItemSyntax) -> bool {
+    matches!(
+        &syntax.item.kind,
+        ItemKind::Function { signature, .. } if signature.generics.iter().any(|g|
+            matches!(g.kind, hirsel_syntax::GenericKind::Implementation { .. }))
+    ) && !matches!(
+        syntax.item.generated,
+        Some(hirsel_syntax::Generated::Specialization(_))
+    )
 }
 
 /// The most instances one generic generated declaration may select (CT-5).

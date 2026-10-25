@@ -142,6 +142,8 @@ pub(super) fn signature_valid(t: &TypeInterner, s: &Signature) -> bool {
             .collect(),
         SignatureKind::Type(t) => t.representation.into_iter().collect::<Vec<_>>(),
         SignatureKind::Const { ty: t, .. } => vec![*t],
+        SignatureKind::Implementation(i) => i.types(),
+        SignatureKind::Family(_) => vec![],
     };
     roots
         .into_iter()

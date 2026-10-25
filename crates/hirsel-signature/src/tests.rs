@@ -23,6 +23,8 @@ fn rows(s: &Signature) -> Vec<(TypeId, Type)> {
             .collect(),
         SignatureKind::Type(t) => t.representation.into_iter().collect(),
         SignatureKind::Const { ty, .. } => vec![*ty],
+        SignatureKind::Implementation(i) => i.types(),
+        SignatureKind::Family(_) => vec![],
     };
     closure(session(), roots)
         .iter()

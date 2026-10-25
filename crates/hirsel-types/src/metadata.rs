@@ -60,6 +60,19 @@ pub struct SignatureMetadata {
     /// their bodies): its `hirsel_graph::scc_keys` key over the members' text,
     /// standing for the members it does not list as dependencies.
     pub recursive_group: Option<ast::ContentHash>,
+    /// A function's implementation binders in declaration order (GEN-6). Each
+    /// binder's type and size members are generic parameters of the function,
+    /// supplied by the implementation a `with` clause names, never inferred.
+    pub implementations: Vec<ImplementationBinder>,
+}
+/// `H: implementation Sig` (GEN-6): the binder's name, its terminal family and
+/// the generic ordinal each type or size member denotes. A shared member
+/// (`where H.K = A.K`) denotes the earlier binder's ordinal.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
+pub struct ImplementationBinder {
+    pub name: String,
+    pub family: DefId,
+    pub members: Vec<(String, u32)>,
 }
 impl Default for SignatureMetadata {
     fn default() -> Self {
@@ -73,6 +86,7 @@ impl Default for SignatureMetadata {
             roles: NominalRoles::default(),
             schema: vec![],
             recursive_group: None,
+            implementations: vec![],
         }
     }
 }

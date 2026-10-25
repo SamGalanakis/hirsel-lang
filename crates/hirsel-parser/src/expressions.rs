@@ -27,6 +27,42 @@ impl Parser<'_> {
                 return Err(());
             }
             if minimum <= 11 {
+                if self.at("with") && self.text_at(1) == "(" {
+                    // GEN-6: `f with (H = path, ..)(args)`; the clause names
+                    // implementation actuals and is always called at once.
+                    self.pos += 2;
+                    let bindings = self.list(")", |p| {
+                        let start = p.pos;
+                        let name = p.name()?;
+                        p.expect("=", const { RuleId::of("GEN-6") })?;
+                        let implementation = p.path(false)?;
+                        Ok(StaticBinding {
+                            name,
+                            implementation,
+                            origin: p.origin(start),
+                        })
+                    })?;
+                    if bindings.is_empty() {
+                        return self.fail(
+                            const { RuleId::of("GEN-6") },
+                            "a `with` clause binds at least one implementation",
+                        );
+                    }
+                    if !self.at("(") {
+                        return self.fail(
+                            const { RuleId::of("GEN-6") },
+                            "a `with` clause is followed by the call's arguments",
+                        );
+                    }
+                    left = self.push_expr(
+                        start,
+                        ExprKind::With {
+                            callee: left,
+                            bindings,
+                        },
+                    );
+                    continue;
+                }
                 if self.eat("(") {
                     let arguments = self.list(")", |p| {
                         let label = if p.ident(0) && p.text_at(1) == ":" {

@@ -46,7 +46,9 @@ impl Builder<'_, '_> {
                 | ExprKind::Continue(_)
                 | ExprKind::Todo(_) => {}
                 ExprKind::Tuple(xs) | ExprKind::Sequence(xs) => pending.extend(xs),
-                ExprKind::Field { base, .. } => pending.push(*base),
+                ExprKind::Field { base, .. } | ExprKind::With { callee: base, .. } => {
+                    pending.push(*base)
+                }
                 ExprKind::Index { base, index } => pending.extend([*base, *index]),
                 ExprKind::Unary { value, .. }
                 | ExprKind::Before(value)

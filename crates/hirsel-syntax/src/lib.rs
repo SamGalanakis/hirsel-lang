@@ -600,7 +600,21 @@ pub enum ExprKind {
     /// the body checker selects its std operation from the step and, for an
     /// append, the appended value's type.
     Formatter(FormatStep),
+    /// `f with (H = path, ..)`: a callee with its named implementation actuals
+    /// (GEN-6), only ever called. Each actual is an implementation path or an
+    /// enclosing implementation binder.
+    With {
+        callee: ExprId,
+        bindings: Vec<StaticBinding>,
+    },
     Error,
+}
+/// One `H = path` actual of a `with` clause (GEN-6).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct StaticBinding {
+    pub name: Symbol,
+    pub implementation: Path,
+    pub origin: Origin,
 }
 /// `Append(value, mut builder)` appends a hole or text piece; `Finish(take builder)`
 /// returns the built `String`. A hole whose options are only fill, alignment and
@@ -835,6 +849,94 @@ pub enum Bound {
 pub enum GenericKind {
     Type(Vec<Bound>),
     Size,
+    /// `H: implementation Sig where H.X = A.Y, ..` (GEN-6): an implementation
+    /// binder. Sharing equations are written here, never inferred from bodies.
+    Implementation {
+        signature: Path,
+        sharing: Vec<Sharing>,
+    },
+}
+/// `H.member = Other.member` on an implementation binder (GEN-6): this
+/// binder's type or size member is the earlier binder's.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub struct Sharing {
+    pub member: Symbol,
+    pub binder: Symbol,
+    pub other: Symbol,
+    pub origin: Origin,
+}
+/// One member specification of a `signature` (GEN-6).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub enum MemberSpec {
+    /// `type X: bounds uses {}`: an abstract type with its required bounds.
+    Type {
+        name: Symbol,
+        bounds: Vec<Bound>,
+        authority: Option<Vec<Path>>,
+        origin: Origin,
+    },
+    /// `size n`.
+    Size { name: Symbol, origin: Origin },
+    /// `fn op(..) -> R uses {..}`: a complete operation header.
+    Operation {
+        name: Symbol,
+        signature: FunctionSyntax,
+        origin: Origin,
+    },
+}
+impl MemberSpec {
+    pub fn name(&self) -> Symbol {
+        match self {
+            Self::Type { name, .. } | Self::Size { name, .. } | Self::Operation { name, .. } => {
+                *name
+            }
+        }
+    }
+    pub fn origin(&self) -> Origin {
+        match self {
+            Self::Type { origin, .. }
+            | Self::Size { origin, .. }
+            | Self::Operation { origin, .. } => *origin,
+        }
+    }
+}
+/// One member mapping of an `implementation` (GEN-6).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+pub enum MemberDefinition {
+    /// `type X = T`.
+    Type {
+        name: Symbol,
+        ty: TypeExprId,
+        origin: Origin,
+    },
+    /// `size n = 32`.
+    Size {
+        name: Symbol,
+        value: u64,
+        origin: Origin,
+    },
+    /// `op = path`: the exact function the member names.
+    Operation {
+        name: Symbol,
+        target: Path,
+        origin: Origin,
+    },
+}
+impl MemberDefinition {
+    pub fn name(&self) -> Symbol {
+        match self {
+            Self::Type { name, .. } | Self::Size { name, .. } | Self::Operation { name, .. } => {
+                *name
+            }
+        }
+    }
+    pub fn origin(&self) -> Origin {
+        match self {
+            Self::Type { origin, .. }
+            | Self::Size { origin, .. }
+            | Self::Operation { origin, .. } => *origin,
+        }
+    }
 }
 /// Generic binders are in scope after declaration (LANG-2).
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
@@ -1011,6 +1113,15 @@ pub enum ItemKind {
         body: TypeBody,
         drop: Option<DropSyntax>,
     },
+    /// `signature Name { members }` (GEN-6).
+    Signature {
+        members: Vec<MemberSpec>,
+    },
+    /// `implementation name: Sig { members }` (GEN-6).
+    Implementation {
+        signature: Path,
+        members: Vec<MemberDefinition>,
+    },
 }
 /// Where an analysis annotation attaches within its item (PS-17). Indexes
 /// follow declaration order: a function definition's parameters, a record's
@@ -1064,6 +1175,11 @@ pub enum Generated {
     /// The generator `e`, checked as a constant: the declared parameter names.
     /// They are run-time values of the generated function, which `e` cannot read.
     Generator(Vec<Symbol>),
+    /// A specialization of a declaration with implementation binders (GEN-6):
+    /// each bound binder's name and its terminal implementation. The item is
+    /// the declaration's own syntax; inside it a bound binder's members name
+    /// the implementation's exact targets.
+    Specialization(Vec<(Symbol, DefPath)>),
 }
 /// Written repeat literal, represented by a typed count binding and a one-element
 /// sequence. Lowering repeats that element's prepared value, never its evaluation.
@@ -1181,6 +1297,7 @@ impl SyntaxTree {
                     children.extend(arguments.iter().map(|a| Step::Expr(a.value)));
                 }
                 ExprKind::Field { base: value, .. }
+                | ExprKind::With { callee: value, .. }
                 | ExprKind::Unary { value, .. }
                 | ExprKind::Try { value, .. }
                 | ExprKind::Before(value)
@@ -1370,8 +1487,14 @@ impl ItemSyntax {
         }
         for e in &mut tree.expressions {
             span(&mut e.origin.span);
-            if let ExprKind::Closure { signature, .. } = &mut e.kind {
-                attributes(&mut signature.attributes, span);
+            match &mut e.kind {
+                ExprKind::Closure { signature, .. } => attributes(&mut signature.attributes, span),
+                ExprKind::With { bindings, .. } => {
+                    for binding in bindings {
+                        span(&mut binding.origin.span);
+                    }
+                }
+                _ => (),
             }
         }
         for s in &mut tree.statements {
@@ -1401,8 +1524,44 @@ impl ItemSyntax {
         span(&mut item.name_span);
         span(&mut item.origin.span);
         attributes(&mut item.attributes, span);
+        fn sharing(signature: &mut FunctionSyntax, span: &mut impl FnMut(&mut Span)) {
+            for generic in &mut signature.generics {
+                if let GenericKind::Implementation { sharing, .. } = &mut generic.kind {
+                    for equation in sharing {
+                        span(&mut equation.origin.span);
+                    }
+                }
+            }
+        }
         match &mut item.kind {
-            ItemKind::Function { signature, .. } => attributes(&mut signature.attributes, span),
+            ItemKind::Function { signature, .. } => {
+                attributes(&mut signature.attributes, span);
+                sharing(signature, span);
+            }
+            ItemKind::Signature { members } => {
+                for member in members {
+                    match member {
+                        MemberSpec::Type { origin, .. } | MemberSpec::Size { origin, .. } => {
+                            span(&mut origin.span)
+                        }
+                        MemberSpec::Operation {
+                            origin, signature, ..
+                        } => {
+                            span(&mut origin.span);
+                            attributes(&mut signature.attributes, span);
+                        }
+                    }
+                }
+            }
+            ItemKind::Implementation { members, .. } => {
+                for member in members {
+                    match member {
+                        MemberDefinition::Type { origin, .. }
+                        | MemberDefinition::Size { origin, .. }
+                        | MemberDefinition::Operation { origin, .. } => span(&mut origin.span),
+                    }
+                }
+            }
             ItemKind::Type { body, .. } => match body {
                 TypeBody::Record(fields) => {
                     for field in fields {

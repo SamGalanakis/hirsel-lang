@@ -227,6 +227,8 @@ fn normalize_inner(
             }
             SignatureKind::Function(f)
         }
+        ast::ItemKind::Signature { members } => n.family(members)?,
+        ast::ItemKind::Implementation { members, .. } => n.implementation(members)?,
         ast::ItemKind::Const { ty, .. } => {
             if item.visibility == ast::Visibility::PublicOpaque {
                 return Err(diagnostic(
@@ -626,6 +628,11 @@ fn normalize_inner(
                 ),
             schema: vec![],
             recursive_group: n.group_key,
+            implementations: if matches!(item.kind, ast::ItemKind::Function { .. }) {
+                input.resolution.implementation_binders.clone()
+            } else {
+                vec![]
+            },
             unsafe_ffi,
             wrapper: input
                 .metadata
@@ -814,6 +821,175 @@ impl Normalizer<'_, '_> {
             None
         }
     }
+    /// A generic parameter's name as a path spells it: one segment, or an
+    /// abstract implementation binder's member `H.m` (GEN-6).
+    fn generic_path_name(&self, p: &ast::Path) -> Option<String> {
+        if let Some(name) = self.path_name(p) {
+            return Some(name.to_owned());
+        }
+        match p.segments.as_slice() {
+            [binder, member] if p.package.is_none() => {
+                let name = format!("{binder}.{member}");
+                self.generic(&name).map(|_| name)
+            }
+            _ => None,
+        }
+    }
+    /// A `signature` (GEN-6). Each operation header is the bodyless
+    /// declaration [`family_operation_path`] names; reading it here records
+    /// it as a dependency and reports a malformed header at the signature.
+    fn family(&mut self, members: &[ast::MemberSpec]) -> Result<SignatureKind, QueryError> {
+        let path = self.input.syntax.item.definition.clone();
+        let mut family = FamilySignature { members: vec![] };
+        for member in members {
+            let kind = match member {
+                ast::MemberSpec::Type {
+                    bounds, authority, ..
+                } => {
+                    let mut bounds = bounds.clone();
+                    if authority.as_ref().is_some_and(Vec::is_empty) {
+                        bounds.push(Bound::Inert);
+                    }
+                    bounds.sort();
+                    bounds.dedup();
+                    FamilyMemberKind::Type {
+                        bounds: bounds.into(),
+                    }
+                }
+                ast::MemberSpec::Size { .. } => FamilyMemberKind::Size,
+                ast::MemberSpec::Operation {
+                    name,
+                    signature,
+                    origin,
+                } => {
+                    if !signature.generics.is_empty() {
+                        return Err(diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            origin.span,
+                            "a signature operation is first-order: it declares no generic parameters",
+                        ));
+                    }
+                    self.snapshot(&family_operation_path(&path, name.as_str()))?;
+                    FamilyMemberKind::Operation
+                }
+            };
+            family.members.push(FamilyMember {
+                name: member.name().as_str().to_owned(),
+                kind,
+            });
+        }
+        Ok(SignatureKind::Family(family))
+    }
+    /// An `implementation` (GEN-6): each member of its family paired by name
+    /// and kind with exactly one written member. Compatibility of the actuals
+    /// is the implementation matcher's, at checking.
+    fn implementation(
+        &mut self,
+        members: &[ast::MemberDefinition],
+    ) -> Result<SignatureKind, QueryError> {
+        let item = &self.input.syntax.item;
+        let mut paths = self
+            .input
+            .resolution
+            .paths
+            .iter()
+            .filter(|(site, _)| *site == ast::NameSite::Item)
+            .filter_map(|(_, name)| match name {
+                ResolvedName::Definition(path) => Some(path.clone()),
+                _ => None,
+            });
+        let Some(family_path) = paths.next() else {
+            return Err(QueryError::NotImplemented);
+        };
+        let targets: Vec<ast::DefPath> = paths.collect();
+        let family_signature = self.snapshot(&family_path)?;
+        let SignatureKind::Family(family) = &family_signature.kind else {
+            return Err(diagnostic(
+                const { RuleId::of("GEN-6") },
+                item.name_span,
+                &format!("`{family_path}` is not a signature"),
+            ));
+        };
+        let mut operations = members
+            .iter()
+            .filter(|m| matches!(m, ast::MemberDefinition::Operation { .. }))
+            .zip(targets);
+        let operations: Vec<_> = operations.by_ref().collect();
+        let mut actuals = vec![];
+        for member in &family.members {
+            let written = members.iter().find(|m| m.name().as_str() == member.name);
+            let actual = match (&member.kind, written) {
+                (FamilyMemberKind::Type { .. }, Some(ast::MemberDefinition::Type { ty, .. })) => {
+                    MemberActual::Type(self.ty(*ty, Position::Field)?)
+                }
+                (FamilyMemberKind::Size, Some(ast::MemberDefinition::Size { value, .. })) => {
+                    MemberActual::Size(*value)
+                }
+                (
+                    FamilyMemberKind::Operation,
+                    Some(written @ ast::MemberDefinition::Operation { .. }),
+                ) => {
+                    let Some((_, target)) = operations.iter().find(|(m, _)| *m == written) else {
+                        return Err(QueryError::NotImplemented);
+                    };
+                    let target_signature = self.snapshot(target)?;
+                    if !matches!(target_signature.kind, SignatureKind::Function(_))
+                        || !target_signature.metadata.implementations.is_empty()
+                    {
+                        return Err(diagnostic(
+                            const { RuleId::of("GEN-6") },
+                            written.origin().span,
+                            &format!(
+                                "operation `{}` names `{target}`, which is not a function without implementation binders",
+                                member.name
+                            ),
+                        ));
+                    }
+                    MemberActual::Operation(target.clone())
+                }
+                (kind, None) => {
+                    let what = match kind {
+                        FamilyMemberKind::Type { .. } => "type",
+                        FamilyMemberKind::Size => "size",
+                        FamilyMemberKind::Operation => "operation",
+                    };
+                    return Err(diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        item.name_span,
+                        &format!(
+                            "implementation is missing {what} member `{}` of `{family_path}`",
+                            member.name
+                        ),
+                    ));
+                }
+                (_, Some(written)) => {
+                    return Err(diagnostic(
+                        const { RuleId::of("GEN-6") },
+                        written.origin().span,
+                        &format!(
+                            "member `{}` has a different kind in `{family_path}`",
+                            member.name
+                        ),
+                    ));
+                }
+            };
+            actuals.push((member.name.clone(), actual));
+        }
+        if let Some(extra) = members
+            .iter()
+            .find(|m| family.member(m.name().as_str()).is_none())
+        {
+            return Err(diagnostic(
+                const { RuleId::of("GEN-6") },
+                extra.origin().span,
+                &format!("`{family_path}` has no member `{}`", extra.name()),
+            ));
+        }
+        Ok(SignatureKind::Implementation(ImplementationSignature {
+            family: DefId::intern(&family_path),
+            members: actuals,
+        }))
+    }
     fn generic_parameters(
         &self,
         gs: &[ast::GenericParam],
@@ -830,19 +1006,40 @@ impl Normalizer<'_, '_> {
                     ));
                 }
                 Ok(match &g.kind {
-                    ast::GenericKind::Size => GenericParameter::Size { name },
+                    ast::GenericKind::Size => Some(GenericParameter::Size { name }),
                     ast::GenericKind::Type(bs) => {
                         let mut bounds = bs.clone();
                         bounds.sort();
                         bounds.dedup();
-                        GenericParameter::Type {
+                        Some(GenericParameter::Type {
                             name,
                             bounds: bounds.into(),
-                        }
+                        })
                     }
+                    ast::GenericKind::Implementation { .. } => None,
                 })
             })
-            .collect()
+            .filter_map(Result::transpose)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|mut ordinary| {
+                // GEN-6: abstract binders' member parameters follow, exactly as
+                // the resolver declared them.
+                if gs
+                    .iter()
+                    .any(|g| matches!(g.kind, ast::GenericKind::Implementation { .. }))
+                {
+                    let scope = self.input.syntax.owner().site(ast::NameSite::Item);
+                    if let Some(declared) = self
+                        .input
+                        .resolution
+                        .generic_declarations
+                        .scope_parameters(scope)
+                    {
+                        ordinary.extend(declared.iter().skip(ordinary.len()).cloned());
+                    }
+                }
+                ordinary
+            })
     }
     fn attributes(
         &self,
@@ -1638,7 +1835,7 @@ impl Normalizer<'_, '_> {
                 id
             }
             ast::TypeExprKind::Named { path, arguments } => {
-                let name = self.path_name(path).map(str::to_owned);
+                let name = self.generic_path_name(path);
                 if name.as_deref() == Some("any") {
                     return Err(diagnostic(
                         const { RuleId::of("LANG-7") },
@@ -1859,9 +2056,9 @@ impl Normalizer<'_, '_> {
                 }) = self.input.syntax.tree.types.get(id.0 as usize)
                 {
                     if arguments.is_empty() {
-                        if let Some(name) = self.path_name(path) {
+                        if let Some(name) = self.generic_path_name(path) {
                             if let Some((depth, i, GenericParameter::Size { .. })) =
-                                self.generic(name)
+                                self.generic(&name)
                             {
                                 return Ok(GenericArgument::Size(Size::Parameter(
                                     SizeParameterRef::Bound {

@@ -1075,6 +1075,9 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
             SignatureKind::Const { ty: t, .. } => {
                 *t = normalize_type_properties(types, *t, &generics, &mut lookup).unwrap()
             }
+            SignatureKind::Family(_) | SignatureKind::Implementation(_) => {
+                unreachable!("core declares no signature or implementation")
+            }
         }
         normalized.fingerprint = hirsel_types::encoding::fingerprint(types, &normalized, &[])
             .expect("normalized core signature");

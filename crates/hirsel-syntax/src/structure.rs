@@ -140,6 +140,12 @@ impl ItemSyntax {
                     }
                 }
                 ExprKind::Field { base, .. } => graph.e(owner, *base)?,
+                ExprKind::With { callee, bindings } => {
+                    graph.e(owner, *callee)?;
+                    for binding in bindings {
+                        origin(binding.origin)?;
+                    }
+                }
                 ExprKind::Index { base, index } => {
                     graph.e(owner, *base)?;
                     graph.e(owner, *index)?;
@@ -320,6 +326,23 @@ impl ItemSyntax {
             ItemKind::Const { ty, value } => {
                 graph.t(None, *ty)?;
                 graph.e(None, *value)?;
+            }
+            ItemKind::Signature { members } => {
+                for member in members {
+                    origin(member.origin())?;
+                    if let MemberSpec::Operation { signature, .. } = member {
+                        attributes(&signature.attributes)?;
+                        graph.function(None, signature)?;
+                    }
+                }
+            }
+            ItemKind::Implementation { members, .. } => {
+                for member in members {
+                    origin(member.origin())?;
+                    if let MemberDefinition::Type { ty, .. } = member {
+                        graph.t(None, *ty)?;
+                    }
+                }
             }
             ItemKind::Type { body, drop, .. } => {
                 match body {

@@ -30,6 +30,7 @@ mod config;
 pub use compiler::{Compiler, FormattedSource};
 pub use config::CompileConfig;
 mod dictionaries;
+mod families;
 mod materialized;
 mod phases;
 pub mod registry;

@@ -82,7 +82,9 @@ impl SourceAudit {
                     .into_iter()
                     .collect(),
             ),
-            SignatureKind::Const { ty: _, .. } => (false, vec![]),
+            SignatureKind::Const { ty: _, .. }
+            | SignatureKind::Family(_)
+            | SignatureKind::Implementation(_) => (false, vec![]),
         };
         let checked = &analyzed.typed.checked;
         let closures = checked

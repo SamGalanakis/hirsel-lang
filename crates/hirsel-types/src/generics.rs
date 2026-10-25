@@ -492,6 +492,10 @@ impl GenericDeclarations {
                 .collect(),
         )
     }
+    /// The parameters a source scope declares, in ordinal order.
+    pub fn scope_parameters(&self, scope: SiteRef) -> Option<&[GenericParameter]> {
+        self.parameters(GenericBinder::Body(scope))
+    }
     fn parameters(&self, binder: GenericBinder) -> Option<&[GenericParameter]> {
         let name = match binder {
             GenericBinder::Bound(depth) => {

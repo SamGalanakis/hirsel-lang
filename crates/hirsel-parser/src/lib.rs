@@ -480,7 +480,13 @@ impl Parser<'_> {
         matches!(
             self.text_at(0),
             "@" | "pub" | "fn" | "extern" | "const" | "type" | "flat" | "resource" | "distinct"
-        )
+        ) || self.family_item_start()
+    }
+    /// `signature Name {` or `implementation name:` (GEN-6); both words are contextual.
+    fn family_item_start(&self) -> bool {
+        self.ident(1)
+            && ((self.at("signature") && self.text_at(2) == "{")
+                || (self.at("implementation") && self.text_at(2) == ":"))
     }
     fn recover_item(&mut self, start: usize) {
         let mut braces = self.recovery_braces(start);
