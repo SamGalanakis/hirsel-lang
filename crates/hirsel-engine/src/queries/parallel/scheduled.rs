@@ -142,6 +142,12 @@ pub struct FrontBodyQueries {
     table_keys: Mutex<BTreeMap<Key, Arc<crate::table_keys::TableKeyUse>>>,
     memos: Mutex<BTreeMap<crate::memo::MemoKey, Arc<Reads>>>,
     store_adoptions: AtomicU64,
+    /// Full-rescan refusals of stored body entries: by the first changed read
+    /// of the newest variant, in `ReadKind::ALL` order, then by own text.
+    refusals: [AtomicU64; crate::memo::ReadKind::ALL.len()],
+    text_refusals: AtomicU64,
+    /// Stored entry validations plus memo rows written.
+    memo_operations: AtomicU64,
     verify_store: crate::store::VerifyStore,
     outcomes: Mutex<BTreeMap<Key, FrontOutcome>>,
     errors: RuntimeErrors,
@@ -249,6 +255,16 @@ impl FrontBodyQueries {
 
     pub fn store_adoptions(&self) -> u64 {
         self.store_adoptions.load(Relaxed)
+    }
+    /// Cumulative refusals, as `MemoStats` invalidation counters, and raw memo
+    /// operations. Each refused entry is one memo identity.
+    pub fn refusal_stats(&self) -> (crate::memo::MemoStats, u64) {
+        let mut stats = crate::memo::MemoStats::default();
+        for (total, count) in stats.invalidated.iter_mut().zip(&self.refusals) {
+            *total = count.load(Relaxed);
+        }
+        stats.invalidated_text = self.text_refusals.load(Relaxed);
+        (stats, self.memo_operations.load(Relaxed))
     }
     /// Successful lookup targets are semantic closure edges even when a
     /// primitive/alias adds no normalized signature fingerprint dependency.
@@ -595,10 +611,24 @@ impl BodyTask {
         let queries = &self.queries;
         let input = queries.inputs.get(&self.query.address.0)?;
         let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
+        if entry.variants.is_empty() {
+            return None;
+        }
+        queries.memo_operations.fetch_add(1, Relaxed);
         entry
             .variants
             .retain(|variant| variant.inputs == input.key.1 && variant.valid(&input.key));
-        let variant = entry.hit(|read| queries.observe(input.definition.path(), read))?;
+        let Some(newest) = entry.variants.first() else {
+            queries.text_refusals.fetch_add(1, Relaxed);
+            return None;
+        };
+        let observe = |read: &ReadKey| queries.observe(input.definition.path(), read);
+        let Some(variant) = entry.hit(observe) else {
+            if let Some(read) = newest.reads.first_changed(observe) {
+                queries.refusals[read.kind() as usize].fetch_add(1, Relaxed);
+            }
+            return None;
+        };
         if variant.output.len > self.weight.scratch {
             return None;
         }
@@ -642,7 +672,10 @@ impl BodyTask {
             .memos
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .extend(memo_rows);
+            .extend(memo_rows.iter().cloned());
+        queries
+            .memo_operations
+            .fetch_add(memo_rows.len() as u64, Relaxed);
         queries
             .outcomes
             .lock()
@@ -859,7 +892,10 @@ impl BodyTask {
             .memos
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .extend(memo_rows);
+            .extend(memo_rows.iter().cloned());
+        queries
+            .memo_operations
+            .fetch_add(memo_rows.len() as u64, Relaxed);
         if let Some(keys) = table_keys {
             queries
                 .table_keys
@@ -1069,6 +1105,9 @@ impl QueryEngine {
             table_keys: Mutex::new(BTreeMap::new()),
             memos: Mutex::new(BTreeMap::new()),
             store_adoptions: AtomicU64::new(0),
+            refusals: Default::default(),
+            text_refusals: AtomicU64::new(0),
+            memo_operations: AtomicU64::new(0),
             verify_store: self.verify_store,
             errors,
             retention: Mutex::new(allowance.bytes() - required),
