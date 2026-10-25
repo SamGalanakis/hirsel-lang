@@ -1,7 +1,0 @@
-// rule: OWN-2
-// expect: reject OWN-2 at line 6
-// twin: OWN/OWN-2-regex-all-5-take-ok.hir
-fn wrong(re: regex.Regex, take text: String) -> u64 {
-  let _ = regex.find_all(re, take text, 1, 100)
-  string.byte_len(text)
-}

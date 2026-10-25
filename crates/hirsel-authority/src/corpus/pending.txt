@@ -25,10 +25,6 @@ CAP/CAP-2-opaque-package-pure-ok.hir # dependency-owned D/fixture M: LANG-4 line
 CAP/CAP-2-testhelpers-property-accept.hir # dependency-owned D/fixture M: LANG-4 line 11
 CAP/CAP-3-directory-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-3-directory-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-CAP/CAP-3-stdout-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-CAP/CAP-3-stdout-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-CAP/CAP-3-tasks-capture-bad.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
-CAP/CAP-3-tasks-capture-ok.hir # dependency-owned std: names std@1/store's Tx, which this harness does not load
 CAP/CAP-4-atomic-create-bad.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-4-atomic-create-ok.hir # dependency-owned H: LANG-2 line 5: literal needs an expected type or numeric suffix
 CAP/CAP-5-seal-ceiling-bad.hir # dependency-owned I/P: operative rule is ownership/locality/allocation rather than J

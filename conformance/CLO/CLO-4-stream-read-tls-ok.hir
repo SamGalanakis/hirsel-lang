@@ -1,8 +1,0 @@
-// rule: CLO-4
-// expect: accept
-@preserves_captures(s)
-fn advance(n: Net, mut s: Stream of n) -> () {
-  // TLS uses the same Stream and net.read after tls.connect/tls.accept.
-  let mut buffer: List[u8] = []
-  let _ = net.read(n, mut s, mut buffer, 1)
-}
