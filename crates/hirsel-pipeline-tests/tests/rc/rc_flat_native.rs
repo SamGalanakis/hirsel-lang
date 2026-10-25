@@ -223,20 +223,35 @@ fn owned_flat_sequence_snapshots_keep_materialization_at_ordinary_boundaries() {
 
 #[test]
 fn an_owned_flat_source_initialized_in_a_loop_is_not_a_frame_constant() {
-    use hirsel_lir::ir::Inst;
+    use hirsel_lir::ir::SlotKind;
+    use hirsel_lir::layout_types::LayoutKind;
     let source = format!(
         "{TYPES}fn main() -> u64 {{ let mut sum = 0u64\n for i in 0u64..3u64 {{ let xs = Items(items: [Item(text: \"a\", n: i)])\n for x in xs.items {{ sum += x.n }} }}\n sum }}"
     );
     let input = compile(&source);
     let lowered = hirsel_rc::import::lower(&input, &target()).unwrap();
     assert!(violations(&input, &lowered).is_empty());
+    let main = unit_named(&lowered, "main");
+    let constants = hirsel_lir::statics::constant_slots(main, &lowered.statics);
+    let owned_flat: Vec<_> = main.slots.iter().enumerate().filter(|(_, slot)| {
+        slot.kind == SlotKind::Local
+            && matches!(lowered.table.layouts[main.types[slot.ty.index()].layout.0 as usize].kind,
+                LayoutKind::Block { payload } if lowered.table.layouts[payload.0 as usize].kind == LayoutKind::Flat)
+    }).collect();
+    assert!(!owned_flat.is_empty());
     assert!(
-        unit_named(&lowered, "main")
-            .instructions
+        owned_flat
             .iter()
-            .any(|i| matches!(i, Inst::FlatCopy { .. }))
+            .all(|(slot, _)| constants[*slot].is_none())
     );
     audited(&source, 3);
+    super::rc_library_views::four_engines(
+        format!(
+            "{}\nfn output_error[E](take e: E) -> () {{}}\nfn grant_error(take e: GrantError) -> () {{}}\npub fn main(rt: Io, args: Args) -> Result[(), ()] {{ out.print(io.stdout(rt) ? grant_error, if value() == 3 {{ \"ok\\n\" }} else {{ \"bad\\n\" }}) ? output_error\n Ok(()) }}",
+            source.replace("fn main() -> u64", "fn value() -> u64")
+        ),
+        "flat-loop-source-54",
+    );
 }
 
 #[test]

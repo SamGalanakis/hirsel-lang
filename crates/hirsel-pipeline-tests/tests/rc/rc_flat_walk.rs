@@ -53,11 +53,22 @@ fn a_zero_based_unit_stride_loop_is_rewritten_and_the_option_preserves_index() {
 
 #[test]
 fn a_break_and_a_continue_after_the_binding_keep_the_cursor_valid() {
-    for body in [
-        "for x in xs.items { if x.n == 2 { break }; total += x.n }",
-        "for x in xs.items { if x.n == 2 { continue }; total += x.n }",
-        "for x in xs.items { continue }",
-    ] {
+    let mut functions = String::from(TYPES);
+    let mut checks = vec![];
+    for (i, (body, expected)) in [
+        (
+            "for x in xs.items { if x.n == 2 { break }; total += x.n }",
+            1,
+        ),
+        (
+            "for x in xs.items { if x.n == 2 { continue }; total += x.n }",
+            4,
+        ),
+        ("for x in xs.items { continue }", 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let (_, l) = lowered(&source(body), true);
         assert_eq!(
             count(unit_named(&l, "sum")),
@@ -65,7 +76,21 @@ fn a_break_and_a_continue_after_the_binding_keep_the_cursor_valid() {
             "{}",
             dump(unit_named(&l, "sum"))
         );
+        functions.push_str(
+            &source(body)
+                .replace(TYPES, "")
+                .replace("fn sum(", &format!("fn sum{i}(")),
+        );
+        functions.push('\n');
+        checks.push(format!("sum{i}(xs) == {expected}"));
     }
+    super::rc_library_views::four_engines(
+        format!(
+            "{functions}\nfn output_error[E](take e: E) -> () {{}}\nfn grant_error(take e: GrantError) -> () {{}}\npub fn main(rt: Io, args: Args) -> Result[(), ()] {{\n let xs = Items(items: [Item(text: \"a\", n: 1), Item(text: \"b\", n: 2), Item(text: \"c\", n: 3)])\n let valid = {}\n out.print(io.stdout(rt) ? grant_error, if valid {{ \"ok\\n\" }} else {{ \"bad\\n\" }}) ? output_error\n Ok(()) }}",
+            checks.join(" && "),
+        ),
+        "flat-walk-exits-54",
+    );
 }
 
 #[test]

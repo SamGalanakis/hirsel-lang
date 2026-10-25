@@ -525,6 +525,35 @@ impl Builder<'_, '_> {
         } else {
             return self.error(span, "loop advance has no executable checked operation");
         };
+        // A used binding prepares its element at the read. An unused binding
+        // still advances the sequence: stage its view so import has a checked
+        // prepare before an unconditional continue, not just an origin name.
+        let unused = self
+            .decisions
+            .patterns
+            .get(&pattern)
+            .iter()
+            .any(|row| match row.kind {
+                hirsel_types::PatternDecisionKind::Binding(local) => {
+                    !self.decisions.referenced_locals.contains(&local)
+                }
+                hirsel_types::PatternDecisionKind::Wildcard => true,
+                _ => false,
+            });
+        let item = if indexed.is_some() && source.usage == UseKind::Borrow && unused {
+            self.transport(
+                Value {
+                    checked_ty: None,
+                    place: item,
+                    usage: UseKind::Borrow,
+                },
+                Storage::Temporary,
+                span,
+            )
+            .place
+        } else {
+            item
+        };
         // The yielded value is named anew on each iteration. In particular,
         // an indexed element has no whole-container identity to alias.
         self.bind_refutable(pattern, item, true, None, span, bodies)?;

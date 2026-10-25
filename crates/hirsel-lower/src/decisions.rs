@@ -23,6 +23,7 @@ impl<'a, K: Ord, V> Table<'a, K, V> {
     }
 }
 pub(super) struct Decisions<'a> {
+    pub referenced_locals: std::collections::BTreeSet<LocalId>,
     /// The owner of the lowered item's lexical sites, which rows qualify them with.
     pub lexical: hirsel_types::LexicalOwner,
     pub confined_releases: Table<'a, StmtId, (StmtId, usize)>,
@@ -71,6 +72,18 @@ impl<'a> Decisions<'a> {
     pub fn new(input: &Input<'a>) -> Self {
         let checked = input.checked;
         Self {
+            referenced_locals: checked
+                .resolution
+                .expressions
+                .iter()
+                .filter_map(|(_, name)| {
+                    if let ResolvedName::Local(local) = name {
+                        Some(*local)
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
             lexical: input.syntax.owner(),
             confined_releases: Table::new(&input.ownership.confined_releases, |row| row.0),
             cloned_scopes: Default::default(),

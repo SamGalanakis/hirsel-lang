@@ -63,17 +63,46 @@ fn agree(source: String, configurations: Vec<Configuration>, name: &str, limits:
         let tools =
             Toolchain::in_tree_diagnostic(&target_root.join("views-runtime"), &targets).unwrap();
         std::fs::create_dir_all(target_root.join(&name)).unwrap();
-        for (configuration, outcome) in differential(
+        let outcomes = differential(
             &validated,
             &entry,
             &reference,
             &configurations,
             &tools,
             &target_root.join(name),
-        ) {
+        );
+        assert_eq!(outcomes.len(), configurations.len());
+        for (configuration, outcome) in outcomes {
             assert_eq!(outcome, Outcome::Agree, "{configuration}");
         }
     });
+}
+
+pub(super) fn four_engines(source: String, name: &str) {
+    let mut options = Options::new(TargetSpec::x86_64_unknown_linux_gnu());
+    options.validation = hirsel_driver::native::Validation::EveryStage;
+    let configurations = vec![
+        Configuration {
+            options: options.clone(),
+            engine: Engine::Heap { campaign: true },
+        },
+        Configuration {
+            options: options.clone(),
+            engine: Engine::Native {
+                opt: OptLevel::Speed,
+                partition: Partition::Whole,
+                runtime: Runtime::Diagnostic,
+            },
+        },
+        Configuration {
+            options,
+            engine: Engine::Cranelift {
+                partition: Partition::Whole,
+                runtime: Runtime::Diagnostic,
+            },
+        },
+    ];
+    agree(source, configurations, name, Limits::default());
 }
 fn native_matrix() -> Vec<Configuration> {
     let mut out = vec![];
@@ -713,7 +742,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ()] {{
 
 #[test]
 fn generated_encoding_preserves_permanent_arena_sharing_and_charge_order() {
-    encoding_audit(
+    four_engines(
         r#"
 @serializable
 type Row { tags: List[String] }
@@ -722,22 +751,27 @@ fn row_json_into(value: Row, mut out: List[u8], depth: u64) -> Result[(), std@1/
 fn output_error[E](take e: E) -> () {}
 @noalloc
 fn grant_error(refusal: GrantError) -> () uses {} { () }
-fn bounded(cap: u64) -> Result[bool, OutOfSpace] {
+fn bounded(cap: u64, share: bool) -> Result[bool, OutOfSpace] {
  arena.bounded(cap, fn(a: Arena) -> bool {
   let tags: List[String] in a = ["a", "b"]
   let mut row = Row(tags: take tags)
+  if share { let alias = copy row.tags }
   let mut out: List[u8] = []
-  let _ = row_json_into(row, mut out, 0)
+  let encoded = row_json_into(row, mut out, 0) == Ok(()) &&
+    std@1/text.finish_valid(take out) == "{\"tags\":[\"a\",\"b\"]}"
   list.push(mut row.tags, "c")
-  list.len(row.tags) == 3
+  encoded && list.len(row.tags) == 3
  })
 }
 pub fn main(rt: Io, args: Args) -> Result[(), ()] {
- let valid = bounded(40) == Ok(true) && bounded(39) == Error(OutOfSpace())
+ // MEM-6: three String references charge 3*8 bytes. Borrowed iteration
+ // adds no share; an explicit copy permanently adds a 2*8-byte COW charge.
+ let valid = bounded(24, false) == Ok(true) && bounded(23, false) == Error(OutOfSpace()) &&
+   bounded(40, true) == Ok(true) && bounded(39, true) == Error(OutOfSpace())
  out.print(io.stdout(rt) ? grant_error, if valid { "ok\n" } else { "bad\n" }) ? output_error
  Ok(())
 }
-"#,
+"#.into(),
         "encoding-arena-sharing",
     );
 }
