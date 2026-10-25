@@ -258,6 +258,14 @@ impl<C> Writer<C> {
             ..Self::with_context(context)
         })
     }
+    /// Count a node at an already opened canonical nesting depth. No output
+    /// prefix is allocated; separators inside the node use the usual emitter.
+    pub fn counting_at_depth(context: C, depth: usize) -> Self {
+        Self {
+            depth,
+            ..Self::counting(context)
+        }
+    }
     pub fn output_bytes(&self) -> Option<usize> {
         match &self.out {
             TextOutput::Empty => Some(0),
