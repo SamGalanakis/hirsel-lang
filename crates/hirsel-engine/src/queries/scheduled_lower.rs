@@ -47,6 +47,18 @@ pub struct FrontLowerWork {
     pub initializers: u64,
     pub validation_runs: u64,
 }
+/// One original's retained decoded artifact and temporary decoding workspace.
+/// Sequential inspectors retain every artifact but reuse one scratch region.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DefinitionDecodeLayout {
+    pub retained: u64,
+    pub transient: u64,
+}
+impl DefinitionDecodeLayout {
+    pub fn total(self) -> Option<u64> {
+        self.retained.checked_add(self.transient)
+    }
+}
 struct Input {
     lower: EntryKey,
     evaluate: EntryKey,
@@ -67,7 +79,7 @@ struct LowerProduct {
     verified: Option<hirsel_validate::VerifiedDefinitionOutput>,
     acceptance: Option<hirsel_validate::AcceptedArtifact>,
     materialized: Reference,
-    definition_decode_bytes: u64,
+    definition_decode_layout: DefinitionDecodeLayout,
     constant_selection_bytes: u64,
 }
 impl LowerProduct {
@@ -322,13 +334,22 @@ impl FrontLowerQueries {
     /// Captured physical decode working memory for an already settled original.
     /// Reads metadata only; no provider fetch, body decoder or query runs.
     pub fn settled_definition_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        self.settled_definition_decode_layout(path)?
+            .total()
+            .ok_or(QueryError::NotImplemented)
+    }
+    /// Captured layout only: no provider read, decode, body phase or clone.
+    pub fn settled_definition_decode_layout(
+        &self,
+        path: &DefPath,
+    ) -> Result<DefinitionDecodeLayout, QueryError> {
         let id = self.query(path).ok_or(QueryError::NotImplemented)?;
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let (_, outcome, _) = outcomes
             .get(&(id.kind, id.address.0))
             .ok_or(QueryError::NotImplemented)?;
         match &outcome.result {
-            Ok(Value::Lower(lower)) => Ok(lower.definition_decode_bytes),
+            Ok(Value::Lower(lower)) => Ok(lower.definition_decode_layout),
             Err(error) => Err(error.clone()),
             _ => Err(QueryError::NotImplemented),
         }
@@ -927,9 +948,15 @@ impl FrontLowerQueries {
         // Arc/slice decoding can temporarily overlap its construction buffers.
         // Count serialized shared rows independently; source sharing is not a
         // promise made by the ordinary decoder.
-        let definition_decode_bytes = crate::memo::retained::decoded_tir_bytes(&definition)
-            .checked_mul(2)
-            .and_then(|bytes| bytes.checked_add(record_decode_bytes))
+        let retained = crate::memo::retained::decoded_tir_bytes(&definition);
+        let definition_decode_layout = DefinitionDecodeLayout {
+            retained,
+            transient: retained
+                .checked_add(record_decode_bytes)
+                .ok_or(QueryError::NotImplemented)?,
+        };
+        definition_decode_layout
+            .total()
             .ok_or(QueryError::NotImplemented)?;
         // Ordinary body bytes belong to the selected provider. Encoding uses
         // the active scratch reservation, rather than the saved future frame.
@@ -959,7 +986,7 @@ impl FrontLowerQueries {
             verified,
             acceptance,
             materialized,
-            definition_decode_bytes,
+            definition_decode_layout,
         }))
     }
 }
