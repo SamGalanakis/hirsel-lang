@@ -850,7 +850,7 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             frame.placement.set_owner(owner_word(owner));
             let task = image.task;
             #[cfg(feature = "diagnostic")]
-            crate::compact_trace::held(task);
+            crate::compact_trace::held(task.slot);
             unsafe { crate::tasks::after_save(run, task, false) };
             let queued = running.save(yielded);
             let _activity = execs.activity.lock().unwrap();
@@ -1123,7 +1123,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             crate::tasks::compact::activate(run, task, stack)
         } else {
             #[cfg(feature = "diagnostic")]
-            crate::compact_trace::resumed(task);
+            crate::compact_trace::resumed(task.slot);
             sp
         };
         TaskCtx::switch_in(ctx, exec.worker.get());

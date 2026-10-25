@@ -67,8 +67,9 @@ fn runtime52_resumed_preparation_cleanup_emits_on_both_backends() {
                 assert!(exported >= 1 && entered, "{backend:?} {partition:?}");
             }
         }
+        // Forced migration saves the frame at every boundary (the published form).
         let published = Fixture {
-            resume_save: true,
+            migrate: true,
             ..Fixture::default()
         };
         agree(DETACHED, &Fixture::default(), "detached result local");

@@ -236,19 +236,15 @@ fn runtime52_arena_callback_continuation() {
 fn runtime52_arena_callback_agrees() {
     with_compiler_stack(|| {
         let local = Fixture::default();
-        let published = Fixture {
-            resume_save: true,
-            ..Fixture::default()
-        };
+        // Forced migration saves the frame at every boundary (the published form).
         let migrate = Fixture {
             migrate: true,
             ..Fixture::default()
         };
         let (done, canceled) = (arena_source(false), arena_source(true));
         agree(&done, &local, "arena local");
-        agree_replayed(&done, &published, "arena published", true);
-        agree(&done, &migrate, "arena migrate");
-        agree(&canceled, &published, "arena canceled");
+        agree_replayed(&done, &migrate, "arena migrate", true);
+        agree(&canceled, &migrate, "arena canceled");
     });
 }
 
