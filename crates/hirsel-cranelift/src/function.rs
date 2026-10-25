@@ -1036,8 +1036,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             }
             self.reload(s)?;
             let unit = self.unit;
-            for (block, i) in hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped) {
-                let inst = &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
+            for (block, i) in
+                hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped)
+            {
+                let inst =
+                    &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
                 self.instruction(inst)?;
             }
             self.resume.as_mut().unwrap().resuming = Some(s.boundary.call);
@@ -2222,7 +2225,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             };
             let symbol = &unit.tables.symbols[symbol.index()];
             let name = hirsel_lir::continuation::resume_name(&symbol.definition, callee.body, None);
-            self.em.manifest_import(&name, ObjectSymbolKind::Function, None, None);
+            self.em
+                .manifest_import(&name, ObjectSymbolKind::Function, None, None);
             Some(name)
         } else if let Some((root, identity)) = ahead_root {
             let metadata = hirsel_lir::ahead::metadata_name(root, identity);

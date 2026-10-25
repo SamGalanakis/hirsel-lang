@@ -49,7 +49,10 @@ pub fn resume_preparations(
     state: u32,
     skipped: &[bool],
 ) -> Vec<(BlockId, usize)> {
-    let Some(resume) = state.checked_sub(1).and_then(|i| plan.states.get(i as usize)) else {
+    let Some(resume) = state
+        .checked_sub(1)
+        .and_then(|i| plan.states.get(i as usize))
+    else {
         return Vec::new();
     };
     let mut at = BTreeMap::new();
@@ -57,7 +60,13 @@ pub fn resume_preparations(
         if !skipped.get(b).copied().unwrap_or(false) {
             continue;
         }
-        for (i, inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
+        for (i, inst) in block
+            .instructions
+            .get(&u.instructions)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+        {
             if let Inst::Address { address, .. } = *inst {
                 at.insert(address, (BlockId(b as u32), i));
             }

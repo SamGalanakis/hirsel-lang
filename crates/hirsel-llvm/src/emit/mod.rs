@@ -311,15 +311,22 @@ fn emit_object_inner(
     profile: Profile<'_>,
     ownership: bool,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested, plan) = lower(units, inputs, profile, ownership, None, |module, machine| {
-        optimize_and_emit(
-            module,
-            machine,
-            inputs.opt,
-            verify_backend(inputs),
-            inputs.alternate,
-        )
-    })?;
+    let (bytes, manifested, plan) = lower(
+        units,
+        inputs,
+        profile,
+        ownership,
+        None,
+        |module, machine| {
+            optimize_and_emit(
+                module,
+                machine,
+                inputs.opt,
+                verify_backend(inputs),
+                inputs.alternate,
+            )
+        },
+    )?;
     let (bytes, debug) = match plan {
         Some(plan) => crate::debug::split(&bytes, &plan)
             .map_err(|message| CodegenError::Object { message })?,
@@ -370,9 +377,16 @@ pub fn emit_resume_object(
     inputs: &EmitInputs<'_>,
     plans: &hirsel_lir::continuation::ContinuationPlans,
 ) -> Result<ObjectArtifact, CodegenError> {
-    let (bytes, manifested, _) = lower(units, inputs, Profile::default(), false, Some(plans), |module, machine| {
-        optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs), false)
-    })?;
+    let (bytes, manifested, _) = lower(
+        units,
+        inputs,
+        Profile::default(),
+        false,
+        Some(plans),
+        |module, machine| {
+            optimize_and_emit(module, machine, inputs.opt, verify_backend(inputs), false)
+        },
+    )?;
     let file = ObjectFile::read(inputs.target, bytes)
         .map_err(|message| CodegenError::Object { message })?;
     artifact(file, manifested, inputs, &toolchain())
@@ -404,9 +418,14 @@ pub fn emit_ir(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), false, None, |module, _| {
-        Ok(module.text())
-    })
+    lower(
+        units,
+        inputs,
+        Profile::default(),
+        false,
+        None,
+        |module, _| Ok(module.text()),
+    )
     .map(|(text, ..)| text)
 }
 
@@ -415,9 +434,14 @@ pub fn emit_ir_ownership(
     units: &[&ValidatedUnit<Ready>],
     inputs: &EmitInputs<'_>,
 ) -> Result<String, CodegenError> {
-    lower(units, inputs, Profile::default(), true, None, |module, _| {
-        Ok(module.text())
-    })
+    lower(
+        units,
+        inputs,
+        Profile::default(),
+        true,
+        None,
+        |module, _| Ok(module.text()),
+    )
     .map(|(text, ..)| text)
 }
 

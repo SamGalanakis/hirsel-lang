@@ -226,7 +226,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_run(
             // SAFETY: no scheduler borrow survives the call into compiled code.
             let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
             // SAFETY: caller contract; the frame is exclusively this body's.
-            unsafe { dispatcher(ctx, environment, caller_site, operation_site, frame.as_mut_ptr()) }
+            unsafe {
+                dispatcher(
+                    ctx,
+                    environment,
+                    caller_site,
+                    operation_site,
+                    frame.as_mut_ptr(),
+                )
+            }
         };
         if status != crate::STATUS_SUSPENDED {
             owner.complete();

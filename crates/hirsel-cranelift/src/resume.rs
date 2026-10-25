@@ -10,8 +10,8 @@
 //! and reissues its boundary call, so no executed work is repeated.
 use crate::function::{FnEmitter, Place, flags};
 use crate::module::{Emitted, Emitter, Inputs, PTR};
-use cranelift_codegen::ir::{self, InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_codegen::Context;
+use cranelift_codegen::ir::{self, InstBuilder, Value, condcodes::IntCC, types};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use hirsel_lir::continuation::{
@@ -32,10 +32,17 @@ pub(crate) struct Resume<'a> {
 
 impl FnEmitter<'_, '_, '_> {
     fn frame(&self) -> Value {
-        self.resume.as_ref().and_then(|r| r.frame).expect("resume frame")
+        self.resume
+            .as_ref()
+            .and_then(|r| r.frame)
+            .expect("resume frame")
     }
 
-    fn frame_place(&mut self, offset: u64, layout: hirsel_lir::layout_types::LayoutId) -> Emitted<Place> {
+    fn frame_place(
+        &mut self,
+        offset: u64,
+        layout: hirsel_lir::layout_types::LayoutId,
+    ) -> Emitted<Place> {
         let frame = self.frame();
         let align = self.layout(layout)?.align;
         Ok(Place {
@@ -103,7 +110,10 @@ impl FnEmitter<'_, '_, '_> {
             self.store(shape, value, place)?;
         }
         let frame = self.frame();
-        let number = self.b.ins().iconst(types::I32, i64::from(state.target.state));
+        let number = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(state.target.state));
         self.b.ins().store(flags(), number, frame, 0);
         Ok(())
     }
@@ -127,7 +137,10 @@ impl FnEmitter<'_, '_, '_> {
     }
 
     /// The boundary protocol before `call`; for a resumable callee, its frame.
-    pub(crate) fn resume_boundary(&mut self, call: CallId) -> Emitted<Option<(Value, NestedFrame)>> {
+    pub(crate) fn resume_boundary(
+        &mut self,
+        call: CallId,
+    ) -> Emitted<Option<(Value, NestedFrame)>> {
         let Some(resume) = self.resume.as_mut() else {
             return Ok(None);
         };
@@ -151,9 +164,11 @@ impl FnEmitter<'_, '_, '_> {
         }
         if !resuming {
             self.materialize(state)?;
-            let number = self.b.ins().iconst(types::I32, i64::from(state.target.state));
-            let decided = self
-                .rt1(RuntimeEntry::ResumePoint, &[self.context, frame, number])?;
+            let number = self
+                .b
+                .ins()
+                .iconst(types::I32, i64::from(state.target.state));
+            let decided = self.rt1(RuntimeEntry::ResumePoint, &[self.context, frame, number])?;
             let (suspended, proceed) = (self.b.create_block(), self.b.create_block());
             self.b.set_cold_block(suspended);
             self.b.ins().brif(decided, suspended, &[], proceed, &[]);

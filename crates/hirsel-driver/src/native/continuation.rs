@@ -95,7 +95,6 @@ fn units(
     }
 }
 
-
 /// Every resumable plan's state alternates and dispatcher, in one object.
 pub(super) fn objects(
     program: &ReadyProgram,

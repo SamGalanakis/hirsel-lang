@@ -9,7 +9,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         if !self.inputs.alternate
             && self.ownership.is_none()
-            && let Some(plan) = self.inputs.continuation.and_then(|p| p.task_entry(self.unit))
+            && let Some(plan) = self
+                .inputs
+                .continuation
+                .and_then(|p| p.task_entry(self.unit))
         {
             return self.emit_resume_entry(plan);
         }
