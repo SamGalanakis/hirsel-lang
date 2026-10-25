@@ -1921,6 +1921,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
     struct ObservedStore {
         pending: AtomicUsize,
         peak: AtomicUsize,
+        parses: AtomicUsize,
         writers: Mutex<Vec<std::thread::ThreadId>>,
         summaries: AtomicUsize,
         signatures: AtomicUsize,
@@ -1931,8 +1932,16 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
         fn get(&self, _: &store::EntryKey) -> Option<hirsel_engine::store::Bytes> {
             None
         }
-        fn put(&self, _: &store::EntryKey, _: &[u8]) {
-            panic!("query publication must identify its product kind");
+        fn put(&self, key: &store::EntryKey, _: &[u8]) {
+            // Ordinary Parse transport precedes the semantic worker interval.
+            // Every semantic query still publishes through put_query below.
+            assert_eq!(
+                key.2,
+                QueryKind::Parse,
+                "query publication must identify its product kind"
+            );
+            assert_eq!(std::thread::current().id(), self.home);
+            self.parses.fetch_add(1, Ordering::SeqCst);
         }
         fn put_content(&self, domain: store::Domain, bytes: &[u8]) -> Option<store::Reference> {
             if domain.kind == 2 {
@@ -1993,6 +2002,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
             let store = Arc::new(ObservedStore {
                 pending: AtomicUsize::new(0),
                 peak: AtomicUsize::new(0),
+                parses: AtomicUsize::new(0),
                 writers: Mutex::new(vec![]),
                 summaries: AtomicUsize::new(0),
                 signatures: AtomicUsize::new(0),
@@ -2011,6 +2021,7 @@ fn durable_front_workers_drain_payloads_before_accepting_another_task() {
                 .collect();
             let file = candidate.sources.add("pending-store.hir", source).unwrap();
             candidate.parse_file(file, &default_context()).unwrap();
+            assert_eq!(store.parses.load(Ordering::SeqCst), 1);
             let owners: Vec<_> = (0..64).rev().map(|i| path(&format!("p{i}"))).collect();
             let output = candidate.publish_definitions(
                 owners.clone(),
