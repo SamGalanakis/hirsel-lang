@@ -2,13 +2,21 @@
 //! operations pass their callback result unchanged; other protocols fail closed.
 use super::{CallState, Context, FrameState, Owner, Resources, Storage, resources_in};
 use crate::{OperationResult, Value, frame::Frame, resources::Ending};
+use hirsel_syntax::DefPath;
+use hirsel_tir::BodyId;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(super) struct Callbacks {
-    calls: BTreeMap<u64, CallState>,
+    calls: BTreeMap<u64, Invocation>,
     runs: BTreeMap<u64, u64>,
     outputs: BTreeMap<u64, Output>,
+}
+struct Invocation {
+    call: CallState,
+    definition: DefPath,
+    body: Option<BodyId>,
+    captures: Vec<(u32, Owner, u64)>,
 }
 struct Output {
     owner: Owner,
@@ -17,22 +25,118 @@ struct Output {
     count: u64,
 }
 impl Resources {
-    pub(super) fn callback_called(&mut self, call: CallState, result: &OperationResult) {
-        if !(call.definition.is_core("task.scope")
-            || call.definition.is_core("mutex.with")
-            || call.definition.is_core("shared.with"))
-            || !matches!(
-                result,
-                OperationResult::Call { .. } | OperationResult::Park { .. }
-            )
-        {
+    pub(super) fn callback_called(
+        &mut self,
+        call: CallState,
+        arguments: &[Value],
+        result: &OperationResult,
+    ) {
+        if !matches!(
+            result,
+            OperationResult::Call { .. } | OperationResult::Park { .. }
+        ) {
+            if !call.arguments.is_empty() {
+                self.unsupported("resource callback did not commit callback entry");
+            }
             return;
+        }
+        let parameter = if call.definition.is_core("mutex.with") {
+            2
+        } else {
+            1
+        };
+        if call
+            .arguments
+            .iter()
+            .any(|(index, _, _)| *index != parameter)
+        {
+            self.unsupported("resource callback input needs an observed transport");
+            return;
+        }
+        let Some(callback) = arguments.get(parameter as usize) else {
+            self.unsupported("callback argument unavailable");
+            return;
+        };
+        let owner = call
+            .arguments
+            .iter()
+            .map(|(index, _, owner)| (index, owner))
+            .chain(call.views.iter().map(|(index, _, owner)| (index, owner)))
+            .find_map(|(index, owner)| (*index == parameter).then_some(owner));
+        let mut incoming = vec![];
+        let (definition, body) = match callback {
+            Value::Closure {
+                definition,
+                body,
+                captures,
+                environment,
+                invoked,
+            } => {
+                if captures.len() != environment.owned_captures.len()
+                    || invoked.as_ref().is_some_and(|state| state.get().is_some())
+                {
+                    self.unsupported("callback environment is inconsistent or already invoked");
+                    return;
+                }
+                for (index, (value, owned)) in
+                    captures.iter().zip(&environment.owned_captures).enumerate()
+                {
+                    let Some(value) = value else { continue };
+                    let count = resources_in(value);
+                    if !owned || count == 0 {
+                        continue;
+                    }
+                    if invoked.is_none() || !Self::supported_tree(value) {
+                        self.unsupported("reusable owned resource callback environment");
+                        return;
+                    }
+                    let Some(mut from) = owner.cloned() else {
+                        self.unsupported("owned callback capture has no source owner");
+                        return;
+                    };
+                    from.path.push(super::Step::Field {
+                        field: index as u32,
+                    });
+                    incoming.push((index as u32, from, count));
+                }
+                (definition.path().clone(), Some(*body))
+            }
+            Value::FunctionReference(reference) => (reference.definition.clone(), None),
+            _ => {
+                self.unsupported("unsupported library callback target");
+                return;
+            }
+        };
+        if let OperationResult::Call { callee, .. } = result {
+            let agrees = match callee {
+                Value::Closure {
+                    definition: actual,
+                    body: actual_body,
+                    ..
+                } => actual.path() == &definition && body == Some(*actual_body),
+                Value::FunctionReference(actual) => {
+                    actual.definition == definition && body.is_none()
+                }
+                _ => false,
+            };
+            if !agrees {
+                self.unsupported("library substituted a different callback target");
+                return;
+            }
         }
         let Some(frame) = self.frames.last().map(|state| state.id) else {
             self.unsupported("library callback has no observed source frame");
             return;
         };
-        self.callbacks.calls.insert(frame, call);
+        self.callbacks.calls.insert(
+            frame,
+            Invocation {
+                call,
+                definition,
+                body,
+                captures: incoming,
+            },
+        );
     }
     pub(super) fn callback_frame(&mut self, callee: &Frame) {
         if self.error.is_some() {
@@ -42,7 +146,7 @@ impl Resources {
             self.unsupported("callback entered without its parent frame");
             return;
         };
-        let Some(call) = self.callbacks.calls.remove(&parent) else {
+        let Some(invocation) = self.callbacks.calls.remove(&parent) else {
             // Resource-free callbacks from other protocols keep the existing
             // conservative sync admission; they cannot return tracked values.
             if callee
@@ -55,6 +159,14 @@ impl Resources {
             }
             return;
         };
+        if callee.definition.path.path() != &invocation.definition
+            || invocation.body.is_some_and(|body| body != callee.body_id)
+            || callee.bounded.is_some()
+        {
+            self.unsupported("committed callback target or transport changed");
+            return;
+        }
+        let call = invocation.call;
         let mut aliases = BTreeMap::new();
         let callback_parameter = if call.definition.is_core("mutex.with") {
             2
@@ -64,6 +176,7 @@ impl Resources {
         if let Some((_, _, environment)) = call
             .views
             .iter()
+            .chain(call.arguments.iter())
             .find(|(parameter, _, _)| *parameter == callback_parameter)
         {
             for (capture, (local, _)) in callee
@@ -74,6 +187,13 @@ impl Resources {
                 .filter(|(_, local)| local.storage == hirsel_tir::Storage::Capture)
                 .enumerate()
             {
+                if invocation
+                    .captures
+                    .iter()
+                    .any(|(index, _, _)| *index == capture as u32)
+                {
+                    continue;
+                }
                 let mut from = environment.clone();
                 from.path.push(super::Step::Field {
                     field: capture as u32,
@@ -85,17 +205,42 @@ impl Resources {
                 }
             }
         }
-        if !call.arguments.is_empty()
-            || callee.slots.iter().enumerate().any(|(local, value)| {
-                value.as_ref().is_some_and(|value| resources_in(value) != 0)
-                    && !aliases.contains_key(&(local as u32))
-            })
-        {
+        let id = self.next_frame;
+        self.next_frame += 1;
+        let mut owned = BTreeMap::new();
+        for (capture, from, expected) in invocation.captures {
+            let Some(local) = Self::capture_local(callee, capture) else {
+                self.unsupported("owned callback capture slot unavailable");
+                return;
+            };
+            let actual = callee
+                .slots
+                .get(local as usize)
+                .and_then(Option::as_ref)
+                .map_or(0, resources_in);
+            if actual != expected || aliases.contains_key(&local) {
+                self.unsupported("owned callback capture inventory changed");
+                return;
+            }
+            let to = self.frame_slot(id, local);
+            let result = self.tracker.move_tree(&call.context, &from, &to);
+            if let Some(tokens) = self.checked(result)
+                && tokens.len() as u64 != expected
+            {
+                self.unsupported("owned callback capture lineage differs");
+                return;
+            }
+            self.move_borrows(&from, &to, false);
+            owned.insert(local, expected);
+        }
+        if callee.slots.iter().enumerate().any(|(local, value)| {
+            value.as_ref().is_some_and(|value| resources_in(value) != 0)
+                && !aliases.contains_key(&(local as u32))
+                && !owned.contains_key(&(local as u32))
+        }) {
             self.unsupported("resource callback parameters or captures need an observed transport");
             return;
         }
-        let id = self.next_frame;
-        self.next_frame += 1;
         let owner = self.scratch();
         self.callbacks.runs.insert(id, parent);
         self.callbacks.outputs.insert(

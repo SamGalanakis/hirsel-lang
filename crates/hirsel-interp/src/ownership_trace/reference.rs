@@ -1062,8 +1062,14 @@ impl Observer for Resources {
                 );
             }
         }
+        if call.definition.is_core("task.scope")
+            || call.definition.is_core("mutex.with")
+            || call.definition.is_core("shared.with")
+        {
+            self.callback_called(call, arguments, result);
+            return;
+        }
         if call.arguments.is_empty() {
-            self.callback_called(call, result);
             return;
         }
         if !call.definition.is_core("task.async") || !call.captures.is_empty() {

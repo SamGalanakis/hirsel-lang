@@ -192,8 +192,23 @@ fn observed_task_source(body: &str, creates: usize) -> hirsel_run_schema::owners
             }
             panic!("task fixture: {error}");
         });
-    let tests = testing::discover(&mut program, &[], Some(49), Selection::Tests)
-        .unwrap_or_else(|error| panic!("task fixture: {error}"));
+    let tests =
+        testing::discover(&mut program, &[], Some(49), Selection::Tests).unwrap_or_else(|error| {
+            if let hirsel_engine::ToolError::Query {
+                error: hirsel_engine::QueryError::Diagnostics(diagnostics),
+                sources,
+                ..
+            } = &error
+            {
+                let rendered = diagnostics
+                    .iter()
+                    .take(4)
+                    .map(|diagnostic| diagnostic.render_human(sources))
+                    .collect::<String>();
+                panic!("task fixture: {rendered}");
+            }
+            panic!("task fixture: {error}");
+        });
     assert_eq!(tests.len(), 1);
     let mut traces = vec![];
     for checked in [false, true] {
@@ -925,6 +940,155 @@ fn assignments(t: Test) {
   let mut current: Token in current = Token(value: 7u64)
   current = Token(value: 7u64)
   test.check(t, current.value == 7u64)
+}
+"#,
+        2,
+    );
+}
+
+#[test]
+fn ownership_callback_captures_scope_moves_its_owned_resource_into_the_result() {
+    observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+@test
+fn captured_scope(t: Test) {
+  let tasks = test.tasks(t)
+  let token = Token()
+  let received = task.scope(tasks, fn(s: Scope) { take token })
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_callback_captures_shared_once_body_drops_an_owned_aggregate() {
+    // Shared's reusable callback borrows from the owning once scope body.
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+fn inspect(token: Token) -> u64 { 7u64 }
+@test
+fn captured_shared(t: Test) {
+  let tasks = test.tasks(t)
+  let frozen = shared.freeze(unique 3u64)
+  let pair = (Token(), Token())
+  let answer = task.scope(tasks, fn(s: Scope) {
+    let (left, right) = take pair
+    shared.with(frozen, fn(value: u64) -> u64 uses {} {
+      inspect(left) + inspect(right) + value
+    })
+  })
+  test.check(t, answer == 17u64)
+}
+"#,
+        2,
+    );
+    use hirsel_run_schema::ownership_trace::{
+        Action, Projection as Step, Storage, TaskPath, Token,
+    };
+    for (sequence, field) in [(0, 0), (1, 1)] {
+        let expected = Token {
+            task: TaskPath::default(),
+            sequence,
+        };
+        let suffix = vec![Step::Field { field }];
+        let events = trace
+            .events
+            .iter()
+            .filter(|event| event.action.token() == &expected)
+            .collect::<Vec<_>>();
+        let transfers = events
+            .iter()
+            .filter(|event| {
+                matches!(&event.action,
+            Action::Move { from, owner, .. }
+                if from.path.len() == 2
+                    && matches!(from.path.first(), Some(Step::Field { .. }))
+                    && from.path[1..] == suffix && owner.path == suffix
+                    && matches!((&from.storage, &owner.storage),
+                        (Storage::Slot { frame: source, .. }, Storage::Slot { frame: target, .. })
+                            if source != target))
+            })
+            .count();
+        assert_eq!(
+            transfers, 1,
+            "{expected} must transfer once from environment.capture.field{field} to callback.field{field}; events={events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(&event.action, Action::Drop { .. })),
+            "{expected} must drop after capture transfer at suffix {suffix:?}; events={events:?}"
+        );
+    }
+}
+
+#[test]
+fn ownership_callback_captures_failed_mutex_body_releases_its_owned_capture() {
+    // Mutex's reusable callback borrows the owning once scope body's resource;
+    // its failure must unwind that owner and complete the captured lifetime.
+    let trace = observed_task_source(
+        r#"
+resource type Token {}
+drop(x) {}
+fn inspect(token: Token) -> u64 { 7u64 }
+@test
+fn captured_failure(t: Test) {
+  let tasks = test.tasks(t)
+  let board = mutex.create(tasks, unique 0u64)
+  let token = Token()
+  task.scope(tasks, fn(s: Scope) {
+    let held = take token
+    mutex.with(tasks, board, fn(mut n: unique u64) -> () uses {} {
+      failure.check(inspect(held) != 7u64, Arithmetic())
+    })
+  })
+}
+"#,
+        1,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    let captured = trace
+        .events
+        .iter()
+        .find_map(|event| match &event.action {
+            Action::Move { token, from, owner }
+                if !from.path.is_empty()
+                    && owner.path.is_empty()
+                    && matches!((&from.storage, &owner.storage),
+                    (Storage::Slot { frame: source, .. }, Storage::Slot { frame: target, .. })
+                        if source != target) =>
+            {
+                Some(token)
+            }
+            _ => None,
+        })
+        .expect("the once callback must receive the owned capture");
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Drop { token, .. } if token == captured)));
+}
+
+#[test]
+fn ownership_callback_captures_mixed_owned_and_borrowed_equal_resources() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn read(token: Token) -> u64 { token.value }
+@test
+fn mixed_captures(t: Test) {
+  let tasks = test.tasks(t)
+  let borrowed = Token(value: 7u64)
+  let owned = Token(value: 7u64)
+  let received = task.scope(tasks, fn(s: Scope) {
+    let n = read(borrowed)
+    take owned
+  })
+  test.check(t, received.value == read(borrowed))
 }
 "#,
         2,
