@@ -373,8 +373,7 @@ impl CheckedProductEncoder {
                 edges.insert(bytes, *value);
             }
         }
-        let mut parts = vec![canonical.as_bytes().to_vec()];
-        parts.extend(registrations);
+        let mut parts = registrations;
         for (path, observed) in &reads {
             let mut key = vec![];
             crate::memo::encode_def_path(&mut key, path);
@@ -388,7 +387,7 @@ impl CheckedProductEncoder {
         CheckedProducts {
             digest: ContentHash::of_parts(
                 "hirsel.checked-products.v1",
-                parts.iter().map(Vec::as_slice),
+                std::iter::once(canonical.as_bytes()).chain(parts.iter().map(Vec::as_slice)),
             ),
             canonical: Some(canonical),
             reads,
@@ -402,6 +401,31 @@ impl CheckedProductEncoder {
 #[cfg(test)]
 mod registration_tests {
     use super::*;
+    #[test]
+    fn checked_digest_borrows_detached_canonical_text_without_copying_its_payload() {
+        let types = hirsel_types::TypeInterner::new(None);
+        for width in [1, 4, 16] {
+            let canonical: Arc<str> = "λ🐑canonical\n".repeat(width * 1024).into();
+            let registrations = vec![b"registration-one".to_vec(), b"registration-two".to_vec()];
+            let expected = ContentHash::of_parts(
+                "hirsel.checked-products.v1",
+                std::iter::once(canonical.as_bytes())
+                    .chain(registrations.iter().map(Vec::as_slice)),
+            );
+            let pointer = canonical.as_ptr();
+            let (actual, count) = crate::test_alloc::measured(|| {
+                CheckedProductEncoder::from_canonical(canonical, types.clone())
+                    .finish(BTreeMap::new(), registrations)
+            });
+            assert_eq!(actual.digest, expected);
+            assert_eq!(actual.canonical.as_ref().unwrap().as_ptr(), pointer);
+            assert!(
+                count.peak < 1024,
+                "digest copied the canonical text: {}",
+                count.peak
+            );
+        }
+    }
 
     #[test]
     fn detached_checked_product_clones_keep_all_output_reservations() {
