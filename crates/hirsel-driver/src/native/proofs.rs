@@ -5,7 +5,7 @@
 //! removal form, and the build's `validate_discharge` confirms what import
 //! removed. The interpreter never reads a sidecar.
 use super::{ReadyProgram, StageName};
-use hirsel_engine::{QueryEngine, ToolError, ValidatedNativeInput};
+use hirsel_engine::{NativeRecordSource, QueryEngine, ToolError, ValidatedNativeInput};
 use hirsel_lir::discharge::{Discharge, Discharged, Form};
 use hirsel_proof_export::sidecar::{self, Budget, Checker, Record, SIDECAR_FORMAT, Verdict};
 use hirsel_proof_export::{DefinitionSection, Obligation, ObligationKind, SitePosition};
@@ -160,10 +160,67 @@ impl Proofs {
         validated: &ValidatedNativeInput,
         evidence: &Evidence,
     ) -> Result<Self, super::NativeError> {
+        Self::assess_selected(export, evidence, |path, definition| {
+            if validated
+                .snapshot()
+                .definitions
+                .get(path)
+                .is_some_and(|selected| **selected != *definition)
+            {
+                return Err(super::NativeError::new(
+                    StageName::Import,
+                    format!("proofs: the native snapshot's TIR of {path} is not the exported TIR"),
+                ));
+            }
+            Ok(())
+        })
+    }
+
+    /// Assess an independently selected complete PS9 export against settled
+    /// original Lower products. This miss operation needs no NativeInput,
+    /// native Value, or mutable compiler. It does not establish the export's
+    /// source closure or authorize reuse of another export's assessment.
+    pub fn assess_original(
+        export: &hirsel_proof_export::Export,
+        original: &hirsel_engine::NativeOriginalReader,
+        evidence: &Evidence,
+    ) -> Result<Self, super::NativeError> {
+        if !std::sync::Arc::ptr_eq(&export.types, original.record_context().record_types()) {
+            return Err(super::NativeError::new(
+                StageName::Import,
+                "proofs: exported and original Lower type universes differ",
+            ));
+        }
+        let mut checked = std::collections::BTreeSet::new();
+        Self::assess_selected(export, evidence, |path, definition| {
+            if checked.contains(path) {
+                return Ok(());
+            }
+            let selected = original.read(path).ok_or_else(|| {
+                super::NativeError::new(
+                    StageName::Import,
+                    format!("proofs: missing independently selected original Lower {path}"),
+                )
+            })?;
+            if **selected.definition() != *definition {
+                return Err(super::NativeError::new(
+                    StageName::Import,
+                    format!("proofs: the original Lower TIR of {path} is not the exported TIR"),
+                ));
+            }
+            checked.insert(path.clone());
+            Ok(())
+        })
+    }
+
+    fn assess_selected(
+        export: &hirsel_proof_export::Export,
+        evidence: &Evidence,
+        mut selected: impl FnMut(&DefPath, &hirsel_tir::Definition) -> Result<(), super::NativeError>,
+    ) -> Result<Self, super::NativeError> {
         let error = |message: String| super::NativeError::new(StageName::Import, message);
         let assessment = sidecar::assess(export, &evidence.records, &evidence.trusted)
             .map_err(|d| error(format!("proofs: two records share the key of {}", d.0)))?;
-        let definitions = &validated.snapshot().definitions;
         let mut discharge = Discharge::default();
         let mut lines = vec![];
         let mut missing = 0;
@@ -190,14 +247,7 @@ impl Proofs {
                 }
             };
             if let Ok(sites) = &licensed {
-                if definitions
-                    .get(path)
-                    .is_some_and(|d| **d != assessed.section.tir)
-                {
-                    return Err(error(format!(
-                        "proofs: the native snapshot's TIR of {path} is not the exported TIR"
-                    )));
-                }
+                selected(path, &assessed.section.tir)?;
                 discharge
                     .0
                     .entry(path.clone())

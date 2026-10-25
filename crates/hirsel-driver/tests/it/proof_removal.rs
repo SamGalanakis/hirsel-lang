@@ -824,3 +824,90 @@ fn immutable_export_assessment_preserves_sidecar_decisions_after_controller_drop
         assert!(Proofs::assess_export(&export, &validated, &duplicate).is_err());
     });
 }
+
+#[test]
+fn settled_original_assessment_binds_exported_bodies_without_a_native_snapshot() {
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let entry = entry_path(&default_context());
+        let text = sidecar(BUMP, &[(ENSURES, "proved"), (OVERFLOW, "proved")], |_| {});
+        let evidence = Evidence {
+            records: parse_sidecar(&text).unwrap(),
+            trusted: vec![Checker::parse("prover@1").unwrap()],
+        };
+        let mut producer = engine(BUMP);
+        let export = hirsel_proof_export::build(&producer.proof_export_input(&entry).unwrap());
+        let paths = export
+            .definitions
+            .iter()
+            .map(|section| section.path.clone())
+            .collect::<Vec<_>>();
+        let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
+        let original = producer
+            .native_original_reader(&paths, store.clone())
+            .unwrap();
+        let missing = producer
+            .native_original_context(&paths)
+            .unwrap()
+            .reader(Vec::new(), store)
+            .unwrap();
+        // The legacy snapshot is a test oracle only. The new assessment below
+        // receives solely the original Lower reader and independently selected export.
+        let input = producer.export_native_input().unwrap();
+        let validated = producer.import_native_input(input).unwrap();
+        let expected = Proofs::assess_export(&export, &validated, &evidence).unwrap();
+        drop(validated);
+        drop(producer);
+
+        let trace = hirsel_lir::construction::ValueTrace::default();
+        let _observe = trace.enter();
+        let actual = Proofs::assess_original(&export, &original, &evidence).unwrap();
+        assert_eq!(actual.discharge, expected.discharge);
+        assert!(!actual.discharge.is_empty());
+        assert_eq!(
+            actual.report_discharged(&actual.discharge),
+            expected.report_discharged(&expected.discharge)
+        );
+        assert_eq!(trace.totals(), Default::default());
+        assert!(Proofs::assess_original(&export, &missing, &evidence).is_err());
+
+        let mut modified = export.clone();
+        modified
+            .definitions
+            .iter_mut()
+            .find(|d| d.path.0.name == "bump")
+            .unwrap()
+            .tir
+            .signature_hash = hirsel_syntax::ContentHash::default();
+        assert!(Proofs::assess_original(&modified, &original, &evidence).is_err());
+        let mut other = engine(BUMP);
+        let foreign = other
+            .native_original_reader(&paths, Arc::new(store::MemStore::default()))
+            .unwrap();
+        assert!(Proofs::assess_original(&export, &foreign, &evidence).is_err());
+
+        let mut duplicate = evidence.clone();
+        duplicate.records.push(duplicate.records[0].clone());
+        assert!(Proofs::assess_original(&export, &original, &duplicate).is_err());
+        let mut untrusted = evidence.clone();
+        untrusted.trusted.clear();
+        let kept = Proofs::assess_original(&export, &missing, &untrusted).unwrap();
+        assert!(kept.discharge.is_empty());
+        assert!(
+            kept.report_discharged(&Default::default())
+                .iter()
+                .any(|line| line.contains("kept"))
+        );
+        let mut stale = evidence.clone();
+        stale
+            .records
+            .iter_mut()
+            .for_each(|r| r.revision = hirsel_syntax::ContentHash::default());
+        assert!(
+            Proofs::assess_original(&export, &missing, &stale)
+                .unwrap()
+                .discharge
+                .is_empty()
+        );
+    });
+}
