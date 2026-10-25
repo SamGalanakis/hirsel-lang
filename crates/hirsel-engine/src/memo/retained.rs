@@ -1,7 +1,9 @@
 //! Retained allocation accounting, adapted from Buck2 allocative's Arc and Vec
 //! visitors (third-party/NOTICES.md). This measures storage, never wire bytes.
 mod signature;
+mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;
+pub(crate) use source_entry::retained_signature_entry_bytes;
 mod syntax;
 use super::{DepthEvidence, Reads};
 use crate::comptime::StagedRegistration;
@@ -526,49 +528,48 @@ impl Weight {
                     self.add(foreign.aliasing_contract.capacity());
                 }
             }
-            hirsel_types::SignatureKind::Type(definition) => {
-                let hirsel_types::TypeDefinition {
-                    loop_source,
-                    format,
-                    destructor_allocation: _,
-                    generics,
-                    representation: _,
-                    bounds,
-                    authority,
-                    capability: _,
-                    implementation_authority,
-                    serializable: _,
-                    serializable_check,
-                    layout: _,
-                    distinct: _,
-                    resource: _,
-                    drop,
-                    fact: _,
-                    captures,
-                } = definition;
-                if let Some(hirsel_types::LoopSourceDeclaration { open, next, option }) =
-                    loop_source
-                {
-                    self.def_path(open);
-                    self.def_path(next);
-                    self.def_path(option);
-                }
-                for path in [format, drop].into_iter().flatten() {
-                    self.def_path(path);
-                }
-                self.vec(generics, Weight::generic);
-                self.flat_vec(bounds);
-                self.authority(authority);
-                if let Some(authority) = implementation_authority {
-                    self.authority(authority);
-                }
-                if let Some(check) = serializable_check {
-                    self.def_path(&check.function);
-                }
-                if let Some(captures) = captures {
-                    self.shared_slice(captures);
-                }
-            }
+            hirsel_types::SignatureKind::Type(definition) => self.type_definition(definition),
+        }
+    }
+    fn type_definition(&mut self, definition: &hirsel_types::TypeDefinition) {
+        let hirsel_types::TypeDefinition {
+            loop_source,
+            format,
+            destructor_allocation: _,
+            generics,
+            representation: _,
+            bounds,
+            authority,
+            capability: _,
+            implementation_authority,
+            serializable: _,
+            serializable_check,
+            layout: _,
+            distinct: _,
+            resource: _,
+            drop,
+            fact: _,
+            captures,
+        } = definition;
+        if let Some(hirsel_types::LoopSourceDeclaration { open, next, option }) = loop_source {
+            self.def_path(open);
+            self.def_path(next);
+            self.def_path(option);
+        }
+        for path in [format, drop].into_iter().flatten() {
+            self.def_path(path);
+        }
+        self.vec(generics, Weight::generic);
+        self.flat_vec(bounds);
+        self.authority(authority);
+        if let Some(authority) = implementation_authority {
+            self.authority(authority);
+        }
+        if let Some(check) = serializable_check {
+            self.def_path(&check.function);
+        }
+        if let Some(captures) = captures {
+            self.shared_slice(captures);
         }
     }
     fn path<T>(&mut self, mut value: &SharedPath<T>) {
