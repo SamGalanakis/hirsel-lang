@@ -1,8 +1,11 @@
 # Free-mode protocol models
 
 Model checks of the free-mode protocol in `crates/hirsel-free` (design §5 Op sections and the
-cut, Claim versus withdraw). `check.sh` runs them all and fails unless every run has its
-expected result; the gate runs it when these models or the kernel source they compile change.
+cut, Claim versus withdraw). Every main run checks them: `loom/` is a workspace crate whose
+tests run with the workspace tests at preemption bound 2 (`sync::model`), and
+`//:gate-free-genmc` runs the GenMC models on the host that built GenMC (its own fast-tier
+stage). `check.sh` runs them all, with the bound-1 sweep and the mutations, and fails unless
+every run has its expected result.
 
 - `loom/` compiles the kernel's `sync`, `phase`, `section` and `claim` modules from their own
   source against loom (`loom/src/sync.rs`), so the models check the code the runtime runs.
@@ -51,6 +54,27 @@ expected result; the gate runs it when these models or the kernel source they co
   The fixture supplies only immutable descriptor metadata. It does not model
   finalizer execution, scheduler readiness, native recorder phases or cuts;
   separate runtime tests cover those boundaries.
+
+- `loom/tests/executors.rs` runs the production executor registry
+  (`executors.rs`) against the section gate: two executors preferring one
+  word, the second waiting for the first's retirement after its acknowledged
+  close while a flush cuts, and the stop releasing a waiting registration
+  unregistered. Lost wakes show as loom deadlocks; overlapping owners of one
+  word as `UnsafeCell` races on its dirty list.
+- `loom/tests/wakes.rs` runs the replay wake registry (`replay/wakes.rs`):
+  register-and-recheck under the cell's lock against an advance that takes
+  only the waits it enabled (Tokio `sync/tests/loom_notify.rs`). A spurious
+  wake re-registers the same wait, as the engine's rerun poll does.
+- `loom/tests/frames.rs` runs `frame.rs` through three dispatcher transitions:
+  a compact frame's leave racing a role-free wake (one activation, from the
+  saved image, on a lent stack); the leave's `Placement` words, so every
+  dispatch routes from the executor the frame left; and a stale wake whose
+  refused dispatch returns the frame through `Running::return_unstarted`,
+  idle, with the `QuietCheck` its save deferred.
+- `loom/tests/channel.rs` also runs the role-free replayed receive (an unready
+  receive registers its park and rechecks under the cell lock, against a send
+  reading `parked` there) and a last sender's role-free close taking every
+  parked receiver's wake token under the lock (the fixture token wakes it).
 
 GenMC is built once by `check.sh`, pinned by commit, into
 `${XDG_CACHE_HOME:-~/.cache}/genmc-<commit>`; it needs cmake, clang and LLVM 19-22 with their

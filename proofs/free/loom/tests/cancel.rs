@@ -1,11 +1,13 @@
 //! The runtime's cancellation flag and role-owned epoch cache, from the same
 //! source, under competing writers and a reader changing role owners.
+
+hirsel_guard::install!();
 use hirsel_free_loom::cancel::{Cache, Epoch, Flag};
 use loom::sync::{Arc, Mutex};
 
 #[test]
 fn competing_causes_have_one_winner_and_cannot_overwrite_it() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let flag = Arc::new(Flag::default());
         let a = loom::thread::spawn({
             let flag = flag.clone();
@@ -26,7 +28,7 @@ fn competing_causes_have_one_winner_and_cannot_overwrite_it() {
 
 #[test]
 fn changing_role_owners_cannot_reuse_an_observation_before_cancellation() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let role = Arc::new(Mutex::new((
             Flag::default(),
             Epoch::default(),

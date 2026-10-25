@@ -34,10 +34,7 @@ fn wake(wakes: Vec<Waker>) -> usize {
 }
 
 fn token(cell: &Arc<Version>, at: u64) -> DependencyToken {
-    DependencyToken {
-        cell: cell.clone(),
-        at,
-    }
+    DependencyToken::new(cell.clone(), at)
 }
 
 fn shared(keys: &[&[bool]]) -> Shared {

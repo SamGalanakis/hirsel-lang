@@ -65,13 +65,14 @@ fn eight_workers_record_object_actions_and_replay_at_one_permit() {
         path: vec![],
         op: 1,
     };
-    let mut children = Vec::new();
-    let prepared = root.prepare_children(TASKS as u32);
+    // The section allocates and frees nothing: room for every child first.
+    let mut children = Vec::with_capacity(TASKS);
+    let mut prepared = root.prepare_children(TASKS as u32);
     root.track(&object);
     recorder
         .phase(&mut worker, &mut root, done(1), PHASE, |phase| {
             phase.create(&object);
-            for child in prepared {
+            for child in prepared.drain(..) {
                 children.push(phase.spawn_prepared(child));
             }
         })
@@ -213,6 +214,7 @@ fn recording_metrics_count_only_gap_bytes_and_do_not_invent_cpu_time() {
     let mut task: Task = recorder.root(&mut worker).unwrap();
     let object = ObjectId::Gate("package".into());
     task.track(&object);
+    let observed = vec![7; 1000];
     recorder
         .phase(
             &mut worker,
@@ -221,7 +223,7 @@ fn recording_metrics_count_only_gap_bytes_and_do_not_invent_cpu_time() {
             PHASE.payload(1000),
             |phase| {
                 phase.touch(&object, 3, 0, "gate enter"); // One gapped event.
-                phase.observation(&vec![7; 1000]);
+                phase.observation(&observed);
                 phase.load(u128::MAX);
             },
         )
@@ -303,13 +305,11 @@ fn retiring_workers_with_one_preferred_slot_keep_exclusive_tokens_and_closed_cut
     );
     let mut root_worker = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut root_worker).unwrap();
-    let prepared = root.prepare_children(WORKERS as u32);
-    let children = recorder
+    let mut prepared = root.prepare_children(WORKERS as u32);
+    let mut children = Vec::with_capacity(WORKERS);
+    recorder
         .phase(&mut root_worker, &mut root, done(1), PHASE, |writer| {
-            prepared
-                .into_iter()
-                .map(|child| writer.spawn_prepared(child))
-                .collect::<Vec<_>>()
+            children.extend(prepared.drain(..).map(|child| writer.spawn_prepared(child)));
         })
         .unwrap();
     drop(root_worker);

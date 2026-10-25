@@ -1,0 +1,3 @@
+# generator's build script assembles only for powerpc64 and sets `nightly` only on a nightly
+# compiler; on the pinned stable x86-64 and aarch64 toolchains it sets nothing.
+buildscript.run = false

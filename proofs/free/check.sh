@@ -7,16 +7,27 @@
 # and must fail, which shows the passing runs are not vacuous.
 #
 # GenMC is built once, pinned by commit, into the cache (like the TLA+ jar of proofs/ordered):
-# it needs cmake, clang/LLVM 19-22 with its development files, and libffi.
+# it needs cmake, clang/LLVM 19-22 with its development files, and libffi. `--prebuilt` (the
+# //:gate-free-genmc test) only uses this host's build in ~/.cache and never builds it.
 #
-# Usage: check.sh [name-filter]   (a grep -E pattern over run names)
+# Usage: check.sh [--prebuilt] [name-filter]   (a grep -E pattern over run names)
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
+prebuilt=""
+if [[ "${1:-}" == --prebuilt ]]; then prebuilt=1; shift; fi
 filter="${1:-.}"
 
 genmc_commit=9f6c4c0772d0c42b325681581acc6a0f3eb9b5f7 # GenMC v0.19.0
-cache="${XDG_CACHE_HOME:-$HOME/.cache}/genmc-$genmc_commit"
+if [[ -n "$prebuilt" ]]; then
+  cache="$HOME/.cache/genmc-$genmc_commit"
+else
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/genmc-$genmc_commit"
+fi
 genmc="${GENMC:-$cache/build/bin/genmc}"
+if [[ -n "$prebuilt" && -z "${GENMC:-}" && ! -f "$cache/.built" ]]; then
+  echo "check.sh: no GenMC build in $cache; run proofs/free/check.sh genmc once on this host" >&2
+  exit 1
+fi
 # GenMC bakes its own include path in at configure time, so it is built where it stays; the
 # marker says the build finished.
 if [[ -z "${GENMC:-}" && ! -f "$cache/.built" ]]; then
@@ -83,6 +94,9 @@ loom_runs=(
   "loom-atomic-bound2|--test atomic|2|pass"
   "loom-mutex-bound2|--test mutex|2|pass"
   "loom-channel-bound2|--test channel|2|pass"
+  "loom-executors-bound2|--test executors|2|pass"
+  "loom-wakes-bound2|--test wakes|2|pass"
+  "loom-frames-bound2|--test frames|2|pass"
   "mutation-loom-weak-handshake|--test models --features weak|2|causality"
 )
 for row in "${loom_runs[@]}"; do

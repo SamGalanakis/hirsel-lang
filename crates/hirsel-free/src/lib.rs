@@ -14,6 +14,7 @@ hirsel_guard::install!();
 pub mod atomic;
 pub mod cancel;
 pub mod claim;
+pub mod executors;
 pub mod frame;
 pub mod keys;
 pub mod mutex;

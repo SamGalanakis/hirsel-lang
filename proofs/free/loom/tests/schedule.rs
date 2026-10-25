@@ -1,6 +1,8 @@
 //! The production queue/state word under loom's memory model. Every token
 //! must have exactly one owner; wakes racing the saved-stack publication
 //! cannot enqueue a running fiber or disappear at park.
+
+hirsel_guard::install!();
 use hirsel_free_loom::{queue, schedule::TaskState};
 use loom::sync::Arc;
 use loom::sync::atomic::{AtomicUsize, Ordering};
@@ -8,7 +10,7 @@ use loom::sync::atomic::{AtomicUsize, Ordering};
 #[test]
 fn a_queue_token_cannot_expose_a_frame_before_the_idle_save() {
     use hirsel_free_loom::frame;
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let (wake, queued) = frame::prepared(0usize);
         let mut running = queued.start();
         let thread = loom::thread::spawn(move || {
@@ -42,7 +44,7 @@ fn discarded_queue_and_running_owners_drop_images_once_and_ignore_late_wakes() {
         }
     }
     for started in [false, true] {
-        loom::model(move || {
+        hirsel_free_loom::sync::model(move || {
             let freed = Arc::new(AtomicUsize::new(0));
             let (wake, queued) = frame::prepared(Image(freed.clone()));
             let late = wake.clone();
@@ -61,7 +63,7 @@ fn discarded_queue_and_running_owners_drop_images_once_and_ignore_late_wakes() {
 
 #[test]
 fn a_wake_racing_park_publishes_exactly_once_after_stack_save() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let state = Arc::new(TaskState::default());
         assert!(state.notify());
         assert!(state.start());
@@ -88,7 +90,7 @@ fn a_wake_racing_park_publishes_exactly_once_after_stack_save() {
 
 #[test]
 fn two_thieves_and_owner_each_get_disjoint_tokens() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let (mut owner, thief) = queue::local::<_, 4>();
         for id in 0..3 {
             assert!(owner.push(id).is_empty());
@@ -108,7 +110,7 @@ fn two_thieves_and_owner_each_get_disjoint_tokens() {
 
 #[test]
 fn overflow_racing_steal_and_reuse_loses_no_token() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let (mut owner, thief) = queue::local::<_, 4>();
         for id in 0..4 {
             assert!(owner.push(id).is_empty());
@@ -125,7 +127,7 @@ fn overflow_racing_steal_and_reuse_loses_no_token() {
 
 #[test]
 fn a_wake_racing_completion_never_resurrects_a_task() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let state = Arc::new(TaskState::default());
         assert!(state.notify());
         assert!(state.start());

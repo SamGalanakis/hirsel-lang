@@ -11,7 +11,7 @@
 //! the state before dropping the image, so a late wake cannot reach its context.
 
 use crate::schedule::TaskState;
-use crate::sync::{Arc, Cell};
+use crate::sync::{Arc, AtomicUsize, Cell, Ordering};
 
 struct Frame<T> {
     state: TaskState,
@@ -125,6 +125,36 @@ impl<T> Running<T> {
     }
 }
 
+/// A dispatch that refused to start its frame (a stale wake, or a row parked on another wait)
+/// returned the image unstarted.
+pub enum Returned<T> {
+    /// A newer wake was remembered meanwhile: publish this token.
+    Requeued(Queued<T>),
+    /// The frame is idle again.
+    Idle(QuietCheck),
+}
+
+/// The refused wake was the one the frame's save deferred its quiet verdict to: whoever holds
+/// this reruns the verdict once it holds no role, or a fully parked run never reports Blocked.
+#[must_use = "a refused wake carries the quiet verdict its save deferred"]
+pub struct QuietCheck(());
+
+impl QuietCheck {
+    pub fn take(self, verdict: impl FnOnce()) {
+        verdict();
+    }
+}
+
+impl<T> Running<T> {
+    /// Return a started but refused frame's image, exactly as it was, without running it.
+    pub fn return_unstarted(self) -> Returned<T> {
+        match self.save(false) {
+            Some(queued) => Returned::Requeued(queued),
+            None => Returned::Idle(QuietCheck(())),
+        }
+    }
+}
+
 impl<T> Drop for Running<T> {
     fn drop(&mut self) {
         if self.value.is_some() {
@@ -132,5 +162,60 @@ impl<T> Drop for Running<T> {
             // The image is dropped after completion. A concurrent wake can
             // observe only RUNNING or COMPLETE, never a new queue token.
         }
+    }
+}
+
+/// Where a saved frame's next dispatch goes: the owner word its latest publisher chose (0: any
+/// worker), and, under forced migration, the executor a compact frame left (0: none) until a
+/// worker starts it. The words are the dispatcher's; this type orders them against the frame
+/// state, so a dispatch the leave's save or a later wake publishes routes from the left word.
+#[derive(Default)]
+pub struct Placement {
+    owner: AtomicUsize,
+    left: AtomicUsize,
+}
+
+impl Placement {
+    pub fn new(owner: usize) -> Self {
+        Self {
+            owner: AtomicUsize::new(owner),
+            left: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn owner(&self) -> usize {
+        self.owner.load(Ordering::Acquire)
+    }
+
+    pub fn set_owner(&self, owner: usize) {
+        self.owner.store(owner, Ordering::Release);
+    }
+
+    /// The executor a compact frame left, or 0.
+    pub fn left(&self) -> usize {
+        self.left.load(Ordering::Acquire)
+    }
+
+    /// A compact frame leaves its stack on executor `exec` (0 without forced migration): record
+    /// it and make the frame any worker's, run the save callback, then save. The save's release
+    /// publishes both words to whoever dispatches the frame next: this caller when a wake was
+    /// remembered, or a later wake's notification.
+    pub fn leave<T>(
+        &self,
+        running: Running<T>,
+        exec: usize,
+        saved: impl FnOnce(),
+    ) -> Option<Queued<T>> {
+        if exec != 0 {
+            self.left.store(exec, Ordering::Release);
+        }
+        self.owner.store(0, Ordering::Release);
+        saved();
+        running.save(false)
+    }
+
+    /// A worker started the frame: it left nowhere.
+    pub fn activated(&self) {
+        self.left.store(0, Ordering::Release);
     }
 }

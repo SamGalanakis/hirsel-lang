@@ -998,6 +998,9 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             products=PRODUCTS, runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw(f"glob({starlark(['bench/native/programs/**', 'bench/native/inputs/**', 'bench/native/manifest.json', 'bench/micro/**', 'examples/hello-web/**', 'examples/todo-api/**', 'examples/common.hir', 'stdlib/**', 'tools/perf-counts.tsv'], 4)})")))
+    # GenMC is built on this host by proofs/free/check.sh (pinned, outside Buck2); its models run here.
+    out.append("\n" + call("hirsel_script_test", name="gate-free-genmc", script="proofs/free/check.sh", full=False,
+                            host=True, args=["--prebuilt", "genmc"], data=Raw('glob(["proofs/free/check.sh", "proofs/free/genmc/**"])')))
     out.append("\n" + call("hirsel_script_test", name="gate-core-broker", script="tools/tests/core_broker.py", full=False,
                             data=["tools/core-broker", "tools/tests/core_broker.py"]))
     out.append("\n" + call("hirsel_script_test", name="gate-langarena", script="bench/langarena/tests.py",

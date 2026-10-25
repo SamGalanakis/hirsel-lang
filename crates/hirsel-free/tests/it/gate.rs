@@ -26,6 +26,8 @@ fn every_cut_is_causally_closed() {
                 section.register(&task);
                 drop(section);
                 let mut op = 0;
+                // A section allocates nothing: the varint's room comes first.
+                let mut bytes = Vec::with_capacity(19);
                 while !done.load(Ordering::Relaxed) {
                     // SAFETY: this thread owns the task's writing side; no section is open.
                     unsafe { task.reserve(10) };
@@ -34,7 +36,7 @@ fn every_cut_is_causally_closed() {
                     };
                     op += 1;
                     let v = version.fetch_add(1, Ordering::Relaxed);
-                    let mut bytes = Vec::new();
+                    bytes.clear();
                     put_varint(&mut bytes, u128::from(v));
                     section.append(&task, &bytes);
                     section.publish(&task, Progress::new(op, Phase::Done));

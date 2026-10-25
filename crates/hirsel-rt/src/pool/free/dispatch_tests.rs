@@ -68,9 +68,8 @@ fn segment(execs: &Execs, task: u32) -> Saved {
         queued,
         frame: Arc::new(Frame {
             notification,
-            owner: AtomicUsize::new(owner_word(Owner::Any)),
+            placement: Placement::new(owner_word(Owner::Any)),
             saved: AtomicBool::new(true),
-            left: AtomicUsize::new(0),
             stop_before_start: false,
         }),
         lease: Lease::new(&execs.dispatch.get().unwrap().count),

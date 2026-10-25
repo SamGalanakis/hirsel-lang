@@ -1,11 +1,13 @@
 //! Production scalar words and striped fallback, including mixed SC orders.
+
+hirsel_guard::install!();
 use hirsel_free_loom::atomic::{Image, Stripes};
 use loom::sync::Arc;
 
 #[test]
 fn native_and_striped_cells_share_one_sequentially_consistent_order() {
     for (left, right) in [(8, 8), (8, 16), (16, 16)] {
-        loom::model(move || {
+        hirsel_free_loom::sync::model(move || {
             let stripes = Arc::new(Stripes::default());
             let a = Arc::new(Image::new(&vec![0; left], 0, left, || stripes.clone()));
             let b = Arc::new(Image::new(&vec![0; right], 0, right, || stripes.clone()));
@@ -33,7 +35,7 @@ fn native_and_striped_cells_share_one_sequentially_consistent_order() {
 #[test]
 fn wide_loads_cannot_tear_across_another_threads_store() {
     for size in [16, 32] {
-        loom::model(move || {
+        hirsel_free_loom::sync::model(move || {
             let image = Arc::new(Image::new(&vec![0; size], 0, size, || {
                 Arc::new(Stripes::default())
             }));

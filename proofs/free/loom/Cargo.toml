@@ -1,13 +1,11 @@
 # The loom model of the free-mode protocol: it compiles crates/hirsel-free's concurrent modules
-# from their own source against loom's primitives. Its own workspace, outside the Buck2 graph;
-# proofs/free/check.sh runs it.
+# from their own source against loom's primitives. A workspace member, so every main run builds
+# and runs its models (crate tests); check.sh adds the bound sweeps and mutations.
 [package]
 name = "hirsel-free-loom"
 version = "0.0.0"
 edition = "2024"
 publish = false
-
-[workspace]
 
 [features]
 # The mutation: SC accesses without their SC fences, so the handshake is only AcqRel.
@@ -16,6 +14,5 @@ weak = []
 [dependencies]
 loom = "=0.7.2"
 
-[profile.test]
-opt-level = 2
-debug-assertions = true
+[dev-dependencies]
+hirsel-guard = { path = "../../../crates/hirsel-guard" }

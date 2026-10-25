@@ -3,6 +3,8 @@
 //! release writes, so loom reports any access to a released slab as a race. Each model also
 //! asserts that every freed block is collected exactly once.
 
+hirsel_guard::install!();
+
 use hirsel_heaps_loom::remote::{self, Link, Owner, Page, Returns, Xthread};
 use loom::cell::UnsafeCell;
 use loom::sync::Arc;

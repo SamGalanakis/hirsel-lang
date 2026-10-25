@@ -342,13 +342,11 @@ fn runtime50_reserved_records_complete_under_concurrent_cuts() {
     );
     let mut slot = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut slot).unwrap();
-    let prepared = root.prepare_children(TASKS as u32);
-    let children = recorder
+    let mut prepared = root.prepare_children(TASKS as u32);
+    let mut children = Vec::with_capacity(TASKS);
+    recorder
         .phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
-            prepared
-                .into_iter()
-                .map(|child| w.spawn_prepared(child))
-                .collect::<Vec<_>>()
+            children.extend(prepared.drain(..).map(|child| w.spawn_prepared(child)));
         })
         .unwrap();
     drop(slot);
@@ -406,16 +404,14 @@ fn runtime50_executor_slot_migration_reentry() {
     );
     let mut home = recorder.executor(2).unwrap();
     let mut root = recorder.root(&mut home).unwrap();
-    let prepared = root.prepare_children(2);
-    let mut children = recorder
+    let mut prepared = root.prepare_children(2);
+    let mut children = Vec::with_capacity(2);
+    recorder
         .phase(&mut home, &mut root, done(1), RecordBound::default(), |w| {
-            prepared
-                .into_iter()
-                .map(|child| w.spawn_prepared(child))
-                .collect::<Vec<_>>()
+            children.extend(prepared.drain(..).map(|child| w.spawn_prepared(child)));
         })
-        .unwrap()
-        .into_iter();
+        .unwrap();
+    let mut children = children.into_iter();
     let (mut migrant, mut blocker) = (children.next().unwrap(), children.next().unwrap());
     // Registration is exclusive: an index has one owner until it retires.
     assert!(recorder.executor(2).is_none());
@@ -517,9 +513,11 @@ fn runtime50_executor_slot_migration_reentry() {
     // Terminal stop while another executor's section is open: the stop waits for that
     // section, admits its publication, and no slot opens a section afterwards.
     let in_section = Arc::new(AtomicBool::new(false));
-    let (release, released) = mpsc::sync_channel::<()>(0);
+    // A flag, not a channel: a section allocates nothing, and a blocking receive may.
+    let release = Arc::new(AtomicBool::new(false));
     let busy = std::thread::spawn({
-        let (recorder, in_section) = (recorder.clone(), in_section.clone());
+        let (recorder, in_section, release) =
+            (recorder.clone(), in_section.clone(), release.clone());
         move || {
             let mut slot = recorder.executor_available(0).unwrap();
             blocker.reserve(RecordBound::records(1));
@@ -531,7 +529,7 @@ fn runtime50_executor_slot_migration_reentry() {
                     RecordBound::records(1),
                     |w| {
                         in_section.store(true, Ordering::Release);
-                        released.recv().unwrap();
+                        wait(&release);
                         w.load(20);
                     },
                 )
@@ -556,7 +554,7 @@ fn runtime50_executor_slot_migration_reentry() {
     });
     std::thread::sleep(std::time::Duration::from_millis(5));
     assert!(!stopper.is_finished(), "a stop waits for open sections");
-    release.send(()).unwrap();
+    release.store(true, Ordering::Release);
     let terminal = stopper.join().unwrap();
     let (refused, busy_index) = busy.join().unwrap();
     assert!(refused, "no section opens after the stop's cut");
@@ -617,10 +615,11 @@ fn contended(trace: bool) -> (Vec<u8>, Option<Projection>, BTreeMap<&'static str
             op: 2,
         },
     ];
-    let prepared = root.prepare_children(2);
+    let mut prepared = root.prepare_children(2);
+    let mut tasks = Vec::with_capacity(2);
     root.track(&objects[0]);
     root.track(&objects[1]);
-    let mut tasks = recorder
+    recorder
         .phase(
             &mut slot,
             &mut root,
@@ -628,10 +627,7 @@ fn contended(trace: bool) -> (Vec<u8>, Option<Projection>, BTreeMap<&'static str
             RecordBound::records(1),
             |w| {
                 w.create(&objects[0]);
-                prepared
-                    .into_iter()
-                    .map(|child| w.spawn_prepared(child))
-                    .collect::<Vec<_>>()
+                tasks.extend(prepared.drain(..).map(|child| w.spawn_prepared(child)));
             },
         )
         .unwrap();
@@ -893,13 +889,11 @@ fn serial_callbacks_with_local_cursors() {
     let gate = ObjectId::Gate("package:7".into());
     let mut slot = recorder.executor(0).unwrap();
     let mut root = recorder.root(&mut slot).unwrap();
-    let prepared = root.prepare_children(TASKS as u32);
-    let children = recorder
+    let mut prepared = root.prepare_children(TASKS as u32);
+    let mut children = Vec::with_capacity(TASKS);
+    recorder
         .phase(&mut slot, &mut root, done(1), RecordBound::default(), |w| {
-            prepared
-                .into_iter()
-                .map(|child| w.spawn_prepared(child))
-                .collect::<Vec<_>>()
+            children.extend(prepared.drain(..).map(|child| w.spawn_prepared(child)));
         })
         .unwrap();
     drop(slot);

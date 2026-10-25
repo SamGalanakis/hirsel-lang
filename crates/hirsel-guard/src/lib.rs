@@ -16,6 +16,11 @@
 //! and thread stacks, but not file mappings or reserved `PROT_NONE` ranges, so
 //! a compiler that reserves address space it never touches stays inside it,
 //! where an address-space limit would not.
+//!
+//! In debug builds it also traps every allocation and free made while a Free
+//! recorder section is open on the calling thread ([`section`]): such a call
+//! ends the process with exit status [`SECTION_STATUS`]. Sections write only
+//! room reserved before them and run no destructor (design §5 Op sections).
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -27,6 +32,83 @@ pub const EXIT_STATUS: i32 = 71;
 pub const DEFAULT_JOBS: usize = 2;
 /// Exit status of a malformed `HIRSEL_MEMORY_LIMIT`.
 const USAGE_STATUS: i32 = 2;
+/// Exit status of a debug build that allocated or freed inside a section (sysexits'
+/// `EX_SOFTWARE`).
+pub const SECTION_STATUS: i32 = 70;
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The Free recorder sections open on this thread.
+    static SECTIONS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A Free recorder section opens (`true`) or closes on the calling thread. In debug builds an
+/// allocation or free while one is open ends the process; release builds do nothing.
+#[inline]
+pub fn section(open: bool) {
+    #[cfg(debug_assertions)]
+    SECTIONS.with(|open_here| {
+        open_here.set(if open {
+            open_here.get() + 1
+        } else {
+            open_here.get() - 1
+        })
+    });
+    #[cfg(not(debug_assertions))]
+    let _ = open;
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Whether this thread's sections trap: false only inside [`simulated_sections`].
+    static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Test support only: run `f` on this thread with the section trap disarmed, and re-arm it on
+/// every exit, unwinding included. For a protocol simulation that drives real sections from
+/// one thread and keeps its own allocating bookkeeping beside them. Production code never
+/// calls it, so every production section entry still traps; other threads are unaffected.
+#[doc(hidden)]
+pub fn simulated_sections<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(debug_assertions)]
+    struct Rearm(bool);
+    #[cfg(debug_assertions)]
+    impl Drop for Rearm {
+        fn drop(&mut self) {
+            ARMED.set(self.0);
+        }
+    }
+    #[cfg(debug_assertions)]
+    let _rearm = Rearm(ARMED.replace(false));
+    f()
+}
+
+/// End a debug build that allocates or frees with a section open on this thread.
+#[inline]
+fn trap_section(size: usize) {
+    // A recorder fault panics inside its section; the panic's own allocations are its report.
+    #[cfg(debug_assertions)]
+    if SECTIONS.try_with(std::cell::Cell::get).unwrap_or(0) != 0
+        && ARMED.try_with(std::cell::Cell::get).unwrap_or(true)
+        && !std::thread::panicking()
+    {
+        trapped(size);
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = size;
+}
+
+/// The trap's report, out of line: every allocation's frame stays as small as before.
+#[cfg(debug_assertions)]
+#[cold]
+#[inline(never)]
+fn trapped(size: usize) -> ! {
+    let mut line = Line::new();
+    line.text(b"hirsel: ")
+        .number(size as u64)
+        .text(b" bytes allocated or freed inside a Free recorder section; sections write only room reserved before them (debug-build trap)\n")
+        .exit(SECTION_STATUS)
+}
 
 /// Make [`Guarded`] the global allocator: `install!()` over the system
 /// allocator, or `install!(Counting)` over a unit-struct allocator a test
@@ -57,6 +139,7 @@ static STATE: AtomicU8 = AtomicU8::new(UNSET);
 unsafe impl<A: GlobalAlloc> GlobalAlloc for Guarded<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         limit_once();
+        trap_section(layout.size());
         let block = unsafe { self.0.alloc(layout) };
         if block.is_null() {
             exhausted(layout.size());
@@ -65,6 +148,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Guarded<A> {
     }
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         limit_once();
+        trap_section(layout.size());
         let block = unsafe { self.0.alloc_zeroed(layout) };
         if block.is_null() {
             exhausted(layout.size());
@@ -72,6 +156,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Guarded<A> {
         block
     }
     unsafe fn realloc(&self, block: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+        trap_section(size);
         let moved = unsafe { self.0.realloc(block, layout, size) };
         if moved.is_null() {
             exhausted(size);
@@ -79,6 +164,7 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for Guarded<A> {
         moved
     }
     unsafe fn dealloc(&self, block: *mut u8, layout: Layout) {
+        trap_section(layout.size());
         unsafe { self.0.dealloc(block, layout) }
     }
 }

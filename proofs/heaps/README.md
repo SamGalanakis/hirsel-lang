@@ -16,6 +16,7 @@ collected exactly once.
 - `return_list_hands_every_node_over_once`: the push-only list large blocks and region segments
   return on.
 
+`loom/` is a workspace crate, so every main run runs these models with the workspace tests.
 `check.sh` runs the models and two mutations that must fail: `direct-dequeue` (the owner's
 direct collection of its current page clears the queued flag) and `blind-trim` (a trim
 releases an empty slab without the busy test). Writing the model found one ordering bug: a

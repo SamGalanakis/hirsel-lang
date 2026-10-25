@@ -4,8 +4,8 @@
 //! for the SeqCst accesses of the section handshake (loom models a SeqCst access as AcqRel
 //! and needs an SC fence beside it; GenMC checks the plain SeqCst form).
 
-pub use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
-pub use std::sync::{Arc, Mutex, MutexGuard};
+pub use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+pub use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// Interior mutability whose exclusion the protocol, not the type, guarantees.
 pub struct Cell<T>(std::cell::UnsafeCell<T>);
@@ -51,6 +51,12 @@ pub fn sc_load64(word: &AtomicU64) -> u64 {
 
 pub fn sc_fence() {
     std::sync::atomic::fence(Ordering::SeqCst);
+}
+
+/// A section opens or closes on this thread: debug builds trap any allocation or free while
+/// one is open (`hirsel_guard::section`).
+pub fn section_open(open: bool) {
+    hirsel_guard::section(open);
 }
 
 /// One step of a bounded wait for another thread's short critical work.

@@ -3,8 +3,8 @@
 //! fence; load), which loom does model; the GenMC model checks the plain SC accesses.
 
 use loom::sync::atomic::fence;
-pub use loom::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
-pub use loom::sync::{Arc, Mutex, MutexGuard};
+pub use loom::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+pub use loom::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 /// Interior mutability whose exclusion the protocol guarantees; loom checks every access.
 pub struct Cell<T>(loom::cell::UnsafeCell<T>);
@@ -56,13 +56,21 @@ pub fn sc_fence() {
     fence(Ordering::SeqCst);
 }
 
+/// The runtime's allocation trap; loom's own bookkeeping allocates inside modeled sections.
+pub fn section_open(_open: bool) {}
+
 pub fn relax() {
     loom::thread::yield_now();
 }
 
-#[cfg(test)]
+/// Explore `f` under loom: at preemption bound 2 with loom's 1000-branch budget unless
+/// `LOOM_MAX_PREEMPTIONS` / `LOOM_MAX_BRANCHES` say otherwise (check.sh's bound sweeps).
 pub fn model(f: impl Fn() + Sync + Send + 'static) {
-    loom::model(f);
+    let mut builder = loom::model::Builder::new();
+    if std::env::var_os("LOOM_MAX_PREEMPTIONS").is_none() {
+        builder.preemption_bound = Some(2);
+    }
+    builder.check(f);
 }
 
 /// Collapse only failed section-gate polls into a blocking wait. Notifications

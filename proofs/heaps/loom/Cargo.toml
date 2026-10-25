@@ -1,13 +1,11 @@
 # The loom model of cross-worker storage return: it compiles crates/hirsel-rt/src/remote.rs from
-# its own source against loom's atomics. Its own workspace, outside the Buck2 graph;
-# proofs/heaps/check.sh runs it.
+# its own source against loom's atomics. A workspace member, so every main run builds
+# and runs its models (crate tests); check.sh adds the bound sweeps and mutations.
 [package]
 name = "hirsel-heaps-loom"
 version = "0.0.0"
 edition = "2024"
 publish = false
-
-[workspace]
 
 [features]
 # Mutations, each of which must fail: the owner's direct collection of its current page clears
@@ -19,6 +17,5 @@ blind-trim = []
 [dependencies]
 loom = "=0.7.2"
 
-[profile.test]
-opt-level = 2
-debug-assertions = true
+[dev-dependencies]
+hirsel-guard = { path = "../../../crates/hirsel-guard" }

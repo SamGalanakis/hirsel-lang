@@ -22,7 +22,7 @@ fn channel() -> (Channels, u64, u64, u32) {
 }
 
 pub fn concurrent_senders_keep_fifo_images_in_version_order() {
-    loom::model(|| {
+    crate::sync::model(|| {
         let (channels, _, _, index) = channel();
         let cell = channels.payload(index);
         let send = |cell: Arc<crate::channels::ChannelCell>, value: u64| {
@@ -57,7 +57,7 @@ pub fn concurrent_senders_keep_fifo_images_in_version_order() {
 }
 
 pub fn send_racing_receiver_close_preserves_exactly_one_image_owner() {
-    loom::model(|| {
+    crate::sync::model(|| {
         let (mut channels, _, receiver, index) = channel();
         let cell = channels.payload(index);
         let send = loom::thread::spawn({
@@ -90,7 +90,7 @@ pub fn send_racing_receiver_close_preserves_exactly_one_image_owner() {
 }
 
 pub fn last_sender_close_cannot_overtake_its_queued_message() {
-    loom::model(|| {
+    crate::sync::model(|| {
         let (mut channels, sender, _, index) = channel();
         let cell = channels.payload(index);
         let producer = loom::thread::spawn({
@@ -126,5 +126,96 @@ pub fn last_sender_close_cannot_overtake_its_queued_message() {
             Err(CLOSED)
         );
         assert_eq!(empty, [0, 0]);
+    });
+}
+
+/// The role-free replayed receive (tasks/free/objects.rs `channel_receive`) against a send: a
+/// receive that finds nothing ready under the cell lock stays unbegun, and its role path
+/// registers the park (`Channels::wait`) and rechecks under the lock, while the sender reads
+/// `parked` under the same lock and touches the channel for the next scheduling point. The
+/// receiver always gets the message: by its recheck, or by the touch's wake.
+pub fn a_role_free_receive_that_finds_nothing_rechecks_or_is_woken() {
+    crate::sync::model(|| {
+        let (channels, _, _, index) = channel();
+        let cell = channels.payload(index);
+        let role = Arc::new(loom::sync::Mutex::new(channels));
+        let point = Arc::new(loom::sync::Notify::new());
+        let sender = loom::thread::spawn({
+            let (cell, role, point) = (cell.clone(), role.clone(), point.clone());
+            move || {
+                let mut image = [1u64, 55];
+                let parked = {
+                    let mut state = cell.lock();
+                    cell.prepare_send(&mut state);
+                    let sent = unsafe { cell.send(&mut state, image.as_mut_ptr().cast(), false) };
+                    assert_eq!(sent.0, DONE);
+                    cell.parked()
+                };
+                if parked {
+                    role.lock().unwrap().touch(index);
+                    point.notify();
+                }
+            }
+        });
+        let mut out = [0u64; 2];
+        let attempt = |out: &mut [u64; 2]| {
+            let mut state = cell.lock();
+            cell.ready(&state)
+                && unsafe { cell.receive(&mut state, out.as_mut_ptr().cast()) } == Ok(true)
+        };
+        // Role-free: act only on a ready outcome; otherwise the op stays unbegun.
+        if !attempt(&mut out) {
+            role.lock().unwrap().wait(index, 1, 0);
+            // A spurious scheduling point reruns the recheck, as a woken poll does.
+            while !attempt(&mut out) {
+                point.wait();
+            }
+            role.lock().unwrap().unwait(index, 1);
+        }
+        sender.join().unwrap();
+        assert_eq!(out, [1, 55]);
+    });
+}
+
+/// A last sender's role-free close against a receiver parking with its wake token (dfbc7719,
+/// tasks/free/objects.rs close): the receiver keeps its token under the cell lock when nothing
+/// is ready, and the close takes every token under the same lock and wakes them after it. The
+/// receiver always ends on Closed: by its own check, or by the close's wake.
+pub fn a_last_sender_close_wakes_a_receiver_parking_with_its_token() {
+    use crate::pool::free::Token;
+    crate::sync::model(|| {
+        let (channels, sender, _, index) = channel();
+        let cell = channels.payload(index);
+        let _ = sender;
+        let closer = loom::thread::spawn({
+            let cell = cell.clone();
+            move || {
+                let tokens = {
+                    let mut state = cell.lock();
+                    let closed = cell.close_locked(&mut state, true);
+                    assert!(closed.unsent && !closed.last);
+                    state.take_tokens()
+                };
+                for (_, Token(wake)) in tokens {
+                    wake.notify();
+                }
+            }
+        });
+        let wake = Arc::new(loom::sync::Notify::new());
+        let outcome = loop {
+            let mut out = [0u64; 2];
+            {
+                let mut state = cell.lock();
+                if cell.ready(&state) {
+                    break unsafe { cell.receive(&mut state, out.as_mut_ptr().cast()) };
+                }
+                state.keep_token(0, Token(wake.clone()));
+            }
+            wake.wait();
+            // Each attempt registers anew if it parks again.
+            cell.lock().drop_token(0);
+        };
+        closer.join().unwrap();
+        assert_eq!(outcome, Err(CLOSED));
     });
 }

@@ -3,6 +3,8 @@
 //! that no log, dirty list or scan position is touched concurrently: that exclusion is what
 //! makes a cut readable while workers run. Each model also asserts its protocol property.
 
+hirsel_guard::install!();
+
 use hirsel_free_loom::claim::{Arbiter, Claim, Requests};
 use hirsel_free_loom::phase::{Phase, Progress};
 use hirsel_free_loom::section::{Gate, Scanned, Stopped, TaskLog};
@@ -35,7 +37,7 @@ const OPS: u64 = 1;
 /// therefore leaves a causally closed prefix, and no section opens after the stop.
 #[test]
 fn every_cut_is_causally_closed() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let gate = Arc::new(Gate::new(2));
         let version = Arc::new(AtomicU64::new(0));
         let workers: Vec<_> = (0..2u32)
@@ -87,7 +89,7 @@ fn every_cut_is_causally_closed() {
 /// cut holds a receive of message n, it holds the send of message n.
 #[test]
 fn old_receive_new_send() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let gate = Arc::new(Gate::new(2));
         let sent = Arc::new(AtomicU64::new(0));
         let sender = {
@@ -145,7 +147,7 @@ fn old_receive_new_send() {
 /// parent's spawn, and the terminal progress list holds every registered task.
 #[test]
 fn registration_and_end_during_a_cut() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let gate = Arc::new(Gate::new(2));
         let parent = {
             let gate = gate.clone();
@@ -216,7 +218,7 @@ impl Drop for Buffers {
 /// after the terminal cut is quarantined, never recorded; and the buffers are freed once,
 /// by whichever holder leaves last.
 fn claim_matrix(recording: bool) {
-    loom::model(move || {
+    hirsel_free_loom::sync::model(move || {
         let arbiter = Arc::new(Arbiter::new(recording, 2));
         let requests = Arc::new(Requests::default());
         let issued = Arc::new(AtomicBool::new(false));
@@ -319,7 +321,7 @@ fn claim_matrix_without_recording() {
 /// bridge withdraws every unclaimed one; home never acts on a withdrawn request.
 #[test]
 fn bridge_claim_and_close() {
-    loom::model(|| {
+    hirsel_free_loom::sync::model(|| {
         let bridge = Arc::new(Requests::<()>::default());
         let acted = Arc::new(AtomicBool::new(false));
         let posted = bridge.prepare(7, ());

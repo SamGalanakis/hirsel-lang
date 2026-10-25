@@ -23,13 +23,11 @@ fn recorder(slots: usize) -> Arc<Recorder<Marked>> {
 fn tasks(recorder: &Recorder<Marked>, children: usize) -> (Task, Vec<Task>) {
     let mut home = recorder.executor(HOME).unwrap();
     let mut root = recorder.root(&mut home).unwrap();
-    let prepared = root.prepare_children(children as u32);
-    let spawned = recorder
+    let mut prepared = root.prepare_children(children as u32);
+    let mut spawned = Vec::with_capacity(children);
+    recorder
         .phase(&mut home, &mut root, done(1), RecordBound::default(), |w| {
-            prepared
-                .into_iter()
-                .map(|child| w.spawn_prepared(child))
-                .collect()
+            spawned.extend(prepared.drain(..).map(|child| w.spawn_prepared(child)));
         })
         .unwrap();
     recorder.retire_executor(home);
@@ -160,9 +158,10 @@ fn an_open_section_word_is_not_reused_and_a_retired_word_is_not_waited_for() {
     let (_, mut children) = tasks(&recorder, 1);
     let mut child = children.pop().unwrap();
     let opened = Arc::new(AtomicBool::new(false));
-    let (release, released) = mpsc::sync_channel::<()>(0);
+    // A flag, not a channel: a section allocates nothing, and a blocking receive may.
+    let release = Arc::new(AtomicBool::new(false));
     let busy = std::thread::spawn({
-        let (recorder, opened) = (recorder.clone(), opened.clone());
+        let (recorder, opened, release) = (recorder.clone(), opened.clone(), release.clone());
         move || {
             let mut slot = recorder.register(1).unwrap();
             child.reserve(RecordBound::records(1));
@@ -174,7 +173,9 @@ fn an_open_section_word_is_not_reused_and_a_retired_word_is_not_waited_for() {
                     RecordBound::records(1),
                     |w| {
                         opened.store(true, Ordering::Release);
-                        released.recv().unwrap();
+                        while !release.load(Ordering::Acquire) {
+                            std::thread::yield_now();
+                        }
                         w.load(7);
                     },
                 )
@@ -187,7 +188,7 @@ fn an_open_section_word_is_not_reused_and_a_retired_word_is_not_waited_for() {
     }
     // The open section's owner still holds its word: no executor registers it early.
     assert!(recorder.executor(1).is_none());
-    release.send(()).unwrap();
+    release.store(true, Ordering::Release);
     busy.join().unwrap();
     // Retired after its acknowledged close: a cut does not wait for it, and it is free.
     assert!(recorder.registered().is_empty());

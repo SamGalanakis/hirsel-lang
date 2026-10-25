@@ -26,7 +26,7 @@
 
 use crate::phase::Progress;
 use crate::sync::{Arc, AtomicBool, AtomicU32, AtomicU64, Cell, Mutex, MutexGuard, Ordering};
-use crate::sync::{SectionWaits, sc_load, sc_store};
+use crate::sync::{SectionWaits, sc_load, sc_store, section_open};
 
 /// Bytes per log segment: a published record never moves.
 pub const SEGMENT: usize = 4096;
@@ -333,6 +333,7 @@ impl Gate {
         loop {
             sc_store(active, 1);
             if sc_load(&self.cut) == 0 {
+                section_open(true);
                 return Ok(Section { gate: self, slot });
             }
             active.store(0, Ordering::Release);
@@ -448,6 +449,7 @@ impl Section<'_> {
 
 impl Drop for Section<'_> {
     fn drop(&mut self) {
+        section_open(false);
         self.gate.slots[self.slot]
             .active
             .store(0, Ordering::Release);

@@ -6,7 +6,7 @@
 //! must explicitly enable this dispatcher; the W1 run-token path is unchanged.
 
 use super::*;
-use hirsel_free::frame::{self, Notification, Queued, Running};
+use hirsel_free::frame::{self, Notification, Placement, Queued, Running};
 use hirsel_free::schedule::Budget;
 use hirsel_free::work::{Ready, Source, Worker as ReadyWorker};
 
@@ -24,10 +24,9 @@ unsafe impl Send for Image {}
 
 pub(crate) struct Frame {
     notification: Notification<Image>,
-    owner: AtomicUsize,
+    /// The owner word and, under forced migration, the exec a compact frame left.
+    placement: Placement,
     saved: AtomicBool,
-    /// Under forced migration, the exec a compact frame left, until another claims it.
-    left: AtomicUsize,
     // A test stop channel's observer; it never reads a queued image.
     stop_before_start: bool,
 }
@@ -65,9 +64,8 @@ impl Frame {
         drop(queued);
         Arc::new(Self {
             notification,
-            owner: AtomicUsize::new(0),
+            placement: Placement::new(0),
             saved: AtomicBool::new(saved),
-            left: AtomicUsize::new(0),
             stop_before_start: false,
         })
     }
@@ -359,7 +357,7 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner)
     unsafe {
         if let Some(frame) = slot {
             let owner = route(execs, frame, owner);
-            frame.owner.store(owner_word(owner), Ordering::Release);
+            frame.placement.set_owner(owner_word(owner));
             frame.notification.notify().map(|queued| Saved {
                 queued,
                 frame: frame.clone(),
@@ -375,9 +373,8 @@ unsafe fn admit(run: *mut RunShared, execs: &Execs, task: TaskKey, owner: Owner)
             assert!(!(*ctx).task_sp.is_null(), "a prepared task has a stack");
             let frame = Arc::new(Frame {
                 notification,
-                owner: AtomicUsize::new(owner_word(owner)),
+                placement: Placement::new(owner_word(owner)),
                 saved: AtomicBool::new(true),
-                left: AtomicUsize::new(0),
                 stop_before_start: task.slot == 1 && dispatch.queued_stop_witness.is_some(),
             });
             *slot = Some(frame.clone());
@@ -432,7 +429,7 @@ pub(crate) unsafe fn token(run: *mut RunShared, task: TaskKey, owner: Owner) -> 
 pub(crate) unsafe fn notify(run: *mut RunShared, token: &Token) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
-    token.frame.owner.store(token.owner, Ordering::Release);
+    token.frame.placement.set_owner(token.owner);
     if let Some(queued) = token.frame.notification.notify() {
         publish(
             execs,
@@ -495,7 +492,7 @@ impl ReadyBatch {
     }
 
     fn push(&mut self, saved: Saved) {
-        if word_owner(saved.frame.owner.load(Ordering::Acquire)) != Owner::Any {
+        if word_owner(saved.frame.placement.owner()) != Owner::Any {
             // An addressed owner has its own inbox; there is no shared wake.
             publish(unsafe { &*self.execs }, saved, false, false);
             return;
@@ -550,7 +547,7 @@ fn inject(execs: &Execs, entries: impl ExactSizeIterator<Item = Saved>) {
 }
 
 fn publish(execs: &Execs, saved: Saved, yielded: bool, idle: bool) {
-    match word_owner(saved.frame.owner.load(Ordering::Acquire)) {
+    match word_owner(saved.frame.placement.owner()) {
         Owner::Any => {
             let me = own_exec();
             // SAFETY: an exec's local state belongs only to its OS thread.
@@ -725,7 +722,7 @@ pub(crate) unsafe fn leave_compact(
 /// compact frame goes to a compute worker other than the one it left, when
 /// the run has one; every other frame keeps `owner`.
 fn route(execs: &Execs, frame: &Frame, owner: Owner) -> Owner {
-    let left = frame.left.load(Ordering::Acquire);
+    let left = frame.placement.left();
     if owner != Owner::Any || left == 0 {
         return owner;
     }
@@ -813,21 +810,17 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
             let image = running.value_mut();
             image.ctx = ctx;
             image.sp = std::ptr::null_mut();
-            if execs.migrate {
-                frame
-                    .left
-                    .store((exec as *const Exec).addr(), Ordering::Release);
-            }
-            frame.owner.store(owner_word(Owner::Any), Ordering::Release);
-            unsafe { crate::tasks::after_save(run, task, false) };
-            let queued = running.save(false);
+            let left = if execs.migrate {
+                (exec as *const Exec).addr()
+            } else {
+                0
+            };
+            let queued = frame.placement.leave(running, left, || unsafe {
+                crate::tasks::after_save(run, task, false)
+            });
             if queued.is_some() {
-                let owner = route(
-                    execs,
-                    &frame,
-                    word_owner(frame.owner.load(Ordering::Acquire)),
-                );
-                frame.owner.store(owner_word(owner), Ordering::Release);
+                let owner = route(execs, &frame, word_owner(frame.placement.owner()));
+                frame.placement.set_owner(owner_word(owner));
             }
             let _activity = execs.activity.lock().unwrap();
             exec.busy.store(false, Ordering::SeqCst);
@@ -848,7 +841,7 @@ pub(super) unsafe fn saved(run: *mut RunShared, exec: &Exec) {
         Leave::Suspend { owner, yielded } => {
             let image = running.value_mut();
             image.sp = unsafe { (*image.ctx).task_sp };
-            frame.owner.store(owner_word(owner), Ordering::Release);
+            frame.placement.set_owner(owner_word(owner));
             let task = image.task;
             unsafe { crate::tasks::after_save(run, task, false) };
             let queued = running.save(yielded);
@@ -998,7 +991,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
     } = saved;
     let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
     if exec.kind == Kind::Home
-        && word_owner(frame.owner.load(Ordering::Acquire)) == Owner::Any
+        && word_owner(frame.placement.owner()) == Owner::Any
         && !home_computes(execs)
     {
         publish(
@@ -1081,12 +1074,12 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             // wait, nor an image whose key no longer names its slot's row. No task code or context switch has run: return the exact
             // image to Saved, without a semantic save callback. The role
             // excludes selection until the token's save is published.
-            let queued = running.save(false);
+            let returned = running.return_unstarted();
             crate::tasks::role::release(ctx);
             execs.permits.release(exec);
             exec.busy.store(false, Ordering::SeqCst);
-            if let Some(queued) = queued {
-                publish(
+            match returned {
+                frame::Returned::Requeued(queued) => publish(
                     execs,
                     Saved {
                         queued,
@@ -1096,10 +1089,11 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
                     },
                     false,
                     true,
-                );
-            } else {
-                crate::tasks::returned_unstarted(run);
-                drop(lease);
+                ),
+                frame::Returned::Idle(quiet) => {
+                    quiet.take(|| crate::tasks::returned_unstarted(run));
+                    drop(lease);
+                }
             }
             wake(&execs.home);
             return;
@@ -1109,7 +1103,7 @@ pub(super) unsafe fn resume(run: *mut RunShared, exec: &Exec, saved: Saved) {
             exec.chain.set(Budget::default());
         }
         frame.saved.store(false, Ordering::Release);
-        frame.left.store(0, Ordering::Release);
+        frame.placement.activated();
         // A compact frame owns no stack: this worker lends it one.
         let sp = if sp.is_null() {
             let stack = (*exec.worker.get()).idle_stacks.take();

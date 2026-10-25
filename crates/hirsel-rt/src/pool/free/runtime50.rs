@@ -746,9 +746,8 @@ fn prepare(
     });
     let frame = Arc::new(Frame {
         notification,
-        owner: AtomicUsize::new(owner_word(Owner::Any)),
+        placement: Placement::new(owner_word(Owner::Any)),
         saved: AtomicBool::new(true),
-        left: AtomicUsize::new(0),
         stop_before_start: false,
     });
     let task = Task {
@@ -1343,7 +1342,7 @@ impl World {
             }
             Leave::Compact => unreachable!("the protocol model saves no compact frame"),
             Leave::Suspend { yielded, .. } => {
-                frame.owner.store(owner_word(Owner::Any), Ordering::Release);
+                frame.placement.set_owner(owner_word(Owner::Any));
                 let unacknowledged = self.config.mutant == Some(Mutant::MissingSaveAck)
                     && t == 0
                     && self.tasks[t].ordinal == 0;
@@ -2247,7 +2246,11 @@ pub(super) fn run(
     expected: Option<Vec<Entry>>,
     uncontrolled: Option<&AtomicU64>,
 ) -> Outcome {
-    World::new(config, Controller::new(config.seed, expected, uncontrolled)).run()
+    // The simulated world keeps its own tables beside the real sections it drives from this
+    // one thread; the production section paths keep the trap (hirsel-free, record.rs tests).
+    hirsel_guard::simulated_sections(|| {
+        World::new(config, Controller::new(config.seed, expected, uncontrolled)).run()
+    })
 }
 
 /// Run `config` from explicit choices (`Controller::schedule`) instead of its seed.
@@ -2257,7 +2260,10 @@ pub(super) fn replay(
     expected: Option<Vec<Entry>>,
     mutation: Option<Mutation>,
 ) -> Outcome {
-    World::new(config, Controller::schedule(choices, expected, mutation)).run()
+    // As `run`: the simulation's own bookkeeping sits beside the real sections it drives.
+    hirsel_guard::simulated_sections(|| {
+        World::new(config, Controller::schedule(choices, expected, mutation)).run()
+    })
 }
 
 const SEEDS: u64 = 96;

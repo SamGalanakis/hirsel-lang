@@ -18,6 +18,7 @@
 //! published, stamped with the phase's task and progress, after the section closes.
 
 use crate::claim::{Arbiter, Request, Requests, Sweep};
+pub use crate::executors::{ExecutorSlot, Executors, HOME};
 use crate::phase::{Phase, Progress};
 use crate::projection::{Event, Observed, Projection, Stamped};
 use crate::record::{CheckIndex, Encoder, ObjectId, Record, RecordBound};
@@ -256,7 +257,7 @@ pub struct Cut {
 pub struct Recorder<S: TapeSink, B = ()> {
     arbiter: Arbiter,
     identity: Arc<()>,
-    executors: Arc<Executors>,
+    executors: Executors,
     requests: Requests<B>,
     root_started: std::sync::atomic::AtomicBool,
     keys: Mutex<Vec<String>>,
@@ -330,62 +331,6 @@ impl Metrics {
     }
 }
 
-/// The registered executor slots of one recording: which section words have an owner. Slot
-/// [`HOME`] belongs to the run's home executor: only a caller preferring it takes it, so home
-/// never waits behind another executor's registration.
-struct Executors {
-    held: Box<[std::sync::atomic::AtomicBool]>,
-    /// Executors blocked in [`Recorder::register`]; a retirement wakes them only when nonzero.
-    waiting: std::sync::atomic::AtomicUsize,
-    retired: (Mutex<()>, std::sync::Condvar),
-}
-
-/// The home executor's section word.
-pub const HOME: usize = 0;
-
-impl Executors {
-    fn release(&self, index: usize) {
-        use std::sync::atomic::{Ordering, fence};
-        self.held[index].store(false, Ordering::Release);
-        // Paired with `register`'s fence: a waiter either sees this word free in its search,
-        // or is counted here and woken.
-        fence(Ordering::SeqCst);
-        if self.waiting.load(Ordering::Relaxed) != 0 {
-            self.wake();
-        }
-    }
-
-    fn wake(&self) {
-        drop(self.retired.0.lock().unwrap());
-        self.retired.1.notify_all();
-    }
-}
-
-/// One registered physical executor's section word, owned for the executor's registered
-/// lifetime: a compute worker, the home thread, a blocking or pool thread. It is not `Send`,
-/// so it never migrates; a migrating task moves its [`Task`] encoder, never the slot. Phase
-/// entry borrows it mutably, so a slot runs one section at a time, and dropping it (the
-/// executor's retirement) cannot happen while a section on it is open. A nested callback on
-/// an executor whose slot is checked out registers a distinct slot instead of reusing it.
-pub struct ExecutorSlot {
-    executors: Arc<Executors>,
-    index: usize,
-    executor: std::marker::PhantomData<*const ()>,
-}
-
-impl ExecutorSlot {
-    /// The section word this slot owns.
-    pub fn index(&self) -> usize {
-        self.index
-    }
-}
-
-impl Drop for ExecutorSlot {
-    fn drop(&mut self) {
-        self.executors.release(self.index);
-    }
-}
-
 impl<S: TapeSink, B> Recorder<S, B> {
     pub fn new(
         mut sink: S,
@@ -403,13 +348,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
         Ok(Self {
             arbiter: Arbiter::new(true, slots),
             identity: Arc::new(()),
-            executors: Arc::new(Executors {
-                held: (0..slots)
-                    .map(|_| std::sync::atomic::AtomicBool::new(false))
-                    .collect(),
-                waiting: std::sync::atomic::AtomicUsize::new(0),
-                retired: Default::default(),
-            }),
+            executors: Executors::new(slots),
             requests: Requests::default(),
             root_started: std::sync::atomic::AtomicBool::new(false),
             keys: Mutex::new(Vec::new()),
@@ -435,55 +374,21 @@ impl<S: TapeSink, B> Recorder<S, B> {
     /// Register an executor on section word `index`, outside any section. A second owner
     /// cannot register it until the first retires (drops its slot).
     pub fn executor(&self, index: usize) -> Option<ExecutorSlot> {
-        use std::sync::atomic::Ordering;
-        let held = self.executors.held.get(index)?;
-        held.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .ok()?;
-        Some(ExecutorSlot {
-            executors: self.executors.clone(),
-            index,
-            executor: std::marker::PhantomData,
-        })
+        self.executors.executor(index)
     }
 
-    /// Register an executor on the preferred section word, or another free one when an old
-    /// retiring executor still owns it ([`HOME`] only when preferred). No section is open while
-    /// searching. `None` when every word is held: a caller that may hold a scheduler role or
-    /// section never waits for one, and an executor starting outside both uses [`register`].
-    ///
-    /// [`register`]: Self::register
+    /// Register an executor on the preferred section word or another free one; see
+    /// [`Executors::available`].
     pub fn executor_available(&self, preferred: usize) -> Option<ExecutorSlot> {
-        self.executor(preferred).or_else(|| {
-            (0..self.executors.held.len())
-                .filter(|&index| index != preferred && index != HOME)
-                .find_map(|index| self.executor(index))
-        })
+        self.executors.available(preferred)
     }
 
-    /// Register a starting executor once, for its whole lifetime, outside any scheduler role or
-    /// section. When every word is held by live or retiring executors it blocks until one
-    /// retires, never spinning; `None` once the run stopped, when no section can open again.
+    /// Register a starting executor once, outside any scheduler role or section, waiting for a
+    /// retirement when every word is held; `None` once the run stopped. See
+    /// [`Executors::register`].
     pub fn register(&self, preferred: usize) -> Option<ExecutorSlot> {
-        use std::sync::atomic::{Ordering, fence};
-        if let Some(slot) = self.executor_available(preferred) {
-            return Some(slot);
-        }
-        let executors = &self.executors;
-        let mut guard = executors.retired.0.lock().unwrap();
-        executors.waiting.fetch_add(1, Ordering::Relaxed);
-        // Paired with `Executors::release`; a later release wakes under this lock.
-        fence(Ordering::SeqCst);
-        let slot = loop {
-            if self.arbiter.stopped().is_some() {
-                break None;
-            }
-            if let Some(slot) = self.executor_available(preferred) {
-                break Some(slot);
-            }
-            guard = executors.retired.1.wait(guard).unwrap();
-        };
-        executors.waiting.fetch_sub(1, Ordering::Relaxed);
-        slot
+        self.executors
+            .register(preferred, || self.arbiter.stopped().is_some())
     }
 
     /// Retire an executor's registration. Its section word was acknowledged inactive: a slot
@@ -492,7 +397,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
     pub fn retire_executor(&self, slot: ExecutorSlot) {
         self.check_worker(&slot);
         assert!(
-            self.arbiter.gate().unwrap().inactive(slot.index),
+            self.arbiter.gate().unwrap().inactive(slot.index()),
             "an executor retires with its section closed"
         );
         drop(slot);
@@ -500,14 +405,12 @@ impl<S: TapeSink, B> Recorder<S, B> {
 
     /// The section words registered now: live, retiring or nested executors.
     pub fn registered(&self) -> Vec<usize> {
-        (0..self.executors.held.len())
-            .filter(|&index| self.executors.held[index].load(std::sync::atomic::Ordering::Acquire))
-            .collect()
+        self.executors.registered()
     }
 
     /// Whether `slot` was registered with this recording.
     pub fn owns(&self, slot: &ExecutorSlot) -> bool {
-        Arc::ptr_eq(&slot.executors, &self.executors)
+        slot.belongs(&self.executors)
     }
 
     fn check_worker(&self, worker: &ExecutorSlot) {
@@ -536,7 +439,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
         );
         let section = self
             .arbiter
-            .section(worker.index)?
+            .section(worker.index())?
             .expect("a recording has a gate");
         Metrics::section(self.metrics.as_ref(), true);
         section.register(&task.log);
@@ -607,7 +510,7 @@ impl<S: TapeSink, B> Recorder<S, B> {
             .arbiter
             .gate()
             .unwrap()
-            .enter_counted(worker.index, self.metrics.as_ref().map(|m| &m.pause_ns))?;
+            .enter_counted(worker.index(), self.metrics.as_ref().map(|m| &m.pause_ns))?;
         Metrics::section(self.metrics.as_ref(), true);
         debug_assert!(task.fits(bound), "only the owner writes its reserved room");
         if !prefix() {

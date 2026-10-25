@@ -1,6 +1,9 @@
 //! crates/hirsel-free's section gate, cutter and claim word, compiled from their own source
 //! against loom (`sync` below), so the models check the code the runtime runs.
 
+#[cfg(test)]
+hirsel_guard::install!();
+
 pub mod sync;
 
 #[path = "../../../../crates/hirsel-free/src/atomic.rs"]
@@ -14,10 +17,14 @@ pub mod cancel;
 
 #[path = "../../../../crates/hirsel-free/src/claim.rs"]
 pub mod claim;
+#[path = "../../../../crates/hirsel-free/src/executors.rs"]
+pub mod executors;
 #[path = "../../../../crates/hirsel-free/src/phase.rs"]
 pub mod phase;
 #[path = "../../../../crates/hirsel-free/src/section.rs"]
 pub mod section;
+#[path = "../../../../crates/hirsel-free/src/replay/wakes.rs"]
+pub mod wakes;
 
 #[path = "../../../../crates/hirsel-free/src/schedule.rs"]
 pub mod schedule;
@@ -42,11 +49,11 @@ mod channels;
 #[cfg(not(test))]
 #[path = "../../../../crates/hirsel-free/src/record.rs"]
 pub mod record;
-// Channel wake tokens are runtime pool handles; no model parks a receiver.
+// Channel wake tokens are runtime pool handles; a model's token wakes its parked receiver.
 #[cfg(not(test))]
-mod pool {
+pub mod pool {
     pub mod free {
-        pub struct Token;
+        pub struct Token(pub loom::sync::Arc<loom::sync::Notify>);
     }
 }
 #[cfg(not(test))]

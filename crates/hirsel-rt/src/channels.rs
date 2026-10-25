@@ -13,7 +13,7 @@
 //! a generation; dropping one closes it through [`close`], reached from the handle close of
 //! `finalize.rs` instead of the Io adapter.
 
-use hirsel_free::sync::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
+use hirsel_free::sync::{Arc, AtomicU32, AtomicU64, Mutex, MutexGuard, Ordering};
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
 use std::collections::{BTreeSet, VecDeque};
 use std::ptr::NonNull;
@@ -194,7 +194,7 @@ pub(crate) struct ChannelCell {
     /// Mirrors the role-owned park list's length. A receiver registers before
     /// its first poll takes the state lock, so a sender that reads zero under
     /// that lock leaves every receiver to see its message.
-    parked: std::sync::atomic::AtomicU32,
+    parked: AtomicU32,
     state: Mutex<ChannelState>,
 }
 
@@ -232,7 +232,7 @@ impl ChannelCell {
 
     /// Whether a parked receiver may need a scheduling point to see a send.
     pub(crate) fn parked(&self) -> bool {
-        self.parked.load(std::sync::atomic::Ordering::Relaxed) != 0
+        self.parked.load(Ordering::Relaxed) != 0
     }
 
     pub(crate) fn dup(&self, state: &mut ChannelState) {
@@ -676,10 +676,9 @@ impl Channels {
     pub(crate) fn wait(&mut self, channel: u32, at: u64, task: u32) {
         let row = self.row(channel);
         row.waiting.push_back((at, task));
-        row.payload.parked.store(
-            row.waiting.len() as u32,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        row.payload
+            .parked
+            .store(row.waiting.len() as u32, Ordering::Relaxed);
     }
     /// The receiver parked at `at` is no longer waiting.
     pub(crate) fn unwait(&mut self, channel: u32, at: u64) {
@@ -687,10 +686,9 @@ impl Channels {
             && let Some(i) = row.waiting.iter().position(|&(place, _)| place == at)
         {
             row.waiting.remove(i);
-            row.payload.parked.store(
-                row.waiting.len() as u32,
-                std::sync::atomic::Ordering::Relaxed,
-            );
+            row.payload
+                .parked
+                .store(row.waiting.len() as u32, Ordering::Relaxed);
         }
     }
     /// A live channel's queued message count, whether no sender is left, and its parked
