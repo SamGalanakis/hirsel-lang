@@ -91,3 +91,5 @@ fn input(original: &NativeOriginalBody) -> Result<SourceInput, SourceError> {
         original.definition().clone(),
     ))
 }
+
+pub mod provider;
