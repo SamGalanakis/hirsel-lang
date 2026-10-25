@@ -245,8 +245,10 @@ pub(super) fn compile_roots_inspect<R>(
         .unwrap()
         + (64 << 20);
     let budget = ProcessBudget::new(runtime_bytes + (192 << 20));
+    // Source/registry products retain their own measured grants. Continuation
+    // constructors bound the descriptor frame within this separate allowance.
     let weight = MemoryWeight {
-        retained: 1 << 20,
+        retained: 256 << 10,
         scratch: 16 << 20,
         stack: 0,
     };

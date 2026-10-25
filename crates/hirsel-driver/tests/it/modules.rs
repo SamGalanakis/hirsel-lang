@@ -227,3 +227,4 @@ mod arena_named_callback_33;
 mod ownership_execution_49;
 mod native_publication_faults_19;
 mod native_ready_descriptor_19;
+mod native_std_object_regressions_19;
