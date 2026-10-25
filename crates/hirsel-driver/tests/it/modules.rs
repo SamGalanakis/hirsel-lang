@@ -162,6 +162,7 @@ mod scheduled_front;
 mod settled_native_source_19;
 mod scheduled_growth;
 mod scheduled_check;
+mod scheduled_check_cases;
 mod scheduled_run;
 mod native_discovery_cache_19;
 mod scheduled_native;
