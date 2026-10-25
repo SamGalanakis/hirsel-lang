@@ -226,10 +226,25 @@ impl Producer<'_, '_> {
         })
     }
     fn body(&mut self, graph: &cfg::Graph) -> Result<StorageBody, QueryError> {
+        // A constructor head names a declaration, not a runtime value. Its type
+        // may omit generic arguments that are inferred on the constructed result.
+        let constructor_heads: std::collections::HashSet<_> = self
+            .checked
+            .calls
+            .iter()
+            .filter(|call| matches!(call.target, CallTarget::Constructor(_)))
+            .filter_map(|call| {
+                match self.syntax.tree.expressions[call.expression.0 as usize].kind {
+                    ExprKind::Call { callee, .. } => Some(callee),
+                    _ => None,
+                }
+            })
+            .collect();
         let types: Vec<_> = self
             .checked
             .expressions
             .iter()
+            .filter(|row| !constructor_heads.contains(&row.expression))
             .map(|row| row.ty)
             .chain(self.checked.bindings.iter().map(|row| row.ty))
             .collect();
