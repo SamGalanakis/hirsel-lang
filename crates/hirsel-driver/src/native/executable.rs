@@ -198,6 +198,8 @@ pub fn build_path_native_backend_with_validation(
             launch: super::LaunchInputs::default(),
             run: None,
             definition: None,
+            test_entries: vec![],
+            supplemental_sources: vec![],
             fuel,
             evidence: evidence.cloned().map(std::sync::Arc::new),
         }),
