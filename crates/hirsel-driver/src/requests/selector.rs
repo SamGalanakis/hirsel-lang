@@ -153,6 +153,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let config = &self.config;
         let limits = self.limits;
         let scratch_parent = &self.scratch_parent;
+        let toolchain = self.toolchain.as_ref();
         self.graphs.select(request, |budget| {
             super::source_graph::install(
                 compiler,
@@ -162,6 +163,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
                 request,
                 ledger,
                 scratch_parent,
+                toolchain,
             )
         })
     }

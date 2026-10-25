@@ -20,7 +20,7 @@ impl BuildProfile {
         options.scoped_specialization = matches!(self, Self::Release | Self::ReleaseLto);
         options
     }
-    fn opt(self) -> OptLevel {
+    pub(crate) fn opt(self) -> OptLevel {
         match self {
             Self::Default | Self::Release | Self::ReleaseLto => OptLevel::Default,
             Self::Debug => OptLevel::None,
