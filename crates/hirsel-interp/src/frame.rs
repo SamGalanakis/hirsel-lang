@@ -125,6 +125,9 @@ pub(crate) struct Frame {
     pub store_point_passed: bool,
     pub continuation: Option<Continuation>,
     pub depth_failure: bool,
+    /// Constructor-tail continuations at or below this frame: one logical
+    /// activation each shares with its caller (LANG-10).
+    pub restarts: usize,
     /// The site of an origin binding whose place is out of bounds or names an
     /// inactive variant. The access that then fails reports this site: the
     /// expression naming the place, not the statement reading it (docs/spec/diagnostics.md).
@@ -274,6 +277,7 @@ impl Frame {
             store_point_passed: false,
             continuation: None,
             depth_failure: false,
+            restarts: 0,
             place_failure_site: None,
             check: None,
             bounded: None,

@@ -6253,11 +6253,23 @@ impl Checker<'_> {
                             .iter()
                             .map(|(_, p)| self.body.places[p.0 as usize].root.0 as usize)
                             .collect();
+                        // A constructor tail's earlier fields stay pending: they
+                        // are parts of the partial result (LANG-10).
+                        let fields: BTreeSet<usize> = match tail.kind {
+                            TailKind::ConstructorHole(_) => {
+                                crate::tail::chain_fields(self.body, tail.call_block)
+                                    .into_iter()
+                                    .map(|root| root as usize)
+                                    .collect()
+                            }
+                            TailKind::SelfTail => BTreeSet::new(),
+                        };
                         let pending_owner = self.body.locals.iter().enumerate().any(|(root, _)| {
                             state.places[model.roots[root]] & LIVE != 0
                                 && (state.must[root].has(MustFacts::OWNED)
                                     || state.ownership_conflicts[root])
                                 && !loop_roots.contains(&root)
+                                && !fields.contains(&root)
                                 && model.release[root]
                         });
                         let frame_borrow = arguments.iter().any(|a| {

@@ -2694,6 +2694,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
             }
             Ok(Action::Call {
                 activation,
+                restart,
                 forward_caller,
                 callee,
                 mut checks,
@@ -3192,7 +3193,8 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         failures: execution.failures.len(),
                     }
                 });
-                callee.depth_failure = depth >= limits.call_depth;
+                callee.restarts = frame.restarts + usize::from(restart);
+                callee.depth_failure = depth - callee.restarts >= limits.call_depth;
                 frame.continuation = Some(Continuation {
                     returns,
                     on_failure,
@@ -3681,6 +3683,9 @@ enum Action {
     Fail(RuleId),
     Call {
         activation: Option<crate::depth::Guard>,
+        /// A constructor-tail site (LANG-10): the callee continues this
+        /// frame's logical activation and is no deeper for the tooling guard.
+        restart: bool,
         forward_caller: bool,
         callee: RuntimeCallee,
         checks: Vec<crate::checked::Argument>,
@@ -4894,7 +4899,14 @@ fn execute_terminator(
             );
             let leaf = matches!(callee, Callee::Definition { path, .. }
                 if !hirsel_core_contract::depth::adds_activation(path));
-            let activation = if self_tail || adapter || leaf {
+            let restart = matches!(callee, Callee::Definition { path, .. }
+                if path == frame.definition.path.path())
+                && frame.body().tail_sites.iter().any(|site| {
+                    site.owner_body == frame.body_id
+                        && site.call_block == frame.block
+                        && matches!(site.kind, TailKind::ConstructorHole(_))
+                });
+            let activation = if self_tail || restart || adapter || leaf {
                 None
             } else {
                 Some(frame.depth.admit().ok_or(EvalError::InvocationDepth)?)
@@ -5091,6 +5103,7 @@ fn execute_terminator(
             }
             Action::Call {
                 activation,
+                restart,
                 forward_caller,
                 callee,
                 checks,

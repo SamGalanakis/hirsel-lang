@@ -1,4 +1,5 @@
 //! Independent verification of source-published self-tail witnesses.
+use hirsel_syntax::DefPath;
 use hirsel_tir::*;
 use hirsel_types::{TypeId, UseKind};
 use std::collections::BTreeSet;
@@ -428,4 +429,342 @@ fn live_at_call(body: &Body, target: BlockId) -> Option<BTreeSet<u32>> {
         }
     }
     at_target
+}
+
+/// LANG-10 constructor-tail facts V reads from declarations, not from the
+/// witness: whether a nominal is an ordinary data record or variant with no
+/// layout promise, `distinct` fact, resource, finalizer or capability.
+pub(crate) type OrdinaryConstructor<'a> = dyn Fn(&DefPath) -> bool + 'a;
+
+/// The constructor chain a self call's continuation builds around its result,
+/// as declaration field ordinals from the returned constructor down to the
+/// call, or None when the continuation is anything else. Each level takes the
+/// previous level's value as its last source-evaluated field; every other
+/// field is a whole temporary already evaluated before the call (LANG-3), so
+/// it is part of the partial result. Only `box`, tuples and ordinary records
+/// and variants are levels, built at an inferred (never arena) destination.
+pub(crate) fn constructor_path(
+    t: &hirsel_types::TypeInterner,
+    definition: &Definition,
+    owner: BodyId,
+    call_block: BlockId,
+    property: &impl Fn(TypeId, bool) -> bool,
+    ordinary: &OrdinaryConstructor<'_>,
+) -> Option<Vec<u32>> {
+    if owner != definition.entry {
+        return None;
+    }
+    let body = definition.bodies.get(owner.0 as usize)?;
+    let call = body.blocks.get(call_block.0 as usize)?;
+    let Terminator::Call {
+        callee: Callee::Definition {
+            path,
+            arguments: generics,
+        },
+        arguments,
+        returns: Some(CallReturn { destination, next }),
+        ..
+    } = &call.terminator
+    else {
+        return None;
+    };
+    // Monomorphic self recursion with data parameters and a global data
+    // result: no step of the loop holds a capability, so none can suspend.
+    if path != definition.path.path() || !generics.is_empty() {
+        return None;
+    }
+    if t.get(body.result)
+        .is_none_or(|ty| ty.modes.relation != hirsel_types::Relation::global())
+        || !property(body.result, true)
+    {
+        return None;
+    }
+    for p in &body.parameters {
+        let local = body.locals.get(p.0 as usize)?;
+        if !property(local.ty, true) {
+            return None;
+        }
+    }
+    if arguments.iter().any(|a| a.value.usage == UseKind::Mut) {
+        return None;
+    }
+    let live = live_at_call(body, call_block)?;
+    let mut dead: BTreeSet<u32> = (0..body.locals.len() as u32)
+        .filter(|id| !live.contains(id))
+        .collect();
+    for arg in arguments {
+        let place = body.places.get(arg.value.place.0 as usize)?;
+        if arg.value.usage == UseKind::Take && place.projection.is_empty() {
+            dead.insert(place.root.0);
+        }
+    }
+    let mut values = vec![*destination];
+    let mut path = Vec::new();
+    let mut block = *next;
+    let mut seen = BTreeSet::new();
+    while seen.insert(block.0) {
+        let b = body.blocks.get(block.0 as usize)?;
+        for i in &b.instructions {
+            match &i.kind {
+                InstructionKind::Assign { destination, value } => {
+                    let dst = body.places.get(destination.0 as usize)?;
+                    match body.rvalues.get(value.0 as usize)? {
+                        Rvalue::Use(operand)
+                            if values.iter().any(|v| same(body, *v, operand.place)) =>
+                        {
+                            let src = body.places.get(operand.place.0 as usize)?;
+                            if operand.usage == UseKind::Take && src.projection.is_empty() {
+                                dead.insert(src.root.0);
+                            }
+                        }
+                        Rvalue::Construct {
+                            constructor,
+                            fields,
+                            destination:
+                                hirsel_types::Destination::Inferred | hirsel_types::Destination::Heap,
+                        } => {
+                            let level = match constructor {
+                                Constructor::Box | Constructor::Tuple => true,
+                                Constructor::Record(p)
+                                | Constructor::Variant { definition: p, .. } => ordinary(p),
+                                _ => false,
+                            };
+                            let (last, earlier) = fields.split_last()?;
+                            if !level || !values.iter().any(|v| same(body, *v, last.value.place)) {
+                                return None;
+                            }
+                            // The call is the payload of the innermost `box`.
+                            if path.is_empty() && *constructor != Constructor::Box {
+                                return None;
+                            }
+                            for f in fields {
+                                let p = body.places.get(f.value.place.0 as usize)?;
+                                if !p.projection.is_empty()
+                                    || !matches!(f.value.usage, UseKind::Take | UseKind::Copy)
+                                {
+                                    return None;
+                                }
+                            }
+                            // An earlier field was evaluated before the call
+                            // and is consumed whole by this level.
+                            for f in earlier {
+                                let p = body.places.get(f.value.place.0 as usize)?;
+                                let local = body.locals.get(p.root.0 as usize)?;
+                                if !live.contains(&p.root.0)
+                                    || local.storage != Storage::Temporary
+                                    || values.iter().any(|v| same(body, *v, f.value.place))
+                                {
+                                    return None;
+                                }
+                                if f.value.usage == UseKind::Take {
+                                    dead.insert(p.root.0);
+                                }
+                            }
+                            let src = body.places.get(last.value.place.0 as usize)?;
+                            if last.value.usage == UseKind::Take && src.projection.is_empty() {
+                                dead.insert(src.root.0);
+                            }
+                            path.push(last.field);
+                            values.clear();
+                        }
+                        _ => return None,
+                    }
+                    dead.remove(&dst.root.0);
+                    values.push(*destination);
+                }
+                InstructionKind::BindOrigin { source, place, .. } => {
+                    if values.iter().any(|v| same(body, *v, *source)) {
+                        values.push(*place);
+                    }
+                }
+                InstructionKind::StorageLive(_)
+                | InstructionKind::EndScope(_)
+                | InstructionKind::BindFields { .. }
+                | InstructionKind::EndOrigin(_) => (),
+                InstructionKind::Drop { place, if_live }
+                    if plain(body, *place, property)
+                        || *if_live && cleared(body, *place, &dead) => {}
+                // Storage of a field already moved into the chain ends empty.
+                InstructionKind::StorageDead { place, .. }
+                    if plain(body, *place, property) || cleared(body, *place, &dead) => {}
+                InstructionKind::RunCleanup(c)
+                    if clean(
+                        body,
+                        *c,
+                        &dead,
+                        &BTreeSet::new(),
+                        &BTreeSet::new(),
+                        property,
+                    ) => {}
+                _ => return None,
+            }
+        }
+        match &b.terminator {
+            Terminator::Goto(n) => block = *n,
+            Terminator::Return { value, cleanup } => {
+                if value.usage == UseKind::Take
+                    && let Some(p) = body.places.get(value.place.0 as usize)
+                    && p.projection.is_empty()
+                {
+                    dead.insert(p.root.0);
+                }
+                path.reverse();
+                return (!path.is_empty()
+                    && values.iter().any(|v| same(body, *v, value.place))
+                    && clean(
+                        body,
+                        *cleanup,
+                        &dead,
+                        &BTreeSet::new(),
+                        &BTreeSet::new(),
+                        property,
+                    ))
+                .then_some(path);
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The locals a constructor-tail chain consumes as earlier fields: owners
+/// pending at the call by design, since they become parts of the partial
+/// result. Whether the chain qualifies is `constructor_path`'s question.
+pub(crate) fn chain_fields(body: &Body, call_block: BlockId) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    let Some(Terminator::Call {
+        returns: Some(CallReturn { destination, next }),
+        ..
+    }) = body
+        .blocks
+        .get(call_block.0 as usize)
+        .map(|b| &b.terminator)
+    else {
+        return out;
+    };
+    let mut values = vec![*destination];
+    let mut block = *next;
+    let mut seen = BTreeSet::new();
+    while seen.insert(block.0) {
+        let Some(b) = body.blocks.get(block.0 as usize) else {
+            return out;
+        };
+        for i in &b.instructions {
+            match &i.kind {
+                InstructionKind::Assign { destination, value } => {
+                    let derived = |o: &Operand| values.iter().any(|v| same(body, *v, o.place));
+                    match body.rvalues.get(value.0 as usize) {
+                        Some(Rvalue::Use(o)) if derived(o) => values.push(*destination),
+                        Some(Rvalue::Construct { fields, .. })
+                            if fields.last().is_some_and(|f| derived(&f.value)) =>
+                        {
+                            for f in &fields[..fields.len() - 1] {
+                                if let Some(p) = body.places.get(f.value.place.0 as usize) {
+                                    out.insert(p.root.0);
+                                }
+                            }
+                            values = vec![*destination];
+                        }
+                        _ => {}
+                    }
+                }
+                InstructionKind::BindOrigin { source, place, .. }
+                    if values.iter().any(|v| same(body, *v, *source)) =>
+                {
+                    values.push(*place)
+                }
+                _ => {}
+            }
+        }
+        match &b.terminator {
+            Terminator::Goto(n) => block = *n,
+            _ => return out,
+        }
+    }
+    out
+}
+
+/// LANG-10: a published constructor-tail witness names exactly the chain V
+/// derives, and its call is otherwise a legal self restart: no mut argument,
+/// and a borrowed counted argument is a parameter or a listed loop temporary.
+pub(crate) fn verify_constructor_hole(
+    t: &hirsel_types::TypeInterner,
+    definition: &Definition,
+    owner: BodyId,
+    site: &TailSite,
+    property: &impl Fn(TypeId, bool) -> bool,
+    ordinary: &OrdinaryConstructor<'_>,
+) -> bool {
+    let TailKind::ConstructorHole(witness) = &site.kind else {
+        return false;
+    };
+    if site.owner_body != owner {
+        return false;
+    }
+    let Some(path) = constructor_path(t, definition, owner, site.call_block, property, ordinary)
+    else {
+        return false;
+    };
+    if &path != witness {
+        return false;
+    }
+    let body = &definition.bodies[owner.0 as usize];
+    let Terminator::Call { arguments, .. } = &body.blocks[site.call_block.0 as usize].terminator
+    else {
+        return false;
+    };
+    let mut carried = BTreeSet::new();
+    for (ordinal, place) in &site.owned_loop_arguments {
+        let Some(p) = body.places.get(place.0 as usize) else {
+            return false;
+        };
+        if !counted_temporary(body, *place, property)
+            || !carried.insert(p.root.0)
+            || arguments
+                .iter()
+                .filter(|a| {
+                    body.places
+                        .get(a.value.place.0 as usize)
+                        .is_some_and(|x| x.root == p.root)
+                })
+                .count()
+                != 1
+            || !arguments.iter().any(|a| {
+                a.parameter == *ordinal
+                    && same(body, a.value.place, *place)
+                    && a.value.usage == UseKind::Borrow
+            })
+        {
+            return false;
+        }
+    }
+    arguments.iter().all(|arg| {
+        let Some(place) = body.places.get(arg.value.place.0 as usize) else {
+            return false;
+        };
+        arg.value.usage != UseKind::Borrow
+            || plain(body, arg.value.place, property)
+            || carried.contains(&place.root.0)
+            || body
+                .locals
+                .get(place.root.0 as usize)
+                .is_some_and(|l| l.storage == Storage::Parameter)
+    })
+}
+
+/// The declaration facts behind [`OrdinaryConstructor`].
+pub(crate) fn ordinary_constructor(reader: &crate::input::Reader<'_>, path: &DefPath) -> bool {
+    reader
+        .get(hirsel_syntax::DefId::intern(path))
+        .is_some_and(|s| match &s.kind {
+            hirsel_types::SignatureKind::Type(t) => {
+                t.layout == hirsel_types::Layout::default()
+                    && !t.distinct
+                    && !t.resource
+                    && t.fact.is_none()
+                    && t.capability.is_none()
+                    && t.drop.is_none()
+            }
+            _ => false,
+        })
 }

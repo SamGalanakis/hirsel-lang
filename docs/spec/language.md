@@ -617,8 +617,40 @@ Generics, capture representation, flat or inline layout, arena placement, regist
 allocation and optimization cannot change the count. Calls in contracts are counted
 when executed. No type or size binder itself adds a runtime activation.
 
-**Unspecified:** whether tail recursion modulo constructor is a guaranteed loop; its
-constructor-tail contexts remain reserved and rejected.
+A self call in constructor-tail position is a guaranteed loop too: it runs in constant
+stack and one activation, however deep the result it builds. The position is exact:
+
+- The function is a top-level, non-generic, non-foreign `fn` without `ensures`
+  ([FACT-1](contracts.md#fact-1-contracts)). Its result has the global relation, and its
+  result and parameter types are `Data`, so no capability is held and nothing suspends.
+- A `return`, the body's final expression, or an `if` or `match` arm in tail position
+  returns a chain of constructions: tuples, `box`, and records and variants of ordinary
+  types (no `distinct`, resource, fact, capability, `drop` or layout annotation). The
+  innermost level is `box`, whose operand is the self call itself, not a `let`-bound
+  result.
+- At every level the chain continues in the last field written. Earlier fields are any
+  expressions, evaluated once, left to right, before the call
+  ([LANG-3](#lang-3-evaluation)); a recursive call among them is an ordinary call.
+- Each `box` is heap-allocated ([MEM-5](memory.md#mem-5-allocation)), with no bounded
+  arena charge ([MEM-6](memory.md#mem-6-bounded-arenas)) or region placement
+  ([MEM-10](memory.md#mem-10-regions)). The call borrows nothing of the current frame,
+  and nothing but the partial result is pending after it, as for a self tail call.
+
+```hirsel
+type Chain = End | Link(u64, box Chain)
+fn chain(n: u64) -> Chain {
+  if n == 0 { End } else { Link(n, box chain(n - 1)) }   // a loop
+}
+```
+
+The result is built in place, outermost level first. Until the outermost invocation
+returns, the partial result is unobservable: nothing reads, borrows, compares, hashes,
+publishes, shares, sends or captures it. If an iteration fails, the failure is reported
+at its own site as usual, and the partial result is released once, every part already
+built included; its unfilled `box` frees its storage without being read. A reused activation still pays each source call's charges, including its
+`requires` checks, fuel and steps, but not an activation. Every other site stays ordinary
+recursion under the limit above: a field after the call, a `let`-bound result, an
+`ensures`, a mutual or indirect call, and a constructor function.
 
 ### LANG-11: Blocks
 

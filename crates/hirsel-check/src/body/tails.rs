@@ -1,5 +1,19 @@
 //! Source tail eligibility belongs to H's declaration and scoped-bound facts.
+//! Constructor-tail sites (LANG-10) follow OCaml 4.14's `choice_makeblock`
+//! (lambda/tmc.ml:741): a self call in the hole of a constructor chain, here
+//! restricted to the last source-evaluated field at every level.
 use super::*;
+/// A constructor-chain position: the declaration field ordinals from the
+/// returned constructor down to here, and the earlier fields, which become
+/// part of the partial result rather than pending frame obligations.
+#[derive(Clone)]
+struct Hole {
+    path: Vec<u32>,
+    fields: Vec<ast::ExprId>,
+    /// The innermost level is `box`: the call is the box's payload, so every
+    /// hole is a box payload of the function's result type.
+    boxed: bool,
+}
 #[derive(Clone, Default)]
 struct State {
     live: BTreeSet<usize>,
@@ -42,6 +56,8 @@ enum Visit {
     Introduce(ast::PatternId, bool, usize),
     Hold(ast::ExprId, usize),
     Consume(ast::ExprId, usize),
+    /// An earlier constructor field moved into the partial result.
+    ConsumeField(ast::ExprId, ast::ExprId, usize),
     ReleaseTemporary(ast::ExprId, usize),
     Assign(ast::ExprId, usize),
     Call(ast::ExprId, bool, bool, usize),
@@ -71,6 +87,8 @@ impl Checker<'_, '_> {
             return Ok(());
         }
         if !self.body.calls.iter().any(|c|matches!(&c.target,CallTarget::Definition(p) if p == self.input.signature.definition.path())) {return Ok(());}
+        let constructor_tail = self.constructor_tail_function()?;
+        let mut holes: BTreeMap<ast::ExprId, Hole> = BTreeMap::new();
         let owner = NameSite::Item;
         let initial = State {
             live: self
@@ -179,11 +197,82 @@ impl Checker<'_, '_> {
                         }
                         E::Call { callee, arguments } => {
                             todo.push(Visit::Call(id, tail, barrier, state));
+                            let hole = match (tail, holes.get(&id)) {
+                                (_, Some(h)) => Some(h.clone()),
+                                (true, None) => Some(Hole {
+                                    path: vec![],
+                                    fields: vec![],
+                                    boxed: false,
+                                }),
+                                _ => None,
+                            };
+                            let mut consumed = vec![];
+                            if constructor_tail
+                                && let Some(hole) = hole
+                                && let Some(last) = arguments.last()
+                                && let Some(ordinal) = self.constructor_hole(id, last.value)?
+                            {
+                                let mut path = hole.path;
+                                path.push(ordinal);
+                                let mut fields = hole.fields;
+                                fields.extend(arguments.iter().rev().skip(1).map(|a| a.value));
+                                holes.insert(
+                                    last.value,
+                                    Hole {
+                                        path,
+                                        fields,
+                                        boxed: false,
+                                    },
+                                );
+                                consumed =
+                                    arguments.iter().rev().skip(1).map(|a| a.value).collect();
+                            }
                             for arg in arguments.into_iter().rev() {
+                                if consumed.contains(&arg.value) {
+                                    todo.push(Visit::ConsumeField(id, arg.value, state));
+                                }
                                 todo.push(Visit::Hold(arg.value, state));
                                 todo.push(Visit::Expression(arg.value, false, barrier, state));
                             }
                             todo.push(Visit::Expression(callee, false, barrier, state));
+                        }
+                        E::Unary {
+                            op: ast::UnaryOp::Box,
+                            value,
+                        } if constructor_tail && (tail || holes.contains_key(&id)) => {
+                            let mut hole = holes.get(&id).cloned().unwrap_or(Hole {
+                                path: vec![],
+                                fields: vec![],
+                                boxed: false,
+                            });
+                            hole.path.push(0);
+                            hole.boxed = true;
+                            holes.insert(value, hole);
+                            todo.push(Visit::Expression(value, false, barrier, state));
+                        }
+                        E::Tuple(values)
+                            if constructor_tail
+                                && (tail || holes.contains_key(&id))
+                                && !values.is_empty() =>
+                        {
+                            let mut hole = holes.get(&id).cloned().unwrap_or(Hole {
+                                path: vec![],
+                                fields: vec![],
+                                boxed: false,
+                            });
+                            hole.path.push(values.len() as u32 - 1);
+                            hole.boxed = false;
+                            hole.fields.extend(values.iter().rev().skip(1).copied());
+                            holes.insert(*values.last().unwrap(), hole);
+                            todo.push(Visit::Exit(
+                                states[state].live.clone(),
+                                states[state].temporaries.clone(),
+                                state,
+                            ));
+                            for value in values.into_iter().rev() {
+                                todo.push(Visit::Hold(value, state));
+                                todo.push(Visit::Expression(value, false, barrier, state));
+                            }
                         }
                         E::Tuple(values) | E::Sequence(values) => {
                             todo.push(Visit::Exit(
@@ -347,6 +436,20 @@ impl Checker<'_, '_> {
                     }
                 }
                 Visit::Consume(id, state) => self.tail_consume(id, &mut states[state]),
+                Visit::ConsumeField(call, field, state) => {
+                    let take = self.body.calls.iter().any(|c| {
+                        c.expression == call
+                            && c.arguments.iter().any(|a| {
+                                a.expression == field
+                                    && a.parameter
+                                        .as_ref()
+                                        .is_some_and(|(_, p)| p.passing == PassingMode::Take)
+                            })
+                    });
+                    if take {
+                        self.tail_consume(field, &mut states[state]);
+                    }
+                }
                 Visit::Assign(id, state) => {
                     if let Some(place) = self.source_place(id).filter(|p| p.projections.is_empty())
                     {
@@ -380,7 +483,8 @@ impl Checker<'_, '_> {
                             states[state].temporaries.remove(&arg.expression);
                         }
                     }
-                    if tail
+                    let hole = holes.get(&id).filter(|h| !tail && h.boxed).cloned();
+                    if (tail || hole.is_some())
                         && !barrier
                         && call.state == CallState::Complete
                         && matches!(&call.target,CallTarget::Definition(p) if p == self.input.signature.definition.path())
@@ -424,6 +528,7 @@ impl Checker<'_, '_> {
                         }
                         for temporary in states[state].temporaries.iter().copied() {
                             if !owned_loop_arguments.iter().any(|(_, e)| *e == temporary)
+                                && !hole.as_ref().is_some_and(|h| h.fields.contains(&temporary))
                                 && !self.bound(self.values[&temporary], ast::Bound::Plain)?
                             {
                                 eligible = false;
@@ -433,7 +538,10 @@ impl Checker<'_, '_> {
                         if eligible {
                             self.body.tails.push(CheckedTail {
                                 call: id,
-                                kind: CheckedTailKind::SelfTail,
+                                kind: match hole {
+                                    Some(h) => CheckedTailKind::ConstructorHole(h.path),
+                                    None => CheckedTailKind::SelfTail,
+                                },
                                 owned_loop_arguments,
                             });
                         }
@@ -510,6 +618,83 @@ impl Checker<'_, '_> {
         self.body.tails.sort_by_key(|t| t.call);
         self.body.tails.dedup_by_key(|t| t.call);
         Ok(())
+    }
+    /// LANG-10: a function whose constructor-tail sites can be guaranteed. It
+    /// is monomorphic, data in and data out (so no step of the loop holds a
+    /// capability and none can suspend), with a global result.
+    fn constructor_tail_function(&mut self) -> Result<bool, QueryError> {
+        let SignatureKind::Function(f) = &self.input.signature.kind else {
+            return Ok(false);
+        };
+        let f = f.clone();
+        if !f.generics.is_empty() || f.foreign.is_some() {
+            return Ok(false);
+        }
+        if self.types.get(f.result).map(|t| t.modes.relation.clone())
+            != Some(hirsel_types::Relation::global())
+        {
+            return Ok(false);
+        }
+        if !self.bound(f.result, ast::Bound::Data)? {
+            return Ok(false);
+        }
+        for p in f.parameters.iter() {
+            if !self.bound(p.ty, ast::Bound::Data)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    /// The declaration ordinal of `field`, the last written field of the
+    /// constructor call `call`, when that constructor is an ordinary data
+    /// record or variant: no flat, packed or other layout promise, no
+    /// `distinct` fact, no resource and no capability.
+    fn constructor_hole(
+        &mut self,
+        call: ast::ExprId,
+        field: ast::ExprId,
+    ) -> Result<Option<u32>, QueryError> {
+        let Some(c) = self
+            .body
+            .calls
+            .iter()
+            .find(|c| c.expression == call)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        if !matches!(c.target, CallTarget::Constructor(_)) || c.state != CallState::Complete {
+            return Ok(None);
+        }
+        let Some(ordinal) = c
+            .arguments
+            .last()
+            .filter(|a| a.expression == field)
+            .and_then(|a| a.parameter.as_ref().map(|(k, _)| *k))
+        else {
+            return Ok(None);
+        };
+        let Some(&ty) = self.values.get(&call) else {
+            return Ok(None);
+        };
+        let TypeKind::Named { definition, .. } = self.kind(ty) else {
+            return Ok(None);
+        };
+        let s = match self.snapshot(definition.path()) {
+            Ok(s) => s,
+            Err(QueryError::Diagnostics(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let SignatureKind::Type(t) = &s.kind else {
+            return Ok(None);
+        };
+        Ok((t.layout == hirsel_types::Layout::default()
+            && !t.distinct
+            && !t.resource
+            && t.fact.is_none()
+            && t.capability.is_none()
+            && t.drop.is_none())
+        .then_some(ordinal))
     }
     fn tail_owned_expression(&self, id: ast::ExprId) -> bool {
         self.source_place(id).is_some_and(|p| {

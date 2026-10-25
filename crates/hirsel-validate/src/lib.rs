@@ -419,15 +419,26 @@ fn validate_input(
                     .unwrap_or_else(|error| checker.proof_failure(error, false))
                 }
             };
-            if !witnessed.insert(tail.call_block.0)
-                || !crate::tail::verify_self_tail(
+            let ordinary =
+                |p: &hirsel_syntax::DefPath| crate::tail::ordinary_constructor(signatures, p);
+            let verified = match tail.kind {
+                TailKind::SelfTail => crate::tail::verify_self_tail(
                     t,
                     definition,
                     BodyId(index as u32),
                     tail,
                     &property,
-                )
-            {
+                ),
+                TailKind::ConstructorHole(_) => crate::tail::verify_constructor_hole(
+                    t,
+                    definition,
+                    BodyId(index as u32),
+                    tail,
+                    &property,
+                    &ordinary,
+                ),
+            };
+            if !witnessed.insert(tail.call_block.0) || !verified {
                 checker.error(ViolationKind::WrongKind {
                     entity: "tail witness",
                     index: tail.call_block.0,
@@ -581,15 +592,13 @@ fn validate_input(
         match invocations::coverage_with_declarations(t, definition, signatures, &declarations) {
             Ok(coverage) => {
                 for (body, block, _, restart) in coverage {
+                    // A restart is a self tail or a constructor-tail site; the
+                    // witness must be published, whichever it is (LANG-10).
                     if restart
                         && !definition.bodies[body as usize]
                             .tail_sites
                             .iter()
-                            .any(|site| {
-                                site.owner_body.0 == body
-                                    && site.call_block.0 == block
-                                    && site.kind == TailKind::SelfTail
-                            })
+                            .any(|site| site.owner_body.0 == body && site.call_block.0 == block)
                     {
                         errors.push(Violation {
                             body: Some(BodyId(body)),

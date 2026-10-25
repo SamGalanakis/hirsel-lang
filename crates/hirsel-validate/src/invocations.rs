@@ -1,5 +1,10 @@
 //! Admission coverage reconstructed from types and control flow, without tail claims.
-use crate::{SignatureLookup, input::Reader, tail::verify_self_tail, typing};
+use crate::{
+    SignatureLookup,
+    input::Reader,
+    tail::{verify_constructor_hole, verify_self_tail},
+    typing,
+};
 use hirsel_syntax::DefId;
 use hirsel_tir::*;
 use hirsel_types::{TypeInterner, UseKind};
@@ -96,13 +101,35 @@ pub(crate) fn coverage_with_declarations(
                 kind: TailKind::SelfTail,
                 owned_loop_arguments,
             };
+            let ordinary =
+                |p: &hirsel_syntax::DefPath| crate::tail::ordinary_constructor(reader, p);
             let restart = verify_self_tail(
                 types,
                 definition,
                 BodyId(body_id as u32),
                 &candidate,
                 &property,
-            );
+            ) || crate::tail::constructor_path(
+                types,
+                definition,
+                BodyId(body_id as u32),
+                BlockId(block_id as u32),
+                &property,
+                &ordinary,
+            )
+            .is_some_and(|path| {
+                verify_constructor_hole(
+                    types,
+                    definition,
+                    BodyId(body_id as u32),
+                    &TailSite {
+                        kind: TailKind::ConstructorHole(path),
+                        ..candidate.clone()
+                    },
+                    &property,
+                    &ordinary,
+                )
+            });
             result.push((
                 body_id as u32,
                 block_id as u32,
