@@ -47,6 +47,23 @@ impl FrontCheckedSignatures {
     pub(crate) fn signature(&self, path: &DefPath) -> Option<&hirsel_types::SignatureRef> {
         self.inputs.get(path).map(|input| &input.public)
     }
+    /// Physical payload bound for these already captured public/private
+    /// signature values, independently of input table and source owners.
+    /// Shared backing is conservatively counted per occurrence; no query,
+    /// type loading or allocation occurs while inspecting the payloads.
+    pub fn signature_payload_bytes(&self) -> Option<u64> {
+        self.inputs.values().try_fold(0u64, |bytes, input| {
+            let bytes = bytes.checked_add(
+                crate::memo::retained::retained_signature_payload_bytes(&input.public),
+            )?;
+            match &input.owner {
+                Some(owner) => bytes.checked_add(
+                    crate::memo::retained::retained_signature_payload_bytes(owner),
+                ),
+                None => Some(bytes),
+            }
+        })
+    }
     pub(crate) fn sections_clone_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.tree::<DefPath, SignatureSection>(self.inputs.len());
