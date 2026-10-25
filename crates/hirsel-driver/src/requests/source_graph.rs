@@ -120,6 +120,13 @@ impl CheckedReceipt {
     }
 }
 
+/// PS9 capture over the conditional Run view of an Artifacts request, with the
+/// output bytes its canonical text may occupy.
+struct ArtifactsExport {
+    capture: Arc<hirsel_engine::FrontProofExport>,
+    output: MemoryReservation,
+}
+
 struct SourceProducts {
     entry: DefPath,
     inputs: FrozenInputs,
@@ -130,8 +137,7 @@ struct SourceProducts {
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     receipt: Option<Arc<CheckedReceipt>>,
-    /// PS9 capture over the conditional Run view of an Artifacts request.
-    export: Option<Arc<hirsel_engine::FrontProofExport>>,
+    export: Option<Arc<ArtifactsExport>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -321,12 +327,28 @@ impl GraphProducts for SourceProducts {
                             // A rejected or incomplete check never demanded Run;
                             // completed_artifacts then publishes diagnostics only.
                             let tir = match run {
-                                Some(run) => export
-                                    .as_ref()
-                                    .ok_or_else(uninstalled)?
-                                    .input(run)
-                                    .map(|input| hirsel_proof_export::export(&input).into_bytes())
-                                    .map_err(|error| format!("{error:?}")),
+                                Some(run) => {
+                                    let export = export.as_ref().ok_or_else(uninstalled)?;
+                                    export
+                                        .capture
+                                        .input(run)
+                                        .map_err(|error| format!("{error:?}"))
+                                        .and_then(|input| {
+                                            let limit = usize::try_from(export.output.bytes())
+                                                .unwrap_or(usize::MAX);
+                                            hirsel_proof_export::encode_with_output_limit(
+                                                &hirsel_proof_export::build(&input),
+                                                &input.locator,
+                                                limit,
+                                            )
+                                            .map(String::into_bytes)
+                                            .ok_or_else(|| {
+                                                format!(
+                                                    "proof export exceeds its {limit} admitted output bytes"
+                                                )
+                                            })
+                                        })
+                                }
                                 None => Err("check was not accepted".into()),
                             };
                             CompileResult::Artifacts(super::host_selector::completed_artifacts(
@@ -1185,8 +1207,9 @@ pub(super) fn install(
     } else {
         None
     };
-    // PS9 headers and source metadata share the Run partition; their
-    // constructors refuse metadata beyond these splits.
+    // PS9 headers, source metadata and the encoded text share the Run
+    // partition; their constructors and the encoder refuse bytes beyond these
+    // splits. Building the Export from its input is not yet admitted.
     let export_allowance = if artifacts {
         let headers = program
             .engine
@@ -1194,7 +1217,8 @@ pub(super) fn install(
             .map_err(&query_error)?;
         let headers = run.split(headers).ok_or_else(uninstalled)?;
         let export = run.split(run.bytes() / 4).ok_or_else(uninstalled)?;
-        Some((headers, export))
+        let output = run.split(run.bytes() / 4).ok_or_else(uninstalled)?;
+        Some((headers, export, output))
     } else {
         None
     };
@@ -1236,7 +1260,7 @@ pub(super) fn install(
     // The export selects its own unshared Run view of the entry package; that
     // view replaces the ordinary Run for this graph.
     let mut export_products = None;
-    if let Some((headers, allowance)) = export_allowance {
+    if let Some((headers, allowance, output)) = export_allowance {
         let headers = program
             .engine
             .front_checked_signatures(front.clone(), headers)
@@ -1252,7 +1276,10 @@ pub(super) fn install(
             )
             .map_err(&query_error)?;
         run = Some(export.run().clone());
-        export_products = Some(export);
+        export_products = Some(Arc::new(ArtifactsExport {
+            capture: export,
+            output,
+        }));
     }
     let safe = safe_allowance
         .map(|allowance| {
