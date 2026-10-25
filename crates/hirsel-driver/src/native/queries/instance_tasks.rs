@@ -45,6 +45,7 @@ pub struct InstanceTasks {
     front: Option<NativeFrontLower>,
     store: Arc<dyn ResultStore>,
     options: crate::native::Options,
+    verify_store: hirsel_engine::store::VerifyStore,
     policy: ContentHash,
     native: Arc<hirsel_lir::validate::NativeCache>,
     registry: Mutex<Registry>,
@@ -124,6 +125,7 @@ impl InstanceTasks {
             front: None,
             store,
             options,
+            verify_store: hirsel_engine::store::VerifyStore::Off,
             policy,
             native,
             roots,
@@ -146,6 +148,17 @@ impl InstanceTasks {
     }
     /// Attach immutable front dispatch before any factory shares this request.
     /// The explicit Lower read replaces eager completion for this request.
+    /// Bind explicit host cache verification before this registry is shared
+    /// with factories. Every worker-local Instance producer receives the policy.
+    pub fn with_store_verification(
+        mut self: Arc<Self>,
+        policy: hirsel_engine::store::VerifyStore,
+    ) -> Result<Arc<Self>, String> {
+        let tasks = Arc::get_mut(&mut self)
+            .ok_or("native tasks were shared before store verification binding")?;
+        tasks.verify_store = policy;
+        Ok(self)
+    }
     pub fn with_front_lower(
         mut self: Arc<Self>,
         front: NativeFrontLower,
@@ -174,6 +187,7 @@ impl InstanceTasks {
             self.policy,
             self.native.clone(),
         )
+        .with_store_verification(self.verify_store)
     }
     fn register(&self, requests: Vec<(InstanceAddress, Request)>) -> Result<(), String> {
         // Encoding/validation runs outside the index lock. admit() has already
