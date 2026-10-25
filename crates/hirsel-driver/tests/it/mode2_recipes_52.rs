@@ -126,7 +126,7 @@ fn mode2_recipes_52_r3_spawn_literal() {
 fn mode2_recipes_52_r3_await_literal() {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let source = "fn probe(s: Scope) -> unique Result[unique String, ()] { let child = task.async(s, fn() -> Result[String, ()] { Ok(\"x\") }); task.await(s, take child) }";
+        let source = "fn probe(s: Scope) -> Result[unique String, ()] { let child = task.async(s, fn() -> Result[String, ()] { Ok(\"x\") }); task.await(s, take child) }";
         rejected(&mut engine, source, "R3 ", true);
         accepted(
             &mut engine,
@@ -134,6 +134,17 @@ fn mode2_recipes_52_r3_await_literal() {
                 "fn() -> Result[String",
                 "fn() -> unique Result[unique String",
             ),
+        );
+        // Generic inference does not retain an uncontextualized root promise.
+        // That case also needs a Task annotation, so a literal-only recipe is withheld.
+        rejected(
+            &mut engine,
+            &source.replace(
+                "fn probe(s: Scope) -> Result",
+                "fn probe(s: Scope) -> unique Result",
+            ),
+            "R3 ",
+            false,
         );
         rejected(
             &mut engine,
@@ -150,8 +161,8 @@ fn mode2_recipes_52_r3_await_literal() {
 #[test]
 fn mode2_recipes_52_r3_select_literal() {
     with_compiler_stack(|| {
-        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let source = "fn probe(s: Scope) -> unique Result[unique String, ()] { let child = task.async(s, fn() -> Result[String, ()] { Ok(\"x\") }); let mut pending: TaskSet[unique Result[unique String, ()]] of s = task.set(s); task.add(s, mut pending, take child); let (_, row) = task.select(s, take pending); take row }";
+        let mut engine = crate::source_std::engine();
+        let source = "fn probe(s: Scope) -> Result[unique String, ()] { let child = task.async(s, fn() -> Result[String, ()] { Ok(\"x\") }); let mut pending: TaskSet[Result[unique String, ()]] of s = task.set(s); task.add(s, mut pending, take child); let (_, row) = task.select(s, take pending); take row }";
         rejected(&mut engine, source, "R3 ", true);
         accepted(
             &mut engine,
@@ -192,7 +203,7 @@ fn mode2_recipes_52_r4_inferred_nested_row() {
 fn mode2_recipes_52_r3_inferred_literal_result() {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
-        let source = "fn probe(s: Scope) -> unique Result[unique String, ()] { let child = task.async(s, fn() { if true { Ok(\"x\") } else { Error(()) } }); task.await(s, take child) }";
+        let source = "fn probe(s: Scope) -> Result[unique String, ()] { let child = task.async(s, fn() { if true { Ok(\"x\") } else { Error(()) } }); task.await(s, take child) }";
         rejected(&mut engine, source, "R3 ", true);
         accepted(
             &mut engine,

@@ -633,7 +633,13 @@ pub(crate) fn check_files_impl(
     }
     if recipes {
         for ((file, context, lowering), (_, output)) in files.iter().zip(&mut outputs) {
-            crate::queries::recipes::offer(engine, *file, context, *lowering, &mut output.diagnostics);
+            crate::queries::recipes::offer(
+                engine,
+                *file,
+                context,
+                *lowering,
+                &mut output.diagnostics,
+            );
         }
     }
     Ok(outputs)
