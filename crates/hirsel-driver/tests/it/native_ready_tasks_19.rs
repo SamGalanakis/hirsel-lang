@@ -28,6 +28,9 @@ impl QueryTask for TracedTask {
     fn weight(&self) -> MemoryWeight {
         self.0.weight()
     }
+    fn continuation_bytes(&self) -> u64 {
+        self.0.continuation_bytes()
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let _observe = self.1.enter();
         self.0.poll(cx)
@@ -185,13 +188,12 @@ fn ready_case_policy(
             assert!(matches!(task.poll(&mut Pending), QueryPoll::Waiting(_)));
             assert_eq!(trace.totals(), Default::default());
             assert_eq!(tasks.imports.load(Ordering::Relaxed), 0);
-            let denied = tasks.failure("native task control refusal");
             let errors = RuntimeErrors {
-                resource: denied,
-                cycle: denied,
-                cancelled: denied,
-                protocol: denied,
-                panicked: denied,
+                resource: tasks.failure("runtime resource admission refused"),
+                cycle: tasks.failure("runtime dependency cycle refused"),
+                cancelled: tasks.failure("runtime request cancelled"),
+                protocol: tasks.failure("runtime dependency protocol refused"),
+                panicked: tasks.failure("runtime worker panicked"),
             };
             let mut runtime = AdmittedRuntime::new(
                 hirsel_intern::jobs::Jobs::new(1),
@@ -225,7 +227,8 @@ fn ready_case_policy(
             let request = runtime.request(&[tasks.discovery_id()]);
             let result = runtime.wait(request).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "discovery phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
@@ -233,7 +236,8 @@ fn ready_case_policy(
             let arena_request = runtime.request(&[arenas.query_id()]);
             let arena_output = runtime.wait(arena_request).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "arena phase: {error:?}, {:?}: {}",
+                    runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             })[0];
@@ -361,7 +365,8 @@ fn ready_case_policy(
             let selected = ready_runtime.request(&[main.ready_query_id()]);
             let ready = ready_runtime.wait(selected).unwrap_or_else(|error| {
                 panic!(
-                    "{}",
+                    "Ready phase: {error:?}, {:?}: {}",
+                    ready_runtime.stats(),
                     String::from_utf8_lossy(&store.get_content(error).unwrap())
                 )
             });
