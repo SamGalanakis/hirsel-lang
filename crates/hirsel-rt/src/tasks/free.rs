@@ -182,7 +182,7 @@ pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
     unsafe { crate::pool::free::suspend_current(ctx, yielded) };
 }
 
-/// Park the running task on `wait`, for an object it registered with under
+/// Park the running task on `wait` at `site`, for an object it registered with under
 /// that object's latch alone, as `try_block` parks it but with no role on
 /// this stack: the save callback parks the row under its own role
 /// (`tasks::after_park`). Returns once a wake dispatched it; the caller
@@ -191,12 +191,12 @@ pub(super) unsafe fn suspend(ctx: &mut TaskCtx, yielded: bool) {
 /// The running task is at role depth zero on a settled worker, with its own
 /// token registered and no runtime borrow or latch on this frame. Whatever
 /// `wait` names outlives the wait.
-pub(super) unsafe fn park_registered(ctx: &mut TaskCtx, wait: Wait) -> Stopped<()> {
+pub(super) unsafe fn park_registered(ctx: &mut TaskCtx, wait: Wait, site: u64) -> Stopped<()> {
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.op();
         metrics.switch();
     }
-    objects::parking(ctx, wait);
+    objects::parking(ctx, wait, site);
     unsafe { crate::pool::free::park_current(ctx) };
     recycle(ctx);
     crate::stop::observe(ctx)

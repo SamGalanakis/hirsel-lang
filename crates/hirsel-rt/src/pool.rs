@@ -516,6 +516,11 @@ impl WorkerMetrics {
     pub(crate) fn switch(&self) {
         self.switches.fetch_add(1, Relaxed);
     }
+    /// Task switches so far.
+    #[cfg(test)]
+    pub(crate) fn switches(&self) -> u64 {
+        self.switches.load(Relaxed)
+    }
     /// A completed immediate op retained its task's worker.
     pub(crate) fn elision(&self) {
         self.elisions.fetch_add(1, Relaxed);

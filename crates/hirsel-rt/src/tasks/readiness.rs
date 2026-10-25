@@ -57,9 +57,12 @@ unsafe fn poll(s: &mut Scheduler, task: u32, pool_available: Option<bool>) -> Op
                 false
             }
         }
-        Wait::ReceiveReady { channel } => {
+        // A send or close that makes the receive able to act takes the
+        // token the receiver registered under the channel's latch, after its
+        // recheck there: only cancellation is left to this poll.
+        Wait::ReceiveReady { .. } => {
             let shield = s.task(task).shield();
-            s.canceled_task(task, shield).is_some() || s.channels.ready(channel)
+            s.canceled_task(task, shield).is_some()
         }
         Wait::Any { set, member: None } => s.first_completed(set).is_some(),
         Wait::Any {

@@ -15,7 +15,7 @@
 //! rows are ([`Slots`]): a generation never wraps, so a closed endpoint's word, and any lease
 //! still keyed by it, never names a later endpoint.
 
-use hirsel_free::sync::{Arc, AtomicU32, AtomicU64, Mutex, MutexGuard, Ordering};
+use hirsel_free::sync::{Arc, AtomicU64, Mutex, MutexGuard, Ordering};
 use std::alloc::{Layout as Allocation, alloc, dealloc, handle_alloc_error};
 use std::collections::{BTreeSet, VecDeque};
 use std::ptr::NonNull;
@@ -198,10 +198,6 @@ pub(crate) struct ChannelCell {
     pub(crate) element: Element,
     pub(crate) object: std::sync::OnceLock<hirsel_free::record::ObjectId>,
     sequence: AtomicU64,
-    /// Mirrors the role-owned park list's length. A receiver registers before
-    /// its first poll takes the state lock, so a sender that reads zero under
-    /// that lock leaves every receiver to see its message.
-    parked: AtomicU32,
     state: Mutex<ChannelState>,
 }
 
@@ -213,12 +209,11 @@ pub(crate) struct ChannelState {
     pending: BTreeSet<u64>,
     sent: u64,
     received: u64,
-    /// The wake token of each receiver parked on a not-ready receive, in park
-    /// order, until its next attempt or a send that makes a message visible.
+    /// The wake token of each Free receiver parked on a not-ready receive, in
+    /// park order, until its next attempt or a send that makes a message
+    /// visible. A receiver registers and rechecks under this lock, so these
+    /// tokens alone reach parked Free receivers.
     tokens: std::collections::VecDeque<(u32, crate::pool::free::Token)>,
-    /// Receivers parked here without a token, until their next attempt: only
-    /// the role's touch reaches them.
-    tokenless: Vec<u32>,
 }
 
 impl ChannelCell {
@@ -235,11 +230,6 @@ impl ChannelCell {
             .fetch_add(1, Ordering::Relaxed)
             .checked_add(1)
             .expect("channel version overflow")
-    }
-
-    /// Whether a parked receiver may need a scheduling point to see a send.
-    pub(crate) fn parked(&self) -> bool {
-        self.parked.load(Ordering::Relaxed) != 0
     }
 
     pub(crate) fn dup(&self, state: &mut ChannelState) {
@@ -285,6 +275,17 @@ impl ChannelCell {
 
     pub(crate) fn ready(&self, state: &ChannelState) -> bool {
         state.visible() > 0 || (state.queue.is_empty() && state.senders == 0)
+    }
+
+    /// A canceled receive takes no message: the next registered receiver's
+    /// token when the channel can serve it, which a send or close may have
+    /// spent on the canceled one.
+    pub(crate) fn pass_on(&self, state: &mut ChannelState) -> Option<crate::pool::free::Token> {
+        if self.ready(state) {
+            state.next_token()
+        } else {
+            None
+        }
     }
 
     /// # Safety
@@ -448,12 +449,10 @@ impl Channels {
                 sent: 0,
                 received: 0,
                 tokens: Default::default(),
-                tokenless: Vec::new(),
             }),
             element,
             object: Default::default(),
             sequence: AtomicU64::new(1),
-            parked: Default::default(),
         })
     }
 
@@ -675,11 +674,7 @@ impl Channels {
 
     /// `task` parked receiving on `channel` at park place `at`, the latest place so far.
     pub(crate) fn wait(&mut self, channel: u32, at: u64, task: u32) {
-        let row = self.row(channel);
-        row.waiting.push_back((at, task));
-        row.payload
-            .parked
-            .store(row.waiting.len() as u32, Ordering::Relaxed);
+        self.row(channel).waiting.push_back((at, task));
     }
     /// The receiver parked at `at` is no longer waiting.
     pub(crate) fn unwait(&mut self, channel: u32, at: u64) {
@@ -687,9 +682,6 @@ impl Channels {
             && let Some(i) = row.waiting.iter().position(|&(place, _)| place == at)
         {
             row.waiting.remove(i);
-            row.payload
-                .parked
-                .store(row.waiting.len() as u32, Ordering::Relaxed);
         }
     }
     /// A live channel's queued message count, whether no sender is left, and its parked
@@ -796,17 +788,6 @@ impl ChannelState {
     /// Drop `task`'s token: each receive attempt registers anew if it parks.
     pub(crate) fn drop_token(&mut self, task: u32) {
         self.tokens.retain(|&(waiter, _)| waiter != task);
-        self.tokenless.retain(|&waiter| waiter != task);
-    }
-
-    /// `task` parks on a ReceiveReady wait with no wake token.
-    pub(crate) fn keep_tokenless(&mut self, task: u32) {
-        self.tokenless.push(task);
-    }
-
-    /// Whether a parked receiver can be reached only by the role's touch.
-    pub(crate) fn tokenless(&self) -> bool {
-        !self.tokenless.is_empty()
     }
 
     /// Receivers parked here with a wake token, for tests.

@@ -141,15 +141,31 @@ pub(crate) unsafe fn send(
     cell.prepare_send(&mut state);
     // Send deliberately does not observe cancellation (CONC-3).
     let publication = sent(ctx, &cell, &mut state, message, out, replay.as_ref());
+    let token = sent_token(&mut state, &publication);
     drop(state);
     drop(cell);
     drop(replay);
-    unsafe { role::enter(ctx) };
-    if publication? == crate::channels::DONE {
-        role::with_role(ctx, |s| s.channels.touch(channel));
+    if let Some(token) = &token {
+        unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) };
     }
+    drop(token);
+    unsafe { role::enter(ctx) };
+    publication?;
     unsafe { try_yield(&mut *ctx) }?;
     Ok(false)
+}
+
+/// The oldest registered receiver's token, under the latch of a send whose
+/// message it may now take: woken after the unlock.
+pub(super) fn sent_token(
+    state: &mut crate::channels::ChannelState,
+    publication: &Stopped<u32>,
+) -> Option<crate::pool::free::Token> {
+    if matches!(publication, Ok(crate::channels::DONE)) {
+        state.next_token()
+    } else {
+        None
+    }
 }
 
 /// Send's bounded action and its evidence, under the held cell lock.
@@ -200,8 +216,30 @@ pub(crate) unsafe fn receive(
     caller_site: u64,
 ) -> Stopped<()> {
     super::record::begin(ctx);
+    unsafe { receive_begun(ctx, receiver, message, out, caller_site, false) }
+}
+
+/// The role path of a begun receive; `entered` once its Entered phase is
+/// published, by this path or the role-free one (`objects::channel_receive`).
+/// The channel, its cell and this task's wake token are resolved once; each
+/// attempt registers the token and rechecks under the cell lock, then unlocks
+/// before its save, as Tokio's `recv` registers its waker and tries again
+/// (`tokio/src/sync/mpsc/chan.rs:302-354`, ce685ee6).
+/// # Safety
+/// As for receive.
+pub(super) unsafe fn receive_begun(
+    ctx: *mut TaskCtx,
+    receiver: u64,
+    message: *mut u8,
+    out: *mut u32,
+    caller_site: u64,
+    mut entered: bool,
+) -> Stopped<()> {
     let channel = role::with_role(ctx, |s| s.channels.channel(receiver, false));
-    let mut entered = false;
+    let cell = unsafe { role::with_held(ctx, |s| s.channels.payload(channel)) };
+    super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
+    drop(cell);
+    let me = unsafe { (*ctx).task_id };
     loop {
         // Cancellation flags and the shield snapshot remain stable while
         // this role is held. Senders drop the object lock before reentering
@@ -225,22 +263,17 @@ pub(crate) unsafe fn receive(
             .map(|object| object.token().cancel_peek(live))
             .unwrap_or(live);
         let canceled_outcome = cause.map(|cause| format!("canceled {cause}"));
-        let (cell, me, owner) = unsafe {
-            role::with_held(ctx, |s| {
-                let me = s.current;
-                let key = s.key(me);
-                let row = s.task(me);
-                let owner = if row.pinned { Owner::Any } else { row.owner };
-                (s.channels.payload(channel), key, owner)
-            })
-        };
-        super::objects::keep_endpoint(ctx, receiver, channel, false, &cell);
-        // A parking receiver's wake needs no role: a send that makes a message
-        // visible takes the oldest token.
-        let mut token = { unsafe { crate::pool::free::token((*ctx).run_ptr(), me, owner) } };
+        // The lease and this task's own token were resolved once; neither
+        // they nor anything else of this attempt stays on the frame across
+        // its save. A parking receiver's wake needs no role: a send that makes
+        // a message visible, or a last sender's close, takes the oldest token.
+        let cell = super::objects::receiver_cell(ctx, receiver);
+        let mut token = super::objects::wake(ctx);
+        assert!(token.is_some(), "a Free receiver's own wake token");
         let mut state = cell.lock();
-        state.drop_token(me.slot);
+        state.drop_token(me);
         let mut result = None;
+        let mut next = None;
         super::record::track(ctx, cell.object.get());
         let publication = if cause.is_some() || cell.ready(&state) {
             super::record::publish_with_replay(
@@ -292,21 +325,21 @@ pub(crate) unsafe fn receive(
             Ok(Ok(()))
         };
         if result.is_none() {
-            match token.take() {
-                Some(token) => state.keep_token(me.slot, token),
-                None => state.keep_tokenless(me.slot),
-            }
+            state.keep_token(me, token.take().unwrap());
+        } else if cause.is_some() {
+            next = cell.pass_on(&mut state);
         }
         drop(state);
+        drop(token);
         drop(cell);
         drop(canceled_outcome);
         drop(replay);
         publication??;
         if result.is_some() {
-            if cause.is_some() {
+            if let Some(next) = next {
                 // A send may have woken this receiver alone: a canceled one
-                // takes no message, so the policy serves the next in park order.
-                role::with_role(ctx, |s| s.channels.touch(channel));
+                // takes no message, so the next registered receiver is served.
+                unsafe { crate::pool::free::notify((*ctx).run_ptr(), &next) };
             }
             return unsafe { try_yield(&mut *ctx) };
         }
@@ -315,7 +348,7 @@ pub(crate) unsafe fn receive(
         // the op, so only a visible message or a close can end the wait.
         let wait = Wait::ReceiveReady { channel };
         // No object lock, Arc, recorder borrow, or frame slot is retained by
-        // the poll. A send racing this park is caught by its first idle poll.
+        // the poll. A send racing this park takes the token registered above.
         unsafe { try_block(&mut *ctx, wait, false, caller_site) }?;
     }
 }
@@ -363,6 +396,7 @@ unsafe fn close_inner(
         "close receiver"
     };
     super::record::track(ctx, cell.object.get());
+    let mut tokens = Default::default();
     let publication = super::record::publish_with_replay(
         ctx,
         Phase::Done,
@@ -371,6 +405,10 @@ unsafe fn close_inner(
             let left = unsafe {
                 role::with_held(ctx, |s| s.channels.close_locked(word, &cell, &mut state))
             };
+            if left.unsent {
+                // The parked receivers now see Closed.
+                tokens = state.take_tokens();
+            }
             let version = cell.next_event();
             if let Some(writer) = writer {
                 writer.touch(
@@ -388,6 +426,10 @@ unsafe fn close_inner(
     drop(state);
     drop(cell);
     drop(replay);
+    for (_, token) in &tokens {
+        unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) };
+    }
+    drop(tokens);
     let left = publication??.into_left();
     // Close is Keep: it still publishes runnable receivers before returning
     // to a segment that may never yield. No stop-aware ctx accessor can

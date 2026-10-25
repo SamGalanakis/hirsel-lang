@@ -413,12 +413,13 @@ fn a_saved_receive_replays_its_entered_cut_and_its_message_or_cancellation() {
                         );
                         (id, channel)
                     };
+                    // The receiver registered its token and its save parked it.
                     tests::wait_until(|| unsafe {
                         let _role = role::Guard::new(ctx);
-                        scheduler(ctx)
-                            .channels
-                            .waiting(channel)
-                            .is_some_and(|(_, _, waiting)| !waiting.is_empty())
+                        let s = scheduler(ctx);
+                        s.channels.payload(channel).lock().tokens() == 1
+                            && s.task(id).state == State::Parked
+                            && s.task(id).dispatch.as_ref().is_some_and(|f| f.is_saved())
                     });
                     let cut = cutter.recorder.flush().unwrap().unwrap();
                     assert_eq!(cut.progress[&vec![0]], Progress::new(1, Phase::Entered));

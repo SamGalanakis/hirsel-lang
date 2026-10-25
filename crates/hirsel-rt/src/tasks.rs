@@ -723,9 +723,10 @@ impl Scheduler {
         }
         match wait {
             Wait::Join { child, .. } => self.task(child).awaited_by = Some(current),
-            Wait::Receive { channel, .. } | Wait::ReceiveReady { channel } => {
-                self.channels.wait(channel, at, current)
-            }
+            Wait::Receive { channel, .. } => self.channels.wait(channel, at, current),
+            // Its wake token, registered under the channel's latch, alone
+            // ends a Free receive's wait; its poll observes cancellation.
+            Wait::ReceiveReady { .. } => {}
             Wait::Any { .. } | Wait::Drain { .. } => self.set_waiters.push(current),
             Wait::Gate { gate } => self.gate(gate).waiters.push(current),
             Wait::Pool => self.pool_waiters.push(current),
@@ -770,9 +771,7 @@ impl Scheduler {
                     child.awaited_by = None;
                 }
             }
-            Some(Wait::Receive { channel, .. } | Wait::ReceiveReady { channel }) => {
-                self.channels.unwait(channel, at)
-            }
+            Some(Wait::Receive { channel, .. }) => self.channels.unwait(channel, at),
             Some(Wait::Any { .. } | Wait::Drain { .. }) => self.set_waiters.retain(|&t| t != task),
             Some(Wait::Gate { gate }) => self.gate(gate).waiters.retain(|&t| t != task),
             Some(Wait::Pool) => self.pool_waiters.retain(|&t| t != task),
@@ -1850,14 +1849,14 @@ unsafe fn saved(
         // SAFETY: the idle continuation owns the suspended image.
         let wait = (!parked.is_null())
             .then(|| unsafe { free::objects::parked(parked) }.expect("a role-free park's wait"));
-        if let Some(wait) = wait
+        if let Some((wait, site)) = wait
             && let Some(row) = ordered::ahead::physical(s, key)
         {
             assert!(
                 row.state == State::Ready && row.wait.is_none(),
                 "a role-free park's row runs"
             );
-            row.wait_site = 0;
+            row.wait_site = site;
             unpin(row);
             resume_on = Some(row.owner);
             // SAFETY: the idle continuation owns the suspended image.
@@ -4414,9 +4413,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_channel_receive(
     // caller_site. Retain the checked operation code in this task's context.
     let previous = unsafe { (*ctx).run_ref().free_replay }
         .then(|| unsafe { std::mem::replace(&mut (*ctx).operation_site, operation_site) });
-    // SAFETY: caller contract; a resolved ready receive needs no role.
+    // SAFETY: caller contract; a resolved receive needs no role.
     if let Some(result) =
-        unsafe { free::objects::channel_receive(ctx, receiver.read(), message, out) }
+        unsafe { free::objects::channel_receive(ctx, receiver.read(), message, out, caller_site) }
     {
         let status = unsafe { free::objects::finish(ctx, result) };
         if let Some(previous) = previous {
