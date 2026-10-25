@@ -179,7 +179,7 @@ impl SourceIndexState {
     /// Restore into a fresh engine before the current loader updates sources
     /// and module inputs. Current compiler/adapters/policy remain authoritative;
     /// changed manifest/policy reads follow ordinary graph invalidation.
-    pub fn restore(self, engine: &mut QueryEngine) -> Result<(), Self> {
+    pub fn restore(self, engine: &mut QueryEngine) -> Result<(), Box<Self>> {
         if self.compiler != engine.store_identity
             || !engine.graph.is_empty()
             || !engine.items.is_empty()
@@ -187,7 +187,7 @@ impl SourceIndexState {
             || !engine.s1.is_empty()
             || !engine.active.is_empty()
         {
-            return Err(self);
+            return Err(Box::new(self));
         }
         let Self {
             sources,
@@ -406,6 +406,32 @@ mod tests {
                 drop(fresh);
                 assert_eq!(budget.reserved(), 0);
             }
+        });
+    }
+    #[test]
+    fn refused_source_index_restore_keeps_its_reservation_and_target_untouched() {
+        crate::with_compiler_stack(|| {
+            let path = DefPath::core("source.refused");
+            let prior = engine(&[path.clone()]);
+            let required = prior.source_index_bytes().unwrap();
+            let budget = ProcessBudget::new(required);
+            let state = prior
+                .into_source_index(budget.reserve(required).unwrap())
+                .unwrap();
+            let mut target = engine(&[path.clone()]);
+            let anchor = target.items[&path][0].anchor;
+            let header = target.signatures[&DefId::intern(&path)].clone();
+            let (refused, allocation) =
+                crate::test_alloc::measured(|| state.restore(&mut target).unwrap_err());
+            assert_eq!(allocation.live as usize, size_of::<SourceIndexState>());
+            assert_eq!(target.items[&path][0].anchor, anchor);
+            assert!(Arc::ptr_eq(
+                &target.signatures[&DefId::intern(&path)],
+                &header
+            ));
+            assert_eq!(budget.reserved(), required);
+            drop(refused);
+            assert_eq!(budget.reserved(), 0);
         });
     }
 }
