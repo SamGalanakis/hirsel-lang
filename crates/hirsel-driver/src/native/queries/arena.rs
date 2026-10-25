@@ -1,8 +1,7 @@
 //! Settled arena component records. Dependency outputs are checked before
 //! loading a prior result; no Value or layout table participates in a hit.
 use super::*;
-use hirsel_artifact_store::{Action, Domain, Reference};
-use hirsel_engine::store::ResultStore;
+use hirsel_engine::store::{Action, Domain, Reference, ResultStore};
 
 pub const EQUATIONS_DOMAIN: Domain = Domain {
     kind: 0x4e00_0010,
