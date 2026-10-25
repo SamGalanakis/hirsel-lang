@@ -5,6 +5,8 @@ mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;
 pub(crate) use source_entry::retained_signature_entry_bytes;
 mod syntax;
+#[cfg(test)]
+mod type_storage;
 use super::{DepthEvidence, Reads};
 use crate::comptime::StagedRegistration;
 use hirsel_syntax::DefPath;
