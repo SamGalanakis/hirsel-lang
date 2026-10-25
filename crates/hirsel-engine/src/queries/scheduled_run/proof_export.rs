@@ -280,6 +280,7 @@ impl FrontProofExport {
             return Err(QueryError::NotImplemented);
         }
         let mut required = self.input_metadata_bytes;
+        let mut transient = 0u64;
         let mut maps = crate::NativeMetadataWeight::default();
         maps.tree::<DefPath, hirsel_tir::DefinitionRef>(closure.len());
         maps.tree::<DefPath, hirsel_tir::Materialized>(closure.len());
@@ -296,13 +297,16 @@ impl FrontProofExport {
                     .ok_or(QueryError::NotImplemented)?;
             }
             if self.executable.contains(path) {
+                let layout = self.run.lower.settled_definition_decode_layout(path)?;
                 required = required
-                    .checked_add(self.run.lower.settled_definition_decode_bytes(path)?)
+                    .checked_add(layout.retained)
                     .ok_or(QueryError::NotImplemented)?;
+                transient = transient.max(layout.transient);
             }
         }
         required
-            .checked_add(maps.bytes())
+            .checked_add(transient)
+            .and_then(|n| n.checked_add(maps.bytes()))
             .ok_or(QueryError::NotImplemented)
     }
     /// Refuse N-1 before body/provider inspection. The returned owner pins both
