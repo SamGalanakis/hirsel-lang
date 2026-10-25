@@ -274,13 +274,18 @@ impl DemandInstances {
                     .adapters
                     .iter()
                     .map(|symbol| {
-                        environment
+                        let mut selected = environment
                             .operations
                             .pretransfer_adapters()
                             .iter()
-                            .find(|reference| &reference.adapter == symbol)
-                            .cloned()
-                            .ok_or("native snapshot lost an independently planned adapter")
+                            .filter(|reference| &reference.adapter == symbol);
+                        let reference = selected
+                            .next()
+                            .ok_or("native snapshot lost an independently planned adapter")?;
+                        if selected.next().is_some() {
+                            return Err("native snapshot repeats an independently planned adapter");
+                        }
+                        Ok(reference.clone())
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),

@@ -187,6 +187,29 @@ fn ready_case_inner(
     verify_store: store::VerifyStore,
     ownership: u8,
 ) {
+    ready_case_inner_mutation(
+        source,
+        adapter,
+        missing_inventory,
+        assemble,
+        validation,
+        verify_store,
+        ownership,
+        u8::from(missing_inventory),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ready_case_inner_mutation(
+    source: &str,
+    adapter: bool,
+    missing_inventory: bool,
+    assemble: bool,
+    validation: native::Validation,
+    verify_store: store::VerifyStore,
+    ownership: u8,
+    mutation: u8,
+) {
     with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -420,7 +443,7 @@ fn ready_case_inner(
                         |row| row.definition.0.name == "main" || row.definition.0.name == "other"
                     )
                     .count(),
-                2
+                if source.contains("fn other") { 2 } else { 1 }
             );
             if adapter {
                 assert!(
@@ -434,7 +457,15 @@ fn ready_case_inner(
                 );
             }
             if missing_inventory {
-                operations.pretransfer_adapters.clear();
+                match mutation {
+                    1 => operations.pretransfer_adapters.clear(),
+                    2 => operations.pretransfer_adapters[0].abi = hirsel_lir::FnAbiId(u32::MAX),
+                    3 => operations
+                        .pretransfer_adapters
+                        .push(operations.pretransfer_adapters[0].clone()),
+                    4 => operations.invocation_bodies.clear(),
+                    _ => panic!("unknown original keyed inventory mutation"),
+                }
             }
             let products = tasks.products(discovery_output).unwrap();
             let before_snapshot = trace.totals();
@@ -457,12 +488,16 @@ fn ready_case_inner(
             );
             if missing_inventory {
                 let Err(error) = snapshot else {
-                    panic!("snapshot accepted a missing independent adapter inventory");
+                    panic!("snapshot accepted independent inventory mutation {mutation}");
                 };
-                assert!(
-                    error.contains("lost an independently planned adapter"),
-                    "{error}"
-                );
+                if mutation == 1 {
+                    assert!(
+                        error.contains("lost an independently planned adapter"),
+                        "{error}"
+                    );
+                } else {
+                    assert!(!error.is_empty(), "missing refusal diagnostic");
+                }
                 assert_eq!(
                     trace.totals(),
                     before_snapshot,
@@ -751,4 +786,34 @@ fn ready_case_inner(
             }
         }
     });
+}
+
+const ORIGINAL_KEYED_MAP: &str = "fn main()->u64 {let m:Map[u64,u64]=map.empty();let get:fn(Map[u64,u64],u64)->Option[u64]=map.get;match get(m,1u64) {Some(x)=>x,None=>0u64}}";
+fn original_inventory_mutation(mutation: u8) {
+    ready_case_inner_mutation(
+        ORIGINAL_KEYED_MAP,
+        true,
+        true,
+        false,
+        native::Validation::Ready,
+        store::VerifyStore::Off,
+        0,
+        mutation,
+    );
+}
+#[test]
+fn original_keyed_map_missing_inventory_refuses_before_materialization() {
+    original_inventory_mutation(1);
+}
+#[test]
+fn original_keyed_map_forged_adapter_abi_refuses_before_materialization() {
+    original_inventory_mutation(2);
+}
+#[test]
+fn original_keyed_map_duplicate_inventory_refuses_before_materialization() {
+    original_inventory_mutation(3);
+}
+#[test]
+fn original_keyed_map_missing_source_body_refuses_before_materialization() {
+    original_inventory_mutation(4);
 }
