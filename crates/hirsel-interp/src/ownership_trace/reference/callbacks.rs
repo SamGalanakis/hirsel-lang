@@ -17,6 +17,7 @@ struct Invocation {
     definition: DefPath,
     body: Option<BodyId>,
     captures: Vec<(u32, Owner, u64)>,
+    mutex: Option<u64>,
 }
 struct Output {
     owner: Owner,
@@ -56,6 +57,17 @@ impl Resources {
         let Some(callback) = arguments.get(parameter as usize) else {
             self.unsupported("callback argument unavailable");
             return;
+        };
+        let mutex = if call.definition.is_core("mutex.with") {
+            match arguments.get(1) {
+                Some(Value::Mutex(root)) => Some(root.id()),
+                _ => {
+                    self.unsupported("mutex callback has no actual mutex identity");
+                    return;
+                }
+            }
+        } else {
+            None
         };
         let owner = call
             .arguments
@@ -135,6 +147,7 @@ impl Resources {
                 definition,
                 body,
                 captures: incoming,
+                mutex,
             },
         );
     }
@@ -207,6 +220,12 @@ impl Resources {
         }
         let id = self.next_frame;
         self.next_frame += 1;
+        if let Some(mutex) = invocation.mutex {
+            let Some(local) = self.mutex_parameter(callee, id, parent, mutex, &call.context) else {
+                return;
+            };
+            aliases.insert(local, super::mutexes::owner(mutex));
+        }
         let mut owned = BTreeMap::new();
         for (capture, from, expected) in invocation.captures {
             let Some(local) = Self::capture_local(callee, capture) else {

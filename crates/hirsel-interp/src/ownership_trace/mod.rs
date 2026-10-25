@@ -49,13 +49,24 @@ pub(crate) trait Observer {
     #[inline(always)]
     fn builtin_completed(&mut self, _task: u64, _frame: &Frame, _result: &crate::OperationResult) {}
     #[inline(always)]
-    fn before_handle_drop(&mut self, _frame: &Frame, _kind: &str, _channel: Option<u64>) {}
+    fn before_handle_drop(&mut self, _frame: &Frame, _kind: &str, _id: u64, _channel: Option<u64>) {
+    }
     #[inline(always)]
     fn handle_released(
         &mut self,
         _task: u64,
         _frame: &Frame,
         _values: &[Value],
+        _anchor: &crate::observation::Anchor,
+        _sources: &SourceMap,
+    ) {
+    }
+    #[inline(always)]
+    fn callback_released(
+        &mut self,
+        _frame: &Frame,
+        _values: &[Value],
+        _abandoned: bool,
         _anchor: &crate::observation::Anchor,
         _sources: &SourceMap,
     ) {

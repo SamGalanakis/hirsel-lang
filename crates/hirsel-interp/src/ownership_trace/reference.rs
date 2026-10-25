@@ -16,6 +16,8 @@ use channels::Channels;
 mod borrows;
 mod callbacks;
 use callbacks::Callbacks;
+mod mutexes;
+use mutexes::Mutexes;
 
 struct FrameState {
     id: u64,
@@ -111,6 +113,7 @@ pub(super) struct Resources {
     tracker: Tracker,
     channels: Channels,
     callbacks: Callbacks,
+    mutexes: Mutexes,
     borrows: BTreeMap<Owner, Owner>,
     frames: Vec<FrameState>,
     next_frame: u64,
@@ -136,6 +139,7 @@ impl Resources {
             tracker: Tracker::new(event_limit),
             channels: Channels::default(),
             callbacks: Callbacks::default(),
+            mutexes: Mutexes::default(),
             borrows: BTreeMap::new(),
             frames: vec![],
             next_frame: 0,
@@ -1040,6 +1044,10 @@ impl Observer for Resources {
             self.unsupported("builtin entered without its actual source call");
             return;
         };
+        if call.definition.is_core("mutex.create") {
+            self.mutex_created(call, arguments, result);
+            return;
+        }
         if call.definition.is_core("channel.send") || call.definition.is_core("channel.receive") {
             self.channel_entered(call, arguments, result, channel);
             return;
@@ -1171,8 +1179,14 @@ impl Observer for Resources {
         if let Some(state) = self.frames.last() {
             self.channel_committed(state.id, result);
         }
+        self.mutex_completed(result);
     }
-    fn before_handle_drop(&mut self, _frame: &Frame, kind: &str, channel: Option<u64>) {
+    fn before_handle_drop(&mut self, _frame: &Frame, kind: &str, id: u64, channel: Option<u64>) {
+        if kind == "Mutex"
+            && let Some(state) = self.frames.last()
+        {
+            self.mutexes.drops.insert(state.id, id);
+        }
         if kind == "Receiver"
             && let (Some(state), Some(channel)) = (self.frames.last(), channel)
         {
@@ -1188,6 +1202,21 @@ impl Observer for Resources {
         sources: &SourceMap,
     ) {
         self.channel_released(frame, values, anchor, sources);
+        self.mutex_released(values, anchor, sources);
+    }
+    fn callback_released(
+        &mut self,
+        _frame: &Frame,
+        values: &[Value],
+        abandoned: bool,
+        anchor: &crate::observation::Anchor,
+        sources: &SourceMap,
+    ) {
+        if abandoned {
+            self.mutex_abandoned(values, anchor, sources);
+        } else if values.iter().any(|value| resources_in(value) != 0) {
+            self.unsupported("unattributed callback writeback cleanup");
+        }
     }
     fn builtin_returned(&mut self, _task: u64, _frame: &Frame, value: &Value) {
         if self.error.is_some() {
@@ -1463,6 +1492,7 @@ impl Observer for Resources {
         if self.error.is_some() {
             return;
         }
+        self.mutex_retiring(frame);
         self.callback_retiring(ending);
         let Some(state) = self.frames.last() else {
             self.unsupported("frame retirement without an entry");

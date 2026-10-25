@@ -1426,6 +1426,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     } else {
                         resumed
                     };
+                    observer.builtin_completed(task, frame, &resumed);
                     frame.operation = Some(Box::new((resumed, callback.state)));
                 }
                 crate::resources::Work::Chain(id, anchor) => {
@@ -1579,6 +1580,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                             observer.before_handle_drop(
                                 frame,
                                 kind,
+                                *id,
                                 operations.ownership_channel(*id),
                             );
                         }
@@ -1943,6 +1945,13 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                     && execution.failures.get(callback.failure_start).is_none();
                 let released = operations.callback_finished(callback.token, &updates, abandoned)?;
                 let caller = frames.last_mut().unwrap();
+                observer.callback_released(
+                    caller,
+                    &released,
+                    abandoned,
+                    &callback.state.anchor,
+                    sources,
+                );
                 for value in released.into_iter().rev() {
                     caller.work.push_back(crate::resources::Work::Release(
                         value,

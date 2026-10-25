@@ -1131,3 +1131,96 @@ fn optional_updates(t: Test) {
         1,
     );
 }
+
+#[test]
+fn ownership_mutex_payload_last_root_release_drops_the_stored_resource() {
+    let trace = observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+@test
+fn stored_payload(t: Test) {
+  let tasks = test.tasks(t)
+  let store = mutex.create(tasks, Token(value: 7u64))
+  let other = copy store
+  let answer = mutex.with(tasks, other, fn(mut token: unique Token) -> u64 uses {} {
+    token.value
+  })
+  test.check(t, answer == 7u64)
+}
+"#,
+        1,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move { owner, .. } if owner.task.is_none()
+            && matches!(&owner.storage, Storage::Object { name, .. } if name == "mutex"))));
+}
+
+#[test]
+fn ownership_mutex_payload_replacement_returns_the_original_identity() {
+    let trace = observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+@test
+fn replaced_payload(t: Test) {
+  let tasks = test.tasks(t)
+  let store = mutex.create(tasks, Token(value: 7u64))
+  let old = mutex.with(tasks, store, fn(mut token: unique Token) -> Token uses {} {
+    replace(mut token, Token(value: 7u64))
+  })
+  test.check(t, old.value == 7u64)
+}
+"#,
+        2,
+    );
+    use hirsel_run_schema::ownership_trace::{Action, Storage};
+    assert!(trace.events.iter().any(|event| matches!(&event.action,
+        Action::Move { token, from, owner } if token.sequence == 0
+            && matches!(&from.storage, Storage::Object { name, .. } if name == "mutex")
+            && matches!(&owner.storage, Storage::Slot { .. }))));
+}
+
+#[test]
+fn ownership_mutex_payload_failed_callback_releases_the_stored_resource() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+@test
+fn failed_payload(t: Test) {
+  let tasks = test.tasks(t)
+  let store = mutex.create(tasks, Token(value: 7u64))
+  mutex.with(tasks, store, fn(mut token: unique Token) -> () uses {} {
+    failure.check(token.value != 7u64, Arithmetic())
+  })
+}
+"#,
+        1,
+    );
+}
+
+#[test]
+fn ownership_mutex_payload_empty_variant_writebacks_preserve_lineage() {
+    observed_task_source(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+@test
+fn optional_payload(t: Test) {
+  let tasks = test.tasks(t)
+  let initial: unique Option[Token] = None()
+  let store = mutex.create(tasks, take initial)
+  let empty = mutex.with(tasks, store, fn(mut slot: unique Option[Token]) -> Option[Token] uses {} {
+    replace(mut slot, Some(Token(value: 7u64)))
+  })
+  let full = mutex.with(tasks, store, fn(mut slot: unique Option[Token]) -> Option[Token] uses {} {
+    replace(mut slot, None())
+  })
+  test.check(t, match full { None() => false, Some(value) => value.value == 7u64 })
+}
+"#,
+        1,
+    );
+}
