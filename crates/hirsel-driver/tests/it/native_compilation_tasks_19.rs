@@ -265,6 +265,58 @@ fn run_case(
     use_frozen_kit: bool,
     verify_objects: bool,
 ) {
+    run_program_case(
+        jobs,
+        observation_only,
+        frozen_plan,
+        use_frozen_kit,
+        verify_objects,
+        ProgramCase::Comptime,
+    );
+}
+#[derive(Clone, Copy)]
+enum ProgramCase {
+    Comptime,
+    OrdinaryCallee { optimized: bool },
+}
+impl ProgramCase {
+    fn optimized(self) -> bool {
+        matches!(self, Self::OrdinaryCallee { optimized: true })
+    }
+    fn source(self, literal: u64) -> String {
+        match self {
+            Self::Comptime => format!(
+                "const SECOND:u64=comptime {literal}u64\npub fn main()->Result[(),u64]{{Error(SECOND)}}\n"
+            ),
+            Self::OrdinaryCallee { .. } => format!(
+                "fn helper(x:u64)->u64{{x+{literal}u64}}\npub fn main()->Result[(),u64]{{Error(helper(0u64))}}\n"
+            ),
+        }
+    }
+}
+#[test]
+fn same_summary_callee_edits_preserve_debug_callers_and_invalidate_optimizer_copies() {
+    with_compiler_stack(|| {
+        for optimized in [false, true] {
+            run_program_case(
+                1,
+                false,
+                false,
+                false,
+                false,
+                ProgramCase::OrdinaryCallee { optimized },
+            );
+        }
+    });
+}
+fn run_program_case(
+    jobs: usize,
+    observation_only: bool,
+    frozen_plan: bool,
+    use_frozen_kit: bool,
+    verify_objects: bool,
+    case: ProgramCase,
+) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
     // Its 24 MiB comes from dispatch's former 96 MiB; total stays 768 MiB.
@@ -325,6 +377,7 @@ fn run_case(
     let policy = ContentHash::of_bytes(b"immutable native compilation control");
     let mut previous: Option<(Vec<store::Reference>, store::Reference)> = None;
     let mut addresses = None;
+    let mut caller_fragments: Option<[store::Association; 2]> = None;
     for (literal, fresh) in [(7, false), (7, true), (8, false), (8, true)]
         .into_iter()
         .take(if observation_only || verify_objects {
@@ -335,9 +388,10 @@ fn run_case(
     {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
-        let file = engine.sources.add("immutable-compilation.hir", format!(
-            "const SECOND:u64=comptime {literal}u64\npub fn main()->Result[(),u64]{{Error(SECOND)}}\n"
-        )).unwrap();
+        let file = engine
+            .sources
+            .add("immutable-compilation.hir", case.source(literal))
+            .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let main = entry_path(&default_context());
         let reference = if fresh {
@@ -409,8 +463,12 @@ fn run_case(
         );
         let emission = EmissionOptions {
             input: declarations.program.input.clone(),
-            opt: native::OptLevel::None,
-            debug: true,
+            opt: if case.optimized() {
+                native::OptLevel::Default
+            } else {
+                native::OptLevel::None
+            },
+            debug: !case.optimized(),
             callbacks: false,
             tracking: false,
             foreign: Default::default(),
@@ -461,7 +519,11 @@ fn run_case(
                     [backend.name().as_bytes(), COMPILER_IDENTITY.as_slice()],
                 ),
                 target_features: target.digest(),
-                profile_options: ContentHash::of_bytes(b"debug opt none"),
+                profile_options: ContentHash::of_bytes(if case.optimized() {
+                    b"optimized"
+                } else {
+                    b"debug opt none"
+                }),
                 runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
                 linker_options: ContentHash::of_parts(
                     "fixture selected platform",
@@ -595,6 +657,54 @@ fn run_case(
         let request = runtime.request(&[instances.discovery_id()]);
         let discovery = runtime.wait(request).unwrap()[0];
         let completed = instances.completed_instances(discovery).unwrap();
+        if let ProgramCase::OrdinaryCallee { optimized } = case {
+            let owner = completed
+                .iter()
+                .find(|(owner, _)| owner.instance.definition().0.name == "main")
+                .unwrap()
+                .0
+                .clone();
+            let fragments = [native::Backend::Llvm, native::Backend::Cranelift].map(|backend| {
+                let key = native::object_queries::CodegenKey {
+                    owner: owner.clone(),
+                    backend: backend.name().into(),
+                    backend_version: ContentHash::of_parts(
+                        "fixture backend",
+                        [backend.name().as_bytes(), COMPILER_IDENTITY.as_slice()],
+                    ),
+                    target_features: target.digest(),
+                    profile_options: ContentHash::of_bytes(if optimized {
+                        b"optimized"
+                    } else {
+                        b"debug opt none"
+                    }),
+                    runtime_abi: ContentHash::of_bytes(
+                        &hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes(),
+                    ),
+                };
+                store.lookup_product(key.address()).unwrap()
+            });
+            if let Some(old) = &caller_fragments {
+                for (index, (old, current)) in old.iter().zip(&fragments).enumerate() {
+                    if fresh || !optimized || index == 1 {
+                        assert_eq!(
+                            old, current,
+                            "ordinary debug/Cranelift caller must remain green after a same-summary callee edit"
+                        );
+                    } else {
+                        assert_ne!(
+                            old.action, current.action,
+                            "LLVM optimizer caller must observe the changed copied callee"
+                        );
+                        assert_ne!(
+                            old.reference, current.reference,
+                            "the copied literal must change the emitted caller"
+                        );
+                    }
+                }
+            }
+            caller_fragments = Some(fragments);
+        }
         let mut reads = vec![roots.query_id()];
         reads.extend(completed.iter().map(|(owner, _)| owner.ready_query_id()));
         let request = runtime.request(&reads);
