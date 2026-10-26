@@ -242,7 +242,6 @@ pub fn fragment(frame: Frame) -> Bytes in frame {
   core@1/bytes.slice(frame.payload, start, end)
 }
 
-@preserves_unique(out)
 fn append(mut out: List[u8], data: Bytes) uses {} {
   let mut i: u64 = 0
   while i < core@1/bytes.len(data) {

@@ -87,7 +87,9 @@ pub fn expect_error[T, E](t: Test, take value: Result[T, E]) -> E {
   match take value {
     Error(error) => take error,
     Ok(success) => {
-      { let _ = take success }
+      {
+        let _ = take success
+      }
       core@1/test.fail(t)
     },
   }
@@ -99,7 +101,9 @@ pub fn expect_ok[T, E](t: Test, take value: Result[T, E]) -> T {
   match take value {
     Ok(success) => take success,
     Error(error) => {
-      { let _ = take error }
+      {
+        let _ = take error
+      }
       core@1/test.fail(t)
     },
   }
@@ -136,11 +140,13 @@ fn replayed(mut s: Source, max: u64) -> Option[u64] uses {} {
   }
   if index < core@1/list.len(s.prefix) {
     let value = s.prefix[index]
-    return Some(if value > max {
-      max
-    } else {
-      value
-    })
+    return Some(
+      if value > max {
+        max
+      } else {
+        value
+      }
+    )
   }
   if !s.fresh {
     s.overrun = true
@@ -295,8 +301,18 @@ fn simpler(a: List[u64], b: List[u64]) -> bool uses {} {
 
 // The choices the generator made when it failed the law on this prefix, or None when the
 // law held or the case overran.
-fn falsifies[T](take prefix: List[u64], gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> Option[List[u64]] {
-  let mut s: Source = Source(prefix: take prefix, generator: prng.seed(0), fresh: false, choices: [], overrun: false)
+fn falsifies[T](
+  take prefix: List[u64],
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> Option[List[u64]] {
+  let mut s: Source = Source(
+    prefix: take prefix,
+    generator: prng.seed(0),
+    fresh: false,
+    choices: [],
+    overrun: false
+  )
   let held = {
     let value = gen(mut s)
     s.overrun || law(value)
@@ -317,7 +333,12 @@ type Shrink {
 }
 
 // Replays candidate; when it still fails with simpler choices they become the best.
-fn attempt[T](mut state: Shrink, take candidate: List[u64], gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> bool {
+fn attempt[T](
+  mut state: Shrink,
+  take candidate: List[u64],
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> bool {
   if state.budget == 0 || !simpler(candidate, state.best) {
     return false
   }
@@ -334,7 +355,7 @@ fn attempt[T](mut state: Shrink, take candidate: List[u64], gen: fn(mut Source) 
   }
 }
 
-fn without(xs: List[u64], start: u64, count: u64) -> unique List[u64] uses {} {
+fn without(xs: List[u64], start: u64, count: u64) -> List[u64] uses {} {
   let mut out = unique xs
   let mut removed: u64 = 0
   while removed < count {
@@ -344,21 +365,43 @@ fn without(xs: List[u64], start: u64, count: u64) -> unique List[u64] uses {} {
   out
 }
 
-fn replaced(xs: List[u64], index: u64, value: u64) -> unique List[u64] uses {} {
+fn replaced(xs: List[u64], index: u64, value: u64) -> List[u64] uses {} {
   let mut out = unique xs
   out[index] = value
   out
 }
 
 // Replays the best choices with index i set to value, while i is still in range.
-fn attempt_value[T](mut state: Shrink, i: u64, value: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> bool {
-  i < core@1/list.len(state.best) && attempt(mut state, replaced(state.best, i, value), gen, law)
+fn attempt_value[T](
+  mut state: Shrink,
+  i: u64,
+  value: u64,
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> bool {
+  i < core@1/list.len(state.best) && attempt(
+    mut state,
+    replaced(state.best, i, value),
+    gen,
+    law
+  )
 }
 
 // Lowers choice i to a locally least failing value: 0, else (unless v - 1 already
 // holds, so v is locally least) a binary search below v.
-fn minimize_choice[T](mut state: Shrink, i: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> () {
-  if i >= core@1/list.len(state.best) || state.best[i] == 0 || attempt_value(mut state, i, 0, gen, law) {
+fn minimize_choice[T](
+  mut state: Shrink,
+  i: u64,
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> () {
+  if i >= core@1/list.len(state.best) || state.best[i] == 0 || attempt_value(
+    mut state,
+    i,
+    0,
+    gen,
+    law
+  ) {
     return
   }
   let mut hi = state.best[i]
@@ -378,7 +421,7 @@ fn minimize_choice[T](mut state: Shrink, i: u64, gen: fn(mut Source) -> T, law: 
 }
 
 // The best choices with choice i set to value and choice j raised to keep their sum.
-fn moved(xs: List[u64], i: u64, j: u64, value: u64) -> unique List[u64] uses {} {
+fn moved(xs: List[u64], i: u64, j: u64, value: u64) -> List[u64] uses {} {
   let mut out = replaced(xs, i, value)
   out[j] = xs[j] + (xs[i] - value)
   out
@@ -386,9 +429,20 @@ fn moved(xs: List[u64], i: u64, j: u64, value: u64) -> unique List[u64] uses {} 
 
 // Redistribution: moves value from choice i to choice j, keeping their sum. All of it,
 // else (unless moving one unit already holds) a binary search for the least kept part.
-fn redistribute[T](mut state: Shrink, i: u64, j: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> () {
+fn redistribute[T](
+  mut state: Shrink,
+  i: u64,
+  j: u64,
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> () {
   let left = state.best[i]
-  if left == 0 || state.best[j] > 0xffffffffffffffff - left || attempt(mut state, moved(state.best, i, j, 0), gen, law) {
+  if left == 0 || state.best[j] > 0xffffffffffffffff - left || attempt(
+    mut state,
+    moved(state.best, i, j, 0),
+    gen,
+    law
+  ) {
     return
   }
   if left == 1 || !attempt(mut state, moved(state.best, i, j, left - 1), gen, law) {
@@ -430,7 +484,7 @@ fn sorted(xs: List[u64], start: u64, end: u64) -> bool uses {} {
   true
 }
 
-fn zeroed(xs: List[u64], start: u64, end: u64) -> unique List[u64] uses {} {
+fn zeroed(xs: List[u64], start: u64, end: u64) -> List[u64] uses {} {
   let mut out = unique xs
   let mut at = start
   while at < end && at < core@1/list.len(out) {
@@ -441,7 +495,7 @@ fn zeroed(xs: List[u64], start: u64, end: u64) -> unique List[u64] uses {} {
 }
 
 // The choices with [start, start + count) sorted ascending (insertion sort).
-fn sorted_window(xs: List[u64], start: u64, count: u64) -> unique List[u64] uses {} {
+fn sorted_window(xs: List[u64], start: u64, count: u64) -> List[u64] uses {} {
   let mut out = unique xs
   let mut i = start + 1
   while i < start + count {
@@ -471,7 +525,11 @@ fn simplify[T](mut state: Shrink, gen: fn(mut Source) -> T, law: fn(T) -> bool u
       end -= 1
       if end < core@1/list.len(state.best) {
         if !attempt(mut state, without(state.best, i, k), gen, law) && i > 0 && state.best[i - 1] > 0 {
-          let lowered = replaced(without(state.best, i, k), i - 1, state.best[i - 1] - 1)
+          let lowered = replaced(
+            without(state.best, i, k),
+            i - 1,
+            state.best[i - 1] - 1
+          )
           if attempt(mut state, take lowered, gen, law) {
             end += 1
           }
@@ -485,7 +543,12 @@ fn simplify[T](mut state: Shrink, gen: fn(mut Source) -> T, law: fn(T) -> bool u
     let mut end = core@1/list.len(state.best)
     while end >= k {
       let i = end - k
-      if !zero_window(state.best, i, end) && attempt(mut state, zeroed(state.best, i, end), gen, law) && end >= k {
+      if !zero_window(state.best, i, end) && attempt(
+        mut state,
+        zeroed(state.best, i, end),
+        gen,
+        law
+      ) && end >= k {
         end -= k - 1
       }
       end -= 1
@@ -530,7 +593,11 @@ fn rearrange[T](mut state: Shrink, gen: fn(mut Source) -> T, law: fn(T) -> bool 
   }
 }
 
-fn shrink[T](take choices: List[u64], gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}) -> List[u64] {
+fn shrink[T](
+  take choices: List[u64],
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {}
+) -> List[u64] {
   let mut state = Shrink(best: choices, budget: 10000, improved: true)
   while state.budget > 0 {
     state.improved = false
@@ -552,12 +619,27 @@ fn shrink[T](take choices: List[u64], gen: fn(mut Source) -> T, law: fn(T) -> bo
 // show, and the test fails through test.check_case with the failing case's index. A
 // language failure in gen or law is not shrunk: it fails the test where it happens.
 @track_caller
-pub fn property_cases[T](t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> () {
+pub fn property_cases[T](
+  t: Test,
+  cases: u64,
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {},
+  show: fn(T) -> String
+) -> () {
   let seed = core@1/test.seed(t)
   let mut case: u64 = 0
   while case < cases {
-    let case_seed = core@1/int.wrapping_add(seed, u64.wrapping_mul(case, 0x9e3779b97f4a7c15))
-    let mut s: Source = Source(prefix: [], generator: prng.seed(case_seed), fresh: true, choices: [], overrun: false)
+    let case_seed = core@1/int.wrapping_add(
+      seed,
+      u64.wrapping_mul(case, 0x9e3779b97f4a7c15)
+    )
+    let mut s: Source = Source(
+      prefix: [],
+      generator: prng.seed(case_seed),
+      fresh: true,
+      choices: [],
+      overrun: false
+    )
     let held = {
       let value = gen(mut s)
       s.overrun || law(value)
@@ -566,7 +648,13 @@ pub fn property_cases[T](t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(
       let simplest = shrink(unique s.choices, gen, law)
       // The counterexample is rendered and destroyed before the report.
       let shown = {
-        let mut replay: Source = Source(prefix: simplest, generator: prng.seed(0), fresh: false, choices: [], overrun: false)
+        let mut replay: Source = Source(
+          prefix: simplest,
+          generator: prng.seed(0),
+          fresh: false,
+          choices: [],
+          overrun: false
+        )
         let value = gen(mut replay)
         show(value)
       }
@@ -579,6 +667,11 @@ pub fn property_cases[T](t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(
 
 // One hundred cases, the Hypothesis default.
 @track_caller
-pub fn property[T](t: Test, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> () {
+pub fn property[T](
+  t: Test,
+  gen: fn(mut Source) -> T,
+  law: fn(T) -> bool uses {},
+  show: fn(T) -> String
+) -> () {
   property_cases(t, 100, gen, law, show)
 }

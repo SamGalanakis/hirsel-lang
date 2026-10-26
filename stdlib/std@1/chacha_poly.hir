@@ -193,7 +193,7 @@ fn rounds(mut x: Inline[u32, 16]) -> () uses {} {
 }
 
 // `data` XORed with the ChaCha20 keystream from block `counter` on.
-fn xor(key: Bytes, nonce: Bytes, counter: u32, data: Bytes) -> unique Bytes uses {} {
+fn xor(key: Bytes, nonce: Bytes, counter: u32, data: Bytes) -> Bytes uses {} {
   let len = core@1/bytes.len(data)
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, len)
@@ -321,7 +321,7 @@ fn poly_padded(mut state: Poly1305, data: Bytes) -> () uses {} {
 }
 
 // The tag: h fully reduced modulo 2^130 - 5, plus the pad modulo 2^128.
-fn poly_finish(take state: Poly1305) -> unique Bytes uses {} {
+fn poly_finish(take state: Poly1305) -> Bytes uses {} {
   let Poly1305(r: _, h: h, pad: pad) = take state
   let mut h0 = h[0]
   let mut h1 = h[1]
@@ -384,7 +384,7 @@ fn poly_finish(take state: Poly1305) -> unique Bytes uses {} {
 
 // RFC 8439 section 2.8: Poly1305 over the padded associated data and
 // ciphertext and their 64-bit little-endian lengths.
-fn tag(key: Bytes, nonce: Bytes, data: Bytes, ciphertext: Bytes) -> unique Bytes uses {} {
+fn tag(key: Bytes, nonce: Bytes, data: Bytes, ciphertext: Bytes) -> Bytes uses {} {
   let block = xor(
     key,
     nonce,
@@ -394,7 +394,12 @@ fn tag(key: Bytes, nonce: Bytes, data: Bytes, ciphertext: Bytes) -> unique Bytes
   let mut state = poly_new(block)
   poly_padded(mut state, data)
   poly_padded(mut state, ciphertext)
-  poly_block(mut state, core@1/bytes.len(data), core@1/bytes.len(ciphertext), 1u64 << 40)
+  poly_block(
+    mut state,
+    core@1/bytes.len(data),
+    core@1/bytes.len(ciphertext),
+    1u64 << 40
+  )
   poly_finish(take state)
 }
 

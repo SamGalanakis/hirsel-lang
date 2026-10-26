@@ -10,7 +10,7 @@
 @serializable
 pub type PathError = Invalid(u64)
 
-fn owned_piece(text: String, begin: u64, end: u64) -> unique String uses {} {
+fn owned_piece(text: String, begin: u64, end: u64) -> String uses {} {
   // Component delimiters are ASCII, so the selected offsets are UTF-8 boundaries.
   let Some(a) = core@1/string.position(text, begin) else {
     core@1/failure.check(false, TextInvariant())

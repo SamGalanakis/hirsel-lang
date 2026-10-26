@@ -288,7 +288,7 @@ fn check_printable(data: Bytes) -> Result[(), YamlError] uses {} {
   Ok(())
 }
 
-fn owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn owned_text(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut output: List[u8] = []
   let mut i = start
   while i < end {
@@ -302,7 +302,6 @@ fn signed(value: u64) -> i64 uses {} {
   core@1/int.narrow(value)
 }
 
-@preserves_unique(out)
 fn push_breaks(mut out: List[u8], count: u64) -> () uses {} {
   let mut i: u64 = 0
   while i < count {
@@ -311,7 +310,6 @@ fn push_breaks(mut out: List[u8], count: u64) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn push_bytes(mut out: List[u8], add: List[u8]) -> () uses {} {
   for c in add {
     core@1/list.push(mut out, c)
@@ -641,7 +639,6 @@ fn skip_blanks(mut s: unique Scanner, data: Bytes) -> () uses {} {
 }
 
 // %XX escapes of one UTF-8 sequence inside a tag or tag prefix.
-@preserves_unique(out)
 fn uri_escapes(mut s: unique Scanner, data: Bytes, mark: u64, mut out: List[u8]) -> Result[
   (),
   YamlError
@@ -682,7 +679,7 @@ fn uri_escapes(mut s: unique Scanner, data: Bytes, mark: u64, mut out: List[u8])
 }
 
 fn finish_tag_text(data: Bytes, mark: u64, take out: unique List[u8]) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   match text.finish(take out) {
@@ -693,7 +690,7 @@ fn finish_tag_text(data: Bytes, mark: u64, take out: unique List[u8]) -> Result[
 
 // `!`, `!!` or `!name!`; inside %TAG a named handle must close with `!`.
 fn tag_handle(mut s: unique Scanner, data: Bytes, directive: bool, mark: u64) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   if peek(data, s.pos) != b'!' {
@@ -714,7 +711,7 @@ fn tag_handle(mut s: unique Scanner, data: Bytes, directive: bool, mark: u64) ->
 
 // saphyr scan_tag_prefix (6.8.2.2): a local `!...` or global prefix of URI characters.
 fn tag_prefix(mut s: unique Scanner, data: Bytes, mark: u64) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   let mut out: List[u8] = []
@@ -799,7 +796,7 @@ fn fetch_directive(mut s: unique Scanner, data: Bytes) -> Result[(), YamlError] 
 }
 
 fn tag_suffix(mut s: unique Scanner, data: Bytes, head: String, mark: u64) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   let head_bytes = core@1/string.as_bytes(head)
@@ -1213,7 +1210,6 @@ fn fetch_block_scalar(mut s: unique Scanner, data: Bytes, literal: bool) -> Resu
 }
 
 // Double-quoted escapes (5.7); pos is at the backslash.
-@preserves_unique(out)
 fn escape(mut s: unique Scanner, data: Bytes, mut out: List[u8], mark: u64) -> Result[
   (),
   YamlError
@@ -1756,7 +1752,7 @@ type Parser {
   entry: u64,
 }
 
-fn event(kind: u8, start: u64, end: u64) -> unique Event uses {} {
+fn event(kind: u8, start: u64, end: u64) -> Event uses {} {
   Event(
     kind: kind,
     style: 0,
@@ -1923,7 +1919,7 @@ fn document_end(mut p: unique Parser, data: Bytes, tokens: List[Token]) -> Resul
 
 // saphyr Parser::resolve_tag: `!!` names the core prefix unless %TAG overrides it;
 // a named handle must have been declared.
-fn resolve_tag(p: Parser, data: Bytes, t: Token) -> Result[unique String, YamlError] uses {} {
+fn resolve_tag(p: Parser, data: Bytes, t: Token) -> Result[String, YamlError] uses {} {
   let handle = t.text
   if let Some(prefix) = core@1/map.get(p.tags, handle) {
     return Ok(string.concat(prefix, t.suffix))
@@ -2445,7 +2441,7 @@ fn int_value(s: String, radix: u8, from: u64) -> Option[i64] uses {} {
 
 // [-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?, respelled for f64.parse:
 // no plus sign and digits on both sides of a point.
-fn float_spelling(s: String) -> Option[unique String] uses {} {
+fn float_spelling(s: String) -> Option[String] uses {} {
   let data = core@1/string.as_bytes(s)
   let n = core@1/bytes.len(data)
   let mut out: List[u8] = []
@@ -2953,7 +2949,6 @@ const SEQ_ITEM: u8 = 2
 // The longest key written as an implicit key (7.4: at most 1024 scalars).
 const IMPLICIT_KEY_BYTES: u64 = 1024
 
-@preserves_unique(out)
 fn push_spaces(mut out: List[u8], count: u64) -> () uses {} {
   let mut i: u64 = 0
   while i < count {
@@ -3100,7 +3095,6 @@ fn hex_digit(nibble: u8) -> u8 uses {} {
   }
 }
 
-@preserves_unique(out)
 fn push_hex_escape(mut out: List[u8], prefix: u8, code: u64, digits: u64) -> () uses {} {
   core@1/list.push(mut out, b'\\')
   core@1/list.push(mut out, prefix)
@@ -3113,7 +3107,6 @@ fn push_hex_escape(mut out: List[u8], prefix: u8, code: u64, digits: u64) -> () 
 
 // A double-quoted scalar (7.3.1) escaping `"`, `\`, controls, DEL, C1 controls,
 // U+2028, U+2029, the byte order mark, U+FFFE and U+FFFF.
-@preserves_unique(out)
 fn write_quoted(s: String, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(s)
   let n = core@1/bytes.len(data)
@@ -3171,7 +3164,6 @@ fn write_quoted(s: String, mut out: List[u8]) -> () uses {} {
 
 // A literal block scalar (8.1.2) whose lines are indented to `indent`; the
 // chomping indicator keeps the trailing line breaks.
-@preserves_unique(out)
 fn write_literal(s: String, indent: u64, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(s)
   let n = core@1/bytes.len(data)
@@ -3207,7 +3199,6 @@ fn write_literal(s: String, indent: u64, mut out: List[u8]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn write_float(f: f64, mut out: List[u8]) -> () uses {} {
   if f != f {
     text.append(mut out, ".nan")
@@ -3271,7 +3262,6 @@ fn quoted_len(s: String) -> u64 uses {} {
 // A key is implicit (`key:`) when it is at most 1024 bytes as written, and
 // otherwise explicit (`? key` with `:` on the next line, 8.2.2), which has no
 // length limit.
-@preserves_unique(out)
 fn write_key(key: String, indent: u64, mut out: List[u8]) -> () uses {} {
   let plain = plain_safe(key)
   let length = if plain {
@@ -3311,7 +3301,6 @@ fn writable_tag(tag: String, value: Value) -> bool uses {} {
 
 // `text` from byte `from`, with `%` and each byte that is not a tag character (a URI
 // character, for a verbatim tag) written as a %XX escape.
-@preserves_unique(out)
 fn write_tag_text(text: String, from: u64, verbatim: bool, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(text)
   let mut i = from
@@ -3335,7 +3324,6 @@ fn write_tag_text(text: String, from: u64, verbatim: bool, mut out: List[u8]) ->
 
 // A tag as `!!suffix` for the core prefix, `!suffix` for a local tag and
 // `!<tag>` otherwise.
-@preserves_unique(out)
 fn write_tag(tag: String, mut out: List[u8]) -> () uses {} {
   let n = core@1/string.byte_len(tag)
   if std@1/string.starts_with(tag, CORE) && n > core@1/string.byte_len(CORE) {
@@ -3355,7 +3343,6 @@ fn write_tag(tag: String, mut out: List[u8]) -> () uses {} {
 // after a key's `:` or after a sequence entry's `- `. `indent` is the column of
 // that key or dash (0 at the root); every write ends with a line break. A Tagged
 // value writes its tag there and its content as a mapping value would follow it.
-@preserves_unique(out)
 fn write_node(value: Value, indent: u64, context: u8, mut out: List[u8], depth: u64) -> Result[
   (),
   YamlError
@@ -3865,7 +3852,7 @@ fn column_of(data: Bytes, pos: u64) -> u64 uses {} {
 }
 
 // `text` with each LF written as `nl`.
-fn with_breaks(take text: String, nl: String) -> unique String uses {} {
+fn with_breaks(take text: String, nl: String) -> String uses {} {
   if nl == "\n" {
     return unique text
   }
@@ -3884,7 +3871,7 @@ fn with_breaks(take text: String, nl: String) -> unique String uses {} {
 }
 
 // `data` with [start, end) replaced by `insert`.
-fn splice(data: Bytes, start: u64, end: u64, insert: String) -> unique String uses {} {
+fn splice(data: Bytes, start: u64, end: u64, insert: String) -> String uses {} {
   let mut out: List[u8] = []
   let mut i: u64 = 0
   while i < start {
@@ -3913,7 +3900,6 @@ fn has_flow_indicator(data: Bytes) -> bool uses {} {
 }
 
 // A scalar or key in flow context: plain when safe there, else double-quoted.
-@preserves_unique(out)
 fn write_flow_text(s: String, mut out: List[u8]) -> () uses {} {
   if plain_safe(s) && !has_flow_indicator(core@1/string.as_bytes(s)) {
     text.append(mut out, s)
@@ -3923,7 +3909,6 @@ fn write_flow_text(s: String, mut out: List[u8]) -> () uses {} {
 }
 
 // A value in flow style (`[a, b]`, `{k: v}`), within MAX_NESTING levels.
-@preserves_unique(out)
 fn write_flow(value: Value, mut out: List[u8], depth: u64) -> Result[(), YamlError] uses {} {
   match value {
     Null() => text.append(mut out, "null"),
@@ -3998,7 +3983,7 @@ fn inline_block(value: Value) -> bool uses {} {
 // `value` written by write_node after a `-` or `:` at column `indent`, without the
 // final line break.
 fn block_value(value: Value, indent: u64, context: u8, depth: u64) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   let mut out: List[u8] = []
@@ -4036,7 +4021,7 @@ fn depth_of(tree: Tree, target: u64) -> u64 uses {} {
 
 // The properties written before a replacement: the node's anchor, kept, and the
 // value's tag; empty when there are none.
-fn properties(data: Bytes, node: Node, value: Value) -> Result[unique String, YamlError] uses {} {
+fn properties(data: Bytes, node: Node, value: Value) -> Result[String, YamlError] uses {} {
   if node.tag != "" && core_tag(node.tag) {
     let mut end = node.content
     while end > node.start && (is_blank(data[end - 1]) || is_break(data[end - 1])) {
@@ -4064,7 +4049,7 @@ fn properties(data: Bytes, node: Node, value: Value) -> Result[unique String, Ya
 // Replaces node `id`, member `index` of `parent` (NONE for the root), with `value`
 // from its first property on, keeping its anchor and the text around it.
 fn replaced(doc: Document, parent: u64, index: u64, id: u64, value: Value) -> Result[
-  unique String,
+  String,
   YamlError
 ] uses {} {
   let data = core@1/string.as_bytes(doc.text)
@@ -4159,10 +4144,7 @@ fn replaced(doc: Document, parent: u64, index: u64, id: u64, value: Value) -> Re
 }
 
 // Adds `key` (or an item, for a sequence) with `value` to collection `id`.
-fn added(doc: Document, id: u64, key: String, value: Value) -> Result[
-  unique String,
-  YamlError
-] uses {} {
+fn added(doc: Document, id: u64, key: String, value: Value) -> Result[String, YamlError] uses {} {
   let data = core@1/string.as_bytes(doc.text)
   let nl = line_break(data)
   let node = doc.tree.nodes[id]
@@ -4224,10 +4206,7 @@ fn commit(
 }
 
 // Mappings holding `value` at the keys path[from..]; an Index there is NotFound.
-fn created(path: List[Segment], from: u64, value: Value) -> Result[
-  unique Value,
-  YamlError
-] uses {} {
+fn created(path: List[Segment], from: u64, value: Value) -> Result[Value, YamlError] uses {} {
   let mut nested = unique value
   let mut i = core@1/list.len(path)
   while i > from {
@@ -4245,7 +4224,7 @@ fn created(path: List[Segment], from: u64, value: Value) -> Result[
 // `current` with path[from..] set to `value` as set would: missing keys are
 // created, Index(len) as the last segment appends, and tags stay.
 fn set_in(current: Value, path: List[Segment], from: u64, value: Value) -> Result[
-  unique Value,
+  Value,
   YamlError
 ] uses {} {
   let n = core@1/list.len(path)

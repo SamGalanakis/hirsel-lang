@@ -39,7 +39,7 @@ fn preflight(n: u64, m: u64, max_cells: u64) -> Result[(), Error] uses {} {
   Ok(())
 }
 
-fn buffer(s: String, n: u64) -> unique List[char] uses {} {
+fn buffer(s: String, n: u64) -> List[char] uses {} {
   let mut out: List[char] = []
   core@1/list.reserve(mut out, n)
   for c in core@1/string.scalars(s) {

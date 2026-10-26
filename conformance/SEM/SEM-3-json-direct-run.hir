@@ -16,7 +16,6 @@ fn named_to_json(value: Named) -> json.Value uses {} = comptime derive.json_valu
   shape(Named)
 )
 
-@preserves_unique(out)
 fn named_json_into(value: Named, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError
@@ -45,19 +44,16 @@ fn record_to_json(value: Record) -> json.Value uses {} = comptime derive.json_va
   shape(Record)
 )
 
-@preserves_unique(out)
 fn leaf_json_into(value: Leaf, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError
 ] uses {} = comptime derive.json_into(shape(Leaf))
 
-@preserves_unique(out)
 fn tree_json_into(value: Tree, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError
 ] uses {} = comptime derive.json_into(shape(Tree))
 
-@preserves_unique(out)
 fn record_json_into(value: Record, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError

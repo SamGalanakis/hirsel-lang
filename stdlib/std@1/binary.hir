@@ -60,7 +60,6 @@ pub fn read_u64(data: Bytes, offset: u64, order: ByteOrder) -> Result[u64, ReadE
   read_word(data, offset, order, 8)
 }
 
-@preserves_unique(out)
 fn append_word(value: u64, order: ByteOrder, width: u64, mut out: List[u8]) -> () uses {} {
   let mut i = 0u64
   while i < width {

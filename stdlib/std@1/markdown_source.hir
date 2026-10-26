@@ -342,7 +342,6 @@ fn mapped_origin(runs: List[OriginRun], a: u64, b: u64) -> SourceSpan uses {} {
   out
 }
 
-@preserves_unique(runs)
 fn append_run(mut budget: ParseState, mut runs: List[OriginRun], segment: OriginRun) -> Result[
   (),
   ParseLimit
@@ -358,7 +357,7 @@ fn slice_runs(
   a: u64,
   b: u64,
   offset: u64
-) -> Result[unique List[OriginRun], ParseLimit] uses {} {
+) -> Result[List[OriginRun], ParseLimit] uses {} {
   let mut out: unique List[OriginRun] = []
   for segment in runs {
     let lo = if a > segment.start {
@@ -418,7 +417,7 @@ fn trim_bounds(source: String) -> (u64, u64) uses {} {
 
 // Called before normalization, preserving CRLF width and NUL rewrite atoms.
 fn source_index(mut budget: ParseState, source: String) -> Result[
-  unique SourceIndex,
+  SourceIndex,
   ParseLimit
 ] uses {} {
   let mut lines: unique List[SourceLine] = []
@@ -562,7 +561,7 @@ fn inline_source(
   Ok(())
 }
 
-fn entry_kind(n: Entry) -> unique Kind uses {} {
+fn entry_kind(n: Entry) -> Kind uses {} {
   let payload: Kind = match n.kind {
     0 => Document(),
     1 => Paragraph(),

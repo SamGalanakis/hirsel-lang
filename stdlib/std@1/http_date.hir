@@ -155,7 +155,6 @@ pub fn parse(value: String) -> Result[time.Timestamp, ParseError] uses {} {
   }
 }
 
-@preserves_unique(out)
 fn append_token(mut out: List[u8], token: (u8, u8, u8)) -> () uses {} {
   let (first, second, third) = token
   core@1/list.push(mut out, first)
@@ -163,14 +162,12 @@ fn append_token(mut out: List[u8], token: (u8, u8, u8)) -> () uses {} {
   core@1/list.push(mut out, third)
 }
 
-@preserves_unique(out)
 fn append(mut out: List[u8], data: Bytes) -> () uses {} {
   for byte in data {
     core@1/list.push(mut out, byte)
   }
 }
 
-@preserves_unique(out)
 fn append_digits(mut out: List[u8], value: i32, width: u64) -> () uses {} {
   let mut divisor: i32 = if width == 4 {
     1000

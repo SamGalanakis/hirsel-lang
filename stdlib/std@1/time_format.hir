@@ -38,7 +38,6 @@ pub fn to_string_at(value: Timestamp, offset: i32) -> Result[unique String, Time
   Ok(text.finish_valid(take out))
 }
 
-@preserves_unique(out)
 fn write_offset(mut out: List[u8], offset: i32, colon: bool) -> () uses {} {
   let magnitude: i128 = if offset < 0 {
     core@1/int.widen(-offset)
@@ -60,7 +59,6 @@ fn write_offset(mut out: List[u8], offset: i32, colon: bool) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn write_name(mut out: List[u8], names: Bytes, index: u64) -> () uses {} {
   let mut i: u64 = 0
   while i < 3 {
@@ -70,7 +68,6 @@ fn write_name(mut out: List[u8], names: Bytes, index: u64) -> () uses {} {
 }
 
 // %Y pads to four characters, a sign included, as jiff's strtime printer does.
-@preserves_unique(out)
 fn write_year(mut out: List[u8], year: i32) -> () uses {} {
   let wide: i128 = core@1/int.widen(year)
   if wide < 0 {

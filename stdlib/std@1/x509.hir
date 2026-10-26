@@ -69,7 +69,7 @@ fn expect(der: Bytes, at: u64, limit: u64, tag: u8) -> Result[Element, X509Error
 }
 
 // Bytes [start, end) of `data` in fresh storage.
-fn owned(data: Bytes, start: u64, end: u64) -> unique Bytes uses {} {
+fn owned(data: Bytes, start: u64, end: u64) -> Bytes uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {

@@ -11,7 +11,6 @@ fn floats_to_json(value: Floats) -> json.Value uses {} = comptime derive.json_va
   shape(Floats)
 )
 
-@preserves_unique(out)
 fn floats_json_into(value: Floats, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError

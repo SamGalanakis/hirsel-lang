@@ -46,7 +46,6 @@ fn level_text(level: Level) -> String uses {} {
 }
 
 // appendEscapedJSONString, without Go's invalid-UTF-8 branch: String is UTF-8.
-@preserves_unique(out)
 fn append_string(mut out: List[u8], value: String) -> () uses {} {
   core@1/list.push(mut out, b'"')
   let bytes = core@1/string.as_bytes(value)
@@ -86,7 +85,6 @@ fn append_string(mut out: List[u8], value: String) -> () uses {} {
   core@1/list.push(mut out, b'"')
 }
 
-@preserves_unique(out)
 fn append_time(mut out: List[u8], value: time.Timestamp) -> () uses {} {
   match time.to_string(value) {
     Ok(encoded) => append_string(mut out, encoded),
@@ -97,7 +95,6 @@ fn append_time(mut out: List[u8], value: time.Timestamp) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn append_float(mut out: List[u8], value: f64) -> () uses {} {
   let encoded = f64.to_string(value)
   if encoded == "NaN" {
@@ -121,7 +118,6 @@ fn append_float(mut out: List[u8], value: f64) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn append_value(mut out: List[u8], value: Value) -> () uses {} {
   match value {
     Null() => text.append(mut out, "null"),

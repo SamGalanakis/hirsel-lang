@@ -71,7 +71,7 @@ fn digits(value: String) -> bool uses {} {
   true
 }
 
-fn part(raw: List[u8], start: u64, end: u64) -> unique String uses {} {
+fn part(raw: List[u8], start: u64, end: u64) -> String uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {

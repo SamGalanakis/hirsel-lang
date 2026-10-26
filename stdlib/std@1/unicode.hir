@@ -93,7 +93,6 @@ fn composite(a: u32, b: u32) -> u32 uses {} {
 }
 
 // Stable insertion within the final combining sequence; starters are barriers.
-@preserves_unique(points)
 fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
   let cc = combining_class(cp)
   core@1/list.push(mut points, cp)
@@ -105,7 +104,6 @@ fn ordered(mut points: List[u32], cp: u32) -> () uses {} {
   points[i] = cp
 }
 
-@preserves_unique(points)
 fn decompose(mut points: List[u32], cp: u32, compatibility: bool) -> () uses {} {
   if compatibility {
     let mut lo: u64 = 0
@@ -149,7 +147,7 @@ fn decompose(mut points: List[u32], cp: u32, compatibility: bool) -> () uses {} 
   }
 }
 
-fn normalize(s: String, compatibility: bool, compose: bool) -> unique String uses {} {
+fn normalize(s: String, compatibility: bool, compose: bool) -> String uses {} {
   // Every ASCII scalar is a starter and has no decomposition or composition.
   if string.is_ascii(s) {
     return unique s

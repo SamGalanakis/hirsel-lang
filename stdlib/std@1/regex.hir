@@ -259,7 +259,7 @@ fn finish_context(mut tree: Tree, mut ctx: Context) -> Result[u64, CompileError]
   }
 }
 
-fn class_ranges(c: char) -> unique List[(u32, u32)] uses {} {
+fn class_ranges(c: char) -> List[(u32, u32)] uses {} {
   if c == 'd' || c == 'D' {
     [(48, 57)]
   } else if c == 's' || c == 'S' {
@@ -1308,12 +1308,19 @@ pub fn find_all(re: Regex, text: String, max_matches: u64, work_limit: u64) -> R
       }
       // Advance one scalar boundary, including EOF+1.
       spend(mut work)?
-      pos = if subject.ascii { pos + 1 } else { subject_next(subject, pos) }
+      pos = if subject.ascii {
+        pos + 1
+      } else {
+        subject_next(subject, pos)
+      }
     } else if subject.ascii {
       // One historical spend per crossed scalar, with the same exhaustion
       // result. ASCII byte and scalar distances coincide.
       let count = span.end - pos
-      if count > work { work = 0; return Error(WorkLimit()) }
+      if count > work {
+        work = 0
+        return Error(WorkLimit())
+      }
       work -= count
       pos = span.end
     } else {
@@ -1389,15 +1396,27 @@ fn subject_len(subject: Subject) -> u64 uses {} {
 // util/utf8.rs:56-71,79-96: decode only at the current forward/reverse
 // position. Unlike arbitrary upstream byte input, String is already valid.
 fn subject_next(subject: Subject, at: u64) -> u64 uses {} {
-  if at == subject_len(subject) || subject.ascii { return at + 1 }
+  if at == subject_len(subject) || subject.ascii {
+    return at + 1
+  }
   let first = subject.bytes[at]
-  at + (if first < 128 { 1u64 } else if first < 224 { 2u64 } else if first < 240 { 3u64 } else { 4u64 })
+  at + if first < 128 {
+    1u64
+  } else if first < 224 {
+    2u64
+  } else if first < 240 {
+    3u64
+  } else {
+    4u64
+  }
 }
 
 fn subject_before(subject: Subject, at: u64) -> u64 uses {} {
   let mut pos = at - 1
   if !subject.ascii {
-    while subject.bytes[pos] >= 128 && subject.bytes[pos] < 192 { pos -= 1 }
+    while subject.bytes[pos] >= 128 && subject.bytes[pos] < 192 {
+      pos -= 1
+    }
   }
   pos
 }
@@ -1429,12 +1448,18 @@ fn subject_scalar(subject: Subject, at: u64) -> char uses {} {
 }
 
 fn subject_previous(subject: Subject, at: u64) -> Option[char] uses {} {
-  if at == 0 { None() } else { Some(subject_scalar(subject, subject_before(subject, at))) }
+  if at == 0 {
+    None()
+  } else {
+    Some(subject_scalar(subject, subject_before(subject, at)))
+  }
 }
 
 fn make_subject(text: String, mut work: u64) -> Result[Subject, MatchError] in text uses {} {
   // Even the empty subject needs its EOF debit; no bytes need inspecting.
-  if work == 0 { return Error(WorkLimit()) }
+  if work == 0 {
+    return Error(WorkLimit())
+  }
   let bytes = core@1/string.as_bytes(text)
   let size = core@1/bytes.len(bytes)
   let mut ascii = true
@@ -1446,11 +1471,16 @@ fn make_subject(text: String, mut work: u64) -> Result[Subject, MatchError] in t
     let byte = bytes[i]
     if byte >= 128 {
       ascii = false
-      if byte < 192 { count -= 1 }
+      if byte < 192 {
+        count -= 1
+      }
     }
     i += 1
   }
-  if count > work { work = 0; return Error(WorkLimit()) }
+  if count > work {
+    work = 0
+    return Error(WorkLimit())
+  }
   work -= count
   Ok(Subject(bytes: bytes, ascii: ascii))
 }
@@ -1588,13 +1618,7 @@ fn expand_into(
   while at < subject_len(source_input) {
     spend(mut work)?
     if subject_scalar(source_input, at) != '$' {
-      append_bytes(
-        mut dst,
-        data,
-        at,
-        subject_next(source_input, at),
-        mut work
-      )?
+      append_bytes(mut dst, data, at, subject_next(source_input, at), mut work)?
       at = subject_next(source_input, at)
       continue
     }
@@ -1631,7 +1655,10 @@ fn expand_into(
       at = subject_next(source_input, at)
     }
     let end = at
-    if begin == end || brace && (at == subject_len(source_input) || subject_scalar(source_input, at) != '}') {
+    if begin == end || brace && (at == subject_len(source_input) || subject_scalar(
+      source_input,
+      at
+    ) != '}') {
       core@1/list.push(mut dst, b'$')
       at = saved
       continue
@@ -1654,7 +1681,7 @@ fn expand_into(
         let mut j = 0u64
         while equal && j < size {
           spend(mut work)?
-          equal = name[j] == data[(begin) + j]
+          equal = name[j] == data[begin + j]
           j += 1
         }
         if equal && i < core@1/list.len(captures.spans) && captures.spans[i] != None() {

@@ -117,7 +117,6 @@ fn safe(byte: u8) -> bool uses {} {
   std@1/ascii.is_alnum(byte) || byte == b'%' || byte == b'+' || byte == b',' || byte == b'-' || byte == b'.' || byte == b'/' || byte == b':' || byte == b'=' || byte == b'@' || byte == b'_'
 }
 
-@preserves_unique(out)
 fn quote_into(word: String, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(word)
   let size = core@1/bytes.len(data)

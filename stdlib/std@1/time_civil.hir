@@ -382,7 +382,6 @@ fn write_fraction(mut out: List[u8], nanosecond: u32) -> () uses {} {
 }
 
 // The digits of a nonzero fraction of a second, trailing zeros trimmed.
-@preserves_unique(out)
 fn write_fraction_digits(mut out: List[u8], nanosecond: u32) -> () uses {} {
   let mut fraction = nanosecond
   let mut divisor: u32 = 100000000

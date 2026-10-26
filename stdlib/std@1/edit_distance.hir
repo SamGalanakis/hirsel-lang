@@ -18,7 +18,7 @@ fn count(s: String, limit: u64) -> Result[u64, Error] uses {} {
   Ok(n)
 }
 
-fn buffer(s: String, n: u64) -> unique List[char] uses {} {
+fn buffer(s: String, n: u64) -> List[char] uses {} {
   let mut out: List[char] = []
   core@1/list.reserve(mut out, n)
   for c in core@1/string.scalars(s) {

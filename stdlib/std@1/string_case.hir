@@ -37,7 +37,6 @@ fn case_property(table: Bytes, cp: u32) -> bool uses {} {
   false
 }
 
-@preserves_unique(bytes)
 fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char, upper: bool) -> () uses {} {
   let cp = core@1/char.to_u32(c)
   if cp < 128 {
@@ -78,7 +77,7 @@ fn append_case(mut bytes: List[u8], table: Bytes, data: Bytes, c: char, upper: b
   }
 }
 
-fn mapped_case(s: String, table: Bytes, data: Bytes, upper: bool) -> unique String uses {} {
+fn mapped_case(s: String, table: Bytes, data: Bytes, upper: bool) -> String uses {} {
   if is_ascii(s) {
     return ascii_case(s, !upper)
   }

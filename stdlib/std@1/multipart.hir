@@ -57,7 +57,7 @@ fn space(b: u8) -> bool uses {} {
   b == b' ' || b == b'\t' || b == b'\r' || b == b'\n' || b == 0x0b || b == 0x0c
 }
 
-fn slice_text(data: Bytes, start: u64, end: u64) -> unique List[u8] uses {} {
+fn slice_text(data: Bytes, start: u64, end: u64) -> List[u8] uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {
@@ -67,7 +67,7 @@ fn slice_text(data: Bytes, start: u64, end: u64) -> unique List[u8] uses {} {
   out
 }
 
-fn lower_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn lower_text(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {
@@ -93,7 +93,7 @@ fn skip_token(data: Bytes, mut pos: u64) -> () uses {} {
 
 // Go consumeValue: a token or a quoted string whose backslash escapes only a
 // tspecial; CR or LF inside quotes, or no closing quote, is no value.
-fn value_at(data: Bytes, mut pos: u64) -> Option[unique List[u8]] uses {} {
+fn value_at(data: Bytes, mut pos: u64) -> Option[List[u8]] uses {} {
   let size = bytes.len(data)
   if pos >= size {
     return None()
@@ -133,7 +133,7 @@ fn unhex(b: u8) -> Option[u8] uses {} {
 }
 
 // Go percentHexUnescape, then UTF-8.
-fn percent_unescape(data: Bytes) -> Option[unique String] uses {} {
+fn percent_unescape(data: Bytes) -> Option[String] uses {} {
   let size = bytes.len(data)
   let mut out: List[u8] = []
   let mut i: u64 = 0
@@ -162,7 +162,7 @@ fn percent_unescape(data: Bytes) -> Option[unique String] uses {} {
 }
 
 // Go decode2231Enc: charset'language'percent-encoded, us-ascii or utf-8 only.
-fn decode_2231(value: String) -> Option[unique String] uses {} {
+fn decode_2231(value: String) -> Option[String] uses {} {
   let Some((charset, rest)) = string.split_once(value, "'") else {
     return None()
   }
@@ -318,7 +318,7 @@ pub fn parse_media_type(value: String) -> Result[
 }
 
 // Go CanonicalMIMEHeaderKey for a token name; other names are kept as sent.
-fn canonical_key(name: Bytes) -> unique String uses {} {
+fn canonical_key(name: Bytes) -> String uses {} {
   let mut out: List[u8] = []
   let mut valid = true
   for b in name {
@@ -473,7 +473,7 @@ fn read_headers(data: Bytes, mut pos: u64, mut budget: u64) -> Result[
 }
 
 // Go filepath.Base on a slash-separated name.
-fn base_name(name: String) -> unique String uses {} {
+fn base_name(name: String) -> String uses {} {
   let data = string.as_bytes(name)
   let mut end = bytes.len(data)
   while end > 0 && data[end - 1] == b'/' {
@@ -687,7 +687,6 @@ pub fn form_type(boundary: String) -> unique String uses {} {
 }
 
 // Go escapeQuotes.
-@preserves_unique(out)
 fn escape_quotes(value: String, mut out: List[u8]) -> () uses {} {
   for b in string.as_bytes(value) {
     if b == b'\\' {

@@ -10,7 +10,7 @@
 // field type's own module, subject to ordinary visibility. A recursive type's deriver calls
 // itself.
 // The text of `text` from byte `start` to byte `end`, past leading spaces.
-fn part(text: String, start: u64, end: u64) -> unique String uses {} {
+fn part(text: String, start: u64, end: u64) -> String uses {} {
   let bytes = core@1/string.as_bytes(text)
   let mut from = start
   while from < end && bytes[from] == 32 {
@@ -64,7 +64,7 @@ fn parameters(ty: String, head: String) -> Option[List[String]] uses {} {
 }
 
 // The one type argument of `ty` when it is `head[..]`.
-fn argument(ty: String, head: String) -> Option[unique String] uses {} {
+fn argument(ty: String, head: String) -> Option[String] uses {} {
   let Some(items) = parameters(ty, head) else {
     return None
   }
@@ -125,7 +125,7 @@ fn nominal(ty: String) -> bool uses {} {
 
 // A nominal type's path without type arguments: `app@1/m.Pair` for
 // `app@1/m.Pair[u64]`, which names its record constructor in any module.
-fn constructor(name: String) -> unique String uses {} {
+fn constructor(name: String) -> String uses {} {
   let Some(at) = string.find(name, "[") else {
     return unique name
   }
@@ -136,7 +136,7 @@ fn constructor(name: String) -> unique String uses {} {
 }
 
 // The declared name alone: `Todo` for `app@1/todo.Todo`.
-fn short_name(name: String) -> unique String uses {} {
+fn short_name(name: String) -> String uses {} {
   let mut last = constructor(name)
   let separators: List[String] = ["/", "."]
   for separator in separators {
@@ -148,7 +148,7 @@ fn short_name(name: String) -> unique String uses {} {
 
 // `TodoItem` as `todo_item` and `HTTPRequest` as `http_request`: an underscore
 // before each capital that ends a lowercase run or starts a word after capitals.
-fn snake(name: String) -> unique String uses {} {
+fn snake(name: String) -> String uses {} {
   let bytes = core@1/string.as_bytes(name)
   let n = core@1/bytes.len(bytes)
   let mut out: List[u8] = []
@@ -171,7 +171,7 @@ fn snake(name: String) -> unique String uses {} {
 }
 
 // The deriver a generated body calls for a field of nominal type `ty`.
-fn deriver(ty: String, suffix: String) -> unique String uses {} {
+fn deriver(ty: String, suffix: String) -> String uses {} {
   let path = constructor(ty)
   let name = short_name(path)
   let prefix = part(
@@ -189,7 +189,7 @@ type Writer {
   next: u64,
 }
 
-fn writer() -> unique Writer uses {} {
+fn writer() -> Writer uses {} {
   Writer(out: [], next: 0)
 }
 
@@ -198,7 +198,7 @@ fn put(mut w: Writer, piece: String) -> () uses {} {
 }
 
 // A binding name `prefix` and a number no other name in the body has.
-fn fresh(mut w: Writer, prefix: String) -> unique String uses {} {
+fn fresh(mut w: Writer, prefix: String) -> String uses {} {
   let name = f"{prefix}{w.next}"
   w.next += 1
   take name
@@ -233,7 +233,7 @@ fn binders(prefix: String, count: u64) -> List[String] uses {} {
 
 // A variant pattern or construction: `Name`, `Name(a, b)` or, for labelled
 // payloads, `Name(label: a, ..)`.
-fn variant_form(v: VariantShape, names: List[String]) -> unique String uses {} {
+fn variant_form(v: VariantShape, names: List[String]) -> String uses {} {
   if list.len(v.payload) == 0 {
     return unique v.name
   }
@@ -250,7 +250,7 @@ fn variant_form(v: VariantShape, names: List[String]) -> unique String uses {} {
 }
 
 // A tuple pattern or construction of `names`: `(a, b)` or `(a,)`.
-fn tuple_form(names: List[String]) -> unique String uses {} {
+fn tuple_form(names: List[String]) -> String uses {} {
   if list.len(names) == 1 {
     return f"({names[0]},)"
   }
@@ -258,7 +258,7 @@ fn tuple_form(names: List[String]) -> unique String uses {} {
 }
 
 // The element type of a List or Set spelling.
-fn element(ty: String) -> Option[unique String] uses {} {
+fn element(ty: String) -> Option[String] uses {} {
   match argument(ty, "List") {
     Some(inner) => Some(take inner),
     None => argument(ty, "Set"),
@@ -378,7 +378,7 @@ fn json_of_at(mut w: Writer, ty: String, read: String, parent: String, member: S
 // A variant's kind in serde's terms: `unit` without payload, `struct` with
 // labelled payloads, `newtype` with one positional payload and `tuple` with
 // more (serde_derive/src/internals/ast.rs `Style`).
-fn style(v: VariantShape) -> unique String uses {} {
+fn style(v: VariantShape) -> String uses {} {
   let count = list.len(v.payload)
   if count == 0 {
     return "unit"
@@ -393,7 +393,7 @@ fn style(v: VariantShape) -> unique String uses {} {
 }
 
 // A struct payload's label.
-fn label_of(p: PayloadShape) -> unique String uses {} {
+fn label_of(p: PayloadShape) -> String uses {} {
   match p.label {
     Some(label) => unique label,
     None => "",
@@ -656,7 +656,7 @@ fn members_from(
 
 // serde's `OneOf`: `A`, `A` or `B`, or one of `A`, `B`, `C`
 // (serde_core/src/de/mod.rs).
-fn one_of(names: List[String]) -> unique String uses {} {
+fn one_of(names: List[String]) -> String uses {} {
   let mut quoted: List[String] = []
   for name in names {
     list.push(mut quoted, f"`{name}`")

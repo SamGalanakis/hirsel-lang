@@ -32,7 +32,7 @@ pub type Patched {
 pub type PatchError = Malformed(u64)
 
 // --- Lines ----------------------------------------------------------------
-fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn piece(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut out: List[u8] = []
   core@1/bytes.append(mut out, core@1/bytes.slice(data, start, end))
   text.finish_valid(take out)
@@ -47,7 +47,11 @@ pub fn split_lines(source: String) -> unique List[String] uses {} {
   let mut start: u64 = 0
   while start < size {
     let stop = core@1/bytes.find_any(data, b"\n", start)
-    let end = if stop < size { stop + 1 } else { size }
+    let end = if stop < size {
+      stop + 1
+    } else {
+      size
+    }
     core@1/list.push(mut out, piece(data, start, end))
     start = end
   }
@@ -56,11 +60,7 @@ pub fn split_lines(source: String) -> unique List[String] uses {} {
 
 // Numbers each distinct line, so the algorithms compare integers; also returns
 // the number of distinct lines.
-fn numbered(old: List[String], new: List[String]) -> (
-  unique List[u64],
-  unique List[u64],
-  u64
-) uses {} {
+fn numbered(old: List[String], new: List[String]) -> (List[u64], List[u64], u64) uses {} {
   let mut ids: Map[String, u64] = core@1/map.empty()
   let mut a: List[u64] = []
   let mut b: List[u64] = []
@@ -173,7 +173,7 @@ fn occurrences(
   b: List[u64],
   start2: u64,
   end2: u64
-) -> (unique List[Occurrence], unique List[Occurrence]) uses {} {
+) -> (List[Occurrence], List[Occurrence]) uses {} {
   let mut limit1 = sqrt(end1 - start1)
   if limit1 > 1024 {
     limit1 = 1024
@@ -284,10 +284,7 @@ fn prune(
   status: List[Occurrence],
   mut changed: List[bool],
   minimal: bool
-) -> (
-  unique List[u64],
-  unique List[u64]
-) uses {} {
+) -> (List[u64], List[u64]) uses {} {
   let mut tokens: unique List[u64] = []
   let mut indices: unique List[u64] = []
   for i in 0u64..core@1/list.len(status) {
@@ -1239,7 +1236,6 @@ type Change {
   inserted: u64,
 }
 
-@preserves_unique(out)
 fn emit(mark: u8, line: String, mut out: List[u8]) -> () uses {} {
   core@1/list.push(mut out, mark)
   text.append(mut out, line)
@@ -1248,7 +1244,6 @@ fn emit(mark: u8, line: String, mut out: List[u8]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn range_into(start: u64, count: u64, mut out: List[u8]) -> () uses {} {
   if count == 0 {
     std@1/u64.format_into(start, mut out)

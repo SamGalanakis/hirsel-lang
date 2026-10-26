@@ -48,7 +48,7 @@ pub fn new[T](max_entries: u64) -> unique Result[Cache[T], CapacityError] uses {
 }
 
 // Keep the opaque cleanup contract at the Result construction boundary.
-fn success[T](take cache: unique Cache[T]) -> unique Result[Cache[T], CapacityError] uses {cache} {
+fn success[T](take cache: unique Cache[T]) -> Result[Cache[T], CapacityError] uses {cache} {
   Ok(take cache)
 }
 
@@ -156,7 +156,7 @@ pub fn remove[T](mut c: unique Cache[T], key: String) -> unique Option[unique En
   detach(mut c, slot)
 }
 
-fn owned_key(key: String) -> unique String uses {} {
+fn owned_key(key: String) -> String uses {} {
   unique key
 }
 

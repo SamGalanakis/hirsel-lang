@@ -78,7 +78,7 @@ fn frame(
   take patch: unique Map[String, json.Value],
   take key: unique String,
   depth: u64
-) -> unique Frame uses {} {
+) -> Frame uses {} {
   let entries = match take target {
     Object(values) => take values,
     _ => core@1/map.empty(),
@@ -87,14 +87,14 @@ fn frame(
 }
 
 // Copy only the next key; removing it transfers the owned child subtree.
-fn first_key(entries: Map[String, json.Value]) -> unique Option[String] uses {} {
+fn first_key(entries: Map[String, json.Value]) -> Option[String] uses {} {
   for (key, _) in entries {
     return Some(unique key)
   }
   None()
 }
 
-fn next_entry(mut pending: unique Map[String, json.Value]) -> unique Option[
+fn next_entry(mut pending: unique Map[String, json.Value]) -> Option[
   (String, json.Value)
 ] uses {} {
   let Some(key) = take first_key(pending) else {

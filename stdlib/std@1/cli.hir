@@ -229,7 +229,6 @@ pub fn usage(program: String, specs: List[Flag]) -> String uses {} {
 // Go ebe2feef, src/flag/flag.go:1136-1160: unknown / missing / invalid
 // value diagnostics. Explicit input and typed errors replace FlagSet state.
 // Byte quoting additionally makes arbitrary argument text safe for terminals.
-@preserves_unique(out)
 fn quote_argument(token: String, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(token)
   let digits = core@1/string.as_bytes("0123456789abcdef")
@@ -372,7 +371,6 @@ fn error_context(args: List[String], specs: List[Flag], error: ParseError, index
   )
 }
 
-@preserves_unique(out)
 fn render_context(error: ParseError, context: ErrorContext, mut out: List[u8]) -> () uses {} {
   match error {
     UnknownFlag(_) => {

@@ -69,7 +69,7 @@ fn json_number_end(data: Bytes, mut pos: u64) -> Result[(), JsonError] uses {} {
 }
 
 // An explicitly owned decoder token has independent, exact-length storage.
-fn json_owned_text(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn json_owned_text(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut output: List[u8] = []
   core@1/bytes.append(mut output, core@1/bytes.slice(data, start, end))
   match text.finish(take output) {
@@ -400,7 +400,6 @@ pub fn write_text_into(text: String, mut builder: List[u8]) -> () uses {} {
 
 // Adapted serde_json src/ser.rs NumberStrEmitter/write_number_str,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8; validate public Number strings.
-@preserves_unique(builder)
 fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonError] uses {} {
   let data = core@1/string.as_bytes(text)
   let mut pos: u64 = 0
@@ -417,7 +416,6 @@ fn json_write_number(text: String, mut builder: List[u8]) -> Result[(), JsonErro
 // Adapted serde_json src/ser.rs compact Serializer sequence/map dispatch,
 // commit 20572a6d066958542d79cdd6cf1a7cd9f0c8e1f8.
 // Matching borrows the DOM.
-@preserves_unique(builder)
 fn json_write_value(value: Value, mut builder: List[u8], depth: u64) -> Result[
   (),
   JsonError

@@ -197,7 +197,6 @@ pub fn parse_socket_addr(text: String) -> Result[SocketAddr, AddrParseError] use
   Ok(SocketAddr(ip: ip, port: core@1/int.narrow(value)))
 }
 
-@preserves_unique(out)
 fn write_v4(octets: Inline[u8, 4], mut out: List[u8]) -> () uses {} {
   let mut i: u64 = 0
   while i < 4 {
@@ -209,7 +208,6 @@ fn write_v4(octets: Inline[u8, 4], mut out: List[u8]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn write_hex(value: u16, mut out: List[u8]) -> () uses {} {
   let digits: Bytes = b"0123456789abcdef"
   let mut shift: u16 = 4096

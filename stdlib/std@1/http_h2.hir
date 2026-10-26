@@ -9,7 +9,7 @@ fn http_input_buffered(r: HttpInput) -> u64 uses {} {
   core@1/list.len(r.bytes) - r.offset
 }
 
-fn http_input_contents(r: HttpInput) -> unique Bytes uses {} {
+fn http_input_contents(r: HttpInput) -> Bytes uses {} {
   let mut out: List[u8] = []
   let mut i = r.offset
   while i < core@1/list.len(r.bytes) {
@@ -477,7 +477,7 @@ fn http_h2_field(name: String, value: String) -> hpack.Field uses {} {
   )
 }
 
-fn http_h2_lower_name(name: String) -> unique String uses {} {
+fn http_h2_lower_name(name: String) -> String uses {} {
   let mut out: List[u8] = []
   for byte in core@1/string.as_bytes(name) {
     core@1/list.push(mut out, http_lower(byte))
@@ -753,7 +753,6 @@ fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
   Error(Truncated())
 }
 
-@preserves_unique(out)
 @preserves_captures(r)
 fn http_h2_read_body(mut r: Request, mut out: List[u8], max: u64) -> Result[
   u64,

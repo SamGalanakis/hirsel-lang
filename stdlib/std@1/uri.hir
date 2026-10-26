@@ -25,7 +25,7 @@ pub type UriError = UnexpectedCharacter | InvalidFormat | InvalidPort | InvalidH
 @serializable
 pub type Part = Unreserved | User | Password | Host | Path | Query | Fragment
 
-fn piece(text: String, begin: u64, end: u64) -> unique String uses {} {
+fn piece(text: String, begin: u64, end: u64) -> String uses {} {
   let data = core@1/string.as_bytes(text)
   let mut out: List[u8] = []
   let mut i = begin
@@ -115,7 +115,7 @@ fn valid_char(byte: u8, part: Part) -> bool uses {} {
   }
 }
 
-fn encode(data: Bytes, part: Part) -> unique String uses {} {
+fn encode(data: Bytes, part: Part) -> String uses {} {
   let digits: Bytes = b"0123456789ABCDEF"
   let mut out: List[u8] = []
   let mut i: u64 = 0
@@ -505,7 +505,7 @@ pub fn resolve(base: Uri, reference: String) -> Result[Uri, UriError] uses {} {
 @serializable
 pub type QueryError = InvalidEscape(u64) | InvalidSeparator(u64) | InvalidUtf8(u64)
 
-fn query_piece(data: Bytes, start: u64, end: u64) -> Result[unique String, QueryError] uses {} {
+fn query_piece(data: Bytes, start: u64, end: u64) -> Result[String, QueryError] uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {
@@ -582,7 +582,6 @@ pub fn query_pairs(query: String) -> Result[
   Ok(take pairs)
 }
 
-@preserves_unique(out)
 fn query_encode_piece(mut out: List[u8], value: String) -> () uses {} {
   let digits: Bytes = b"0123456789ABCDEF"
   let data = core@1/string.as_bytes(value)

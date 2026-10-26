@@ -225,7 +225,7 @@ fn block_sum(b: List[u8], base: u64) -> u64 uses {} {
 }
 
 // Go parser.parseString: the bytes before the first NUL.
-fn field_text(b: List[u8], start: u64, end: u64) -> Result[unique String, ()] uses {} {
+fn field_text(b: List[u8], start: u64, end: u64) -> Result[String, ()] uses {} {
   let mut builder: List[u8] = []
   let mut i = start
   while i < end && b[i] != 0 {
@@ -747,7 +747,7 @@ fn special[S, E](
   refill: fn(mut S, mut List[u8], u64) -> Result[u64, E],
   size: u64,
   at: u64
-) -> Result[unique List[u8], ReadError[E]] uses {refill} {
+) -> Result[List[u8], ReadError[E]] uses {refill} {
   if size > SPECIAL {
     return Error(Archive(Header(at)))
   }
@@ -990,7 +990,7 @@ fn ascii(s: String) -> bool uses {} {
 }
 
 // Go toASCII.
-fn to_ascii(s: String) -> unique String uses {} {
+fn to_ascii(s: String) -> String uses {} {
   let mut builder: List[u8] = []
   for c in core@1/string.as_bytes(s) {
     if c < 0x80 && c != 0 {
@@ -1002,7 +1002,6 @@ fn to_ascii(s: String) -> unique String uses {} {
 
 // Go formatter.formatString into b[start..end): copies what fits, a NUL
 // after a shorter value, and a NUL over a trailing slash run when truncated.
-@preserves_unique(b)
 fn put_text(mut b: List[u8], start: u64, end: u64, s: String) -> bool uses {} {
   let bytes = core@1/string.as_bytes(s)
   let len = core@1/bytes.len(bytes)
@@ -1032,7 +1031,6 @@ fn fits_octal(size: u64, value: u64) -> bool uses {} {
 
 // Go formatter.formatOctal: zero-padded octal and a NUL, or zero when the
 // value does not fit.
-@preserves_unique(b)
 fn put_octal(mut b: List[u8], start: u64, end: u64, value: u64) -> bool uses {} {
   let size = end - start
   let fits = fits_octal(size, value)
@@ -1053,7 +1051,6 @@ fn put_octal(mut b: List[u8], start: u64, end: u64, value: u64) -> bool uses {} 
 }
 
 // put_octal for the signed modification time; negative times do not fit.
-@preserves_unique(b)
 fn put_time(mut b: List[u8], value: i64) -> bool uses {} {
   if value < 0 {
     put_octal(mut b, 136, 148, 0)
@@ -1064,7 +1061,6 @@ fn put_time(mut b: List[u8], value: i64) -> bool uses {} {
 }
 
 // Go block.setFormat for USTAR and PAX: the magic, version and checksum.
-@preserves_unique(b)
 fn seal(mut b: List[u8]) -> () uses {} {
   b[257] = 117
   b[258] = 115
@@ -1081,7 +1077,7 @@ fn seal(mut b: List[u8]) -> () uses {} {
 
 const ZERO_BLOCK: List[u8] = comptime zeros(BLOCK)
 
-fn zeros(n: u64) -> unique List[u8] uses {} {
+fn zeros(n: u64) -> List[u8] uses {} {
   let mut out: List[u8] = []
   let mut i: u64 = 0
   while i < n {
@@ -1093,7 +1089,7 @@ fn zeros(n: u64) -> unique List[u8] uses {} {
 
 // Go templateV7Plus: the V7 and USTAR fields, with what does not fit cut or
 // zeroed.
-fn template(h: Header, name: String, ascii_only: bool) -> unique List[u8] uses {} {
+fn template(h: Header, name: String, ascii_only: bool) -> List[u8] uses {} {
   let mut b = unique ZERO_BLOCK
   let mut fits = true
   b[156] = flag_of(h.kind)
@@ -1146,7 +1142,7 @@ fn split_ustar(name: String) -> Option[u64] uses {} {
   Some(slash)
 }
 
-fn piece(s: String, start: u64, end: u64) -> unique String uses {} {
+fn piece(s: String, start: u64, end: u64) -> String uses {} {
   let bytes = core@1/string.as_bytes(s)
   let mut builder: List[u8] = []
   let mut i = start
@@ -1221,7 +1217,6 @@ fn pax_name(name: String) -> String uses {} {
 // Go Writer.writeRawFile for a PAX header: a V7 block with zero numbers and
 // the name made ASCII, cut to 100 bytes and stripped of trailing slashes,
 // then the records padded to a block.
-@preserves_unique(out)
 fn raw_file(mut out: List[u8], name: String, data: List[u8], flag: u8) -> () uses {} {
   let mut short = to_ascii(name)
   if string.byte_len(short) > 100 {
@@ -1254,7 +1249,6 @@ fn raw_file(mut out: List[u8], name: String, data: List[u8], flag: u8) -> () use
 }
 
 // Go Writer.Flush: the previous entry must be complete; pads it to a block.
-@preserves_unique(out)
 fn flush(mut w: Writer, mut out: List[u8]) -> Result[(), WriteError] uses {} {
   if w.closed {
     return Error(Closed())
@@ -1480,7 +1474,7 @@ pub fn close(mut w: Writer, mut out: List[u8]) -> Result[(), WriteError] uses {}
 
 // A name extraction accepts: relative, nonempty after leading "./" pieces,
 // without "..", NUL or backslash; returns its components.
-fn local_parts(name: String) -> Option[unique List[String]] uses {} {
+fn local_parts(name: String) -> Option[List[String]] uses {} {
   if name == "" || string.starts_with(name, "/") || string.contains(name, "\x00") || string.contains(
     name,
     "\\"
@@ -1503,7 +1497,7 @@ fn local_parts(name: String) -> Option[unique List[String]] uses {} {
   Some(take parts)
 }
 
-fn joined(parts: List[String], count: u64) -> unique String uses {} {
+fn joined(parts: List[String], count: u64) -> String uses {} {
   let mut builder: List[u8] = []
   let mut i: u64 = 0
   while i < count {

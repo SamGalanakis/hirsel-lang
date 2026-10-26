@@ -146,7 +146,6 @@ fn integer(data: Bytes, mut pos: u64, mask: u8) -> Result[u64, Error] uses {} {
   Error(Truncated())
 }
 
-@preserves_unique(out)
 fn append_integer(mut out: List[u8], value: u64, mask: u8, prefix: u8) uses {} {
   let maximum: u64 = core@1/int.widen(mask)
   if value < maximum {
@@ -328,7 +327,6 @@ pub fn decode(mut d: Decoder, data: Bytes, limit: u64) -> Result[List[Field], Er
   outcome
 }
 
-@preserves_unique(out)
 fn append_string(mut out: List[u8], value: Bytes) uses {} {
   let mut bits: u64 = 0
   for i in 0u64..core@1/bytes.len(value) {
@@ -406,7 +404,6 @@ pub fn encode(mut e: Encoder, fields: List[Field]) -> unique Bytes uses {} {
   core@1/bytes.from_list(take out)
 }
 
-@preserves_unique(out)
 fn append_bytes(mut out: List[u8], data: Bytes) uses {} {
   let mut i: u64 = 0
   while i < core@1/bytes.len(data) {

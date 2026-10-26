@@ -357,7 +357,7 @@ fn edit(
   at: u64,
   mode: Edit,
   take replacement: unique json.Value
-) -> Result[unique json.Value, ErrorKind] uses {} {
+) -> Result[json.Value, ErrorKind] uses {} {
   let last = at + 1 == core@1/list.len(tokens)
   let token = tokens[at]
   match take target {
@@ -413,7 +413,7 @@ fn change(
   selected_path: Path,
   mode: Edit,
   take replacement: unique json.Value
-) -> Result[unique Option[json.Value], ErrorKind] uses {} {
+) -> Result[Option[json.Value], ErrorKind] uses {} {
   if core@1/list.len(selected_path.tokens) == 0 {
     if mode != Insert() && !match document {
       Some(_) => true,
@@ -599,7 +599,7 @@ fn execute(
   op: Operation,
   limits: Limits,
   mut work: u64
-) -> Result[unique Option[json.Value], ErrorKind] uses {} {
+) -> Result[Option[json.Value], ErrorKind] uses {} {
   match op {
     Add(p, v) => change(take document, p, Insert(), unique v),
     Remove(p) => change(take document, p, Delete(), Null()),

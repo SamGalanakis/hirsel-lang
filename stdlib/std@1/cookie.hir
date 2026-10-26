@@ -63,7 +63,7 @@ fn space(byte: u8) -> bool uses {} {
   byte == b' ' || byte == b'\t' || byte == b'\n' || byte == b'\r'
 }
 
-fn piece(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn piece(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {

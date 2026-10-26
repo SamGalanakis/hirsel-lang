@@ -258,10 +258,7 @@ pub fn decode_content(headers: List[Header], body: Bytes, limit: u64) -> Result[
 
 // Go Transport's transparent decompression: only when the caller sent no
 // Accept-Encoding does the client ask for gzip and deflate and decode them.
-fn http_offer_codings(config: Config, headers: List[Header]) -> (
-  unique List[Header],
-  bool
-) uses {} {
+fn http_offer_codings(config: Config, headers: List[Header]) -> (List[Header], bool) uses {} {
   let mut sent = unique headers
   if !config.decompress || option.is_some(header(headers, "accept-encoding")) {
     return (take sent, false)
@@ -528,7 +525,7 @@ pub fn request(
   )
 }
 
-fn http_method_text(method: Method) -> unique String uses {} {
+fn http_method_text(method: Method) -> String uses {} {
   match method {
     Get() => "GET",
     Head() => "HEAD",
@@ -1669,6 +1666,7 @@ pub fn detach(take s: ServerStream) -> Result[Detached, HttpError] {
 }
 
 // Moves up to `max` unread bytes of `source` to `out`, for bufio.read_more.
+@preserves_unique(out)
 fn http_input_refill(mut source: HttpInput, mut out: List[u8], max: u64) -> Result[
   u64,
   ()
@@ -2360,7 +2358,7 @@ fn http_respond(
 
 // Shared validation and head serialization for complete and streaming replies.
 fn http_server_response_head(version: Version, status: u16, headers: List[Header]) -> Result[
-  unique List[u8],
+  List[u8],
   HttpError
 ] uses {} {
   validate_headers(headers)?

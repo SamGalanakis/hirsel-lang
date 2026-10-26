@@ -27,7 +27,7 @@ fn make(negative: bool, take magnitude: List[u64]) -> BigInt uses {} {
   BigInt(negative: negative && nonzero, magnitude: take magnitude)
 }
 
-fn zeros(count: u64) -> unique List[u64] uses {} {
+fn zeros(count: u64) -> List[u64] uses {} {
   let mut out: unique List[u64] = []
   core@1/list.reserve(mut out, count)
   for _ in 0u64..count {
@@ -45,7 +45,7 @@ fn trim(mut xs: unique List[u64]) -> () uses {} {
 }
 
 // The limbs of `xs` from `start` to `end`, without high zero limbs.
-fn slice_magnitude(xs: List[u64], start: u64, end: u64) -> unique List[u64] uses {} {
+fn slice_magnitude(xs: List[u64], start: u64, end: u64) -> List[u64] uses {} {
   let mut out: unique List[u64] = []
   core@1/list.reserve(mut out, end - start)
   for i in start..end {
@@ -79,7 +79,7 @@ fn compare_magnitudes(a: List[u64], b: List[u64]) -> i32 uses {} {
   0
 }
 
-fn add_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
+fn add_magnitudes(a: List[u64], b: List[u64]) -> List[u64] uses {} {
   let la = core@1/list.len(a)
   let lb = core@1/list.len(b)
   let longest = if la < lb {
@@ -108,7 +108,7 @@ fn add_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
 }
 
 // a - b for a >= b.
-fn sub_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
+fn sub_magnitudes(a: List[u64], b: List[u64]) -> List[u64] uses {} {
   let la = core@1/list.len(a)
   let lb = core@1/list.len(b)
   let mut out: unique List[u64] = []
@@ -177,7 +177,7 @@ fn sub_at(mut acc: unique List[u64], offset: u64, p: List[u64]) -> () uses {} {
   }
 }
 
-fn mul_schoolbook(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
+fn mul_schoolbook(x: List[u64], y: List[u64]) -> List[u64] uses {} {
   let lx = core@1/list.len(x)
   let ly = core@1/list.len(y)
   let mut out = zeros(lx + ly)
@@ -199,7 +199,7 @@ fn mul_schoolbook(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
 }
 
 // |a - b| and the sign of a - b.
-fn difference(a: List[u64], b: List[u64]) -> (i32, unique List[u64]) uses {} {
+fn difference(a: List[u64], b: List[u64]) -> (i32, List[u64]) uses {} {
   let order = compare_magnitudes(a, b)
   if order > 0 {
     (1, sub_magnitudes(a, b))
@@ -213,7 +213,7 @@ fn difference(a: List[u64], b: List[u64]) -> (i32, unique List[u64]) uses {} {
 
 // num-bigint mac3's Karatsuba step, for KARATSUBA_THRESHOLD < len(x) <= len(y) < 2 len(x):
 // x*y = x1*y1*b^2 + (x1*y1 + x0*y0 - (x1 - x0)*(y1 - y0))*b + x0*y0.
-fn karatsuba(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
+fn karatsuba(x: List[u64], y: List[u64]) -> List[u64] uses {} {
   let lx = core@1/list.len(x)
   let ly = core@1/list.len(y)
   let half = lx / 2
@@ -243,7 +243,7 @@ fn karatsuba(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
 // num-bigint 41f0b035 src/biguint/multiplication.rs:285-431 (MIT/Apache-2.0).
 // Evaluate at 0, 1, -1, -2, infinity, then Bodrato interpolation. Signed
 // temporaries matter: the evaluations at negative points need not be positive.
-fn toom3(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
+fn toom3(x: List[u64], y: List[u64]) -> List[u64] uses {} {
   let lx = core@1/list.len(x)
   let ly = core@1/list.len(y)
   let width = ly / 3 + 1
@@ -309,7 +309,7 @@ fn toom_accumulate(mut acc: unique List[u64], offset: u64, value: BigInt) -> () 
 }
 
 // len(x) <= len(y): schoolbook, Karatsuba, Toom-3, or len(x)-limb chunks of y.
-fn mul_ordered(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
+fn mul_ordered(x: List[u64], y: List[u64]) -> List[u64] uses {} {
   let lx = core@1/list.len(x)
   let ly = core@1/list.len(y)
   if lx == 0 {
@@ -341,7 +341,7 @@ fn mul_ordered(x: List[u64], y: List[u64]) -> unique List[u64] uses {} {
   acc
 }
 
-fn mul_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
+fn mul_magnitudes(a: List[u64], b: List[u64]) -> List[u64] uses {} {
   if core@1/list.len(a) <= core@1/list.len(b) {
     mul_ordered(a, b)
   } else {
@@ -363,7 +363,7 @@ fn mul_add_word(mut z: unique List[u64], m: u64, a: u64) -> () uses {} {
   }
 }
 
-fn divide_word(a: List[u64], d: u64) -> (unique List[u64], u64) uses {} {
+fn divide_word(a: List[u64], d: u64) -> (List[u64], u64) uses {} {
   let length = core@1/list.len(a)
   let mut q = zeros(length)
   let divisor: u128 = core@1/int.widen(d)
@@ -388,7 +388,7 @@ fn trailing_zero_bits(a: List[u64]) -> u64 uses {} {
   i * 64 + core@1/int.trailing_zeros(a[i])
 }
 
-fn shift_left_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
+fn shift_left_magnitude(a: List[u64], bits: u64) -> List[u64] uses {} {
   let length = core@1/list.len(a)
   if length == 0 {
     let empty: unique List[u64] = []
@@ -415,7 +415,7 @@ fn shift_left_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
   out
 }
 
-fn shift_right_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
+fn shift_right_magnitude(a: List[u64], bits: u64) -> List[u64] uses {} {
   let length = core@1/list.len(a)
   let limbs = bits / 64
   let shift = bits % 64
@@ -437,7 +437,7 @@ fn shift_right_magnitude(a: List[u64], bits: u64) -> unique List[u64] uses {} {
 
 // num-bigint div_rem_core: Knuth TAOCP 4.3.1 algorithm D with the exercise 19-21 estimate.
 // The divisor has at least two limbs and a <= b is handled by the caller.
-fn divide_long(a: List[u64], b: List[u64]) -> (unique List[u64], unique List[u64]) uses {} {
+fn divide_long(a: List[u64], b: List[u64]) -> (List[u64], List[u64]) uses {} {
   let shift = core@1/int.leading_zeros(b[core@1/list.len(b) - 1])
   let divisor = shift_left_magnitude(b, shift)
   let mut rest = shift_left_magnitude(a, shift)
@@ -510,7 +510,7 @@ fn add_back(mut a: unique List[u64], offset: u64, b: List[u64]) -> u64 uses {} {
 }
 
 // Quotient and remainder of magnitudes; b is nonzero.
-fn divide_magnitudes(a: List[u64], b: List[u64]) -> (unique List[u64], unique List[u64]) uses {} {
+fn divide_magnitudes(a: List[u64], b: List[u64]) -> (List[u64], List[u64]) uses {} {
   if compare_magnitudes(a, b) < 0 {
     let empty: unique List[u64] = []
     return (empty, slice_magnitude(a, 0, core@1/list.len(a)))
@@ -526,15 +526,15 @@ fn divide_magnitudes(a: List[u64], b: List[u64]) -> (unique List[u64], unique Li
   divide_long(a, b)
 }
 
-fn plus_one(a: List[u64]) -> unique List[u64] uses {} {
+fn plus_one(a: List[u64]) -> List[u64] uses {} {
   add_magnitudes(a, [1u64])
 }
 
-fn minus_one(a: List[u64]) -> unique List[u64] uses {} {
+fn minus_one(a: List[u64]) -> List[u64] uses {} {
   sub_magnitudes(a, [1u64])
 }
 
-fn and_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
+fn and_magnitudes(a: List[u64], b: List[u64]) -> List[u64] uses {} {
   let la = core@1/list.len(a)
   let lb = core@1/list.len(b)
   let shortest = if la < lb {
@@ -551,7 +551,7 @@ fn and_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
 }
 
 // a & !b.
-fn and_not_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
+fn and_not_magnitudes(a: List[u64], b: List[u64]) -> List[u64] uses {} {
   let lb = core@1/list.len(b)
   let mut out: unique List[u64] = []
   for i in 0u64..core@1/list.len(a) {
@@ -566,7 +566,7 @@ fn and_not_magnitudes(a: List[u64], b: List[u64]) -> unique List[u64] uses {} {
 }
 
 // `or` when `exclusive` is false, `xor` when it is true.
-fn or_magnitudes(a: List[u64], b: List[u64], exclusive: bool) -> unique List[u64] uses {} {
+fn or_magnitudes(a: List[u64], b: List[u64], exclusive: bool) -> List[u64] uses {} {
   let la = core@1/list.len(a)
   let lb = core@1/list.len(b)
   let longest = if la < lb {
@@ -617,7 +617,6 @@ fn digit_byte(digit: u64) -> u8 uses {} {
 }
 
 // Appends `width` digits of `value`, most significant first.
-@preserves_unique(out)
 fn append_chunk(mut out: List[u8], value: u64, radix: u64, width: u64) -> () uses {} {
   let mut scale: u64 = 1
   for _ in 1u64..width {
@@ -632,7 +631,6 @@ fn append_chunk(mut out: List[u8], value: u64, radix: u64, width: u64) -> () use
 }
 
 // Go natconv utoa: divide by the largest limb power of the radix, then expand each chunk.
-@preserves_unique(out)
 fn append_magnitude(mut out: List[u8], magnitude: List[u64], radix: u64) -> () uses {} {
   if core@1/list.len(magnitude) == 0 {
     core@1/list.push(mut out, 48)

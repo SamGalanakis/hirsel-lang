@@ -280,7 +280,7 @@ fn span_equal(data: Bytes, decoded: List[u8], a: Span, b: Span) -> bool uses {} 
 
 // The same owning-key membership pattern as json.hir's json_node. Bytes keys
 // compare decoded bytes exactly, including NUL, using the existing keyed hash.
-fn scratch_key(data: Bytes, decoded: List[u8], key: Span) -> unique Bytes uses {} {
+fn scratch_key(data: Bytes, decoded: List[u8], key: Span) -> Bytes uses {} {
   let mut out: List[u8] = []
   if key.source == 1 {
     core@1/bytes.append(
@@ -696,7 +696,6 @@ pub fn to_owned(doc: Document, at: u64) -> Option[json.Value] uses {} {
 }
 
 // Compact escaping is the owned writer algorithm over decoded bytes.
-@preserves_unique(builder)
 fn write_bytes(data: Bytes, mut builder: List[u8]) -> () uses {} {
   core@1/list.reserve(
     mut builder,

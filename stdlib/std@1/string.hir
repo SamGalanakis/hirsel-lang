@@ -144,7 +144,7 @@ pub fn trim(s: String) -> String in s uses {} {
 }
 
 // Builders below only append valid UTF-8 or change one ASCII byte to another.
-fn ascii_case(s: String, lower: bool) -> unique String uses {} {
+fn ascii_case(s: String, lower: bool) -> String uses {} {
   let source = core@1/string.as_bytes(s)
   let mut builder: List[u8] = []
   core@1/list.reserve(mut builder, core@1/bytes.len(source))

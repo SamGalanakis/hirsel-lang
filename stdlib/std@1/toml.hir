@@ -232,7 +232,6 @@ fn hex_value(data: Bytes, mut pos: u64, digits: u64) -> Result[u32, TomlError] u
 
 // Basic-string escapes: toml-rs toml_parser/src/decoder/string.rs:312-370
 // (escape), including TOML 1.1 e/x; pos is after the backslash.
-@preserves_unique(output)
 fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
   (),
   TomlError
@@ -273,7 +272,7 @@ fn parse_escape(data: Bytes, mut pos: u64, mut output: List[u8]) -> Result[
 }
 
 fn finish_text(data: Bytes, take output: unique List[u8], at: u64) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   match text.finish(take output) {
@@ -283,7 +282,7 @@ fn finish_text(data: Bytes, take output: unique List[u8], at: u64) -> Result[
 }
 
 // Single-line basic or literal string; pos is at the opening quote.
-fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+fn quoted(data: Bytes, mut pos: u64) -> Result[String, TomlError] uses {} {
   let quote = data[pos]
   pos += 1
   let mut output: List[u8] = []
@@ -309,7 +308,7 @@ fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {}
 // Multi-line basic or literal string; pos is at the first of three quotes. A newline
 // right after the delimiter is trimmed, a closing run may carry two content quotes,
 // and a basic string's line-ending backslash trims the following whitespace.
-fn multiline(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+fn multiline(data: Bytes, mut pos: u64) -> Result[String, TomlError] uses {} {
   let quote = data[pos]
   pos += 3
   eat_newline(data, mut pos)
@@ -364,7 +363,7 @@ fn multiline(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses
 }
 
 // One simple key: bare, basic or literal (multi-line strings are not keys).
-fn simple_key(data: Bytes, mut pos: u64) -> Result[unique String, TomlError] uses {} {
+fn simple_key(data: Bytes, mut pos: u64) -> Result[String, TomlError] uses {} {
   let c = peek(data, pos)
   if c == b'"' || c == b'\'' {
     return quoted(data, mut pos)
@@ -1194,7 +1193,6 @@ fn bare_key(key: String) -> bool uses {} {
 
 // Basic string with escapes, or a literal string when that avoids escaping quotes
 // or backslashes (toml_edit's default string representation).
-@preserves_unique(out)
 fn write_string(s: String, mut out: List[u8]) -> () uses {} {
   let data = core@1/string.as_bytes(s)
   let mut literal = false
@@ -1240,7 +1238,6 @@ fn write_string(s: String, mut out: List[u8]) -> () uses {} {
   core@1/list.push(mut out, b'"')
 }
 
-@preserves_unique(out)
 fn write_key(key: String, mut out: List[u8]) -> () uses {} {
   if bare_key(key) {
     text.append(mut out, key)
@@ -1249,7 +1246,6 @@ fn write_key(key: String, mut out: List[u8]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn write_keys(path: List[Segment], from: u64, mut out: List[u8]) -> () uses {} {
   let mut i = from
   let mut first = true
@@ -1266,7 +1262,6 @@ fn write_keys(path: List[Segment], from: u64, mut out: List[u8]) -> () uses {} {
 }
 
 // Shortest round-trip digits; whole numbers keep a fraction so they stay floats.
-@preserves_unique(out)
 fn write_float(f: f64, mut out: List[u8]) -> () uses {} {
   if f != f {
     text.append(mut out, "nan")
@@ -1371,7 +1366,6 @@ pub fn moment(spelling: String) -> Result[Moment, TomlError] uses {} {
   Ok(OffsetDateTime(at, offset))
 }
 
-@preserves_unique(out)
 fn write_date(value: time.Date, mut out: List[u8]) -> Result[(), TomlError] uses {} {
   let year = date.year(value)
   if year < 0 || year > 9999 {
@@ -1426,7 +1420,6 @@ pub fn datetime(value: Moment) -> Result[Value, TomlError] uses {} {
   Ok(Datetime(text.finish_valid(take out)))
 }
 
-@preserves_unique(out)
 fn write_two_digits(n: i32, mut out: List[u8]) -> () uses {} {
   let tens: u8 = core@1/int.narrow(n / 10)
   let ones: u8 = core@1/int.narrow(n % 10)
@@ -1460,7 +1453,6 @@ fn section_shaped(value: Value) -> bool uses {} {
 
 // One array-of-tables element at `path` as a `[[path]]` section, its table at
 // level `depth`.
-@preserves_unique(out)
 fn write_element(
   path: List[Segment],
   element: Value,
@@ -1478,7 +1470,6 @@ fn write_element(
   }
 }
 
-@preserves_unique(out)
 fn write_inline(value: Value, mut out: List[u8], depth: u64) -> Result[(), TomlError] uses {} {
   match value {
     Text(s) => write_string(s, mut out),
@@ -1539,7 +1530,6 @@ fn write_inline(value: Value, mut out: List[u8], depth: u64) -> Result[(), TomlE
 }
 
 // Key/value lines of a table, skipping members written as sections.
-@preserves_unique(out)
 fn write_pairs(entries: Map[String, Value], mut out: List[u8], depth: u64, nl: String) -> Result[
   (),
   TomlError
@@ -1556,7 +1546,6 @@ fn write_pairs(entries: Map[String, Value], mut out: List[u8], depth: u64, nl: S
 }
 
 // A header line, preceded by a blank line unless it starts the output.
-@preserves_unique(out)
 fn write_header(path: List[Segment], tables: bool, mut out: List[u8], nl: String) -> () uses {} {
   if core@1/list.len(out) > 0 {
     text.append(mut out, nl)
@@ -1583,7 +1572,6 @@ fn write_header(path: List[Segment], tables: bool, mut out: List[u8], nl: String
 
 // Section-shaped members of a table at `path`, recursively. A table holding only
 // sections has no header line of its own.
-@preserves_unique(out)
 fn write_sections(
   path: List[Segment],
   entries: Map[String, Value],
@@ -1618,7 +1606,6 @@ fn write_sections(
   Ok(())
 }
 
-@preserves_unique(out)
 fn write_table(
   path: List[Segment],
   entries: Map[String, Value],
@@ -1700,7 +1687,7 @@ fn line_break(data: Bytes) -> String uses {} {
 }
 
 fn splice(data: Bytes, start: u64, end: u64, insert: String) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   let mut out: List[u8] = []
@@ -1869,7 +1856,7 @@ fn inline_span(tree: Tree, data: Bytes, index: u64) -> (u64, u64) uses {} {
   (previous_end, e.value_end)
 }
 
-fn removed(doc: Document, path: List[Segment]) -> Result[unique String, TomlError] uses {} {
+fn removed(doc: Document, path: List[Segment]) -> Result[String, TomlError] uses {} {
   let data = core@1/string.as_bytes(doc.text)
   let Some(target) = find(doc.tree, path) else {
     return Error(NotFound())
@@ -1934,7 +1921,7 @@ pub fn remove(mut doc: Document, path: List[Segment]) -> Result[(), TomlError] u
   commit(mut doc, take edited)
 }
 
-fn render(value: Value) -> Result[unique String, TomlError] uses {} {
+fn render(value: Value) -> Result[String, TomlError] uses {} {
   let mut out: List[u8] = []
   write_inline(value, mut out, 0)?
   match text.finish(take out) {
@@ -1945,7 +1932,7 @@ fn render(value: Value) -> Result[unique String, TomlError] uses {} {
 
 // Header sections for a table or array-of-tables value at `path`.
 fn render_sections(path: List[Segment], value: Value, nl: String) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   let mut out: List[u8] = []
@@ -1967,7 +1954,7 @@ fn render_sections(path: List[Segment], value: Value, nl: String) -> Result[
 
 // Inserts text at `at`; leading text after a line with no newline gets one first.
 fn insert_line(data: Bytes, at: u64, line: String, nl: String) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   if at > 0 && data[at - 1] != b'\n' {
@@ -1986,7 +1973,7 @@ fn insert_sections(
   parent: List[Segment],
   path: List[Segment],
   value: Value
-) -> Result[unique String, TomlError] uses {} {
+) -> Result[String, TomlError] uses {} {
   let data = core@1/string.as_bytes(doc.text)
   let nl = line_break(data)
   let body = render_sections(path, value, nl)?
@@ -2012,7 +1999,7 @@ fn insert_pair(
   parent_path: List[Segment],
   key: String,
   value: Value
-) -> Result[unique String, TomlError] uses {} {
+) -> Result[String, TomlError] uses {} {
   let data = core@1/string.as_bytes(doc.text)
   let nl = line_break(data)
   let rendered = render(value)?
@@ -2080,7 +2067,7 @@ fn insert_pair(
 
 // A header for an implicit table, placed before its first sub-table.
 fn insert_implicit(doc: Document, parent_path: List[Segment], key: String, value: Value) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   let data = core@1/string.as_bytes(doc.text)
@@ -2106,7 +2093,7 @@ fn insert_implicit(doc: Document, parent_path: List[Segment], key: String, value
 // An entry appended to an inline table or array.
 // `keys` spells the member's key relative to the container; empty for an element.
 fn insert_inline(doc: Document, container: u64, keys: List[Segment], value: Value) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   let data = core@1/string.as_bytes(doc.text)
@@ -2173,7 +2160,7 @@ fn insert_inline(doc: Document, container: u64, keys: List[Segment], value: Valu
 }
 
 fn inserted(doc: Document, path: List[Segment], value: Value) -> Result[
-  unique String,
+  String,
   TomlError
 ] uses {} {
   let n = core@1/list.len(path)

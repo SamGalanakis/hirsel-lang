@@ -1,7 +1,7 @@
 // XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha-03): ChaCha20-Poly1305 under the
 // HChaCha20 subkey of the key and the nonce's first 16 bytes, with a 12-byte
 // nonce of four zero bytes and the last 8. A 24-byte nonce is safe to choose at random.
-fn subkey(key: Bytes, nonce: Bytes) -> (unique Bytes, unique Bytes) uses {} {
+fn subkey(key: Bytes, nonce: Bytes) -> (Bytes, Bytes) uses {} {
   internal.chacha_poly.check_sizes(key, nonce, 24)
   let mut short: List[u8] = [0, 0, 0, 0]
   let mut i: u64 = 16

@@ -23,7 +23,6 @@ fn animal_equal(a: Animal, b: Animal) -> bool uses {} = comptime derive.equal(
   shape(Animal)
 )
 
-@preserves_unique(out)
 fn animal_json_into(value: Animal, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError

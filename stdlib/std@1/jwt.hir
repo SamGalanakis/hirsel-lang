@@ -32,7 +32,7 @@ pub fn default_validation() -> Validation uses {} {
   Validation(audience: None(), issuer: None(), leeway: 0, require_expiration: false)
 }
 
-fn algorithm(key: Key) -> unique String uses {} {
+fn algorithm(key: Key) -> String uses {} {
   match key {
     HS256(_) => "HS256",
     HS384(_) => "HS384",
@@ -43,7 +43,7 @@ fn algorithm(key: Key) -> unique String uses {} {
 }
 
 // golang-jwt ed25519.go:34-78: public keys verify, private keys sign.
-fn make_signature(key: Key, data: Bytes) -> Result[unique Bytes, JwtError] uses {} {
+fn make_signature(key: Key, data: Bytes) -> Result[Bytes, JwtError] uses {} {
   match key {
     HS256(secret) => Ok(
       bytes.from_inline(hmac.mac with (H = sha256.hash)(secret, data))
@@ -77,7 +77,7 @@ fn verify_signature(key: Key, data: Bytes, signed: Bytes) -> Result[bool, JwtErr
   }
 }
 
-fn segment(data: Bytes) -> unique String uses {} {
+fn segment(data: Bytes) -> String uses {} {
   base64.encode(data, UrlSafe(), Omitted())
 }
 

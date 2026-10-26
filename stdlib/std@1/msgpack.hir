@@ -124,7 +124,6 @@ pub fn decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {} {
   Ok(take value)
 }
 
-@preserves_unique(out)
 fn header(count: u64, fixed: u64, limit: u64, marker: u64, mut out: List[u8]) -> Result[
   (),
   binary.DecodeError
@@ -159,7 +158,6 @@ fn string(value: String, mut out: List[u8]) -> Result[(), binary.DecodeError] us
   Ok(())
 }
 
-@preserves_unique(out)
 fn number(value: String, mut out: List[u8]) -> Result[(), binary.DecodeError] uses {} {
   match internal.binary_json.numeric(value)? {
     Unsigned(n) => {
@@ -225,7 +223,6 @@ fn number(value: String, mut out: List[u8]) -> Result[(), binary.DecodeError] us
   Ok(())
 }
 
-@preserves_unique(out)
 fn write(value: json.Value, mut out: List[u8], depth: u64) -> Result[
   (),
   binary.DecodeError

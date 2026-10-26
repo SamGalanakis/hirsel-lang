@@ -24,7 +24,7 @@ fn alphabet_bytes(alphabet: Alphabet) -> Bytes uses {} {
 // Rust base64 5b98ee18 general_purpose/mod.rs:151-268 (MIT), scalar only.
 // Reserve and initialize once. Hirsel requires initialized List elements before
 // indexed writes; the history primitive fills the reservation with memset.
-fn output_buffer(length: u64) -> unique List[u8] uses {} {
+fn output_buffer(length: u64) -> List[u8] uses {} {
   let mut out: List[u8] = []
   if length != 0 {
     core@1/list.reserve(mut out, length)
@@ -37,7 +37,7 @@ fn output_buffer(length: u64) -> unique List[u8] uses {} {
 // aklomp/base64 e4cc438b lib/arch/generic/32/dec_loop.c:4-20:
 // shifted sextets and an error bit share each lookup. OR validates a block.
 // Unlike the C kernel, store exactly three output bytes (no overstore).
-fn decode_words(alphabet: Alphabet) -> unique List[u32] uses {} {
+fn decode_words(alphabet: Alphabet) -> List[u32] uses {} {
   let bytes = alphabet_bytes(alphabet)
   let mut table: List[u32] = []
   core@1/list.reserve(mut table, 1024)
@@ -398,7 +398,6 @@ fn stream_tail(state: Decoder) -> Result[(), DecodeError] uses {} {
   Ok(())
 }
 
-@preserves_unique(out)
 fn stream_emit(state: Decoder, mut out: List[u8]) -> () uses {} {
   let packed = if state.used == 2 {
     state.value * 4096u32
@@ -416,7 +415,7 @@ fn stream_emit(state: Decoder, mut out: List[u8]) -> () uses {} {
   }
 }
 
-fn stream_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, DecodeError] uses {} {
+fn stream_feed(mut state: Decoder, data: Bytes) -> Result[Bytes, DecodeError] uses {} {
   let mut out: List[u8] = []
   let mut i: u64 = 0
   while i < core@1/bytes.len(data) {
@@ -482,7 +481,7 @@ pub fn decode_feed(mut state: Decoder, data: Bytes) -> Result[unique Bytes, Stre
   }
 }
 
-fn stream_finish(mut state: Decoder) -> Result[unique Bytes, DecodeError] uses {} {
+fn stream_finish(mut state: Decoder) -> Result[Bytes, DecodeError] uses {} {
   if state.second_pad {
     return Error(InvalidPadding(state.offset))
   }

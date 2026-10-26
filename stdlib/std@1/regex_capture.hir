@@ -390,7 +390,7 @@ fn capture_ensure(mut scratch: CaptureScratch, cells: u64) -> () uses {} {
   }
 }
 
-fn capture_plan(re: Regex) -> unique List[u64] uses {} {
+fn capture_plan(re: Regex) -> List[u64] uses {} {
   let m = core@1/list.len(re.code)
   let slots = core@1/list.len(re.names) * 2
   // <=133120 bytes of transitions, independent of the subject length.
@@ -603,7 +603,7 @@ fn capture_backtrack_fits(re: Regex, length: u64) -> bool uses {} {
 // Three numeric cells per state: kind/x/y and two exact ASCII acceptance masks.
 // m <= 512 bounds both PCs and capture slot numbers to nine bits. At most
 // 12288 payload bytes, separate from the existing 256 KiB capture scratch slab.
-fn capture_backtrack_code(re: Regex) -> unique List[u64] uses {} {
+fn capture_backtrack_code(re: Regex) -> List[u64] uses {} {
   let mut code: unique List[u64] = []
   for inst in re.code {
     core@1/list.push(mut code, core@1/int.widen(inst.kind) | inst.x << 5 | inst.y << 14)

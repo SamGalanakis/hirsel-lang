@@ -16,7 +16,6 @@ fn appointment_from_json(value: json.Value) -> Result[unique Appointment, String
   shape(Appointment)
 )
 
-@preserves_unique(out)
 fn appointment_json_into(value: Appointment, mut out: List[u8], depth: u64) -> Result[
   (),
   json.JsonError

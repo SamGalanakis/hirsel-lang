@@ -622,7 +622,7 @@ fn word_byte(words: Inline[u64, 8], at: u64) -> u8 uses {} {
 
 // `data` XORed with the keystream from counter 2: the last two blocks of `start`,
 // then four blocks per encryption.
-fn ctr(round_keys: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> unique Bytes uses {} {
+fn ctr(round_keys: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -> Bytes uses {} {
   let prefix = load32(nonce, 0) | load32(nonce, 4) << 32
   let len = core@1/bytes.len(data)
   let mut out: List[u8] = []
@@ -657,7 +657,7 @@ fn ctr(round_keys: Schedule, nonce: Bytes, start: Inline[u64, 8], data: Bytes) -
 }
 
 // GHASH over `data` and `ciphertext` and their bit lengths, masked with AES(nonce || 1).
-fn tag(start: Inline[u64, 8], data: Bytes, ciphertext: Bytes) -> unique Bytes uses {} {
+fn tag(start: Inline[u64, 8], data: Bytes, ciphertext: Bytes) -> Bytes uses {} {
   let mut key: u128 = 0
   let mut i: u64 = 0
   while i < 16 {

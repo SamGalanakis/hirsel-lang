@@ -19,7 +19,7 @@ fn argument(data: Bytes, mut pos: u64, info: u64) -> Result[
 }
 
 fn text_value(data: Bytes, mut pos: u64, count: Option[u64]) -> Result[
-  unique String,
+  String,
   binary.DecodeError
 ] uses {} {
   if let Some(n) = count {
@@ -181,7 +181,6 @@ pub fn decode(data: Bytes) -> Result[json.Value, binary.DecodeError] uses {} {
   Ok(take value)
 }
 
-@preserves_unique(out)
 fn header(major: u64, n: u64, mut out: List[u8]) -> () uses {} {
   if n < 24 {
     internal.binary_json.write(major * 32 + n, 1, mut out)
@@ -206,7 +205,6 @@ fn string(value: String, mut out: List[u8]) -> () uses {} {
   text.append(mut out, value)
 }
 
-@preserves_unique(out)
 fn number(value: String, deterministic: bool, mut out: List[u8]) -> Result[
   (),
   binary.DecodeError
@@ -254,7 +252,6 @@ fn key_order(a: String, b: String) -> i32 uses {} {
   }
 }
 
-@preserves_unique(out)
 fn write(value: json.Value, deterministic: bool, mut out: List[u8], depth: u64) -> Result[
   (),
   binary.DecodeError

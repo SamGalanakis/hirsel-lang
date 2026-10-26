@@ -7,7 +7,7 @@ pub opaque type State[S: plain + inert]: plain + inert uses {} {
 }
 
 // The key block masked with `pad`; `key` is at most one block long.
-fn padded(key: Bytes, block_size: u64, pad: u8) -> unique Bytes uses {} {
+fn padded(key: Bytes, block_size: u64, pad: u8) -> Bytes uses {} {
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, block_size)
   let len = core@1/bytes.len(key)

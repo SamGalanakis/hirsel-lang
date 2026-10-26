@@ -28,7 +28,7 @@ pub fn default_limits() -> Limits uses {} {
   )
 }
 
-fn slice(data: Bytes, start: u64, end: u64) -> unique String uses {} {
+fn slice(data: Bytes, start: u64, end: u64) -> String uses {} {
   let mut out: List[u8] = []
   let mut i = start
   while i < end {
@@ -94,10 +94,7 @@ fn output_check(n: u64, limits: Limits, pos: u64) -> Result[(), MailError] uses 
 }
 
 // consumeComment: iterative depth, retaining nested parentheses and quoted pairs.
-fn comment(data: Bytes, mut pos: u64, limits: Limits) -> Result[
-  unique String,
-  MailError
-] uses {} {
+fn comment(data: Bytes, mut pos: u64, limits: Limits) -> Result[String, MailError] uses {} {
   let start = pos
   pos += 1
   if limits.max_comment_depth == 0 {
@@ -136,7 +133,7 @@ fn cfws(data: Bytes, mut pos: u64, limits: Limits) -> Result[(), MailError] uses
   Ok(())
 }
 
-fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, MailError] uses {} {
+fn quoted(data: Bytes, mut pos: u64) -> Result[String, MailError] uses {} {
   let start = pos
   pos += 1
   let mut out: List[u8] = []
@@ -161,7 +158,7 @@ fn quoted(data: Bytes, mut pos: u64) -> Result[unique String, MailError] uses {}
   Error(Syntax(start))
 }
 
-fn atom(data: Bytes, mut pos: u64, permissive: bool) -> Result[unique String, MailError] uses {} {
+fn atom(data: Bytes, mut pos: u64, permissive: bool) -> Result[String, MailError] uses {} {
   let start = pos
   while pos < bytes.len(data) && atext(data[pos]) {
     pos += 1
@@ -179,7 +176,7 @@ fn atom(data: Bytes, mut pos: u64, permissive: bool) -> Result[unique String, Ma
   Ok(take value)
 }
 
-fn addr_spec(data: Bytes, mut pos: u64) -> Result[unique String, MailError] uses {} {
+fn addr_spec(data: Bytes, mut pos: u64) -> Result[String, MailError] uses {} {
   skip_space(data, mut pos)
   if pos == bytes.len(data) {
     return Error(Syntax(pos))
@@ -342,7 +339,7 @@ fn decode_word(word: String, offset: u64, limits: Limits) -> Result[
   Ok((text.finish_valid(take out), true))
 }
 
-fn phrase(data: Bytes, mut pos: u64, limits: Limits) -> Result[unique String, MailError] uses {} {
+fn phrase(data: Bytes, mut pos: u64, limits: Limits) -> Result[String, MailError] uses {} {
   let start = pos
   let mut out: List[u8] = []
   let mut words: u64 = 0
@@ -410,10 +407,7 @@ fn phrase(data: Bytes, mut pos: u64, limits: Limits) -> Result[unique String, Ma
   Ok(text.finish_valid(take out))
 }
 
-fn comment_name(value: String, offset: u64, limits: Limits) -> Result[
-  unique String,
-  MailError
-] uses {} {
+fn comment_name(value: String, offset: u64, limits: Limits) -> Result[String, MailError] uses {} {
   let mut out: List[u8] = []
   let data = string.as_bytes(value)
   let mut pos: u64 = 0
@@ -583,7 +577,7 @@ pub fn parse_list(value: String, limits: Limits) -> Result[List[Address], MailEr
   Ok(take out)
 }
 
-fn quote(value: String) -> unique String uses {} {
+fn quote(value: String) -> String uses {} {
   let mut out: List[u8] = [b'"']
   for b in string.as_bytes(value) {
     if b == b'"' || b == b'\\' {
@@ -598,7 +592,7 @@ fn quote(value: String) -> unique String uses {} {
 }
 
 // Go WordEncoder splitting: 75-byte encoded words, never split a UTF-8 scalar.
-fn encode_name(value: String, binary: bool) -> unique String uses {} {
+fn encode_name(value: String, binary: bool) -> String uses {} {
   let data = string.as_bytes(value)
   let mut out: List[u8] = []
   let mut pos: u64 = 0

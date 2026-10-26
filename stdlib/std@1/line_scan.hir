@@ -51,7 +51,7 @@ fn poison(mut s: unique Scanner) -> () uses {} {
   s.status = Poisoned()
 }
 
-fn line(mut s: unique Scanner) -> unique Bytes uses {} {
+fn line(mut s: unique Scanner) -> Bytes uses {} {
   let mut data = replace(mut s.carry, [])
   let len = core@1/list.len(data)
   if s.strip_cr && len != 0 && data[len - 1] == 13 {

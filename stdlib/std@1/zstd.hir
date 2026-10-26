@@ -70,7 +70,7 @@ fn empty_tables() -> Tables uses {} {
   )
 }
 
-fn zeros(n: u64) -> unique List[u64] uses {} {
+fn zeros(n: u64) -> List[u64] uses {} {
   let mut out: List[u64] = []
   core@1/list.reserve(mut out, n)
   let mut i: u64 = 0
@@ -307,7 +307,7 @@ fn read_fse(data: Bytes, mut c: Cursor, max_symbols: u64, max_log: u64) -> Resul
 
 // Zig HuffmanTree.assignWeights: two interleaved FSE states. A state update
 // that crosses the bitstream end emits the other state's final symbol too.
-fn fse_weights(data: Bytes) -> Result[unique List[u64], ZstdError] uses {} {
+fn fse_weights(data: Bytes) -> Result[List[u64], ZstdError] uses {} {
   let mut c = Cursor(pos: 0)
   let decoding_table = read_fse(data, mut c, 256, 6)?
   let stream = core@1/bytes.slice(data, c.pos, core@1/bytes.len(data))
@@ -421,7 +421,6 @@ fn read_huffman(data: Bytes, mut c: Cursor) -> Result[Huffman, ZstdError] uses {
   build_huffman(take weights)
 }
 
-@preserves_unique(out)
 fn huffman_stream(data: Bytes, tree: Huffman, n: u64, mut out: List[u8]) -> Result[
   (),
   ZstdError
@@ -456,7 +455,7 @@ fn read_literals(
   mut tables: Tables,
   block_limit: u64,
   output_room: u64
-) -> Result[unique List[u8], ZstdError] uses {} {
+) -> Result[List[u8], ZstdError] uses {} {
   let first = word(data, mut c, 1)?
   let kind = first & 3
   let format = first >> 2 & 3
@@ -953,7 +952,6 @@ fn offset(value: u64, literal_length: u64, mut t: Tables) -> Result[u64, ZstdErr
   Ok(distance)
 }
 
-@preserves_unique(out)
 fn compressed_block(
   data: Bytes,
   mut t: Tables,

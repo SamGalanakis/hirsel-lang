@@ -215,7 +215,7 @@ fn size(s: String) -> u64 uses {} {
   core@1/string.byte_len(s)
 }
 
-fn piece(s: String, a: u64, b: u64) -> unique String uses {} {
+fn piece(s: String, a: u64, b: u64) -> String uses {} {
   let Some(start) = core@1/string.position(s, a) else {
     return ""
   }
@@ -252,7 +252,7 @@ fn punctuation(c: u8) -> bool uses {} {
   c >= 33 && c <= 126 && !ascii.is_alnum(c)
 }
 
-fn trim(s: String) -> unique String uses {} {
+fn trim(s: String) -> String uses {} {
   let mut a: u64 = 0
   let mut b = size(s)
   while a < b && (space(byte(s, a)) || byte(s, a) == 10 || byte(s, a) == 13) {
@@ -2487,7 +2487,7 @@ fn build_node(nodes: List[Entry], mut budget: ParseState) -> Result[
 
 // CommonMark preprocessing and line splitting share one byte scan. Delimiters
 // are ASCII, so every emitted slice starts and ends at a UTF-8 boundary.
-fn normalized_line(source: String, begin: u64, end: u64, take prefix: unique List[u8]) -> unique String uses {} {
+fn normalized_line(source: String, begin: u64, end: u64, take prefix: unique List[u8]) -> String uses {} {
   if core@1/list.len(prefix) == 0 {
     piece(source, begin, end)
   } else {

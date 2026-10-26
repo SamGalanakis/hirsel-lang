@@ -145,7 +145,7 @@ fn payload_size(length: u8, extension: Bytes, max: u64) -> Result[u64, ProtocolE
   Ok(size)
 }
 
-fn unmask(payload: Bytes, offset: u64, size: u64, key: Option[Inline[u8, 4]]) -> unique Bytes uses {} {
+fn unmask(payload: Bytes, offset: u64, size: u64, key: Option[Inline[u8, 4]]) -> Bytes uses {} {
   let mut out: List[u8] = []
   core@1/list.reserve(mut out, size)
   let mut i: u64 = 0
@@ -292,7 +292,7 @@ pub fn decode_close(payload: Bytes) -> Result[Option[(u16, String)], ProtocolErr
   }
 }
 
-fn close_payload(code: u16, reason: String) -> unique Bytes uses {} {
+fn close_payload(code: u16, reason: String) -> Bytes uses {} {
   let mut out: List[u8] = []
   core@1/list.push(mut out, core@1/int.narrow(code >> 8))
   core@1/list.push(mut out, core@1/int.narrow(code & 0xff))

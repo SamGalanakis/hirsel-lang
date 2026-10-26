@@ -689,7 +689,7 @@ pub fn tx_range(
   entries_in(tx.txn.state, from, to, direction, limit)
 }
 
-fn stream_key(stream: Bytes) -> unique Bytes uses {} {
+fn stream_key(stream: Bytes) -> Bytes uses {} {
   let mut out: List[u8] = []
   for b in b"hirsel.streams/" {
     list.push(mut out, b)
@@ -997,7 +997,7 @@ fn list_ids[S](mut s: Store[S], kind: String) -> Result[List[u64], StoreError] {
   Ok(ids)
 }
 
-fn object_name(kind: String, id: u64) -> unique String uses {} {
+fn object_name(kind: String, id: u64) -> String uses {} {
   let mut out: List[u8] = []
   text.append(mut out, kind)
   list.push(mut out, b'/')
@@ -1010,15 +1010,15 @@ fn object_name(kind: String, id: u64) -> unique String uses {} {
   text.finish_valid(take out)
 }
 
-fn log_name(id: u64) -> unique String uses {} {
+fn log_name(id: u64) -> String uses {} {
   object_name("log", id)
 }
 
-fn snap_name(id: u64) -> unique String uses {} {
+fn snap_name(id: u64) -> String uses {} {
   object_name("snap", id)
 }
 
-fn manifest_name(id: u64) -> unique String uses {} {
+fn manifest_name(id: u64) -> String uses {} {
   object_name("manifest", id)
 }
 

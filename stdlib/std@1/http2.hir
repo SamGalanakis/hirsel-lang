@@ -123,7 +123,6 @@ pub fn session(role: Role, header_limit: u64) -> Session uses {} {
   take s
 }
 
-@preserves_unique(out)
 fn append(mut out: List[u8], data: Bytes) uses {} {
   for byte in data {
     core@1/list.push(mut out, byte)

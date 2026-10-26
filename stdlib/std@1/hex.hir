@@ -24,7 +24,6 @@ pub fn encode_into(data: Bytes, mut out: List[u8]) -> () uses {} {
   append_digits(data, mut out)
 }
 
-@preserves_unique(out)
 fn append_digits(data: Bytes, mut out: List[u8]) -> () uses {} {
   let digits = core@1/string.as_bytes("0123456789abcdef")
   let len = core@1/bytes.len(data)

@@ -275,13 +275,13 @@ pub fn parse(take text: String, config: Config) -> Result[List[List[String]], Cs
 // Go reader.go:439-459 assembles fields after parsing a record. Unlike Go's
 // shared record String, each field here owns its bytes. Reuse SliceReader's
 // strict transitions/positions; materialize final fields before reusing views.
-fn owned_field(data: Bytes) -> unique String uses {} {
+fn owned_field(data: Bytes) -> String uses {} {
   let mut out: List[u8] = []
   core@1/bytes.append(mut out, data)
   text.finish_valid(take out)
 }
 
-fn owned_row(r: SliceReader) -> unique List[String] uses {} {
+fn owned_row(r: SliceReader) -> List[String] uses {} {
   let mut row: List[String] = []
   for i in 0u64..field_count(r) {
     let Some(data) = get_field_bytes(r, i) else {

@@ -42,7 +42,7 @@ fn skip_text(data: Bytes, at: u64) -> u64 uses {} {
 
 // The nodes of a codec envelope's descriptor (SER-2 concrete schema
 // descriptor), which `codec.encode` produced and so is well formed.
-fn envelope(data: Bytes) -> unique Envelope uses {} {
+fn envelope(data: Bytes) -> Envelope uses {} {
   let descriptor_start: u64 = 16
   let descriptor_end = descriptor_start + u64_at(data, 8)
   let count = u32_at(data, descriptor_start + 8)
@@ -172,7 +172,6 @@ fn float(kind: u8) -> bool uses {} {
 
 // Appends the key encoding of the value of schema node `node` whose canonical
 // payload starts at `at`, and returns the offset just past that payload.
-@preserves_unique(out)
 fn emit(nodes: List[Node], node: u64, data: Bytes, at: u64, mut out: List[u8]) -> u64 uses {} {
   match nodes[node] {
     Scalar(kind) => emit_scalar(kind, data, at, mut out),
@@ -222,7 +221,6 @@ fn emit(nodes: List[Node], node: u64, data: Bytes, at: u64, mut out: List[u8]) -
   }
 }
 
-@preserves_unique(out)
 fn emit_scalar(kind: u8, data: Bytes, at: u64, mut out: List[u8]) -> u64 uses {} {
   let n = scalar_width(kind)
   if n == 0 {
@@ -267,7 +265,6 @@ fn emit_scalar(kind: u8, data: Bytes, at: u64, mut out: List[u8]) -> u64 uses {}
 
 // Appends the canonical payload of the key of schema node `node` that starts
 // at `at` in `key`, and returns the offset just past that key.
-@preserves_unique(out)
 fn absorb(nodes: List[Node], node: u64, key: Bytes, at: u64, mut out: List[u8]) -> Result[
   u64,
   DecodeError
@@ -340,7 +337,6 @@ fn absorb(nodes: List[Node], node: u64, key: Bytes, at: u64, mut out: List[u8]) 
   }
 }
 
-@preserves_unique(out)
 fn append(mut out: List[u8], data: Bytes) -> () uses {} {
   let n = core@1/bytes.len(data)
   let mut i: u64 = 0
@@ -350,7 +346,6 @@ fn append(mut out: List[u8], data: Bytes) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn put_little(value: u64, count: u64, mut out: List[u8]) -> () uses {} {
   let mut i: u64 = 0
   while i < count {
@@ -360,7 +355,6 @@ fn put_little(value: u64, count: u64, mut out: List[u8]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn absorb_scalar(kind: u8, key: Bytes, at: u64, mut out: List[u8]) -> Result[
   u64,
   DecodeError
