@@ -315,6 +315,7 @@ fn a_divergence_on_a_migrated_child_ends_the_run() {
     let mut run = BodyRun::new(3, true);
     run.config = config();
     run.adapter = Some(Box::new(home));
+    let control = run.control();
     let ended = run.run(
         |_| {},
         |ctx| {
@@ -329,7 +330,14 @@ fn a_divergence_on_a_migrated_child_ends_the_run() {
         "{:?}",
         ended.ended
     );
-    assert_eq!(ended.pending, 0);
+    // A stop returns immediately; pending is the snapshot at that boundary.
+    // The bounded child must still retire and return every compute permit.
+    eventually("the diverged child's reclamation", || {
+        control.status().reclamation_pending == 0
+    });
+    let status = control.status();
+    assert!(status.finished && status.stop_requested && !status.home_busy);
+    assert_eq!(status.lost_permits, 0);
     let admission = std::thread::current().id();
     // The request reached the adapter on the home thread, and the binding died there.
     assert_eq!(take_threads(), [admission]);
