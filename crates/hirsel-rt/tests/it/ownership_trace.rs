@@ -117,3 +117,40 @@ fn ownership_runtime_admission_refuses_replacement_and_oversized_buffers() {
     assert!(first.is_file());
     assert!(!second.exists());
 }
+
+#[test]
+fn ownership_runtime_alias_hook_only_records_bounded_scalar_relations() {
+    use hirsel_rt::ownership_trace::hirsel_rt_v2_ownership_alias;
+    for (limit, complete) in [(3, true), (2, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trace.json");
+        let context = Context::new();
+        context.start(path.clone(), limit);
+        let frame =
+            unsafe { hirsel_rt_v2_ownership_enter(context.0, ABI_VERSION, [7; 32].as_ptr()) };
+        unsafe {
+            hirsel_rt_v2_ownership_alias(context.0, frame, 9, 12, 1 << 32, 42, 7);
+            hirsel_rt_v2_ownership_leave(context.0, frame);
+        }
+        assert!(!path.exists(), "alias hooks perform no observer I/O");
+        drop(context);
+        let log: Log = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(log.complete, complete);
+        if complete {
+            assert_eq!(log.row_count, 3);
+            assert_eq!(
+                log.rows[1],
+                Row::Alias {
+                    task: 0,
+                    frame,
+                    marker: 9,
+                    view: 12,
+                    owner: 1 << 32,
+                    site: 42,
+                    layout: 7
+                }
+            );
+            assert!(!log.rows.iter().any(|row| matches!(row, Row::Event { .. })));
+        }
+    }
+}

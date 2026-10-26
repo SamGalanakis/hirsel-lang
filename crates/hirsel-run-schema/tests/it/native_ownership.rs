@@ -302,7 +302,9 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
                 *frame = 2;
                 *unit = [8; 32];
             }
-            Row::Event { frame, .. } | Row::Leave { frame, .. } => *frame = 2,
+            Row::Event { frame, .. } | Row::Alias { frame, .. } | Row::Leave { frame, .. } => {
+                *frame = 2
+            }
         }
     }
     log.rows.splice(2..2, child);
@@ -458,4 +460,128 @@ fn native_ownership_direct_call_refuses_missing_arguments_returns_and_root_trans
         *token = 3u64 << 32 | 1;
     }
     assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
+}
+
+#[test]
+fn native_alias_binds_capture_custody_without_an_ownership_event() {
+    let caller = [7; 32];
+    let callee = [8; 32];
+    let field = 8u64 << 32 | 1; // capture 0 of callable SSA value 1
+    let slot = 1u64 << 32;
+    let capture = 6u64 << 32;
+    let mut units = Units::new();
+    let mut rows = vec![Row::Enter {
+        task: 0,
+        frame: 1,
+        unit: caller,
+    }];
+    let mut emit = |unit, frame, marker, action, token, owner, site| {
+        units.entry(unit).or_default().insert(
+            marker,
+            Metadata {
+                action,
+                token,
+                owner,
+                site,
+                layout: 7,
+                source: Site {
+                    definition: "fixture::Token".into(),
+                    file: "capture.hir".into(),
+                    line: site,
+                    column: 1,
+                },
+                value_type: "Token".into(),
+            },
+        );
+        Row::Event {
+            task: 0,
+            frame,
+            marker,
+            action,
+            token,
+            owner,
+            site,
+            layout: 7,
+        }
+    };
+    rows.push(emit(caller, 1, 0, 0, 0, 0, 40));
+    rows.push(emit(caller, 1, 1, 1, 0, field, 41));
+    rows.push(emit(caller, 1, 2, 1, 1, slot, 42));
+    let alias = Row::Alias {
+        task: 0,
+        frame: 1,
+        marker: 3,
+        view: 2,
+        owner: slot,
+        site: 43,
+        layout: 7,
+    };
+    rows.push(alias);
+    rows.push(Row::Enter {
+        task: 0,
+        frame: 2,
+        unit: callee,
+    });
+    rows.push(emit(callee, 2, 0, 1, capture, 0, 44));
+    rows.push(emit(callee, 2, 1, 1, 0, 4u64 << 32, 45));
+    rows.push(Row::Leave { task: 0, frame: 2 });
+    rows.push(emit(caller, 1, 4, 1, 5u64 << 32, 3, 46));
+    rows.push(emit(caller, 1, 5, 2, 3, 3, 47));
+    rows.push(Row::Leave { task: 0, frame: 1 });
+    let mut alias_metadata = units[&caller][&2].clone();
+    alias_metadata.action = 3;
+    alias_metadata.token = 2;
+    alias_metadata.owner = slot;
+    alias_metadata.site = 43;
+    units.get_mut(&caller).unwrap().insert(3, alias_metadata);
+    let log = Log {
+        version: VERSION,
+        program: [49; 32],
+        row_count: rows.len() as u64,
+        rows,
+        complete: true,
+    };
+    let calls = LocalCalls::from([(caller, [callee].into()), (callee, Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert_eq!(trace.events.len(), 7); // no Alias ownership event
+    let token = trace.events[0].action.token();
+    assert!(
+        trace
+            .events
+            .iter()
+            .all(|event| event.action.token() == token)
+    );
+    assert!(decode_leaf(&log, [49; 32], &units, 100).is_err());
+    let mut missing = log.clone();
+    missing.rows.remove(4);
+    missing.row_count -= 1;
+    assert!(matches!(
+        decode_local_calls(&missing, [49; 32], &units, &calls, 100),
+        Err(Error::InvalidLocation(_))
+    ));
+    let mut forged = log.clone();
+    let Row::Alias { owner, .. } = &mut forged.rows[4] else {
+        unreachable!()
+    };
+    *owner += 1;
+    assert_eq!(
+        decode_local_calls(&forged, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::InvalidMarker(3)
+    );
+    let mut false_metadata = units.clone();
+    false_metadata
+        .get_mut(&caller)
+        .unwrap()
+        .get_mut(&3)
+        .unwrap()
+        .owner += 1;
+    assert!(matches!(
+        decode_local_calls(&forged, [49; 32], &false_metadata, &calls, 100),
+        Err(Error::Consistency(_))
+    ));
 }

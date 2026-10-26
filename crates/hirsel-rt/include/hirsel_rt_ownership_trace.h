@@ -3,7 +3,7 @@
 #ifndef HIRSEL_RT_OWNERSHIP_TRACE_H
 #define HIRSEL_RT_OWNERSHIP_TRACE_H
 #include "hirsel_rt_v2.h"
-#define HIRSEL_RT_V2_OWNERSHIP_TRACE_ABI_VERSION 71
+#define HIRSEL_RT_V2_OWNERSHIP_TRACE_ABI_VERSION 72
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,6 +16,10 @@ uint64_t hirsel_rt_v2_ownership_enter(hirsel_rt_v2_ctx *ctx, uint32_t abi,
 void hirsel_rt_v2_ownership_event(hirsel_rt_v2_ctx *ctx, uint64_t frame,
                                 uint32_t marker, uint32_t action,
                                 uint64_t token, uint64_t owner,
+                                uint64_t site, uint32_t layout);
+/* Internal alias relation. This neither moves nor creates a resource. */
+void hirsel_rt_v2_ownership_alias(hirsel_rt_v2_ctx *ctx, uint64_t frame,
+                                uint32_t marker, uint64_t view, uint64_t owner,
                                 uint64_t site, uint32_t layout);
 void hirsel_rt_v2_ownership_leave(hirsel_rt_v2_ctx *ctx, uint64_t frame);
 #ifdef __cplusplus

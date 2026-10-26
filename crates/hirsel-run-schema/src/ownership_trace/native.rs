@@ -6,7 +6,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -24,6 +24,16 @@ pub enum Row {
         marker: u32,
         action: u32,
         token: u64,
+        owner: u64,
+        site: u64,
+        layout: u32,
+    },
+    /// Internal checked environment relation, never an ownership event.
+    Alias {
+        task: u32,
+        frame: u64,
+        marker: u32,
+        view: u64,
         owner: u64,
         site: u64,
         layout: u32,
@@ -81,7 +91,28 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-fn owner(frame: u64, parent: Option<u64>, location: u64) -> Result<Owner, Error> {
+fn owner(
+    frame: u64,
+    parent: Option<u64>,
+    environment: Option<&Owner>,
+    location: u64,
+) -> Result<Owner, Error> {
+    if location >> 32 == 6 {
+        let mut owner = environment
+            .cloned()
+            .ok_or(Error::InvalidLocation(location))?;
+        owner.path.push(super::Projection::Field {
+            field: location as u32,
+        });
+        return Ok(owner);
+    }
+    if location >> 32 >= 8 {
+        let mut owner = owner(frame, parent, environment, location & u64::from(u32::MAX))?;
+        owner.path.push(super::Projection::Field {
+            field: (location >> 32) as u32 - 8,
+        });
+        return Ok(owner);
+    }
     let index = location as u32;
     let storage = match location >> 32 {
         0 => Storage::Value {
@@ -153,12 +184,21 @@ fn decode(
     if !log.complete || log.row_count != log.rows.len() as u64 || log.rows.len() > limit {
         return Err(Error::Incomplete);
     }
-    let mut frames = Vec::new();
+    struct Frame {
+        id: u64,
+        unit: [u8; 32],
+        environment: Option<Owner>,
+        pending: Option<Owner>,
+    }
+    let mut frames: Vec<Frame> = Vec::new();
     let mut entered = BTreeSet::new();
     let mut tracker = Tracker::new(limit);
     for &row in &log.rows {
         let task = match row {
-            Row::Enter { task, .. } | Row::Event { task, .. } | Row::Leave { task, .. } => task,
+            Row::Enter { task, .. }
+            | Row::Event { task, .. }
+            | Row::Alias { task, .. }
+            | Row::Leave { task, .. } => task,
         };
         if task != 0 {
             return Err(Error::UnsupportedTask(task));
@@ -172,20 +212,64 @@ fn decode(
                 // Descriptor finalizers can enter an emitted body even when
                 // Ready has no call instruction. Empty checked units carry no
                 // tracked input/output or ownership events across this frame.
-                if let Some((_, parent)) = frames.last()
-                    && !metadata.is_empty()
-                    && !calls
-                        .and_then(|calls| calls.get(parent))
+                let allowed = frames.last().is_some_and(|parent| {
+                    calls
+                        .and_then(|calls| calls.get(&parent.unit))
                         .is_some_and(|targets| targets.contains(&unit))
+                });
+                if !frames.is_empty() && !metadata.is_empty() && !allowed {
+                    return Err(Error::InvalidFrame(frame));
+                }
+                let environment = if allowed {
+                    frames.last_mut().and_then(|parent| parent.pending.take())
+                } else {
+                    None
+                };
+                frames.push(Frame {
+                    id: frame,
+                    unit,
+                    environment,
+                    pending: None,
+                });
+            }
+            Row::Leave { frame, .. } => {
+                if frames
+                    .pop()
+                    .is_none_or(|current| current.id != frame || current.pending.is_some())
                 {
                     return Err(Error::InvalidFrame(frame));
                 }
-                frames.push((frame, unit));
             }
-            Row::Leave { frame, .. } => {
-                if frames.pop().is_none_or(|(current, _)| current != frame) {
+            Row::Alias {
+                frame,
+                marker,
+                view,
+                owner: target,
+                site,
+                layout,
+                ..
+            } => {
+                let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame || current.pending.is_some() || calls.is_none() {
                     return Err(Error::InvalidFrame(frame));
                 }
+                let expected = units[&current.unit]
+                    .get(&marker)
+                    .ok_or(Error::InvalidMarker(marker))?;
+                if (
+                    expected.action,
+                    expected.token,
+                    expected.owner,
+                    expected.site,
+                    expected.layout,
+                ) != (3, view, target, site, layout)
+                    || view >> 32 != 0
+                    || !matches!(target >> 32, 1 | 6)
+                {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                current.pending = Some(owner(frame, parent, current.environment.as_ref(), target)?);
             }
             Row::Event {
                 frame,
@@ -197,13 +281,13 @@ fn decode(
                 layout,
                 ..
             } => {
-                let Some(&(current, unit)) = frames.last() else {
+                let Some(current) = frames.last() else {
                     return Err(Error::InvalidFrame(frame));
                 };
-                if current != frame {
+                if current.id != frame {
                     return Err(Error::InvalidFrame(frame));
                 }
-                let expected = units[&unit]
+                let expected = units[&current.unit]
                     .get(&marker)
                     .ok_or(Error::InvalidMarker(marker))?;
                 if (action, token, recipient, site, layout)
@@ -217,12 +301,12 @@ fn decode(
                 {
                     return Err(Error::InvalidMarker(marker));
                 }
-                let parent = frames.iter().rev().nth(1).map(|(frame, _)| *frame);
+                let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
                 if calls.is_none() && (token >> 32 > 1 || recipient >> 32 > 1) {
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
-                let from = owner(frame, parent, token)?;
-                let to = owner(frame, parent, recipient)?;
+                let from = owner(frame, parent, current.environment.as_ref(), token)?;
+                let to = owner(frame, parent, current.environment.as_ref(), recipient)?;
                 let context = Context {
                     task: TaskPath::default(),
                     operation: 0,

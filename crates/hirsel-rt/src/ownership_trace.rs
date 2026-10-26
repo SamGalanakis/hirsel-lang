@@ -9,7 +9,7 @@ use hirsel_run_schema::ownership_trace::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-pub const ABI_VERSION: u32 = 71;
+pub const ABI_VERSION: u32 = 72;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -174,6 +174,34 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_event(
             marker,
             action,
             token,
+            owner,
+            site,
+            layout,
+        });
+    }
+}
+
+/// Bind a checked borrowed callable view to the still-owned caller slot.
+/// This copies a scalar relation and creates no language ownership event.
+/// # Safety
+/// ctx is current and frame belongs to this admitted diagnostic run.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ownership_alias(
+    ctx: *mut TaskCtx,
+    frame: u64,
+    marker: u32,
+    view: u64,
+    owner: u64,
+    site: u64,
+    layout: u32,
+) {
+    if let Some(observer) = unsafe { observer(ctx) } {
+        let observer = unsafe { &*observer };
+        observer.record(Row::Alias {
+            task: unsafe { (*ctx).task_id },
+            frame,
+            marker,
+            view,
             owner,
             site,
             layout,
