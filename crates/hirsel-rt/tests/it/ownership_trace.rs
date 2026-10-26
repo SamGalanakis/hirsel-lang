@@ -154,3 +154,56 @@ fn ownership_runtime_alias_hook_only_records_bounded_scalar_relations() {
         }
     }
 }
+
+#[test]
+fn ownership_cleanup_scopes_nest_without_io_and_poison_overflow_or_bad_retirement() {
+    use hirsel_rt::ownership_trace::{
+        CleanupScope, hirsel_rt_v2_ownership_cleanup_begin, hirsel_rt_v2_ownership_cleanup_end,
+    };
+    for (limit, bad_order, complete) in [(6, false, true), (5, false, false), (6, true, false)] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace.json");
+        let context = Context::new();
+        context.start(path.clone(), limit);
+        let frame =
+            unsafe { hirsel_rt_v2_ownership_enter(context.0, ABI_VERSION, [7; 32].as_ptr()) };
+        let mut outer = std::mem::MaybeUninit::<CleanupScope>::uninit();
+        let mut inner = std::mem::MaybeUninit::<CleanupScope>::uninit();
+        unsafe {
+            hirsel_rt_v2_ownership_cleanup_begin(
+                context.0,
+                outer.as_mut_ptr(),
+                frame,
+                10,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+            );
+            hirsel_rt_v2_ownership_cleanup_begin(
+                context.0,
+                inner.as_mut_ptr(),
+                frame,
+                11,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+            );
+            if bad_order {
+                hirsel_rt_v2_ownership_cleanup_end(context.0, outer.as_mut_ptr());
+            }
+            hirsel_rt_v2_ownership_cleanup_end(context.0, inner.as_mut_ptr());
+            hirsel_rt_v2_ownership_cleanup_end(context.0, outer.as_mut_ptr());
+            hirsel_rt_v2_ownership_leave(context.0, frame);
+        }
+        assert!(!path.exists(), "cleanup hooks perform no observer I/O");
+        drop(context);
+        let log: Log = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(log.complete, complete);
+        if complete {
+            assert!(matches!(log.rows[1], Row::CleanupBegin { marker: 10, .. }));
+            assert!(matches!(log.rows[2], Row::CleanupBegin { marker: 11, .. }));
+            assert!(matches!(log.rows[3], Row::CleanupEnd { marker: 11, .. }));
+            assert!(matches!(log.rows[4], Row::CleanupEnd { marker: 10, .. }));
+        }
+    }
+}

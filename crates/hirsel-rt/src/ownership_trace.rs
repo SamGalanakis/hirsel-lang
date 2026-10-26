@@ -279,7 +279,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_end(
 ) {
     unsafe {
         if (*ctx).ownership_cleanup != scope {
-            if let Some(observer) = observer(ctx) { (*observer).failed.store(true, Ordering::Relaxed); }
+            if let Some(observer) = observer(ctx) {
+                (*observer).failed.store(true, Ordering::Relaxed);
+            }
             return;
         }
         (*ctx).ownership_cleanup = (*scope).previous;

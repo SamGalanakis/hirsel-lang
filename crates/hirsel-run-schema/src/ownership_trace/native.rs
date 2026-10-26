@@ -316,7 +316,9 @@ fn decode(
                 ..
             } => {
                 let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
-                if current.id != frame { return Err(Error::InvalidFrame(frame)); }
+                if current.id != frame {
+                    return Err(Error::InvalidFrame(frame));
+                }
                 let Some((expected, root, fields)) = &mut current.cleanup else {
                     return Err(Error::InvalidMarker(marker));
                 };

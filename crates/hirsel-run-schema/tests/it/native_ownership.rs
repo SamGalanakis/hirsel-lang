@@ -742,3 +742,103 @@ fn native_capture_cleanup_requires_actual_typed_retirements_before_scope_end() {
         Err(Error::InvalidFrame(1))
     ));
 }
+
+#[test]
+fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures() {
+    let mut units = Units::new();
+    let unit = [7; 32];
+    let slot = 1u64 << 32;
+    let mut rows = vec![Row::Enter {
+        task: 0,
+        frame: 1,
+        unit,
+    }];
+    for (marker, action, token, owner) in [
+        (0, 0, 0, 0),
+        (1, 1, 0, 8u64 << 32 | 1),
+        (2, 0, 2, 2),
+        (3, 1, 2, 9u64 << 32 | 1),
+        (4, 1, 1, slot),
+    ] {
+        units.entry(unit).or_default().insert(
+            marker,
+            Metadata {
+                action,
+                callee: None,
+                cleanup: None,
+                token,
+                owner,
+                site: 42,
+                layout: 7,
+                source: Site {
+                    definition: "fixture::Token".into(),
+                    file: "captures.hir".into(),
+                    line: 1,
+                    column: 1,
+                },
+                value_type: "Token".into(),
+            },
+        );
+        rows.push(Row::Event {
+            task: 0,
+            frame: 1,
+            marker,
+            action,
+            token,
+            owner,
+            site: 42,
+            layout: 7,
+        });
+    }
+    let mut retirement = units[&unit][&4].clone();
+    retirement.action = 4;
+    retirement.token = slot;
+    retirement.cleanup = Some(vec![(1, 7), (0, 7)]);
+    units.get_mut(&unit).unwrap().insert(5, retirement);
+    rows.extend([
+        Row::CleanupBegin {
+            task: 0,
+            frame: 1,
+            marker: 5,
+        },
+        Row::CleanupDrop {
+            task: 0,
+            frame: 1,
+            marker: 5,
+            field: 1,
+            layout: 7,
+        },
+        Row::CleanupDrop {
+            task: 0,
+            frame: 1,
+            marker: 5,
+            field: 0,
+            layout: 7,
+        },
+        Row::CleanupEnd {
+            task: 0,
+            frame: 1,
+            marker: 5,
+        },
+        Row::Leave { task: 0, frame: 1 },
+    ]);
+    let mut log = Log {
+        version: VERSION,
+        program: [49; 32],
+        row_count: rows.len() as u64,
+        rows,
+        complete: true,
+    };
+    let calls = LocalCalls::from([(unit, Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    log.rows.swap(7, 8);
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::InvalidMarker(5)
+    );
+}

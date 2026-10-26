@@ -1439,19 +1439,19 @@ fn ownership_native_called_once_environment_drops_only_retained_capture_on_four_
         r#"
 resource type Token { value: u64 }
 drop(x) {}
-fn select(take first: Token, take second: Token) -> Token {
+fn select(pick: bool, take first: Token, take second: Token) -> Token {
     let captured: once fn() -> Token = fn() -> Token {
-        let seen = second.value
-        take first
+        if pick { take second } else { take first }
     }
     captured()
 }
 pub fn main() -> Result[(), ()] {
-    let result = select(Token(value: 7u64), Token(value: 7u64))
+    let left = select(false, Token(value: 7u64), Token(value: 7u64))
+    let right = select(true, Token(value: 7u64), Token(value: 7u64))
     Ok(())
 }
 "#,
-        2,
+        4,
     );
 }
 
