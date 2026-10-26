@@ -81,6 +81,13 @@ impl FnEmitter<'_, '_, '_> {
         else {
             return self.invalid("structural operand has no validated logical access plan");
         };
+        if plan
+            .graph
+            .static_depth_bound()
+            .is_some_and(|bound| bound <= hirsel_core_contract::depth::STRUCTURAL_LIMIT)
+        {
+            return Ok(());
+        }
         let words = plan
             .program(self.em.inputs.layouts, &|_| Some(0))
             .map_err(|what| crate::CodegenError::Invalid {
@@ -109,6 +116,17 @@ impl FnEmitter<'_, '_, '_> {
         value: ValueId,
         failure: FailureId,
     ) -> Emitted {
+        if self
+            .unit
+            .tables
+            .structural
+            .iter()
+            .find(|plan| plan.root_layout() == layout)
+            .and_then(|plan| plan.graph.static_depth_bound())
+            .is_some_and(|bound| bound <= hirsel_core_contract::depth::STRUCTURAL_LIMIT)
+        {
+            return Ok(());
+        }
         let at = self.stack(layout)?;
         let operand = self.counted_view(value)?;
         self.store(self.layout_shape(layout)?, operand, at)?;

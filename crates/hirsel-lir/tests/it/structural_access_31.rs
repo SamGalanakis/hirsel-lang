@@ -12,6 +12,47 @@ fn physical_plan(
 }
 
 #[test]
+fn static_depth_bounds_cover_all_paths_without_counting_width_or_transparency() {
+    use hirsel_lir::structural::{Shape as S, ShapeGraph};
+    let graph = ShapeGraph {
+        root: 0,
+        nodes: vec![
+            S::Variant(vec![vec![], vec![1, 1, 2]]),
+            S::Sequence(3),
+            S::Map { key: 3, value: 4 },
+            S::Leaf,
+            S::Transparent(1),
+        ],
+    };
+    assert_eq!(graph.static_depth_bound(), Some(3));
+    for n in [1087, 1088, 1089, 4096] {
+        let mut nodes: Vec<_> = (0..n).map(|i| S::Distinct(i + 1)).collect();
+        nodes.extend([S::Transparent(n + 1), S::Fields(vec![])]);
+        assert_eq!(
+            ShapeGraph { root: 0, nodes }.static_depth_bound(),
+            Some(u64::from(n))
+        );
+    }
+    for nodes in [
+        vec![S::Box(0)],
+        vec![S::Sequence(1), S::Variant(vec![vec![], vec![0]])],
+        vec![S::Transparent(0)],
+        vec![S::Box(9)],
+    ] {
+        assert_eq!(ShapeGraph { root: 0, nodes }.static_depth_bound(), None);
+    }
+    // Unreachable recursion cannot deepen a value of the root type.
+    assert_eq!(
+        ShapeGraph {
+            root: 0,
+            nodes: vec![S::Leaf, S::Box(1)]
+        }
+        .static_depth_bound(),
+        Some(0)
+    );
+}
+
+#[test]
 fn structural_access_rejects_erased_distinct_edge_and_forged_logical_binding() {
     use hirsel_lir::structural::{Shape, ShapeGraph};
     let table = crate::support::table();

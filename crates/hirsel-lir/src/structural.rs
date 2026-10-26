@@ -21,6 +21,43 @@ pub struct ShapeGraph {
 }
 
 impl ShapeGraph {
+    /// Maximum logical edge count of every value of this shape. A reachable
+    /// cycle or malformed graph has no static bound. This is derived from the
+    /// same source graph V validates, never from asserted physical edge totals.
+    /// Iterative postorder keeps arbitrarily deep type graphs off the host stack.
+    pub fn static_depth_bound(&self) -> Option<u64> {
+        let mut state = vec![0u8; self.nodes.len()];
+        let mut bounds = vec![0u64; self.nodes.len()];
+        let mut work = vec![(self.root, false)];
+        while let Some((id, finish)) = work.pop() {
+            let node = self.nodes.get(id as usize)?;
+            if finish {
+                let mut bound = Some(0);
+                node.children(|child| {
+                    bound = bound
+                        .zip(bounds.get(child as usize))
+                        .and_then(|(max, &child)| {
+                            child
+                                .checked_add(u64::from(!matches!(node, Shape::Transparent(_))))
+                                .map(|child| max.max(child))
+                        });
+                });
+                bounds[id as usize] = bound?;
+                state[id as usize] = 2;
+            } else {
+                match state[id as usize] {
+                    1 => return None,
+                    2 => continue,
+                    _ => (),
+                }
+                state[id as usize] = 1;
+                work.push((id, true));
+                node.children(|child| work.push((child, false)));
+            }
+        }
+        bounds.get(self.root as usize).copied()
+    }
+
     pub fn check(&self) -> Result<(), &'static str> {
         if self.root as usize >= self.nodes.len() {
             return Err("structural root outside graph");
@@ -57,6 +94,25 @@ impl ShapeGraph {
             }
         }
         Ok(())
+    }
+}
+
+impl Shape {
+    fn children(&self, mut visit: impl FnMut(u32)) {
+        match self {
+            Self::Leaf => (),
+            Self::Fields(fields) => fields.iter().copied().for_each(visit),
+            Self::Variant(arms) => arms.iter().flatten().copied().for_each(visit),
+            Self::Map { key, value } => {
+                visit(*key);
+                visit(*value);
+            }
+            Self::Box(child)
+            | Self::Sequence(child)
+            | Self::Set(child)
+            | Self::Distinct(child)
+            | Self::Transparent(child) => visit(*child),
+        }
     }
 }
 
