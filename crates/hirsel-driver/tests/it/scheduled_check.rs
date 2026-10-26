@@ -223,6 +223,15 @@ fn ordered_reachable_check_fits_original_lower_metadata_grant() {
 
 #[test]
 fn settled_front_check_does_not_decode_an_evicted_modes_body() {
+    check_settled_front_eviction(false);
+}
+
+#[test]
+fn demanded_lower_rematerializes_only_its_evicted_modes_body_after_settled_check() {
+    check_settled_front_eviction(true);
+}
+
+fn check_settled_front_eviction(demand_lower: bool) {
     use hirsel_engine::store::{Bytes, EntryKey, Reference, ResultStore};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     #[derive(Default)]
@@ -246,6 +255,17 @@ fn settled_front_check_does_not_decode_an_evicted_modes_body() {
                 return None;
             }
             self.store.get_content(reference)
+        }
+        fn put_content(
+            &self,
+            domain: hirsel_engine::store::Domain,
+            bytes: &[u8],
+        ) -> Option<Reference> {
+            let reference = self.store.put_content(domain, bytes)?;
+            if domain.kind == QueryKind::Modes as u32 + 16 {
+                self.evicted.store(false, Ordering::Relaxed);
+            }
+            Some(reference)
         }
         fn name(&self) -> &'static str {
             "evicted-modes-control"
@@ -363,6 +383,21 @@ fn settled_front_check_does_not_decode_an_evicted_modes_body() {
             assert_eq!(front.recompute_count(&program.entry, kind), 1);
         }
         assert_eq!(front.live_body_count(), 0);
+        if demand_lower {
+            let retained = front.retained_bytes();
+            let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
+            let products = runtime
+                .wait(request)
+                .expect("a demanded body rematerializes under its own admission");
+            let held = lower.outcome(products[0]).unwrap();
+            assert_eq!(held.output.value.path.path(), &program.entry);
+            assert_eq!(front.recompute_count(&program.entry, QueryKind::Modes), 2);
+            assert_eq!(
+                front.retained_bytes(),
+                retained,
+                "body demand keeps one compact metadata owner"
+            );
+        }
         runtime.shutdown();
     });
 }

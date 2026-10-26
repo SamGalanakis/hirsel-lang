@@ -270,8 +270,22 @@ impl Task {
             Poll::Ready(Err(r)) => return Poll::Ready(Err(r)),
             Poll::Ready(Ok(p)) => p,
         };
-        let Some(front) = owner.front.outcome(selected.record) else {
-            return Poll::Ready(Err(owner.errors.protocol));
+        let front = match owner.front.outcome(selected.record) {
+            Some(front) => front,
+            None => {
+                let Some(id) = owner.front.body_query(&self.path) else {
+                    return Poll::Ready(Err(owner.errors.protocol));
+                };
+                let selected = match self.read(cx, id) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                    Poll::Ready(Ok(product)) => product,
+                };
+                let Some(front) = owner.front.outcome(selected.record) else {
+                    return Poll::Ready(Err(owner.errors.protocol));
+                };
+                front
+            }
         };
         let analyzed = match &front.outcome.result {
             Ok(body) => body,

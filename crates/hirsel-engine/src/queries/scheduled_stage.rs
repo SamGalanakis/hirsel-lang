@@ -267,9 +267,25 @@ impl QueryTask for Task {
             }
             Poll::Ready(Ok(product)) => product,
         };
-        let Some(front) = self.queries.front.outcome(selected.record) else {
-            self.terminal = Some(Err(self.queries.errors.protocol));
-            return QueryPoll::Failed(self.queries.errors.protocol);
+        let front = match self.queries.front.outcome(selected.record) {
+            Some(front) => front,
+            None => {
+                let Some(body) = self.queries.front.body_query(&input.owner) else {
+                    return QueryPoll::Failed(self.queries.errors.protocol);
+                };
+                let selected = match cx.read(body) {
+                    Poll::Pending => return QueryPoll::Waiting(vec![body]),
+                    Poll::Ready(Err(error)) => {
+                        self.terminal = Some(Err(error));
+                        return QueryPoll::Failed(error);
+                    }
+                    Poll::Ready(Ok(product)) => product,
+                };
+                let Some(front) = self.queries.front.outcome(selected.record) else {
+                    return QueryPoll::Failed(self.queries.errors.protocol);
+                };
+                front
+            }
         };
         let result = front.outcome.result.and_then(|analyzed| {
             if has_errors(&analyzed.diagnostics) {

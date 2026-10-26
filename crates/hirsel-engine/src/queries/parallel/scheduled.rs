@@ -496,6 +496,18 @@ impl FrontBodyQueries {
             })
         })
     }
+    /// A separately admitted body materialization after the compact P settles.
+    /// This address is demanded only when a body consumer lost its archive.
+    pub fn body_query(&self, definition: &DefPath) -> Option<QueryId> {
+        let query = self.query(definition)?;
+        Some(QueryId {
+            kind: FRONT_BODY_KIND,
+            address: hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.body-demand.v1",
+                [query.address.0.0.as_slice()],
+            )),
+        })
+    }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
@@ -633,17 +645,28 @@ impl FrontBodyQueries {
 struct Factory(Arc<FrontBodyQueries>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
-        let input = self
-            .0
-            .inputs
-            .get(&query.address.0)
-            .filter(|_| query.kind == FRONT_BODY_KIND)
-            .ok_or(self.0.errors.protocol)?;
+        if query.kind != FRONT_BODY_KIND {
+            return Err(self.0.errors.protocol);
+        }
+        let (key, input, materialize) = if let Some(input) = self.0.inputs.get(&query.address.0) {
+            (query.address.0, input, false)
+        } else {
+            self.0
+                .inputs
+                .iter()
+                .find_map(|(key, input)| {
+                    (ContentHash::of_parts("hirsel.front.body-demand.v1", [key.0.as_slice()])
+                        == query.address.0)
+                        .then_some((*key, input, true))
+                })
+                .ok_or(self.0.errors.protocol)?
+        };
         Ok(Box::new(BodyTask {
             queries: self.0.clone(),
             query,
+            input: key,
+            materialize,
             weight: input.weight,
-
             terminal: None,
         }))
     }
@@ -651,6 +674,8 @@ impl QueryFactory for Factory {
 struct BodyTask {
     queries: Arc<FrontBodyQueries>,
     query: QueryId,
+    input: Key,
+    materialize: bool,
     weight: MemoryWeight,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -665,9 +690,32 @@ impl QueryTask for BodyTask {
             stack: self.weight.stack,
         }
     }
-    fn poll(&mut self, _: &mut dyn QueryContext) -> QueryPoll {
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         if let Some(result) = self.terminal {
             return finish(result);
+        }
+        if self.materialize {
+            let parent = QueryId {
+                kind: FRONT_BODY_KIND,
+                address: hirsel_artifact_store::Address(self.input),
+            };
+            match cx.read(parent) {
+                std::task::Poll::Pending => return QueryPoll::Waiting(vec![parent]),
+                std::task::Poll::Ready(Err(error)) => {
+                    self.terminal = Some(Err(error));
+                    return finish(Err(error));
+                }
+                std::task::Poll::Ready(Ok(product)) => {
+                    if self.queries.outcome(product.record).is_some() {
+                        let result = Ok(ProductRef {
+                            address: self.query.address,
+                            ..product
+                        });
+                        self.terminal = Some(result);
+                        return finish(result);
+                    }
+                }
+            }
         }
         let result = self.run();
         self.terminal = Some(result);
@@ -683,7 +731,7 @@ fn finish(result: Result<ProductRef, Reference>) -> QueryPoll {
 impl BodyTask {
     fn load(&self) -> Option<Result<ProductRef, Reference>> {
         let queries = &self.queries;
-        let input = queries.inputs.get(&self.query.address.0)?;
+        let input = queries.inputs.get(&self.input)?;
         let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
         if entry.variants.is_empty() {
             return None;
@@ -744,7 +792,7 @@ impl BodyTask {
                 .table_keys
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(self.query.address.0, table_keys);
+                .insert(self.input, table_keys);
         }
         let (outcome, checked) = (restored.outcome, restored.checked);
         let failed = outcome.result.is_err();
@@ -761,7 +809,7 @@ impl BodyTask {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
-                self.query.address.0,
+                self.input,
                 FrontOutcome::capture(variant.output, outcome, checked, restored.dead_arms),
             );
         queries.store_adoptions.fetch_add(1, Relaxed);
@@ -780,16 +828,18 @@ impl BodyTask {
         }))
     }
     fn run(&mut self) -> Result<ProductRef, Reference> {
-        if let Some(product) = self.queries.completed_product(self.query) {
+        if !self.materialize
+            && let Some(product) = self.queries.completed_product(self.query)
+        {
             return product;
         }
-        if self.queries.verify_store == crate::store::VerifyStore::Off {
+        if !self.materialize && self.queries.verify_store == crate::store::VerifyStore::Off {
             if let Some(hit) = self.load() {
                 return hit;
             }
         }
         let queries = &self.queries;
-        let input = &queries.inputs[&self.query.address.0];
+        let input = &queries.inputs[&self.input];
         let expected = if queries.verify_store == crate::store::VerifyStore::Recompute {
             let mut entry = crate::store::Entry::load(&*queries.store, &input.key);
             entry.variants.retain(|variant| {
@@ -888,6 +938,34 @@ impl BodyTask {
         if bytes.len() as u64 > self.weight.scratch {
             return Err(queries.errors.resource);
         }
+        if self.materialize {
+            // The accepted compact P is immutable. A body demand may only
+            // replenish exactly its original archive; it never replaces facts
+            // or debits a second retained copy of their metadata.
+            let (reference, reads) = {
+                let outcomes = queries.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+                let old = outcomes.get(&self.input).ok_or(queries.errors.protocol)?;
+                if failed || old.status.is_err() || old.reads.as_ref() != outcome.reads.as_ref() {
+                    return Err(queries.errors.protocol);
+                }
+                (old.reference, old.reads.clone())
+            };
+            if reference.domain.reference(&bytes) != Some(reference) {
+                return Err(queries.errors.protocol);
+            }
+            if queries.store.put_content(reference.domain, &bytes) != Some(reference) {
+                return Err(queries.errors.resource);
+            }
+            let action = crate::store::query_action(&input.key, input.key.1, &reads);
+            queries
+                .store
+                .associate_product(self.query.address, action, reference);
+            return Ok(ProductRef {
+                address: self.query.address,
+                action,
+                record: reference,
+            });
+        }
         if let Some((reads, expected)) = expected {
             if failed || reads != *outcome.reads || expected.as_ref() != bytes.as_slice() {
                 let error = QueryError::Operational(hirsel_types::OperationalFailure {
@@ -926,7 +1004,7 @@ impl BodyTask {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .insert(
-                        self.query.address.0,
+                        self.input,
                         FrontOutcome::capture(record, output, None, None),
                     );
                 return Err(record);
@@ -985,14 +1063,14 @@ impl BodyTask {
                 .table_keys
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(self.query.address.0, keys);
+                .insert(self.input, keys);
         }
         queries
             .outcomes
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(
-                self.query.address.0,
+                self.input,
                 FrontOutcome::capture(record, outcome, checked, dead_arms),
             );
         if failed {

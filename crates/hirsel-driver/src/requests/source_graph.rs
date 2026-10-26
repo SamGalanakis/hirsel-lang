@@ -631,7 +631,7 @@ impl Plan {
         // source roots have separate slots.
         // Reserve the same row bound here and in the runtime constructor so
         // task grants cannot spend the scheduler's bookkeeping allocation.
-        let per_definition = 3
+        let per_definition = 4
             + usize::from(needs_run)
             + 2 * usize::from(needs_native)
             + usize::from(needs_ownership);
@@ -1097,6 +1097,7 @@ pub(super) fn install(
     for path in &definitions {
         for query in [
             front.query(path),
+            front.body_query(path),
             lower.query(path),
             lower.evaluate_query(path),
             run.as_ref().and_then(|run| run.query(path)),

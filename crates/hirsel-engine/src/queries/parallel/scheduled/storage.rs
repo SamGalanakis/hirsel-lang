@@ -143,7 +143,20 @@ impl QueryTask for StorageTask {
         let selected = match cx.read(front) {
             Poll::Pending => return QueryPoll::Waiting(vec![front]),
             Poll::Ready(Err(reference)) => Err(reference),
-            Poll::Ready(Ok(product)) => self.run(product),
+            Poll::Ready(Ok(product)) => {
+                if self.owner.front.outcome(product.record).is_some() {
+                    self.run(product)
+                } else {
+                    let Some(body) = self.owner.front.body_query(&self.path) else {
+                        return finish(Err(self.owner.errors.protocol));
+                    };
+                    match cx.read(body) {
+                        Poll::Pending => return QueryPoll::Waiting(vec![body]),
+                        Poll::Ready(Err(error)) => Err(error),
+                        Poll::Ready(Ok(product)) => self.run(product),
+                    }
+                }
+            }
         };
         self.terminal = Some(selected);
         finish(selected)
