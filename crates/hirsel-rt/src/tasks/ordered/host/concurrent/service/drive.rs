@@ -39,6 +39,7 @@ pub(super) unsafe fn start(ctx: *mut TaskCtx, request: Request) {
         (*ctx).pending_ordered_host = Some(Box::new(Pending {
             request: Some(request),
             result: None,
+            home: None,
             invocation: Some(Invocation {
                 identity,
                 token: 0,

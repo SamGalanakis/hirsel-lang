@@ -27,8 +27,30 @@ type Discovered = Result<Discovery, &'static str>;
 /// fiber drops this owner with TaskCtx, rather than leaking a stack local.
 pub(crate) struct Pending {
     invocation: Option<service::drive::Invocation>,
-    request: Option<Request>,
-    result: Option<Result<Completion, AdapterError>>,
+    pub(super) home: Option<super::home::Invocation>,
+    pub(super) request: Option<Request>,
+    pub(super) result: Option<Result<Completion, AdapterError>>,
+}
+impl Pending {
+    pub(super) fn home_result(
+        result: Option<Completion>,
+        invocation: super::home::Invocation,
+    ) -> Self {
+        Self {
+            invocation: None,
+            home: Some(invocation),
+            request: None,
+            result: result.map(Ok),
+        }
+    }
+    pub(super) fn home(request: Request, invocation: super::home::Invocation) -> Self {
+        Self {
+            invocation: None,
+            home: Some(invocation),
+            request: Some(request),
+            result: None,
+        }
+    }
 }
 struct Owner(*mut TaskCtx);
 impl Drop for Owner {
@@ -48,27 +70,19 @@ pub(crate) struct HomeRequest {
     local_result: Option<Result<Completion, AdapterError>>,
 }
 impl HomeRequest {
-    pub(crate) unsafe fn new(ctx: *mut TaskCtx, request: Request, ordered: bool) -> Self {
-        if ordered {
-            assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
-            unsafe {
-                (*ctx).pending_ordered_host = Some(Box::new(Pending {
-                    invocation: None,
-                    request: Some(request),
-                    result: None,
-                }))
-            };
-            Self {
-                ctx: Some(ctx),
-                local: None,
-                local_result: None,
-            }
-        } else {
-            Self {
-                ctx: None,
-                local: Some(request),
-                local_result: None,
-            }
+    pub(crate) fn local(request: Request) -> Self {
+        Self {
+            ctx: None,
+            local: Some(request),
+            local_result: None,
+        }
+    }
+    /// A bounded view: TaskCtx remains the owner after this view returns.
+    pub(crate) unsafe fn retained(ctx: *mut TaskCtx) -> Self {
+        Self {
+            ctx: Some(ctx),
+            local: None,
+            local_result: None,
         }
     }
     pub(crate) fn get(&self) -> &Request {
@@ -131,32 +145,6 @@ impl HomeRequest {
             None => self.local_result.take().unwrap(),
         }
     }
-    pub(crate) unsafe fn close(
-        &mut self,
-        result: Result<Completion, AdapterError>,
-    ) -> Stopped<Result<Completion, AdapterError>> {
-        let ctx = self.ctx.expect("Ordered close owner");
-        unsafe { (*ctx).pending_ordered_host.as_mut().unwrap().result = Some(result) };
-        super::finish(ctx, Next::Keep)?;
-        Ok(unsafe {
-            (*ctx)
-                .pending_ordered_host
-                .as_mut()
-                .unwrap()
-                .result
-                .take()
-                .unwrap()
-        })
-    }
-}
-impl Drop for HomeRequest {
-    fn drop(&mut self) {
-        if let Some(ctx) = self.ctx {
-            unsafe {
-                (*ctx).pending_ordered_host.take();
-            }
-        }
-    }
 }
 
 /// A home completion owns heap buffers even after the adapter loan ended.
@@ -168,25 +156,7 @@ pub(crate) unsafe fn finish_home(
     operation: bool,
     parked: bool,
 ) -> Result<Completion, ()> {
-    assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
-    unsafe {
-        (*ctx).pending_ordered_host = Some(Box::new(Pending {
-            invocation: None,
-            request: None,
-            result: completion.ok().map(Ok),
-        }))
-    };
-    let _owner = Owner(ctx);
-    if operation && !parked {
-        unsafe { crate::stop::check(ctx, super::finish(ctx, Next::Yield)) };
-    } else if !operation {
-        unsafe { crate::tasks::leave_home(ctx) };
-    }
-    match unsafe { (*ctx).pending_ordered_host.as_mut().unwrap().result.take() } {
-        Some(Ok(value)) => Ok(value),
-        None => Err(()),
-        Some(Err(_)) => unreachable!("home capability conversion already checked"),
-    }
+    unsafe { super::home::finish_result(ctx, completion, operation, parked) }
 }
 
 /// # Safety
@@ -210,6 +180,7 @@ pub(crate) unsafe fn request(
     unsafe {
         (*ctx).pending_ordered_host = Some(Box::new(Pending {
             invocation: None,
+            home: None,
             request: Some(request),
             result: None,
         }));

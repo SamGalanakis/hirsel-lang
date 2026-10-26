@@ -527,38 +527,12 @@ pub(crate) unsafe fn issue(
         return unsafe { ordered_concurrent::request(ctx, &*adapter, request) }
             .map(|result| (result, true));
     }
-    let mut request = unsafe { ordered_concurrent::HomeRequest::new(ctx, request, ordered) };
-    let print = matches!(
-        request.get(),
-        Request::Print { .. } | Request::PrintStderr { .. }
-    );
     if ordered {
-        crate::tasks::ordered::host::begin(ctx, matches!(request.get(), Request::Close { .. }))?;
-        crate::tasks::ordered::events::request_host(ctx, request.get());
-        if crate::tasks::ordered::events::observing(ctx) {
-            unsafe { observe_keys(ctx, request.get()) };
-        }
+        return unsafe { crate::tasks::ordered::host::home::request(ctx, request) };
     }
-    let close = matches!(request.get(), Request::Close { .. });
-    let read = (ordered && matches!(request.get(), Request::NetRead { .. }))
-        .then(|| request.get().clone());
-    // SAFETY: caller contract.
+    let mut request = ordered_concurrent::HomeRequest::local(request);
     let issued = unsafe { issue_here(ctx, &mut request) };
-    // SAFETY: as above.
     unsafe { count(ctx) };
-    if ordered && let Ok((result, parked)) = &issued {
-        if !parked && let Some(read) = &read {
-            crate::tasks::ordered::host::bounded_read(ctx, read, result);
-        }
-        crate::tasks::ordered::events::complete_host(ctx, close, result);
-        if print && crate::tasks::ordered::events::observing(ctx) {
-            let _ = crate::tasks::ordered::events::certify_host(ctx);
-        }
-    }
-    if close && issued.is_ok() && ordered {
-        let (result, parked) = issued.unwrap();
-        return unsafe { request.close(result) }.map(|result| (result, parked));
-    }
     issued
 }
 
@@ -617,10 +591,59 @@ pub(crate) unsafe fn observe_result(ctx: *mut TaskCtx, result: &Result<Completio
     crate::tasks::ordered::events::home_discovery(s, unsafe { (*ctx).task_id }, result, discovered);
 }
 
+pub(crate) enum HomeOutcome {
+    Complete(Result<Completion, AdapterError>),
+    Wait { token: u64, yielded: bool },
+}
+
+/// Bounded home attempt. Its borrowed view ends before an owned drive can leave.
+pub(crate) unsafe fn home_initial(ctx: *mut TaskCtx) -> Stopped<HomeOutcome> {
+    let mut request = unsafe { ordered_concurrent::HomeRequest::retained(ctx) };
+    let result = unsafe { attempt_here(ctx, &mut request) };
+    unsafe { count(ctx) };
+    result
+}
+
+/// Take the published completion once, without introducing a stop after selection.
+pub(crate) unsafe fn home_completion(
+    ctx: *mut TaskCtx,
+    token: u64,
+) -> Result<Completion, AdapterError> {
+    let binding = unsafe { Binding::raw(ctx) };
+    let completion = if crate::tasks::ordered::host::return_pending(ctx, token) {
+        binding
+            .waits
+            .parked
+            .get(&token)
+            .and_then(|row| row.completion.clone())
+    } else {
+        binding
+            .waits
+            .remove_parked(token)
+            .and_then(|row| row.completion)
+    }
+    .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
+    unsafe { count(ctx) };
+    completion
+}
+
 unsafe fn issue_here(
     ctx: *mut TaskCtx,
     request: &mut ordered_concurrent::HomeRequest,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
+    match unsafe { attempt_here(ctx, request) }? {
+        HomeOutcome::Complete(result) => Ok((result, false)),
+        HomeOutcome::Wait { token, yielded } => {
+            unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
+            Ok((unsafe { home_completion(ctx, token) }, true))
+        }
+    }
+}
+
+unsafe fn attempt_here(
+    ctx: *mut TaskCtx,
+    request: &mut ordered_concurrent::HomeRequest,
+) -> Stopped<HomeOutcome> {
     if let Some(cause) = unsafe { crate::tasks::canceled(ctx) }
         && let Some(completion) = unsafe { canceled(ctx, request.get(), cause) }?
     {
@@ -640,7 +663,7 @@ unsafe fn issue_here(
                 _ => {}
             }
         }
-        return Ok((request.take_result(), false));
+        return Ok(HomeOutcome::Complete(request.take_result()));
     }
     let binding = unsafe { Binding::get(ctx) };
     let batch = may_park(request.get()) && binding.adapter.batches_issue();
@@ -676,7 +699,7 @@ unsafe fn issue_here(
                 _ => unreachable!(),
             };
             crate::tasks::ordered::events::print_output(ctx, bytes, request.result(), count);
-            return Ok((request.take_result(), false));
+            return Ok(HomeOutcome::Complete(request.take_result()));
         }
         let result = {
             let _segment = observing.then(|| unsafe { crate::tasks::role::Segment::new(ctx) });
@@ -685,7 +708,7 @@ unsafe fn issue_here(
         request.save_result(result);
         unsafe { observe_result(ctx, request.result()) };
         crate::tasks::ordered::events::record_host_initial(ctx, request.result());
-        return Ok((request.take_result(), false));
+        return Ok(HomeOutcome::Complete(request.take_result()));
     }
     let token = binding.waits.next;
     binding.waits.next += 1;
@@ -716,7 +739,7 @@ unsafe fn issue_here(
     // The snapshot owns the first attempt before this frame may be saved.
     if request.result() != &Err(AdapterError::Blocked) {
         binding.adapter.finish(token);
-        return Ok((request.take_result(), false));
+        return Ok(HomeOutcome::Complete(request.take_result()));
     }
     drop(request.take_result());
     if binding.adapter.injected_wait(request.get()) {
@@ -734,23 +757,7 @@ unsafe fn issue_here(
     );
     // Invalidate timer-only publication before park can retire a boundary.
     unsafe { count(ctx) };
-    // SAFETY: the context is live and nothing is borrowed across the park.
-    unsafe { crate::tasks::park_host(&mut *ctx, token, yielded) }?;
-    let binding = unsafe { Binding::get(ctx) };
-    let completion = if crate::tasks::ordered::host::return_pending(ctx, token) {
-        binding
-            .waits
-            .parked
-            .get(&token)
-            .and_then(|row| row.completion.clone())
-    } else {
-        binding
-            .waits
-            .remove_parked(token)
-            .and_then(|row| row.completion)
-    }
-    .unwrap_or_else(|| crate::fault("a host wait resumed without its completion"));
-    Ok((completion, true))
+    Ok(HomeOutcome::Wait { token, yielded })
 }
 
 /// Inspect only an already-completed row, after the original poll and wake.
