@@ -337,6 +337,24 @@ fn entered_isolate_mark_storage_rejects_forged_cells_without_admitting_callback(
                     .unwrap();
                 let cell = proof.begin_result(wrapper, &program.table, 17).unwrap();
                 assert_eq!(cell.offset, 24);
+                let operation = proof.begin_operation(wrapper, &program.table, 17).unwrap();
+                assert_eq!(operation.kind.tag(), 24);
+                assert!(proof.check_begin_operation(wrapper, &program.table, 17, &operation));
+                for mutation in 0..5 {
+                    let mut bad = operation.clone();
+                    match mutation {
+                        0 => bad.kind = hirsel_lir::continuation::RuntimeOpKind::ScopeEnter,
+                        1 => bad.helper = "hirsel_rt_v2_task_scope_enter".into(),
+                        2 => bad.results.clear(),
+                        3 => bad.results.push(cell.clone()),
+                        4 => bad.results[0].offset = u64::MAX - 7,
+                        _ => unreachable!(),
+                    }
+                    assert!(
+                        !proof.check_begin_operation(wrapper, &program.table, 17, &bad),
+                        "typed operation mutation {mutation}"
+                    );
+                }
                 assert!(proof.check_begin_result(wrapper, &program.table, 17, &cell));
                 assert!(
                     !proof.check_begin_result(wrapper, &program.table, 25, &cell),

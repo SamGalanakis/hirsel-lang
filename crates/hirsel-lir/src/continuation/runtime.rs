@@ -8,6 +8,7 @@ use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum RuntimeOpKind {
+    IsolateBegin,
     ScopeEnter,
     ScopeEnterUntil,
     ScopeExit,
@@ -23,6 +24,7 @@ impl RuntimeOpKind {
     /// Tags of the shared entered-site binder. Free mutex tails occupy 0..3.
     pub fn tag(self) -> u32 {
         match self {
+            Self::IsolateBegin => 24,
             Self::ScopeEnter => 16,
             Self::ScopeEnterUntil => 17,
             Self::ScopeExit => 18,

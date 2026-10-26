@@ -3,12 +3,48 @@
 //! validate IsolateProtocol and the complete retained callchain/cleanup plan.
 use super::*;
 use crate::continuation::{
-    FRAME_HEADER_BYTES, MAX_FRAME_BYTES, RuntimeResultSlot, RuntimeResultSource,
+    FRAME_HEADER_BYTES, MAX_FRAME_BYTES, RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot,
+    RuntimeResultSource,
 };
 use crate::layout_types::{ScalarKind, SizeSpec};
 use crate::stage::ValidatedUnit;
 
 impl IsolateProtocol {
+    /// Typed handoff to the entered begin runtime. The full protocol, cleanup
+    /// coverage and every enclosing frame still require independent checking;
+    /// constructing this record does not make an isolate call resumable.
+    pub fn begin_operation(
+        &self,
+        wrapper: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+        after: u64,
+    ) -> Option<RuntimeOpPlan> {
+        Some(RuntimeOpPlan {
+            kind: RuntimeOpKind::IsolateBegin,
+            helper: "hirsel_rt_v2_isolate_begin".into(),
+            results: vec![self.begin_result(wrapper, layouts, after)?],
+            scope: None,
+        })
+    }
+
+    /// Check the submitted helper/kind and result against actual Ready SSA.
+    /// This neither calls begin_operation nor trusts a runtime/helper digest.
+    pub fn check_begin_operation(
+        &self,
+        wrapper: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+        after: u64,
+        claimed: &RuntimeOpPlan,
+    ) -> bool {
+        let [result] = claimed.results.as_slice() else {
+            return false;
+        };
+        claimed.kind == RuntimeOpKind::IsolateBegin
+            && claimed.helper == "hirsel_rt_v2_isolate_begin"
+            && claimed.scope.is_none()
+            && self.check_begin_result(wrapper, layouts, after, result)
+    }
+
     /// Append the mark cell after the independently validated live frame area.
     /// The runtime initializes this same output once before its begin yield;
     /// an entered Pending rebinds it rather than materializing a fresh mark.
