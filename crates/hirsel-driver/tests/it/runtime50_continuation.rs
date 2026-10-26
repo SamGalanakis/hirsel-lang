@@ -127,7 +127,10 @@ fn runtime50_resume_import_mutations_refused() {
             assert!(!state.cleanup.anchors.is_empty());
         }
         assert_ne!(plan.states[0].target.block, plan.states[1].target.block);
-        assert_eq!(plan.cost.boundaries, 2);
+        assert_eq!(plan.states.len(), 2, "the two original send boundaries");
+        // Entered instruction cleanup adds its own labels without changing
+        // either send or its import-mutation assertions below.
+        assert_eq!(plan.cost.boundaries, 2 + plan.cleanups.len() as u32);
         assert!(plan.cost.frame_bytes > 8 && plan.cost.frame_bytes <= 4096);
         // The child's specialized task wrapper nests the child's frame at its
         // first boundary and finishes the task at its second.
