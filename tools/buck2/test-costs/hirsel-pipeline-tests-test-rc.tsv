@@ -324,3 +324,4 @@ rc_statics::a_dynamic_flat_constant_is_one_pointer_free_extent	0.098
 rc_statics::a_scalar_constant_is_one_block_of_its_bytes	0.025
 wildcard_tag::a_borrowed_soa_list_count_reaches_the_vectorizer_before_unrolling	0.185
 wildcard_tag::only_a_source_catch_all_receives_the_default_tag_edge	0.081
+rc_library_list::soa_variant_push_commits_nested_owned_payload_under_fault_injection	0.167
