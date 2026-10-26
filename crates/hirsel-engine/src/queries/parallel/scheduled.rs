@@ -432,6 +432,14 @@ impl FrontBodyQueries {
             }
         })
     }
+    /// Whether every body settled so far checked without an error.
+    pub fn settled_clean(&self) -> bool {
+        self.outcomes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .all(|outcome| outcome.status.is_ok())
+    }
     /// Actual completed phase read rows, captured by the same compact phase
     /// finisher as scalar publication. This inspection executes no query.
     pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {

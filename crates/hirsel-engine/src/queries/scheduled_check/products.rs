@@ -176,12 +176,20 @@ impl FrontCheckScope {
             return Err(QueryError::NotImplemented);
         }
         let lower = &self.owner().plan.lower;
-        // A GEN-6 specialization is a header only where a receipt body names
-        // it, as checking that body registers it. Others were registered for
-        // bodies this receipt does not cover.
-        let named: BTreeSet<DefId> = self
-            .reads()
-            .values()
+        // A GEN-6 specialization is a header only where a checked body names
+        // it, as checking that body registers it. A clean check reaches every
+        // settled body, including a specialization's own nested clauses the
+        // receipt does not cover (an adopted body keeps its recorded reads);
+        // a failed one stops at the bodies this receipt covers.
+        let front = &self.owner().plan.front;
+        let memos = front.memo_snapshot();
+        let checked: Vec<&Reads> = if front.settled_clean() {
+            memos.iter().map(|(_, reads)| &**reads).collect()
+        } else {
+            self.reads().values().map(|reads| &**reads).collect()
+        };
+        let named: BTreeSet<DefId> = checked
+            .into_iter()
             .flat_map(|reads| reads.iter())
             .filter_map(|(read, _)| match read {
                 ReadKey::Signature(id) => Some(*id),
