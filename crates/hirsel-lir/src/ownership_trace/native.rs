@@ -90,7 +90,16 @@ impl LeafPlan {
                         to: Location,
                         layout: LayoutId|
          -> Result<(), String> {
-            if !leaf(layouts, layout) {
+            // A source callable carries its captured lineage; it does not
+            // create an additional resource token for the callable shell.
+            // Native encoding still refuses it until environment transport
+            // has an independently checked representation.
+            let carrier_move = source_only
+                && kind == Kind::Move
+                && layouts
+                    .layout(layout)
+                    .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
+            if !leaf(layouts, layout) && !carrier_move {
                 return Err(format!(
                     "native ownership tracing: nested ownership at {point:?}"
                 ));
@@ -209,6 +218,31 @@ impl LeafPlan {
                                 Location::Value(result),
                                 layout(result),
                             )?;
+                        }
+                    }
+                    Inst::Closure {
+                        result, closure, ..
+                    } if source_only => {
+                        let site = &unit.tables.closures[closure.index()];
+                        for (capture, captured) in site
+                            .captures
+                            .get(&unit.pools.captures)
+                            .unwrap_or(&[])
+                            .iter()
+                            .enumerate()
+                        {
+                            match captured.usage {
+                                CaptureUse::Take if owned(captured.value) => push(
+                                    after,
+                                    Kind::Move,
+                                    Location::Value(captured.value),
+                                    Location::Capture { closure: result, capture: capture as u32 },
+                                    layout(captured.value),
+                                )?,
+                                CaptureUse::Copy if owned(captured.value) => return Err(
+                                    "native ownership tracing: copied owned capture needs independent lineage".into()),
+                                _ => (),
+                            }
                         }
                     }
                     Inst::Read {

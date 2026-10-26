@@ -2578,3 +2578,118 @@ fn ownership_trace_edge_observation_cannot_use_an_unreferenced_pool_row() {
     let plan = Plan::new(&unit, plan.observations);
     check(&unit, &plan).unwrap();
 }
+
+#[test]
+fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
+    use hirsel_lir::abi_types::{CallMultiplicity, CallableShape};
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(
+        &[(Passing::Take, l::BLK), (Passing::Take, l::BLK)],
+        Some(l::ERASED_ONCE),
+    );
+    let first = t.owned(l::BLK);
+    let second = t.owned(l::BLK);
+    t.param(first);
+    t.param(second);
+    let abi = t.abi_shaped(CallableShape::Closure, &[], Some(l::BLK));
+    t.table.fn_abis[abi.0 as usize].multiplicity = CallMultiplicity::Once;
+    let code = t.symbol(SymbolKind::Function);
+    let captures = PoolRange::push(
+        &mut t.builder.unit.pools.captures,
+        [
+            CaptureValue {
+                value: first,
+                usage: CaptureUse::Take,
+            },
+            CaptureValue {
+                value: second,
+                usage: CaptureUse::Take,
+            },
+        ],
+    );
+    t.builder.unit.tables.closures.push(ClosureSite {
+        receipts: None,
+        scoped: false,
+        code: Some(ClosureCode { symbol: code, abi }),
+        environment: l::PAIR,
+        captures,
+        destination: DestinationClass::Heap,
+        placement: None,
+        anchor: SourceAnchorId(0),
+    });
+    let result = t.owned(l::ERASED_ONCE);
+    // Closure owns its Take captures on both success and failure; C checks
+    // that rejection consumes them too, so caller cleanup must not reuse them.
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Closure {
+            result,
+            closure: ClosureId(0),
+            failure,
+        },
+    );
+    t.builder.ret(ENTRY, Some(result));
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    let captures = plan
+        .observations
+        .iter()
+        .filter(|row| matches!(row.marker.owner, Location::Capture { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(captures.len(), 2);
+    for (ordinal, (row, value)) in captures.iter().zip([first, second]).enumerate() {
+        assert_eq!(row.marker.kind, Kind::Move);
+        assert_eq!(row.marker.token, Location::Value(value));
+        assert_eq!(
+            row.marker.owner,
+            Location::Capture {
+                closure: result,
+                capture: ordinal as u32
+            }
+        );
+        let mut forged = plan.clone();
+        forged
+            .observations
+            .iter_mut()
+            .find(|other| other.marker.id == row.marker.id)
+            .unwrap()
+            .marker
+            .owner = Location::Capture {
+            closure: result,
+            capture: 1 - ordinal as u32,
+        };
+        assert!(matches!(
+            check(unit.unit(), &forged),
+            Err(Error::InvalidBinding(_))
+        ));
+        let mut missing = plan.clone();
+        missing
+            .observations
+            .retain(|other| other.marker.id != row.marker.id);
+        assert!(matches!(
+            check_transform(
+                unit.unit(),
+                &plan,
+                unit.unit(),
+                &missing,
+                Some(&recipe(&plan, &missing))
+            ),
+            Err(Error::MissingMarker(_))
+        ));
+    }
+    assert!(
+        !plan
+            .observations
+            .iter()
+            .any(|row| row.marker.kind == Kind::Create)
+    );
+    assert!(
+        plan.observations
+            .iter()
+            .any(|row| row.point == Point::Return(ENTRY)
+                && row.marker.token == Location::Value(result)
+                && row.marker.owner == Location::Return)
+    );
+}
