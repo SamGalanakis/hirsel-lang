@@ -276,7 +276,11 @@ run_harness() (
       if "$literal"; then set -- "$@" "$argument"; continue; fi
       case "$argument" in
         --) literal=true; set -- "$@" -- ;;
-        --format=* | --quiet | -q) ;;
+        --format=* | --quiet | -q | -Zunstable-options) ;;
+        -Z)
+          [ "$remaining" -gt 0 ] || { echo "$argument requires a value" >&2; exit 2; }
+          value=$1; shift; remaining=$((remaining - 1))
+          [ "$value" = unstable-options ] || set -- "$@" -Z "$value" ;;
         --format)
           [ "$remaining" -gt 0 ] || { echo "$argument requires a value" >&2; exit 2; }
           shift; remaining=$((remaining - 1)) ;;

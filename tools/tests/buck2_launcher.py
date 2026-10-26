@@ -249,6 +249,14 @@ while True: signal.pause()
         self.assertIn('test b_fail ... FAILED', result.stdout)
         self.assertIn('fixture failure output', result.stdout)
         self.assertIn('test result: FAILED. 2 passed; 1 failed; 0 ignored;', result.stdout)
+        costs = self.root / 'costs.tsv'
+        costs.write_text('a_pass\t1\nc_hangs\t1\n')
+        self.env['HIRSEL_TEST_COSTS'] = str(costs)
+        for unstable in ((), ('-Z', 'unstable-options')):
+            result = self.run_report(unstable, deadline=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertRegex(result.stdout, r'test a_pass \.\.\. ok <[0-9.]+s>')
+            self.assertIn('test result: ok. 2 passed; 0 failed; 1 ignored;', result.stdout)
         self.env['HIRSEL_REPORT_FIXTURE_HANG'] = '1'
         result = self.run_report(('--test-threads=1',), deadline=1)
         self.assertEqual(result.returncode, 124, result.stderr)
