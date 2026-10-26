@@ -6,6 +6,19 @@ use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SealedId(u32);
 
+/// A local loan number alone is not an identity across two sealed owners.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SealedLoan {
+    owner: SealedId,
+    index: u64,
+}
+
+#[derive(Clone)]
+struct BitRoot {
+    layout: LayoutId,
+    value: Extent,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StorageCustody {
     Scope,
@@ -25,6 +38,7 @@ pub(crate) struct SealedOwner {
     phase: Phase,
     loans: BTreeSet<u64>,
     next_loan: u64,
+    root: Option<BitRoot>,
 }
 
 // These entry methods are independently tested before the instruction adapter
@@ -68,12 +82,74 @@ impl Ledger {
             phase: Phase::Live,
             loans: BTreeSet::new(),
             next_loan: 0,
+            root: None,
         });
         self.regions[region].storage = StorageCustody::Sealed(id);
         Ok(id)
     }
 
-    pub(crate) fn begin_sealed_loan(&mut self, id: SealedId) -> Checked<u64> {
+    /// Snapshot a fully initialized bit root. Data-bearing roots need a
+    /// separate cell relocation/ownership proof and cannot enter this path.
+    pub(crate) fn transfer_closed_scope_with_bit_root(
+        &mut self,
+        region: usize,
+        word: u64,
+        table: &hirsel_lir::LayoutTable,
+        layout: LayoutId,
+        value: Extent,
+    ) -> Checked<SealedId> {
+        use hirsel_lir::layout_types::{LayoutKind, ScalarKind, SizeSpec};
+        let record = table
+            .layout(layout)
+            .ok_or_else(|| err(V::TypeConfusion, "unknown sealed bit root layout"))?;
+        if !matches!(record.kind, LayoutKind::Unit)
+            && !matches!(record.kind, LayoutKind::Scalar(kind) if kind != ScalarKind::Pointer)
+            || record.size != SizeSpec::Fixed(value.len())
+            || !value.cells.is_empty()
+            || !value.resources.is_empty()
+        {
+            return fail(
+                V::TypeConfusion,
+                "sealed bit root contains storage or has another extent",
+            );
+        }
+        if !value.all_init(0, value.len()) {
+            return fail(V::UninitializedRead, "sealed bit root is not initialized");
+        }
+        // All fallible root checks precede the sole storage-custody transition.
+        let id = self.transfer_closed_scope(region, word)?;
+        self.sealed_owners[id.0 as usize].root = Some(BitRoot { layout, value });
+        Ok(id)
+    }
+
+    pub(crate) fn sealed_bit_root(
+        &self,
+        id: SealedId,
+        loan: SealedLoan,
+        layout: LayoutId,
+    ) -> Checked<&Extent> {
+        self.check_sealed_ownership()?;
+        let owner = self
+            .sealed_owners
+            .get(id.0 as usize)
+            .ok_or_else(|| err(V::ForgedPointer, "unknown sealed root owner"))?;
+        if loan.owner != id || owner.phase != Phase::Live || !owner.loans.contains(&loan.index) {
+            return fail(
+                V::BorrowExpired,
+                "sealed root has no active loan of this owner",
+            );
+        }
+        let root = owner
+            .root
+            .as_ref()
+            .ok_or_else(|| err(V::TypeConfusion, "sealed owner has no typed bit root"))?;
+        if root.layout != layout {
+            return fail(V::TypeConfusion, "sealed root layout differs from its read");
+        }
+        Ok(&root.value)
+    }
+
+    pub(crate) fn begin_sealed_loan(&mut self, id: SealedId) -> Checked<SealedLoan> {
         self.check_sealed_ownership()?;
         let owner = self
             .sealed_owners
@@ -87,14 +163,17 @@ impl Ledger {
             .checked_add(1)
             .ok_or_else(|| err(V::Malformed, "sealed loan identity overflow"))?;
         owner.loans.insert(loan);
-        Ok(loan)
+        Ok(SealedLoan {
+            owner: id,
+            index: loan,
+        })
     }
-    pub(crate) fn end_sealed_loan(&mut self, id: SealedId, loan: u64) -> Checked<()> {
+    pub(crate) fn end_sealed_loan(&mut self, id: SealedId, loan: SealedLoan) -> Checked<()> {
         let owner = self
             .sealed_owners
             .get_mut(id.0 as usize)
             .ok_or_else(|| err(V::ForgedPointer, "unknown sealed owner"))?;
-        if owner.phase != Phase::Live || !owner.loans.remove(&loan) {
+        if loan.owner != id || owner.phase != Phase::Live || !owner.loans.remove(&loan.index) {
             return fail(V::BorrowExpired, "sealed loan is no longer live");
         }
         Ok(())
@@ -140,7 +219,9 @@ impl Ledger {
         {
             return fail(V::UnexplainedAllocation, "sealed drain left storage live");
         }
-        self.sealed_owners[id.0 as usize].phase = Phase::Dead;
+        let owner = &mut self.sealed_owners[id.0 as usize];
+        owner.root = None;
+        owner.phase = Phase::Dead;
         Ok(())
     }
 }
@@ -423,5 +504,159 @@ mod tests {
         }
         ledger.finish_sealed_drop(owner).unwrap();
         ledger.audit_sealed_owners().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod bit_root_tests {
+    use super::*;
+    use crate::build::Layouts;
+    use hirsel_lir::layout_types::{ScalarKind, TargetSpec};
+
+    fn fixture() -> (Ledger, hirsel_lir::LayoutTable, LayoutId, LayoutId) {
+        let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
+        let unit = layouts.unit();
+        let scalar = layouts.scalar(ScalarKind::U64);
+        let (_, table) = layouts.finish();
+        let mut ledger = Ledger::default();
+        for i in 0..2 {
+            ledger.regions.push(Region {
+                storage: StorageCustody::Scope,
+                instance: RegionInstanceId(i),
+                live: true,
+                allocations: Snapshot::default(),
+                budget: None,
+            });
+        }
+        (ledger, table, unit, scalar)
+    }
+    fn bits() -> Extent {
+        let mut e = Extent::new(8);
+        e.write_bytes(0, &73u64.to_le_bytes());
+        e
+    }
+    fn drain(ledger: &mut Ledger, owner: SealedId) {
+        for alloc in ledger.begin_sealed_drop(owner).unwrap() {
+            ledger.free(alloc).unwrap();
+        }
+        ledger.finish_sealed_drop(owner).unwrap();
+    }
+
+    #[test]
+    fn sealed_bit_roots_snapshot_unit_and_scalar_after_scope_exit() {
+        let (mut ledger, table, unit, scalar) = fixture();
+        let mut original = bits();
+        let a = ledger
+            .transfer_closed_scope_with_bit_root(0, 8, &table, unit, Extent::new(0))
+            .unwrap();
+        let b = ledger
+            .transfer_closed_scope_with_bit_root(1, 8, &table, scalar, original.clone())
+            .unwrap();
+        original.write_bytes(0, &99u64.to_le_bytes());
+        for region in 0..2 {
+            ledger.regions[region].live = false;
+        }
+        let la = ledger.begin_sealed_loan(a).unwrap();
+        let lb = ledger.begin_sealed_loan(b).unwrap();
+        assert_eq!(ledger.sealed_bit_root(a, la, unit).unwrap().len(), 0);
+        assert_eq!(
+            ledger
+                .sealed_bit_root(b, lb, scalar)
+                .unwrap()
+                .read_bytes(0, 8),
+            &73u64.to_le_bytes()
+        );
+        assert_eq!(
+            ledger.begin_sealed_drop(b).unwrap_err().kind,
+            V::LoanOutlivesFrame
+        );
+        ledger.end_sealed_loan(a, la).unwrap();
+        ledger.end_sealed_loan(b, lb).unwrap();
+        drain(&mut ledger, a);
+        drain(&mut ledger, b);
+        assert_eq!(
+            ledger.sealed_bit_root(b, lb, scalar).unwrap_err().kind,
+            V::BorrowExpired
+        );
+        ledger.audit_sealed_owners().unwrap();
+    }
+
+    #[test]
+    fn sealed_bit_root_loans_cannot_substitute_another_owner_with_the_same_local_number() {
+        let (mut ledger, table, unit, scalar) = fixture();
+        let a = ledger
+            .transfer_closed_scope_with_bit_root(0, 8, &table, scalar, bits())
+            .unwrap();
+        let b = ledger
+            .transfer_closed_scope_with_bit_root(1, 8, &table, scalar, bits())
+            .unwrap();
+        let la = ledger.begin_sealed_loan(a).unwrap();
+        let lb = ledger.begin_sealed_loan(b).unwrap();
+        assert_eq!(la.index, lb.index);
+        assert_ne!(la, lb);
+        assert_eq!(
+            ledger.sealed_bit_root(b, la, scalar).unwrap_err().kind,
+            V::BorrowExpired
+        );
+        assert_eq!(
+            ledger.end_sealed_loan(b, la).unwrap_err().kind,
+            V::BorrowExpired
+        );
+        assert_eq!(
+            ledger.sealed_bit_root(b, lb, unit).unwrap_err().kind,
+            V::TypeConfusion
+        );
+        assert!(ledger.sealed_bit_root(b, lb, scalar).is_ok());
+        ledger.end_sealed_loan(a, la).unwrap();
+        ledger.end_sealed_loan(b, lb).unwrap();
+        assert_eq!(
+            ledger.sealed_bit_root(b, lb, scalar).unwrap_err().kind,
+            V::BorrowExpired
+        );
+        drain(&mut ledger, a);
+        drain(&mut ledger, b);
+        ledger.audit_sealed_owners().unwrap();
+    }
+
+    #[test]
+    fn malformed_sealed_bit_roots_leave_scope_custody_unchanged() {
+        for mutation in 0..5 {
+            let (mut ledger, table, unit, scalar) = fixture();
+            let mut e = bits();
+            let (layout, expected) = match mutation {
+                0 => (unit, V::TypeConfusion),
+                1 => {
+                    e = Extent::new(8);
+                    (scalar, V::UninitializedRead)
+                }
+                2 => {
+                    let p = ledger.alloc(Owner::Heap, None, 8, 8, 8, Some(Count::Finite(1)));
+                    e.put_cell(
+                        0,
+                        8,
+                        Cell::Data {
+                            ptr: p,
+                            counted: true,
+                            borrow: None,
+                        },
+                    );
+                    (scalar, V::TypeConfusion)
+                }
+                3 => {
+                    e.resources.insert(vec![], ResourceId(0));
+                    (scalar, V::TypeConfusion)
+                }
+                _ => (LayoutId(999), V::TypeConfusion),
+            };
+            assert_eq!(
+                ledger
+                    .transfer_closed_scope_with_bit_root(0, 8, &table, layout, e)
+                    .unwrap_err()
+                    .kind,
+                expected
+            );
+            assert_eq!(ledger.regions[0].storage, StorageCustody::Scope);
+            assert!(ledger.sealed_owners.is_empty());
+        }
     }
 }
