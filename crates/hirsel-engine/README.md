@@ -463,7 +463,11 @@ and placement remain explicit inputs. The compiler parses syntax only on demand.
 Stored products carry data, not verification authority. V independently checks
 signatures and artifacts; only verifier-owned receipts bound to the complete
 content, environment and policy can reuse success. A read-only installation or
-copied producer record cannot supply local execution authority. Package precomputation
+copied producer record cannot supply local execution authority. With environment-selected `none@1`, only V may publish accept receipts to its
+separate host-local validator namespace; installed products and result-directory
+selection never confer that authority. Receipt misses run V, and exact content,
+compiler/V build, options and current reads must match for reuse. Query-result
+writes remain disabled. Package precomputation
 uses batch retention and releases intermediate bodies as each demand finishes.
 
 The single-threaded engine lives on a compiler thread. Use

@@ -58,6 +58,16 @@ impl DirStore {
     }
     /// `$XDG_CACHE_HOME/hirsel/results-v<N>`, else `$HOME/.cache/...`.
     pub fn default_location() -> Option<Self> {
+        Some(
+            Self::new(
+                Self::cache_base()?
+                    .join("hirsel")
+                    .join(format!("results-v{FORMAT}")),
+            )
+            .with_installed_products(),
+        )
+    }
+    fn cache_base() -> Option<PathBuf> {
         let base = std::env::var_os("XDG_CACHE_HOME")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
@@ -71,10 +81,36 @@ impl DirStore {
         if !base.is_absolute() {
             return None;
         }
-        Some(
-            Self::new(base.join("hirsel").join(format!("results-v{FORMAT}")))
-                .with_installed_products(),
-        )
+        Some(base)
+    }
+    /// V's own local associations are independent of query-result writes.
+    /// Neither a run's result directory nor an installed product root selects
+    /// this directory. Only V receives the writable handle.
+    fn installed_verifier(installed: &Path) -> std::sync::Arc<hirsel_validate::VerifierCache> {
+        Self::cache_base()
+            .and_then(|base| Self::local_verifier(&base, installed))
+            .map(std::sync::Arc::new)
+            .unwrap_or_default()
+    }
+    fn local_verifier(base: &Path, installed: &Path) -> Option<hirsel_validate::VerifierCache> {
+        // Canonicalize the existing cache base before appending the private
+        // namespace. Refuse ambiguous/unavailable locations rather than letting
+        // product selection point at the verifier's trusted associations.
+        let base = base.canonicalize().ok()?;
+        let installed = installed.canonicalize().ok()?;
+        let root = base.join("hirsel").join("validator-v2");
+        let root = root.canonicalize().unwrap_or(root);
+        if root.starts_with(&installed) || installed.starts_with(&root) {
+            return None;
+        }
+        // A symlink on the existing namespace parent also needs resolving.
+        let parent = root.parent()?;
+        if parent.exists() && parent.canonicalize().ok()? != parent {
+            return None;
+        }
+        let physical = hirsel_artifact_store::Store::rebuildable(root);
+        physical.set_cache_cap(DEFAULT_CAP);
+        Some(hirsel_validate::VerifierCache::directory_store(physical))
     }
     /// Installed ordinary products are independent of writable-cache policy.
     fn installed_root() -> Option<PathBuf> {
@@ -89,13 +125,13 @@ impl DirStore {
     }
     pub(super) fn installed_only() -> Option<Self> {
         let root = Self::installed_root().filter(|root| root.is_dir())?;
+        let verifier = Self::installed_verifier(&root);
         Some(Self {
             read_only: vec![hirsel_artifact_store::Store::new(root.clone())],
             root,
             physical: None,
             cap: 0,
-            // This reader owns only fresh, process-local verifier authority.
-            verifier: std::sync::Arc::default(),
+            verifier,
         })
     }
     /// Compose environment-selected local storage with installed ordinary
@@ -272,6 +308,81 @@ impl ResultStore for DirStore {
 mod tests {
     use super::*;
     use crate::store::{Domain, ResultStore};
+
+    #[test]
+    fn installed_only_verifier_is_host_local_and_never_writes_query_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let installed = directory.path().join("installed");
+        let cache = directory.path().join("cache");
+        fs::create_dir_all(&installed).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let root = cache.join("hirsel/validator-v2");
+        let verifier = DirStore::local_verifier(&cache, &installed).unwrap();
+        let reader = DirStore {
+            root: installed.clone(),
+            physical: None,
+            read_only: vec![hirsel_artifact_store::Store::new(installed.clone())],
+            cap: 0,
+            verifier: std::sync::Arc::new(verifier),
+        };
+        // Initialize the installed store's ordinary read lock before observing
+        // query writes; lock creation is independent of query publication.
+        assert!(
+            reader
+                .get(&EntryKey(
+                    Default::default(),
+                    Default::default(),
+                    crate::QueryKind::Summary
+                ))
+                .is_none()
+        );
+        let installed_before: Vec<_> = fs::read_dir(&installed)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        let key = EntryKey::new(
+            Default::default(),
+            &hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: crate::default_context().package,
+                modules: vec![],
+                name: "host-local".into(),
+            }),
+            Default::default(),
+            crate::QueryKind::Summary,
+            crate::LoweringPolicy::Reachable,
+        );
+        reader.put(&key, b"must not persist");
+        assert!(reader.get(&key).is_none());
+        assert!(reader.local_product_store().is_none());
+        assert!(
+            reader
+                .put_content(
+                    Domain {
+                        kind: 42,
+                        schema: 1
+                    },
+                    b"no query content"
+                )
+                .is_none()
+        );
+        assert!(!root.exists(), "only V may publish in its namespace");
+        let installed_after: Vec<_> = fs::read_dir(&installed)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(installed_after, installed_before);
+        fs::create_dir_all(&root).unwrap();
+        assert!(DirStore::local_verifier(&cache, &root).is_none());
+        assert!(DirStore::local_verifier(&cache, &cache).is_none());
+        fs::create_dir_all(root.join("program-inputs")).unwrap();
+        assert!(DirStore::local_verifier(&cache, &root.join("program-inputs")).is_none());
+        #[cfg(unix)]
+        {
+            let alias = directory.path().join("product-alias");
+            std::os::unix::fs::symlink(&root, &alias).unwrap();
+            assert!(DirStore::local_verifier(&cache, &alias).is_none());
+        }
+    }
 
     #[test]
     fn installed_read_scope_reuses_regions_refreshes_and_rejects_damage() {

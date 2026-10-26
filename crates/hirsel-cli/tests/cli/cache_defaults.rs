@@ -184,6 +184,7 @@ impl HermeticCacheFixture {
             "HIRSEL_OBJECTS",
             "HIRSEL_RESULTS",
             "HIRSEL_RESULTS_DIR",
+            "HIRSEL_PRODUCTS",
             "HIRSEL_VERIFY_CACHE",
             "HIRSEL_VALIDATE_STAGES",
         ] {
@@ -278,7 +279,11 @@ fn native_private_cache_reuses_units_and_unwritable_dir_never_reports_a_hit() {
     assert!(warm["counts"]["object hits"].as_u64().unwrap() > 0);
     assert_eq!(warm["counts"]["units"], 0);
     assert_eq!(bytes, cached);
-    assert!(cache.join("hirsel/results-v3").is_dir());
+    assert!(
+        cache
+            .join(format!("hirsel/results-v{}", hirsel_engine::store::FORMAT))
+            .is_dir()
+    );
     let (_, fresh) = fixture.build(&mut fixture.command());
     assert_eq!(bytes, fresh);
     // ENOTDIR works even when the harness runs as root; chmod(0) would not.
