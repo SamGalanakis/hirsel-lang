@@ -291,7 +291,7 @@ impl ReadyQueries {
             hirsel_lir::ownership_trace::native::LeafPlan::prepare_value(&value, inputs.layouts)?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
-        let lowered = hirsel_rc::observed::lower_validated_with_guard(
+        let lowered = hirsel_rc::observed::lower_validated(
             value.unit().clone(),
             &initial,
             inputs,
@@ -304,7 +304,6 @@ impl ReadyQueries {
                 },
                 finalizers: miss.finalizers,
             },
-            miss.guard,
         )?;
         self.counts.validations += 1;
         let (unit, output) = self

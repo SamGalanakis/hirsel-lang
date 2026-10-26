@@ -107,7 +107,6 @@ impl OwnershipCompilation {
         }
         for kind in [
             OWNERSHIP_COMPILATION_KIND,
-            super::seal_demand::SEAL_DEMAND_KIND,
             OWNERSHIP_READY_KIND,
             OWNERSHIP_ROOT_KIND,
         ] {
@@ -124,19 +123,9 @@ impl OwnershipCompilation {
             };
         }
         let completed = self.instances.completed_instances(discovery)?;
-        let guard_bytes = if completed
+        let bytes = completed
             .iter()
-            .any(|(_, output)| output.seal_demand.has_seal())
-        {
-            super::seal_demand::Plan::admission_bytes(
-                completed.iter().map(|(_, output)| &output.seal_demand),
-            )
-        } else {
-            0
-        };
-        let bytes = completed.iter().try_fold(
-            16384u64.saturating_add(guard_bytes),
-            |total, (key, output)| {
+            .try_fold(16384u64, |total, (key, output)| {
                 serde_json::to_vec(&(&output.templates, &output.emission))
                     .map(|data| {
                         total
@@ -144,8 +133,7 @@ impl OwnershipCompilation {
                             .saturating_add((key.instance.encoding().len() as u64 + 4096) * 8)
                     })
                     .map_err(|e| e.to_string())
-            },
-        )?;
+            })?;
         if bytes > self.allowance.bytes() {
             return Err("ownership compilation dispatch allowance exhausted".into());
         }
@@ -167,7 +155,6 @@ impl OwnershipCompilation {
             self.instances.retained_source_allowance(),
             self.arena.retained_allowance(),
         ];
-        Arc::get_mut(&mut snapshot).unwrap().guard_admitted_bytes = guard_bytes;
         let native = NativeTasks::new(snapshot, self.weight)?;
         let allowance = self
             .diagnostic_allowance
@@ -175,16 +162,12 @@ impl OwnershipCompilation {
             .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or("ownership dispatch admission consumed twice")?;
-        let guard_factory = native.guard_factory();
         let ownership = OwnershipTasks::new(native, self.weight, allowance)?;
         let factory = ownership.factory();
-        let mut factories = BTreeMap::from([
+        let factories = BTreeMap::from([
             (OWNERSHIP_READY_KIND, factory.clone()),
             (OWNERSHIP_ROOT_KIND, factory),
         ]);
-        if let Some((key, factory)) = guard_factory {
-            factories.insert(key.kind, factory);
-        }
         self.dispatch
             .set(Dispatch {
                 discovery,

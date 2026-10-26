@@ -623,7 +623,7 @@ impl Task {
         let fail = |error: String| owner.native.failure(&error);
         let root = self.query == owner.root;
         let request = owner.requests.get(&self.query.address.0);
-        let mut reads = if root {
+        let reads = if root {
             owner
                 .unit_queries()
                 .into_iter()
@@ -637,9 +637,6 @@ impl Task {
                 .map(|(query, record)| (*query, Some(*record)))
                 .collect()
         };
-        if !root && let Some(query) = owner.native.guard_dependency() {
-            reads.push((query, None));
-        }
         let mut waiting = Vec::new();
         let mut outputs = Vec::new();
         for (query, expected) in reads {
@@ -650,16 +647,6 @@ impl Task {
                     if product.address == query.address
                         && expected.is_none_or(|record| record == product.record) =>
                 {
-                    if query.kind == super::seal_demand::SEAL_DEMAND_KIND
-                        && !owner
-                            .native
-                            .snapshot
-                            .guard
-                            .get()
-                            .is_some_and(|guard| guard.accepts(product))
-                    {
-                        return Err(fail("ownership seal-demand dependency differs".into()));
-                    }
                     outputs.push(product)
                 }
                 _ => {
