@@ -142,6 +142,10 @@ impl FrontCheckQueries {
             )
         })
     }
+    /// The packages admitted to call C (PROG-4).
+    pub(super) fn unsafe_ffi(&self) -> &[UnsafeFfiPackage] {
+        &self.plan.unsafe_ffi
+    }
     pub fn query(&self) -> QueryId {
         self.query
     }

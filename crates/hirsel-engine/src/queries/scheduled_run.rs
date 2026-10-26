@@ -80,7 +80,6 @@ pub struct FrontRunQueries {
     runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
     foreign_links: Vec<LinkInput>,
-    foreign_unreplayable: bool,
     store: Arc<dyn ResultStore>,
     records: crate::NativeRecords,
     anchors: crate::NativeRecordContext,
@@ -699,6 +698,9 @@ impl Task {
             }
         }
         let foreign = foreign_use(&program, &queries.inputs);
+        // PROG-4: C called outside a deterministic wrapper makes every run of
+        // this entry unrecordable, as the checked package decides it.
+        let unreplayable = !queries.check.unsafe_ffi().is_empty() && !foreign.unmodeled.is_empty();
         let revision = program.revision(&self.root)?;
         let code = reach(&self.root);
         let semantic_program = if queries.native_roots.is_empty() {
@@ -726,7 +728,7 @@ impl Task {
             snapshot.clone(),
             bindings,
             queries.foreign_links.clone(),
-            queries.foreign_unreplayable,
+            unreplayable,
         ));
         let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
         let output = Arc::new(FrontRunOutput {
@@ -1030,7 +1032,6 @@ impl QueryEngine {
             runtime,
             foreign_threads: self.foreign_threads.clone(),
             foreign_links: self.foreign_links.clone(),
-            foreign_unreplayable: self.foreign_unreplayable,
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             anchors: crate::NativeRecordContext::capture(self),
             store,

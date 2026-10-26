@@ -370,6 +370,7 @@ impl Task {
         }
         let mut roots = owner.template.clone();
         roots.definitions = native_selected;
+        roots.foreign_unreplayable = run.semantic.foreign_unreplayable();
         roots
             .instance_bodies
             .declarations
@@ -630,7 +631,8 @@ impl QueryEngine {
             instance_bodies: self.instance_bodies(&all.iter().cloned().collect()),
             sources: self.sources.clone(),
             foreign_links: self.foreign_links.clone(),
-            foreign_unreplayable: self.foreign_unreplayable,
+            // The Run decides PROG-4 from the entry's foreign use.
+            foreign_unreplayable: false,
             foreign_threads: self.foreign_threads.clone(),
         };
         let mut declarations = Vec::new();

@@ -16,7 +16,6 @@ struct SettledProducts {
 pub(super) fn materialize(
     facts: Arc<FrontRunOutput>,
     lower: Arc<FrontLowerQueries>,
-    foreign_unreplayable: bool,
 ) -> Result<Arc<TirExecution>, ToolError> {
     let sources = lower.sources().clone().retain_owner(facts.clone());
     let query_error = |error| ToolError::Query {
@@ -39,7 +38,7 @@ pub(super) fn materialize(
         callees: facts.callees.clone(),
         entries: facts.entries.clone(),
         revision: facts.revision.clone(),
-        foreign_unreplayable,
+        foreign_unreplayable: facts.semantic.foreign_unreplayable(),
         foreign: facts.foreign.clone(),
         products: Arc::new(SettledProducts {
             lower,

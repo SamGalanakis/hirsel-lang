@@ -123,7 +123,6 @@ struct SourceProducts {
     inputs: FrozenInputs,
     lowering: LoweringPolicy,
     launch_entry: Option<DefPath>,
-    foreign_unreplayable: bool,
     run: Option<Arc<FrontRunQueries>>,
     native: Option<Arc<super::native_selection::NativeSelection>>,
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
@@ -208,7 +207,6 @@ impl GraphProducts for SourceProducts {
         let ownership = self.ownership.clone();
         let safe = self.safe.clone();
         let lower = self.lower.clone();
-        let foreign_unreplayable = self.foreign_unreplayable;
         let check = self.check.clone();
         let receipt = self.receipt.clone();
         let expected = check.query();
@@ -365,7 +363,6 @@ impl GraphProducts for SourceProducts {
                             CompileResult::Tir(super::tir_products::materialize(
                                 facts,
                                 lower.clone(),
-                                foreign_unreplayable,
                             )?)
                         }
                         CompileOperation::Inspect { definitions } if products.is_empty() => {
@@ -811,7 +808,6 @@ pub(super) fn install(
         return Err(loading.failed(error));
     }
     let launch_entry = program.launch_entry().cloned();
-    let foreign_unreplayable = program.engine.foreign_unreplayable;
     // Capturing the footprint and the Run and native inputs can still name a
     // specialization (GEN-6); select again until no new root appears.
     let mut definitions = selected_definitions(&mut program.engine);
@@ -1231,7 +1227,6 @@ pub(super) fn install(
         inputs: request.inputs.clone(),
         lowering,
         launch_entry,
-        foreign_unreplayable,
         run,
         native,
         ownership,
