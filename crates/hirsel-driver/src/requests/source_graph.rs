@@ -743,6 +743,7 @@ pub(super) fn install(
     budget: &GraphBudget,
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
+    carry: Option<&Arc<hirsel_engine::FrontCarry>>,
     scratch_parent: &std::path::Path,
     toolchain: Option<&Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -901,6 +902,13 @@ pub(super) fn install(
         .engine
         .front_body_queries(&definitions, plan.body, front, errors)
         .map_err(&query_error)?;
+    // Before any task: this fresh graph adopts the selector's earlier accepted
+    // front facts only where their text and reads still validate.
+    if let Some(carry) = carry {
+        front
+            .install_carry(carry.clone())
+            .map_err(|_| uninstalled())?;
+    }
     let lower = program
         .engine
         .front_lower_queries(

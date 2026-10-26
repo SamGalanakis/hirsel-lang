@@ -23,6 +23,8 @@ pub struct CompilerRequests {
     config: CompileConfig,
     budget: Arc<ProcessBudget>,
     limits: RequestLimits,
+    /// Accepted front facts carried from one source revision's graph to the next.
+    carry: Option<Arc<hirsel_engine::FrontCarry>>,
     scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -66,11 +68,17 @@ impl CompilerRequests {
     ) -> Self {
         // Without a durable store, this selector's source revisions share a
         // bounded transient one, so an edit revalidates rather than recomputes.
+        // The store and the front carry split that one transport bound.
+        let mut carry = None;
         if !config.store.enabled() {
             config.store = Arc::new(super::resident_store::ResidentStore::new(
                 budget.clone(),
-                limits.transport_bytes,
+                limits.transport_bytes - limits.transport_bytes / 2,
             ));
+            carry = budget
+                .reserve(limits.transport_bytes / 2)
+                .ok()
+                .and_then(|allowance| hirsel_engine::FrontCarry::new(allowance).ok());
         }
         let graphs = super::host_selector::GraphSelections::new(&budget);
         let ledger =
@@ -82,6 +90,7 @@ impl CompilerRequests {
             config,
             budget,
             limits,
+            carry,
             scratch_parent: std::env::temp_dir(),
             toolchain: None,
             host_toolchain: false,
@@ -164,6 +173,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let compiler = &self.compiler;
         let config = &self.config;
         let limits = self.limits;
+        let carry = self.carry.as_ref();
         let scratch_parent = &self.scratch_parent;
         let toolchain = self.toolchain.as_ref();
         let host_toolchain = self.host_toolchain;
@@ -175,6 +185,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
                 budget,
                 request,
                 ledger,
+                carry,
                 scratch_parent,
                 toolchain,
                 host_toolchain,
