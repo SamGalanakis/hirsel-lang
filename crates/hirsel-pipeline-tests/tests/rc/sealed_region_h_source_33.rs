@@ -114,6 +114,23 @@ pub(super) fn original(
     Declarations,
     hirsel_core_contract::Manifest,
 ) {
+    original_with_guard_observer(source, root_kind, root_native, |_, _, _| {})
+}
+
+pub(super) fn original_with_guard_observer(
+    source: &str,
+    root_kind: TypeKind,
+    root_native: NativeType,
+    mut observe: impl FnMut(
+        &[hirsel_lir::LirUnit<hirsel_lir::stage::Value>],
+        usize,
+        &mut hirsel_lir::LirUnit<hirsel_lir::stage::Placed>,
+    ),
+) -> (
+    hirsel_heapcheck::Program<hirsel_lir::stage::Rc>,
+    Declarations,
+    hirsel_core_contract::Manifest,
+) {
     let program = compile(source);
     let target = target();
     let root = program.types.intern(Type::with_kind(root_kind));
@@ -270,6 +287,7 @@ pub(super) fn original(
         )
         .unwrap();
         demand.apply(unit_index, &mut placed).unwrap();
+        observe(&lowered.units, entry, &mut placed);
         guards += placed
             .tables
             .regions

@@ -50,6 +50,10 @@ impl LocalDemandEquations {
         &self.owner
     }
 
+    pub fn value_count(&self) -> u32 {
+        self.values
+    }
+
     /// Extraction is not admission. The caller still owns independent Value,
     /// original source, grant and Ready checks before using any output.
     pub fn extract<S>(unit: &LirUnit<S>) -> Result<Self, String> {

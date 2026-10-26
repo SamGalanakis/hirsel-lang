@@ -8,6 +8,7 @@ use std::sync::Arc;
 pub mod arena;
 pub mod discharge;
 pub mod graph;
+pub mod seal_demand;
 
 pub const INSTANCE_KIND: u32 = 0x4e00_0001;
 pub const ARENA_CANDIDATES_KIND: u32 = 0x4e00_0002;
