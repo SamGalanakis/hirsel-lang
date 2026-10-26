@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 mod dir;
 mod request;
-pub use dir::{DirStore, GcReport};
+pub use dir::{DirStore, FORMAT, GcReport};
 pub use request::RequestStore;
 
 /// Stable logical address plus explicit source inputs. The address does not
