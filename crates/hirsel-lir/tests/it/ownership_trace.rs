@@ -2579,8 +2579,13 @@ fn ownership_trace_edge_observation_cannot_use_an_unreferenced_pool_row() {
     check(&unit, &plan).unwrap();
 }
 
-#[test]
-fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
+fn once_capture_value_fixture() -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Value>,
+    hirsel_lir::layout_types::LayoutTable,
+    ValueId,
+    ValueId,
+    ValueId,
+) {
     use hirsel_lir::abi_types::{CallMultiplicity, CallableShape};
     use hirsel_lir::stage::Value;
     let mut t = Lir::<Value>::new(
@@ -2632,6 +2637,12 @@ fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
     t.builder.ret(ENTRY, Some(result));
     let (unit, table, _) = t.finish();
     let unit = checked_native_fixture(unit, &table);
+    (unit, table, first, second, result)
+}
+
+#[test]
+fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
+    let (unit, table, first, second, result) = once_capture_value_fixture();
     let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
     let captures = plan
         .observations
@@ -2691,5 +2702,64 @@ fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
             .any(|row| row.point == Point::Return(ENTRY)
                 && row.marker.token == Location::Value(result)
                 && row.marker.owner == Location::Return)
+    );
+}
+
+#[test]
+fn ownership_trace_once_captures_survive_all_recipes_but_still_refuse_native_emission() {
+    let (unit, table, _, _, _) = once_capture_value_fixture();
+    let input = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    let operations = support::registry();
+    let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
+        "hirsel_rt_op".into(),
+    ));
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let finalizers = Default::default();
+    let output = hirsel_rc::observed::lower_validated(
+        unit.into_raw(),
+        &input,
+        &inputs,
+        &hirsel_rc::observed::Options {
+            placement: &placement,
+            proofs: &proofs,
+            elide: true,
+            reuse: &reuse,
+            finalizers: &finalizers,
+        },
+    )
+    .unwrap();
+    assert_eq!(output.recipes.len(), 10);
+    assert_eq!(
+        output
+            .plan
+            .observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>(),
+        input
+            .observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(output.recipes[0].before, input.unit);
+    assert_eq!(output.recipes.last().unwrap().after, output.plan.unit);
+    let ready = checked_native_fixture(output.unit, &table);
+    check(ready.unit(), &output.plan).unwrap();
+    let refusal = native::LeafPlan::from_relocated(&ready, &table, &output.plan).unwrap_err();
+    assert!(
+        refusal.contains("unsupported instruction") && refusal.contains("Closure"),
+        "{refusal}"
     );
 }
