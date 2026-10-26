@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 77;
+pub const ABI_VERSION: u32 = 78;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -607,6 +607,7 @@ pub enum RuntimeEntry {
     /// Enter/resume a certified Ordered join without re-taking its handle.
     OrderedJoin,
     OrderedSleepUntil,
+    OrderedPrint,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -678,7 +679,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 105] = [
+    pub const ALL: [RuntimeEntry; 106] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -784,6 +785,7 @@ impl RuntimeEntry {
         Self::SealPrepareCommit,
         Self::OrderedJoin,
         Self::OrderedSleepUntil,
+        Self::OrderedPrint,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1452,6 +1454,23 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::OrderedPrint => (
+                "hirsel_rt_v2_ordered_print",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("caller_site", U64),
+                        OPERATION_SITE,
+                        p("destination", ptr(N::U8, 1)),
+                        p("out", ptr(N::U8, 1)),
+                        p("stdout", ptr(N::U64, 1)),
+                        p("owner", ptr(N::Header, 1)),
+                        p("start", U64),
+                        p("len", U64),
+                    ]
+                },
+            ),
             Self::ResumeTail => (
                 "hirsel_rt_v2_resume_tail",
                 VOID,
@@ -1644,4 +1663,5 @@ snapshot_enum!(RuntimeEntry {
     SealPrepareCommit,
     OrderedJoin,
     OrderedSleepUntil,
+    OrderedPrint,
 });

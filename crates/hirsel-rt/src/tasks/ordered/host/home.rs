@@ -127,7 +127,7 @@ unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<(Result<Completion, AdapterE
                 // finish and returns language failure without initializing out.
                 if finish_in_drive
                     && let Err(error) = result
-                    && !matches!(error, AdapterError::InvalidHandle(_))
+                    && (print || !matches!(error, AdapterError::InvalidHandle(_)))
                 {
                     return Err(crate::stop::Stop::refusal(error.clone()));
                 }
