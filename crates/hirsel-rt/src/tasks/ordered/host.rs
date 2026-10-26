@@ -179,25 +179,16 @@ pub(crate) fn argument(
 /// # Safety
 /// This task exclusively owns the request and all of its completion buffers.
 pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopped<()> {
-    begin(ctx, false)?;
-    if yielded {
-        let (_, progress) = engine::head_continuation(ctx, || ((), Next::Yield))?;
-        engine::continue_at_head(ctx, progress)?;
-    }
-    let (_, progress) = engine::head_continuation(ctx, || {
-        role::with_role(ctx, |s| {
-            let me = s.current;
-            unpin(s.task(me));
-            s.park(Wait::Host { token });
-        });
-        ((), Next::Park)
-    })?;
-    let me = engine::current(ctx) as u32;
-    engine::reserve_host_poll(ctx, progress);
-    unsafe { crate::host_waits::park(ctx, token, me) };
-    // This distinct boundary may release only an irrevocably completed owned
-    // read. Joins, cleanup and all uncertified waits keep save_boundary's gate.
-    engine::save_host_boundary(ctx);
+    super::inop::start(
+        ctx,
+        super::inop::Operation::Host(super::inop::Host::new(token, yielded)),
+    );
+    super::inop::run(ctx, || unsafe { super::inop::drive_host(ctx) })
+}
+
+/// Inspect the original completed row only after the promised physical save.
+/// This does not retry or take the row; canonical retirement retains custody.
+pub(super) fn select_completed_return(ctx: *mut TaskCtx, token: u64) -> bool {
     let task = engine::current(ctx);
     if super::ahead::host_return::armed(ctx)
         && engine::with_driver(ctx, |d| d.private_enabled)
@@ -212,16 +203,11 @@ pub(crate) unsafe fn park(ctx: *mut TaskCtx, token: u64, yielded: bool) -> Stopp
                     unreachable!()
                 };
                 assert!(driver.host_returns.insert(task, completed).is_none());
-                return Ok(());
+                return true;
             }
         }
     }
-    engine::at_head(ctx)?;
-    assert!(engine::with_driver(ctx, |d| d
-        .host_ops
-        .remove(&task)
-        .is_some()));
-    Ok(())
+    false
 }
 
 #[cfg(test)]

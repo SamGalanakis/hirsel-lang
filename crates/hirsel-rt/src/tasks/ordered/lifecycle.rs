@@ -499,7 +499,7 @@ pub(super) fn detach_member(s: &mut Scheduler, caller: u64, child: u64) {
 /// Execute a holding child's rest as a call, never as a FIFO enqueue.
 /// # Safety
 /// The child is holding a physically saved frame; the caller owns the role.
-pub(super) unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<()> {
+pub(super) unsafe fn call_start(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<Progress> {
     let effect = || {
         let id = role::with_role(ctx, |s| {
             let me = s.current;
@@ -535,6 +535,13 @@ pub(super) unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<
         engine::head_continuation(ctx, effect)?
     };
     assert!(matches!(progress, Progress::Called(_)));
+    Ok(progress)
+}
+
+/// # Safety
+/// The child's result and calling activation remain live through its rest.
+pub(super) unsafe fn call(ctx: *mut TaskCtx, child: u32, call: Call) -> Stopped<()> {
+    let progress = unsafe { call_start(ctx, child, call) }?;
     engine::save_boundary(ctx, progress)
 }
 
@@ -548,84 +555,19 @@ pub(crate) unsafe fn join(
     size: u64,
     caller_site: u64,
 ) -> Stopped<u8> {
-    engine::at_head(ctx)?;
-    let scope_word = unsafe { scope.read() };
-    let child_word = unsafe { task.read() };
-    let (scope, child, state) = role::with_role(ctx, |s| {
-        let scope = s.scope_handle(scope_word);
-        let child = s.task_handle(child_word, scope);
-        (scope, child, s.task(child).state)
-    });
-    super::events::prepare_join(ctx, scope_word, child_word);
-    match state {
-        State::Holding => {
-            unsafe {
-                call(
-                    ctx,
-                    child,
-                    Call {
-                        begin: Some("task.join"),
-                        then_yield: true,
-                        result: ResultAction::Deliver(slot, size),
-                        detached: false,
-                    },
-                )
-            }?;
-        }
-        State::Done => {
-            let (_, progress) = engine::head_effect(ctx, "task.join", || ((), Next::Yield))?;
-            engine::continue_at_head(ctx, progress)?;
-        }
-        State::Ready | State::Parked => {
-            // Cooperative block(yielded=true) first yields, then parks when
-            // the caller reaches the front again, even if the child finished
-            // during that first scheduling point.
-            let (_, progress) = engine::head_effect(ctx, "task.join", || ((), Next::Yield))?;
-            engine::continue_at_head(ctx, progress)?;
-            let (_, progress) = engine::head_continuation(ctx, || {
-                role::with_role(ctx, |s| {
-                    let me = s.current;
-                    s.task(me).wait_site = caller_site;
-                    s.park(Wait::Join { child, slot, size });
-                });
-                ((), Next::Park)
-            })?;
-            engine::save_boundary(ctx, progress)?;
-            if role::with_role(ctx, |s| s.task(child).state) == State::Holding {
-                // The retirement poll already moved the held result. A return
-                // from this child's rest continues the same turn, without poll.
-                unsafe {
-                    call(
-                        ctx,
-                        child,
-                        Call {
-                            begin: None,
-                            then_yield: false,
-                            result: ResultAction::Keep,
-                            detached: false,
-                        },
-                    )
-                }?;
-            }
-        }
-    }
-    let chain = role::with_role(ctx, |s| {
-        assert_eq!(s.task(child).state, State::Done);
-        assert!(readiness::saved(s, child));
-        s.task(child).failure.take()
-    });
-    super::events::complete_join(ctx, scope_word, child_word, chain.as_deref());
-    // Keep the original no-stop window through row retirement. The observer
-    // only reborrowed role-owned data and cannot add a scheduling boundary.
-    let s = unsafe { (*(*(*ctx).run_ptr()).tasks.get()).as_deref_mut().unwrap() };
-    s.scope(scope).children.retain(|&c| c != child);
-    s.vacate_task(child);
-    Ok(if let Some(chain) = chain {
-        unsafe { (*ctx).failure.append_chain(chain) };
-        STATUS_FAILURE
-    } else {
-        STATUS_OK
-    })
+    super::inop::start(
+        ctx,
+        super::inop::Operation::Join(super::inop::Join::new(
+            unsafe { scope.read() },
+            unsafe { task.read() },
+            super::inop::StackfulDestination {
+                address: slot,
+                size,
+            },
+            caller_site,
+        )),
+    );
+    super::inop::run(ctx, || unsafe { super::inop::drive_join(ctx) })
 }
 
 /// # Safety

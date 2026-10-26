@@ -478,7 +478,7 @@ fn with_frontier_here<T>(
 }
 
 /// Exactly one retirement poll. No driver/scheduler reference crosses it.
-fn poll(ctx: *mut TaskCtx) -> Stopped<()> {
+pub(super) fn poll(ctx: *mut TaskCtx) -> Stopped<()> {
     assert!(
         !with_driver(ctx, |d| std::mem::replace(&mut d.host_poll, true)),
         "one poll owner"
@@ -555,7 +555,7 @@ fn accepted(ctx: *mut TaskCtx, task: TaskId, waiting: bool) {
     });
 }
 
-fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
+pub(super) fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
     with_driver(ctx, |d| d.suspending(task, head_only));
     unsafe { crate::pool::free::suspend_current(ctx, false) };
     with_driver(ctx, |d| {
@@ -566,21 +566,31 @@ fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {
 /// Wait before any task-tree mutation. This gate keeps a later task's native
 /// arguments on its own stack until its existing log has retired at the head.
 pub(super) fn at_head(ctx: *mut TaskCtx) -> Stopped<()> {
+    loop {
+        if head_step(ctx)? {
+            return Ok(());
+        }
+        suspend(ctx, current(ctx), true);
+    }
+}
+
+/// One head acquisition attempt. All retirement callbacks finish before this
+/// returns false: a saved operation may suspend around a poll, never inside
+/// its Rust call chain. Retrying only advances the already-owned frontier.
+pub(super) fn head_step(ctx: *mut TaskCtx) -> Stopped<bool> {
     let task = with_current_driver(ctx, |task, driver| {
         driver.enter(task, crate::pool::compute_index().unwrap_or(0));
         task
     });
-    loop {
-        advance(ctx)?;
-        if with_driver(ctx, |d| d.head_ready(task)) {
-            super::host::retire_return(ctx);
-            let before = stretch(ctx);
-            settle_head(ctx, &before)?;
-            fuel_in(ctx);
-            return Ok(());
-        }
-        suspend(ctx, task, true);
+    advance(ctx)?;
+    if !with_driver(ctx, |d| d.head_ready(task)) {
+        return Ok(false);
     }
+    super::host::retire_return(ctx);
+    let before = stretch(ctx);
+    settle_head(ctx, &before)?;
+    fuel_in(ctx);
+    Ok(true)
 }
 
 /// Whether the running task would wait at a boundary before it could issue
@@ -902,14 +912,6 @@ pub(super) fn reserve_host_poll(ctx: *mut TaskCtx, progress: Progress) {
         let task = current(ctx);
         with_driver(ctx, |d| d.defer_poll_until_saved(task));
     }
-}
-
-/// A host wait still publishes the same saved frame and its reserved
-/// retirement poll. Its owner inspects the completed row before deciding
-/// whether at_head is needed.
-pub(super) fn save_host_boundary(ctx: *mut TaskCtx) {
-    let task = current(ctx);
-    suspend(ctx, task, false);
 }
 
 /// Save only the physical frame while a blocking file job owns the logical

@@ -46,6 +46,7 @@ pub(crate) struct Driver {
     pub(super) host_poll: bool,
     /// A physical file job retains its logical head until completion.
     pub(super) head_job: Option<(TaskId, u64)>,
+    pub(super) in_operations: BTreeMap<TaskId, super::inop::Operation>,
     pub(super) host_ops: BTreeMap<TaskId, &'static str>,
     pub(super) next_host_token: u64,
     pub(super) bounded_reads: BTreeSet<TaskId>,
@@ -92,6 +93,7 @@ impl Driver {
             returned: BTreeMap::new(),
             host_poll: false,
             head_job: None,
+            in_operations: BTreeMap::new(),
             host_ops: BTreeMap::new(),
             next_host_token: 1,
             host_returns: BTreeMap::new(),
