@@ -202,8 +202,8 @@ pub(super) fn used_edges<S>(unit: &LirUnit<S>) -> std::collections::BTreeSet<Edg
     edges
 }
 
-/// The initial alias vocabulary accepts a callable stored and borrowed in the
-/// same block as its call. C independently checks the ordinary unit; this
+/// Accept a callable stored and borrowed along one checked predecessor chain.
+/// C independently checks the ordinary unit; this
 /// checker replays the named slot's live/initialized version and loan rather
 /// than trusting a producer's alias target or an equal callable layout.
 pub(super) fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> bool {
@@ -263,74 +263,164 @@ pub(super) fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation)
     if call.callee.value() != Some(view) || call.pretransfer_failure.is_some() {
         return false;
     }
-    let Some(code) = unit
-        .blocks
-        .get(block.index())
-        .and_then(|block| block.instructions.get(&unit.instructions))
-    else {
-        return false;
-    };
+    // Arena controls split an ordinary store/loan/call sequence into blocks.
+    // Follow only a unique normal predecessor back to entry. A join, failure
+    // entry or cycle needs a stronger proof and remains refused.
+    let mut predecessors = vec![Vec::new(); unit.blocks.len()];
+    for (index, term) in unit.terminators.iter().enumerate() {
+        for edge in term.normal_edges(&unit.pools) {
+            let Some(info) = unit.tables.edges.get(edge.index()) else {
+                return false;
+            };
+            let Some(rows) = predecessors.get_mut(info.target.index()) else {
+                return false;
+            };
+            rows.push((BlockId(index as u32), edge));
+        }
+    }
+    let mut failure_targets = std::collections::BTreeSet::new();
+    for (index, term) in unit.terminators.iter().enumerate() {
+        let failures = term.failure_edges(&unit.tables).into_iter().chain(
+            unit.blocks[index]
+                .instructions
+                .get(&unit.instructions)
+                .unwrap_or(&[])
+                .iter()
+                .filter_map(Inst::failure),
+        );
+        for failure in failures {
+            let Some(failure) = unit.tables.failures.get(failure.index()) else {
+                return false;
+            };
+            let Some(edge) = unit.tables.edges.get(failure.cleanup.index()) else {
+                return false;
+            };
+            failure_targets.insert(edge.target);
+        }
+    }
+    let mut chain = vec![block];
+    let mut current = block;
+    while current != unit.entry {
+        if failure_targets.contains(&current) {
+            return false;
+        }
+        let [(parent, _)] = predecessors[current.index()].as_slice() else {
+            return false;
+        };
+        if chain.contains(parent) {
+            return false;
+        }
+        chain.push(*parent);
+        current = *parent;
+    }
+    chain.reverse();
     let (mut live, mut version, mut active, mut borrowed) = (false, None, false, None);
-    for instruction in code {
-        match *instruction {
-            Inst::StorageLive { slot: current } if current == slot => {
-                live = true;
-                version = None;
-            }
-            Inst::StorageDead { slot: current, .. } if current == slot => {
-                live = false;
-                version = None;
-            }
-            Inst::EndScope { scope } => {
-                let mut current = Some(unit.slots[slot.index()].scope);
-                for _ in 0..unit.scopes.len() {
-                    let Some(at) = current else { break };
-                    if at == scope {
-                        live = false;
-                        version = None;
-                        break;
+    for (position, &block) in chain.iter().enumerate() {
+        let Some(code) = unit.blocks[block.index()]
+            .instructions
+            .get(&unit.instructions)
+        else {
+            return false;
+        };
+        for instruction in code {
+            match *instruction {
+                Inst::StorageLive { slot: current } if current == slot => {
+                    live = true;
+                    version = None;
+                }
+                Inst::StorageDead { slot: current, .. } if current == slot => {
+                    live = false;
+                    version = None;
+                }
+                Inst::EndScope { scope } => {
+                    let mut current = Some(unit.slots[slot.index()].scope);
+                    for _ in 0..unit.scopes.len() {
+                        let Some(at) = current else { break };
+                        if at == scope {
+                            live = false;
+                            version = None;
+                            break;
+                        }
+                        current = unit.scopes.get(at.index()).and_then(|info| info.parent);
                     }
-                    current = unit.scopes.get(at.index()).and_then(|info| info.parent);
+                }
+                Inst::Store {
+                    address,
+                    value,
+                    version: next,
+                } if whole(unit, address) == Some(slot) => {
+                    version = unit
+                        .values
+                        .get(value.index())
+                        .filter(|value| value.holding == Holding::Owned && value.ty == info.ty)
+                        .map(|_| next);
+                }
+                Inst::Read {
+                    address,
+                    mode: ReadMode::Take,
+                    ..
+                }
+                | Inst::Drop { address, .. }
+                | Inst::FinalizeEnd { address, .. }
+                    if whole(unit, address) == Some(slot) =>
+                {
+                    version = None
+                }
+                Inst::Replace { address, .. } if whole(unit, address) == Some(slot) => {
+                    version = None
+                }
+                Inst::BeginLoan { loan: current, .. } if current == loan => {
+                    active = true;
+                    borrowed = None;
+                }
+                Inst::EndLoan { loan: current, .. } if current == loan => {
+                    active = false;
+                    borrowed = None;
+                }
+                Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Borrow,
+                } if result == view && address == owner && active => borrowed = Some(reaching),
+                _ => (),
+            }
+        }
+        if let Some(&next) = chain.get(position + 1) {
+            if let Terminator::Call { call, .. } = unit.terminators[block.index()] {
+                let Some(call) = unit.tables.calls.get(call.index()) else {
+                    return false;
+                };
+                for argument in call
+                    .arguments
+                    .get(&unit.pools.call_arguments)
+                    .unwrap_or(&[])
+                {
+                    if let ArgumentValue::Address { address, .. } = argument.value
+                        && whole(unit, address) == Some(slot)
+                    {
+                        return false;
+                    }
                 }
             }
-            Inst::Store {
-                address,
-                value,
-                version: next,
-            } if whole(unit, address) == Some(slot) => {
-                version = unit
-                    .values
-                    .get(value.index())
-                    .filter(|value| value.holding == Holding::Owned && value.ty == info.ty)
-                    .map(|_| next);
-            }
-            Inst::Read {
-                address,
-                mode: ReadMode::Take,
-                ..
-            }
-            | Inst::Drop { address, .. }
-            | Inst::FinalizeEnd { address, .. }
-                if whole(unit, address) == Some(slot) =>
+            let [(_, edge)] = predecessors[next.index()].as_slice() else {
+                return false;
+            };
+            let edge = &unit.tables.edges[edge.index()];
+            for (&parameter, &argument) in unit.blocks[next.index()]
+                .parameters
+                .get(&unit.pools.values)
+                .unwrap_or(&[])
+                .iter()
+                .zip(edge.arguments.get(&unit.pools.values).unwrap_or(&[]))
             {
-                version = None
+                if version == Some(argument) {
+                    version = Some(parameter);
+                }
+                if borrowed == Some(argument) {
+                    borrowed = Some(parameter);
+                }
             }
-            Inst::Replace { address, .. } if whole(unit, address) == Some(slot) => version = None,
-            Inst::BeginLoan { loan: current, .. } if current == loan => {
-                active = true;
-                borrowed = None;
-            }
-            Inst::EndLoan { loan: current, .. } if current == loan => {
-                active = false;
-                borrowed = None;
-            }
-            Inst::Read {
-                result,
-                address,
-                reaching,
-                mode: ReadMode::Borrow,
-            } if result == view && address == owner && active => borrowed = Some(reaching),
-            _ => (),
         }
     }
     live && active && version.is_some() && borrowed == version

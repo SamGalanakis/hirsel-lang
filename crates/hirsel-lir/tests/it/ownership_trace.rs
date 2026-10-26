@@ -3931,3 +3931,72 @@ fn checked_nested_arena_fixture<S: hirsel_lir::stage::Stage>(
     )
     .unwrap()
 }
+
+#[test]
+fn ownership_trace_alias_checks_the_live_owner_across_a_split_block() {
+    let (unit, table, plan, _, loan) = alias_fixture();
+    let mut raw = unit.unit().clone();
+    let code = raw.blocks[ENTRY.index()].instructions;
+    let split = code
+        .get(&raw.instructions)
+        .unwrap()
+        .iter()
+        .position(|inst| matches!(inst, Inst::BeginLoan { .. }))
+        .unwrap();
+    let called = BlockId(raw.blocks.len() as u32);
+    raw.blocks.push(Block {
+        kind: BlockKind::Body,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::new(code.start + split as u32, code.len - split as u32),
+        anchor: raw.blocks[ENTRY.index()].anchor,
+    });
+    raw.blocks[ENTRY.index()].instructions.len = split as u32;
+    raw.terminators.push(raw.terminators[ENTRY.index()].clone());
+    let edge = EdgeId(raw.tables.edges.len() as u32);
+    raw.tables.edges.push(Edge {
+        target: called,
+        arguments: PoolRange::EMPTY,
+    });
+    raw.terminators[ENTRY.index()] = Terminator::Jump(edge);
+    let checked = checked_native_fixture(raw.clone(), &table);
+    let mut observations = plan.observations.clone();
+    observations[0].point = Point::CallEntered(called);
+    let plan = Plan::new(checked.unit(), observations.clone());
+    check(checked.unit(), &plan).unwrap();
+    for suffix in [
+        vec![Inst::EndScope { scope: ROOT }],
+        vec![Inst::EndLoan {
+            loan,
+            if_active: false,
+        }],
+    ] {
+        let mut bad = raw.clone();
+        let mut code = bad.blocks[called.index()]
+            .instructions
+            .get(&bad.instructions)
+            .unwrap()
+            .to_vec();
+        code.extend(suffix);
+        bad.blocks[called.index()].instructions = PoolRange::push(&mut bad.instructions, code);
+        let forged = Plan::new(&bad, observations.clone());
+        assert_eq!(
+            check(&bad, &forged).unwrap_err(),
+            Error::InvalidBinding(MarkerId(100))
+        );
+    }
+    let mut joined = raw.clone();
+    let extra = BlockId(joined.blocks.len() as u32);
+    joined.blocks.push(Block {
+        kind: BlockKind::Body,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::EMPTY,
+        anchor: joined.blocks[ENTRY.index()].anchor,
+    });
+    joined.terminators.push(Terminator::Jump(edge));
+    let _ = extra;
+    let forged = Plan::new(&joined, observations);
+    assert_eq!(
+        check(&joined, &forged).unwrap_err(),
+        Error::InvalidBinding(MarkerId(100))
+    );
+}
