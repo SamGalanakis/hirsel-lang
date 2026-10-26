@@ -252,9 +252,6 @@ impl NativeTasks {
             .get()
             .map(|guard| (guard.query_id(), guard.factory()))
     }
-    pub(super) fn guard_dependency(&self) -> Option<QueryId> {
-        self.snapshot.guard.get().map(|guard| guard.query_id())
-    }
     pub fn failure(&self, message: &str) -> hirsel_engine::store::Reference {
         self.snapshot
             .store
