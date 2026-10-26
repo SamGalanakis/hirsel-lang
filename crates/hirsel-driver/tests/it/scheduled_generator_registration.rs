@@ -1454,3 +1454,38 @@ fn accepted_generated_native_inputs_bind_current_views_and_exact_metadata_grants
         }
     });
 }
+
+#[test]
+fn detached_generator_text_releases_completed_front_and_lower_input_grants() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let mut detached = None;
+            let mut retained_budget = None;
+            accepted_output_control(jobs, |_, budget, output| {
+                assert!(
+                    budget.reserved() > 0,
+                    "text/read/evidence payload stays charged"
+                );
+                assert!(
+                    budget.reserved() < 16 << 20,
+                    "detached text must release the three completed 16MiB input graphs"
+                );
+                assert_eq!(output.text().unwrap(), "fn()->u8 uses {} {7u8}");
+                assert!(output.has_execution_acceptance());
+                assert!(output.reads().iter().any(|(key, _)| matches!(key, hirsel_engine::ReadKey::ExecutedBody(id) if id.path().0.name == "make")));
+                let copy = output.clone();
+                drop(output);
+                assert!(budget.reserved() > 0);
+                detached = Some(copy);
+                retained_budget = Some(budget.clone());
+            });
+            let budget = retained_budget.unwrap();
+            let output = detached.unwrap();
+            assert_eq!(output.text().unwrap(), "fn()->u8 uses {} {7u8}");
+            assert!(output.has_execution_acceptance());
+            assert!(budget.reserved() > 0 && budget.reserved() < 16 << 20);
+            drop(output);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
