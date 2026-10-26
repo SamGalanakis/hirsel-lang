@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Make one schema-1 package manifest's local dependencies workspace-relative."""
+"""Make one schema-1 or schema-2 manifest's local dependencies workspace-relative."""
 import argparse
 import json
 import os
@@ -46,14 +46,46 @@ def identity(value):
 def read_manifest(path):
     with path.open(encoding='utf-8') as stream:
         value = json.load(stream, object_pairs_hook=unique_object, parse_constant=invalid_constant)
-    if not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] != 1:
-        raise ValueError(f'{path}: package schema must be 1')
+    if not isinstance(value, dict) or type(value.get('schema')) is not int or value['schema'] not in (1, 2):
+        raise ValueError(f'{path}: package schema must be 1 or 2')
     identity(value.get('package'))
     if not isinstance(value.get('dependencies'), list):
         raise ValueError(f'{path}: dependencies must be an array of local manifest selections')
     if not isinstance(value.get('sources'), list) or not value['sources']:
         raise ValueError(f'{path}: sources must be a nonempty array')
+    descriptors(value)
     return value
+
+
+def descriptors(value):
+    """Compiler package.rs catalog/edge shapes; slot resolution stays in Hirsel."""
+    if value['schema'] == 1:
+        entries = value['dependencies']
+    else:
+        catalog = value.get('dependency_catalog', {})
+        if not isinstance(catalog, dict):
+            raise ValueError('dependency_catalog must be an object')
+        for key in catalog:
+            # Catalog IDs use the same identifier rules as package names.
+            identity(dict(name=key, version='1'))
+            if key == 'self':
+                raise ValueError('self is reserved and cannot be a catalog ID')
+        used = set()
+        for edge in value['dependencies']:
+            if not isinstance(edge, dict) or not isinstance(edge.get('use'), str) or edge['use'] not in catalog:
+                raise ValueError('dependency use must name a dependency_catalog ID')
+            if edge['use'] in used:
+                raise ValueError('two dependencies use the same catalog ID')
+            used.add(edge['use'])
+            if not isinstance(edge.get('bindings'), dict) or not isinstance(edge.get('expose'), list):
+                raise ValueError('schema-2 dependency requires bindings object and expose array')
+        entries = list(catalog.values())
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError('dependency must be an object with manifest and package')
+        identity(entry.get('package'))
+        local_path(entry.get('manifest'))
+    return entries
 
 
 def contained_file(path, root):
@@ -91,7 +123,7 @@ def portable(manifest, workspace_root, std_manifest=None):
         raise ValueError('workspace root must be a directory')
     path = contained_file(manifest, root)
     value = read_manifest(path)
-    dependencies = value['dependencies']
+    dependencies = descriptors(value)
     selections = []
     std_indices = []
     for index, dependency in enumerate(dependencies):
@@ -112,8 +144,20 @@ def portable(manifest, workspace_root, std_manifest=None):
         if identity(read_manifest(replacement)['package']) != ('std', '1'):
             raise ValueError('--std-manifest target must identify std@1')
     for dependency, (expected, spelling) in zip(dependencies, selections):
-        target = (replacement if expected == ('std', '1') and replacement is not None
-                  else contained_file(path.parent / spelling, root))
+        target = replacement if expected == ('std', '1') and replacement is not None else None
+        if target is None:
+            candidate = path.parent / spelling
+            if value['schema'] == 2 and not spelling.is_absolute():
+                # Catalogs are lazy, including defaults suppressed by an override.
+                # Resolve existing symlinks even when a suffix is missing, and
+                # preserve safe missing relative spellings without claiming an
+                # identity check. Only the compiler knows which entries it needs.
+                resolved = candidate.resolve()
+                if not resolved.is_relative_to(root):
+                    raise ValueError(f'{candidate}: manifest resolves outside workspace root {root}')
+                if not resolved.exists():
+                    continue
+            target = contained_file(candidate, root)
         if identity(read_manifest(target)['package']) != expected:
             raise ValueError(f'{target}: package identity does not match dependency {expected[0]}@{expected[1]}')
         dependency['manifest'] = relative_manifest(target, path.parent)

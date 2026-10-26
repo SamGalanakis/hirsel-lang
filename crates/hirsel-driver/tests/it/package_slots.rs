@@ -279,6 +279,138 @@ fn a_forwarded_slot_reads_the_dependency_s_effective_slot() {
 }
 
 #[test]
+fn portable_catalogs_preserve_effective_slots_and_execution_after_moving() {
+    with_compiler_stack(|| {
+        let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/portable-manifest");
+        for actual in ["fast", "slow"] {
+            let fixture = Fixture::new();
+            fixture.write(
+                "main.hir",
+                "pub fn main() -> Result[(), ()] {\n  if mac.tag().value == 7 { Ok(()) } else { Error(()) }\n}\n",
+            );
+            if actual == "slow" {
+                fixture.fwd(
+                    forward("mac", "H"),
+                    json!({"H": implementation("prov", "slow")}),
+                );
+                // The overridden default remains a valid catalog reference,
+                // but its absent target must never be opened by either tool.
+                fixture.mac(implementation("gone", "fast"));
+            }
+            let bindings = if actual == "slow" {
+                json!({"H": implementation("alias", "slow")})
+            } else {
+                json!({})
+            };
+            fixture.app(json!([uses("mac", bindings), uses("fwd", json!({}))]));
+            let manifests = [
+                "hirsel.json",
+                "mac/hirsel.json",
+                "fwd/hirsel.json",
+                "other/hirsel.json",
+                "prov/hirsel.json",
+            ];
+            // Start with absolute catalog targets. Keep the safe absent entry
+            // relative, as in the compiler's lazy-catalog fixture.
+            for name in manifests {
+                let path = fixture.0.path().join(name);
+                let mut value: Value =
+                    serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                if let Some(catalog) = value
+                    .get_mut("dependency_catalog")
+                    .and_then(Value::as_object_mut)
+                {
+                    for entry in catalog.values_mut() {
+                        let target = path
+                            .parent()
+                            .unwrap()
+                            .join(entry["manifest"].as_str().unwrap());
+                        if target.exists() {
+                            entry["manifest"] = std::fs::canonicalize(target)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .into();
+                        }
+                    }
+                }
+                fixture.json(name, value);
+            }
+            let observe = |root: &Path| {
+                let path = root.join("hirsel.json");
+                let mut program = load_program(&path).unwrap();
+                assert_eq!(slot(&program, &mac(), "H"), prov(actual));
+                assert_eq!(slot(&program, &package("fwd"), "R"), prov(actual));
+                assert_eq!(
+                    program.slots[&mac()]["H"].signature.to_string(),
+                    prov("Digest")
+                );
+                let checked = program.check(LoweringPolicy::Comptime).unwrap();
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+                assert!(matches!(
+                    run_path(&path, &mut Vec::new()).unwrap(),
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                ));
+            };
+            observe(fixture.0.path());
+            for name in manifests {
+                let path = fixture.0.path().join(name);
+                let before: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+                let rewrite = || {
+                    let output = std::process::Command::new("python3")
+                        .arg(&tool)
+                        .arg(&path)
+                        .arg("--workspace-root")
+                        .arg(fixture.0.path())
+                        .arg("--write")
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                };
+                rewrite();
+                let first = std::fs::read(&path).unwrap();
+                let after: Value = serde_json::from_slice(&first).unwrap();
+                let mut expected = before;
+                if let Some(catalog) = expected
+                    .get_mut("dependency_catalog")
+                    .and_then(Value::as_object_mut)
+                {
+                    for (id, entry) in catalog {
+                        if id == "gone" {
+                            assert_eq!(entry["manifest"], "../absent/hirsel.json");
+                        } else {
+                            let rewritten = &after["dependency_catalog"][id.as_str()]["manifest"];
+                            assert!(!Path::new(rewritten.as_str().unwrap()).is_absolute());
+                            assert_eq!(
+                                std::fs::canonicalize(
+                                    path.parent().unwrap().join(rewritten.as_str().unwrap())
+                                )
+                                .unwrap(),
+                                std::fs::canonicalize(entry["manifest"].as_str().unwrap()).unwrap()
+                            );
+                            entry["manifest"] = rewritten.clone();
+                        }
+                    }
+                }
+                assert_eq!(after, expected, "only catalog paths change");
+                rewrite();
+                assert_eq!(std::fs::read(&path).unwrap(), first);
+            }
+            observe(fixture.0.path());
+            let destination = tempfile::tempdir().unwrap();
+            let moved = destination.path().join("moved space 雪");
+            std::fs::rename(fixture.0.path(), &moved).unwrap();
+            assert!(!fixture.0.path().exists());
+            observe(&moved);
+        }
+    });
+}
+
+#[test]
 fn a_forwarding_cycle_bad() {
     with_compiler_stack(|| {
         let fixture = Fixture::new();

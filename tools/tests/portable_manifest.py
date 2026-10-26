@@ -226,7 +226,7 @@ class Unit(unittest.TestCase):
         self.assertEqual(self.manifest.read_bytes(), before)
 
     def test_unknown_schema_and_malformed_shapes(self):
-        for field, value in [('schema', 2), ('schema', True), ('schema', '1'),
+        for field, value in [('schema', 3), ('schema', True), ('schema', '1'),
                              ('dependencies', {}), ('dependencies', ['remote']),
                              ('dependencies', [{'url': 'https://example.com', 'package': {'name': 'lib', 'version': '1'}}]),
                              ('sources', [])]:
@@ -264,6 +264,106 @@ class Unit(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.manifest.write_bytes(raw)
                 self.refused('error:')
+
+    def catalog(self, entries=None, **extra):
+        value = package(**extra)
+        value.update(schema=2, dependency_catalog=entries if entries is not None else {
+            'lib': dict(manifest=str(self.lib), package=dict(name='lib', version='1'))})
+        return value
+
+    def test_catalog_preserves_slots_aliases_and_unrelated_data(self):
+        ref = dict(dependency='lib', module=['api'], name='Digest')
+        value = self.catalog(parameters={
+            'H': dict(signature=ref, default={'implementation': ref}),
+            'R': dict(signature=ref, default={'parameter': dict(dependency='self', name='H')})},
+            future={'unicode': '雪', 'array': [False, None]})
+        value['dependency_catalog']['alias'] = copy.deepcopy(value['dependency_catalog']['lib'])
+        value['dependencies'] = [dict(use='lib', bindings={
+            'H': {'implementation': dict(ref, name='slow')},
+            'R': {'parameter': dict(dependency='self', name='H')}},
+            expose=[dict(head='provider', module=['api'])])]
+        save(self.manifest, value)
+        expected = copy.deepcopy(value)
+        for entry in expected['dependency_catalog'].values():
+            entry['manifest'] = '../library/hirsel.json'
+        self.assertEqual(self.success('--write'), expected)
+        first = self.manifest.read_bytes()
+        self.assertEqual(self.success('--write'), expected)
+        self.assertEqual(self.manifest.read_bytes(), first)
+
+    def test_lazy_missing_relative_catalog_is_preserved_even_when_selected(self):
+        # The tool cannot infer whether a caller will override this frame's
+        # default. Even a direct use is left for compiler selection to validate.
+        for selected in (False, True):
+            value = self.catalog({'gone': dict(manifest='../absent/./hirsel.json',
+                                               package=dict(name='gone', version='1'))})
+            if selected:
+                value['dependencies'] = [dict(use='gone', bindings={}, expose=[])]
+            save(self.manifest, value)
+            self.assertEqual(self.success('--write'), value)
+
+    def test_missing_absolute_catalog_is_refused(self):
+        save(self.manifest, self.catalog({'gone': dict(manifest=str(self.root / 'absent/hirsel.json'),
+                                                      package=dict(name='gone', version='1'))}))
+        self.refused('No such file')
+
+    def test_catalog_std_replacement_and_ambiguous_aliases(self):
+        std = save(self.root / 'stdlib/hirsel.json', package('std'))
+        value = self.catalog({'runtime': dict(manifest='/stale/std.json', package=dict(name='std', version='1'))})
+        save(self.manifest, value)
+        expected = copy.deepcopy(value)
+        expected['dependency_catalog']['runtime']['manifest'] = '../stdlib/hirsel.json'
+        self.assertEqual(self.success('--std-manifest', std), expected)
+        value['dependency_catalog']['alias'] = copy.deepcopy(value['dependency_catalog']['runtime'])
+        save(self.manifest, value)
+        self.refused('ambiguous duplicate std@1', '--std-manifest', std)
+        self.refused('ambiguous duplicate std@1')
+
+    def test_unused_catalog_paths_are_checked_including_missing_symlink_suffix(self):
+        outside = self.root.parent / 'outside'
+        outside.mkdir()
+        (self.root / 'escape').symlink_to(outside, target_is_directory=True)
+        vectors = ['../../missing/hirsel.json', '../escape/absent/hirsel.json',
+                   'https://example.com/a', 'file:///tmp/a', '//host/share/a', r'C:\a', r'\\host\share\a']
+        for spelling in vectors:
+            with self.subTest(spelling=spelling):
+                save(self.manifest, self.catalog({'unused': dict(manifest=spelling, package=dict(name='lib', version='1'))}))
+                self.refused('error:')
+        save(self.manifest, self.catalog({'unused': dict(manifest=str(self.lib), package=dict(name='other', version='1'))}))
+        self.refused('identity does not match')
+
+    def test_catalog_malformed_shapes_and_duplicate_keys(self):
+        for catalog in ([], None, {'self': {}}, {'a-b': {}}, {'lib': None},
+                        {'lib': {'manifest': str(self.lib)}},
+                        {'lib': {'manifest': 7, 'package': dict(name='lib', version='1')}}):
+            with self.subTest(catalog=catalog):
+                value = self.catalog()
+                value['dependency_catalog'] = catalog
+                save(self.manifest, value)
+                self.refused('error:')
+        for edges in ([dict(use='absent', bindings={}, expose=[])],
+                      [dict(use='lib', bindings=[], expose=[])],
+                      [dict(use='lib', bindings={}, expose={})],
+                      [dict(use='lib', bindings={}, expose=[])] * 2,
+                      [dependency(self.lib)]):
+            value = self.catalog()
+            value['dependencies'] = edges
+            save(self.manifest, value)
+            self.refused('error:')
+        for raw in ('{"schema":2,"dependency_catalog":{"a":{},"a":{}}}',
+                    json.dumps(self.catalog()).replace('"manifest":', '"manifest": "x", "manifest":')):
+            self.manifest.write_text(raw)
+            self.refused('duplicate JSON field')
+
+    def test_go_catalog_sibling_ancestor_and_dot_vectors(self):
+        # Go ebe2feef path_test.go:1495-1578 adapted to manifest targets.
+        for spelling, name, expected in [('../library/./hirsel.json', 'lib', '../library/hirsel.json'),
+                                          ('../hirsel.json', 'ancestor', '../hirsel.json'),
+                                          ('./hirsel.json', 'app', 'hirsel.json')]:
+            save(self.root / 'hirsel.json', package('ancestor'))
+            value = self.catalog({'edge': dict(manifest=spelling, package=dict(name=name, version='1'))})
+            save(self.manifest, value)
+            self.assertEqual(self.success()['dependency_catalog']['edge']['manifest'], expected)
 
     def test_go_relative_path_vectors_on_resolved_existing_paths(self):
         # Go ebe2feefc400 src/path/filepath/path_test.go:1495-1538.

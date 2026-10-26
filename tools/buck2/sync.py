@@ -176,7 +176,7 @@ TEST_DATA = {
     "hirsel-conformance-test-spec_links": ["crates/**", "docs/*.md", "docs/research/**", "reports/**"],
     # memcheck:: compiles a C program against the runtime header.
     "hirsel-driver-test-it": ["crates/hirsel-driver/tests/fixtures/**", "crates/hirsel-rt/include/**",
-                              "examples/tasks/model.hir", "examples/tasks/store.hir"],
+                              "examples/tasks/model.hir", "examples/tasks/store.hir", "tools/portable-manifest"],
     "hirsel-driver-test-it-stdlib": ["crates/hirsel-driver/tests/fixtures/**"],
     "hirsel-llvm-test-it": ["crates/hirsel-llvm/tests/native/**"],
     "hirsel-ownership-unittest": ["crates/hirsel-ownership/proptest-regressions/**"],
@@ -1055,7 +1055,7 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-portable-manifest", script="tools/tests/portable_manifest.py", full=False,
                             data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-portable-manifest-integration", script="tools/tests/portable_manifest.py", full=False,
-                            args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-portable-manifest-integration/hirsel"],
+                            args=["--hirsel", "buck-out/tmp/cargo-bin-exe/test-portable-manifest-integration/hirsel", "Integration"],
                             bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"}, runtime_archives=RUNTIME_ARCHIVES,
                             data=["tools/portable-manifest", "tools/tests/portable_manifest.py"]))
     out.append("\n" + call("hirsel_script_test", name="test-native-verification-9", script="tools/tests/native_verification_9.py", full=False,
