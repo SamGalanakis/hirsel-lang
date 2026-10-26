@@ -3745,3 +3745,79 @@ fn ownership_trace_compound_failure_boundary_stays_before_independent_cleanup_sp
         );
     }
 }
+
+#[test]
+fn ownership_trace_arena_control_relocates_original_unique_lifetimes() {
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[], None);
+    t.builder.unit.header.origin = UnitOrigin::Library;
+    let token = t.plain(l::ARENA);
+    t.builder.push(
+        ENTRY,
+        Inst::ArenaOpen {
+            result: token,
+            budget: None,
+        },
+    );
+    let slot = t.slot(l::BLK, SlotKind::Local, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let resource = t.new_block(ENTRY, &[]);
+    t.store(ENTRY, address, resource, slot);
+    let failure = t.fails();
+    let anchor = t.cleanup_anchor();
+    t.builder.push(
+        ENTRY,
+        Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+    );
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let before = checked_native_fixture(unit, &table);
+    let input = native::LeafPlan::prepare_value(&before, &table).unwrap();
+    assert_eq!(input.observations.len(), 3);
+    let options = hirsel_rc::placement::Options {
+        regions: false,
+        noalloc: false,
+    };
+    let ordinary = hirsel_rc::placement::place(before.unit().clone(), &table, &options).unwrap();
+    let (after, output, recipe) =
+        hirsel_rc::placement::place_observed(before.unit().clone(), &table, &options, &input)
+            .unwrap();
+    let after = checked_native_fixture(after, &table);
+    assert_eq!(
+        hirsel_codec::to_text(after.unit()),
+        hirsel_codec::to_text(&ordinary)
+    );
+    check_transform(before.unit(), &input, after.unit(), &output, Some(&recipe)).unwrap();
+    for (old, new) in input.observations.iter().zip(&output.observations) {
+        assert_eq!(old.marker, new.marker);
+        assert_ne!(old.point, new.point);
+    }
+    let mut missing = output.clone();
+    missing.observations.pop();
+    assert!(check_transform(before.unit(), &input, after.unit(), &missing, Some(&recipe)).is_err());
+    let mut stale = output.clone();
+    stale.observations[0].point = input.observations[0].point;
+    assert!(check(after.unit(), &stale).is_err());
+    let mut forged = output.clone();
+    let mut extra = forged.observations[0].clone();
+    extra.marker.id = MarkerId(999);
+    extra.point = Point::Instruction {
+        block: after.unit().entry,
+        index: 0,
+        moment: Moment::After,
+    };
+    forged.observations.push(extra);
+    assert!(check(after.unit(), &forged).is_err());
+}
