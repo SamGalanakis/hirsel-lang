@@ -212,11 +212,16 @@ impl ResultStore for ResidentStore {
     }
     /// Retained best-effort for later revisions, but never claimed: a request
     /// keeps its own transport copy, since this bound may drop or evict
-    /// content that the request has still to read.
+    /// content that the request has still to read. Only result content is
+    /// retained: rows reference nothing else, and every revision recaptures
+    /// its source inputs and staged records, which would evict the rows the
+    /// next revision adopts.
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let reference = domain.reference(bytes)?;
-        self.bounded
-            .put_bytes(Key::Content(reference.output.0), bytes);
+        if hirsel_engine::store::is_result_content(domain) {
+            self.bounded
+                .put_bytes(Key::Content(reference.output.0), bytes);
+        }
         None
     }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
@@ -288,6 +293,35 @@ mod tests {
     }
 
     #[test]
+    fn resident_store_retains_result_content_but_not_request_transports() {
+        let budget = ProcessBudget::new(1 << 20);
+        let store = ResidentStore::new(budget.clone(), 1 << 16);
+        let product = Domain {
+            kind: QueryKind::Modes as u32 + 16,
+            schema: 8,
+        };
+        let types = hirsel_engine::store::TYPE_RECORDS;
+        let source_input = Domain {
+            kind: 0x4600_0013,
+            schema: 1,
+        };
+        assert_eq!(store.put_content(product, b"modes"), None);
+        assert_eq!(store.put_content(types, b"type"), None);
+        assert_eq!(store.put_content(source_input, b"syntax"), None);
+        let product = product.reference(b"modes").unwrap();
+        assert_eq!(&store.get_content(product).unwrap()[..], b"modes");
+        let types = types.reference(b"type").unwrap();
+        assert_eq!(&store.get_content(types).unwrap()[..], b"type");
+        assert!(
+            store
+                .get_content(source_input.reference(b"syntax").unwrap())
+                .is_none()
+        );
+        assert_eq!(store.used(), SLOTS + 9 + 2 * PAYLOAD_CHARGE);
+        assert_eq!(budget.reserved(), store.used());
+    }
+
+    #[test]
     fn resident_store_never_charges_slots_beyond_its_capacity() {
         let budget = ProcessBudget::new(1 << 20);
         let store = ResidentStore::new(budget.clone(), SLOTS - 1);
@@ -315,7 +349,10 @@ mod tests {
     fn resident_store_retains_product_content_without_claiming_request_transport() {
         let budget = ProcessBudget::new(1 << 20);
         let store = ResidentStore::new(budget.clone(), 1 << 16);
-        let domain = Domain { kind: 1, schema: 1 };
+        let domain = Domain {
+            kind: QueryKind::Check as u32 + 16,
+            schema: 8,
+        };
         assert_eq!(store.put_content(domain, b"product"), None);
         let reference = domain.reference(b"product").unwrap();
         assert_eq!(&store.get_content(reference).unwrap()[..], b"product");

@@ -158,6 +158,14 @@ pub(crate) fn product_domain(kind: QueryKind) -> Domain {
         schema: 8,
     }
 }
+/// The type records a result payload cites.
+pub const TYPE_RECORDS: Domain = hirsel_product_codec::TypeRecords::DOMAIN;
+/// Whether `domain` holds result content: a payload a stored row's variants
+/// reference (`VariantRef::valid`), or a type record such a payload cites.
+pub fn is_result_content(domain: Domain) -> bool {
+    domain == TYPE_RECORDS
+        || domain.schema == 8 && (16..=QueryKind::SemanticBody as u32 + 16).contains(&domain.kind)
+}
 
 /// Whether a store hit is recomputed and compared byte for byte
 /// (`--verify-cache`; gate campaigns force it on). A mismatch is a tool error.

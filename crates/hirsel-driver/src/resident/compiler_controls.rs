@@ -586,6 +586,80 @@ fn selected_private_layout_cache_matches_cold_and_preserves_unread_reader_work()
 }
 
 #[test]
+fn unread_representation_edit_adopts_reader_bodies_and_matches_the_cold_receipt() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        let initial = "pub opaque type Secret: data uses {} { level:u64, }\nfn view()->u64{1}\npub fn main()->u64{1}\n";
+        std::fs::write(&source, initial).unwrap();
+        let selected = request(&entry);
+        let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
+        let first = host.request(&selected).unwrap().wait().unwrap();
+        let mut view = first.entry.clone();
+        view.0.name = "view".into();
+        drop(first);
+        let mut receipt = selected.clone();
+        receipt.operation = CompileOperation::CheckedProducts {
+            lowering: LoweringPolicy::Comptime,
+            canonical: true,
+        };
+        let mut counter = selected.clone();
+        counter.operation = CompileOperation::RecomputeCounts {
+            queries: [
+                hirsel_engine::QueryKind::Resolve,
+                hirsel_engine::QueryKind::Check,
+            ]
+            .map(|kind| (view.clone(), kind))
+            .to_vec(),
+        };
+        let counts = |host: &mut Host<CompilerRequests>, request: &CompileRequest| {
+            let output = host.request(request).unwrap().wait().unwrap();
+            match &output.result {
+                CompileResult::RecomputeCounts(counts) => counts.clone(),
+                _ => panic!("counter request returned another operation"),
+            }
+        };
+        drop(host.request(&receipt).unwrap().wait().unwrap());
+        let before = counts(&mut host, &counter);
+        assert!(before.iter().all(|(_, _, count)| *count == 1), "{before:?}");
+        let edited = initial.replace("level:u64", "level:u32");
+        std::fs::write(&source, &edited).unwrap();
+        let inputs = selected
+            .inputs
+            .replace_sources(
+                &BTreeMap::from([(source.clone(), edited.into_bytes().into())]),
+                1 << 20,
+            )
+            .unwrap();
+        for request in [&mut receipt, &mut counter] {
+            request.inputs = inputs.clone();
+        }
+        let mut checked = selected.clone();
+        checked.inputs = inputs;
+        drop(host.request(&checked).unwrap().wait().unwrap());
+        let products = host.request(&receipt).unwrap().wait().unwrap();
+        let CompileResult::CheckedProducts { products, .. } = &products.result else {
+            panic!("checked-products root returned another operation")
+        };
+        let products = products.clone();
+        assert_eq!(
+            counts(&mut host, &counter),
+            before,
+            "a view that does not read the representation keeps its P work"
+        );
+        let mut cold = crate::COMPILER
+            .with_config(config())
+            .with_owned_engines()
+            .load_program(&entry)
+            .unwrap();
+        cold.check(LoweringPolicy::Comptime).unwrap();
+        let expected = cold.engine.checked_products(&cold.entry).unwrap();
+        assert_eq!(products.canonical, expected.canonical);
+        assert_eq!(products.canonical_reads(), expected.canonical_reads());
+        assert_eq!(products.digest, expected.digest);
+    });
+}
+
+#[test]
 fn selected_run_bounds_lower_mailboxes_by_the_immutable_query_inventory() {
     hirsel_engine::with_compiler_stack(|| {
         let (_directory, entry, source) = fixture();

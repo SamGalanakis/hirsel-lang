@@ -46,6 +46,8 @@ pub struct TypeRecords {
     decoded: Mutex<HashMap<(ContentHash, u64), Arc<[TypeId]>>>,
 }
 impl TypeRecords {
+    /// The content domain of every published type record.
+    pub const DOMAIN: Domain = DOMAIN;
     pub fn new(types: Arc<TypeInterner>, store: Arc<dyn Contents>) -> Arc<Self> {
         Self::with_base(types, store, HashMap::new())
     }
