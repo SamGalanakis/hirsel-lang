@@ -180,3 +180,26 @@ fn siphash13_streaming_matches_independent_oracle_at_every_chunk_boundary() {
         }
     }
 }
+
+#[test]
+fn siphash13_partial_finishes_preserve_unaligned_tail_bytes() {
+    use std::hash::Hasher;
+    let data: Vec<u8> = (0..=255).map(|i: u8| i.wrapping_mul(173) ^ 0xa5).collect();
+    for offset in 0..8 {
+        for width in 1..=17 {
+            let mut stream = siphash::SipHasher13::new(0, 0);
+            let mut oracle = std::collections::hash_map::DefaultHasher::new();
+            for bytes in data[offset..].chunks(width) {
+                stream.write(bytes);
+                oracle.write(bytes);
+                assert_eq!(
+                    stream.finish(),
+                    oracle.finish(),
+                    "offset={offset} width={width}"
+                );
+                stream.write(&[]);
+                assert_eq!(stream.finish(), oracle.finish());
+            }
+        }
+    }
+}

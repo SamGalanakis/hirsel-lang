@@ -16,6 +16,31 @@ fn round(v: &mut [u64; 4]) {
     v[1] ^= v[2];
     v[2] = v[2].rotate_left(32);
 }
+// Rust core hash/sip.rs:113-146 loads a short tail in 4/2/1-byte pieces.
+// Keep the reads bounded to this slice, including an unaligned final byte.
+#[inline(always)]
+fn tail_word(mut bytes: &[u8]) -> u64 {
+    if bytes.len() == 8 {
+        return u64::from_le_bytes(bytes.try_into().unwrap());
+    }
+    let mut word = 0u64;
+    let mut shift = 0;
+    if bytes.len() >= 4 {
+        word = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
+        bytes = &bytes[4..];
+        shift = 32;
+    }
+    if bytes.len() >= 2 {
+        word |= u64::from(u16::from_le_bytes(bytes[..2].try_into().unwrap())) << shift;
+        bytes = &bytes[2..];
+        shift += 16;
+    }
+    if let Some(&byte) = bytes.first() {
+        word |= u64::from(byte) << shift;
+    }
+    word
+}
+
 /// One SipHash-1-3 stream. Chunk boundaries do not contribute to the hash.
 /// Its six words are also the caller-owned native hashing scratch storage.
 #[repr(C)]
@@ -51,9 +76,7 @@ impl SipHasher13 {
         self.length = self.length.wrapping_add(bytes.len() as u64);
         if used != 0 {
             let take = (8 - used).min(bytes.len());
-            for (i, &byte) in bytes[..take].iter().enumerate() {
-                self.tail |= u64::from(byte) << ((used + i) * 8);
-            }
+            self.tail |= tail_word(&bytes[..take]) << (used * 8);
             bytes = &bytes[take..];
             if used + take != 8 {
                 return;
@@ -65,9 +88,7 @@ impl SipHasher13 {
         for chunk in &mut chunks {
             self.compress(u64::from_le_bytes(chunk.try_into().unwrap()));
         }
-        for (i, &byte) in chunks.remainder().iter().enumerate() {
-            self.tail |= u64::from(byte) << (i * 8);
-        }
+        self.tail = tail_word(chunks.remainder());
     }
     #[inline(always)]
     pub fn finish(&self) -> u64 {
