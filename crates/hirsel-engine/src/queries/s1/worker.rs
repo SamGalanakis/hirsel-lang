@@ -501,6 +501,13 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         let product = source.body(self, path);
         let body = self.merge_product(product)?;
         self.merge(&body.reads);
+        for (read, _) in body.reads.iter() {
+            if let ReadKey::Representation(id) = read
+                && let Some(hash) = self.source.implementation(id.path())
+            {
+                self.record(ReadKey::LayoutBody(*id), memos::optional(Some(hash)));
+            }
+        }
         self.execution_signatures(&body.dependencies);
         Ok(body)
     }
@@ -1666,6 +1673,33 @@ mod tests {
             bodies,
             cached: None,
         }
+    }
+
+    #[test]
+    fn body_representation_reads_observe_layout_source_before_lowering() {
+        crate::with_compiler_stack(|| {
+            let mut source = source("fn helper()->(){()}\nfn layout()->(){()}\n", 8);
+            let layout = DefId::intern(&path("layout"));
+            let representation = ContentHash::of_parts("representation", [b"view".as_slice()]);
+            let body = source.bodies.get_mut(&path("helper")).unwrap();
+            let body = Arc::get_mut(body).unwrap();
+            body.reads =
+                Reads::from_vec(vec![(ReadKey::Representation(layout), representation)]).unwrap();
+            let expected = memos::optional(source.implementation(layout.path()));
+            assert_ne!(expected, representation);
+            let shared = TaskShared::new(S1Coordinator::new());
+            let mut worker = TaskWorker::new(&source, &shared);
+            let product = worker.lower_root(&path("helper"));
+            assert!(product.result.is_ok());
+            assert!(product.reads.iter().any(|(key, value)| {
+                *key == ReadKey::Representation(layout) && *value == representation
+            }));
+            assert!(
+                product.reads.iter().any(|(key, value)| {
+                    *key == ReadKey::LayoutBody(layout) && *value == expected
+                })
+            );
+        });
     }
 
     fn cached_source() -> Source {
