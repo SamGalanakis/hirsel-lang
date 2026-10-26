@@ -599,7 +599,14 @@ fn check_state(
             let Some((bytes, align)) = fixed(table, slot.layout) else {
                 return Err(ContinuationError::Frame(id));
             };
-            if slot.bytes != bytes || slot.align != align || slot.offset % align != 0 {
+            if slot.bytes != bytes
+                || slot.align != align
+                || slot.offset % align != 0
+                || slot
+                    .offset
+                    .checked_add(bytes)
+                    .is_none_or(|end| end > MAX_FRAME_BYTES)
+            {
                 return Err(ContinuationError::Frame(id));
             }
             match slot.source {
@@ -1191,7 +1198,11 @@ pub fn validate_runtime_operations(
         }
         let mut end = check_fixed(u, table, target, plan)?;
         for slot in &plan.storage {
-            let ty = &u.types[u.slots[slot.slot.index()].ty.index()];
+            let row = u
+                .slots
+                .get(slot.slot.index())
+                .ok_or(ContinuationError::Storage(*id, 0))?;
+            let ty = &u.types[row.ty.index()];
             let (bytes, align) = fixed(table, slot.layout).ok_or(ContinuationError::Frame(*id))?;
             if slot.layout != ty.layout
                 || slot.repr != ty.repr
@@ -1200,7 +1211,11 @@ pub fn validate_runtime_operations(
             {
                 return Err(ContinuationError::Storage(*id, 0));
             }
-            end = slot.offset + bytes;
+            end = slot
+                .offset
+                .checked_add(bytes)
+                .filter(|end| *end <= MAX_FRAME_BYTES)
+                .ok_or(ContinuationError::Frame(*id))?;
         }
         let base = end.next_multiple_of(8);
         let live = Live::compute(u);
@@ -1210,9 +1225,12 @@ pub fn validate_runtime_operations(
             .enumerate()
             .filter(|(_, s)| s.runtime.is_some())
         {
-            let Terminator::Call { call, .. } = u.terminators[state.boundary.block.index()] else {
+            let Some(Terminator::Call { call, .. }) =
+                u.terminators.get(state.boundary.block.index())
+            else {
                 return Err(ContinuationError::Boundary(*id, ordinal as u32 + 1));
             };
+            let call = *call;
             let site = &u.tables.calls[call.index()];
             let Callee::Operation(op) = site.callee else {
                 return Err(ContinuationError::RuntimeOperation(*id, ordinal as u32 + 1));

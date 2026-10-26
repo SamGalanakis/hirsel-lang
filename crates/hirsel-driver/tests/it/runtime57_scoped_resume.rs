@@ -568,3 +568,49 @@ fn finish_physical_run(mut process: std::process::Child) -> std::process::Output
         std::thread::yield_now();
     }
 }
+
+#[test]
+fn runtime57_emitter_runtime_evidence_refuses_out_of_bounds_metadata() {
+    use hirsel_lir::ir::{BlockId, SlotId};
+    with_compiler_stack(|| {
+        let program = ready(WITNESS);
+        let plans = native::continuation::plans(&program);
+        let (&body, plan) = plans
+            .plans
+            .iter()
+            .find(|(_, p)| {
+                !p.storage.is_empty()
+                    && p.states
+                        .iter()
+                        .any(|s| s.runtime.as_ref().is_some_and(|r| !r.results.is_empty()))
+            })
+            .unwrap();
+        let state = plan
+            .states
+            .iter()
+            .position(|s| s.runtime.as_ref().is_some_and(|r| !r.results.is_empty()))
+            .unwrap();
+        let units = program.units.iter().collect::<Vec<_>>();
+        for change in 0..4 {
+            let mut bad = plans.clone();
+            let plan = bad.plans.get_mut(&body).unwrap();
+            match change {
+                0 => plan.states[state].boundary.block = BlockId(u32::MAX),
+                1 => plan.storage[0].slot = SlotId(u32::MAX),
+                2 => plan.states[state].runtime.as_mut().unwrap().results[0].offset = u64::MAX - 7,
+                3 => plan.storage[0].offset = u64::MAX - 7,
+                _ => unreachable!(),
+            }
+            assert!(
+                hirsel_lir::continuation::validate_runtime_operations(
+                    &units,
+                    &program.table,
+                    &program.target,
+                    &bad
+                )
+                .is_err(),
+                "mutation {change}"
+            );
+        }
+    });
+}
