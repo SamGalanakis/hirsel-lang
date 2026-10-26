@@ -197,9 +197,12 @@ unsafe fn release(run: usize, shared: &Shared, rest: bool) {
     } else {
         &shared.body_go
     };
-    ready.store(true, Ordering::Release);
     unsafe {
         tables(run, |s| {
+            // Publish readiness while holding the role that protects the row.
+            // Otherwise the child can observe the flag and retire before this
+            // coordinator records and wakes its original retry.
+            ready.store(true, Ordering::Release);
             let child = shared.child.load(Ordering::Acquire);
             s.task(child).retried = true;
             s.wake(child);
@@ -262,6 +265,7 @@ fn run_case(
     run.config.layouts = layouts.as_ptr();
     run.config.layout_count = 1;
     unsafe { run.use_physical_dispatch() };
+    let control = replay.as_ref().map(|_| run.control());
     let outcome = run.run(
         move |ctx| unsafe {
             if let Some(replay) = &replayed {
@@ -422,10 +426,19 @@ fn run_case(
             matches!(outcome.ended, Err(crate::stop::Stop::Blocked(_))),
             "{outcome:?}"
         );
+        // A stopped launch may return before its last worker retires. Keep
+        // the next run from racing that retirement, using the host API rather
+        // than assuming the launch-time pending count is already zero.
+        let control = control.as_ref().unwrap();
+        wait("stopped replay workers retire", || {
+            control.status().reclamation_pending == 0
+        });
+        assert!(control.status().finished);
+        assert_eq!(control.status().lost_permits, 0);
     } else {
         assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
     }
-    assert_eq!(outcome.pending, 0);
     assert_eq!(observe.calls.load(Ordering::Acquire), 1);
     assert!(observe.leaves.load(Ordering::Acquire) >= 2);
     assert!(observe.done.load(Ordering::Acquire));
