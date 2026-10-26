@@ -41,6 +41,12 @@ pub const ROOT_OVERFLOW: u32 = u32::MAX;
 pub(crate) struct Overflow(Mutex<HashMap<usize, u64>>);
 
 impl Overflow {
+    /// Hold admission contended without changing a root, for runtime protocol tests.
+    #[cfg(test)]
+    pub(crate) fn test_hold(&self) -> std::sync::MutexGuard<'_, HashMap<usize, u64>> {
+        self.lock()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<usize, u64>> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }

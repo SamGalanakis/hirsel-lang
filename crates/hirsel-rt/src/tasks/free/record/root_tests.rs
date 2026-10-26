@@ -567,3 +567,126 @@ unsafe fn pending_nested_roots(ctx: *mut TaskCtx) -> *mut crate::Header {
         inner
     }
 }
+#[test]
+fn entered_publication_releases_checkout_on_rejection_and_finishes_roots_once() {
+    let scalar = crate::Layout {
+        magic: crate::LAYOUT_MAGIC,
+        version: crate::LAYOUT_VERSION,
+        size: 8,
+        align: 8,
+        finalizer: None,
+        steps: std::ptr::null(),
+        step_count: 0,
+        field_count: 1,
+        flags: crate::LAYOUT_FROZEN,
+        logical: 0,
+        logical_count: std::ptr::null(),
+        scan: std::ptr::null(),
+        scan_words: 0,
+    };
+    let nested = crate::Step {
+        kind: crate::STEP_RELEASE_ROOT,
+        field: 0,
+        variant: 0,
+        span: 0,
+        offset: 0,
+        stride: 0,
+        count: 0,
+        count_offset: 0,
+        layout: std::ptr::null(),
+    };
+    let outer = crate::Layout {
+        steps: &nested,
+        step_count: 1,
+        ..scalar
+    };
+    let layouts = [&raw const scalar, &raw const outer];
+    let recording = Recording::new(b"entered root admission", false);
+    let install = recording.clone();
+    let run_once = |install: Box<dyn FnOnce(*mut TaskCtx)>, replay: bool| {
+        let mut run = crate::host::BodyRun::new(1, false);
+        run.free = true;
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 2;
+        run.config.count_max = 3;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(install, move |ctx| unsafe {
+            let _role = role::Guard::new(ctx);
+            let inner = pending_nested_roots(ctx);
+            assert!(begin_entered(ctx));
+            let mut effects = 0u32;
+            let overflow = &(*(*ctx).run_ptr()).root_overflow;
+            let held = overflow.test_hold();
+            assert!(
+                poll_publish(ctx, Phase::Done, |_| {
+                    effects += 1;
+                    42
+                })
+                .unwrap()
+                .is_none()
+            );
+            assert_eq!(effects, 0);
+            assert_eq!(crate::roots::count(&*ctx, inner), 2);
+            assert!((*ctx).roots.has_pending());
+            assert_eq!(
+                (*ctx).recording.is_some(),
+                !replay,
+                "checkout returned before Pending"
+            );
+            if let Some(task) = &(*ctx).recording {
+                assert_eq!(task.ordinal, 1);
+            }
+            drop(held);
+            assert_eq!(
+                poll_publish(ctx, Phase::Done, |_| {
+                    effects += 1;
+                    42
+                })
+                .unwrap(),
+                Some(42)
+            );
+            assert_eq!(effects, 1);
+            assert!(!(*ctx).roots.has_pending());
+            assert_eq!(
+                crate::roots::count(&*ctx, inner),
+                1,
+                "frozen nested tail finished exactly once"
+            );
+            if replay {
+                assert!(!begin_entered(ctx), "next ordinal rejects at the saved cut");
+            }
+            crate::roots::hirsel_rt_v2_root_release(ctx, inner);
+            STATUS_OK
+        });
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    };
+    run_once(
+        Box::new(move |ctx| unsafe {
+            super::super::enable(ctx);
+            install.root(ctx)
+        }),
+        false,
+    );
+    let cut = recording
+        .recorder
+        .stop("returned", None)
+        .unwrap()
+        .unwrap()
+        .0;
+    assert_eq!(cut.progress[&Vec::new()], Progress::new(1, Phase::Done));
+    let trace = recording.trace();
+    let bytes = Arc::try_unwrap(recording)
+        .ok()
+        .unwrap()
+        .recorder
+        .into_sink()
+        .bytes;
+    let replay = Replay::new(&bytes).unwrap();
+    let install = replay.clone();
+    run_once(Box::new(move |ctx| unsafe { install.root(ctx) }), true);
+    assert_eq!(
+        replay.finish().unwrap(),
+        Projection::new("returned", &cut.progress, &trace)
+    );
+}
