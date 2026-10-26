@@ -1648,6 +1648,19 @@ impl QueryEngine {
         {
             return entry.result();
         }
+        // GEN-6 members share their source owner's syntax and are omitted
+        // from the ordinary per-file front roots. Direct Check demand must
+        // still restore their checked facts from a current ordinary Modes row.
+        if crate::families::derived(definition)
+            && let Some(modes) = self.load_mode(definition)
+        {
+            self.modes.insert(id, modes);
+            if let Some(entry) = self.checked.get(&id).cloned()
+                && self.memo_valid(definition, &entry, text)
+            {
+                return entry.result();
+            }
+        }
         let resolution = self.resolve_query(definition)?;
         let signature = self.signature_output(definition)?;
         let _timing = timings::phase(Phase::Check);
