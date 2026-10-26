@@ -22,6 +22,7 @@ mod finalizer_frame;
 mod frame;
 pub use cleanup::{CleanupOwner, SynchronousCleanup, SynchronousCleanupPlan};
 pub use finalizer::FinalizerSource;
+pub(crate) use finalizer::sources as finalizer_sources;
 pub use finalizer_coverage::FinalizerCoverage;
 pub use finalizer_frame::FinalizerFrame;
 pub use frame::IsolatePlan;

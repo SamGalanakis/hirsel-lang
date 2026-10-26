@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 79
+#define HIRSEL_RT_V2_ABI_VERSION 80
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -859,6 +859,7 @@ void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, 
 /* A resumable frame at a boundary: 0 proceeds with the boundary call, 1 suspends. */
 uint8_t hirsel_rt_v2_resume_point(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state);
 void hirsel_rt_v2_resume_tail(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state, uint32_t kind, uint32_t bytes, uint64_t anchor, uint64_t operation_site);
+void hirsel_rt_v2_resume_cleanup(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state, uint32_t kind, uint32_t bytes, uint64_t anchor, uint64_t operation_site, const uint8_t *rows, uint32_t count);
 /* A resumable task body: its dispatcher runs over an owned compact frame, saved at each suspension. */
 uint8_t hirsel_rt_v2_resume_run(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *environment, uint64_t caller_site, uint64_t operation_site, void *dispatcher, uint32_t bytes);
 

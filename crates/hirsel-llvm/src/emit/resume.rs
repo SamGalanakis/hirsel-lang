@@ -343,7 +343,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let (state, bytes, frame) = (state.clone(), resume.plan.cost.frame_bytes, resume.frame);
         self.materialize_live(&state.live, state.state)?;
-        let entry = self.runtime(RuntimeEntry::ResumeTail)?;
+        let entry = self.runtime(if state.finalizers.is_some() {
+            RuntimeEntry::ResumeCleanup
+        } else {
+            RuntimeEntry::ResumeTail
+        })?;
         let number = self
             .module
             .const_int(self.module.int_type(32), state.state.into());
@@ -370,11 +374,110 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .module
             .const_int(self.module.int_type(32), bytes.into());
         let (anchor, site) = self.failure_sites(self.cleanup_code(state.anchor)?);
-        self.builder.call(
-            entry,
-            &[self.context, frame, number, kind, bytes, anchor, site],
-        );
+        let mut arguments = vec![self.context, frame, number, kind, bytes, anchor, site];
+        if let Some(coverage) = &state.finalizers {
+            let rows = self.finalizer_rows(coverage)?;
+            arguments.push(rows);
+            arguments.push(
+                self.module
+                    .const_int(self.module.int_type(32), coverage.finalizers.len() as u128),
+            );
+        }
+        self.builder.call(entry, &arguments);
         Ok(())
+    }
+
+    fn finalizer_rows(
+        &mut self,
+        coverage: &hirsel_lir::continuation::isolate::FinalizerCoverage,
+    ) -> Emitted<Value<'m>> {
+        let name = format!(
+            "{}.finalizers.{}.{}",
+            resume_name(
+                &self.unit.header.definition,
+                self.unit.header.instance,
+                None
+            ),
+            coverage.root.0,
+            coverage.end,
+        );
+        if let Some(data) = self.module.named_global(&name) {
+            return Ok(data);
+        }
+        let ptr = self.module.ptr_type();
+        let i32_ty = self.module.int_type(32);
+        let row_ty = self.module.struct_type(&[ptr, ptr, i32_ty, i32_ty]);
+        let mut rows = Vec::new();
+        for frame in &coverage.finalizers {
+            let definition = &self
+                .layout(frame.source.layout)?
+                .finalizer
+                .as_ref()
+                .unwrap()
+                .definition;
+            let abi = fn_abi(self.inputs.layouts, frame.source.abi, definition)?;
+            let signature = Signature::of(self.module, self.inputs.layouts, abi, definition)?;
+            let target_name = resume_name(definition, frame.source.body, None);
+            let target = self
+                .module
+                .function(&target_name, resume_type(self.module, &signature))
+                .map_err(|what| CodegenError::Invalid {
+                    definition: definition.clone(),
+                    what,
+                })?;
+            self.manifested
+                .import(&target_name, ObjectSymbolKind::Function, Some(definition));
+            let name = format!("{target_name}_drop_adapter");
+            let fresh = !self.module.defines(&name);
+            let thunk_ty = self.module.function_type(
+                self.module.int_type(8),
+                &[
+                    ptr,
+                    ptr,
+                    self.module.int_type(64),
+                    self.module.int_type(64),
+                    ptr,
+                ],
+            );
+            let thunk =
+                self.module
+                    .function(&name, thunk_ty)
+                    .map_err(|what| CodegenError::Invalid {
+                        definition: definition.clone(),
+                        what,
+                    })?;
+            if fresh {
+                self.module.make_private(thunk);
+                let b = Builder::new(self.module);
+                b.position(self.module.append_block(thunk));
+                let params: Vec<_> = (0..5).map(|i| self.module.parameter(thunk, i)).collect();
+                let mut args = vec![params[0]];
+                if abi.caller_site {
+                    args.extend([params[2], params[3]]);
+                }
+                args.extend([params[1], params[4]]);
+                let status = b.call(target, &args);
+                b.ret(status);
+            }
+            let cell_name = hirsel_lir::glue::descriptor_index_symbol(
+                &self.inputs.keys.key(frame.source.layout),
+            );
+            let descriptor = self.glue_cell(&cell_name, i32_ty);
+            rows.push(self.module.const_struct(&[
+                descriptor,
+                thunk.value,
+                self.module.const_int(i32_ty, frame.nested.offset as u128),
+                self.module.const_int(i32_ty, frame.nested.bytes as u128),
+            ]));
+        }
+        let data = self.module.private_constant(
+            &name,
+            self.module.array_type(row_ty, rows.len() as u64),
+            8,
+        );
+        self.module
+            .set_initializer(data, self.module.const_array(row_ty, &rows));
+        Ok(data)
     }
 
     /// A resumable callee's dispatcher, called with its nested frame.

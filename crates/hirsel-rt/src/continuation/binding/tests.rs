@@ -104,3 +104,32 @@ fn abandoning_nested_bindings_reclaims_only_administrative_keys() {
     assert_eq!(bindings.stack.len(), 16);
     drop(bindings);
 }
+
+#[test]
+fn ancestor_reentry_retains_pending_descendants_and_consumes_only_its_own_arm() {
+    let mut bindings = Bindings::default();
+    let inputs = [
+        site(0x1000, 1, 49),
+        site(0x1040, 1, 24),
+        site(0x1080, 2, 18),
+    ];
+    let mut originals = Vec::new();
+    for input in inputs {
+        bindings.bind(input);
+        originals.push(bindings.take(input.kind).unwrap());
+    }
+    for _ in 0..3 {
+        // Generated reentry always enters the root first. Neither the root's
+        // cleanup cursor nor its child's finalizer begins a second invocation.
+        for (input, original) in inputs.iter().zip(&originals) {
+            bindings.bind(*input);
+            assert_eq!(bindings.take(input.kind), Some(*original));
+            assert_eq!(bindings.take(input.kind), None);
+        }
+        assert_eq!(bindings.stack.len(), 3);
+    }
+    for original in originals.into_iter().rev() {
+        bindings.complete(original);
+    }
+    assert!(bindings.stack.is_empty());
+}

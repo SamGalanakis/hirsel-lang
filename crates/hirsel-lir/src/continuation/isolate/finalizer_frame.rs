@@ -6,9 +6,10 @@ use crate::continuation::{
     Representation, validate,
 };
 use crate::ir::SlotId;
+use crate::layout_types::LayoutTable;
 use crate::stage::{Ready, ValidatedUnit};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FinalizerFrame {
     pub source: FinalizerSource,
     pub nested: NestedFrame,
@@ -20,6 +21,17 @@ pub struct FinalizerFrame {
 
 impl FinalizerFrame {
     pub fn propose(
+        source: &FinalizerSource,
+        units: &[&ValidatedUnit<Ready>],
+        inputs: &PlanInputs<'_>,
+        plans: &ContinuationPlans,
+        after: u64,
+    ) -> Result<Self, String> {
+        crate::continuation::validate(units, inputs, plans).map_err(|e| e.to_string())?;
+        Self::propose_extent(source, units, inputs, plans, after)
+    }
+
+    pub(crate) fn propose_extent(
         source: &FinalizerSource,
         units: &[&ValidatedUnit<Ready>],
         inputs: &PlanInputs<'_>,
@@ -50,7 +62,7 @@ impl FinalizerFrame {
                 .checked_add(plan.cost.frame_bytes)
                 .ok_or("finalizer extent overflow")?,
         };
-        proposal.check(units, inputs, plans, after)?;
+        proposal.check_extent(units, inputs.table, plans, after)?;
         Ok(proposal)
     }
 
@@ -64,8 +76,18 @@ impl FinalizerFrame {
         plans: &ContinuationPlans,
         after: u64,
     ) -> Result<(), String> {
-        self.source.check(units, inputs.table)?;
         validate(units, inputs, plans).map_err(|e| e.to_string())?;
+        self.check_extent(units, inputs.table, plans, after)
+    }
+
+    pub(crate) fn check_extent(
+        &self,
+        units: &[&ValidatedUnit<Ready>],
+        table: &LayoutTable,
+        plans: &ContinuationPlans,
+        after: u64,
+    ) -> Result<(), String> {
+        self.source.check(units, table)?;
         let body = plans
             .get(self.source.body)
             .ok_or("missing finalizer plan")?;

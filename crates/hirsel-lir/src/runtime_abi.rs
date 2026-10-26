@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 79;
+pub const ABI_VERSION: u32 = 80;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -598,6 +598,7 @@ pub enum RuntimeEntry {
     ResumeRun,
     /// Bind a validated entered-tail site and retained nested frame.
     ResumeTail,
+    ResumeCleanup,
     /// A constructor-tail block's payload is filled: its header takes the box's layout in
     /// place of the open stand-in (LANG-10, LIR schema revision 59, runtime ABI 70).
     HoleClose,
@@ -682,7 +683,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 108] = [
+    pub const ALL: [RuntimeEntry; 109] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -777,6 +778,7 @@ impl RuntimeEntry {
         Self::ResumePoint,
         Self::ResumeRun,
         Self::ResumeTail,
+        Self::ResumeCleanup,
         Self::ReceiptRetain,
         Self::ReceiptRelease,
         Self::SealedRoot,
@@ -1522,6 +1524,23 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::ResumeCleanup => (
+                "hirsel_rt_v2_resume_cleanup",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("frame", ptr(N::U8, 1)),
+                        p("state", U32),
+                        p("kind", U32),
+                        p("bytes", U32),
+                        p("anchor", U64),
+                        OPERATION_SITE,
+                        p("rows", cptr(N::U8)),
+                        p("count", U32),
+                    ]
+                },
+            ),
             Self::ResumeRun => (
                 "hirsel_rt_v2_resume_run",
                 U8,
@@ -1692,6 +1711,7 @@ snapshot_enum!(RuntimeEntry {
     ResumePoint,
     ResumeRun,
     ResumeTail,
+    ResumeCleanup,
     HoleClose,
     ReceiptRegionEnter,
     ReceiptRegionExit,

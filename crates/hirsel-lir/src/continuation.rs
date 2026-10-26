@@ -468,6 +468,7 @@ pub struct CleanupResumeState {
     pub live: Vec<LiveOwnedSlot>,
     pub storage: Vec<LiveStorage>,
     pub bytes: u64,
+    pub finalizers: Option<isolate::FinalizerCoverage>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -1527,6 +1528,7 @@ fn plan_unit(
     digests: &BTreeMap<ContentHash, ContentHash>,
     done: &BTreeMap<ContentHash, ContinuationPlan>,
     admission: Result<Option<isolate::IsolateEvidence>, String>,
+    checked: &[&ValidatedUnit<Ready>],
 ) -> ContinuationPlan {
     let effects: Vec<_> = u
         .tables
@@ -1546,7 +1548,7 @@ fn plan_unit(
             return Ok((Fixed::default(), Vec::new(), Vec::new(), Vec::new()));
         }
         let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
-        let (storage, mut states, cleanups) = states(u, inputs.table, &sites, base)?;
+        let (storage, mut states, mut cleanups) = states(u, inputs.table, &sites, base)?;
         if scope::candidate(u) {
             let wrapper = scope::wrapper(u, units).ok_or("unproved scope callback or exit flow")?;
             for state in &mut states {
@@ -1585,6 +1587,25 @@ fn plan_unit(
             begin.runtime = Some(runtime);
             if !cleanups.is_empty() {
                 return Err("uncertified isolate instruction cleanup".into());
+            }
+        }
+        let sources = isolate::finalizer_sources(checked, inputs.table);
+        let partial = ContinuationPlans {
+            plans: done.clone(),
+            identity: ContentHash::default(),
+        };
+        for state in &mut cleanups {
+            if cleanup::has_finalizers(inputs.table, state.layout) {
+                let coverage = isolate::FinalizerCoverage::propose_extents(
+                    state.layout,
+                    &sources,
+                    checked,
+                    inputs,
+                    &partial,
+                    state.bytes,
+                )?;
+                state.bytes = coverage.end;
+                state.finalizers = Some(coverage);
             }
         }
         Ok(((parameters, records), storage, states, cleanups))
@@ -1675,6 +1696,28 @@ fn plan_in_order(
         return;
     }
     let u = units[&id];
+    let sources = isolate::finalizer_sources(checked, inputs.table);
+    for (block, instruction) in cleanup::sites(u, inputs.table) {
+        if let Inst::Release { layout, .. } =
+            u.instructions[u.blocks[block.index()].instructions.start as usize + instruction]
+        {
+            let mut pending = vec![layout];
+            let mut seen = BTreeSet::new();
+            while let Some(layout) = pending.pop() {
+                if !seen.insert(layout) {
+                    continue;
+                }
+                if let Some(&source) = sources.get(&layout) {
+                    plan_in_order(
+                        source, inputs, units, suspends, digests, active, done, checked,
+                    );
+                }
+                if let Some(record) = inputs.table.layout(layout) {
+                    pending.extend(record.references());
+                }
+            }
+        }
+    }
     for call in &u.tables.calls {
         if let CallEffect::Nested(callee) = call_effect(u, call, units, suspends, inputs.classify) {
             plan_in_order(
@@ -1687,7 +1730,9 @@ fn plan_in_order(
     } else {
         Ok(None)
     };
-    let plan = plan_unit(u, inputs, units, suspends, digests, done, admission);
+    let plan = plan_unit(
+        u, inputs, units, suspends, digests, done, admission, checked,
+    );
     active.remove(&id);
     done.insert(id, plan);
 }

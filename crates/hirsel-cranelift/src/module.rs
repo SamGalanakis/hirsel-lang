@@ -164,11 +164,23 @@ fn c_type(ty: CType) -> Option<(ir::Type, bool)> {
 /// A helper function a body asked for, defined once the units are.
 pub(crate) enum Helper {
     /// `hirsel.compare.<layout key>[.eq]`.
-    Compare { layout: LayoutId, equality: bool },
+    Compare {
+        layout: LayoutId,
+        equality: bool,
+    },
     /// `hirsel.hash.<layout key>`.
-    Hash { layout: LayoutId },
+    Hash {
+        layout: LayoutId,
+    },
     /// `hirsel.drop.<layout>`, calling the drop body `body`.
-    Drop { body: FuncId, caller_site: bool },
+    Drop {
+        body: FuncId,
+        caller_site: bool,
+    },
+    DropResume {
+        body: FuncId,
+        caller_site: bool,
+    },
     /// `hirsel.check.<symbol>`, a codec check's `hirsel_rt_v2_check_thunk` (SER-1).
     Check(CheckThunk),
 }
@@ -840,6 +852,9 @@ impl<'a> Emitter<'a> {
                 }
                 Helper::Drop { body, caller_site } => {
                     self.define_drop_wrapper(b, body, caller_site)
+                }
+                Helper::DropResume { body, caller_site } => {
+                    self.define_drop_resume_wrapper(b, body, caller_site)
                 }
                 Helper::Check(thunk) => self.define_check_wrapper(b, thunk),
             }

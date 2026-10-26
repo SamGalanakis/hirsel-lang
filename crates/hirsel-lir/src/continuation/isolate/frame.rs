@@ -69,6 +69,7 @@ impl IsolateProtocol {
             &digests,
             &ordinary.plans,
             Ok(None),
+            units,
         );
         if frame.representation != Representation::Resumable || !frame.cleanups.is_empty() {
             return Err(format!(

@@ -12,17 +12,16 @@ use std::ptr;
 
 /// A resolved alternate and a disjoint retained extent of the checked root.
 /// Resolver inputs are source-proved by the caller; none are runtime hints.
-pub(in crate::tasks) struct ResolvedFinalizer {
-    pub(in crate::tasks) dispatch: crate::finalize::entered::Dispatch,
-    pub(in crate::tasks) frame: *mut u8,
-    pub(in crate::tasks) bytes: u32,
+pub(crate) struct ResolvedFinalizer {
+    pub(crate) dispatch: crate::finalize::entered::Dispatch,
+    pub(crate) frame: *mut u8,
+    pub(crate) bytes: u32,
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::tasks) struct FinalizerResolver {
-    pub(in crate::tasks) resolve:
-        unsafe fn(*mut TaskCtx, Finalizer, usize) -> Option<ResolvedFinalizer>,
-    pub(in crate::tasks) retained: usize,
+pub(crate) struct FinalizerResolver {
+    pub(crate) resolve: unsafe fn(*mut TaskCtx, Finalizer, usize) -> Option<ResolvedFinalizer>,
+    pub(crate) retained: usize,
 }
 
 pub(in crate::tasks) enum CleanupPending {
@@ -402,7 +401,8 @@ pub(in crate::tasks) unsafe fn attach(
     operation_site: u64,
 ) -> usize {
     let task = crate::tasks::running_key(ctx);
-    let driver = Box::new(Driver::new(task, cursor, anchor, operation_site));
+    let mut driver = Box::new(Driver::new(task, cursor, anchor, operation_site));
+    driver.finalizers = unsafe { crate::continuation::binding::cleanup_resolver(ctx) };
     let drivers = unsafe { &mut (*ctx).free_ops.tails.drivers };
     let index = drivers.len();
     drivers.push(driver);
@@ -580,8 +580,9 @@ unsafe fn invoke_cleanup(
             .free_ops
             .tails
             .cleanup_sites
-            .last()
-            .filter(|(s, _)| *s == site)
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == site)
             .map(|(_, index)| *index)
     };
     let index = match previous {
@@ -599,7 +600,24 @@ unsafe fn invoke_cleanup(
     };
     crate::tasks::compact::waited(ctx);
     loop {
-        match unsafe { poll(ctx, index) } {
+        let typed = unsafe { (&(*ctx).free_ops.tails.drivers)[index].finalizers.is_some() };
+        let result = if typed {
+            match unsafe { poll_finalizers(ctx, index) } {
+                Ok(CleanupPoll::Ready(status)) => Ok(Poll::Ready(status)),
+                Ok(CleanupPoll::Pending(CleanupPending::Nested)) => {
+                    // The finalizer's checked nested dispatcher has already
+                    // published its exact wait. Preserve it through this root.
+                    #[cfg(feature = "diagnostic")]
+                    crate::compact_trace::finalizer(unsafe { (*ctx).task_id }, site.state);
+                    return Some(crate::STATUS_SUSPENDED);
+                }
+                Ok(CleanupPoll::Pending(_)) => Ok(Poll::Pending),
+                Err(stop) => Err(stop),
+            }
+        } else {
+            unsafe { poll(ctx, index) }
+        };
+        match result {
             Ok(Poll::Ready(status)) => {
                 unsafe {
                     assert_eq!(

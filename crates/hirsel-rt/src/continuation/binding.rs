@@ -26,6 +26,7 @@ pub(crate) struct BoundSite {
 struct Binding {
     site: BoundSite,
     armed: bool,
+    finalizers: Option<FinalizerRows>,
 }
 
 /// Bind only a site for which the independent continuation checker proved
@@ -70,21 +71,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_resume_tail(
 
 impl Bindings {
     fn bind(&mut self, mut site: BoundSite) {
-        if let Some(binding) = self
+        let existing = self
             .stack
-            .last_mut()
-            .filter(|b| b.site.frame == site.frame && b.site.state == site.state)
-        {
+            .iter()
+            .rposition(|b| b.site.frame == site.frame && b.site.state == site.state);
+        if let Some(index) = existing {
+            let binding = &self.stack[index];
             site.invocation = binding.site.invocation;
             assert_eq!(binding.site, site, "a different entered-tail invocation");
             assert!(
                 !binding.armed,
                 "an entered tail rebound before its intrinsic"
             );
-            binding.armed = true;
+            assert!(
+                self.stack.iter().all(|b| !b.armed),
+                "nested tail before intrinsic entry"
+            );
+            // Reentry walks ancestors before their pending descendants. Keep
+            // both records and arm only this immediate call's binding.
+            self.stack[index].armed = true;
         } else {
             assert!(
-                self.stack.last().is_none_or(|b| !b.armed),
+                self.stack.iter().all(|b| !b.armed),
                 "nested tail before intrinsic entry"
             );
             self.next = self
@@ -92,14 +100,15 @@ impl Bindings {
                 .checked_add(1)
                 .expect("entered-site identity overflow");
             site.invocation = self.next;
-            self.stack.push(Binding { site, armed: true });
+            self.stack.push(Binding {
+                site,
+                armed: true,
+                finalizers: None,
+            });
         }
     }
     fn take(&mut self, kind: u32) -> Option<BoundSite> {
-        let binding = self.stack.last_mut()?;
-        if !binding.armed {
-            return None;
-        }
+        let binding = self.stack.iter_mut().rev().find(|b| b.armed)?;
         assert_eq!(
             binding.site.kind, kind,
             "a bound tail reached a different intrinsic"
@@ -160,3 +169,144 @@ pub(crate) unsafe fn can_leave(ctx: *mut crate::TaskCtx, site: BoundSite) -> boo
 
 #[cfg(test)]
 mod tests;
+
+/// Immutable native resolver row. Descriptor indices live in the linked
+/// program's glue cells; the table and dispatchers outlive the entire run.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct NativeFinalizer {
+    pub descriptor: *const u32,
+    pub dispatch: crate::finalize::entered::Dispatch,
+    pub offset: u32,
+    pub bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FinalizerRows {
+    address: usize,
+    count: u32,
+}
+
+/// Bind a checked cleanup root and its complete immutable source resolver.
+/// # Safety
+/// As for resume_tail. Every row belongs to this root's independently checked
+/// cleanup graph; nested extents are disjoint from its live image and from
+/// one another. Rows and code are immutable program storage, never stack bytes.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn hirsel_rt_v2_resume_cleanup(
+    ctx: *mut crate::TaskCtx,
+    frame: *mut u8,
+    state: u32,
+    kind: u32,
+    bytes: u32,
+    anchor: u64,
+    operation_site: u64,
+    rows: *const u8,
+    count: u32,
+) {
+    unsafe { hirsel_rt_v2_resume_tail(ctx, frame, state, kind, bytes, anchor, operation_site) };
+    if !unsafe { crate::pool::free::enabled((*ctx).run_ref()) } {
+        return;
+    }
+    assert!((48..=50).contains(&kind));
+    assert!(!rows.is_null() && count > 0 && count <= 64);
+    let claimed = FinalizerRows {
+        address: rows as usize,
+        count,
+    };
+    let binding = unsafe {
+        (*ctx)
+            .resume_bindings
+            .stack
+            .iter_mut()
+            .rev()
+            .find(|b| b.armed)
+    }
+    .expect("missing cleanup binding");
+    if let Some(previous) = binding.finalizers {
+        // Ordinary/ahead objects can own distinct immutable tables and adapter
+        // addresses for the same checked source. Keep the original table and
+        // any entered Driver; rebinding must never replace its saved PC.
+        assert_eq!(previous.count, claimed.count);
+        let previous = unsafe {
+            std::slice::from_raw_parts(previous.address as *const NativeFinalizer, count as usize)
+        };
+        let claimed = unsafe {
+            std::slice::from_raw_parts(claimed.address as *const NativeFinalizer, count as usize)
+        };
+        for (a, b) in previous.iter().zip(claimed) {
+            assert!(!a.descriptor.is_null() && !b.descriptor.is_null());
+            assert_eq!(unsafe { a.descriptor.read() }, unsafe {
+                b.descriptor.read()
+            });
+            assert_eq!((a.offset, a.bytes), (b.offset, b.bytes));
+        }
+    } else {
+        binding.finalizers = Some(claimed);
+    }
+}
+
+/// The explicitly bound root alone opts into source finalizers. An opaque
+/// nested release cannot inherit this resolver after the binding disarms.
+pub(crate) unsafe fn cleanup_resolver(
+    ctx: *mut crate::TaskCtx,
+) -> Option<crate::tasks::free::tail::FinalizerResolver> {
+    let binding = unsafe { (*ctx).resume_bindings.stack.last() }?;
+    if binding.armed || !(48..=50).contains(&binding.site.kind) || binding.finalizers.is_none() {
+        return None;
+    }
+    Some(crate::tasks::free::tail::FinalizerResolver {
+        resolve: resolve_finalizer,
+        retained: binding.site.frame,
+    })
+}
+
+unsafe fn resolve_finalizer(
+    ctx: *mut crate::TaskCtx,
+    token: crate::release::Finalizer,
+    retained: usize,
+) -> Option<crate::tasks::free::tail::ResolvedFinalizer> {
+    let binding = unsafe {
+        (*ctx)
+            .resume_bindings
+            .stack
+            .iter()
+            .rev()
+            .find(|b| b.site.frame == retained && b.finalizers.is_some())
+    }?;
+    let site = binding.site;
+    let rows = binding.finalizers?;
+    assert_eq!(crate::tasks::running_key(ctx), site.task);
+    let rows = unsafe {
+        std::slice::from_raw_parts(rows.address as *const NativeFinalizer, rows.count as usize)
+    };
+    let mut selected = None;
+    for row in rows {
+        assert!(!row.descriptor.is_null());
+        let descriptor = unsafe { row.descriptor.read() };
+        if unsafe { (*ctx).descriptor(descriptor) } != token.layout {
+            continue;
+        }
+        assert!(selected.is_none(), "duplicate source finalizer resolver");
+        assert!(row.offset >= 8 && row.offset.is_multiple_of(16));
+        assert!((8..=4096).contains(&row.bytes));
+        assert!(
+            row.offset
+                .checked_add(row.bytes)
+                .is_some_and(|end| end <= site.bytes)
+        );
+        let frame = unsafe { (retained as *mut u8).add(row.offset as usize) };
+        assert!(crate::tasks::compact::contains_frame(
+            ctx,
+            frame as usize,
+            row.bytes as usize
+        ));
+        selected = Some(crate::tasks::free::tail::ResolvedFinalizer {
+            dispatch: row.dispatch,
+            frame,
+            bytes: row.bytes,
+        });
+    }
+    selected
+}

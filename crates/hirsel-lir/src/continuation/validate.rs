@@ -964,6 +964,15 @@ pub fn validate(
     inputs: &PlanInputs<'_>,
     plans: &ContinuationPlans,
 ) -> Result<(), ContinuationError> {
+    validate_plans(units, inputs, plans, true)
+}
+
+fn validate_plans(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &PlanInputs<'_>,
+    plans: &ContinuationPlans,
+    certificates: bool,
+) -> Result<(), ContinuationError> {
     let index: BTreeMap<_, _> = units
         .iter()
         .map(|u| (u.unit().header.instance, u.unit()))
@@ -1189,6 +1198,8 @@ pub fn validate(
                         instruction,
                         plan.states.len() as u32 + i as u32 + 1,
                         base,
+                        units,
+                        plans,
                     )?;
                 }
             }
@@ -1244,11 +1255,11 @@ pub fn validate(
             plan.captures,
             plan.isolate.as_ref(),
         );
-        if certificate != plan.certificate {
+        if certificates && certificate != plan.certificate {
             return Err(ContinuationError::Certificate(*id));
         }
     }
-    if plans.identity != ContinuationPlans::identity_of(&plans.plans, inputs) {
+    if certificates && plans.identity != ContinuationPlans::identity_of(&plans.plans, inputs) {
         return Err(ContinuationError::Identity);
     }
     Ok(())
@@ -1444,6 +1455,34 @@ impl AheadCertificate {
     }
 }
 
+// The same reviewed descriptor rules used by native::continuation::classify;
+// no submitted plan or advisory class selects source-finalizer boundaries.
+fn native_class(definition: &DefPath) -> Option<CalleeClass> {
+    use hirsel_rt_operations::descriptors::{self as d, Locality, Transition};
+    let name = core_name(definition)?;
+    let point = |ops: &[&str]| {
+        ops.iter().any(|op| {
+            d::op_descriptor(op)
+                .is_none_or(|o| o.transitions.iter().any(|t| *t != Transition::Keep))
+        })
+    };
+    if let Some((_, ops)) = d::REGISTRY.iter().find(|(n, _)| *n == name) {
+        return Some(if point(ops) {
+            CalleeClass::Boundary
+        } else {
+            CalleeClass::Local
+        });
+    }
+    let symbol = format!("hirsel_rt_v2_{}", name.replace('.', "_"));
+    let entry = d::entry_descriptor(&symbol)?;
+    Some(match entry.locality {
+        Locality::Local | Locality::Immutable | Locality::Concurrent => CalleeClass::Local,
+        Locality::Op if point(entry.ops) => CalleeClass::Boundary,
+        Locality::Op => CalleeClass::Local,
+        Locality::Admission | Locality::Physical => CalleeClass::Unknown,
+    })
+}
+
 /// Recheck entered-runtime evidence at each native emitter's public entry.
 /// Callers supply complete Ready content, including bodies that stay stackful,
 /// because incoming callable provenance cannot be inferred from a plan hash.
@@ -1453,6 +1492,42 @@ pub fn validate_runtime_operations(
     target: &TargetSpec,
     plans: &ContinuationPlans,
 ) -> Result<(), ContinuationError> {
+    if plans
+        .plans
+        .values()
+        .any(|p| p.cleanups.iter().any(|s| s.finalizers.is_some()))
+    {
+        // Resolver rows call source dispatchers directly. Recheck the entire
+        // reachable continuation graph, including ordinary boundaries inside
+        // those finalizers, before either backend can materialize an address.
+        // Runtime-byte identity is checked by the importing driver; here only
+        // the independently reconstructed Ready structure supplies authority.
+        let mut environments = BTreeMap::new();
+        for unit in units {
+            for closure in &unit.unit().tables.closures {
+                if let Some(code) = closure.code
+                    && let Some(id) = unit.unit().tables.symbols[code.symbol.index()].instance
+                {
+                    environments
+                        .entry(id)
+                        .and_modify(|layout| {
+                            if *layout != Some(closure.environment) {
+                                *layout = None;
+                            }
+                        })
+                        .or_insert(Some(closure.environment));
+                }
+            }
+        }
+        let inputs = PlanInputs {
+            table,
+            target,
+            environments: &environments,
+            runtime: ContentHash::default(),
+            classify: &native_class,
+        };
+        validate_plans(units, &inputs, plans, false)?;
+    }
     let index: BTreeMap<_, _> = units
         .iter()
         .map(|u| (u.unit().header.instance, u.unit()))
@@ -1473,8 +1548,21 @@ pub fn validate_runtime_operations(
                 .check(units, table)
                 .map_err(|_| ContinuationError::Representation(*id))?;
         }
-        if !plan.states.iter().any(|s| s.runtime.is_some()) && plan.isolate.is_none() {
+        let root_sites = index
+            .get(id)
+            .map(|u| root_instruction_sites(u, table))
+            .unwrap_or_default();
+        if !plan.states.iter().any(|s| s.runtime.is_some())
+            && plan.isolate.is_none()
+            && plan.cleanups.is_empty()
+            && (plan.representation != Representation::Resumable || root_sites.is_empty())
+        {
             continue;
+        }
+        if plan.representation != Representation::Resumable
+            || plan.cleanups.len() != root_sites.len()
+        {
+            return Err(ContinuationError::Representation(*id));
         }
         let u = index.get(id).ok_or(ContinuationError::Body(*id))?;
         if plan.digest != u.digest() || plan.body != *id {
@@ -1582,6 +1670,23 @@ pub fn validate_runtime_operations(
             }
         }
         let live = Live::compute(u);
+        for (ordinal, (state, &(block, instruction))) in
+            plan.cleanups.iter().zip(&root_sites).enumerate()
+        {
+            check_cleanup_instruction(
+                u,
+                table,
+                &live,
+                plan,
+                state,
+                block,
+                instruction,
+                plan.states.len() as u32 + ordinal as u32 + 1,
+                base,
+                units,
+                plans,
+            )?;
+        }
         for (ordinal, state) in plan
             .states
             .iter()
@@ -1682,7 +1787,9 @@ fn root_instruction_sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(Block
                             && r.size.storage().is_some()
                     }))
             {
-                if !instruction_reaches_close(table, *layout) {
+                if !instruction_reaches_close(table, *layout)
+                    && !instruction_reaches_finalizer(table, *layout)
+                {
                     continue;
                 }
                 sites.push((BlockId(b as u32), i));
@@ -1703,6 +1810,8 @@ fn check_cleanup_instruction(
     instruction: usize,
     number: u32,
     base: u64,
+    units: &[&ValidatedUnit<Ready>],
+    all_plans: &ContinuationPlans,
 ) -> Result<(), ContinuationError> {
     let id = u.header.instance;
     let bad = ContinuationError::LiveOwner(id, number);
@@ -1821,7 +1930,23 @@ fn check_cleanup_instruction(
         }
         end = retained.offset.checked_add(size).ok_or(bad.clone())?;
     }
-    if state.bytes != end.next_multiple_of(8) || state.bytes > MAX_FRAME_BYTES {
+    let root_end = end.next_multiple_of(8);
+    let expected_end = match &state.finalizers {
+        Some(coverage) => {
+            if coverage.root != layout {
+                return Err(ContinuationError::Frame(id));
+            }
+            coverage
+                .check_extents(units, table, all_plans, root_end)
+                .map_err(|_| ContinuationError::Frame(id))?;
+            coverage.end
+        }
+        None if instruction_reaches_finalizer(table, layout) => {
+            return Err(ContinuationError::Frame(id));
+        }
+        None => root_end,
+    };
+    if state.bytes != expected_end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
     }
     Ok(())
@@ -2172,4 +2297,22 @@ pub(super) fn isolate_frame(
         return Err(ContinuationError::Certificate(id));
     }
     Ok(())
+}
+
+fn instruction_reaches_finalizer(table: &LayoutTable, root: LayoutId) -> bool {
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(record) = table.layout(id) else {
+            return true;
+        };
+        if record.finalizer.is_some() {
+            return true;
+        }
+        pending.extend(record.references());
+    }
+    false
 }

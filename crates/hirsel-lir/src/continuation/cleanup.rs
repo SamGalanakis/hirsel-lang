@@ -20,7 +20,8 @@ pub(super) fn sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(BlockId, us
                         live: MaskRef::All,
                         ..
                     } if eligible(u, table, value, layout)
-                        && has_close(table, layout, &mut BTreeSet::new()) =>
+                        && (has_close(table, layout, &mut BTreeSet::new())
+                            || has_finalizers(table, layout)) =>
                     {
                         Some((BlockId(b as u32), i))
                     }
@@ -57,7 +58,9 @@ pub(super) fn root_states(
             else {
                 continue;
             };
-            if !eligible(u, table, value, layout) || !has_close(table, layout, &mut BTreeSet::new())
+            if !eligible(u, table, value, layout)
+                || !(has_close(table, layout, &mut BTreeSet::new())
+                    || has_finalizers(table, layout))
             {
                 continue;
             }
@@ -163,6 +166,7 @@ pub(super) fn root_states(
                     .collect(),
                 storage: retained,
                 bytes,
+                finalizers: None,
             });
         }
     }
@@ -230,4 +234,22 @@ fn has_close(table: &LayoutTable, layout: LayoutId, seen: &mut BTreeSet<LayoutId
             .flat_map(|t| &t.variants)
             .flat_map(|v| &v.fields)
             .any(|field| has_close(table, field.layout, seen))
+}
+
+pub(super) fn has_finalizers(table: &LayoutTable, root: LayoutId) -> bool {
+    let mut pending = vec![root];
+    let mut seen = BTreeSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(record) = table.layout(id) else {
+            return true;
+        };
+        if record.finalizer.is_some() {
+            return true;
+        }
+        pending.extend(record.references());
+    }
+    false
 }

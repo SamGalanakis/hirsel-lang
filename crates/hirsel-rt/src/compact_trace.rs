@@ -88,3 +88,9 @@ pub(crate) fn runtime_wait(task: u32, state: u32, kind: u32, phase: &str, invoca
         worker()
     ));
 }
+
+/// A certified source finalizer returned Pending with its original nested PC.
+/// This is physical evidence only; it adds no language or replay event.
+pub(crate) fn finalizer(task: u32, state: u32) {
+    line(format_args!("finalizer {task} {state} {}", worker()));
+}

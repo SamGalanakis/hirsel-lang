@@ -47,7 +47,8 @@ unsafe extern "C" fn finalizer(
             for _ in 0..127 {
                 assert!(crate::pool::free::proceed(ctx));
             }
-            let pending = crate::tasks::free::try_yield_entered(&mut *ctx, true).unwrap();
+            let pending =
+                crate::stop::check(ctx, crate::tasks::free::try_yield_entered(&mut *ctx, true));
             assert!(pending);
             pc.write(1);
             return crate::STATUS_SUSPENDED;
@@ -124,7 +125,10 @@ unsafe extern "C" fn dispatch(
                 assert_eq!(original, site, "resumption retains the original invocation");
                 index
             };
-            match poll_finalizers(ctx, index).unwrap() {
+            // A sibling's save hook can request host stop while this child is
+            // polling. Match a generated runtime entry: propagate the terminal
+            // stop instead of panicking across this extern-C dispatcher.
+            match crate::stop::check(ctx, poll_finalizers(ctx, index)) {
                 CleanupPoll::Pending(CleanupPending::Nested) => return crate::STATUS_SUSPENDED,
                 CleanupPoll::Ready(status) => assert_eq!(status, STATUS_OK),
                 _ => panic!("finalizer cannot replace its own pending wait"),

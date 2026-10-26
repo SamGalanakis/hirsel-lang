@@ -678,6 +678,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_ahead_state", Local),
     entry("hirsel_rt_v2_resume_point", Local),
     entry("hirsel_rt_v2_resume_tail", Local),
+    entry("hirsel_rt_v2_resume_cleanup", Local),
     ops("hirsel_rt_v2_ordered_join", &["task.join"]),
     ops("hirsel_rt_v2_ordered_sleep_until", HOST),
     ops("hirsel_rt_v2_ordered_print", HOST),

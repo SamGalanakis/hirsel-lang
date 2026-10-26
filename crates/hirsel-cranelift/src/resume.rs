@@ -585,11 +585,94 @@ impl FnEmitter<'_, '_, '_> {
         let code = self.cleanup_code(state.anchor)?;
         let (anchor, site) = self.failure_sites(code);
         let frame = self.frame();
-        self.rt(
-            RuntimeEntry::ResumeTail,
-            &[self.context, frame, number, kind, bytes, anchor, site],
-        )?;
+        let mut args = vec![self.context, frame, number, kind, bytes, anchor, site];
+        let entry = if let Some(coverage) = &state.finalizers {
+            let rows = self.finalizer_rows(coverage)?;
+            args.push(rows);
+            args.push(
+                self.b
+                    .ins()
+                    .iconst(types::I32, coverage.finalizers.len() as i64),
+            );
+            RuntimeEntry::ResumeCleanup
+        } else {
+            RuntimeEntry::ResumeTail
+        };
+        self.rt(entry, &args)?;
         Ok(())
+    }
+
+    fn finalizer_rows(
+        &mut self,
+        coverage: &hirsel_lir::continuation::isolate::FinalizerCoverage,
+    ) -> Emitted<Value> {
+        use cranelift_module::DataDescription;
+        let mut description = DataDescription::new();
+        let mut bytes = vec![0u8; coverage.finalizers.len() * 24];
+        for (i, frame) in coverage.finalizers.iter().enumerate() {
+            let definition = self
+                .layout(frame.source.layout)?
+                .finalizer
+                .as_ref()
+                .unwrap()
+                .definition
+                .clone();
+            let abi = self.em.fn_abi(frame.source.abi, &definition)?;
+            let caller_site = abi.caller_site;
+            let mut signature = self.em.entry_signature(abi, &definition)?.ir;
+            signature.params.push(ir::AbiParam::new(PTR));
+            let name = resume_name(&definition, frame.source.body, None);
+            let target = self.em.import_function(&name, &signature)?;
+            self.em
+                .manifest_import(&name, ObjectSymbolKind::Function, Some(&definition), None);
+            let mut thunk_sig = ir::Signature::new(self.em.call_conv);
+            thunk_sig.params.extend(
+                [PTR, PTR, types::I64, types::I64, PTR]
+                    .into_iter()
+                    .map(ir::AbiParam::new),
+            );
+            thunk_sig.returns.push(ir::AbiParam::new(types::I8).uext());
+            let thunk = self
+                .em
+                .helper(&format!("{name}_drop_adapter"), &thunk_sig, |_| {
+                    crate::module::Helper::DropResume {
+                        body: target,
+                        caller_site,
+                    }
+                })?;
+            let key = hirsel_lir::glue::descriptor_index_symbol(
+                &self.em.inputs.keys.key(frame.source.layout),
+            );
+            let (cell, _) = self.em.declare_data(&key, Linkage::Import)?;
+            self.em
+                .manifest_import(&key, ObjectSymbolKind::Data, None, None);
+            let data_ref = self.em.module.declare_data_in_data(cell, &mut description);
+            let function = self.em.module.declare_func_in_data(thunk, &mut description);
+            let offset = (i * 24) as u32;
+            description.write_data_addr(offset, data_ref, 0);
+            description.write_function_addr(offset + 8, function);
+            bytes[i * 24 + 16..i * 24 + 20]
+                .copy_from_slice(&(frame.nested.offset as u32).to_le_bytes());
+            bytes[i * 24 + 20..i * 24 + 24]
+                .copy_from_slice(&(frame.nested.bytes as u32).to_le_bytes());
+        }
+        description.define(bytes.into_boxed_slice());
+        description.set_align(8);
+        let key = format!(
+            "hirsel.finalizer.rows.{}.{}.{}",
+            resume_name(
+                &self.unit.header.definition,
+                self.unit.header.instance,
+                None
+            ),
+            coverage.root.0,
+            coverage.end
+        );
+        let (data, fresh) = self.em.declare_data(&key, Linkage::Local)?;
+        if fresh {
+            self.em.define_data(&key, data, &description)?;
+        }
+        Ok(self.data_addr(data, 0))
     }
 
     /// After a nested resumable call: a suspended callee suspends this frame,

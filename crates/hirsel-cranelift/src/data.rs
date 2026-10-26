@@ -556,6 +556,29 @@ impl Emitter<'_> {
         b.finalize(self.module.target_config());
     }
 
+    pub(crate) fn define_drop_resume_wrapper(
+        &mut self,
+        mut b: FunctionBuilder<'_>,
+        body: FuncId,
+        caller_site: bool,
+    ) {
+        let entry = b.create_block();
+        b.append_block_params_for_function_params(entry);
+        b.switch_to_block(entry);
+        let params = b.block_params(entry).to_vec();
+        let callee = self.module.declare_func_in_func(body, b.func);
+        let mut args = vec![params[0]];
+        if caller_site {
+            args.extend([params[2], params[3]]);
+        }
+        args.extend([params[1], params[4]]);
+        let call = b.ins().call(callee, &args);
+        let status = b.inst_results(call)[0];
+        b.ins().return_(&[status]);
+        b.seal_all_blocks();
+        b.finalize(self.module.target_config());
+    }
+
     /// `hirsel.check.<symbol>(ctx, value, verdict) -> i8`: the check's status, with its bool
     /// verdict stored as a byte at `verdict`.
     pub(crate) fn define_check_wrapper(&mut self, mut b: FunctionBuilder<'_>, thunk: CheckThunk) {

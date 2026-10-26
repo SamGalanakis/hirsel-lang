@@ -106,3 +106,27 @@ impl FinalizerSource {
         Ok(())
     }
 }
+
+pub(crate) fn sources(
+    units: &[&ValidatedUnit<Ready>],
+    table: &LayoutTable,
+) -> std::collections::BTreeMap<LayoutId, ContentHash> {
+    let mut found = std::collections::BTreeMap::new();
+    for (index, layout) in table.layouts.iter().enumerate() {
+        let Some(finalizer) = &layout.finalizer else {
+            continue;
+        };
+        let id = LayoutId(index as u32);
+        let matching: Vec<_> = units
+            .iter()
+            .filter(|u| u.unit().header.definition == finalizer.definition)
+            .filter_map(|u| {
+                FinalizerSource::derive(units, table, id, u.unit().header.instance).ok()
+            })
+            .collect();
+        if let [source] = matching.as_slice() {
+            found.insert(id, source.body);
+        }
+    }
+    found
+}
