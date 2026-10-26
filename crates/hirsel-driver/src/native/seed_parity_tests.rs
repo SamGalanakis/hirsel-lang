@@ -43,18 +43,22 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             stages::build_full(&input, &opts).unwrap();
         }
         {
+            // Source checking is independent of the object-store policy under
+            // test. Keep a fresh verified source snapshot for each salt, then
+            // compare every cold/warm/donor/verified native consumer against it.
+            let input = consumer(&source);
             let mut opts = options(
                 Arc::new(DirObjects::new(scratch.0.join("source-cache"))),
                 jobs,
             );
             opts.objects.as_mut().unwrap().backend = backend;
             opts.objects.as_mut().unwrap().debug = true;
-            let cold = prepare_in(&consumer(&source), &opts, Mode::Disabled).unwrap();
+            let cold = prepare_in(&input, &opts, Mode::Disabled).unwrap();
             let expected = cold.ready.unit_objects.as_ref().unwrap().objects.clone();
             let summaries = cold.ready.summaries.clone();
             drop(cold);
             // Warm source imports in an independent cache must agree too.
-            let warm = prepare_in(&consumer(&source), &opts, Mode::Reuse).unwrap();
+            let warm = prepare_in(&input, &opts, Mode::Reuse).unwrap();
             assert_eq!(summaries, warm.ready.summaries);
             assert_eq!(
                 &expected,
@@ -62,14 +66,14 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             );
             drop(warm);
             opts.objects.as_mut().unwrap().store = Arc::new(DirObjects::new(shared.clone()));
-            let ordinary = prepare_in(&consumer(&source), &opts, Mode::Disabled).unwrap();
+            let ordinary = prepare_in(&input, &opts, Mode::Disabled).unwrap();
             assert!(ordinary.ready.unit_objects.as_ref().unwrap().hits > 0);
             assert_eq!(
                 &expected,
                 &ordinary.ready.unit_objects.as_ref().unwrap().objects
             );
             drop(ordinary);
-            let populated = prepare_in(&consumer(&source), &opts, Mode::Reuse).unwrap();
+            let populated = prepare_in(&input, &opts, Mode::Reuse).unwrap();
             assert!(!populated.stats.hit);
             assert_eq!(
                 &expected,
@@ -93,7 +97,7 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             assert_ne!(channel.instance, ContentHash([0; 32]));
             drop(populated);
             let before = [Count::ValueDecodes, Count::ValueRebinds, Count::LateKeys].map(count);
-            let hit = prepare_in(&consumer(&source), &opts, Mode::Reuse).unwrap();
+            let hit = prepare_in(&input, &opts, Mode::Reuse).unwrap();
             assert!(hit.stats.hit, "{:?}", hit.stats);
             assert_eq!(
                 before,
@@ -101,7 +105,7 @@ fn next_stream(backend: Backend, jobs: usize) -> String {
             );
             assert_eq!(&expected, &hit.ready.unit_objects.as_ref().unwrap().objects);
             drop(hit);
-            let verified = prepare_in(&consumer(&source), &opts, Mode::VerifyReuse).unwrap();
+            let verified = prepare_in(&input, &opts, Mode::VerifyReuse).unwrap();
             assert_eq!(
                 &expected,
                 &verified.ready.unit_objects.as_ref().unwrap().objects
