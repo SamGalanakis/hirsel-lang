@@ -21,6 +21,7 @@ hirsel-check-protocol = { path = "../hirsel-check-protocol" }
 hirsel-code-store = { path = "../hirsel-code-store" }
 sha2 = "0.10"
 hirsel-core-contract = { path = "../hirsel-core-contract" }
+hirsel-cranelift = { path = "../hirsel-cranelift" }
 hirsel-diag = { path = "../hirsel-diag" }
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }

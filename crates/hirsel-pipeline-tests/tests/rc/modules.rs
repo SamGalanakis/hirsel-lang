@@ -88,3 +88,4 @@ mod sealed_region_body_33;
 mod rc_ctor_tail;
 mod wildcard_tag;
 mod sealed_region_h_source_33;
+mod sealed_region_native_source_33;

@@ -1690,8 +1690,9 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
         .map(Inst::opcode)
         .chain(unit.terminators.iter().map(Terminator::opcode))
         .collect();
-    // The typed sealed vocabulary is not executable Ready input yet. Its
-    // standalone rows still have complete snapshot and opcode coverage.
+    // Ready admits seal/root-view opcodes with independently checked bits-only
+    // descriptors. Inventory and receipt transport remain unavailable there.
+    // Every standalone row still has complete snapshot and opcode coverage.
     for instruction in [
         Inst::SealArena {
             result: ValueId(0),
@@ -1724,7 +1725,10 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
     ] {
         assert_round_trip(&instruction);
         let opcode = instruction.opcode();
-        assert!(!StageKind::Ready.admits(opcode));
+        assert_eq!(
+            StageKind::Ready.admits(opcode),
+            matches!(opcode, Opcode::SealArena | Opcode::BorrowSealedRoot)
+        );
         seen.push(opcode);
     }
     assert_round_trip(&Terminator::RejectTransfer);

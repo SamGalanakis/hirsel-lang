@@ -11,7 +11,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_types::{GenericArgument, Type, TypeKind};
 use std::collections::BTreeMap;
 
-struct Declarations {
+pub(super) struct Declarations {
     registry: OperationRegistry,
     selected: Vec<(DefPath, ContentHash, SourceEventKind)>,
     root: NativeType,
@@ -105,7 +105,15 @@ impl OperationDeclarations for Declarations {
     }
 }
 
-fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) {
+pub(super) fn original(
+    source: &str,
+    root_kind: TypeKind,
+    root_native: NativeType,
+) -> (
+    hirsel_heapcheck::Program<hirsel_lir::stage::Rc>,
+    Declarations,
+    hirsel_core_contract::Manifest,
+) {
     let program = compile(source);
     let target = target();
     let root = program.types.intern(Type::with_kind(root_kind));
@@ -292,10 +300,15 @@ fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) 
         layouts: lowered.table,
         units: counted,
         statics: lowered.statics,
-        invocation_bodies: declarations.registry.invocation_bodies,
-        invocations: declarations.registry.invocations,
-        pretransfer_adapters: declarations.registry.pretransfer_adapters,
+        invocation_bodies: declarations.registry.invocation_bodies.clone(),
+        invocations: declarations.registry.invocations.clone(),
+        pretransfer_adapters: declarations.registry.pretransfer_adapters.clone(),
     };
+    (h, declarations, manifest)
+}
+
+fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) {
+    let (h, _, _) = original(source, root_kind, root_native);
     for full in [false, true] {
         let config = hirsel_heapcheck::Config {
             full_recount_every_step: full,

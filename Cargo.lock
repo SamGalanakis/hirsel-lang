@@ -1011,6 +1011,7 @@ dependencies = [
  "hirsel-code-store",
  "hirsel-codec",
  "hirsel-core-contract",
+ "hirsel-cranelift",
  "hirsel-diag",
  "hirsel-driver",
  "hirsel-engine",

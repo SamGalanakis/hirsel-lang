@@ -220,8 +220,8 @@ fn checked(
     checked_raw(unit, &table, &manifest, declarations)
 }
 
-fn checked_raw(
-    unit: hirsel_lir::LirUnit<TestStage>,
+fn checked_raw<S: hirsel_lir::stage::Stage>(
+    unit: hirsel_lir::LirUnit<S>,
     table: &LayoutTable,
     manifest: &hirsel_core_contract::Manifest,
     declarations: &Declarations,
@@ -238,6 +238,83 @@ fn checked_raw(
     hirsel_lir::validate::validate(unit, &inputs)
         .err()
         .map_or(Vec::new(), |rejected| rejected.violations)
+}
+
+#[test]
+fn ready_sealed_bits_33_keeps_source_and_descriptor_obligations() {
+    let (t, declarations, _, _) = transition_fixture();
+    let (unit, table, manifest) = t.finish();
+    let unit = unit.into_stage::<hirsel_lir::stage::Ready>();
+    assert_eq!(
+        checked_raw(unit.clone(), &table, &manifest, &declarations),
+        []
+    );
+    let mut borrowed = table.clone();
+    let parameter = &mut borrowed.fn_abis[unit.header.abi.0 as usize].parameters[0];
+    parameter.convention = Passing::Borrow;
+    parameter.passing = hirsel_lir::abi_types::ParameterPassing::ReadOnlyAddress;
+    sealed_rejection(
+        &checked_raw(unit.clone(), &borrowed, &manifest, &declarations),
+        "borrow-only",
+    );
+    let mut missing = declarations;
+    missing.expected = None;
+    sealed_rejection(
+        &checked_raw(unit.clone(), &table, &manifest, &missing),
+        "source event correspondence",
+    );
+    let (_, declarations, _, _) = transition_fixture();
+    let mut forged = unit;
+    forged.tables.seal_descriptors[0].logical.facts[0].bytes = LogicalBytes::Bytes(9);
+    assert!(!checked_raw(forged, &table, &manifest, &declarations).is_empty());
+}
+
+#[test]
+fn ready_sealed_bits_33_refuses_heap_roots_before_emission() {
+    let (t, declarations, _, _) = transition_fixture_with_root(true);
+    let (unit, table, manifest) = t.finish();
+    sealed_rejection(
+        &checked_raw(
+            unit.into_stage::<hirsel_lir::stage::Ready>(),
+            &table,
+            &manifest,
+            &declarations,
+        ),
+        "original pointer-free root",
+    );
+    let (t, declarations, _, _, _) = root_view_fixture(ViewRoot::Heap);
+    let (unit, table, manifest) = t.finish();
+    sealed_rejection(
+        &checked_raw(
+            unit.into_stage::<hirsel_lir::stage::Ready>(),
+            &table,
+            &manifest,
+            &declarations,
+        ),
+        "original pointer-free root",
+    );
+}
+
+#[test]
+fn ready_sealed_bits_33_root_view_keeps_exclusive_owner_correspondence() {
+    for kind in [ViewRoot::Unit, ViewRoot::Scalar] {
+        let (t, declarations, _, _, other_owner) = root_view_fixture(kind);
+        let (unit, table, manifest) = t.finish();
+        let mut unit = unit.into_stage::<hirsel_lir::stage::Ready>();
+        assert_eq!(
+            checked_raw(unit.clone(), &table, &manifest, &declarations),
+            []
+        );
+        for inst in &mut unit.instructions {
+            if let Inst::BorrowSealedRoot { owner, .. } = inst {
+                *owner = other_owner;
+            }
+        }
+        sealed_rejection(
+            &checked_raw(unit, &table, &manifest, &declarations),
+            "exclusive owner loan",
+        );
+    }
 }
 
 #[test]

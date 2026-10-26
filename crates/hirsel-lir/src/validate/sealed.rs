@@ -114,6 +114,18 @@ pub(super) fn check<S: Stage>(
                 }
                 _ => continue,
             };
+            if S::KIND == crate::stage::StageKind::Ready
+                && unit.tables.seal_descriptors[shape.index()]
+                    .bits_root(cx.layouts.0)
+                    .is_err()
+            {
+                report.add(
+                    site,
+                    K::Sealed(
+                        "Ready sealed transition requires an original pointer-free root".into(),
+                    ),
+                );
+            }
             observed.push(SourceEvent {
                 anchor: unit.tables.source_anchors[anchor.index()].clone(),
                 kind,

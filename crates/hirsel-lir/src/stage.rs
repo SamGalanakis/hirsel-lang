@@ -76,9 +76,10 @@ impl StageKind {
             Opcode::Reset | Opcode::Reuse | Opcode::Dispose | Opcode::TokenNone => {
                 rank >= StageKind::Reuse as u8
             }
-            Opcode::SealArena | Opcode::BorrowSealedRoot | Opcode::ArenaInventory => {
-                rank < StageKind::Ready as u8
-            }
+            // Existing source/grant/loan checks remain mandatory. Ready's
+            // sealed checker admits only the linked pointer-free root subset.
+            Opcode::SealArena | Opcode::BorrowSealedRoot => true,
+            Opcode::ArenaInventory => rank < StageKind::Ready as u8,
             Opcode::CopyValue => rank <= StageKind::Placed as u8,
             Opcode::HoleOpen | Opcode::HoleFill | Opcode::HoleAbandon => true,
             Opcode::Copy
