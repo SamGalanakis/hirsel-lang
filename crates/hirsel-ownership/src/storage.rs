@@ -317,7 +317,35 @@ impl Producer<'_, '_> {
                 ),
                 _ => None,
             },
-            NameSite::Expression(expression) => self.ty(expression),
+            NameSite::Expression(expression) => self.ty(expression).map(|ty| {
+                // A direct literal implements the completed call's declared
+                // entry convention at construction. Derive its source identity
+                // from those original checked facts, just as lowering does;
+                // lexical callable aliases keep their independently inferred type.
+                let once = matches!(
+                    self.syntax.tree.expressions[expression.0 as usize].kind,
+                    ExprKind::Closure { .. }
+                ) && self
+                    .checked
+                    .calls
+                    .iter()
+                    .flat_map(|call| &call.arguments)
+                    .any(|argument| {
+                        argument.expression == expression
+                            && argument.parameter.as_ref().is_some_and(|(_, parameter)| {
+                                let row = self.types.row(parameter.ty);
+                                matches!(row.kind, TypeKind::Function(_))
+                                    && row.modes.multiplicity == Multiplicity::Once
+                            })
+                    });
+                if once {
+                    let mut row = self.types.row(ty).clone();
+                    row.modes.multiplicity = Multiplicity::Once;
+                    self.types.intern(row)
+                } else {
+                    ty
+                }
+            }),
             NameSite::Statement(statement) => self
                 .rows
                 .at(NameSite::Statement(statement))

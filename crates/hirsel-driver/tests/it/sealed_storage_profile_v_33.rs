@@ -1600,6 +1600,68 @@ fn sealed_storage_task_carrier_v_33_callable_result_control() {
 }
 
 #[test]
+fn sealed_storage_task_carrier_v_33_many_profile_cannot_authorize_once_literal() {
+    let mut input = task_carrier_fixture_state().input.clone();
+    let definition = input
+        .definitions
+        .iter()
+        .find(|(path, _)| path.0.name == "inspect")
+        .unwrap()
+        .1;
+    let (callable, once) = definition
+        .bodies
+        .iter()
+        .flat_map(|body| {
+            body.blocks.iter().flat_map(move |block| {
+                block.instructions.iter().filter_map(move |instruction| {
+                    let hirsel_tir::InstructionKind::Assign { destination, value } =
+                        instruction.kind
+                    else {
+                        return None;
+                    };
+                    let hirsel_tir::Rvalue::Closure { body: nested, .. } =
+                        body.rvalues[value.0 as usize]
+                    else {
+                        return None;
+                    };
+                    Some((
+                        hirsel_types::storage::StorageCallable {
+                            definition: definition.path,
+                            scope: definition.bodies[nested.0 as usize].parameter_scope,
+                        },
+                        body.places[destination.0 as usize].ty,
+                    ))
+                })
+            })
+        })
+        .find(|(callable, ty)| {
+            input.types.row(*ty).modes.multiplicity == hirsel_types::Multiplicity::Once
+                && input
+                    .storage_profiles
+                    .iter()
+                    .any(|profile| profile.callable == *callable)
+        })
+        .expect("the original task carrier has a demanded Once literal");
+    let mut many = input.types.row(once).clone();
+    many.modes.multiplicity = hirsel_types::Multiplicity::Many;
+    let source_type =
+        hirsel_types::encoding::closed_storage_source_type(&input.types, input.types.intern(many))
+            .unwrap();
+    let profile = &mut input
+        .storage_profiles
+        .iter_mut()
+        .find(|profile| profile.callable == callable)
+        .unwrap()
+        .profile;
+    assert_ne!(source_type, profile.source_type);
+    *profile = StorageProfile::new(source_type, profile.behavior.clone()).unwrap();
+    let validation = validate(&input);
+    assert!(validation.violations.iter().any(|violation| matches!(violation,
+        StorageViolation::Profile { callable: actual, error: StorageProfileError::SourceTypeMismatch }
+            if *actual == callable)), "{validation:?}");
+}
+
+#[test]
 fn sealed_storage_task_carrier_v_33_allocation_with_fresh_claims() {
     let mut input = task_carrier_fixture_state().input.clone();
     let definition = input
