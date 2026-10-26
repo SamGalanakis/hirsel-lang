@@ -355,7 +355,7 @@ impl DemandInstances {
                 INSTANCE_PLAN,
                 &self
                     .records
-                    .encode(engine, &InstancePlan::capture(instances, id))
+                    .encode(engine, &InstancePlan::capture(instances, id)?)
                     .ok_or("native original plan encoding failed")?,
             )?,
         })

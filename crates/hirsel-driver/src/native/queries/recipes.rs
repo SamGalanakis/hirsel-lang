@@ -7,7 +7,7 @@ use hirsel_rc::instance::{
 };
 use hirsel_syntax::DefPath;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Bodyless original instance inputs used to re-plan adapter declarations on
 /// both misses and hits. Key validation binds every actual and lexical binder;
@@ -17,10 +17,10 @@ pub(super) struct InstancePlan {
     actuals: Actuals,
 }
 impl InstancePlan {
-    pub fn capture(instances: &Instances, id: InstanceId) -> Self {
-        Self {
-            actuals: instances.actuals[id.index()].clone(),
-        }
+    pub fn capture(instances: &Instances, id: InstanceId) -> Result<Self, String> {
+        Ok(Self {
+            actuals: Sendless::new(&instances.types).actuals(&instances.actuals[id.index()])?,
+        })
     }
     pub fn register(
         &self,
@@ -92,6 +92,75 @@ impl InstancePlan {
     }
 }
 
+/// An instance key erases every actual's sendability, and no native stage reads
+/// it, so discoveries of one key in different instance tables may differ only
+/// there. Recipes and plans capture their types with it fixed, so every
+/// discovery of a key registers the same products.
+struct Sendless<'a> {
+    types: &'a hirsel_types::TypeInterner,
+    done: HashMap<hirsel_types::TypeId, hirsel_types::TypeId>,
+}
+impl<'a> Sendless<'a> {
+    fn new(types: &'a hirsel_types::TypeInterner) -> Self {
+        Self {
+            types,
+            done: HashMap::new(),
+        }
+    }
+    fn actuals(&mut self, actuals: &Actuals) -> Result<Actuals, String> {
+        Ok(Actuals {
+            binder: actuals.binder,
+            arguments: self.arguments(&actuals.arguments)?,
+            outer: actuals
+                .outer
+                .iter()
+                .map(|(site, arguments)| Ok((*site, self.arguments(arguments)?)))
+                .collect::<Result<_, String>>()?,
+        })
+    }
+    fn arguments(
+        &mut self,
+        arguments: &[hirsel_types::GenericArgument],
+    ) -> Result<Vec<hirsel_types::GenericArgument>, String> {
+        arguments
+            .iter()
+            .map(|argument| match argument {
+                hirsel_types::GenericArgument::Type(ty) => {
+                    Ok(hirsel_types::GenericArgument::Type(self.ty(*ty)?))
+                }
+                other => Ok(other.clone()),
+            })
+            .collect()
+    }
+    fn ty(&mut self, root: hirsel_types::TypeId) -> Result<hirsel_types::TypeId, String> {
+        let mut entered = HashSet::new();
+        let mut pending = vec![(root, false)];
+        while let Some((id, exit)) = pending.pop() {
+            if self.done.contains_key(&id) {
+                continue;
+            }
+            let row = self
+                .types
+                .get(id)
+                .ok_or("native recipe actual is not a type row")?;
+            if !exit {
+                if !entered.insert(id) {
+                    return Err("native recipe actual is a cyclic type graph".into());
+                }
+                pending.push((id, true));
+                pending.extend(row.kind.graph_edges().into_iter().map(|e| (e.ty, false)));
+                continue;
+            }
+            let mut row = row.clone();
+            row.modes.sendability = hirsel_types::Sendability::NotSendable;
+            row.kind = row.kind.map_edges(|child| self.done[&child]);
+            let canonical = self.types.intern(row);
+            self.done.insert(id, canonical);
+        }
+        Ok(self.done[&root])
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Step {
     body: u32,
@@ -145,7 +214,8 @@ impl SourceRecipe {
         Ok(Self {
             schema: 1,
             definition,
-            actuals: instances.actuals[current.index()].clone(),
+            actuals: Sendless::new(&instances.types)
+                .actuals(&instances.actuals[current.index()])?,
             finalizer,
             steps,
         })
@@ -350,13 +420,14 @@ impl LibraryRecipe {
             return Err("source instance is not a library recipe".into());
         };
         let view = instances.view(id);
+        let mut sendless = Sendless::new(&instances.types);
         Ok(Self {
             schema: 1,
             definition: view.key.definition().clone(),
             encoding: view.key.encoding().to_vec(),
             body: u32::try_from(body).map_err(|_| "library recipe body limit")?,
-            actuals: instances.actuals[id.index()].clone(),
-            callable: instances.callables[id.index()],
+            actuals: sendless.actuals(&instances.actuals[id.index()])?,
+            callable: sendless.ty(instances.callables[id.index()])?,
             shape: view.owner.into(),
             environment: instances.environments[id.index()]
                 .map(|layout| hirsel_lir::LayoutKeys::rooted(table, layout).0),

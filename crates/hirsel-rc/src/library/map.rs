@@ -245,6 +245,14 @@ fn helper(
     allocation: Allocation,
     actuals: Vec<GenericArgument>,
 ) -> R<Direct> {
+    // A list operation has a registry row: its callable is the declared
+    // signature under `actuals`, as every other requirement of it states.
+    if name.starts_with("list.") {
+        let path = hirsel_syntax::DefPath::core(name);
+        let body = super::body_index(&path).expect("registered list operation");
+        let request = Request::operation(b.cx.program, body, &path, actuals)?;
+        return b.cx.require(request);
+    }
     let callable = add_type(
         b.cx.types,
         TypeKind::Function(FunctionType {
@@ -270,11 +278,7 @@ fn helper(
             foreign: None,
         }),
     );
-    let path = if name.starts_with("list.") {
-        hirsel_syntax::DefPath::core(name)
-    } else {
-        native_path(name)
-    };
+    let path = native_path(name);
     let body = super::body_index(&path).expect("registered helper");
     let request = Request::native(body, &path, actuals, callable);
     b.cx.require(request)
