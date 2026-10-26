@@ -300,7 +300,7 @@ def main():
         rows = json.loads((HERE / "test-sizes.json").read_text())
         rows.update({name: size(name, samples, peaks[name], floors[name])
                      for name, samples in sorted(found.items()) if not args.only or name in args.only})
-    if not args.only:
+    if not args.only and any(name in found for name in NATIVE_STAGES):
         fresh_native = native_rows(found, peaks, floors)
         for name, row in list(rows.items()):
             if name not in found and name in fresh_native:

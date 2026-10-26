@@ -736,7 +736,10 @@ measurement window count. Both first-party and third-party compiles get
 per-target dev/release requests. A profile with no fresh executions inherits
 the measured sibling profile's memory before using the generic default;
 its CPU request remains one until measured in that profile. Missing or
-ambiguous matches stay visible.
+ambiguous matches stay visible. Retries of one operation are one join candidate;
+their largest PSS peak includes killed attempts. Refreshing an existing evidence
+file retains unobserved targets and special classes, including on-demand native
+observations.
 Decode retained event logs with event_logs.commands and copy existing worker
 logs and scheduler traces; do not launch a workspace build to collect data.
 Run action_sizes_from_log.py with --commands, --pss, --usage, --since and
@@ -746,7 +749,8 @@ CPU follows sustained use across the complete run: one CPU through 1.6 cores,
 otherwise two. Old October 16 calibrations no longer pin four CPUs; a new
 four-CPU request needs fresh evidence that it shortens the critical path.
 Memory is maximum measured PSS times 1.2, rounded to 64 MiB, at least 128 MiB.
-The unmeasured compile default is 256 MiB instead of 1 GiB. There is no fixed
+The unmeasured compile default is 1 GiB: new harnesses and generated targets
+exceeded the former 256 MiB reservation repeatedly. There is no fixed
 512 MiB anonymous-memory surcharge. special_requests in the same evidence
 sizes precheck, Clippy and native observation from their own measured peaks.
 

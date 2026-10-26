@@ -184,7 +184,7 @@ def measured_commands(commands, traces, records, since, until):
                 e = json.loads(line)
                 if e.get('event') == 'dispatch':
                     by_digest[e['action_digest'].replace(':', '-')].append(e)
-                elif e.get('event') == 'usage' and e.get('sampled') and e.get('outcome') == 'COMPLETED':
+                elif e.get('event') == 'usage' and e.get('sampled') and e.get('outcome') in ('COMPLETED', 'KILLED_MEMORY'):
                     peaks[e['operation']] = max(peaks.get(e['operation'], 0), e.get('peak_memory_kb', 0) * 1024)
     seen = set()
     for path in commands:
@@ -194,13 +194,13 @@ def measured_commands(commands, traces, records, since, until):
                 if a['category'] != 'rustc' or a['cached'] or a['failed'] or not since <= a['end'] < until:
                     continue
                 a['target'] = a['display'].removeprefix('root//')
-                candidates = [e for e in by_digest.get(a['digest'].replace(':', '-'), [])
+                candidates = {e['operation'] for e in by_digest.get(a['digest'].replace(':', '-'), [])
                               if abs(e['start_s'] - (a['end'] - a['wall'])) <= 5
-                              and e['operation'] in records and peaks.get(e['operation'])]
+                              and e['operation'] in records and peaks.get(e['operation'])}
                 if len(candidates) != 1:
                     yield a, None
                     continue
-                op = candidates[0]['operation']
+                op = next(iter(candidates))
                 if op in seen:
                     continue
                 seen.add(op)
@@ -251,6 +251,13 @@ def main():
     result['unmatched'] = [dict(profile=p, target=t, phase=phase, samples=n)
                            for (p, t, phase), n in sorted(missing.items())]
     result['special_requests'] = special_requests(args.pss, args.usage, args.since, args.until)
+    # A quiet profile or on-demand campaign is not evidence that its measured
+    # targets became small. Refresh observed rows and retain unobserved ones.
+    if args.output.exists():
+        previous = json.loads(args.output.read_text())
+        for profile in ('dev', 'release'):
+            result['profiles'][profile] = previous['profiles'][profile] | result['profiles'][profile]
+        result['special_requests'] = previous.get('special_requests', {}) | result['special_requests']
     result['event_logs'] = [p.name for p in args.commands]
     result['measurement_window'] = [args.since, args.until]
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + '\n')

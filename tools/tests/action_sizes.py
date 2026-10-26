@@ -6,6 +6,7 @@ import sys
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'buck2'))
 import action_sizes_from_log as sizing  # noqa: E402
@@ -21,6 +22,29 @@ def sample(cores, peak, target='hirsel-foo'):
 
 
 class Sizes(unittest.TestCase):
+    def test_refresh_retains_unobserved_targets_and_special_classes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            commands, trace, usage, output = [root / name for name in ('commands', 'trace', 'usage', 'output')]
+            commands.write_text(json.dumps(dict(display='hirsel-foo', category='rustc', cached=False,
+                failed=False, end=101, wall=1, digest='abc:10', profile='dev', cpu=1, phase='rlib')))
+            trace.write_text('\n'.join(map(json.dumps, [
+                dict(event='dispatch', action_digest='abc-10', start_s=100, operation='op'),
+                dict(event='usage', operation='op', sampled=True, outcome='COMPLETED', peak_memory_kb=200000),
+            ])))
+            usage.write_text('101\top=op\tcategory=rustc\texit=0\twall_ms=1000\tcpu_usec=1000000\t'
+                             'peak_bytes=100000000\trequested_cpu=1\trequested_kb=262144\n')
+            retained = dict(cpu_count=1, memory_kb=1048576)
+            output.write_text(json.dumps(dict(profiles=dict(dev={'hirsel-foo': retained},
+                release={'hirsel-bar': retained}), special_requests={'native_observation': retained})))
+            with patch.object(sys, 'argv', ['sizes', '--commands', str(commands), '--pss', str(trace),
+                                            '--usage', str(usage), '-o', str(output)]):
+                sizing.main()
+            result = json.loads(output.read_text())
+            self.assertEqual(result['profiles']['release']['hirsel-bar'], retained)
+            self.assertEqual(result['special_requests']['native_observation'], retained)
+            self.assertEqual(result['profiles']['dev']['hirsel-foo']['memory_kb'], 262144)
+
     def test_cpu_uses_whole_run_and_memory_keeps_largest_peak(self):
         # 20 samples: 18 at one core, then 1.5 and an outlier of 3.5. The
         # nearest-rank p95 is the 19th value, 1.5, inside the slot share.
@@ -56,6 +80,13 @@ class Sizes(unittest.TestCase):
             self.assertEqual(len(joined), 1)
             self.assertEqual(joined[0][0]['target'], 'third-party:small')
             self.assertEqual(joined[0][1]['pss_peak_bytes'], 204800000)
+            # Several quick memory retries are one operation, not ambiguous
+            # concurrent actions. A killed attempt can peak above its retry.
+            with trace.open('a') as out:
+                out.write('\n' + json.dumps(dispatch | {'start_s': 98}))
+                out.write('\n' + json.dumps(peak | {'outcome': 'KILLED_MEMORY', 'peak_memory_kb': 500000}))
+            joined = list(sizing.measured_commands([commands], [trace], records, 90, 110))
+            self.assertEqual(joined[0][1]['pss_peak_bytes'], 512000000)
             trace.write_text(trace.read_text() + '\n' + json.dumps(dispatch | {'operation': 'other'}))
             records['other'] = records['op']
             trace.write_text(trace.read_text() + '\n' + json.dumps(peak | {'operation': 'other'}))

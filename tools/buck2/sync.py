@@ -1095,7 +1095,7 @@ def execution_sizes() -> str:
     profiles = data["profiles"]
     # The native-selection observation request (tools/buck2/native_selection.bzl).
     special = data.get("special_requests", {})
-    budgets = {(1, 262144, "")} | {(r["cpu_count"], r["memory_kb"], "fast" if name == "precheck" else "") for name, r in special.items()}
+    budgets = {(1, 1048576, "")} | {(r["cpu_count"], r["memory_kb"], "fast" if name == "precheck" else "") for name, r in special.items()}
     requests = {}
     for profile in ("dev", "release"):
         requests[profile] = {}
@@ -1109,7 +1109,7 @@ def execution_sizes() -> str:
             budgets.add((cpu, memory, CPU_CLASSES[profile].get(target, "")))
             requests[profile][target] = [cpu, memory]
         for target, cpu_class in CPU_CLASSES[profile].items():
-            cpu, memory = requests[profile].get(target, [1, 262144])
+            cpu, memory = requests[profile].get(target, [1, 1048576])
             budgets.add((cpu, memory, cpu_class))
     # A profile with no fresh execution inherits the measured sibling's
     # request in platforms.bzl. Register its CPU class combination too.

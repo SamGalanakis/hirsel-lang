@@ -847,27 +847,24 @@
   "hirsel-conformance-test-it": {
     "cpu_class": "",
     "cpu_count": 1,
-    "mean_cores": 1.31,
-    "mean_wall_seconds": 116.4,
-    "memory_kb": 1179648,
-    "memory_kills": 0,
-    "p95_cores": 1.64,
-    "parallel_fraction": 0.49,
-    "pss_peak_mib": 922,
-    "pss_runs": 30,
+    "mean_cores": 1.03,
+    "mean_wall_seconds": 388.6,
+    "memory_kb": 3342336,
+    "memory_kills": 2,
+    "p95_cores": 1.07,
+    "parallel_fraction": null,
+    "pss_peak_mib": 2682,
+    "pss_runs": 16,
     "requested": [
-      "1/1572864",
-      "1/2097152",
-      "2/1572864",
-      "2/2097152",
-      "2/2293760"
+      "1/1179648",
+      "1/2359296"
     ],
-    "runs": 159,
-    "timed_runs": 136,
+    "runs": 14,
+    "timed_runs": 14,
     "two_cpu_slowdown": null,
     "window": [
-      1792447139,
-      1792530001
+      1792947376,
+      1793006688
     ]
   },
   "hirsel-conformance-test-spec_links": {
@@ -1018,6 +1015,7 @@
   "hirsel-driver-test-it-image": {
     "cpu_class": "",
     "cpu_count": 1,
+    "guard_limit_kb": 10092544,
     "mean_wall_seconds": 376.1,
     "memory_kb": 5242880,
     "memory_kills": 1,

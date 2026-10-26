@@ -138,7 +138,7 @@ def _compile_env(package_name, crate, version, build_script):
     return env
 
 # `-c hirsel.clippy=true` (tools/buck2/clippy.py) declares every Rust target's
-# Clippy twin `<name>-clippy`: the same rule and attributes on a 1 CPU/512 MiB
+# Clippy twin `<name>-clippy`: the same rule and attributes on a measured 1 CPU
 # platform. Buck2 gives a target one execution platform, so Clippy
 # on the target itself reserves its whole compile request. The twin shares its
 # target's dependencies and sources: building its `[clippy.txt]` runs Clippy

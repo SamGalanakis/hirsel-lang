@@ -14,6 +14,24 @@ import test_sizes_from_usage as sizes  # noqa: E402
 
 
 class NativeSizes(unittest.TestCase):
+    def test_full_refresh_without_native_runs_preserves_native_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            retained = dict(cpu_count=1, memory_kb=4194304, cpu_class='')
+            (root / 'test-sizes.json').write_text(json.dumps({'gate-native-full': retained}))
+            usage = root / 'usage.log'
+            usage.write_text('10\ttest=run:0:root//:hirsel-conformance-test-it\top=abc\twall_ms=1000\t'
+                             'cpu_usec=1200000\trequested_cpu=1\trequested_kb=524288\n')
+            trace = root / 'trace.jsonl'
+            trace.write_text(json.dumps(dict(event='usage', operation='abc', sampled=True,
+                                             peak_memory_kb=2400000)))
+            with patch.object(sizes, 'HERE', root), patch.object(sys, 'argv', [
+                    'sizes', '--usage', str(usage), '--pss', str(trace)]):
+                sizes.main()
+            rows = json.loads((root / 'test-sizes.json').read_text())
+            self.assertEqual(rows['gate-native-full'], retained)
+            self.assertGreaterEqual(rows['hirsel-conformance-test-it']['memory_kb'], 2400000 * 1.2)
+
     def test_partial_refresh_preserves_unobserved_native_requests(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

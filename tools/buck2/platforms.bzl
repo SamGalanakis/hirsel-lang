@@ -95,7 +95,7 @@ def doctest_properties():
     }
 
 # The request of a compile no measurement sized.
-DEFAULT_REQUEST = [1, 262144]
+DEFAULT_REQUEST = [1, 1048576]
 
 # Every Clippy twin's request (defs.bzl): Clippy is a single-threaded front end.
 CLIPPY_REQUEST = SPECIAL_REQUESTS["clippy"]
