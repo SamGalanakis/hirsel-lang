@@ -333,6 +333,9 @@ fn object_store_30_native_and_host_replay() {
 }
 
 fn replay_receipts(root: &Path, manifest: &Path) {
+    // Every receipt uses this manifest; keep its compiler queries while each
+    // public replay call constructs a fresh runtime and consumes its own tape.
+    hirsel_driver::session::enable_resident(1);
     let receipts: Vec<Value> =
         serde_json::from_slice(&fs::read(root.join("receipts.json")).unwrap()).unwrap();
     assert!(!receipts.is_empty());
