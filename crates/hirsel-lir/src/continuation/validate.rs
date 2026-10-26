@@ -799,8 +799,10 @@ fn check_tail(
         .copied()
         .filter(|l| root_slot(u, u.tables.loans[l.index()].address) == Some(slot))
         .collect();
-    let [loan] = active[..] else {
-        return Err(refused);
+    let loan = match active.as_slice() {
+        [] => None,
+        [loan] => Some(*loan),
+        _ => return Err(refused),
     };
     let expected = TailCarrier {
         slot,
@@ -814,7 +816,8 @@ fn check_tail(
     if *carrier != expected || !slots.contains(&slot) || stored.layout != layout || stored.offset % align != 0
         || at.projection.len != 0 || !at.unchecked.is_empty() || u.types[at.ty.index()].layout != layout
         || !matches!(u.slots[slot.index()].kind, SlotKind::Local | SlotKind::Temporary)
-        || !u.tables.loans[loan.index()].mutable || u.tables.loans[loan.index()].address != address
+        || arg.passing != Passing::Mut || align > 16
+        || loan.is_some_and(|loan| !u.tables.loans[loan.index()].mutable || u.tables.loans[loan.index()].address != address)
         || args.iter().any(|a| a.parameter != 1 && matches!(a.value, ArgumentValue::Address { address, .. } if root_slot(u, address) == Some(slot)))
     { return Err(refused); }
     Ok(())

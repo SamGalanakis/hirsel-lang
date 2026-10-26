@@ -14,7 +14,7 @@ pub enum TailKind {
 pub struct TailCarrier {
     pub slot: SlotId,
     pub address: AddressId,
-    pub loan: LoanId,
+    pub loan: Option<LoanId>,
     pub layout: LayoutId,
     pub offset: u64,
     pub size: u64,
@@ -171,10 +171,15 @@ pub(super) fn derive(
             .copied()
             .filter(|l| root(u.tables.loans[l.index()].address) == Some(slot))
             .collect();
-        let [loan] = reaching[..] else {
-            return Err("aliased put carrier".into());
+        // Library bodies use an exclusive call address directly, without
+        // a BeginLoan instruction. Source bodies can carry its explicit loan.
+        let loan = match reaching.as_slice() {
+            [] => None,
+            [loan] => Some(*loan),
+            _ => return Err("aliased put carrier".into()),
         };
-        if !u.tables.loans[loan.index()].mutable || u.tables.loans[loan.index()].address != address
+        if arg.passing != Passing::Mut || align > 16
+            || loan.is_some_and(|loan| !u.tables.loans[loan.index()].mutable || u.tables.loans[loan.index()].address != address)
             || args.iter().any(|a| a.parameter != 1 && matches!(a.value, ArgumentValue::Address { address, .. } if root(address) == Some(slot)))
             || stored.layout != layout || stored.offset % align != 0 || u.types[at.ty.index()].layout != layout
             || !matches!(u.slots[slot.index()].kind, SlotKind::Local | SlotKind::Temporary)

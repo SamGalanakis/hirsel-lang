@@ -2,6 +2,7 @@
 use super::runtime50_continuation::ready;
 use super::runtime50_resume::{compact_runs_with, routing};
 use hirsel_driver::native::{self, *};
+use hirsel_engine::with_compiler_stack;
 use hirsel_lir::continuation::{Representation, ResumeAction};
 
 const PUT: &str = r#"
