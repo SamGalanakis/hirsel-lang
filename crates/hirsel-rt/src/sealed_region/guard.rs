@@ -16,6 +16,8 @@ use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 
+mod bits;
+
 /// Exact demand-only extension, with the ordinary base fields/offsets intact.
 /// The trailing owner word records consumption ONLY. It may be dangling after
 /// affine owner drop and MUST NEVER be dereferenced for access or cleanup.
@@ -36,6 +38,9 @@ const _: () = {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
     Consumed,
+    InventoryRequired,
+    RootLayout,
+    RootImage,
     Journal(journal::Error),
     Seal(journal::SealError),
 }
