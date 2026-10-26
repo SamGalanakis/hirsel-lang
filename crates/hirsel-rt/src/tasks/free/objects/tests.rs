@@ -1296,3 +1296,33 @@ fn contended_lease_takes_register_and_park_without_role() {
         }
     }
 }
+
+#[test]
+fn empty_cancellation_lease_survives_topology_and_rechecks_new_causes() {
+    let mut run = crate::host::BodyRun::new(1, false);
+    let outcome = run.run(
+        |_| {},
+        |ctx| unsafe {
+            let _role = role::Guard::new(ctx);
+            let s = scheduler(ctx);
+            keep_uncanceled(ctx, s, 0);
+            assert!(uncanceled(&(*ctx).free_ops, 0));
+            let (scope, _) = s.open_scope(None);
+            assert!(uncanceled(&(*ctx).free_ops, 0));
+            s.cancel_scope(scope, CANCEL_DEADLINE);
+            assert!(!uncanceled(&(*ctx).free_ops, 0));
+            assert_eq!(s.canceled_task(0, 0), Some(CANCEL_DEADLINE));
+            assert_eq!(s.task(0).scopes.pop(), Some(scope));
+            s.cancel_epoch.changed();
+            assert_eq!(s.canceled_task(0, 0), None);
+            keep_uncanceled(ctx, s, 0);
+            assert!(uncanceled(&(*ctx).free_ops, 0));
+            assert!(!uncanceled(&(*ctx).free_ops, 1));
+            s.cancel(0, CANCEL_REQUESTED);
+            assert!(!uncanceled(&(*ctx).free_ops, 0));
+            assert_eq!(s.canceled_task(0, 0), Some(CANCEL_REQUESTED));
+            STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(STATUS_OK));
+}

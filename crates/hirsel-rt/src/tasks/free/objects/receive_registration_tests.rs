@@ -209,6 +209,10 @@ unsafe extern "C" fn vector_sender(ctx: *mut TaskCtx, env: *mut Header, _: u64, 
     wait_until("the vector receiver resolves its lease", || {
         v.stage.load(Ordering::Acquire) == LEASE
     });
+    wait_until("parent leaves scope before immediate receive", || {
+        let _role = unsafe { role::Guard::new(ctx) };
+        scheduler(ctx).task(0).scopes.is_empty()
+    });
     assert_eq!(unsafe { send(ctx, sender, 2) }, crate::channels::DONE);
     v.stage.store(SENT, Ordering::Release);
     wait_until("the receiver's immediate receive", || {
@@ -314,6 +318,9 @@ fn free53_empty_receive_registers_and_parks_without_role() {
         let env = Arc::as_ptr(&shared).cast();
         spawn(ctx, &scope, vector_receiver, env);
         spawn(ctx, &scope, vector_sender, env);
+        wait_until("receiver resolved before parent leaves scope", || {
+            shared.stage.load(Ordering::Acquire) == LEASE
+        });
         hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
         let done = crate::channels::DONE;
         assert_eq!(

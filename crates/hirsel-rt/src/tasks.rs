@@ -309,6 +309,9 @@ enum Logical {
 pub(crate) struct Scheduler {
     logical: Logical,
     cancel_epoch: std::sync::Arc<hirsel_free::cancel::Epoch>,
+    /// New cancellation causes, excluding scope topology changes. An empty
+    /// observation stays empty when an uncanceled scope is entered or left.
+    cancel_causes: std::sync::Arc<hirsel_free::cancel::Epoch>,
     /// The cancellation generation home last rechecked saved host waits for.
     home_epoch: u64,
     cancel_metrics: Option<std::sync::Arc<crate::pool::WorkerMetrics>>,
@@ -624,11 +627,13 @@ impl Scheduler {
             self.notify_cancel(index);
         }
         if changed {
+            self.cancel_causes.changed();
             self.cancel_epoch.changed();
         }
     }
     fn cancel_scope(&mut self, scope: u32, cause: u32) {
         if self.scope(scope).canceled.cancel(cause) {
+            self.cancel_causes.changed();
             self.cancel_epoch.changed();
             // Only the owner enters a scope; children are canceled by name.
             let owner = self.scope(scope).owner;

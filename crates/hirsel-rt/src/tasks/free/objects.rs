@@ -236,9 +236,10 @@ pub(super) fn keep_endpoint(
     };
 }
 
-/// The role observed this task uncanceled at `seen` under `shield`.
+/// The role observed this task uncanceled at `seen` under `shield`. Scope
+/// topology alone cannot introduce a cause into an empty observation.
 pub(super) fn keep_uncanceled(ctx: *mut TaskCtx, s: &Scheduler, shield: u32) {
-    let seen = s.cancel_epoch.load();
+    let seen = s.cancel_causes.load();
     let ops = unsafe { &mut (*ctx).free_ops };
     match &mut ops.uncanceled {
         Some(known) => {
@@ -247,7 +248,7 @@ pub(super) fn keep_uncanceled(ctx: *mut TaskCtx, s: &Scheduler, shield: u32) {
         }
         None => {
             ops.uncanceled = Some(Uncanceled {
-                epoch: s.cancel_epoch.clone(),
+                epoch: s.cancel_causes.clone(),
                 seen,
                 shield,
             })
@@ -591,7 +592,7 @@ pub(crate) unsafe fn channel_send(
 }
 
 /// Whether the role's last observation that this task is uncanceled, under
-/// `shield`, still holds: no cancellation, scope change or shield change has
+/// `shield`, still holds: no new cancellation cause or shield change has
 /// invalidated it since.
 fn uncanceled(ops: &OpLocal, shield: u32) -> bool {
     ops.uncanceled
