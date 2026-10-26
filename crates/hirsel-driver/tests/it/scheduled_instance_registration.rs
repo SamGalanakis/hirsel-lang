@@ -632,3 +632,342 @@ fn closed_instance_registration_refuses_open_wrong_kind_and_257th_selection_with
         });
     });
 }
+
+#[test]
+fn bounded_instance_bootstrap_reuses_one_grant_and_refreshes_nested_final_universe_views() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let source = SOURCE.replace("{7u64}", "{ inner(v) }")
+                + "\nfn inner[T](v:T)->u64 uses {} = comptime inner_make(shape(T))\n"
+                + &SOURCE[SOURCE.find("fn make").unwrap()..SOURCE.find("fn generated").unwrap()]
+                    .replace("make[T]", "inner_make[T]");
+            let mut retained = None;
+            fixture(&source, jobs, |program, budget| {
+                let definitions = program.engine.front_source_roots();
+                let generators = program.engine.front_generator_roots(&definitions).unwrap();
+                assert_eq!(generators.len(), 2);
+                let admission = FrontInstanceBootstrapAdmission {
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    weight: weight(),
+                    max_reads: 64,
+                    runtime: budget.reserve(256 << 20).unwrap(),
+                    front: budget.reserve(32 << 20).unwrap(),
+                    lower: budget.reserve(32 << 20).unwrap(),
+                    text: budget.reserve(32 << 20).unwrap(),
+                    syntax: budget.reserve(32 << 20).unwrap(),
+                    discovery: budget.reserve(16 << 20).unwrap(),
+                    metadata: budget.reserve(4 << 20).unwrap(),
+                };
+                let reserved = budget.reserved();
+                assert_eq!(reserved, 404 << 20);
+                let bootstrap = program
+                    .engine
+                    .bootstrap_front_instances(
+                        &definitions,
+                        &[program.entry.clone()],
+                        &generators,
+                        admission,
+                        crate::scheduled_front::errors(),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    bootstrap.registrations().len(),
+                    4,
+                    "two types at outer and nested declarations"
+                );
+                assert_eq!(bootstrap.rounds(), 3);
+                assert_eq!(bootstrap.stats().active, 0);
+                assert_eq!(bootstrap.stats().charged_bytes, 0);
+                assert!(bootstrap.stats().claims > 0);
+                for view in bootstrap.registrations() {
+                    view.validate_in_engine(&mut program.engine).unwrap();
+                    assert!(bootstrap.definitions().contains(view.definition()));
+                }
+                for path in bootstrap.definitions() {
+                    for kind in [
+                        QueryKind::Resolve,
+                        QueryKind::Check,
+                        QueryKind::Modes,
+                        QueryKind::Lower,
+                    ] {
+                        assert_eq!(
+                            program.engine.recompute_count(path, kind),
+                            0,
+                            "only S5 workers perform {kind:?}: {path}"
+                        );
+                    }
+                }
+                assert!(
+                    budget.reserved() < 16 << 20,
+                    "one runtime and all completed stage grants release; accepted payloads stay charged"
+                );
+                let final_front = program
+                    .engine
+                    .front_body_queries_with_registrations(
+                        bootstrap.definitions(),
+                        bootstrap.registrations(),
+                        weight(),
+                        budget.reserve(32 << 20).unwrap(),
+                        crate::scheduled_front::errors(),
+                    )
+                    .unwrap();
+                let mut runtime = AdmittedRuntime::new(
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                    budget.reserve(256 << 20).unwrap(),
+                    crate::scheduled_front::errors(),
+                )
+                .unwrap();
+                runtime
+                    .register(FRONT_BODY_KIND, final_front.factory())
+                    .unwrap();
+                let roots: Vec<_> = bootstrap
+                    .definitions()
+                    .iter()
+                    .map(|p| final_front.query(p).unwrap())
+                    .collect();
+                let request = runtime.request(&roots);
+                runtime.wait(request).unwrap();
+                let complete = program
+                    .engine
+                    .discover_front_instances(
+                        &[program.entry.clone()],
+                        &[final_front.clone()],
+                        budget.reserve(16 << 20).unwrap(),
+                    )
+                    .unwrap();
+                assert!(complete.pending_bodies().is_empty());
+                assert_eq!(complete.requests().len(), 4);
+                runtime.shutdown();
+                drop(runtime);
+                drop(complete);
+                drop(final_front);
+                drop(bootstrap);
+                retained = Some(budget.clone());
+            });
+            assert_eq!(retained.unwrap().reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn bounded_instance_bootstrap_refuses_short_metadata_before_body_work_or_registration() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            fixture(SOURCE, jobs, |program, budget| {
+                let definitions = program.engine.front_source_roots();
+                let generators = program.engine.front_generator_roots(&definitions).unwrap();
+                let required =
+                    FrontInstanceBootstrap::input_bytes(&definitions, &generators).unwrap();
+                let before = program.engine.work_stats();
+                let error = program
+                    .engine
+                    .bootstrap_front_instances(
+                        &definitions,
+                        &[program.entry.clone()],
+                        &generators,
+                        FrontInstanceBootstrapAdmission {
+                            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                            weight: weight(),
+                            max_reads: 64,
+                            runtime: budget.reserve(256 << 20).unwrap(),
+                            front: budget.reserve(32 << 20).unwrap(),
+                            lower: budget.reserve(32 << 20).unwrap(),
+                            text: budget.reserve(32 << 20).unwrap(),
+                            syntax: budget.reserve(32 << 20).unwrap(),
+                            discovery: budget.reserve(16 << 20).unwrap(),
+                            metadata: budget.reserve(required - 1).unwrap(),
+                        },
+                        crate::scheduled_front::errors(),
+                    )
+                    .err()
+                    .expect("short cursor grant");
+                let FrontInstanceBootstrapError::Bootstrap(
+                    FrontRegistrationBootstrapError::Admission(QueryError::Operational(error)),
+                ) = error
+                else {
+                    panic!("{error:?}")
+                };
+                assert_eq!(error.operation, "generated instance bootstrap admission");
+                assert_eq!(program.engine.work_stats(), before);
+                assert_eq!(budget.reserved(), 0);
+                assert!(program.engine.generated_sources().next().is_none());
+            });
+        }
+    });
+}
+
+#[test]
+fn bounded_instance_bootstrap_keeps_generator_error_sources_and_never_accepts_failed_text() {
+    instance_bootstrap_failure(false);
+}
+
+#[test]
+fn bounded_instance_bootstrap_preserves_zero_depth_refusal_without_private_execution() {
+    instance_bootstrap_failure(true);
+}
+
+fn instance_bootstrap_failure(zero_depth: bool) {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"), "type Point{x:u8}\nfn make()->Result[Body[fn(Point)->u64 uses {}],String] uses {} {Error(\"generic bootstrap stop\")}\nfn generated[T](v:T)->u64 uses {} = comptime make()\npub fn main()->u64 uses {} {generated(Point(x:1u8))}\n").unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"instance_failure","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        for jobs in [1, 2] {
+            let compiler = COMPILER
+                .with_config(CompileConfig {
+                    store: Arc::new(MemStore::default()),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    hold_bytes: 0,
+                    ..Default::default()
+                })
+                .with_comptime_limits(ComptimeLimits {
+                    call_depth: if zero_depth { 0 } else { usize::MAX },
+                    ..Default::default()
+                })
+                .with_owned_engines();
+            let mut program = compiler.load_program(&manifest).unwrap();
+            let definitions = program.engine.front_source_roots();
+            let generators = program.engine.front_generator_roots(&definitions).unwrap();
+            let budget = ProcessBudget::new(1 << 30);
+            let error = program
+                .engine
+                .bootstrap_front_instances(
+                    &definitions,
+                    &[program.entry.clone()],
+                    &generators,
+                    FrontInstanceBootstrapAdmission {
+                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                        weight: weight(),
+                        max_reads: 64,
+                        runtime: budget.reserve(256 << 20).unwrap(),
+                        front: budget.reserve(32 << 20).unwrap(),
+                        lower: budget.reserve(32 << 20).unwrap(),
+                        text: budget.reserve(32 << 20).unwrap(),
+                        syntax: budget.reserve(32 << 20).unwrap(),
+                        discovery: budget.reserve(16 << 20).unwrap(),
+                        metadata: budget.reserve(4 << 20).unwrap(),
+                    },
+                    crate::scheduled_front::errors(),
+                )
+                .err()
+                .expect("generator refusal");
+            let FrontInstanceBootstrapError::Bootstrap(FrontRegistrationBootstrapError::Runtime {
+                reference,
+                error: Some(failure),
+                sources,
+                owner,
+            }) = &error
+            else {
+                panic!("{error:?}")
+            };
+            let output = owner
+                .failed(*reference)
+                .expect("failed private text still owns its product");
+            assert!(!output.has_execution_acceptance());
+            match failure {
+                QueryError::Operational(error) if zero_depth => {
+                    assert_eq!(error.operation, "compile-time tooling limit");
+                    assert!(error.message.contains("CallDepth"));
+                }
+                QueryError::Diagnostics(diagnostics) if !zero_depth => {
+                    assert_eq!(diagnostics.len(), 1);
+                    assert_eq!(diagnostics[0].rule.as_str(), "CT-1");
+                    assert!(
+                        diagnostics[0]
+                            .notes
+                            .iter()
+                            .any(|note| note == "generic bootstrap stop")
+                    );
+                    assert!(sources.slice(diagnostics[0].primary).is_some());
+                }
+                other => panic!("{other:?}"),
+            }
+            assert!(program.engine.generated_sources().next().is_none());
+            assert_eq!(
+                program
+                    .engine
+                    .recompute_count(&program.entry, QueryKind::Check),
+                0
+            );
+            assert!(
+                budget.reserved() < 256 << 20,
+                "runtime partition released on failure"
+            );
+            drop(output);
+            drop(program);
+            assert!(
+                budget.reserved() > 0,
+                "detached error owns failed payload/sources"
+            );
+            drop(error);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn bounded_instance_bootstrap_front_failure_keeps_its_admitted_source_owner() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let source = SOURCE.replace(
+                "generated(Point(x:1u8)) + generated(Box3(x:2u16)) + generated(Point(x:3u8))",
+                "missing()",
+            );
+            let mut detached = None;
+            let mut retained = None;
+            fixture(&source, jobs, |program, budget| {
+                let definitions = program.engine.front_source_roots();
+                let generators = program.engine.front_generator_roots(&definitions).unwrap();
+                let error = program
+                    .engine
+                    .bootstrap_front_instances(
+                        &definitions,
+                        &[program.entry.clone()],
+                        &generators,
+                        FrontInstanceBootstrapAdmission {
+                            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                            weight: weight(),
+                            max_reads: 64,
+                            runtime: budget.reserve(256 << 20).unwrap(),
+                            front: budget.reserve(32 << 20).unwrap(),
+                            lower: budget.reserve(32 << 20).unwrap(),
+                            text: budget.reserve(32 << 20).unwrap(),
+                            syntax: budget.reserve(32 << 20).unwrap(),
+                            discovery: budget.reserve(16 << 20).unwrap(),
+                            metadata: budget.reserve(4 << 20).unwrap(),
+                        },
+                        crate::scheduled_front::errors(),
+                    )
+                    .err()
+                    .expect("unresolved ordinary body");
+                let FrontInstanceBootstrapError::Front {
+                    error: Some(QueryError::Diagnostics(diagnostics)),
+                    sources,
+                    owner,
+                    ..
+                } = &error
+                else {
+                    panic!("{error:?}")
+                };
+                assert!(!diagnostics.is_empty());
+                assert!(
+                    diagnostics
+                        .iter()
+                        .all(|d| sources.slice(d.primary).is_some())
+                );
+                assert!(owner.query(&program.entry).is_some());
+                assert!(program.engine.generated_sources().next().is_none());
+                assert!(budget.reserved() > 0 && budget.reserved() < 256 << 20);
+                detached = Some(error);
+                retained = Some(budget.clone());
+            });
+            let budget = retained.unwrap();
+            assert!(
+                budget.reserved() > 0,
+                "detached diagnostics own their admitted front after host drop"
+            );
+            drop(detached);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}

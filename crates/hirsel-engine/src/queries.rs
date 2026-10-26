@@ -43,7 +43,8 @@ pub use scheduled_check::{
 pub use scheduled_stage::{FRONT_STAGE_KIND, FrontStageOutput, FrontStageQueries};
 mod scheduled_growth;
 pub use generation::{
-    AcceptedFrontRegistration, FrontInstanceDiscovery, FrontInstanceRequest, FrontInstanceSyntax,
+    AcceptedFrontRegistration, FrontInstanceBootstrap, FrontInstanceBootstrapAdmission,
+    FrontInstanceBootstrapError, FrontInstanceDiscovery, FrontInstanceRequest, FrontInstanceSyntax,
     FrontRegistrationBootstrap, FrontRegistrationBootstrapAdmission,
     FrontRegistrationBootstrapError, FrontRegistrationFailure,
 };

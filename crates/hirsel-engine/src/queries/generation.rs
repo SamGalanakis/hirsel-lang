@@ -15,10 +15,14 @@ use hirsel_syntax::{
 use hirsel_types::SignatureKind;
 mod accepted;
 mod bootstrap;
+mod instance_bootstrap;
 mod instances;
 pub use bootstrap::{
     FrontRegistrationBootstrap, FrontRegistrationBootstrapAdmission,
     FrontRegistrationBootstrapError,
+};
+pub use instance_bootstrap::{
+    FrontInstanceBootstrap, FrontInstanceBootstrapAdmission, FrontInstanceBootstrapError,
 };
 pub(crate) mod task;
 pub use accepted::{AcceptedFrontRegistration, FrontRegistrationFailure};

@@ -62,7 +62,7 @@ impl QueryEngine {
         request: &FrontInstanceRequest,
         allowance: MemoryReservation,
     ) -> Result<Arc<FrontInstanceSyntax>, FrontRegistrationFailure> {
-        let allowance = Arc::new(allowance);
+        let mut allowance = allowance;
         let previous_sources = self.sources.clone();
         let source_before = self.sources.retained_payload_bytes();
         let mut installed = None;
@@ -143,21 +143,27 @@ impl QueryEngine {
                 weight.tree::<DefId, ()>(1);
             }
             let retained = weight.bytes();
-            if retained > allowance.bytes() {
-                return Err(refusal("instance syntax exceeds its reservation"));
-            }
+            let retained_allowance = Arc::new(
+                allowance
+                    .split(retained)
+                    .ok_or_else(|| refusal("instance syntax exceeds its reservation"))?,
+            );
             if fresh {
-                self.sources = self.sources.clone().retain_owner(allowance.clone());
+                self.sources = self
+                    .sources
+                    .clone()
+                    .retain_owner(retained_allowance.clone());
             }
             Ok(Arc::new(FrontInstanceSyntax {
                 definition,
                 retained,
-                _allowance: allowance.clone(),
+                _allowance: retained_allowance,
             }))
         })();
         match result {
             Ok(value) => Ok(value),
             Err(mut error) => {
+                let allowance = Arc::new(allowance);
                 let mut weight = crate::NativeMetadataWeight::default();
                 weight.add(size_of::<MemoryReservation>() + 2 * size_of::<usize>());
                 weight.source_snapshot(&self.sources);
