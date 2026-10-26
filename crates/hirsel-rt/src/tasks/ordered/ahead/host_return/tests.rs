@@ -503,7 +503,7 @@ fn deferred_byte_frees_keep_old_fuel_words_and_release_only_at_admission() {
                 "host admission retains the same task-owned invocation state"
             );
             assert_eq!(
-                (*ctx).invocation_sites[depth.1 - 1].assume_init_ref(),
+                (&(*ctx).invocation_sites)[depth.1 - 1].assume_init_ref(),
                 &[111, 222]
             );
             crate::depth::hirsel_rt_v2_depth_leave(ctx);

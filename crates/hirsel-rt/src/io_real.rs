@@ -3105,12 +3105,22 @@ pub(crate) mod borrowed_net_tests {
     pub(crate) struct Count;
     thread_local! {
         static CALLS: Cell<u64> = const { Cell::new(0) };
+        static WATCHED_FREE: Cell<usize> = const { Cell::new(0) };
+        static MATCHING_FREES: Cell<u64> = const { Cell::new(0) };
         static IN_SECTION: Cell<bool> = const { Cell::new(false) };
     }
     static SECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static TRAPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     pub(crate) fn allocation_calls() -> u64 {
         CALLS.with(Cell::get)
+    }
+    /// Observe destruction of one owned allocation, without counting unrelated frees.
+    pub(crate) fn count_deallocation(pointer: usize, drop_owner: impl FnOnce()) -> u64 {
+        assert_eq!(WATCHED_FREE.replace(pointer), 0);
+        MATCHING_FREES.set(0);
+        drop_owner();
+        WATCHED_FREE.set(0);
+        MATCHING_FREES.get()
     }
     /// A test recorder's section window on this thread (`Metrics::with_section_hook`).
     pub(crate) fn section_hook(open: bool) {
@@ -3136,6 +3146,9 @@ pub(crate) mod borrowed_net_tests {
             unsafe { System.alloc(layout) }
         }
         unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
+            if WATCHED_FREE.try_with(Cell::get).unwrap_or(0) == pointer.addr() {
+                let _ = MATCHING_FREES.try_with(|n| n.set(n.get() + 1));
+            }
             trap();
             unsafe { System.dealloc(pointer, layout) }
         }

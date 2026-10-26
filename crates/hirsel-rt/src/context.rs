@@ -194,18 +194,18 @@ pub struct TaskCtx {
     pub(crate) ahead: Option<Box<crate::tasks::ordered::ahead::Local>>,
     pub(crate) ahead_physical: *mut crate::tasks::ordered::ahead::native::Physical,
     pub(crate) active_invocations:
-        Box<[std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>]>,
+        crate::depth::storage::Slots<hirsel_core_contract::depth::Activation>,
     /// User finalizers retained through their field programs. Allocated at task creation.
-    pub(crate) cleanup_invocations: Vec<hirsel_core_contract::depth::Activation>,
+    pub(crate) cleanup_invocations: crate::depth::storage::Cleanup,
     /// Rejected entries cannot execute code; their nested field scopes need no tokens.
     pub(crate) cleanup_rejections: usize,
     /// Invoking language sites parallel to admitted compiled invocations. Runtime
     /// callback boundaries inherit these sites without introducing an IR selector.
-    pub(crate) invocation_sites: Box<[std::mem::MaybeUninit<[u64; 2]>]>,
+    pub(crate) invocation_sites: crate::depth::storage::Sites,
     /// Initialized prefix of both fixed-capacity native invocation arrays.
     pub(crate) invocation_depth: usize,
-    /// Stable pointers into the owned boxes above for the certified naked leaf.
-    /// Never serialized or copied to another task; the boxes live with this task.
+    /// Stable pointers into the owned scratch above for the certified naked leaf.
+    /// Never serialized or copied to another task; the owner lives with this task.
     pub(crate) invocation_tokens:
         *mut std::mem::MaybeUninit<hirsel_core_contract::depth::Activation>,
     pub(crate) invocation_site_slots: *mut std::mem::MaybeUninit<[u64; 2]>,
@@ -448,12 +448,10 @@ impl RunShared {
 impl TaskCtx {
     /// A fresh task's context on `worker`, in `run`; nothing binds it yet.
     pub(crate) fn new(worker: *mut Worker, run: *mut RunShared) -> TaskCtx {
-        let mut active_invocations =
-            Box::<[hirsel_core_contract::depth::Activation]>::new_uninit_slice(
-                crate::depth::INVOCATION_CAPACITY,
-            );
-        let mut invocation_sites =
-            Box::<[[u64; 2]]>::new_uninit_slice(crate::depth::INVOCATION_CAPACITY);
+        // SAFETY: all extents move and drop with this context. The Sites owner
+        // remains allocated until no extent can be used, including on stop.
+        let (mut active_invocations, cleanup_invocations, mut invocation_sites) =
+            unsafe { crate::depth::storage::Sites::new() };
         let invocation_tokens = active_invocations.as_mut_ptr();
         let invocation_site_slots = invocation_sites.as_mut_ptr();
         TaskCtx {
@@ -496,9 +494,7 @@ impl TaskCtx {
             activations: Default::default(),
             active_invocations,
             cleanup_depth: 0,
-            cleanup_invocations: Vec::with_capacity(usize::from(
-                hirsel_core_contract::depth::CLEANUP_LIMIT,
-            )),
+            cleanup_invocations,
             cleanup_rejections: 0,
             free_ops: Default::default(),
             compact: None,

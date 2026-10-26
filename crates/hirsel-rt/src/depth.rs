@@ -1,5 +1,6 @@
 //! Logical invocation admission before compiled calls and primitive effects.
 use crate::{STATUS_FAILURE, STATUS_OK, context::TaskCtx};
+pub(crate) mod storage;
 
 /// Validated LANG-10 bound, including the independent cleanup allowance.
 /// Allocate this storage before the task starts; admission never allocates.
@@ -266,6 +267,107 @@ mod tests {
             assert_eq!(invocation_site(&*ctx), Some((7, 8)));
             hirsel_rt_v2_depth_leave(ctx);
             crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn moving_a_context_preserves_depth_aliases_and_reuses_only_live_sites() {
+        use crate::io_real::borrowed_net_tests::{allocation_calls, count_deallocation};
+        let mut boxed = Box::new(TaskCtx::new(std::ptr::null_mut(), std::ptr::null_mut()));
+        // SAFETY: this test exclusively owns scratch; admission never uses worker/run.
+        unsafe {
+            assert_eq!(
+                hirsel_rt_v2_depth_enter_at_site(&mut *boxed, 11, 12),
+                STATUS_OK
+            );
+            boxed.cleanup_depth = 1;
+            assert_eq!(
+                hirsel_rt_v2_depth_enter_at_site(&mut *boxed, 21, 22),
+                STATUS_OK
+            );
+            let token = boxed.activations.admit_finalizer().unwrap();
+            boxed.cleanup_invocations.push(token);
+            let tokens = boxed.invocation_tokens;
+            let sites = boxed.invocation_site_slots;
+            let allocation = boxed.invocation_sites.as_ptr().addr();
+            // Same move as spawn::flush: the context leaves its box; aliases survive.
+            let mut moved = *boxed;
+            assert_eq!(moved.invocation_tokens, tokens);
+            assert_eq!(moved.invocation_site_slots, sites);
+            assert_eq!(invocation_site(&moved), Some((21, 22)));
+            let before = allocation_calls();
+            let token = moved.cleanup_invocations.pop().unwrap();
+            moved.activations.retire(token);
+            moved.cleanup_depth = 0;
+            hirsel_rt_v2_depth_leave(&mut moved);
+            assert_eq!(invocation_site(&moved), Some((11, 12)));
+            hirsel_rt_v2_depth_leave(&mut moved);
+            assert_eq!(invocation_site(&moved), None);
+            assert_eq!(
+                hirsel_rt_v2_depth_enter_at_site(&mut moved, 31, 32),
+                STATUS_OK
+            );
+            assert_eq!(invocation_site(&moved), Some((31, 32)));
+            hirsel_rt_v2_depth_leave(&mut moved);
+            assert_eq!(moved.activations.live(), (0, 0));
+            assert_eq!(
+                allocation_calls(),
+                before,
+                "admission and retirement never allocate"
+            );
+            assert_eq!(count_deallocation(allocation, || drop(moved)), 1);
+        }
+        let fresh = TaskCtx::new(std::ptr::null_mut(), std::ptr::null_mut());
+        assert_eq!(invocation_site(&fresh), None);
+        assert_eq!(fresh.activations.live(), (0, 0));
+        assert_eq!(fresh.cleanup_invocations.len(), 0);
+    }
+
+    #[test]
+    fn depth_owner_is_destroyed_once_after_success_failure_or_abandoned_cleanup() {
+        use crate::io_real::borrowed_net_tests::count_deallocation;
+        for mode in 0..3 {
+            let mut ctx = Box::new(TaskCtx::new(std::ptr::null_mut(), std::ptr::null_mut()));
+            // SAFETY: the exclusively owned context has no worker-bound state.
+            unsafe {
+                assert_eq!(
+                    hirsel_rt_v2_depth_enter_at_site(&mut *ctx, 41, 42),
+                    STATUS_OK
+                );
+                if mode == 0 {
+                    hirsel_rt_v2_depth_leave(&mut *ctx);
+                } else if mode == 1 {
+                    ctx.failure.record(crate::failure::FailureRecord {
+                        kind: 1,
+                        rule: 1,
+                        site: 41,
+                        operation_site: 42,
+                    });
+                    hirsel_rt_v2_depth_leave(&mut *ctx);
+                } else {
+                    ctx.cleanup_depth = 1;
+                    assert_eq!(
+                        hirsel_rt_v2_depth_enter_at_site(&mut *ctx, 51, 52),
+                        STATUS_OK
+                    );
+                    let token = ctx.activations.admit_finalizer().unwrap();
+                    ctx.cleanup_invocations.push(token);
+                    // A stop abandons the native cleanup frames and their tokens.
+                }
+            }
+            let allocation = ctx.invocation_sites.as_ptr().addr();
+            let address = Box::into_raw(ctx).addr();
+            // Tokio task_abort.rs:48-110: ownership can be destroyed on another
+            // thread after suspension. No thread retains a borrow or runtime binding.
+            let frees = std::thread::spawn(move || {
+                count_deallocation(allocation, || {
+                    // SAFETY: the transferred box is uniquely owned by this thread.
+                    unsafe { drop(Box::from_raw(address as *mut TaskCtx)) };
+                })
+            })
+            .join()
+            .unwrap();
+            assert_eq!(frees, 1, "exit mode {mode}");
         }
     }
 
