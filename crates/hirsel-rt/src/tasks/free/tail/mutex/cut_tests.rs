@@ -4,10 +4,10 @@ use super::*;
 use std::ptr;
 use crate::tasks::*;
 use crate::tasks::free::objects::tests::{isolated_at, plain, wait_until, wrapper};
-use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, Ordering}};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering}};
 
 struct Shared {
-    handle: u64,
+    handle: AtomicU64,
     kind: Kind,
     task: AtomicU32,
     callback: AtomicU32,
@@ -20,6 +20,7 @@ struct Shared {
 unsafe extern "C" fn dispatch(ctx:*mut TaskCtx, env:*mut Header, _:u64, _:u64, frame:*mut u8)->u8 {
     unsafe {
         let shared=&**crate::alloc::payload(env).cast::<*const Shared>();
+        let handle=shared.handle.load(Ordering::Acquire);
         let payload=frame.add(16).cast::<u64>();
         if frame.cast::<u32>().read()==2 {
             return hirsel_rt_v2_task_finish(ctx,payload.cast(),[0u64;2].as_ptr().cast(),16,u32::MAX);
@@ -28,7 +29,7 @@ unsafe extern "C" fn dispatch(ctx:*mut TaskCtx, env:*mut Header, _:u64, _:u64, f
         if frame.cast::<u32>().read()==0 {
             shared.task.store((*ctx).task_id,Ordering::Release);
             let mut dead=99;
-            assert_eq!(hirsel_rt_v2_mutex_take(ctx,&mut dead,&shared.handle,payload.cast()),STATUS_OK);
+            assert_eq!(hirsel_rt_v2_mutex_take(ctx,&mut dead,&handle,payload.cast()),STATUS_OK);
             assert_eq!(dead,u32::from(shared.kind==Kind::Cause));
             match shared.kind {
                 Kind::Put=>{ shared.callback.fetch_add(1,Ordering::Relaxed); payload.add(1).write(8); }
@@ -49,9 +50,9 @@ unsafe extern "C" fn dispatch(ctx:*mut TaskCtx, env:*mut Header, _:u64, _:u64, f
         if frame.cast::<u32>().read()!=3 {
         crate::continuation::binding::hirsel_rt_v2_resume_tail(ctx,frame,1,match shared.kind {Kind::Put=>0,Kind::Kill=>1,Kind::Cause=>2,_=>unreachable!()},32,31,41);
         let status=match shared.kind {
-            Kind::Put=>hirsel_rt_v2_mutex_put(ctx,&shared.handle,payload.cast()),
-            Kind::Kill=>hirsel_rt_v2_mutex_kill(ctx,&shared.handle),
-            Kind::Cause=>hirsel_rt_v2_mutex_cause(ctx,&shared.handle),
+            Kind::Put=>hirsel_rt_v2_mutex_put(ctx,&handle,payload.cast()),
+            Kind::Kill=>hirsel_rt_v2_mutex_kill(ctx,&handle),
+            Kind::Cause=>hirsel_rt_v2_mutex_cause(ctx,&handle),
             _=>unreachable!(),
         };
         if status==crate::STATUS_SUSPENDED {return status;}
@@ -79,7 +80,7 @@ unsafe extern "C" fn child(ctx:*mut TaskCtx,env:*mut Header,caller:u64,site:u64)
 }
 
 fn run(width:u32,kind:Kind,recording:Option<Arc<record::Recording>>,replay:Option<Arc<replay::Replay>>)->Arc<Shared> {
-    let shared=Arc::new(Shared{handle:0,kind,task:AtomicU32::new(u32::MAX),callback:AtomicU32::new(0),suffix:AtomicU32::new(0),saved:AtomicBool::new(false),go:AtomicBool::new(false),leaves:AtomicU32::new(0),replay:replay.is_some()});
+    let shared=Arc::new(Shared{handle:AtomicU64::new(0),kind,task:AtomicU32::new(u32::MAX),callback:AtomicU32::new(0),suffix:AtomicU32::new(0),saved:AtomicBool::new(false),go:AtomicBool::new(false),leaves:AtomicU32::new(0),replay:replay.is_some()});
     let observe=shared.clone();
     let owner=recording.clone();
     let scalar=plain(16);let wrapper=wrapper();let env=plain(8);
@@ -92,10 +93,7 @@ fn run(width:u32,kind:Kind,recording:Option<Arc<record::Recording>>,replay:Optio
     },move |ctx|unsafe {
         let none=[0u64;2];let mut payload=[1u64,7];let mut handle=0;
         hirsel_rt_v2_mutex_create(ctx,ptr::null_mut(),&mut handle,payload.as_mut_ptr().cast(),none.as_ptr().cast(),2,3);
-        // Only this running root can initialize the handle before publication.
-        let shared=Arc::into_raw(shared);
-        (&raw mut (*(shared.cast_mut())).handle).write(handle);
-        let shared=Arc::from_raw(shared);
+        shared.handle.store(handle,Ordering::Release);
         if kind==Kind::Cause {
             let mut dead=99;let mut payload=none;
             hirsel_rt_v2_mutex_take(ctx,&mut dead,&handle,payload.as_mut_ptr().cast());

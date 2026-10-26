@@ -8,7 +8,7 @@ static FAILURES: AtomicBool = AtomicBool::new(false);
 unsafe extern "C" fn leaf(ctx: *mut TaskCtx, value: *mut u8, _: u64, _: u64) -> u8 {
     let [tag, id] = unsafe { value.cast::<[u64; 2]>().read() };
     assert_eq!(tag, 1);
-    ORDER.fetch_update(Ordering::AcqRel, Ordering::Acquire, |old| Some(old * 10 + id)).unwrap();
+    ORDER.try_update(Ordering::AcqRel, Ordering::Acquire, |old| Some(old * 10 + id)).unwrap();
     if FAILURES.load(Ordering::Acquire) && matches!(id, 2 | 4) {
         unsafe { crate::failure::hirsel_rt_v2_failure_begin(ctx, 1, (900 + id) as u32, 31, 41) };
         return crate::STATUS_FAILURE;
