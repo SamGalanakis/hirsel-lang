@@ -3152,3 +3152,110 @@ fn ownership_trace_call_inventory_separates_implicit_cleanup_without_losing_phys
         vec![target.unit().digest().0]
     );
 }
+
+#[test]
+fn ownership_trace_nested_source_construction_transfers_fields_without_a_shell_token() {
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(
+        &[(Passing::Take, l::BLK), (Passing::Take, l::BLK)],
+        Some(l::PAIR),
+    );
+    let first = t.owned(l::BLK);
+    let second = t.owned(l::BLK);
+    t.param(first);
+    t.param(second);
+    let symbol = t.symbol(SymbolKind::Type);
+    let placement = t.heap();
+    let construct = t.construct_site(
+        ConstructorKind::Record(symbol),
+        l::PAIR,
+        &[(0, first), (1, second)],
+        placement,
+    );
+    t.builder.unit.tables.constructs[construct.index()].placement = None;
+    let result = t.owned(l::PAIR);
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Construct {
+            result,
+            construct,
+            failure,
+        },
+    );
+    t.builder.ret(ENTRY, Some(result));
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    check(unit.unit(), &plan).unwrap();
+    assert_eq!(plan.observations.len(), 5);
+    assert!(
+        plan.observations
+            .iter()
+            .all(|row| row.marker.kind == Kind::Move)
+    );
+    for (value, field) in [(first, 0), (second, 1)] {
+        let row = plan
+            .observations
+            .iter()
+            .find(|row| row.marker.token == Location::Value(value))
+            .unwrap();
+        assert_eq!(
+            row.marker.owner,
+            Location::Field {
+                aggregate: result,
+                field
+            }
+        );
+        let mut forged = plan.clone();
+        let forged_row = forged
+            .observations
+            .iter_mut()
+            .find(|candidate| candidate.marker.id == row.marker.id)
+            .unwrap();
+        forged_row.marker.owner = Location::Field {
+            aggregate: result,
+            field: 1 - field,
+        };
+        assert!(
+            check(unit.unit(), &forged).is_err(),
+            "equal-layout field ordinals remain distinct"
+        );
+    }
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let finalizers = Default::default();
+    let output = hirsel_rc::observed::lower(
+        unit.into_raw(),
+        &plan,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &placement,
+            proofs: &proofs,
+            elide: true,
+            reuse: &reuse,
+            finalizers: &finalizers,
+        },
+    )
+    .unwrap();
+    assert_eq!(output.recipes.len(), 10);
+    assert_eq!(
+        output
+            .plan
+            .observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>(),
+        plan.observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>()
+    );
+    let ready = checked_native_fixture(output.unit, &table);
+    assert!(
+        native::LeafPlan::from_relocated(&ready, &table, &output.plan).is_err(),
+        "Ready refuses until nested physical retirements can be observed"
+    );
+}

@@ -100,7 +100,11 @@ impl LeafPlan {
                 && layouts
                     .layout(layout)
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
-            if !leaf(layouts, layout) && !carrier_move {
+            let source_aggregate = source_only
+                && layouts.layout(layout).is_some_and(|record| {
+                    matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource)
+                });
+            if !leaf(layouts, layout) && !carrier_move && !source_aggregate {
                 return Err(format!(
                     "native ownership tracing: nested ownership at {point:?}"
                 ));
@@ -214,16 +218,21 @@ impl LeafPlan {
                         result, construct, ..
                     } => {
                         let site = &unit.tables.constructs[construct.index()];
-                        if site
+                        let fields = site
                             .fields
                             .get(&unit.pools.fields)
-                            .unwrap_or(&[])
-                            .iter()
-                            .any(|f| owned(f.value))
-                        {
+                            .ok_or("ownership construction has no checked fields")?;
+                        let nested = fields.iter().any(|field| owned(field.value));
+                        if nested && !source_only {
                             return Err("native ownership tracing: owned construction fields are not implemented".into());
                         }
-                        if owned(result) {
+                        // An aggregate carries existing child lineage without a new
+                        // identity. A Resource constructor also creates its own token.
+                        let aggregate = nested
+                            && layouts
+                                .layout(layout(result))
+                                .is_some_and(|record| matches!(record.kind, LayoutKind::Aggregate));
+                        if owned(result) && !aggregate {
                             push(
                                 after,
                                 Kind::Create,
@@ -231,6 +240,20 @@ impl LeafPlan {
                                 Location::Value(result),
                                 layout(result),
                             )?;
+                        }
+                        if source_only {
+                            for field in fields.iter().filter(|field| owned(field.value)) {
+                                push(
+                                    after,
+                                    Kind::Move,
+                                    Location::Value(field.value),
+                                    Location::Field {
+                                        aggregate: result,
+                                        field: field.field,
+                                    },
+                                    layout(field.value),
+                                )?;
+                            }
                         }
                     }
                     Inst::Closure {
