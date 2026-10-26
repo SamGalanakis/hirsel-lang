@@ -12,12 +12,6 @@ type PrefixPlan {
   search: Option[internal.substring.Plan],
 }
 
-type Candidate {
-  byte: u64,
-  scalar: u64,
-  previous: Option[char],
-}
-
 fn no_prefix() -> PrefixPlan uses {} {
   PrefixPlan(enabled: false, low: 0, high: 0, literals: [], search: None())
 }
@@ -227,49 +221,23 @@ fn prefix_at(plan: PrefixPlan, haystack: Bytes, at: u64) -> bool uses {} {
 }
 
 // Called only at a dead start state after whole-operation budget admission.
-// Return byte + scalar coordinates and original look-behind, never a slice.
-fn next_candidate(plan: PrefixPlan, haystack: Bytes, subject: Subject, from: u64) -> Option[
-  Candidate
-] uses {} {
-  let mut cursor = from
-  let mut target = from
+// Return an original byte coordinate. Callers recover look-behind only when
+// they need it; the DFA does not decode each skipped ASCII byte.
+fn next_candidate(plan: PrefixPlan, haystack: Bytes, from: u64) -> Option[u64] uses {} {
   if let Some(search) = plan.search {
+    // The complete extracted literal was found, so no second confirmation
+    // or scalar decoding is needed. Its first byte is always ASCII.
     let needle = core@1/string.as_bytes(plan.literals[0])
-    let Some(found) = internal.substring.find_from(haystack, needle, search, target) else {
-      return None()
-    }
-    target = found
-    cursor = target
+    return internal.substring.find_from(haystack, needle, search, from)
   }
-  let bytes = subject.bytes
-  let size = core@1/bytes.len(bytes)
+  let size = core@1/bytes.len(haystack)
+  let mut cursor = from
   while cursor < size {
-    let byte = cursor
-    let first = bytes[cursor]
-    let is_boundary = first < 128 || first >= 192
-    // Fuse ASCII scalar decoding and cursor advance. Substring searches may
-    // land on a continuation byte; keep the boundary check before decoding.
-    let cp: u32 = if first < 128 { core@1/int.widen(first) } else if is_boundary {
-      core@1/char.to_u32(subject_scalar(subject, cursor))
-    } else { 0u32 }
-    if is_boundary && byte >= target && prefix_has(plan, cp) && prefix_at(
-      plan,
-      haystack,
-      byte
-    ) {
-      return Some(
-        Candidate(
-          byte: byte,
-          scalar: cursor,
-          previous: if cursor == 0 {
-            None()
-          } else {
-            Some(subject_scalar(subject, subject_before(subject, cursor)))
-          }
-        )
-      )
+    let byte = haystack[cursor]
+    if (byte < 128 || byte >= 192) && prefix_has(plan, core@1/int.widen(byte)) && prefix_at(plan, haystack, cursor) {
+      return Some(cursor)
     }
-    cursor = if first < 128 || !is_boundary { cursor + 1 } else { subject_next(subject, cursor) }
+    cursor += 1
   }
   None()
 }

@@ -1247,13 +1247,13 @@ fn find_from_prefilter(
   let mut cursor = start
   while cursor <= subject_len(subject) {
     if core@1/list.len(machine.seeds) == 0 && machine.matched == None() {
-      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else {
+      let Some(candidate) = next_candidate(re.prefilter, haystack, cursor) else {
         work = machine.work
         return Ok((None(), Captures(spans: [])))
       }
-      cursor = candidate.scalar
-      machine.at = candidate.byte
-      machine.previous = candidate.previous
+      cursor = candidate
+      machine.at = candidate
+      machine.previous = subject_previous(subject, candidate)
     }
     let next: Option[char] = if cursor < subject_len(subject) {
       Some(subject_scalar(subject, cursor))

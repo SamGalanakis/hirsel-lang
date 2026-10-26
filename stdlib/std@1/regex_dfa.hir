@@ -394,17 +394,26 @@ fn dfa_search(re: Regex, subject: Subject, start: u64, haystack: Bytes, mut cach
   while true {
     // A prefilter is optional and can skip only with no active thread/match.
     if !scalar && re.prefilter.enabled && cache.data[state + 2] == 0 && end == None() {
-      let Some(candidate) = next_candidate(re.prefilter, haystack, subject, cursor) else { return DfaMiss() }
-      cursor = candidate.scalar
-      let preceding = if cursor == 0 { 128u64 } else { dfa_byte(subject, subject_before(subject, cursor)) }
-      state = dfa_intern(mut cache, 0, dfa_category(preceding))
-      if state == 0 || preceding > 128 {
-        scalar = true
-        cache.disabled = true
-        cache.scalar_fallback = true
-        cache.fallbacks += 1
-        cache.resume_at = cursor
-        seeds = 0
+      let Some(candidate) = next_candidate(re.prefilter, haystack, cursor) else { return DfaMiss() }
+      // hybrid/search.rs:246-266 restarts only after the prefilter advances.
+      // Without progress, this empty frontier already has its look-behind.
+      if candidate != cursor {
+        cursor = candidate
+        let preceding = if cursor == 0 { 128u64 } else if subject.ascii {
+          core@1/int.widen(bytes[cursor - 1])
+        } else { dfa_byte(subject, subject_before(subject, cursor)) }
+        let category = dfa_category(preceding)
+        if cache.data[state + 1] != category {
+          state = dfa_intern(mut cache, 0, category)
+        }
+        if state == 0 || preceding > 128 {
+          scalar = true
+          cache.disabled = true
+          cache.scalar_fallback = true
+          cache.fallbacks += 1
+          cache.resume_at = cursor
+          seeds = 0
+        }
       }
     }
     // hybrid/search.rs:63-70,95-110: load the byte and follow a known

@@ -152,3 +152,89 @@ fn regex_prefilter_17_admitted_unicode_folds_after_ascii_skip() {
         }
     });
 }
+
+fn byte_candidate(entry: &str) {
+    with_compiler_stack(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/regex-prefilter-17")
+            .canonicalize()
+            .unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("folds.json")).unwrap()).unwrap();
+        for source in manifest["sources"].as_array_mut().unwrap() {
+            source["path"] = root
+                .join(source["path"].as_str().unwrap())
+                .into_os_string()
+                .into_string()
+                .unwrap()
+                .into();
+        }
+        for dependency in manifest["dependencies"].as_array_mut().unwrap() {
+            dependency["manifest"] = root
+                .join(dependency["manifest"].as_str().unwrap())
+                .into_os_string()
+                .into_string()
+                .unwrap()
+                .into();
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("hirsel.json");
+        {
+            eprintln!("{entry}: interpreter, LLVM, Cranelift");
+            manifest["entry"]["name"] = entry.into();
+            std::fs::write(&path, manifest.to_string()).unwrap();
+            let outcome = run_path_with_step_budget(
+                &path,
+                SimulationConfig::default(),
+                Some(1_000_000),
+                Verify::On,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            assert!(
+                matches!(
+                    outcome,
+                    RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                ),
+                "{entry}: {outcome:?}"
+            );
+            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+                let outcome = native::run_path_native_backend(
+                    &path,
+                    HostLaunch::empty(),
+                    None,
+                    backend,
+                    native::Output::Streams {
+                        stdout: &mut Vec::new(),
+                        stderr: &mut Vec::new(),
+                    },
+                    Verify::On,
+                )
+                .unwrap()
+                .unwrap();
+                assert!(
+                    matches!(
+                        outcome,
+                        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
+                    ),
+                    "{entry} {backend:?}: {outcome:?}"
+                );
+            }
+        }
+    });
+}
+
+macro_rules! byte_candidates {
+    ($($name:ident => $entry:literal),+ $(,)?) => {$(
+        #[test]
+        fn $name() { byte_candidate($entry); }
+    )+};
+}
+byte_candidates! {
+    byte_candidate_alternatives => "candidate_alternatives",
+    byte_candidate_end => "candidate_end",
+    byte_candidate_partial => "candidate_partial",
+    byte_candidate_boundary => "candidate_boundary",
+    byte_candidate_single => "candidate_single",
+}

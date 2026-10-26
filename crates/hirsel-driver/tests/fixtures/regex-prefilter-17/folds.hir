@@ -16,3 +16,33 @@ pub fn main() -> Result[(), ()] {
   }
   Ok(())
 }
+
+pub fn candidate_alternatives() -> Result[(), ()] {
+  let Ok(re) = regex.compile("(?:abc|xyz)z", 1000) else { return Error(()) }
+  failure.check(regex.find_all(re, "________________________________________________________________☃abq xyzx abczz", 8, 18446744073709551615) == Ok([regex.Span(start: 76, end: 80)]), TextInvariant())
+  Ok(())
+}
+
+pub fn candidate_end() -> Result[(), ()] {
+  let Ok(re) = regex.compile("(?:abc|xyz)z", 1000) else { return Error(()) }
+  failure.check(regex.find_all(re, "________________________________________________________________☃abq xyzz", 8, 18446744073709551615) == Ok([regex.Span(start: 71, end: 75)]), TextInvariant())
+  Ok(())
+}
+
+pub fn candidate_partial() -> Result[(), ()] {
+  let Ok(re) = regex.compile("(?:abc|xyz)z", 1000) else { return Error(()) }
+  failure.check(regex.find_all(re, "________________________________________________________________☃abc xyz", 8, 18446744073709551615) == Ok([]), TextInvariant())
+  Ok(())
+}
+
+pub fn candidate_boundary() -> Result[(), ()] {
+  let Ok(re) = regex.compile("\\b(?:abc|xyz)z", 1000) else { return Error(()) }
+  failure.check(regex.find_all(re, "________________________________________________________________☃xabczz abczz", 8, 18446744073709551615) == Ok([regex.Span(start: 74, end: 78)]), TextInvariant())
+  Ok(())
+}
+
+pub fn candidate_single() -> Result[(), ()] {
+  let Ok(re) = regex.compile("password=[^ ]+", 1000) else { return Error(()) }
+  failure.check(regex.find_all(re, "________________________________________________________________☃passwor password=yes", 8, 18446744073709551615) == Ok([regex.Span(start: 75, end: 87)]), TextInvariant())
+  Ok(())
+}
