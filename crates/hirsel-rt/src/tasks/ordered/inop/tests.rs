@@ -64,7 +64,7 @@ impl ConcurrentAdapter for Host {
     }
 }
 
-unsafe fn finish_value(ctx: *mut TaskCtx, value: u64) -> u8 {
+pub(super) unsafe fn finish_value(ctx: *mut TaskCtx, value: u64) -> u8 {
     let mut result = [1u64, value];
     unsafe {
         hirsel_rt_v2_task_finish(
