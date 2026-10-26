@@ -622,13 +622,6 @@ pub(crate) fn artifact_anchor_owner(
         Some((identity, base))
     })
 }
-fn encode_record<T: Serialize>(
-    records: &TypeRecords,
-    items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
-    record: &T,
-) -> Option<Vec<u8>> {
-    records.encode_record(record, |anchor| anchor_owner(items, anchor))
-}
 pub(super) struct Contents(pub(super) Arc<dyn crate::store::ResultStore>);
 impl hirsel_artifact_store::Contents for Contents {
     fn get_content(&self, reference: crate::store::Reference) -> Option<crate::store::Bytes> {
@@ -1057,8 +1050,8 @@ impl QueryEngine {
         self
     }
     pub(super) fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
-        // A generated body's registration must still be replayed by S1; its
-        // transient syntax isn't a source-owned record.
+        // Source-owned generated Lower products bind the accepted text below.
+        // Synthetic instance registrations still replay through S1.
         if !self.items.contains_key(path) && self.catalog.body(path).is_some() {
             if !self.catalog.storeable(path, kind) {
                 return None;
@@ -1070,6 +1063,7 @@ impl QueryEngine {
                     return None;
                 }
             } else if kind != QueryKind::GeneratedRegistration
+                && !(kind == QueryKind::Lower && self.source_owned_generator(path))
                 && (generation::generator(item).is_some() || self.generated.contains_key(path))
             {
                 return None;
@@ -1095,13 +1089,43 @@ impl QueryEngine {
                     .as_slice(),
             ],
         );
+        let mut text = self.key_text(path, kind).ok()?;
+        if kind == QueryKind::Lower && self.source_owned_generator(path) {
+            let generated = self.generated.get(path)?;
+            text = ContentHash::of_parts(
+                "hirsel.generated-lower.inputs.v1",
+                [text.0.as_slice(), generated.text.as_bytes()],
+            );
+        }
         Some(EntryKey::new(
             env,
             path,
-            self.key_text(path, kind).ok()?,
+            text,
             kind,
             LoweringPolicy::Reachable,
         ))
+    }
+    fn source_owned_generator(&self, path: &DefPath) -> bool {
+        self.items
+            .get(path)
+            .and_then(|items| items.first())
+            .is_some_and(|item| {
+                generation::generator(item).is_some()
+                    && !generation::instance_bodied(item)
+                    && self
+                        .sources
+                        .file(self.item_file(item))
+                        .is_some_and(|file| !file.path.to_string_lossy().starts_with('<'))
+            })
+    }
+    fn prepare_lower_generation(&mut self, path: &DefPath) -> Option<()> {
+        if self.source_owned_generator(path) {
+            // Reconstruct and accept the current generated source before an old
+            // payload can resolve its content-bound anchors. This is ordinary
+            // generation replay, never authority supplied by the Lower bytes.
+            self.check_query(path).ok()?;
+        }
+        Some(())
     }
     /// Current owned source identity, including literal generated bodies. The
     /// generated owner includes its exact text hash; arbitrary persisted ids
@@ -1125,7 +1149,7 @@ impl QueryEngine {
     }
     pub(super) fn encode_record<T: Serialize>(&self, record: &T) -> Option<Vec<u8>> {
         let records = self.type_records()?;
-        encode_record(&records, &self.items, record)
+        records.encode_record(record, |anchor| self.record_anchor_owner(anchor))
     }
     pub(super) fn type_records(&self) -> Option<Arc<TypeRecords>> {
         let store = self.result_store.clone()?;
@@ -1187,11 +1211,7 @@ impl QueryEngine {
     fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
         let records = self.type_records()?;
         let record: T = records.decode_record(bytes, |path, occurrence| {
-            self.items
-                .get(path)
-                .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                .map(|item| item.anchor)
-                .or_else(|| self.catalog.anchor(path, occurrence))
+            self.record_anchor(path, occurrence)
         })?;
         // Check every nested payload TypeId before any semantic consumer indexes it.
         let (encoded, roots) = hirsel_types::with_table_collection(|| {
@@ -1754,6 +1774,13 @@ impl QueryEngine {
                 return matches!(read, ReadKey::Signature(_) | ReadKey::ExecutedSignature(_))
                     && (owner == Some(&constant.owner) || selections.iter().any(|selection| matches!(selection, Selection::Staged(selected, _) if *selected == id)));
             }
+            // Merely calling a declared generated function reads its public
+            // signature, not its generated implementation or registration.
+            if matches!(read, ReadKey::Signature(_) | ReadKey::ExecutedSignature(_))
+                && self.source_owned_generator(path)
+            {
+                return true;
+            }
             if self.generated.contains_key(path) || path.0.name.contains("$instance$")
                 || self.items.get(path).and_then(|items| items.first()).is_some_and(|syntax| generation::generator(syntax).is_some() && !generation::instance_bodied(syntax))
             {
@@ -2223,6 +2250,8 @@ impl QueryEngine {
         {
             return None;
         }
+        self.result_store.as_ref()?;
+        self.prepare_lower_generation(path)?;
         let variant = self.stored_variant(path, QueryKind::Lower)?;
         let record: LowerRecord = self.decode_record(&variant.payload)?;
         if record.output.value.path != DefId::intern(path)
@@ -2728,13 +2757,7 @@ impl QueryEngine {
         cache.read_definition(
             output,
             self.types.clone(),
-            |path, occurrence| {
-                self.items
-                    .get(path)
-                    .and_then(|items| items.iter().find(|item| item.occurrence == occurrence))
-                    .map(|item| item.anchor)
-                    .or_else(|| self.catalog.anchor(path, occurrence))
-            },
+            |path, occurrence| self.record_anchor(path, occurrence),
             self.source_verification_policy(),
             snapshot.validation(&output.owner().path().0.package),
         )
@@ -2875,6 +2898,37 @@ impl QueryEngine {
 #[cfg(test)]
 mod malformed_tests {
     use super::*;
+
+    #[test]
+    fn source_generated_signature_reads_do_not_grant_execution_selection() {
+        let (engine, syntax) = fixture_source("fn main()->u32 uses {}=comptime ignored()");
+        let id = DefId::intern(&syntax.item.definition);
+        let caller = DefPath::core("caller");
+        let digest = syntax.text_hash;
+        let signature = vec![
+            (ReadKey::Signature(id), digest),
+            (ReadKey::ExecutedSignature(id), digest),
+        ];
+        assert!(engine.portable_lower_reads(
+            &caller,
+            &Reads::from_vec(signature.clone()).unwrap(),
+            &[],
+        ));
+        let mut executed = signature;
+        executed.push((ReadKey::ExecutedBody(id), digest));
+        let executed = Reads::from_vec(executed).unwrap();
+        assert!(!engine.portable_lower_reads(&caller, &executed, &[]));
+        assert!(engine.portable_lower_reads(
+            &caller,
+            &executed,
+            &[crate::comptime::Selection::Generated(id)],
+        ));
+        assert!(!engine.portable_lower_reads(
+            &caller,
+            &Reads::from_vec(vec![(ReadKey::ExecutedBody(id), digest)]).unwrap(),
+            &[crate::comptime::Selection::Generated(id)],
+        ));
+    }
 
     #[test]
     fn layout_reads_never_discharge_callable_execution_authority() {
