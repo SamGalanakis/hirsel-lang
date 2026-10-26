@@ -25,6 +25,8 @@ pub enum ContinuationError {
     Hole(ContentHash, u32),
     CleanupAnchor(ContentHash, u32),
     ResumeLabel(ContentHash, u32),
+    /// Missing, forged or currently unsupported entered-operation evidence.
+    RuntimeOperation(ContentHash, u32),
     /// A nested callee's exclusive parameter without its call-edge proof, or
     /// with a proof this body does not establish (by state).
     Exclusive(ContentHash, u32),
@@ -590,6 +592,12 @@ fn check_state(
     }
     if state.bytes != end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
+    }
+    // No operation is admitted by the shared data shape itself. Each kind's
+    // independent provenance/result walk must qualify it before selection.
+    // Keep this after all frame/storage checks, as for nested actions.
+    if state.runtime.is_some() {
+        return Err(ContinuationError::RuntimeOperation(id, n));
     }
     // Check the action only after independently checking the nested frame,
     // so a forged frame retains its structural rejection.

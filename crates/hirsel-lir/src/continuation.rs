@@ -32,7 +32,11 @@ use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpe
 use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
+mod runtime;
+mod scope;
 mod validate;
+pub use runtime::{RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot, RuntimeResultSource};
+pub use scope::ScopeOpPlan;
 pub use validate::{
     AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
 };
@@ -353,6 +357,9 @@ pub struct NestedFrame {
 pub enum ResumeAction {
     RetryUnenteredCall(CallId),
     ResumeNested(CallId, NestedFrame),
+    /// Continue the same entered runtime intrinsic, whose independently
+    /// checked operation/result proof is this state's `runtime` descriptor.
+    ResumeRuntime(CallId),
     AfterEnteredCall(CallId, EdgeId),
     ResumeCleanup {
         block: BlockId,
@@ -392,6 +399,8 @@ pub struct ExclusiveSlot {
 pub struct ResumeState {
     pub boundary: ExistingBoundary,
     pub action: ResumeAction,
+    /// A typed entered operation; absent for retry, nested and cleanup actions.
+    pub runtime: Option<RuntimeOpPlan>,
     /// Set when the boundary is a call of a resumable body.
     pub callee: Option<NestedFrame>,
     /// Set when that callee takes an exclusive parameter.
@@ -1205,6 +1214,7 @@ fn states(
                 Some(frame) => ResumeAction::ResumeNested(site.call, frame),
                 None => ResumeAction::RetryUnenteredCall(site.call),
             },
+            runtime: None,
             callee,
             exclusive,
             live: values

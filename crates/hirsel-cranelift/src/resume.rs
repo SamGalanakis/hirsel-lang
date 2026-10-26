@@ -284,6 +284,10 @@ impl FnEmitter<'_, '_, '_> {
             resume.resuming = None;
         }
         let frame = self.frame();
+        if state.runtime.is_some() {
+            return self
+                .invalid("an entered runtime operation without qualified helper/result evidence");
+        }
         let callee = match state.action {
             ResumeAction::ResumeNested(at, frame) if at == call && state.callee == Some(frame) => {
                 Some(frame)

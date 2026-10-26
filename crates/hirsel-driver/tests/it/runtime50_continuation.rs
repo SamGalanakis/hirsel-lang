@@ -241,6 +241,25 @@ fn runtime50_resume_import_mutations_refused() {
                 |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
             ),
             (
+                "entered runtime action without its independently checked operation proof",
+                refused(&program, &plans, id, |p| {
+                    p.states[0].action = ResumeAction::ResumeRuntime(p.states[0].boundary.call)
+                }),
+                |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
+            ),
+            (
+                "runtime helper evidence attached to an ordinary retry",
+                refused(&program, &plans, id, |p| {
+                    p.states[0].runtime = Some(hirsel_lir::continuation::RuntimeOpPlan {
+                        kind: hirsel_lir::continuation::RuntimeOpKind::OrderedPrint,
+                        helper: "hirsel_rt_v2_task_scope_exit".into(),
+                        results: Vec::new(),
+                        scope: None,
+                    });
+                }),
+                |e| matches!(e, ContinuationError::RuntimeOperation(_, 1)),
+            ),
+            (
                 "completed call claimed without initialized entered state",
                 refused(&program, &plans, id, |p| {
                     p.states[0].action = ResumeAction::AfterEnteredCall(
