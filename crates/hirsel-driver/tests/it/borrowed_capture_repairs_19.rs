@@ -224,6 +224,8 @@ fn borrowed_capture_repairs_19_concrete_sequences_shared_and_parameter_control()
 #[test]
 fn borrowed_capture_repairs_19_generic_resource_callable_and_arena_are_conditional() {
     with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
+        let mut checked = |source: &str| checked_in(&mut engine, source);
         for (source, unique_accepted, unique_rule) in [
             (callback("T", "take").replace("fn probe(", "fn probe[T:copyable + inert]("), false, "MODE-1"),
             ("resource type Token { n:u64 } drop(x) {}\nfn consume(take item:Token) {}\nfn invoke(action:fn() -> () uses {}) { action() }\nfn probe(row:Token) { invoke(fn() -> () uses {} { consume(take row) }) }".to_owned(), false, "OWN-5"),

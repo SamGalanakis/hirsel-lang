@@ -150,7 +150,7 @@ fn proved<'p>(plans: &'p ContinuationPlans, callee: ContentHash) -> (&'p Continu
 }
 
 #[test]
-fn runtime55_wait_mut_slot_suspends_compactly() {
+fn runtime55_wait_mut_slot_plans_and_routing() {
     with_compiler_stack(|| {
         let done = source(&DONE);
         let program = ready(&done);
@@ -189,13 +189,36 @@ fn runtime55_wait_mut_slot_suspends_compactly() {
                 );
             }
         }
-        let local = Fixture::default();
+    });
+}
+
+#[test]
+fn runtime55_wait_mut_slot_local() {
+    with_compiler_stack(|| {
+        let done = source(&DONE);
+        agree(&done, &Fixture::default(), "slot local");
+    });
+}
+
+#[test]
+fn runtime55_wait_mut_slot_migrate_replay() {
+    with_compiler_stack(|| {
+        let done = source(&DONE);
         let migrate = Fixture {
             migrate: true,
             ..Fixture::default()
         };
-        agree(&done, &local, "slot local");
         agree_replayed(&done, &migrate, "slot migrate", true);
+    });
+}
+
+#[test]
+fn runtime55_wait_mut_slot_unread() {
+    with_compiler_stack(|| {
+        let migrate = Fixture {
+            migrate: true,
+            ..Fixture::default()
+        };
         // A caller local used only through the borrow keeps its storage.
         let unread = source(&Shape {
             child: "let mut n=1u64\n      wait_mut(tasks,owned,mut n)\n      5u64",
@@ -212,6 +235,13 @@ fn runtime55_wait_mut_slot_suspends_compactly() {
                 .any(|s| s.slot == proof.slot)
         );
         agree(&unread, &migrate, "slot unread");
+    });
+}
+
+#[test]
+fn runtime55_wait_mut_slot_compact_custody() {
+    with_compiler_stack(|| {
+        let done = source(&DONE);
         // Two waits under the shared dispatcher: each save leaves its stack
         // and activates once at its state on another worker, live and replayed.
         for (index, trace) in compact_runs(&done, "slot").iter().enumerate() {
