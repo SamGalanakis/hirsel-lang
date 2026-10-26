@@ -807,6 +807,7 @@ pub(super) fn install(
     config: &CompileConfig,
     limits: RequestLimits,
     budget: &GraphBudget,
+    may_wait: bool,
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
     carry: Option<&Carry>,
@@ -831,7 +832,7 @@ pub(super) fn install(
     let artifacts = matches!(request.operation, CompileOperation::Artifacts { .. });
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
-    let mut loading = budget.begin(limits)?;
+    let mut loading = budget.begin(limits, may_wait)?;
     let disk_bytes = limits
         .runtime_bytes
         .checked_add(limits.snapshot_bytes)

@@ -1,9 +1,11 @@
 //! A process allowance shared by all simultaneously live immutable snapshots.
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 pub struct ProcessBudget {
     limit: u64,
     reserved: Mutex<u64>,
+    released: Condvar,
 }
 impl ProcessBudget {
     /// The engine subtracts its fixed overhead from the host limit first.
@@ -11,6 +13,7 @@ impl ProcessBudget {
         Arc::new(Self {
             limit,
             reserved: Mutex::new(0),
+            released: Condvar::new(),
         })
     }
     /// Nonblocking: reject a new source snapshot instead of multiplying caps
@@ -32,6 +35,20 @@ impl ProcessBudget {
     }
     pub fn reserved(&self) -> u64 {
         *self.reserved.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn limit(&self) -> u64 {
+        self.limit
+    }
+    /// Block until an owner releases part of this allowance, a host reports
+    /// idle work, or the timeout passes. Only a caller holding none of this
+    /// budget may wait; one holding a charge could wait on itself.
+    pub fn wait_for_release(&self, timeout: Duration) {
+        let reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
+        drop(self.released.wait_timeout(reserved, timeout));
+    }
+    /// Wake waiters after work became idle without releasing its charge yet.
+    pub fn notify_idle(&self) {
+        self.released.notify_all();
     }
 }
 
@@ -154,6 +171,7 @@ impl Drop for MemoryReservation {
             .reserved
             .lock()
             .unwrap_or_else(|e| e.into_inner()) -= bytes;
+        self.budget.released.notify_all();
     }
 }
 

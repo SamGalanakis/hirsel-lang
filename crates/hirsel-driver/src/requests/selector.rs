@@ -186,12 +186,13 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let scratch_parent = &self.scratch_parent;
         let toolchain = self.toolchain.as_ref();
         let host_toolchain = self.host_toolchain;
-        self.graphs.select(request, |budget| {
+        self.graphs.select(request, |budget, may_wait| {
             super::source_graph::install(
                 compiler,
                 config,
                 limits,
                 budget,
+                may_wait,
                 request,
                 ledger,
                 carry,

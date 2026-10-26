@@ -197,13 +197,41 @@ impl GraphBudget {
         budgets.push((Arc::downgrade(budget), Arc::downgrade(&owner)));
         owner
     }
-    pub fn begin(&self, limits: RequestLimits) -> Result<LoadingAdmission, ToolError> {
-        match LoadingAdmission::reserve(&self.budget, limits) {
-            Ok(admission) => Ok(admission),
-            Err(_) => {
-                self.release_idle();
-                LoadingAdmission::reserve(&self.budget, limits)
+    /// A request whose selection holds no live graph waits, holding nothing,
+    /// for other requests' releases instead of refusing; one that holds a graph
+    /// could wait on itself, so it refuses as soon as idle graphs cannot make
+    /// room. A request that cannot fit even alone, or a host whose charge stops
+    /// moving for `ADMISSION_STALL`, is refused rather than left waiting.
+    pub fn begin(
+        &self,
+        limits: RequestLimits,
+        may_wait: bool,
+    ) -> Result<LoadingAdmission, ToolError> {
+        let fits_alone = limits
+            .runtime_bytes
+            .checked_add(limits.snapshot_bytes)
+            .and_then(|bytes| bytes.checked_add(limits.transport_bytes))
+            .is_some_and(|bytes| bytes <= self.budget.limit());
+        let mut seen = self.budget.reserved();
+        let mut moved = std::time::Instant::now();
+        loop {
+            let error = match LoadingAdmission::reserve(&self.budget, limits) {
+                Ok(admission) => return Ok(admission),
+                Err(error) => error,
+            };
+            self.release_idle();
+            if let Ok(admission) = LoadingAdmission::reserve(&self.budget, limits) {
+                return Ok(admission);
             }
+            let reserved = self.budget.reserved();
+            if reserved != seen {
+                seen = reserved;
+                moved = std::time::Instant::now();
+            }
+            if !may_wait || !fits_alone || reserved == 0 || moved.elapsed() >= ADMISSION_STALL {
+                return Err(error);
+            }
+            self.budget.wait_for_release(std::time::Duration::from_secs(1));
         }
     }
     pub fn admit(
@@ -283,9 +311,18 @@ impl GraphBudget {
         drop(discarded);
     }
 }
+/// How long a waiting admission tolerates a process charge that neither grows
+/// nor shrinks before it refuses.
+const ADMISSION_STALL: std::time::Duration = std::time::Duration::from_secs(600);
 pub(super) struct GraphSelections {
     retention: Arc<GraphBudget>,
     live: Vec<Weak<InstalledGraph>>,
+}
+impl Drop for GraphSelections {
+    fn drop(&mut self) {
+        // Its hot graphs may now be idle; a waiting admission can release them.
+        self.retention.budget.notify_idle();
+    }
 }
 impl GraphSelections {
     pub fn new(budget: &Arc<ProcessBudget>) -> Self {
@@ -297,7 +334,7 @@ impl GraphSelections {
     pub fn select(
         &mut self,
         request: &CompileRequest,
-        install: impl FnOnce(&GraphBudget) -> Result<Arc<InstalledGraph>, ToolError>,
+        install: impl FnOnce(&GraphBudget, bool) -> Result<Arc<InstalledGraph>, ToolError>,
     ) -> Result<
         hirsel_engine::requests::SelectedRequest<AdmittedRuntime, CompilerReadiness>,
         ToolError,
@@ -316,7 +353,10 @@ impl GraphSelections {
         let graph = match selected {
             Some(graph) => graph,
             None => {
-                let graph = install(&self.retention)?;
+                // Graphs only the hot index holds are idle, not this
+                // selection's own outputs.
+                let may_wait = self.live.iter().all(|graph| graph.strong_count() <= 1);
+                let graph = install(&self.retention, may_wait)?;
                 if graph.path != request.path || graph.inputs != request.inputs {
                     return Err(ToolError::Runtime(
                         "installed compiler graph differs from selected inputs".into(),
@@ -683,24 +723,24 @@ mod tests {
             }))
         };
         let active = first
-            .select(&request, |owner| create(owner, &request))
+            .select(&request, |owner, _| create(owner, &request))
             .unwrap();
         let equal = first
-            .select(&request, |_| {
+            .select(&request, |_, _| {
                 panic!("equal immutable inputs must reuse the installed graph")
             })
             .unwrap();
         assert!(Arc::ptr_eq(&active.runtime, &equal.runtime));
         assert!(
             second
-                .select(&request, |owner| create(owner, &request))
+                .select(&request, |owner, _| create(owner, &request))
                 .is_err()
         );
         assert_eq!(budget.reserved(), bytes);
         drop(equal);
         drop(active);
         let replacement = second
-            .select(&request, |owner| create(owner, &request))
+            .select(&request, |owner, _| create(owner, &request))
             .unwrap();
         assert_eq!(budget.reserved(), bytes);
         drop(replacement);
