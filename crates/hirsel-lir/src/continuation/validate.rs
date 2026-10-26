@@ -645,7 +645,11 @@ fn check_state(
     if state.bytes != end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
     }
-    if scope::check(u, table, units, state, runtime_base)? != end {
+    if ordered_await::candidate(u) {
+        if !ordered_await::check(u, table, frame, state) || runtime_base != end {
+            return Err(ContinuationError::RuntimeOperation(id, n));
+        }
+    } else if scope::check(u, table, units, state, runtime_base)? != end {
         return Err(ContinuationError::RuntimeOperation(id, n));
     }
     // Check the action only after independently checking the nested frame,

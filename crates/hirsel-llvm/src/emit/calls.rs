@@ -559,7 +559,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     args.push(self.exclusive_slot_address(proof)?);
                 }
                 (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }) => {
-                    let place = self.place(address)?;
+                    let place =
+                        match self.runtime_argument(call, parameter.source, parameter.layout)? {
+                            Some(place) => place,
+                            None => self.place(address)?,
+                        };
                     if signature.roots.contains(&i) {
                         args.push(self.load(Shape::Scalar(ScalarKind::Pointer), place));
                         root_places.push(place);
@@ -732,6 +736,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             self.ahead_barrier()?;
         }
+        let (function, name) = if let Some(align) = self.ordered_join_align(call) {
+            args.push(
+                self.module
+                    .const_int(self.module.int_type(32), u128::from(align)),
+            );
+            (
+                Some(self.runtime(RuntimeEntry::OrderedJoin)?),
+                Some("hirsel_rt_v2_ordered_join".to_owned()),
+            )
+        } else {
+            (function, name)
+        };
         self.host_read_boundary(call, false)?;
         self.ahead_flush();
         self.ownership_call(call, false)?;

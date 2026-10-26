@@ -2270,7 +2270,11 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     args.push(address);
                 }
                 (ParameterPassing::ExclusiveAddress, ArgumentValue::Address { address, .. }) => {
-                    let place = self.place(address)?;
+                    let place =
+                        match self.runtime_argument(call, parameter.source, parameter.layout)? {
+                            Some(place) => place,
+                            None => self.place(address)?,
+                        };
                     let passed = self.gather(place)?;
                     if place.columns.is_some() {
                         column_returns.push((place, passed));
@@ -2355,6 +2359,18 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.em
                 .manifest_import(&name, ObjectSymbolKind::Runtime, None, None);
             Some(name)
+        } else {
+            name
+        };
+        let name = if let Some(align) = self.ordered_join_align(call) {
+            args.push(self.b.ins().iconst(types::I32, align as i64));
+            physical_signature
+                .params
+                .push(ir::AbiParam::new(types::I32));
+            let helper = "hirsel_rt_v2_ordered_join".to_owned();
+            self.em
+                .manifest_import(&helper, ObjectSymbolKind::Runtime, None, None);
+            Some(helper)
         } else {
             name
         };

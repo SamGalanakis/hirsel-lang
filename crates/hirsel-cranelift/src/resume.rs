@@ -370,6 +370,49 @@ impl FnEmitter<'_, '_, '_> {
         self.frame_place(slot.offset, slot.layout).map(Some)
     }
 
+    pub(crate) fn ordered_join_align(&self, call: CallId) -> Option<u64> {
+        let runtime = self
+            .resume
+            .as_ref()?
+            .plan
+            .states
+            .iter()
+            .find(|s| s.boundary.call == call)?
+            .runtime
+            .as_ref()?;
+        (runtime.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedJoin)
+            .then(|| runtime.results.first().map(|s| s.align))
+            .flatten()
+    }
+
+    pub(crate) fn runtime_argument(
+        &mut self,
+        call: CallId,
+        parameter: u32,
+        layout: hirsel_lir::LayoutId,
+    ) -> Emitted<Option<Place>> {
+        let Some(runtime) = self
+            .resume
+            .as_ref()
+            .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
+            .and_then(|s| s.runtime.as_ref())
+        else {
+            return Ok(None);
+        };
+        if runtime.kind != hirsel_lir::continuation::RuntimeOpKind::OrderedJoin {
+            return Ok(None);
+        }
+        let [cell] = runtime.results.as_slice() else {
+            return self.invalid("join result count");
+        };
+        if cell.layout != layout
+            || !matches!(cell.source,hirsel_lir::continuation::RuntimeResultSource::ArgumentSlot {parameter:p,..} if p==parameter)
+        {
+            return self.invalid("join retained argument differs from its proof");
+        }
+        self.frame_place(cell.offset, cell.layout).map(Some)
+    }
+
     pub(crate) fn bind_runtime(
         &mut self,
         call: CallId,

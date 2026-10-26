@@ -232,3 +232,134 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         assert!(proved > 0, "no complete await protocol");
     });
 }
+
+#[test]
+fn ordered_await_entered_helper_is_checked_and_emitted_on_both_backends() {
+    with_compiler_stack(|| {
+        let source = r#"
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let value=task.scope(tasks,fn(s:Scope)->String {
+    let child=task.async(s,fn()->String {"held"})
+    task.await(s,take child)
+  })
+  let _=out.print(output,value)
+  Ok(())
+}
+"#;
+        let program = super::runtime50_continuation::ready(source);
+        let plans = hirsel_driver::native::continuation::plans(&program);
+        hirsel_driver::native::continuation::validate(&program, &plans).unwrap();
+        let (&id, wrapper) = plans
+            .plans
+            .iter()
+            .find(|(_, p)| {
+                p.states.iter().any(|s| {
+                    s.runtime.as_ref().is_some_and(|r| {
+                        r.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedJoin
+                    })
+                })
+            })
+            .expect("entered await plan");
+        assert_eq!(
+            wrapper.representation,
+            hirsel_lir::continuation::Representation::Resumable
+        );
+        for field in 0..4 {
+            let mut bad = plans.clone();
+            let state = bad
+                .plans
+                .get_mut(&id)
+                .unwrap()
+                .states
+                .iter_mut()
+                .find(|s| {
+                    s.runtime.as_ref().is_some_and(|r| {
+                        r.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedJoin
+                    })
+                })
+                .unwrap();
+            let runtime = state.runtime.as_mut().unwrap();
+            match field {
+                0 => runtime.helper = "hirsel_rt_v2_task_join".into(),
+                1 => runtime.results[0].bytes += 1,
+                2 => runtime.kind = hirsel_lir::continuation::RuntimeOpKind::OrderedPrint,
+                _ => {
+                    state.action = hirsel_lir::continuation::ResumeAction::RetryUnenteredCall(
+                        state.boundary.call,
+                    )
+                }
+            }
+            assert!(hirsel_driver::native::continuation::validate(&program, &bad).is_err());
+        }
+        for backend in [
+            hirsel_driver::native::Backend::Llvm,
+            hirsel_driver::native::Backend::Cranelift,
+        ] {
+            let objects = hirsel_driver::native::emit_backend_objects(
+                &program,
+                backend,
+                hirsel_driver::native::OptLevel::Default,
+                hirsel_driver::native::Partition::Whole,
+                false,
+                None,
+            )
+            .unwrap();
+            assert!(
+                objects
+                    .iter()
+                    .flat_map(|o| &o.imports)
+                    .any(|s| s.name == "hirsel_rt_v2_ordered_join"),
+                "{backend:?} omitted entered join"
+            );
+        }
+    });
+}
+
+#[test]
+fn ordered_await_native_owning_result_agrees_with_checked_h_and_replays() {
+    with_compiler_stack(|| {
+        let source = r#"
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let value=task.scope(tasks,fn(s:Scope)->u64 {
+    let joining=task.async(s,fn()->u64 {
+      let owned=task.scope(tasks,fn(inner:Scope)->String {
+        let child=task.async(inner,fn()->String {"held"})
+        task.await(inner,take child)
+      })
+      string.byte_len(owned)
+    })
+    task.await(s,take joining)
+  })
+  let _=out.print(output,f"{value}")
+  Ok(())
+}
+"#;
+        let program = super::runtime50_continuation::ready(source);
+        let plans = hirsel_driver::native::continuation::plans(&program);
+        hirsel_driver::native::continuation::validate(&program, &plans).unwrap();
+        assert!(
+            program
+                .units
+                .iter()
+                .filter(|u| u.unit().header.definition.is_core("$native.task_main"))
+                .any(|u| plans.get(u.unit().header.instance).is_some_and(
+                    |p| p.representation == hirsel_lir::continuation::Representation::Resumable
+                )),
+            "no native task exposes its nested await"
+        );
+        super::runtime50_resume::agree_on(
+            source,
+            &hirsel_driver::native::Fixture {
+                migrate: true,
+                ..Default::default()
+            },
+            "entered owning await",
+            true,
+            &[false],
+        );
+    });
+}

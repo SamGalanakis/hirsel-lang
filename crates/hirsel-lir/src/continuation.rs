@@ -591,7 +591,9 @@ pub(crate) fn call_effect(
     // A specialized reviewed scope exposes its nested callback and entered
     // intrinsics. Classification grants no custody: plan_unit and import
     // validation reconstruct its callable and scope-flow evidence first.
-    if let Some(id) = body.filter(|id| scope::candidate(units[id])) {
+    if let Some(id) =
+        body.filter(|id| scope::candidate(units[id]) || ordered_await::candidate(units[id]))
+    {
         return if suspending.contains(&id) {
             CallEffect::Nested(id)
         } else {
@@ -1527,6 +1529,11 @@ fn plan_unit(
             let wrapper = scope::wrapper(u, units).ok_or("unproved scope callback or exit flow")?;
             for state in &mut states {
                 wrapper.plan(u, inputs.table, state)?;
+            }
+        }
+        if ordered_await::candidate(u) {
+            for state in &mut states {
+                ordered_await::plan(u, inputs.table, &storage, state)?;
             }
         }
         Ok(((parameters, records), storage, states, cleanups))

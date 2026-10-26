@@ -189,7 +189,15 @@ impl OrderedAwaitProtocol {
         block: BlockId,
         frame: &[LiveStorage],
     ) -> Option<Self> {
-        let u = unit.unit();
+        Self::derive_unit(unit.unit(), table, block, frame)
+    }
+
+    fn derive_unit(
+        u: &LirUnit<Ready>,
+        table: &LayoutTable,
+        block: BlockId,
+        frame: &[LiveStorage],
+    ) -> Option<Self> {
         let result = ordered_join_result(u, table, block, frame)?;
         let RuntimeResultSource::ArgumentSlot { slot, loan, .. } = result.source else {
             return None;
@@ -258,7 +266,15 @@ impl OrderedAwaitProtocol {
         table: &LayoutTable,
         frame: &[LiveStorage],
     ) -> bool {
-        let u = unit.unit();
+        self.validate_unit(unit.unit(), table, frame)
+    }
+
+    fn validate_unit(
+        &self,
+        u: &LirUnit<Ready>,
+        table: &LayoutTable,
+        frame: &[LiveStorage],
+    ) -> bool {
         if self.body != u.header.instance
             || self.digest != u.digest()
             || u.tables.calls.len() != 1
@@ -413,4 +429,112 @@ impl OrderedAwaitProtocol {
         }
         true
     }
+}
+
+pub(super) fn candidate(u: &LirUnit<Ready>) -> bool {
+    u.header.definition.is_core("task.await")
+        && u.header.origin == UnitOrigin::Library
+        && u.tables.calls.len() == 1
+}
+
+pub(super) fn plan(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    frame: &[LiveStorage],
+    state: &mut ResumeState,
+) -> Result<(), String> {
+    let proof = OrderedAwaitProtocol::derive_unit(u, table, state.boundary.block, frame)
+        .ok_or("unproved await wrapper or cleanup flow")?;
+    if state.callee.is_some() {
+        return Err("nested frame at TaskJoin".into());
+    }
+    state.runtime = Some(RuntimeOpPlan {
+        kind: RuntimeOpKind::OrderedJoin,
+        helper: "hirsel_rt_v2_ordered_join".into(),
+        results: vec![proof.result],
+        scope: None,
+    });
+    state.action = ResumeAction::ResumeRuntime(state.boundary.call);
+    Ok(())
+}
+
+/// Independent import walk: reconstruct complete successor coverage from the
+/// actual CFG, then check all loan transitions and cleanup ownership. No
+/// producer descriptor or producer suffix analysis is consulted.
+pub(super) fn check(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    frame: &[LiveStorage],
+    state: &ResumeState,
+) -> bool {
+    let Some(runtime) = &state.runtime else {
+        return false;
+    };
+    if !candidate(u)
+        || runtime.kind != RuntimeOpKind::OrderedJoin
+        || runtime.helper != "hirsel_rt_v2_ordered_join"
+        || runtime.scope.is_some()
+        || runtime.results.len() != 1
+    {
+        return false;
+    }
+    let result = runtime.results[0].clone();
+    if !check_ordered_join_result(u, table, state.boundary.block, frame, &result) {
+        return false;
+    }
+    let Some(Terminator::Call {
+        call,
+        normal: Some(normal),
+        failure,
+    }) = u.terminators.get(state.boundary.block.index())
+    else {
+        return false;
+    };
+    fn reachable(u: &LirUnit<Ready>, start: BlockId) -> Vec<BlockId> {
+        let mut seen = BTreeSet::new();
+        let mut work = vec![start];
+        while let Some(b) = work.pop() {
+            if seen.insert(b) {
+                work.extend(successors_of(u, b));
+            }
+        }
+        seen.into_iter().collect()
+    }
+    let normal_suffix = reachable(u, u.tables.edges[normal.index()].target);
+    let failure_suffix = reachable(
+        u,
+        u.tables.edges[u.tables.failures[failure.index()].cleanup.index()].target,
+    );
+    let covered: BTreeSet<_> = normal_suffix
+        .iter()
+        .chain(&failure_suffix)
+        .copied()
+        .collect();
+    let mut sites = Vec::new();
+    for b in covered {
+        for (i, inst) in u.blocks[b.index()]
+            .instructions
+            .get(&u.instructions)
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
+        {
+            if let Some(site) = cleanup(u, b, i, inst) {
+                sites.push(site);
+            }
+        }
+    }
+    OrderedAwaitProtocol {
+        body: u.header.instance,
+        digest: u.digest(),
+        block: state.boundary.block,
+        call: *call,
+        normal: *normal,
+        failure: *failure,
+        result,
+        normal_suffix,
+        failure_suffix,
+        cleanup: sites,
+    }
+    .validate_unit(u, table, frame)
 }
