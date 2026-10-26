@@ -148,13 +148,20 @@ fn original_cleanup_and_upstream_vectors_on_all_engines() {
         // A scoped contents view ends before the cached item is transferred.
         ("OWN/OWN-3-iter-peekable-7-scoped-run.hir", b"", false),
     ];
+    let compiler =
+        hirsel_driver::COMPILER
+            .with_owned_engines()
+            .with_config(hirsel_engine::CompileConfig {
+                store: hirsel_engine::store::MemStore::shared(),
+                ..Default::default()
+            });
     let mut executions = 0;
     for &(relative, output, fails) in cases {
         with_compiler_stack(|| {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../conformance")
                 .join(relative);
-            let mut loaded = hirsel_driver::load_program(&path).unwrap();
+            let mut loaded = compiler.load_program(&path).unwrap();
             loaded.check_for_execution().unwrap();
             let run = run_observed_snapshot(
                 &mut loaded.engine,
