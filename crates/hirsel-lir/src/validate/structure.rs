@@ -2557,9 +2557,16 @@ impl<S: Stage> Checker<'_, '_, S> {
                 let descriptor = &unit.tables.seal_descriptors[shape.index()];
                 let valid_owner = matches!(layouts.get(self.layout_of(owner)).map(|r| &r.kind),
                     Some(LayoutKind::SealedRegion { root: layout }) if *layout == descriptor.root_layout);
+                // Bits carry no storage credit, just as for an ordinary
+                // borrowed read. Their explicit owner loan is still checked.
                 if !valid_owner
                     || self.layout_of(result) != descriptor.root_layout
-                    || unit.values[result.index()].holding != Holding::Borrowed(loan)
+                    || unit.values[result.index()].holding
+                        != if self.cx.owns(result) {
+                            Holding::Borrowed(loan)
+                        } else {
+                            Holding::Plain
+                        }
                 {
                     self.add(site, K::Type("read-only sealed root loan"));
                 }

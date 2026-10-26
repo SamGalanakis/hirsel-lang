@@ -794,3 +794,230 @@ fn receipt_local_33_public_c_refuses_producer_before_complete_custody_proof() {
     }
     assert!(wrong.check_identity(&table).is_err());
 }
+
+#[derive(Clone, Copy, Debug)]
+enum ViewRoot {
+    Unit,
+    Scalar,
+    Heap,
+}
+
+/// Model region.with's two mut owner parameters independently of any seal
+/// producer. The source expectation is fixed before candidate mutations.
+fn root_view_fixture(
+    kind: ViewRoot,
+) -> (
+    support::Lir<TestStage>,
+    Declarations,
+    ValueId,
+    LoanId,
+    ValueId,
+) {
+    let types = support::session();
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let root = match kind {
+        ViewRoot::Unit => types.intern(Type::with_kind(TypeKind::Tuple(vec![].into()))),
+        ViewRoot::Scalar => scalar,
+        ViewRoot::Heap => types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(scalar)].into(),
+        })),
+    };
+    let region = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Region,
+        arguments: vec![GenericArgument::Type(root)].into(),
+    }));
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let owners = Owners::default();
+    let mut layouts = LayoutBuilder::new(&target, &owners);
+    let root_layout = layouts.layout(&types, root).unwrap();
+    let owner_layout = layouts.layout(&types, region).unwrap();
+    let mut t = support::Lir::<TestStage>::new(&[], None);
+    let offset = t.table.layouts.len() as u32;
+    for mut row in layouts.finish().layouts {
+        row.for_each_reference_mut(&mut |id| id.0 += offset);
+        t.table.layouts.push(row);
+    }
+    let root_layout = LayoutId(root_layout.0 + offset);
+    let owner_layout = LayoutId(owner_layout.0 + offset);
+    t.builder.unit.header.abi = t.abi(
+        &[(Passing::Mut, owner_layout), (Passing::Mut, owner_layout)],
+        None,
+    );
+    t.builder.unit.header.origin = UnitOrigin::Library;
+    let arguments =
+        hirsel_layout::operation::collect_arguments(&types, &[GenericArgument::Type(root)])
+            .unwrap();
+    let [OperationArgument::Type(native)] = arguments.as_slice() else {
+        unreachable!()
+    };
+    t.builder.unit.tables.seal_descriptors.push(
+        t.operations
+            .seal_descriptor(native, &t.table, &target)
+            .unwrap(),
+    );
+    let mut owner_views = Vec::new();
+    for i in 0..2 {
+        let ty = t.ty(ValueRepr::Handle, owner_layout);
+        let slot = SlotId(t.builder.unit.slots.len() as u32);
+        t.builder.unit.slots.push(SlotInfo {
+            ty,
+            kind: SlotKind::Parameter(i),
+            scope: support::ROOT,
+        });
+        let version = t.value_as(ValueRepr::Handle, owner_layout, Holding::Plain);
+        t.param(version);
+        let address = t.builder.address(
+            AddressBase::Slot(slot),
+            &[],
+            ValueRepr::Handle,
+            owner_layout,
+        );
+        t.prepare_undo(support::ENTRY, address, &[]);
+        let loan = t.loan(address, true);
+        owner_views.push((address, loan, version));
+    }
+    let mut owners = Vec::new();
+    for (address, loan, version) in &owner_views {
+        t.begin(support::ENTRY, *loan);
+        let result = t.value_as(ValueRepr::Handle, owner_layout, Holding::Borrowed(*loan));
+        t.builder.push(
+            support::ENTRY,
+            Inst::Read {
+                result,
+                address: *address,
+                reaching: *version,
+                mode: ReadMode::Borrow,
+            },
+        );
+        owners.push(result);
+    }
+    let loan = owner_views[0].1;
+    let (repr, holding) = match kind {
+        ViewRoot::Unit => (ValueRepr::Unit, Holding::Plain),
+        ViewRoot::Scalar => (ValueRepr::Scalar(ScalarKind::U64), Holding::Plain),
+        ViewRoot::Heap => (ValueRepr::Block, Holding::Borrowed(loan)),
+    };
+    let result = t.value_as(repr, root_layout, holding);
+    t.builder.push(
+        support::ENTRY,
+        Inst::BorrowSealedRoot {
+            result,
+            owner: owners[0],
+            loan,
+            shape: SealDescriptorId(0),
+        },
+    );
+    for (_, loan, _) in owner_views.into_iter().rev() {
+        t.end(support::ENTRY, loan);
+    }
+    t.builder.ret(support::ENTRY, None);
+    let d = Declarations {
+        registry: t.operations.clone(),
+        payloads: None,
+        expected: Some(vec![SourceEvent {
+            anchor: t.builder.unit.tables.source_anchors[0].clone(),
+            kind: SourceEventKind::BorrowRoot,
+            root_type: native.clone(),
+        }]),
+    };
+    (t, d, result, loan, owners[1])
+}
+
+#[test]
+fn sealed_root_views_accept_bits_and_owned_payloads() {
+    for kind in [ViewRoot::Unit, ViewRoot::Scalar, ViewRoot::Heap] {
+        let (t, d, _, _, _) = root_view_fixture(kind);
+        assert_eq!(checked(t, &d), [], "root {kind:?}");
+    }
+}
+
+#[test]
+fn sealed_root_views_reject_owner_loan_and_holding_mutations() {
+    use hirsel_lir::validate::ViolationKind as K;
+    for kind in [ViewRoot::Unit, ViewRoot::Scalar, ViewRoot::Heap] {
+        for mutation in 0..4 {
+            let (t, d, result, loan, other_owner) = root_view_fixture(kind);
+            let (mut unit, table, manifest) = t.finish();
+            match mutation {
+                0 => {
+                    // The other owner has a valid active loan of its own.
+                    // That loan cannot authorize reading this owner's root.
+                    for inst in &mut unit.instructions {
+                        if let Inst::BorrowSealedRoot { owner, .. } = inst {
+                            *owner = other_owner;
+                        }
+                    }
+                }
+                1 => {
+                    // Omit the loan activation; conditional ends cannot make
+                    // either the owner read or the root read valid.
+                    let begin = unit
+                        .instructions
+                        .iter()
+                        .position(
+                            |inst| matches!(inst, Inst::BeginLoan { loan: l, .. } if *l == loan),
+                        )
+                        .unwrap();
+                    let end = unit
+                        .instructions
+                        .iter()
+                        .position(
+                            |inst| matches!(inst, Inst::EndLoan { loan: l, .. } if *l == loan),
+                        )
+                        .unwrap();
+                    unit.instructions[begin] = Inst::EndLoan {
+                        loan,
+                        if_active: true,
+                    };
+                    unit.instructions[end] = Inst::EndLoan {
+                        loan,
+                        if_active: true,
+                    };
+                }
+                2 => {
+                    unit.tables.loans[loan.index()].mutable = false;
+                    for inst in &mut unit.instructions {
+                        if let Inst::BeginLoan {
+                            loan: l, mutable, ..
+                        } = inst
+                            && *l == loan
+                        {
+                            *mutable = false;
+                        }
+                    }
+                }
+                _ => {
+                    unit.values[result.index()].holding = match kind {
+                        ViewRoot::Heap => Holding::Plain,
+                        _ => Holding::Borrowed(loan),
+                    };
+                }
+            }
+            let errors = checked_raw(unit, &table, &manifest, &d);
+            match mutation {
+                0 => sealed_rejection(&errors, "exclusive owner loan"),
+                1 => assert!(
+                    errors
+                        .iter()
+                        .any(|error| matches!(error.kind, K::OutsideLoan(_))),
+                    "{kind:?}: {errors:?}"
+                ),
+                2 => assert!(
+                    errors.iter().any(|error| matches!(
+                        error.kind,
+                        K::Type("sealed owner requires an exclusive loan")
+                    )),
+                    "{kind:?}: {errors:?}"
+                ),
+                _ => assert!(
+                    errors.iter().any(|error| matches!(
+                        error.kind,
+                        K::Holding(_) | K::Type("read-only sealed root loan")
+                    )),
+                    "{kind:?}: {errors:?}"
+                ),
+            }
+        }
+    }
+}

@@ -98,7 +98,12 @@ pub(super) fn check<S: Stage>(
                     };
                     if !owner_from_loan
                         || !info.mutable
-                        || unit.values[result.index()].holding != Holding::Borrowed(loan)
+                        || unit.values[result.index()].holding
+                            != if cx.owns(result) {
+                                Holding::Borrowed(loan)
+                            } else {
+                                Holding::Plain
+                            }
                     {
                         report.add(
                             site,
