@@ -28,6 +28,7 @@ mod net;
 mod process;
 pub use net::validate_net_grant;
 pub use process::validate_process_grant;
+mod cpu;
 mod signals;
 use sha2::{Digest as _, Sha256};
 pub use signals::validate_signals_grant;
@@ -942,6 +943,9 @@ fn provider(field: &str, name: &str) -> Result<(), RunRefusal> {
 /// Validate and normalize one `io` grant set: the record's own, or a runner's at `field`.
 fn validate_io(io: &mut IoGrants, field: &str) -> Result<(), RunRefusal> {
     let at = |member: &str| format!("{field}.{member}");
+    if let Some(cpu) = &io.cpu {
+        cpu::validate(cpu, io.tasks.is_some(), &at("cpu"))?;
+    }
     for (field, value) in [
         (at("stdin"), &io.stdin),
         (at("stderr"), &io.stderr),

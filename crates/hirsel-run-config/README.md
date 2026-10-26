@@ -71,6 +71,14 @@ Known provider contracts have one closed enumeration, `ProviderContract`:
 `process.script@1`, `signals.host@1`, `signals.script@1`, the code admission policies `admit.any@1` and `admit.safe@1`, and `budgets.none@1` and `budgets.limits@2`. The validator checks the exact projection and version.
 These names are identical for real hosts and simulation/replay; execution origin
 belongs to tooling provenance. Unknown contracts and versions refuse as Unsupported.
+
+`io.cpu` is optional finite `cpu.scoped@1` authority subordinate to `io.tasks`.
+It requires explicit `max_workers` in 1..=16, `max_domains` equal to 1, and
+positive `max_physical_bytes` and `max_batch_bytes`. There are no default limits.
+Absent or null grants are omitted from canonical bytes. Present grants and every
+limit contribute to semantic identity and the grant subset relation. The schema
+does not itself start workers or certify physical width. Runner grant narrowing
+does not convey this adjunct implicitly.
 `inputs.scheduler` names `fifo`, `random` or `pct`, version 1 (docs/spec/determinism.md,
 "Scheduler"); any other refuses as Unsupported. `Config::scheduler` projects its launch
 word (`Scheduler::CONTRACTS`, shared with `hirsel_kernels::schedule::Algorithm::code`) and

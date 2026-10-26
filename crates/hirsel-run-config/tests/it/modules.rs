@@ -1,4 +1,5 @@
 mod grant_base_guidance_24;
+mod cpu;
 mod grant_projection_model;
 mod grants;
 mod managed_cores;

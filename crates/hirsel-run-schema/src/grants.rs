@@ -27,6 +27,13 @@ pub fn io_within(a: &IoGrants, b: &IoGrants) -> bool {
         && optional(&a.process, &b.process, process_within)
         && optional(&a.telemetry, &b.telemetry, |a, b| a == b)
         && optional(&a.signals, &b.signals, signals_within)
+        && optional(&a.cpu, &b.cpu, |a, b| {
+            a.provider == b.provider
+                && a.max_workers <= b.max_workers
+                && a.max_domains <= b.max_domains
+                && a.max_physical_bytes <= b.max_physical_bytes
+                && a.max_batch_bytes <= b.max_batch_bytes
+        })
 }
 
 /// The same provider, observing a subset of the other's kinds.

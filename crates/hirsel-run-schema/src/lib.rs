@@ -72,6 +72,7 @@ pub use process::{
 pub enum ProviderContract {
     TasksCooperative,
     TasksFree,
+    CpuScoped,
     StdinBytes,
     StderrBytes,
     StdoutBytes,
@@ -104,6 +105,7 @@ impl ProviderContract {
         Self::BudgetsNone,
         Self::MonotonicNanoseconds,
         Self::WallUnixNanoseconds,
+        Self::CpuScoped,
         Self::RunnerLocalThreads,
         Self::NetScript,
         Self::NetStream,
@@ -128,6 +130,7 @@ impl ProviderContract {
         match self {
             Self::TasksCooperative => "tasks.cooperative@1",
             Self::TasksFree => "tasks.free@1",
+            Self::CpuScoped => "cpu.scoped@1",
             Self::StdinBytes => "stdin.bytes@1",
             Self::StderrBytes => "stderr.bytes@1",
             Self::StdoutBytes => "stdout.bytes@1",
@@ -274,6 +277,20 @@ pub struct IoGrants {
     /// identity they had before the member existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signals: Option<SignalsGrant>,
+    /// Finite scoped CPU service authority, subordinate to the Tasks grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<CpuGrant>,
+}
+/// A scoped CPU service's bounds. Validation requires Tasks, a known provider,
+/// 1..=16 workers, one active domain, and positive byte limits.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuGrant {
+    pub provider: String,
+    pub max_workers: u32,
+    pub max_domains: u32,
+    pub max_physical_bytes: u64,
+    pub max_batch_bytes: u64,
 }
 /// `io.telemetry`: `telemetry.capture@1` (span identities from the host's secure
 /// generator) or `telemetry.null@1` (identities from `seed`, and, with `queue`, a simulated
