@@ -2,7 +2,6 @@ use hirsel_rt::{
     io::{Adapter, AdapterError, Completion, Request, Tree},
     io_real::RealIo,
     io_sim::SimIo,
-    launch::{parse_tape, render_tape},
 };
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -47,7 +46,7 @@ fn case_reporting_records_the_bound_seed_and_replays_before_publication() {
     assert_eq!(real.stdout(), expected);
     assert_eq!(output.0.lock().unwrap().as_slice(), expected);
     let tape = real.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut replay = SimIo::new(Tree::default(), tape);
     replay.test_context(u64::MAX);
     assert_eq!(replay.call(success), Ok(Completion::Checked(true)));

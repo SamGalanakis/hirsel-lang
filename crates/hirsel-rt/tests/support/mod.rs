@@ -6,6 +6,7 @@ pub mod library;
 pub mod loopback;
 pub mod mounts;
 pub mod schema;
+pub mod tape;
 pub mod tls_peer;
 
 use std::alloc::{GlobalAlloc, Layout as HostLayout, System};

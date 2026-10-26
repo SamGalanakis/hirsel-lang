@@ -46,7 +46,7 @@ fn splitmix_draws_are_the_seeded_words_and_replay_with_their_tape_forms() {
     let tape = real.tape().to_vec();
     let text = hirsel_rt::launch::render_tape(&tape).unwrap();
     assert!(text.contains("random_bytes 2 13"), "{text}");
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut sim = replay(&tape);
     for e in &tape {
         assert_eq!(sim.call(e.request.clone()).unwrap(), e.completion);
@@ -82,8 +82,9 @@ fn system_draws_fill_the_count_from_the_host_and_replay_only_the_recorded_bytes(
             Event {
                 request: Request::RandomBytes { random: 2, count },
                 completion: Completion::Random(Ok(bytes)),
-                fault: None,
-                resources: None,
+                // Keep the valid request footprint so replay reaches the
+                // malformed completion rather than rejecting mixed annotations.
+                ..tape[1].clone()
             },
         ];
         let mut sim = replay(&bad);
@@ -124,7 +125,7 @@ fn a_blocking_wait_reaches_its_deadline_and_replay_never_waits() {
         "{text}"
     );
     assert!(text.contains("wait ok"), "{text}");
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut sim = replay(&tape);
     for e in &tape {
         assert_eq!(sim.call(e.request.clone()).unwrap(), e.completion);

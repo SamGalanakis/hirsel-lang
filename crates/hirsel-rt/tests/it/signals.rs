@@ -64,7 +64,7 @@ fn scripted_arrivals_complete_waits_at_idle_points_and_replay_from_their_tape_fo
     ] {
         assert!(text.contains(form), "{form}: {text}");
     }
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut sim = SimIo::new(Tree::default(), tape.clone());
     sim.set_signal_kinds(Interrupt.bit() | Terminate.bit());
     for e in &tape {

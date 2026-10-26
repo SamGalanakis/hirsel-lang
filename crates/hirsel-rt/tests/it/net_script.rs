@@ -337,10 +337,7 @@ fn tls_only_script_can_set_timeouts_before_a_stalled_handshake() {
 #[test]
 fn net_script_test_worlds_are_isolated_and_recordings_rederive_script_outcomes() {
     use hirsel_rt::io::{Adapter, Completion as C, Request as R, Tree};
-    use hirsel_rt::{
-        io_sim::SimIo,
-        launch::{parse_tape, render_tape},
-    };
+    use hirsel_rt::io_sim::SimIo;
     let mut real = script_adapter();
     real.test_context(7);
     let peers = vec![peer(vec![NetConnection::Open(vec![
@@ -392,7 +389,7 @@ fn net_script_test_worlds_are_isolated_and_recordings_rederive_script_outcomes()
         assert_eq!(real.call(R::Close { handle: stream }), Ok(C::Unit(Ok(()))));
     }
     let tape = real.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut sim = SimIo::new(Tree::default(), tape.clone());
     crate::support::host(&mut sim);
     sim.test_context(7);
@@ -626,8 +623,7 @@ fn ephemeral_listen_completions_record_assigned_ports_and_refuse_altered_replay(
         Ok(C::Accepted(Err(NetError::ConnectionAborted)))
     );
     assert_eq!(io.call(R::Close { handle: 5 }), Ok(C::Unit(Ok(()))));
-    let text = hirsel_rt::launch::render_tape(io.tape()).unwrap();
-    let tape = hirsel_rt::launch::parse_tape(&text).unwrap();
+    let tape = crate::support::tape::events(io.tape());
     assert_eq!(tape, io.tape());
     for altered in [false, true] {
         let mut input = tape.clone();
@@ -804,7 +800,6 @@ fn journal_held_connects_replay_in_issue_order_after_reversed_release() {
     real.set_cooperative(hirsel_rt::readiness::Readiness::default());
     real.set_net_script(peers.clone(), vec![]).unwrap();
     real.set_net_rules(rules);
-    assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
     let header = hirsel_rt::launch::Recording {
         arguments: vec![],
         run_identity: [0; 32],
@@ -819,6 +814,7 @@ fn journal_held_connects_replay_in_issue_order_after_reversed_release() {
     real.journal_to(Box::new(
         DurableJournal::create(file.clone(), &header).unwrap(),
     ));
+    assert_eq!(real.call(R::Net { io: 1 }), Ok(C::Handle(Ok(2))));
     let connect = R::Connect {
         net: 2,
         host: "example.com".into(),
@@ -864,9 +860,9 @@ fn journal_held_connects_replay_in_issue_order_after_reversed_release() {
         2
     );
     let tape = real.tape().to_vec();
-    // Both wire representations carry the new distinction without any renumbering.
-    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    // Ordinary binary tapes and the recovered journal retain the distinction.
+    assert_eq!(recovered.recording.events, tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut sim = SimIo::new(Tree::default(), tape);
     crate::support::host(&mut sim);
     sim.set_net_script(peers, vec![]).unwrap();

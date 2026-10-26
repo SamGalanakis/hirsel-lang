@@ -539,7 +539,7 @@ fn host_errors_and_timeouts_are_recorded_outcomes() {
         Ok(Completion::NetBytes(Ok(vec![])))
     );
     let tape = io.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let rules = [
         rule("127.0.0.1", port, NetOperation::Connect),
         rule("127.0.0.1", open, NetOperation::Connect),
@@ -1027,11 +1027,12 @@ fn udp_host_datagrams_discard_outside_senders_and_replay_without_sockets() {
     );
     let text = render_tape(&tape).unwrap();
     assert!(!text.contains(&hirsel_run_schema::hex(b"discard me")));
-    assert_eq!(parse_tape(&text).unwrap(), tape);
+    let parsed = crate::support::tape::events(&tape);
+    assert_eq!(parsed, tape);
     drop(io);
     drop(peer);
     drop(outside);
-    let mut sim = replay(&rules, parse_tape(&text).unwrap());
+    let mut sim = replay(&rules, parsed);
     for event in &tape {
         assert_eq!(
             sim.call(event.request.clone()),
@@ -1151,7 +1152,7 @@ fn unix_streams_connect_accept_and_replay_without_socket_files() {
     // The listener's close removed the file it bound.
     assert!(!std::path::Path::new(&path).exists());
     let tape = io.tape().to_vec();
-    let parsed = parse_tape(&render_tape(&tape).unwrap()).unwrap();
+    let parsed = crate::support::tape::events(&tape);
     assert_eq!(parsed, tape);
     let mut sim = replay(&rules, parsed);
     assert_eq!(unix_exchange(&mut sim, &path), b"over a socket file");

@@ -258,6 +258,30 @@ fn declared_auxiliary_domains_snapshot_real_ports_and_shared_inherited_sinks_wit
         );
         assert!(io.keys(&run).contains(*key, Mode::Exclusive));
     }
+    let Request::ProcessRun { command, .. } = &run else {
+        unreachable!()
+    };
+    for request in [
+        Request::ProcessSpawn {
+            process,
+            command: command.clone(),
+        },
+        Request::ProcessPipeline {
+            process,
+            stages: vec![command.clone(); 2],
+            stdin: vec![],
+            max_output: 1,
+            deadline: None,
+        },
+        Request::ProcessSpawnPipeline {
+            process,
+            stages: vec![command.clone(); 2],
+            max_stderr: 1,
+        },
+    ] {
+        assert_eq!(io.domains(&request), inherited, "{request:?}");
+        assert_eq!(io.keys(&request), io.keys(&run), "{request:?}");
+    }
     let stdout = handle(io.call(Request::Stdout { io: 1 }).unwrap());
     let stderr = handle(io.call(Request::Stderr { io: 1 }).unwrap());
     assert_eq!(

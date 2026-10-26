@@ -103,7 +103,7 @@ fn null_identities_follow_the_seed_and_replay_from_the_tape() {
     let tape = real.tape()[..8].to_vec();
     let encoded = hirsel_rt::launch::render_tape(&tape).unwrap();
     assert!(encoded.contains("telemetry_begin 2 "), "{encoded}");
-    assert_eq!(hirsel_rt::launch::parse_tape(&encoded).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut replay = SimIo::new(Tree::default(), tape.clone());
     for event in &tape {
         assert_eq!(

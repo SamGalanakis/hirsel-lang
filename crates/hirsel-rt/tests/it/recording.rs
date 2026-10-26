@@ -430,9 +430,9 @@ fn mapping_views_and_an_outside_truncation_replay_from_the_tape() {
     let mut record = header();
     record.tree = Tree::new(BTreeMap::from([("m".into(), original)])).unwrap();
     record.events = io.tape().to_vec();
-    let text = hirsel_rt::launch::render_recording(&record).unwrap();
-    assert_eq!(parse_recording(&text).unwrap(), record);
-    let mut sim = SimIo::new(record.tree.clone(), record.events.clone());
+    let decoded = crate::support::tape::recording(&record);
+    assert_eq!(decoded, record);
+    let mut sim = SimIo::new(decoded.tree, decoded.events.clone());
     for event in &record.events {
         assert_eq!(sim.call(event.request.clone()).unwrap(), event.completion);
     }

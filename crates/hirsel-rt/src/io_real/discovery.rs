@@ -129,6 +129,7 @@ pub(super) fn domains<S: Streams>(
         R::ProcessRun { process, .. }
         | R::ProcessSpawn { process, .. }
         | R::ProcessPipeline { process, .. }
+        | R::ProcessSpawnPipeline { process, .. }
             if matches!(
                 core.state.handles.rows.get(process),
                 Some(crate::handles::Grant::Process { .. })

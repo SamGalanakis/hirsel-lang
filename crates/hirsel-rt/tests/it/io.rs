@@ -354,9 +354,7 @@ fn niche_images_match_derived_layouts_on_both_targets() {
 
 #[test]
 fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malformed_data() {
-    use hirsel_rt::launch::{
-        Recording, parse_recording, parse_tape, render_recording, render_tape,
-    };
+    use hirsel_rt::launch::{Recording, parse_recording, render_recording};
     let (_temp, real) = setup();
     let mut real = Library(real);
     actions(&mut real);
@@ -391,8 +389,7 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         fault: None,
         resources: None,
     });
-    let text = render_tape(&events).unwrap();
-    assert_eq!(parse_tape(&text).unwrap(), events);
+    assert_eq!(crate::support::tape::events(&events), events);
     let record = Recording {
         arguments: vec!["".into(), "é/x".into()],
         run_identity: [0; 32],
@@ -404,7 +401,7 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         events,
     };
     let text = render_recording(&record).unwrap();
-    assert_eq!(parse_recording(&text).unwrap(), record);
+    assert_eq!(crate::support::tape::recording(&record), record);
     for malformed in [
         text.replace("test_seed 18446744073709551615", "test_seed x"),
         text.replace("events\n", ""),
@@ -779,8 +776,7 @@ fn host_input_tape_rechecks_exact_grants_and_never_reads_the_provider_on_replay(
     assert_eq!(real.stdout(), b"");
     assert_eq!(real.stderr(), b"separate\n");
     let tape = real.tape().to_vec();
-    let encoded = hirsel_rt::launch::render_tape(&tape).unwrap();
-    assert_eq!(hirsel_rt::launch::parse_tape(&encoded).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let mut replay = SimIo::new(Tree::new(BTreeMap::new()).unwrap(), tape.clone());
     replay.set_env(BTreeMap::from([
         ("SET".into(), Some("λ".into())),
@@ -976,8 +972,7 @@ fn filesystem_lifecycle_replays_without_host_paths() {
     }
     drop(host);
     drop(temp);
-    let text = hirsel_rt::launch::render_tape(&expected).unwrap();
-    let tape = hirsel_rt::launch::parse_tape(&text).unwrap();
+    let tape = crate::support::tape::events(&expected);
     assert_eq!(tape, expected);
     let mut replay = SimIo::new(tree, tape.clone());
     for event in tape {
@@ -1173,9 +1168,7 @@ fn filesystem_hard_link_rename_keeps_both_names_and_replays_inode_sharing() {
         tree,
         events: host.tape().to_vec(),
     };
-    let decoded =
-        hirsel_rt::launch::parse_recording(&hirsel_rt::launch::render_recording(&record).unwrap())
-            .unwrap();
+    let decoded = crate::support::tape::recording(&record);
     assert_eq!(decoded, record);
     drop(host);
     drop(temp);

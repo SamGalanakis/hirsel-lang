@@ -325,14 +325,13 @@ fn checks_precede_every_effect_and_spawn_failures_are_typed() {
 
 #[test]
 fn host_runs_record_and_replay_without_spawning() {
-    use hirsel_rt::launch::{parse_tape, render_tape};
     let (_temp, mut io, p) = host(&[("/bin/echo", &[]), ("/bin/false", &[])]);
     io.call(run(p, "/bin/echo", &["é", ""], b"in", 64)).unwrap();
     io.call(run(p, "/bin/false", &[], b"", 64)).unwrap();
     io.call(run(p, "/bin/cat", &[], b"", 64)).unwrap();
     let tape = io.tape().to_vec();
     assert_eq!(tape.len(), 4);
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
         crate::support::host(&mut sim);
@@ -505,7 +504,6 @@ fn host_pipelines_connect_stages_and_report_every_status() {
 
 #[test]
 fn host_pipelines_record_and_replay_without_spawning() {
-    use hirsel_rt::launch::{parse_tape, render_tape};
     let rules: &[(&str, &[&str])] = &[("/usr/bin/sort", &[]), ("/bin/cat", &[])];
     let (_temp, mut io, p) = host(rules);
     io.call(pipeline(
@@ -525,7 +523,7 @@ fn host_pipelines_record_and_replay_without_spawning() {
     io.call(pipeline(p, &[], b"", 64)).unwrap();
     let tape = io.tape().to_vec();
     assert_eq!(tape.len(), 4);
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
         crate::support::host(&mut sim);
@@ -702,13 +700,12 @@ fn a_deadline_times_out_a_running_child_and_a_reached_one_spawns_nothing() {
 
 #[test]
 fn timeouts_record_and_replay_only_under_a_deadline() {
-    use hirsel_rt::launch::{parse_tape, render_tape};
     let (_temp, mut io, p) = host(&[("/bin/sleep", &[])]);
     let now = clock(&mut io);
     let request = until(run(p, "/bin/sleep", &["10"], b"", 64), now, 50_000_000);
     assert_eq!(io.call(request.clone()), Ok(TIMED_OUT));
     let tape = io.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let replay = |tape: &[Event]| {
         let mut sim = SimIo::new(Tree::default(), tape.to_vec());
         crate::support::host(&mut sim);
@@ -735,11 +732,14 @@ fn timeouts_record_and_replay_only_under_a_deadline() {
     // A completed timeout proves the clock reached the deadline: a later sample below it
     // is not a monotonic reading.
     let mut below = tape.clone();
+    let sample = tape
+        .iter()
+        .find(|event| matches!(event.request, Request::Monotonic { .. }))
+        .unwrap();
     below.push(Event {
         request: Request::Monotonic { clock: now.0 },
         completion: Completion::Monotonic(Ok(now.1 + 1)),
-        fault: None,
-        resources: None,
+        ..sample.clone()
     });
     assert_eq!(
         replay(&below).last().unwrap(),
@@ -1047,7 +1047,6 @@ fn kill_signals_the_child_writes_after_exit_are_input_closed_and_a_drop_kills() 
 
 #[test]
 fn children_record_and_replay_without_spawning() {
-    use hirsel_rt::launch::{parse_tape, render_tape};
     let (_temp, mut io, p) = host(&[("/bin/cat", &[])]);
     let c = spawned(&mut io, spawn(p, "/bin/cat", &["-u"]));
     io.call(write(p, c, b"echo\n")).unwrap();
@@ -1068,7 +1067,7 @@ fn children_record_and_replay_without_spawning() {
     io.call(Request::Close { handle: c }).unwrap();
     io.call(spawn(p, "/bin/sh", &[])).unwrap();
     let tape = io.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
         crate::support::host(&mut sim);
@@ -1682,7 +1681,6 @@ fn a_cooperative_group_parks_its_reads_and_wait() {
 
 #[test]
 fn groups_record_and_replay_without_spawning() {
-    use hirsel_rt::launch::{parse_tape, render_tape};
     let (_temp, mut io, p) = host(&[(SH, &[]), ("/bin/cat", &[])]);
     let g = spawned(
         &mut io,
@@ -1712,7 +1710,7 @@ fn groups_record_and_replay_without_spawning() {
     .unwrap();
     io.call(Request::Close { handle: g }).unwrap();
     let tape = io.tape().to_vec();
-    assert_eq!(parse_tape(&render_tape(&tape).unwrap()).unwrap(), tape);
+    assert_eq!(crate::support::tape::events(&tape), tape);
     let replay = |tape: Vec<Event>| {
         let mut sim = SimIo::new(Tree::default(), tape.clone());
         crate::support::host(&mut sim);
