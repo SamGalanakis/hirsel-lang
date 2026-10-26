@@ -761,7 +761,9 @@ impl LeafPlan {
                 })
             || !matches!(
                 observation.point,
-                Point::FinalizerDrop { .. } | Point::ReleaseDrop { .. }
+                Point::FinalizerDrop { .. }
+                    | Point::ReleaseDrop { .. }
+                    | Point::CompoundDrop { .. }
             )
         {
             return None;
