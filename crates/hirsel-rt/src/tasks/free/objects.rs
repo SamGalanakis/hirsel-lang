@@ -37,6 +37,8 @@ use std::sync::atomic::Ordering;
 #[cfg(test)]
 mod close_tests;
 #[cfg(test)]
+mod compact_mutex_tests;
+#[cfg(test)]
 mod receive_registration_tests;
 #[cfg(test)]
 mod tests;
@@ -65,6 +67,9 @@ pub(crate) struct OpLocal {
     /// The wait and wait site of a role-free park, from its switch to its
     /// save callback.
     parking: Option<(Wait, u64)>,
+    /// A compact take already linked in this mutex's FIFO and published
+    /// Entered. Its reissue must neither begin nor register again.
+    pub(super) mutex_wait: Option<u64>,
     /// Registry rows a role-free close left for this task's next role entry.
     retired: Vec<Retired>,
 }
@@ -350,6 +355,11 @@ pub(crate) unsafe fn mutex_take(
     let mut state = cell.lock();
     // A reserved front waiter owns the next permit; never overtake it.
     if !state.permit.ready_for(me) {
+        // A certified boundary can give its stack back. Resolve/register
+        // under the existing role authority before beginning that path.
+        if unsafe { (*ctx).point_ops == 0 } {
+            return None;
+        }
         // Recorded and replayed waits keep the role path, which publishes
         // Entered under the latch.
         if replay.is_some() || super::record::on(ctx) {

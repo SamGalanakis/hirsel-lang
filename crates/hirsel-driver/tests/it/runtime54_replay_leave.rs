@@ -5,7 +5,7 @@
 //! operation's first, such as one inside a `task.isolate` callback, keeps its
 //! stack and nothing is reissued: every live and replayed observation on
 //! both backends equals the reference interpreter's (`compact_runs_with`).
-use super::runtime50_resume::{compact_runs_with, peak_held};
+use super::runtime50_resume::{compact_runs_recording, compact_runs_with, peak_held};
 
 /// `CHILDREN` children (the bound is one past them) each add their seed to
 /// one shared mutex once.
@@ -161,7 +161,7 @@ fn replayed(source: &str, label: &str) -> Vec<(usize, usize)> {
 #[test]
 fn runtime54_replayed_mutex_takers_hold_worker_stacks() {
     hirsel_engine::with_compiler_stack(|| {
-        for children in [8u64, 32] {
+        for children in [8u64, 16, 32] {
             let source = TAKERS.replace("CHILDREN", &format!("{}u64", children + 1));
             let label = format!("mutex takers {children}");
             let cells = replayed(&source, &label);
@@ -173,6 +173,40 @@ fn runtime54_replayed_mutex_takers_hold_worker_stacks() {
                 let leaves: usize = cells.iter().map(|cell| cell.0).sum();
                 assert!(leaves > 0, "{label}: no replayed take left its stack");
             }
+        }
+    });
+}
+
+/// Both ordinary and recorded live permit waits release their stacks, beside
+/// the tape-turn waits covered above. Each observation (including strict
+/// replay of the recorded live run) equals the reference interpreter's.
+#[test]
+fn runtime55_live_mutex_takers_hold_worker_stacks() {
+    hirsel_engine::with_compiler_stack(|| {
+        for children in [8u64, 16, 32] {
+            let source = TAKERS.replace("CHILDREN", &format!("{}u64", children + 1));
+            for recording in [false, true] {
+                let label = format!("live mutex takers {children} recording={recording}");
+                for (index, trace) in
+                    compact_runs_recording(&source, &label, false, "tasks.free@1", recording)
+                        .iter()
+                        .enumerate()
+                {
+                    let peak = peak_held(trace);
+                    eprintln!("{label} run {index}: peak held {peak}");
+                    assert!(peak <= 4, "{label}: {peak} suspended takers held stacks");
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn runtime55_live_mutex_takers_checked_heap_agrees() {
+    hirsel_engine::with_compiler_stack(|| {
+        for children in [8u64, 16, 32] {
+            let source = TAKERS.replace("CHILDREN", &format!("{}u64", children + 1));
+            super::runtime50_resume::checked_heap_agrees(&source);
         }
     });
 }

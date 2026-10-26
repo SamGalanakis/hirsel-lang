@@ -296,6 +296,45 @@ fn runtime50_migrate_every_suspension_continuations() {
     });
 }
 
+/// Checked H alone beside already qualified native observations.
+pub(crate) fn checked_heap_agrees(source: &str) {
+    let mut engine = crate::source_std::engine();
+    let file = engine.sources.add("main.hir", source.into()).unwrap();
+    let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+    assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+    let entry = entry_path(&default_context());
+    let reference = run_observed_snapshot(
+        &mut engine,
+        &RunConfiguration {
+            entry: entry.clone(),
+            hash_seed: 50,
+            inputs: vec![],
+        },
+        (&Fixture::default()).into(),
+    )
+    .unwrap();
+    let expected = Observation::of_reference(reference.observation.as_ref().unwrap());
+    let input = engine.export_native_input().unwrap();
+    let validated = engine.import_native_input(input).unwrap();
+    let configurations = [Configuration {
+        options: Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+        engine: Engine::Heap { campaign: false },
+    }];
+    let scratch = tempfile::tempdir().unwrap();
+    let tools = Toolchain::for_matrix(&scratch.path().join("runtime"), &configurations).unwrap();
+    for (configuration, outcome) in differential_in(
+        &validated,
+        &entry,
+        &expected,
+        &configurations,
+        &tools,
+        scratch.path(),
+        &Fixture::default(),
+    ) {
+        assert_eq!(outcome, Outcome::Agree, "{configuration}: {outcome:?}");
+    }
+}
+
 /// One compact trace line: `leave` or `activate`, task row, state, worker,
 /// pooled; or `hold` or `resume`, task row, 0, worker, false.
 type Line = (String, u32, u32, String, bool);
@@ -315,6 +354,19 @@ pub(crate) fn compact_runs_with(
     label: &str,
     migrate: bool,
     tasks: &str,
+) -> Vec<Vec<Line>> {
+    compact_runs_recording(source, label, migrate, tasks, true)
+}
+
+/// As `compact_runs_with`, also allowing ordinary live runs without a tape.
+/// Recording runs include their strict reference replay; unrecorded runs
+/// still compare every observation to the reference interpreter.
+pub(crate) fn compact_runs_recording(
+    source: &str,
+    label: &str,
+    migrate: bool,
+    tasks: &str,
+    recording: bool,
 ) -> Vec<Vec<Line>> {
     let mut engine = crate::source_std::engine();
     let file = engine.sources.add("main.hir", source.into()).unwrap();
@@ -366,6 +418,9 @@ pub(crate) fn compact_runs_with(
         .unwrap();
         let tape = dir.join("run.tape");
         for replay in [false, true] {
+            if replay && !recording {
+                continue;
+            }
             let record = dir.join("observation");
             let trace = dir.join(format!("compact-{replay}"));
             let mut command = std::process::Command::new(&exe);
@@ -382,11 +437,10 @@ pub(crate) fn compact_runs_with(
             if replay {
                 command.arg("--hirsel-replay").arg(&tape);
             } else {
-                command
-                    .arg("--hirsel-record")
-                    .arg(&tape)
-                    .arg("--hirsel-grants")
-                    .arg(&grants);
+                if recording {
+                    command.arg("--hirsel-record").arg(&tape);
+                }
+                command.arg("--hirsel-grants").arg(&grants);
             }
             let output = command.output().unwrap();
             let launched = native::Launched {

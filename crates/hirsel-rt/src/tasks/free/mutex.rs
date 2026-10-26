@@ -105,7 +105,7 @@ pub(super) fn notify(ctx: *mut TaskCtx, task: u32) {
     });
 }
 
-/// `true` means the take left its stack in its replay wait; its wake
+/// `true` means the take left its stack in its permit or replay wait; its wake
 /// reissues `mutex.with`, whose body begins with it.
 ///
 /// # Safety
@@ -117,6 +117,11 @@ pub(crate) unsafe fn take(
     out: *mut u32,
 ) -> Stopped<bool> {
     let reissued = crate::tasks::compact::waited(ctx);
+    let registered = unsafe { (*ctx).free_ops.mutex_wait.take() };
+    if let Some(registered) = registered {
+        assert!(reissued);
+        assert_eq!(registered, word, "a take reissued a different mutex");
+    }
     if !reissued {
         super::record::begin(ctx);
     }
@@ -129,8 +134,8 @@ pub(crate) unsafe fn take(
         s.task(me).retried = false;
         me
     });
-    let mut queued = false;
-    let mut entered = false;
+    let mut queued = registered.is_some();
+    let mut entered = queued;
     loop {
         let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
         let cell = role::with_role(ctx, |s| s.sync.mutex(word));
@@ -192,11 +197,21 @@ pub(crate) unsafe fn take(
         drop(stale);
         drop(cell);
         drop(replay);
+        drop(token);
         unsafe { role::enter(ctx) };
         publication?;
         match result {
             Acquired::Pending => {
                 entered = true;
+                if unsafe { crate::tasks::compact::can_wait(ctx) } {
+                    // The cell owns the FIFO link and wake token; the task
+                    // owns its Entered/queued state. No carrier pointer,
+                    // cell owner or guard survives the returned suspension.
+                    unsafe { (*ctx).free_ops.mutex_wait = Some(word) };
+                    unsafe { crate::tasks::park_left(ctx, Wait::Retry { cancelable: false }) }?;
+                    crate::tasks::compact::wait(ctx);
+                    return Ok(true);
+                }
                 // Only primitives remain on this frame across the wait. The
                 // returned stop unwinds helpers before the ABI entry raises it.
                 unsafe { try_block(&mut *ctx, Wait::Retry { cancelable: false }, false, 0) }?;
