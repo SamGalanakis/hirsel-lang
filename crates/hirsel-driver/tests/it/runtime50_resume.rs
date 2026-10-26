@@ -443,15 +443,30 @@ pub(crate) fn compact_runs_recording(
                 command.arg("--hirsel-grants").arg(&grants);
             }
             let output = command.output().unwrap();
+            let cell = format!("{label} {tasks} {backend:?} replay={replay}");
+            let observation = std::fs::read_to_string(&record).unwrap_or_else(|error| {
+                panic!(
+                    "{cell}: observation {record:?}: {error}; child status={:?}; stdout={}; stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr),
+                )
+            });
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt;
+                output.status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal = None;
             let launched = native::Launched {
                 audit_required: true,
                 exit: output.status.code(),
-                signal: None,
+                signal,
                 stdout: output.stdout,
                 stderr: output.stderr,
-                record: std::fs::read_to_string(&record).unwrap(),
+                record: observation,
             };
-            let cell = format!("{label} {tasks} {backend:?} replay={replay}");
             assert_eq!(
                 native::observe(&launched, &ready, &sites).unwrap(),
                 expected,
