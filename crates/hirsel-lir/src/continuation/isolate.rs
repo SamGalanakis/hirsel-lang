@@ -17,6 +17,8 @@ pub(crate) use admission::{candidate, evidence, intrinsic};
 mod begin;
 mod cleanup;
 mod frame;
+mod finalizer;
+pub use finalizer::FinalizerSource;
 pub use cleanup::{CleanupOwner, SynchronousCleanup, SynchronousCleanupPlan};
 pub use frame::IsolatePlan;
 mod protocol;
