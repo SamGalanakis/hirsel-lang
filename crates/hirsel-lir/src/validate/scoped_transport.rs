@@ -217,16 +217,30 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         }
     }
     for inst in &u.instructions {
-        if let Inst::Closure {
-            result, closure, ..
-        } = *inst
-        {
-            if u.tables.closures[closure.index()].scoped {
+        match *inst {
+            Inst::Closure {
+                result, closure, ..
+            } if u.tables.closures[closure.index()].scoped => {
                 n[result.index()]
                     .entry(Vec::new())
                     .or_default()
                     .insert(result);
             }
+            Inst::BorrowSealedRoot {
+                result,
+                owner,
+                loan,
+                ..
+            } if !matches!(cx.repr(result), ValueRepr::Unit | ValueRepr::Scalar(_)) => {
+                // Sealed views are scoped even without a callable contract
+                // elsewhere in the unit; seed them before the empty fast path.
+                // Unit/scalar reads copy bits instead of retaining owner storage;
+                // ownership/sealed validation still checks their exclusive loan.
+                let roots = n[result.index()].entry(Vec::new()).or_default();
+                roots.scoped.insert(owner);
+                roots.referents.insert(loan);
+            }
+            _ => {}
         }
     }
     if n.iter().all(|p| p.values().all(|r| r.scoped.is_empty())) {
@@ -294,16 +308,6 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                             &mut n[result.index()],
                             &project(&old[reaching.index()], path),
                         );
-                    }
-                    Inst::BorrowSealedRoot {
-                        result,
-                        owner,
-                        loan,
-                        ..
-                    } => {
-                        let roots = n[result.index()].entry(Vec::new()).or_default();
-                        roots.scoped.insert(owner);
-                        roots.referents.insert(loan);
                     }
                     Inst::Weaken { result, value }
                     | Inst::Recast { result, value }

@@ -1021,3 +1021,44 @@ fn sealed_root_views_reject_owner_loan_and_holding_mutations() {
         }
     }
 }
+
+#[test]
+fn sealed_root_scalar_can_outlive_the_loan_but_a_heap_view_cannot_escape() {
+    for kind in [ViewRoot::Scalar, ViewRoot::Heap] {
+        let (mut t, d, result, _, _) = root_view_fixture(kind);
+        let root_layout = t.builder.unit.tables.seal_descriptors[0].root_layout;
+        let params: Vec<_> = t.table.fn_abis[t.builder.unit.header.abi.0 as usize]
+            .parameters
+            .iter()
+            .map(|p| (p.convention, p.layout))
+            .collect();
+        t.builder.unit.header.abi = t.abi(&params, Some(root_layout));
+        t.builder.ret(support::ENTRY, Some(result));
+        let (unit, table, manifest) = t.finish();
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let inputs = hirsel_lir::validate::Inputs {
+            target: &target,
+            layouts: &table,
+            manifest: &manifest,
+            operations: &d,
+            discharge: None,
+            memo: Default::default(),
+        };
+        let errors = hirsel_lir::validate::check_scoped_transport(&unit, &inputs);
+        match kind {
+            ViewRoot::Scalar => {
+                assert!(errors.is_empty(), "{errors:?}");
+                assert!(hirsel_lir::validate::validate(unit, &inputs).is_ok());
+            }
+            ViewRoot::Heap => assert!(
+                errors.iter().any(
+                    |e| matches!(e.kind, hirsel_lir::validate::ViolationKind::ScopedRetention {
+                    value, operation: "return or error payload", ..
+                } if value == result)
+                ),
+                "{errors:?}"
+            ),
+            ViewRoot::Unit => unreachable!(),
+        }
+    }
+}
