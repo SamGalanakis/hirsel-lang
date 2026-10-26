@@ -491,6 +491,32 @@ impl<S: TapeSink, B> Recorder<S, B> {
         prefix: impl FnOnce() -> bool,
         action: impl FnOnce(&mut Writer<'_, '_>) -> T,
     ) -> Result<Option<T>, Stopped> {
+        self.phase_attempt(worker, task, progress, (bound, false), prefix, action)
+    }
+
+    /// Nonblocking admission for a typed runtime continuation. None retains
+    /// the same progress with no prefix effects; the caller keeps its phase.
+    pub fn try_phase_if<T>(
+        &self,
+        worker: &mut ExecutorSlot,
+        task: &mut Task,
+        progress: Progress,
+        bound: RecordBound,
+        prefix: impl FnOnce() -> bool,
+        action: impl FnOnce(&mut Writer<'_, '_>) -> T,
+    ) -> Result<Option<T>, Stopped> {
+        self.phase_attempt(worker, task, progress, (bound, true), prefix, action)
+    }
+
+    fn phase_attempt<T>(
+        &self,
+        worker: &mut ExecutorSlot,
+        task: &mut Task,
+        progress: Progress,
+        (bound, nonblocking): (RecordBound, bool),
+        prefix: impl FnOnce() -> bool,
+        action: impl FnOnce(&mut Writer<'_, '_>) -> T,
+    ) -> Result<Option<T>, Stopped> {
         self.check_worker(worker);
         assert!(
             Arc::ptr_eq(&task.identity, &self.identity),
@@ -504,11 +530,15 @@ impl<S: TapeSink, B> Recorder<S, B> {
         if short {
             task.reserve(bound);
         }
-        let section = self
-            .arbiter
-            .gate()
-            .unwrap()
-            .enter_counted(worker.index(), self.metrics.as_ref().map(|m| &m.pause_ns))?;
+        let gate = self.arbiter.gate().unwrap();
+        let section = if nonblocking {
+            let Some(section) = gate.try_enter(worker.index())? else {
+                return Ok(None);
+            };
+            section
+        } else {
+            gate.enter_counted(worker.index(), self.metrics.as_ref().map(|m| &m.pause_ns))?
+        };
         Metrics::section(self.metrics.as_ref(), true);
         debug_assert!(task.fits(bound), "only the owner writes its reserved room");
         if !prefix() {

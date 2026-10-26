@@ -442,6 +442,25 @@ impl Gate {
         }
     }
 
+    /// A single Dekker admission attempt. A closed flush releases the slot
+    /// immediately, so an owned runtime invocation can return Pending with no
+    /// gate/section/writer loan; a stopped recording rejects permanently.
+    pub fn try_enter(&self, slot: usize) -> Result<Option<Section<'_>>, Stopped> {
+        let active = &self.slots[slot].active;
+        sc_store(active, 1);
+        if sc_load(&self.cut) == 0 {
+            section_open(true);
+            return Ok(Some(Section { gate: self, slot }));
+        }
+        active.store(0, Ordering::Release);
+        self.waits.wake(active);
+        if self.stopped.load(Ordering::Acquire) {
+            Err(Stopped)
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Take the cutter role for a flush and close the gate; `None` once a stop wants the role
     /// or has taken it. The caller holds no open section.
     pub fn flush_cut(&self) -> Option<Cut<'_>> {

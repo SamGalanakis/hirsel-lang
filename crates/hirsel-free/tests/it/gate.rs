@@ -123,3 +123,23 @@ fn claim_and_withdraw_race_to_exactly_one_winner() {
         );
     }
 }
+
+#[test]
+fn nonblocking_admission_backs_off_from_flush_and_rejects_stop() {
+    let gate = Gate::new(2);
+    let task = TaskLog::new(&[]);
+    let section = gate.try_enter(0).unwrap().unwrap();
+    section.register(&task);
+    drop(section);
+    let mut cut = gate.flush_cut().unwrap();
+    assert!(gate.try_enter(1).unwrap().is_none());
+    assert_eq!(cut.scan()[0].progress, Progress::START);
+    drop(cut);
+    let section = gate.try_enter(1).unwrap().unwrap();
+    section.publish(&task, Progress::new(1, Phase::Done));
+    drop(section);
+    let mut cut = gate.stop_cut().unwrap();
+    assert_eq!(cut.scan()[0].progress, Progress::new(1, Phase::Done));
+    drop(cut);
+    assert!(gate.try_enter(0).is_err());
+}
