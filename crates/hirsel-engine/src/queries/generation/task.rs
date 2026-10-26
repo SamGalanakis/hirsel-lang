@@ -4,6 +4,22 @@
 //! of generated syntax remains separate from a worker's preparation/execution.
 use super::*;
 
+/// register_generated_instance creates exactly one declaration in its own
+/// source. Its private constant shares these parser-owned arenas and anchor.
+/// No ordinary file's sibling transport or namespace is replaced.
+pub(crate) struct InstanceSiblings(pub(crate) Arc<ItemSyntax>);
+impl crate::snapshot::DeclarationSiblings for InstanceSiblings {
+    fn siblings(&self, syntax: &ItemSyntax) -> Result<Arc<[Arc<ItemSyntax>]>, QueryError> {
+        if syntax.anchor != self.0.anchor {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "generated instance source".into(),
+                message: "private generator escaped its registered instance source".into(),
+            }));
+        }
+        Ok(Arc::from([self.0.clone()]))
+    }
+}
+
 pub(crate) struct GeneratorInput {
     pub(crate) syntax: Arc<ItemSyntax>,
     pub(crate) value: ExprId,

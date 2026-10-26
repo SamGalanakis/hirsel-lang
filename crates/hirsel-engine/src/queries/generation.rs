@@ -15,12 +15,14 @@ use hirsel_syntax::{
 use hirsel_types::SignatureKind;
 mod accepted;
 mod bootstrap;
+mod instances;
 pub use bootstrap::{
     FrontRegistrationBootstrap, FrontRegistrationBootstrapAdmission,
     FrontRegistrationBootstrapError,
 };
 pub(crate) mod task;
 pub use accepted::{AcceptedFrontRegistration, FrontRegistrationFailure};
+pub use instances::{FrontInstanceDiscovery, FrontInstanceRequest, FrontInstanceSyntax};
 
 /// A declaration's generated source, for diagnostics and `hirsel expand`.
 #[derive(Clone, Debug, Eq, PartialEq)]

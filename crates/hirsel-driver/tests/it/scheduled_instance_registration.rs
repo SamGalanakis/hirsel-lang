@@ -1,0 +1,634 @@
+//! Explicit CT-5 registration rounds, independent of the host bootstrap.
+use hirsel_driver::COMPILER;
+use hirsel_engine::{runtime::*, store::MemStore, *};
+use std::sync::Arc;
+
+const SOURCE: &str = r#"
+type Point { x: u8 }
+type Box3 { x: u16 }
+fn make[T](s: TypeShape[T]) -> Result[Body[fn(T)->u64 uses {}], String] uses {} {
+  let info = type_shape.info(s)
+  if info.name == "instance_front@1/Point" { Ok(codegen.body("fn(v:Point)->u64 uses {} {7u64}")) }
+  else { Ok(codegen.body("fn(v:Box3)->u64 uses {} {7u64}")) }
+}
+fn generated[T](v: T)->u64 uses {} = comptime make(shape(T))
+pub fn main()->u64 uses {} { generated(Point(x:1u8)) + generated(Box3(x:2u16)) + generated(Point(x:3u8)) }
+"#;
+fn fixture(source: &str, jobs: usize, run: impl FnOnce(&mut LoadedProgram, &Arc<ProcessBudget>)) {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = directory.path().join("hirsel.json");
+    std::fs::write(directory.path().join("main.hir"), source).unwrap();
+    std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"instance_front","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+    let compiler = COMPILER
+        .with_config(CompileConfig {
+            store: Arc::new(MemStore::default()),
+            jobs: hirsel_intern::jobs::Jobs::new(jobs),
+            hold_bytes: 0,
+            ..Default::default()
+        })
+        .with_owned_engines();
+    let mut program = compiler.load_program(&manifest).unwrap();
+    let budget = ProcessBudget::new(1 << 30);
+    run(&mut program, &budget);
+}
+fn weight() -> MemoryWeight {
+    MemoryWeight {
+        retained: 2 << 20,
+        scratch: 8 << 20,
+        stack: 0,
+    }
+}
+fn ordinary(program: &mut LoadedProgram) -> Vec<DefPath> {
+    program
+        .engine
+        .front_source_roots()
+        .into_iter()
+        .filter(|p| {
+            p.0.name != "generated" && p.0.name != "inner" && !p.0.name.contains("$instance$")
+        })
+        .collect()
+}
+fn front(
+    program: &mut LoadedProgram,
+    budget: &Arc<ProcessBudget>,
+    jobs: usize,
+    accepted: &[Arc<AcceptedFrontRegistration>],
+) -> Arc<FrontBodyQueries> {
+    let mut paths = ordinary(program);
+    paths.extend(accepted.iter().map(|a| a.definition().clone()));
+    let front = program
+        .engine
+        .front_body_queries_with_registrations(
+            &paths,
+            accepted,
+            weight(),
+            budget.reserve(32 << 20).unwrap(),
+            crate::scheduled_front::errors(),
+        )
+        .unwrap();
+    let mut runtime = AdmittedRuntime::new(
+        hirsel_intern::jobs::Jobs::new(jobs),
+        budget.reserve(256 << 20).unwrap(),
+        crate::scheduled_front::errors(),
+    )
+    .unwrap();
+    runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+    let queries: Vec<_> = paths.iter().map(|p| front.query(p).unwrap()).collect();
+    let request = runtime.request(&queries);
+    if let Err(error) = runtime.wait(request) {
+        let failure = front.outcome(error);
+        panic!(
+            "front {error:?}: {:?}; resource={}, protocol={}, work={:?}, accepted={:?}",
+            failure.map(|o| o.outcome.result),
+            error == crate::scheduled_front::errors().resource,
+            error == crate::scheduled_front::errors().protocol,
+            front.work_snapshot(),
+            accepted.iter().map(|a| a.definition()).collect::<Vec<_>>()
+        );
+    }
+    runtime.shutdown();
+    front
+}
+fn execute(
+    program: &mut LoadedProgram,
+    budget: &Arc<ProcessBudget>,
+    jobs: usize,
+    front: Arc<FrontBodyQueries>,
+    paths: &[DefPath],
+    run: impl FnOnce(&mut LoadedProgram, Vec<FrontRegistrationOutput>),
+) {
+    let lower_paths = ordinary(program);
+    let errors = crate::scheduled_front::errors();
+    let lower = program
+        .engine
+        .front_lower_queries(
+            &lower_paths,
+            front.clone(),
+            weight(),
+            32,
+            budget.reserve(32 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let registration = program
+        .engine
+        .front_registration_queries(
+            paths,
+            lower.clone(),
+            weight(),
+            budget.reserve(32 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+    let mut runtime = AdmittedRuntime::new(
+        hirsel_intern::jobs::Jobs::new(jobs),
+        budget.reserve(256 << 20).unwrap(),
+        errors,
+    )
+    .unwrap();
+    runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+    runtime
+        .register_local(FRONT_LOWER_KIND, lower.factory())
+        .unwrap();
+    runtime
+        .register_local(FRONT_EVALUATE_KIND, lower.factory())
+        .unwrap();
+    runtime
+        .register_local(FRONT_REGISTRATION_KIND, registration.factory())
+        .unwrap();
+    let queries: Vec<_> = paths
+        .iter()
+        .map(|p| registration.query(p).unwrap())
+        .collect();
+    let request = runtime.request(&queries);
+    let products = runtime.wait(request).unwrap_or_else(|r| {
+        panic!(
+            "generator {:?}",
+            registration.failed(r).map(|o| o.text().map(str::to_owned))
+        )
+    });
+    // A caller cannot turn arbitrary product bytes into private execution
+    // acceptance: only this producer's exact completed product is transportable.
+    let mut forged = products[0];
+    forged.action = hirsel_artifact_store::Action(hirsel_syntax::ContentHash::default());
+    assert!(registration.outcome(forged).is_none());
+    let outputs: Vec<_> = products
+        .into_iter()
+        .map(|p| registration.outcome(p).unwrap())
+        .collect();
+    assert!(outputs.iter().all(|o| o.has_execution_acceptance()));
+    runtime.shutdown();
+    run(program, outputs);
+}
+fn discovery(
+    program: &mut LoadedProgram,
+    budget: &Arc<ProcessBudget>,
+    fronts: &[Arc<FrontBodyQueries>],
+) -> FrontInstanceDiscovery {
+    let roots = [program.entry.clone()];
+    program
+        .engine
+        .discover_front_instances(&roots, fronts, budget.reserve(16 << 20).unwrap())
+        .unwrap()
+}
+fn register(
+    program: &mut LoadedProgram,
+    budget: &Arc<ProcessBudget>,
+    round: &FrontInstanceDiscovery,
+) -> Vec<DefPath> {
+    round
+        .requests()
+        .iter()
+        .map(|r| {
+            let input = program
+                .engine
+                .register_front_instance(r, budget.reserve(16 << 20).unwrap())
+                .unwrap();
+            assert!(
+                program
+                    .engine
+                    .generated_source(input.definition())
+                    .is_none(),
+                "registration cannot execute"
+            );
+            input.definition().clone()
+        })
+        .collect()
+}
+#[test]
+fn closed_instances_accept_two_types_deduplicate_and_select_nested_instances_before_publication() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let source = SOURCE.replace("{7u64}", "{ inner(v) }")
+                + "\nfn inner[T](v:T)->u64 uses {} = comptime inner_make(shape(T))\n"
+                + &SOURCE[SOURCE.find("fn make").unwrap()..SOURCE.find("fn generated").unwrap()]
+                    .replace("make[T]", "inner_make[T]");
+            fixture(&source, jobs, |program, budget| {
+                let first = front(program, budget, jobs, &[]);
+                let round = discovery(program, budget, &[first]);
+                assert_eq!(round.requests().len(), 2);
+                let paths = register(program, budget, &round);
+                assert_eq!(paths.len(), 2);
+                let mut accepted = vec![];
+                let before_execution = front(program, budget, jobs, &[]);
+                execute(
+                    program,
+                    budget,
+                    jobs,
+                    before_execution,
+                    &paths,
+                    |program, outputs| {
+                        for output in outputs {
+                            accepted.push(
+                                program
+                                    .engine
+                                    .accept_front_registration(
+                                        output,
+                                        budget.reserve(16 << 20).unwrap(),
+                                    )
+                                    .unwrap(),
+                            );
+                        }
+                    },
+                );
+                let second = front(program, budget, jobs, &accepted);
+                let round = discovery(program, budget, &[second.clone()]);
+                assert_eq!(round.requests().len(), 4);
+                let nested: Vec<_> = round
+                    .requests()
+                    .iter()
+                    .filter(|r| r.declaration.0.name == "inner")
+                    .map(|r| {
+                        program
+                            .engine
+                            .register_front_instance(r, budget.reserve(16 << 20).unwrap())
+                            .unwrap()
+                            .definition()
+                            .clone()
+                    })
+                    .collect();
+                assert_eq!(nested.len(), 2);
+                // New declaration heads change V's universe. Keep its original
+                // refusal, then refresh all private execution receipts in the
+                // final universe before publishing any accepted front.
+                assert!(
+                    accepted
+                        .iter()
+                        .all(|a| a.validate_in_engine(&mut program.engine).is_err())
+                );
+                accepted.clear();
+                let mut final_paths = paths.clone();
+                final_paths.extend(nested);
+                let before_execution = front(program, budget, jobs, &[]);
+                execute(
+                    program,
+                    budget,
+                    jobs,
+                    before_execution,
+                    &final_paths,
+                    |program, outputs| {
+                        for output in outputs {
+                            accepted.push(
+                                program
+                                    .engine
+                                    .accept_front_registration(
+                                        output,
+                                        budget.reserve(16 << 20).unwrap(),
+                                    )
+                                    .unwrap(),
+                            );
+                        }
+                    },
+                );
+                let final_front = front(program, budget, jobs, &accepted);
+                let done = discovery(program, budget, &[final_front]);
+                assert!(
+                    done.pending_bodies().is_empty(),
+                    "{:?}",
+                    done.pending_bodies()
+                );
+                assert_eq!(done.requests().len(), 4);
+                assert!(
+                    accepted
+                        .iter()
+                        .all(|a| a.validate_in_engine(&mut program.engine).is_ok())
+                );
+                assert_eq!(
+                    program
+                        .engine
+                        .recompute_count(&program.entry, QueryKind::Check),
+                    0
+                );
+            });
+        }
+    });
+}
+#[test]
+fn closed_instance_registration_and_acceptance_enforce_exact_grants() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let mut required_syntax = 0;
+            let mut required_accepted = 0;
+            for phase in 0..3 {
+                fixture(SOURCE, jobs, |program, budget| {
+                    let first = front(program, budget, jobs, &[]);
+                    let round = discovery(program, budget, &[first]);
+                    let request = &round.requests()[0];
+                    if phase == 1 {
+                        let before = program.engine.sources.retained_payload_bytes();
+                        assert!(
+                            program
+                                .engine
+                                .register_front_instance(
+                                    request,
+                                    budget.reserve(required_syntax - 1).unwrap()
+                                )
+                                .is_err()
+                        );
+                        assert_eq!(program.engine.sources.retained_payload_bytes(), before);
+                    }
+                    let input = program
+                        .engine
+                        .register_front_instance(
+                            request,
+                            budget
+                                .reserve(if phase == 0 {
+                                    16 << 20
+                                } else {
+                                    required_syntax
+                                })
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    required_syntax = input.retained_bytes();
+                    let path = input.definition().clone();
+                    let repeated = program
+                        .engine
+                        .register_front_instance(request, budget.reserve(16 << 20).unwrap())
+                        .unwrap();
+                    assert_eq!(input.definition(), repeated.definition());
+                    let next = front(program, budget, jobs, &[]);
+                    execute(
+                        program,
+                        budget,
+                        jobs,
+                        next,
+                        &[path],
+                        |program, mut outputs| {
+                            let output = outputs.pop().unwrap();
+                            if phase == 1 {
+                                let before = program.engine.sources.retained_payload_bytes();
+                                assert!(
+                                    program
+                                        .engine
+                                        .accept_front_registration(
+                                            output.clone(),
+                                            budget.reserve(required_accepted - 1).unwrap()
+                                        )
+                                        .is_err()
+                                );
+                                assert_eq!(program.engine.sources.retained_payload_bytes(), before);
+                            }
+                            let accepted = program
+                                .engine
+                                .accept_front_registration(
+                                    output,
+                                    budget
+                                        .reserve(if phase == 0 {
+                                            16 << 20
+                                        } else {
+                                            required_accepted
+                                        })
+                                        .unwrap(),
+                                )
+                                .unwrap();
+                            required_accepted = accepted.retained_bytes();
+                        },
+                    );
+                });
+            }
+        }
+    });
+}
+#[test]
+fn closed_instance_views_reject_stale_generator_helper_and_declaring_header_reads() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            for edit in [0, 1, 2] {
+                fixture(SOURCE, jobs, |program, budget| {
+                    let first = front(program, budget, jobs, &[]);
+                    let round = discovery(program, budget, &[first]);
+                    let paths = register(program, budget, &round);
+                    let before = front(program, budget, jobs, &[]);
+                    execute(program, budget, jobs, before, &paths, |program, outputs| {
+                        let accepted: Vec<_> = outputs
+                            .iter()
+                            .map(|output| {
+                                program
+                                    .engine
+                                    .accept_front_registration(
+                                        output.clone(),
+                                        budget.reserve(16 << 20).unwrap(),
+                                    )
+                                    .unwrap()
+                            })
+                            .collect();
+                        for view in &accepted {
+                            assert!(
+                                view.validate_current(Verify::On, |_, key| view.reads().get(key))
+                                    .is_ok()
+                            );
+                            assert!(
+                                view.validate_current(Verify::On, |_, key| {
+                                    if matches!(key, ReadKey::ValidationUniverse(_)) {
+                                        None
+                                    } else {
+                                        view.reads().get(key)
+                                    }
+                                })
+                                .is_err()
+                            );
+                            assert!(
+                                view.validate_current(Verify::On, |_, key| {
+                                    if matches!(key, ReadKey::ValidationUniverse(_)) {
+                                        Some(hirsel_syntax::ContentHash::default())
+                                    } else {
+                                        view.reads().get(key)
+                                    }
+                                })
+                                .is_err()
+                            );
+                            assert!(view.reads().iter().any(|(k, _)| matches!(k, ReadKey::ExecutedBody(d) if d.path().0.name == "generated")));
+                        }
+                        let source = match edit {
+                            0 => SOURCE
+                                .replace("comptime make(shape(T))", "comptime {make(shape(T))}"),
+                            1 => SOURCE.replace("{7u64}", "{8u64}"),
+                            _ => {
+                                SOURCE.replace("fn generated[T](v: T)", "fn generated[T](value: T)")
+                            }
+                        };
+                        let path = program
+                            .engine
+                            .sources
+                            .file(program.primary)
+                            .unwrap()
+                            .path
+                            .clone();
+                        assert!(program.replace_source(&path, source).unwrap());
+                        program.parse_sources().unwrap();
+                        for view in accepted {
+                            assert!(view.validate_in_engine(&mut program.engine).is_err());
+                        }
+                        for output in outputs {
+                            assert!(
+                                program
+                                    .engine
+                                    .accept_front_registration(
+                                        output,
+                                        budget.reserve(16 << 20).unwrap()
+                                    )
+                                    .is_err()
+                            );
+                        }
+                    });
+                });
+            }
+        }
+    });
+}
+#[test]
+fn closed_instance_discovery_refuses_stale_summaries_and_exact_output_budget() {
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            fixture(SOURCE, jobs, |program, budget| {
+                let first = front(program, budget, jobs, &[]);
+                let round = discovery(program, budget, &[first.clone()]);
+                let bytes = round.retained_bytes();
+                let roots = [program.entry.clone()];
+                assert!(
+                    program
+                        .engine
+                        .discover_front_instances(
+                            &roots,
+                            &[first.clone()],
+                            budget.reserve(bytes - 1).unwrap()
+                        )
+                        .is_err()
+                );
+                let exact = program
+                    .engine
+                    .discover_front_instances(
+                        &roots,
+                        &[first.clone()],
+                        budget.reserve(bytes).unwrap(),
+                    )
+                    .unwrap();
+                assert_eq!(exact.retained_bytes(), bytes);
+                let path = program
+                    .engine
+                    .sources
+                    .file(program.primary)
+                    .unwrap()
+                    .path
+                    .clone();
+                assert!(
+                    program
+                        .replace_source(
+                            &path,
+                            SOURCE.replace("generated(Box3(x:2u16))", "generated(Point(x:2u8))")
+                        )
+                        .unwrap()
+                );
+                program.parse_sources().unwrap();
+                assert!(
+                    program
+                        .engine
+                        .discover_front_instances(
+                            &roots,
+                            &[first],
+                            budget.reserve(16 << 20).unwrap()
+                        )
+                        .is_err()
+                );
+            });
+        }
+    });
+}
+#[test]
+fn closed_instance_registration_refuses_open_wrong_kind_and_257th_selection_with_owned_spans() {
+    use hirsel_types::{
+        Actuals, GenericArgument, Size, Type, TypeKind, TypeParamId, TypeParameterRef,
+    };
+    with_compiler_stack(|| {
+        // CT-5's existing size fixture gives 257 distinct closed keys without
+        // executing or growing a body. Keep the original 256-instance bound.
+        let source = "fn generated[n:size](v:u8)->u64 uses {} = comptime make()\nfn make()->Result[Body[fn(u8)->u64 uses {}], String] uses {} {Ok(codegen.body(\"fn(v:u8)->u64 uses {} {7u64}\"))}\npub fn main()->u64 uses {} {0u64}\n";
+        fixture(source, 1, |program, budget| {
+            let declaration = program
+                .engine
+                .front_source_roots()
+                .into_iter()
+                .find(|p| p.0.name == "generated")
+                .unwrap();
+            let site =
+                hirsel_span::Span::new(program.engine.sources.file_anchor(program.primary), 0, 1)
+                    .unwrap();
+            let open = program
+                .engine
+                .types()
+                .intern(Type::with_kind(TypeKind::Parameter(
+                    TypeParameterRef::bound(TypeParamId(0)),
+                )));
+            let wrong = FrontInstanceRequest {
+                declaration: declaration.clone(),
+                actuals: Actuals {
+                    arguments: vec![GenericArgument::Type(open)],
+                },
+                site,
+            };
+            assert!(
+                program
+                    .engine
+                    .register_front_instance(&wrong, budget.reserve(16 << 20).unwrap())
+                    .is_err()
+            );
+            let open = FrontInstanceRequest {
+                declaration: declaration.clone(),
+                actuals: Actuals {
+                    arguments: vec![GenericArgument::Size(Size::Parameter(
+                        hirsel_types::SizeParameterRef::bound(hirsel_types::SizeParamId(0)),
+                    ))],
+                },
+                site,
+            };
+            assert!(
+                program
+                    .engine
+                    .register_front_instance(&open, budget.reserve(16 << 20).unwrap())
+                    .is_err()
+            );
+            for n in 0..256 {
+                let request = FrontInstanceRequest {
+                    declaration: declaration.clone(),
+                    actuals: Actuals {
+                        arguments: vec![GenericArgument::Size(Size::Constant(n))],
+                    },
+                    site,
+                };
+                program
+                    .engine
+                    .register_front_instance(&request, budget.reserve(512 << 10).unwrap())
+                    .unwrap();
+            }
+            let request = FrontInstanceRequest {
+                declaration,
+                actuals: Actuals {
+                    arguments: vec![GenericArgument::Size(Size::Constant(256))],
+                },
+                site,
+            };
+            let failure = program
+                .engine
+                .register_front_instance(&request, budget.reserve(16 << 20).unwrap())
+                .err()
+                .expect("257 refused");
+            let QueryError::Diagnostics(ds) = &failure.error else {
+                panic!("{failure:?}")
+            };
+            assert!(
+                ds.iter()
+                    .any(|d| d.rule.as_str() == "CT-1" && d.message.contains("256"))
+            );
+            for d in ds {
+                assert!(failure.sources.slice(d.primary).is_some());
+                for label in &d.secondary {
+                    assert!(failure.sources.slice(label.span).is_some());
+                }
+            }
+            let detached = failure.sources.clone();
+            drop(failure);
+            assert!(detached.slice(site).is_some());
+        });
+    });
+}

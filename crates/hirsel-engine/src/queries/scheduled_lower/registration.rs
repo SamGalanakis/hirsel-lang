@@ -21,6 +21,7 @@ struct Input {
     syntax: Reference,
     implementation: ContentHash,
     site: Span,
+    instance_reads: Reads,
 }
 struct Data {
     text: Result<String, QueryError>,
@@ -126,6 +127,7 @@ impl FrontRegistrationQueries {
             ReadKey::ExecutedBody(input.definition),
             memos::optional(Some(input.implementation)),
         );
+        source.merge(&input.instance_reads);
         let text = if source.depth.borrow().limit() == 0 {
             Err(source.overflow(input.site))
         } else {
@@ -234,10 +236,11 @@ impl FrontRegistrationQueries {
         if crate::queries::generation::instance_bodied(&syntax) {
             return Err(QueryError::NotImplemented);
         }
-        let prepared = self
-            .lower
-            .front
-            .prepare_generator(Arc::new(syntax), &*self.signer);
+        let prepared = self.lower.front.prepare_generator(
+            Arc::new(syntax),
+            &*self.signer,
+            !input.instance_reads.is_empty(),
+        );
         source.merge(&prepared.reads);
         let PreparedGenerator {
             input: generator,
@@ -348,7 +351,7 @@ impl QueryEngine {
             operation: "generator registration admission".into(), message: "generator input inventory exceeds admission or differs from its source snapshot".into(),
         })
         };
-        let required = FrontRegistrationQueries::input_bytes(definitions);
+        let mut required = FrontRegistrationQueries::input_bytes(definitions);
         if required > allowance.bytes() || !Arc::ptr_eq(&self.types, lower.snapshot.types()) {
             return Err(refused());
         }
@@ -368,6 +371,13 @@ impl QueryEngine {
                 .encode(&lower.anchors, &(&syntax, syntax.occurrence))
                 .ok_or_else(refused)?;
             let archived = lower.store.put_content(INPUT, &bytes).ok_or_else(refused)?;
+            let instance_reads = self.front_instance_reads(definition)?;
+            for (_, bytes) in instance_reads.allocations() {
+                required = required.checked_add(bytes as u64).ok_or_else(refused)?;
+            }
+            if required > allowance.bytes() {
+                return Err(refused());
+            }
             inputs.insert(
                 key.0,
                 Input {
@@ -375,6 +385,7 @@ impl QueryEngine {
                     syntax: archived,
                     implementation: syntax.text_hash,
                     site: syntax.item.name_span,
+                    instance_reads,
                 },
             );
         }

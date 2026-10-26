@@ -213,6 +213,7 @@ impl FrontBodyQueries {
         &self,
         syntax: Arc<ItemSyntax>,
         signer: &dyn SignaturePhase,
+        instance: bool,
     ) -> s1::DependencyProduct<generation::task::PreparedGenerator> {
         let (Some(resolver), Some(checker), Some(modes)) = (
             self.resolver.as_deref(),
@@ -225,13 +226,25 @@ impl FrontBodyQueries {
             };
         };
         let path = syntax.item.definition.clone();
+        // A closed instance is a parser-created single-declaration source. Its
+        // private generator reads that source, which is not an ordinary body
+        // input in this view. Keep the source context explicit and local to
+        // preparation, under the admitted worker's existing scratch grant.
+        let declarations = if instance {
+            self.declarations
+                .with_archived_siblings(Arc::new(generation::task::InstanceSiblings(
+                    syntax.clone(),
+                )))
+        } else {
+            self.declarations.clone()
+        };
         generation::task::prepare(
             &path,
             syntax,
             &self.types,
             &self.memo,
             &self.snapshot,
-            &self.declarations,
+            &declarations,
             &self.citations,
             self.environment,
             &generation::task::GeneratorPhases {
@@ -261,7 +274,10 @@ impl FrontBodyQueries {
         // never enter the ordinary single-source untrusted archive decoder.
         if let Some(registration) = &input.registration {
             let syntax = &registration.syntax;
-            return (syntax.item.definition == *input.definition.path()
+            // Instance bodies retain the declaring source's lexical owner,
+            // as on the scalar path. The opaque registration binds the query
+            // identity; the syntax's owner is not a second instance identity.
+            return (registration.definition() == input.definition.path()
                 && syntax.text_hash == input.implementation)
                 .then(|| syntax.clone());
         }
@@ -531,6 +547,40 @@ impl FrontBodyQueries {
             .get(&(DefId::intern(definition), kind))
             .copied()
             .unwrap_or(0)
+    }
+    /// Discovery consumes only an actual settled product from this admitted view.
+    /// Check own text separately: the read set need not contain its owner's body.
+    pub(crate) fn instance_discovery_summary(
+        self: &Arc<Self>,
+        engine: &mut QueryEngine,
+        path: &DefPath,
+    ) -> Result<Option<FrontCheckedOutput>, QueryError> {
+        let Some(input) = self
+            .inputs
+            .values()
+            .find(|input| input.definition.path() == path)
+        else {
+            return Ok(None);
+        };
+        let Some(output) = self.checked_definition(path) else {
+            return Ok(None);
+        };
+        if !Arc::ptr_eq(&self.types, &engine.types)
+            || engine.key_text(path, QueryKind::Modes)? != input.text
+            || output
+                .reads
+                .first_changed(|key| engine.observe(path, key))
+                .is_some()
+        {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "generated instance discovery".into(),
+                message: format!("stale front summary for {path}"),
+            }));
+        }
+        if let Some(accepted) = &input.registration {
+            accepted.validate(engine)?;
+        }
+        Ok(Some(output))
     }
     /// Actual settled checked summary, including after a later Modes failure.
     pub fn checked_definition(self: &Arc<Self>, path: &DefPath) -> Option<FrontCheckedOutput> {

@@ -8,7 +8,7 @@ use crate::runtime::MemoryReservation;
 pub struct FrontRegistrationFailure {
     pub error: QueryError,
     pub sources: SourceMap,
-    _allowance: Arc<MemoryReservation>,
+    pub(super) _allowance: Arc<MemoryReservation>,
 }
 impl std::fmt::Debug for FrontRegistrationFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -29,6 +29,47 @@ pub struct AcceptedFrontRegistration {
 impl AcceptedFrontRegistration {
     pub fn definition(&self) -> &DefPath {
         self.output.definition()
+    }
+    /// Complete declaration, normalization and private execution observations.
+    pub fn reads(&self) -> &Reads {
+        &self.reads
+    }
+    /// Revalidate against an immutable snapshot observer. This is a reuse
+    /// predicate, not authority to install syntax; installation still validates
+    /// the original source binding in front_body_queries_with_registrations.
+    pub fn validate_current(
+        &self,
+        verify: Verify,
+        mut observe: impl FnMut(&DefPath, &ReadKey) -> Option<ContentHash>,
+    ) -> Result<(), QueryError> {
+        let invalid = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "generated syntax validation".into(),
+                message: "generated registration reads or private execution acceptance changed"
+                    .into(),
+            })
+        };
+        if self
+            .reads
+            .first_changed(|key| observe(self.definition(), key))
+            .is_some()
+        {
+            return Err(invalid());
+        }
+        if verify != Verify::Off {
+            let receipt = self.acceptance().ok_or_else(invalid)?;
+            for (package, digest) in receipt.contexts() {
+                let key = ReadKey::ValidationUniverse(crate::memo::PackageKey::of(package));
+                if observe(self.definition(), &key) != Some(*digest) {
+                    return Err(invalid());
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Engine-backed check, also used when constructing a fresh front view.
+    pub fn validate_in_engine(&self, engine: &mut QueryEngine) -> Result<(), QueryError> {
+        self.validate(engine)
     }
     pub fn retained_bytes(&self) -> u64 {
         self.retained
