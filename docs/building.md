@@ -150,8 +150,15 @@ Native object storage uses the driver's existing separate provider.
 `HIRSEL_RESULTS_DIR` overrides the disk directory. `HIRSEL_VERIFY_CACHE=1`
 recomputes disk hits and compares their canonical bytes. `--verify-cache` on
 check, build and run selects the same policy and bypasses resident dispatch.
-Use `none@1` with
-`HIRSEL_DAEMON=off` for a cache-free reference check. Source snapshots are
+`none@1` disables query-result writes while keeping installed ordinary std
+products eligible. V's independently issued accept verdicts use a separate
+host-local cache under `$XDG_CACHE_HOME/hirsel/validator-v2` (or
+`$HOME/.cache/hirsel/validator-v2`), including with `none@1`. `HIRSEL_PRODUCTS`
+and `HIRSEL_RESULTS_DIR` cannot select this namespace. Each receipt binds exact
+validated content, compiler/V build, options and current validation reads;
+unreadable or mismatching receipts run V again. A missing cache location uses
+process-local V authority. Use a fresh absolute `XDG_CACHE_HOME` with
+`HIRSEL_DAEMON=off` for a fresh-verifier reference check. Source snapshots are
 renewed from disk results after 64 edited revisions to bound retained history.
 
 ### Isolated candidate checks

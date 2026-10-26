@@ -1163,6 +1163,42 @@ mod tests {
     }
 
     #[test]
+    fn local_receipts_bind_exact_bytes_and_validator_build_before_reuse() {
+        let mut f = Fixture::unit();
+        let directory = Directory::new();
+        let options = ContentHash::of_bytes(b"validation options");
+        let policy = |build: &[u8]| {
+            ContentHash::of_parts("local V build and options", [build, options.0.as_slice()])
+        };
+        let original = policy(b"V build 1");
+        let cache = VerifierCache::directory(directory.0.clone());
+        let (report, ran) = check(&f, &cache, original);
+        assert!(ran && report.violations.is_empty());
+        drop(cache);
+        let reopened = VerifierCache::directory(directory.0.clone());
+        assert!(!check(&f, &reopened, original).1);
+        let (report, ran) = check(&f, &reopened, policy(b"V build 2"));
+        assert!(
+            ran && report.violations.is_empty(),
+            "a new V build must run V"
+        );
+        f.definition.entry = hirsel_tir::BodyId(u32::MAX);
+        for _ in 0..2 {
+            let (report, ran) = check(&f, &reopened, original);
+            assert!(
+                ran && !report.violations.is_empty(),
+                "changed bytes must run and fail V"
+            );
+        }
+        assert!(
+            Store::new(directory.0.clone())
+                .lookup(Address(key(&artifact(&f), original)))
+                .is_none(),
+            "V must not publish a rejection as acceptance"
+        );
+    }
+
+    #[test]
     fn execution_receipts_require_v_capabilities_and_exact_current_contexts() {
         let f = Fixture::unit();
         let directory = Directory::new();
