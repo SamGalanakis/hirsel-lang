@@ -1385,27 +1385,32 @@ mod tests {
     #[test]
     fn a_closed_and_reused_descriptor_number_is_watched_anew() {
         let readiness = Readiness::default();
-        let (first, _first_peer) = pair();
-        let number = first.as_raw_fd();
-        park(&readiness, 1, &first, libc::POLLIN);
+        let (watched, _first_peer) = pair();
+        let number = watched.as_raw_fd();
+        park(&readiness, 1, &watched, libc::POLLIN);
         assert!(readiness.ready().unwrap().is_empty());
-        // Closed while its token still waits: the file leaves the epoll set by itself.
-        drop(first);
+        // Keep ownership of the descriptor number throughout replacement.
+        // Dropping it and expecting socketpair's lowest-free allocation races
+        // unrelated tests. dup3 atomically closes the old file and installs
+        // the new one at that exact number, so epoll must register it anew.
         let (second, mut second_peer) = pair();
         assert_eq!(
-            second.as_raw_fd(),
-            number,
-            "the lowest free number is reused"
+            unsafe { libc::dup3(second.as_raw_fd(), number, libc::O_CLOEXEC) },
+            number
         );
-        park(&readiness, 1, &second, libc::POLLIN);
+        drop(second);
+        park(&readiness, 1, &watched, libc::POLLIN);
         assert!(readiness.ready().unwrap().is_empty());
         second_peer.write_all(b"x").unwrap();
         assert_eq!(readiness.ready().unwrap(), [1]);
         readiness.finish(1);
-        drop(second);
         let (third, mut third_peer) = pair();
-        assert_eq!(third.as_raw_fd(), number);
-        park(&readiness, 2, &third, libc::POLLIN);
+        assert_eq!(
+            unsafe { libc::dup3(third.as_raw_fd(), number, libc::O_CLOEXEC) },
+            number
+        );
+        drop(third);
+        park(&readiness, 2, &watched, libc::POLLIN);
         third_peer.write_all(b"y").unwrap();
         assert_eq!(readiness.ready().unwrap(), [2]);
     }
