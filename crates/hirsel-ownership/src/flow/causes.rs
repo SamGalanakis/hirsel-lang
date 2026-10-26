@@ -180,6 +180,28 @@ impl Checker<'_, '_> {
                     if !self.callee_preserves_unique(*callee, requirement.parameter) {
                         let part = self.spelled(argument.value).unwrap_or_else(|| name.clone());
                         step.losses.push((self.span_of(*expression), format!("this plain `mut` handback through `{part}` may install counted shares in `{name}`")));
+                        if let Some(path) = self.callee_definition(*callee)
+                            && hirsel_types::unique_summary::same_module(
+                                path,
+                                self.own.definition.path(),
+                            )
+                            && let Some(failure) = self.signatures.unique_failure(
+                                path,
+                                UniqueClaim::Parameter(ParamId(requirement.parameter as u32)),
+                            )
+                        {
+                            step.items.push(Fact::new(
+                                Cause::UniquenessLoss,
+                                failure.span,
+                                &[
+                                    &name,
+                                    &format!(
+                                        "`{}` no longer hands this parameter back unique: {}",
+                                        path.0.name, failure.message
+                                    ),
+                                ],
+                            ));
+                        }
                         // Consult only the written direct signature. A body in
                         // another module or a foreign/bodyless declaration is
                         // not a local declaration edit we can recommend.
@@ -386,6 +408,15 @@ impl Checker<'_, '_> {
             return None;
         };
         if function.foreign.is_some() {
+            return None;
+        }
+        if self
+            .signatures
+            .cached(DefId::intern(path))?
+            .metadata
+            .visibility
+            == hirsel_syntax::Visibility::Private
+        {
             return None;
         }
         let parameter = function.parameters.get(ordinal)?;

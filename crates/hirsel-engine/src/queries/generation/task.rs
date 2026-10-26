@@ -314,6 +314,17 @@ impl SignatureProvider for GeneratorRecorder<'_> {
         }
         output
     }
+    fn cite_unique_failure(
+        &mut self,
+        definition: &DefPath,
+        claim: hirsel_types::UniqueClaim,
+    ) -> Option<hirsel_types::UniqueFailure> {
+        let failure = self.provider.cite_unique_failure(definition, claim);
+        self.detail
+            .citations
+            .push((definition.clone(), failure.as_ref().map(|f| f.span)));
+        failure
+    }
     fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
         let cited = self.provider.cite_name(definition);
         self.detail.citations.push((definition.clone(), cited));

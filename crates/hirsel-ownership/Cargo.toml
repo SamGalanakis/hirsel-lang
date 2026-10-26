@@ -26,3 +26,4 @@ proptest = "1"
 hirsel-driver = { path = "../hirsel-driver" }
 hirsel-engine = { path = "../hirsel-engine" }
 hirsel-authority = { path = "../hirsel-authority", features = ["testing"] }
+hirsel-validate = { path = "../hirsel-validate" }

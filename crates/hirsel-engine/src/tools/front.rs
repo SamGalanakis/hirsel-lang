@@ -355,11 +355,39 @@ impl QueryEngine {
             }
             // Keep the delivered failure's reads even when no Lower memo can
             // retain it. Receipt collection never retries that settled root.
+            let debug_header = if outcome.definition.0.name == "format"
+                && outcome.definition.0.package.name == "std"
+            {
+                let mut dependency = outcome.definition.clone();
+                dependency.0.name = "epoch_day".into();
+                self.signature_memo_source(DefId::intern(&dependency))
+                    .and_then(|e| e.result().ok())
+                    .map(|o| {
+                        (
+                            o.value.fingerprint,
+                            o.value.metadata.inferred_unique.clone(),
+                        )
+                    })
+            } else {
+                None
+            };
             let reads = self
                 .checked_scope
                 .front
                 .entry(outcome.definition.clone())
                 .or_default();
+            if outcome.definition.0.name == "format" && outcome.definition.0.package.name == "std" {
+                let mut dependency = outcome.definition.clone();
+                dependency.0.name = "epoch_day".into();
+                let id = DefId::intern(&dependency);
+                let key = crate::memo::ReadKey::Signature(id);
+                eprintln!(
+                    "[DEBUG-private59] prefix front={:?}, lower={:?}, current={:?}",
+                    reads.get(&key),
+                    outcome.reads.get(&key),
+                    debug_header
+                );
+            }
             *reads = std::sync::Arc::new(
                 Reads::from_vec(
                     reads
@@ -368,11 +396,11 @@ impl QueryEngine {
                         .map(|(key, value)| (*key, *value))
                         .collect(),
                 )
-                .map_err(|_| {
+                .map_err(|error| {
                     QueryError::Operational(hirsel_types::OperationalFailure {
                         operation: "candidate reads".into(),
                         message: format!(
-                            "conflicting complete read values for {}",
+                            "conflicting complete read values for {}: {error:?}",
                             outcome.definition
                         ),
                     })
@@ -473,6 +501,7 @@ impl QueryEngine {
         definitions: Vec<DefPath>,
         jobs: hirsel_intern::jobs::Jobs,
     ) -> Vec<PublishedResult> {
+        self.prepare_private_summaries();
         self.work.front_outcome_visits += definitions.len() as u64;
         let changes = self.invalidate_front_products();
         // Preserve caller order, duplicate occurrences and generator boundaries.

@@ -984,6 +984,7 @@ dependencies = [
  "hirsel-syntax",
  "hirsel-type-analysis",
  "hirsel-types",
+ "hirsel-validate",
  "proptest",
 ]
 

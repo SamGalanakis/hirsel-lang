@@ -1,4 +1,4 @@
-//! A plain mut handback names a conditional checked declaration repair.
+//! Private summaries and explicit public preservation promises.
 use hirsel_driver::*;
 use hirsel_engine::*;
 
@@ -24,27 +24,7 @@ fn checked(source: &str) -> CheckOutput {
 #[test]
 fn helper_unique_promise_19_original_handback_names_checked_recipe() {
     with_compiler_stack(|| {
-        let output = checked(INCIDENT);
-        let [d] = &output.diagnostics[..] else {
-            panic!("{:?}", output.diagnostics)
-        };
-        eprintln!("{}", d.render_human(&output.sources));
-        assert_eq!(d.rule.as_str(), "MODE-2");
-        assert_eq!(output.sources.slice(d.primary), Some("need(take xs)"));
-        assert!(
-            d.secondary
-                .iter()
-                .any(|l| output.sources.slice(l.span) == Some("add(mut xs)")
-                    && l.message.contains("plain `mut` handback"))
-        );
-        assert!(
-            d.notes.iter().any(|n| n.contains("@preserves_unique(xs)")
-                && n.contains("`add`")
-                && n.contains("only if")
-                && n.contains("every exit")),
-            "{d:?}"
-        );
-        assert!(d.fix.is_none());
+        accepted(INCIDENT);
     });
 }
 
@@ -99,13 +79,7 @@ fn helper_unique_promise_19_append_only_checked_promise() {
             .replace("add", "append_line")
             .replace("mut xs: List", "mut lines: List")
             .replace("mut xs, 1", "mut lines, 1");
-        let output = rejected(&renamed, "need(take xs)", true);
-        assert!(
-            output.diagnostics[0]
-                .notes
-                .iter()
-                .any(|n| n.contains("@preserves_unique(lines)") && n.contains("`append_line`"))
-        );
+        accepted(&renamed);
         accepted(&renamed.replacen(
             "fn append_line",
             "@preserves_unique(lines)\nfn append_line",
@@ -118,7 +92,7 @@ fn helper_unique_promise_19_append_only_checked_promise() {
 fn helper_unique_promise_19_share_installing_promise_rejected() {
     with_compiler_stack(|| {
         let source = "const EMPTY: List[u64] = []\nfn reset(mut out: List[u64]) { out = EMPTY }\nfn need(take xs: unique List[u64]) {}\nfn probe() { let mut xs: unique List[u64] = []; reset(mut xs); need(take xs) }";
-        rejected(source, "need(take xs)", true);
+        rejected(source, "need(take xs)", false);
         let claimed = source.replace("fn reset", "@preserves_unique(out)\nfn reset");
         rejected(&claimed, "}", false);
         accepted(&claimed.replace("out = EMPTY", "out = unique EMPTY"));
@@ -129,13 +103,7 @@ fn helper_unique_promise_19_share_installing_promise_rejected() {
 fn helper_unique_promise_19_field_mutation_and_failure_handback() {
     with_compiler_stack(|| {
         let source = "type State { lines: List[u64], n: u64 }\nfn add(mut lines: List[u64]) { list.push(mut lines,1) }\nfn need(mut state: unique State) {}\nfn probe() { let mut state: unique State = State(lines: [], n: 0); add(mut state.lines); need(mut state) }";
-        let output = rejected(source, "need(mut state)", true);
-        assert!(
-            output.diagnostics[0]
-                .secondary
-                .iter()
-                .any(|l| output.sources.slice(l.span) == Some("add(mut state.lines)"))
-        );
+        accepted(source);
         accepted(&source.replace("fn add", "@preserves_unique(lines)\nfn add"));
         // Failure is an exit too: a later restoration cannot justify the promise.
         let source = "const EMPTY: List[u64] = []\n@preserves_unique(out)\nfn reset(mut out: List[u64], ok: bool) { out = EMPTY; failure.check(ok, Bounds()); out = unique out }";
@@ -143,20 +111,7 @@ fn helper_unique_promise_19_field_mutation_and_failure_handback() {
         accepted(&source.replace("out = EMPTY", "out = unique EMPTY"));
         let source = "fn add(mut out: List[u64], ok: bool) { list.push(mut out,1); failure.check(ok, Bounds()) }\nfn probe(mut out: unique List[u64], ok: bool) { add(mut out,ok) }";
         // The caller owes uniqueness on both the normal and failure handbacks.
-        let output = checked(source);
-        assert!(!output.diagnostics.is_empty());
-        assert!(
-            output
-                .diagnostics
-                .iter()
-                .all(|d| d.rule.as_str() == "MODE-2")
-        );
-        assert!(
-            output
-                .diagnostics
-                .iter()
-                .any(|d| d.notes.iter().any(|n| n.contains("@preserves_unique(out)")))
-        );
+        accepted(source);
         accepted(&source.replace("fn add", "@preserves_unique(out)\nfn add"));
     });
 }

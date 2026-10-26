@@ -313,10 +313,31 @@ impl QueryEngine {
                     .collect::<Vec<_>>();
                 edges.sort();
                 edges.dedup();
-                *combined = Arc::new(crate::memo::Reads::from_vec(edges).map_err(|_| {
+                if path.0.name == "format"
+                    && path.0.package.name == "std"
+                    && path.0.modules == ["time"]
+                {
+                    let mut dependency = path.clone();
+                    dependency.0.name = "epoch_day".into();
+                    let id = DefId::intern(&dependency);
+                    let key = crate::memo::ReadKey::Signature(id);
+                    eprintln!(
+                        "[DEBUG-private59] format read front={:?}, lower={:?}, current={:?}",
+                        combined.get(&key),
+                        lower.get(&key),
+                        self.signatures
+                            .get(&id)
+                            .and_then(|e| e.result().ok())
+                            .map(|o| (
+                                o.value.fingerprint,
+                                o.value.metadata.inferred_unique.clone()
+                            ))
+                    );
+                }
+                *combined = Arc::new(crate::memo::Reads::from_vec(edges).map_err(|error| {
                     QueryError::Operational(hirsel_types::OperationalFailure {
                         operation: "candidate reads".into(),
-                        message: format!("conflicting complete read values for {path}"),
+                        message: format!("conflicting complete read values for {path}: {error:?}"),
                     })
                 })?);
             }

@@ -440,6 +440,17 @@ impl SignatureProvider for WorkerRecorder<'_> {
         }
         result
     }
+    fn cite_unique_failure(
+        &mut self,
+        definition: &DefPath,
+        claim: hirsel_types::UniqueClaim,
+    ) -> Option<hirsel_types::UniqueFailure> {
+        let failure = self.provider.cite_unique_failure(definition, claim);
+        self.detail
+            .citations
+            .push((definition.clone(), failure.as_ref().map(|f| f.span)));
+        failure
+    }
     fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
         let cited = self.provider.cite_name(definition);
         self.detail.citations.push((definition.clone(), cited));
@@ -724,6 +735,7 @@ impl QueryEngine {
         jobs: Jobs,
         compact: bool,
     ) -> Vec<FrontResult> {
+        self.prepare_private_summaries();
         let mut outputs = Vec::with_capacity(definitions.len());
         let mut frontier = Vec::new();
         for definition in definitions {
@@ -783,6 +795,7 @@ impl QueryEngine {
         jobs: Jobs,
         compact: bool,
     ) -> Vec<FrontResult> {
+        self.prepare_private_summaries();
         let prepare = timings::interval(Interval::FrontPrepare);
         let mut outputs: Vec<Option<FrontResult>> = (0..definitions.len()).map(|_| None).collect();
         let mut sources = Vec::new();

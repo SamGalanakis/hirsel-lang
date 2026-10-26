@@ -112,6 +112,7 @@ mod retention;
 mod safety;
 mod summaries;
 pub use safety::{Escape, UnsafeReach};
+mod private_unique;
 mod type_groups;
 use hirsel_diag::Severity;
 use hirsel_intern::timings::{self, Count, Interval, Phase};
@@ -318,6 +319,11 @@ pub struct QueryEngine {
     pub(crate) types: Arc<hirsel_types::TypeInterner>,
     /// The session's structural memo over `types`.
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
+    private_summary_bodies: hirsel_syntax::DefMap<Vec<(DefPath, ContentHash)>>,
+    private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
+    private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
+    private_summary_revision: Option<crate::memo::Revision>,
+    private_summary_active: bool,
     signature_stack: Vec<DefPath>,
     recomputes: BTreeMap<(DefPath, QueryKind), usize>,
     scalar_lower_calls: hirsel_syntax::DefMap<u64>,
@@ -442,6 +448,7 @@ impl QueryEngine {
     pub(crate) fn prepare_signature_snapshot(&mut self) {
         self.note_environment();
         self.settle_signatures();
+        self.prepare_private_summaries();
     }
     pub(crate) fn signature_memo_source(
         &self,
@@ -662,6 +669,11 @@ impl QueryEngine {
             snapshot_inputs_revision: 0,
             types: crate::registry::session_types(),
             memo: Arc::new(hirsel_types::TypeMemo::new()),
+            private_summary_bodies: Default::default(),
+            private_summaries: Default::default(),
+            private_unique_failures: BTreeMap::new(),
+            private_summary_revision: None,
+            private_summary_active: false,
             signature_stack: vec![],
             recomputes: BTreeMap::new(),
             scalar_lower_calls: Default::default(),
@@ -926,6 +938,15 @@ impl QueryEngine {
             self.active
                 .remove(&(definition.clone(), QueryKind::Signature));
             if let Some(entry) = stored {
+                if id.path().0.name == "epoch_day" && !self.private_summary_active {
+                    eprintln!(
+                        "[DEBUG-private59] restored epoch_day {:?}, inferred {:?}",
+                        entry
+                            .result()
+                            .map(|o| o.value.metadata.inferred_unique.clone()),
+                        self.private_summaries.get(&id)
+                    );
+                }
                 self.signatures.insert(id, entry.clone());
                 return entry.result();
             }
@@ -964,6 +985,10 @@ impl QueryEngine {
         recorder.observed.products = Arc::new(products);
         let observed = recorder.observed;
         let reads = recorder.reads;
+        let mut result = result;
+        if let Ok(output) = &mut result {
+            self.attach_private_summary(&mut output.value, &output.dependencies);
+        }
         let covered = result
             .as_ref()
             .map(|output| output.dependencies.clone())
@@ -991,6 +1016,7 @@ impl QueryEngine {
     /// retained signature snapshots so ordinary body edits stay observable.
     pub fn citation_source(&self) -> impl CitationSource + '_ {
         crate::snapshot::SourceContext {
+            unique_failures: &self.private_unique_failures,
             sources: &self.sources,
             items: &self.items,
             declarations: &self.declarations,
@@ -1530,6 +1556,7 @@ impl QueryEngine {
         &mut self,
         definition: &DefPath,
     ) -> Result<Arc<QueryOutput<AnalyzedBody>>, QueryError> {
+        self.prepare_private_summaries();
         let id = DefId::intern(definition);
         let text = self.key_text(definition, QueryKind::Modes)?;
         if let Some(entry) = self.modes.get(&id).cloned()
@@ -2489,6 +2516,21 @@ impl SignatureProvider for Recorder<'_> {
         } else {
             result
         }
+    }
+    fn cite_unique_failure(
+        &mut self,
+        definition: &DefPath,
+        claim: hirsel_types::UniqueClaim,
+    ) -> Option<hirsel_types::UniqueFailure> {
+        let failure = self.engine.citation_source().unique_failure(
+            DefId::intern(&self.owner),
+            DefId::intern(definition),
+            claim,
+        );
+        self.reads
+            .citations
+            .push((definition.clone(), failure.as_ref().map(|f| f.span)));
+        failure
     }
     fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
         let cited = self.engine.cited_name(&self.owner, definition);

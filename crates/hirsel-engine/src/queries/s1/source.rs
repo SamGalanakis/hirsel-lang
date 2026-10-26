@@ -690,6 +690,7 @@ impl QueryEngine {
             graph: &self.graph,
             declarations,
             citations: SourceContext {
+                unique_failures: &self.private_unique_failures,
                 sources: &self.sources,
                 items: &self.items,
                 declarations: &self.declarations,

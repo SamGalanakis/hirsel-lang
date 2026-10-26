@@ -801,7 +801,7 @@ impl Repair {
                 "supply an independently unique `{item}` only if its element contract permits it; a per-item deep copy requires concrete copyable data, permitted allocation and compatible placement. Generic or resource elements need a checked ownership contract; arena bounds remain and allocating copies are unavailable under `@noalloc`"
             ),
             Repair::PreserveUnique { helper, parameter } => format!(
-                "declare `@preserves_unique({parameter})` on `{helper}` only if its body checks the contract: the selected parameter must stay deeply unique at every exit, including failure handback; other non-plain `take` inputs must also be unique at this call (no cost; checked signature promise, never inferred from the body)"
+                "declare `@preserves_unique({parameter})` on `{helper}` only if its body checks the contract: the selected parameter must stay deeply unique at every exit, including failure handback; other non-plain `take` inputs must also be unique at this call (no cost; checked exported signature promise)"
             ),
             Repair::UniqueResult { ty, expression } => format!(
                 "return a `unique {ty}` value with `unique {expression}` (deep copy: may allocate and costs O(size))"

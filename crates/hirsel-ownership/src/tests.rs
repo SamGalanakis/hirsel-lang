@@ -1,3 +1,4 @@
+include!("tests/modules.rs");
 mod corpus;
 mod source_support;
 mod support;

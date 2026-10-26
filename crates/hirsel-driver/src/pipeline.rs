@@ -131,8 +131,23 @@ impl CheckerPhase for BodyAdapter {
         })
     }
 }
+#[path = "private_unique.rs"]
+mod private_unique;
 pub struct ModeAdapter;
 impl ModesPhase for ModeAdapter {
+    fn infers_private_unique(&self) -> bool {
+        true
+    }
+    fn infer_unique(
+        &self,
+        t: &hirsel_types::TypeInterner,
+        m: &hirsel_types::TypeMemo,
+        bodies: &[(Arc<TypedBody>, hirsel_types::SignatureRef)],
+        provider: &mut dyn SignatureProvider,
+    ) -> Result<Vec<(DefId, hirsel_types::UniqueInference)>, QueryError> {
+        private_unique::infer(self, t, m, bodies, provider)
+    }
+
     fn storage(
         &self,
         t: &hirsel_types::TypeInterner,
@@ -359,7 +374,7 @@ impl LoweringPhase for LowerAdapter {
                 )));
             }
         };
-        let value = lower_expression(
+        let mut value = lower_expression(
             t,
             analyzed,
             &comptime.staged,
@@ -368,6 +383,7 @@ impl LoweringPhase for LowerAdapter {
             None,
             &comptime.materialized,
         )?;
+        value.inferred_unique = signature.metadata.inferred_unique.clone();
         Ok(QueryOutput {
             value,
             diagnostics: vec![],

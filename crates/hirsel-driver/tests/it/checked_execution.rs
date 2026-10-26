@@ -1181,3 +1181,81 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         assert_eq!(printed(run(&mut engine, &[], true)), "released\none\n");
     });
 }
+#[test]
+fn a_forged_private_unique_result_still_traps_with_both_checkers_bypassed() {
+    with_compiler_stack(|| {
+        let source = r#"
+fn fresh() -> String { "fresh" }
+fn need(take text: unique String) {}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+    need(fresh())
+    Ok(())
+}
+"#;
+        let mut engine = accepted(source);
+        assert_eq!(printed(run(&mut engine, &[], true)), "");
+        let mut fresh = lowered(&mut engine, "fresh");
+        assert!(
+            fresh
+                .inferred_unique
+                .results
+                .contains(&hirsel_types::UniqueResultRow::Root)
+        );
+        // Replace the fresh result with a counted share of a live literal.
+        // Keep the result header and the caller's unique parameter unchanged.
+        let body = &mut fresh.bodies[0];
+        let mut count = 0;
+        for rvalue in &mut body.rvalues {
+            if let hirsel_tir::Rvalue::Constant(hirsel_tir::Constant::String(_)) = rvalue {
+                count += 1;
+            }
+        }
+        assert_eq!(count, 1);
+        let literal = body
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .find_map(|i| match i.kind {
+                hirsel_tir::InstructionKind::Assign { destination, value }
+                    if matches!(
+                        body.rvalues[value.0 as usize],
+                        hirsel_tir::Rvalue::Constant(hirsel_tir::Constant::String(_))
+                    ) =>
+                {
+                    Some(destination)
+                }
+                _ => None,
+            })
+            .unwrap();
+        // A second local keeps the original owner alive while the return
+        // receives a share. An ordinary return transfers its copy onward.
+        let local = hirsel_tir::LocalId(body.locals.len() as u32);
+        let mut kept = body.locals[body.places[literal.0 as usize].root.0 as usize].clone();
+        kept.storage = hirsel_tir::Storage::Local;
+        let place = hirsel_tir::PlaceId(body.places.len() as u32);
+        let mut kept_place = body.places[literal.0 as usize].clone();
+        kept_place.root = local;
+        body.locals.push(kept);
+        body.places.push(kept_place);
+        let value = hirsel_tir::RvalueId(body.rvalues.len() as u32);
+        body.rvalues
+            .push(hirsel_tir::Rvalue::Use(hirsel_tir::Operand {
+                place: literal,
+                usage: hirsel_types::UseKind::Copy,
+            }));
+        body.blocks[0].instructions.push(hirsel_tir::Instruction {
+            kind: hirsel_tir::InstructionKind::Assign {
+                destination: place,
+                value,
+            },
+            on_failure: hirsel_tir::CleanupId(0),
+            span: hirsel_span::Span::default(),
+        });
+        without_unique_locals(engine.types(), &mut fresh);
+        assert!(validator_rejects(&mut engine, &fresh));
+        assert_eq!(
+            trapped(run(&mut engine, &[fresh], true)),
+            TrapRule::UniqueShared
+        );
+    });
+}

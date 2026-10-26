@@ -1000,3 +1000,11 @@ creation rules as closure literals. J reconstructs the declaration from its lexi
 binding, checks crossing/authority bounds, and publishes a capture table and formal
 forwarding result. I checks its construction through the existing Capture operation;
 the lexical generic body's own frame remains checked at its declaration.
+
+
+Private helpers publish body-checked `UniqueSummary` evidence beside their declared
+signature. The engine settles each same-module call-graph SCC before freezing front
+headers. `FunctionType` stays declared, so indirect calls and generic inference cannot
+consume these bits. Ownership reuses the preservation proof and independently tracks
+result root and direct Result/Option/tuple payload evidence. V re-proves every published
+bit on the callee, and consumes peer bits only at direct calls in the same module.

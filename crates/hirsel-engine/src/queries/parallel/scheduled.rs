@@ -1312,6 +1312,9 @@ impl QueryEngine {
             self.materialize(definition)?;
         }
         self.register_specializations(definitions);
+        // Inference can materialize siblings and change private header facts.
+        // Settle them before capturing any immutable syntax, keys or receipts.
+        self.prepare_private_summaries();
         let anchors = Arc::new(crate::NativeRecordContext::capture(self));
         let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
         let declarations = self.frozen_declarations();
@@ -1463,6 +1466,7 @@ impl QueryEngine {
                 store: store.clone(),
             })),
             citations: OwnedSourceContext {
+                unique_failures: self.private_unique_failures.clone(),
                 sources: self.sources.clone(),
                 items,
                 declarations: self.declarations.observations(),

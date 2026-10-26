@@ -290,6 +290,46 @@ unique too), so `bufio.read_until(mut reader, mut stream, .., mut out, ..)` hand
 from a literal and unique elements unique, while a list copied first, or given an aliased
 element, stays aliased.
 
+A private function with a body, excluding `extern` declarations and `@test` entries,
+carries a body-checked uniqueness summary. For each `mut` parameter it records the
+`preserves_unique` promise that the body proves under the same entry and failure-exit
+rules as a written annotation. It also records unique evidence independently for the
+result root and each direct payload row of `Result`, `Option` and tuples. Every return
+must prove a recorded result row. Summaries are the greatest fixed point of each
+same-module call-graph component: begin with all candidate bits, re-prove the bodies,
+drop failed bits and repeat until stable.
+
+Only a direct call in the defining module uses this evidence. A function value keeps
+its declared header; callable variance and generic inference use that header too.
+Exported functions and calls across modules keep their declared contracts. H publishes
+inferred bits separately from callable types, and V independently re-proves each bit
+against the callee body, assuming its peers' published headers. A body change that loses
+a bit invalidates the helper's callers. A resulting caller diagnostic names the helper
+and labels the body site that lost the proof.
+
+```hirsel
+fn add(mut xs: List[u64]) { list.push(mut xs, 1) }
+fn code(n: u64) -> String { "x" }
+fn need(take xs: unique List[u64]) {}
+fn need_s(take s: unique String) {}
+pub fn main() {
+  let mut xs: unique List[u64] = []
+  add(mut xs)
+  need(take xs)
+  need_s(code(1))
+}
+```
+
+Both hand-offs check from their private helpers' bodies. Installing a counted share in
+`add` loses its preservation bit. A `pub add` in another module supplies no inferred
+promise, and calling `add` through `let f: fn(mut List[u64]) -> () = add` supplies none.
+A helper that installs a share before a possibly failing evaluation loses the bit even
+if it repairs the value afterwards. A producer returning a counted constant, such as
+`const NAME: String = "x"; fn code() -> String { NAME }`, has no unique-result evidence.
+In a recursive component, a share-installing member loses its bit and re-proof removes
+any dependent bits in its peers. These six cases remain rejected at a subsequent
+uniqueness demand, including when inferred bits are forged into TIR.
+
 A call is **parametric** when it directly calls a generic function whose owned result holds
 no counted content except values of type parameters it has no copying permission for
 ([GEN-1](generics.md#gen-1-bounds)). Such a body only moves those values, so the result
@@ -503,7 +543,9 @@ declaration cannot remove those bounds.
 
 ### MODE-7: Inference
 
-Modes inside bodies are inferred; modes on signatures are declared
+Modes inside bodies are inferred. Callable type rows and exported headers are declared;
+private helpers additionally carry the body-checked direct-call summaries of
+[MODE-2](#mode-2-uniqueness)
 ([LANG-6](language.md#lang-6-signatures)). Defaults: borrowed and `mut` parameters are
 local to themselves, taken parameters and results are global (no relation), everything is
 aliased, and closures are many.
