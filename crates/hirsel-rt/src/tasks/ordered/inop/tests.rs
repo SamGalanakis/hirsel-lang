@@ -120,7 +120,7 @@ unsafe extern "C" fn joiner(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64)
     unsafe { finish_value(ctx, result[1]) }
 }
 
-fn layout() -> crate::Layout {
+pub(super) fn layout() -> crate::Layout {
     crate::Layout {
         magic: crate::LAYOUT_MAGIC,
         version: crate::LAYOUT_VERSION,
@@ -482,7 +482,7 @@ fn retained_home_host_and_join_release_both_stacks_with_original_home_token() {
     retained_join_run(compact_sleeper, true, true);
 }
 
-unsafe extern "C" fn compact_sleeper(
+pub(super) unsafe extern "C" fn compact_sleeper(
     ctx: *mut TaskCtx,
     env: *mut Header,
     caller: u64,
