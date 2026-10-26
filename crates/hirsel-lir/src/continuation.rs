@@ -1535,6 +1535,9 @@ fn plan_unit(
                 ordered_await::plan(u, inputs.table, &storage, state)?;
             }
         }
+        for state in &mut states {
+            ordered::plan(u, inputs.table, state)?;
+        }
         Ok(((parameters, records), storage, states, cleanups))
     });
     let none = || (Fixed::default(), Vec::new(), Vec::new(), Vec::new());

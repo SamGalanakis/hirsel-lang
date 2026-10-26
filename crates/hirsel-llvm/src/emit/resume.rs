@@ -435,6 +435,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.frame_place(slot.offset, slot.layout).map(Some)
     }
 
+    pub(super) fn ordered_sleep(&self, call: CallId) -> bool {
+        self.resume
+            .as_ref()
+            .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
+            .and_then(|s| s.runtime.as_ref())
+            .is_some_and(|r| r.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedSleepUntil)
+    }
+
     pub(super) fn ordered_join_align(&self, call: CallId) -> Option<u64> {
         let runtime = self
             .resume

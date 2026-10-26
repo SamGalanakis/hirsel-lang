@@ -736,7 +736,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             self.ahead_barrier()?;
         }
-        let (function, name) = if let Some(align) = self.ordered_join_align(call) {
+        let (function, name) = if self.ordered_sleep(call) {
+            (
+                Some(self.runtime(RuntimeEntry::OrderedSleepUntil)?),
+                Some("hirsel_rt_v2_ordered_sleep_until".to_owned()),
+            )
+        } else if let Some(align) = self.ordered_join_align(call) {
             args.push(
                 self.module
                     .const_int(self.module.int_type(32), u128::from(align)),

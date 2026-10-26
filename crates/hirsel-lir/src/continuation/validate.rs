@@ -662,6 +662,10 @@ fn check_state(
         {
             return Err(ContinuationError::RuntimeOperation(id, n));
         }
+    } else if ordered::sleep(u, expected.call) {
+        if !ordered::check_sleep(u, table, state, runtime_base) {
+            return Err(ContinuationError::RuntimeOperation(id, n));
+        }
     } else if scope::check(u, table, units, state, runtime_base)? != end {
         return Err(ContinuationError::RuntimeOperation(id, n));
     }

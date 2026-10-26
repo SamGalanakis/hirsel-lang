@@ -1,5 +1,5 @@
 //! Retained result cells for the reviewed Ordered host entries. This is a
-//! storage proof only: it does not admit a helper, wrapper or physical leave.
+//! storage proof; only the independently checked sleep entry is admitted.
 use super::*;
 use crate::abi_types::CallableShape;
 
@@ -129,4 +129,65 @@ pub fn check_ordered_host_result(
         && claimed.offset == offset
         && claimed.bytes == bytes
         && claimed.align == align
+}
+
+pub(super) fn sleep(u: &LirUnit<Ready>, call: CallId) -> bool {
+    host_kind(u, call) == Some(RuntimeOpKind::OrderedSleepUntil)
+}
+
+pub(super) fn plan(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    state: &mut ResumeState,
+) -> Result<(), String> {
+    if !sleep(u, state.boundary.call) {
+        return Ok(());
+    }
+    if state.callee.is_some() || state.runtime.is_some() {
+        return Err("nested or entered frame at clock.sleep_until".into());
+    }
+    let result = ordered_host_result(u, table, state.boundary.call, state.bytes)
+        .ok_or("unproved clock.sleep_until result cell")?;
+    state.bytes = result
+        .offset
+        .checked_add(result.bytes)
+        .and_then(|n| n.checked_next_multiple_of(8))
+        .ok_or("clock.sleep_until frame overflow")?;
+    state.runtime = Some(RuntimeOpPlan {
+        kind: RuntimeOpKind::OrderedSleepUntil,
+        helper: "hirsel_rt_v2_ordered_sleep_until".into(),
+        results: vec![result],
+        scope: None,
+    });
+    state.action = ResumeAction::ResumeRuntime(state.boundary.call);
+    Ok(())
+}
+
+pub(super) fn check_sleep(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    state: &ResumeState,
+    after: u64,
+) -> bool {
+    let Some(runtime) = &state.runtime else {
+        return false;
+    };
+    // Reconstruct identity from the actual operation, never from the claimed
+    // runtime kind. The result-cell checker reconstructs the ABI and extent.
+    let Some(site) = u.tables.calls.get(state.boundary.call.index()) else {
+        return false;
+    };
+    let Callee::Operation(op) = site.callee else {
+        return false;
+    };
+    let Some(operation) = u.tables.operations.get(op.index()) else {
+        return false;
+    };
+    operation.definition.is_core("clock.sleep_until")
+        && state.callee.is_none()
+        && runtime.kind == RuntimeOpKind::OrderedSleepUntil
+        && runtime.helper == "hirsel_rt_v2_ordered_sleep_until"
+        && runtime.scope.is_none()
+        && runtime.results.len() == 1
+        && check_ordered_host_result(u, table, state.boundary.call, after, &runtime.results[0])
 }
