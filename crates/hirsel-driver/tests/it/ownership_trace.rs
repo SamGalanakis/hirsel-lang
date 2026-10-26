@@ -1604,3 +1604,31 @@ pub fn main() -> Result[(), ()] {
         hirsel_run_schema::exit::FAILED,
     );
 }
+
+#[test]
+#[ignore = "native: observes transferred and retained nested captures on both backends"]
+fn ownership_native_called_once_environment_drops_only_retained_nested_children_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+type Pair { left: Token, right: Token }
+fn select(pick: bool, take first: Pair, take second: Pair) -> Pair {
+    let captured: once fn() -> Pair = fn() -> Pair {
+        if pick { take second } else { take first }
+    }
+    captured()
+}
+pub fn main() -> Result[(), ()] {
+    let a = Pair(left: Token(value: 7u64), right: Token(value: 7u64))
+    let b = Pair(left: Token(value: 7u64), right: Token(value: 7u64))
+    let left = select(false, take a, take b)
+    let c = Pair(left: Token(value: 7u64), right: Token(value: 7u64))
+    let d = Pair(left: Token(value: 7u64), right: Token(value: 7u64))
+    let right = select(true, take c, take d)
+    Ok(())
+}
+"#,
+        8,
+    );
+}
