@@ -821,7 +821,13 @@ fn check_with_context<S: Stage>(
         ownership::check(&cx, &facts, &mut report);
         holes::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
-        if strict_scoped {
+        if strict_scoped
+            || scoped_transport::has_data_contract(&cx)
+            || unit
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, crate::ir::Inst::BorrowSealedRoot { .. }))
+        {
             scoped_transport::check(&cx, &facts, &mut report);
         }
         arena::check(&cx, &facts, &mut report);

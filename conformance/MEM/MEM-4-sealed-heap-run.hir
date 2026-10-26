@@ -11,7 +11,7 @@ pub fn main(t: Test) -> Result[(), ()] {
   let first = region.with(
     mut r,
     fn(root: List[u64]) -> u64 {
-      list.len(root)
+      root[0] + root[1]
     }
   )
   let second = region.with(
@@ -20,7 +20,7 @@ pub fn main(t: Test) -> Result[(), ()] {
       root[1]
     }
   )
-  failure.check(first == 2u64, Bounds())
+  failure.check(first == 23u64, Bounds())
   failure.check(second == 12u64, Bounds())
   Ok(())
 }

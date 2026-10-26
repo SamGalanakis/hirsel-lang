@@ -328,6 +328,46 @@ impl<'o> LayoutBuilder<'o> {
         Ok(id)
     }
 
+    /// Bind a higher-order actual to a body-proved invocation contract.
+    pub fn with_scoped_entry(
+        &mut self,
+        base: FnAbiId,
+        parameter: ParameterPath,
+        nested: FnAbiId,
+    ) -> Result<FnAbiId, LayoutError> {
+        let identity =
+            hirsel_lir::abi::scoped_entry_identity(self.ordinary_abi(nested)?, self.table());
+        let mut abi = self.ordinary_abi(base)?.clone();
+        let entry = ScopedEntry {
+            parameter,
+            identity,
+        };
+        if abi.scoped_entries.iter().any(|e| *e == entry) {
+            return Ok(base);
+        }
+        abi.scoped_entries
+            .retain(|e| e.parameter != entry.parameter);
+        abi.scoped_entries.push(entry);
+        abi.scoped_entries
+            .sort_by(|a, b| a.parameter.cmp(&b.parameter));
+        abi.key.callable = ContentHash::of_parts(
+            "hirsel.scoped-entry-abi.v1",
+            [
+                abi.key.callable.0.as_slice(),
+                hirsel_lir::snapshot::digest("scoped-entries-v1", &abi.scoped_entries)
+                    .0
+                    .as_slice(),
+            ],
+        );
+        if let Some(id) = self.ordinary_cached(abi.key.callable, abi.shape)? {
+            return Ok(id);
+        }
+        let id = FnAbiId(self.table().fn_abis.len() as u32);
+        self.abi_memo.insert((abi.key.callable, abi.shape), id);
+        self.table_mut_fn_abis().push(abi);
+        Ok(id)
+    }
+
     /// Add the constant caller-site carrier without changing the callable's language type.
     pub fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
         let mut abi = self.ordinary_abi(base)?.clone();

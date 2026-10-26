@@ -21,3 +21,4 @@ mod sealed_regions_33;
 mod support;
 mod unique_empty_builder_29;
 mod utf8_construction_model_16;
+mod sealed_data_entry_74;

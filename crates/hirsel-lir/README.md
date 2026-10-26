@@ -780,3 +780,13 @@ caller-owned interval record grows to `FOREIGN_SCOPE_BYTES` 40; and callback thu
 associations refer to checked immutable outputs. Only the configured local
 writable provider supplies `ProducedBytes`; imported content supplies integrity
 without production authority. The v3 directory reset has no old-format reader.
+
+LIR revision 61 allows `FnAbi.nonretaining` to select immutable data roots as
+well as callable content. Strict C seeds the selected content, follows its
+physical flow through slots, projections and SSA joins, and rejects retained
+results, owning captures and calls without a matching body-proved contract.
+Ordinary C also enforces these data claims and every sealed-root read.
+Numeric field reads and `SeqLen` produce independent bits. A `mut` data entry
+cannot claim this read-only contract. `ScopedEntry` binds the contract of the
+`region.with` callback; complete qualification checks its actual body and entry
+identity. These contracts grant no receipt provenance or storage ownership.

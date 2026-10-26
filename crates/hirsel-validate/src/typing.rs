@@ -57,6 +57,30 @@ pub(super) fn declaration_tables(
     GenericDeclarations::lexical(scopes)
 }
 
+// Additional data selectors strengthen an immutable entry. The independent
+// source flow checker proves every such claim from the body, including exits
+// and captures. Ordinary borrowed parameters acquire no contract implicitly.
+fn scoped_parameters_valid(
+    types: &TypeInterner,
+    function: &hirsel_types::FunctionType,
+    claimed: &[ScopedParameter],
+    expected: &[ScopedParameter],
+) -> bool {
+    claimed.windows(2).all(|w| w[0] < w[1])
+        && expected.iter().all(|p| claimed.contains(p))
+        && claimed.iter().all(|p| {
+            expected.contains(p)
+                || p.fields.is_empty()
+                    && function
+                        .parameters
+                        .get(p.parameter as usize)
+                        .is_some_and(|a| {
+                            a.passing == PassingMode::Borrow
+                                && !matches!(&types.row(a.ty).kind, TypeKind::Function(_))
+                        })
+        })
+}
+
 pub(super) fn operands(r: &Rvalue) -> Vec<&Operand> {
     match r {
         Rvalue::Use(o) | Rvalue::Unary { value: o, .. } => {
@@ -760,7 +784,7 @@ impl<'a> Checker<'a> {
                 fields: Vec::new(),
             })
             .collect();
-        if self.body.scoped_parameters != expected {
+        if !scoped_parameters_valid(self.t, f, &self.body.scoped_parameters, &expected) {
             self.error(ViolationKind::TypeMismatch {
                 entity: "scoped parameter contract",
             });
@@ -3490,7 +3514,7 @@ impl<'a> Checker<'a> {
                         fields: Vec::new(),
                     })
                     .collect();
-                if nested.scoped_parameters != expected {
+                if !scoped_parameters_valid(self.t, f, &nested.scoped_parameters, &expected) {
                     self.error(ViolationKind::TypeMismatch {
                         entity: "nested scoped parameter contract",
                     });

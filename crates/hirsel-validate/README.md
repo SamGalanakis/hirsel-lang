@@ -889,3 +889,10 @@ type-closure rows and violation count. This includes import and compile-time
 validation. Use a profiling build and `perf record --call-graph fp` for stacks;
 use `--timings=json` for aggregate thread CPU time. The opt-in wall clock rows
 identify heavy definitions; compare times only in an interleaved session.
+
+TIR revision 16 permits additional `ScopedParameter` selectors for immutable
+data parameters. V proves these nonretaining claims from executable body flow,
+including copies, deep uniqueness, captures and result paths. Contextual
+`region.with` literals select their root parameter. A taken or mutable data
+parameter cannot claim a read-only entry. Ordinary borrowed data parameters
+acquire no nonretaining promise implicitly.

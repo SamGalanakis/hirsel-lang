@@ -115,6 +115,7 @@ pub(super) fn check<S: Stage>(
                 _ => continue,
             };
             if S::KIND == crate::stage::StageKind::Ready
+                && !matches!(inst, Inst::BorrowSealedRoot { .. })
                 && unit.tables.seal_descriptors[shape.index()]
                     .bits_root(cx.layouts.0)
                     .is_err()

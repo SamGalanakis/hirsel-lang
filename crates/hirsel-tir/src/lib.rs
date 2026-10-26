@@ -24,7 +24,7 @@ use hirsel_types::{
 /// v12 binds the combined grant and logical invocation semantics.
 /// v13 adds compile-time source-event charges (CT-4).
 /// v14 publishes inferred private-helper uniqueness evidence.
-pub const TIR_VERSION: u32 = 15;
+pub const TIR_VERSION: u32 = 16;
 
 pub mod representation;
 
@@ -472,7 +472,9 @@ pub struct BorrowCursor {
     /// None infers anchors from the initial Borrow; Some names earlier values.
     pub cover: Option<Vec<PlaceId>>,
 }
-/// A declaration-derived scoped callable path, independent of its physical passing class.
+/// Invocation-bounded content selected at a borrowed entry. Callable selectors
+/// follow the declaration; additional immutable data selectors require a body
+/// proof by V. Neither kind grants ownership or authority.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ScopedParameter {
     pub parameter: u32,

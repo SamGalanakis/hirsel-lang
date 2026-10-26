@@ -52,6 +52,12 @@ pub trait Layouts {
         parameters: Vec<hirsel_lir::abi_types::ParameterPath>,
         captures: Vec<hirsel_lir::abi_types::ParameterPath>,
     ) -> Result<FnAbiId, LayoutError>;
+    fn with_scoped_entry(
+        &mut self,
+        base: FnAbiId,
+        parameter: hirsel_lir::abi_types::ParameterPath,
+        nested: FnAbiId,
+    ) -> Result<FnAbiId, LayoutError>;
     fn table(&self) -> &LayoutTable;
     /// Reconstruct a sealed root against these exact physical layouts and target.
     fn seal_descriptor(
@@ -99,6 +105,14 @@ impl Layouts for LayoutBuilder<'_> {
         captures: Vec<hirsel_lir::abi_types::ParameterPath>,
     ) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::with_scoped_contract(self, base, parameters, captures)
+    }
+    fn with_scoped_entry(
+        &mut self,
+        base: FnAbiId,
+        parameter: hirsel_lir::abi_types::ParameterPath,
+        nested: FnAbiId,
+    ) -> Result<FnAbiId, LayoutError> {
+        LayoutBuilder::with_scoped_entry(self, base, parameter, nested)
     }
     fn table(&self) -> &LayoutTable {
         LayoutBuilder::table(self)

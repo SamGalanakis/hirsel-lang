@@ -1850,20 +1850,26 @@ impl<'a> Validator<'a> {
         out
     }
 
-    fn scoped_path(&self, mut layout: LayoutId, fields: &[u32]) -> bool {
+    fn scoped_path_layout(&self, mut layout: LayoutId, fields: &[u32]) -> Option<LayoutId> {
         for field in fields {
             let Some(record) = self.table.layouts.get(layout.0 as usize) else {
-                return false;
+                return None;
             };
             let Some(next) = record.fields.iter().find(|f| f.ordinal == *field) else {
-                return false;
+                return None;
             };
             layout = next.layout;
         }
-        self.table
-            .layouts
-            .get(layout.0 as usize)
-            .is_some_and(|r| matches!(r.kind, LayoutKind::Callable { .. }))
+        self.table.layouts.get(layout.0 as usize).map(|_| layout)
+    }
+
+    fn scoped_path(&self, layout: LayoutId, fields: &[u32]) -> bool {
+        self.scoped_path_layout(layout, fields).is_some_and(|id| {
+            matches!(
+                self.table.layouts[id.0 as usize].kind,
+                LayoutKind::Callable { .. }
+            )
+        })
     }
 
     fn fn_abi(&mut self, id: FnAbiId, abi: &FnAbi) {
@@ -1880,8 +1886,10 @@ impl<'a> Validator<'a> {
             || !abi.nonretaining_captures.windows(2).all(|w| w[0] < w[1])
             || abi.nonretaining.iter().any(|p| {
                 abi.parameters.get(p.parameter as usize).is_none_or(|a| {
-                    a.convention == hirsel_core_contract::Passing::Take
-                        || !self.scoped_path(a.layout, &p.fields)
+                    self.scoped_path_layout(a.layout, &p.fields).is_none()
+                        || a.convention == hirsel_core_contract::Passing::Take
+                        || a.convention == hirsel_core_contract::Passing::Mut
+                            && !self.scoped_path(a.layout, &p.fields)
                 })
             })
         {

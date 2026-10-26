@@ -50,3 +50,4 @@ mod native_products_19;
 mod seal_descriptor_33;
 mod sealed_regions_33;
 mod receipt_closure_33;
+mod sealed_data_entry_74;

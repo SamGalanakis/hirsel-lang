@@ -22,8 +22,14 @@ fn join(to: &mut Paths, from: &Paths) -> bool {
     }
     changed
 }
-fn read(body: &Body, rows: &State, value: &Operand) -> Paths {
+fn read(t: &TypeInterner, body: &Body, rows: &State, value: &Operand) -> Paths {
     let p = &body.places[value.place.0 as usize];
+    if matches!(&t.row(p.ty).kind, TypeKind::Primitive(k)
+        if !matches!(k, hirsel_types::Primitive::Bytes | hirsel_types::Primitive::String))
+        || matches!(&t.row(p.ty).kind, TypeKind::Tuple(fields) if fields.is_empty())
+    {
+        return Paths::new();
+    }
     let path: Option<Vec<u32>> = p
         .projection
         .iter()
@@ -208,10 +214,12 @@ pub(super) fn check(
                         InstructionKind::Assign { destination, value } => {
                             let mut input = Paths::new();
                             match &body.rvalues[value.0 as usize] {
-                                Rvalue::Use(o) => input = read(body, &state, o),
+                                Rvalue::Use(o) | Rvalue::Unary { value: o, .. } => {
+                                    input = read(t, body, &state, o)
+                                }
                                 Rvalue::Construct { fields, .. } => {
                                     for field in fields {
-                                        let facts = read(body, &state, &field.value);
+                                        let facts = read(t, body, &state, &field.value);
                                         let embedded = facts
                                             .into_iter()
                                             .map(|(p, r)| {
@@ -241,7 +249,7 @@ pub(super) fn check(
                                         .enumerate()
                                         .filter(|(_, l)| l.storage == Storage::Capture);
                                     for ((i, _), capture) in locals.zip(captures) {
-                                        let facts = read(body, &state, capture);
+                                        let facts = read(t, body, &state, capture);
                                         for roots in facts.values() {
                                             input.entry(Vec::new()).or_default().extend(roots);
                                         }
@@ -264,6 +272,7 @@ pub(super) fn check(
                             ..
                         } => {
                             let old = read(
+                                t,
                                 body,
                                 &state,
                                 &Operand {
@@ -271,7 +280,7 @@ pub(super) fn check(
                                     usage: hirsel_types::UseKind::Borrow,
                                 },
                             );
-                            let input = read(body, &state, value);
+                            let input = read(t, body, &state, value);
                             write(body, &mut state, *destination, &input);
                             write(body, &mut state, *displaced, &old);
                         }
@@ -353,17 +362,19 @@ pub(super) fn check(
             } => {
                 destination = Some(*to);
                 match &body.rvalues[value.0 as usize] {
-                    Rvalue::Use(o) => retained = read(body, state, o),
+                    Rvalue::Use(o) | Rvalue::Unary { value: o, .. } => {
+                        retained = read(t, body, state, o)
+                    }
                     Rvalue::Construct { fields, .. } => {
                         for field in fields {
-                            join(&mut retained, &read(body, state, &field.value));
+                            join(&mut retained, &read(t, body, state, &field.value));
                         }
                     }
                     Rvalue::Closure {
                         captures, context, ..
                     } => {
                         for capture in captures {
-                            join(&mut retained, &read(body, state, capture));
+                            join(&mut retained, &read(t, body, state, capture));
                         }
                         if matches!(
                             context,
@@ -391,7 +402,7 @@ pub(super) fn check(
                 ..
             } => {
                 destination = Some(*to);
-                retained = read(body, state, value);
+                retained = read(t, body, state, value);
             }
             _ => {}
         }
@@ -433,7 +444,10 @@ pub(super) fn check(
                         place: *scope,
                         usage: hirsel_types::UseKind::Borrow,
                     };
-                    if read(body, &state, &value).values().any(|r| !r.is_empty()) {
+                    if read(t, body, &state, &value)
+                        .values()
+                        .any(|r| !r.is_empty())
+                    {
                         errors.push(Violation {
                             body: Some(BodyId(b as u32)),
                             block: Some(BlockId(block as u32)),
@@ -465,13 +479,31 @@ pub(super) fn check(
             };
             match &bb.terminator {
                 Terminator::Return { value, .. } => {
-                    if read(body, state, value).values().any(|r| !r.is_empty()) {
+                    if read(t, body, state, value).values().any(|r| !r.is_empty()) {
                         error(&mut errors, None, "scoped nonretaining result");
                     }
                 }
                 Terminator::Call {
                     callee, arguments, ..
                 } => {
+                    if let Callee::Indirect { value, .. } = callee {
+                        let retains_data =
+                            read(t, body, state, value)
+                                .values()
+                                .flatten()
+                                .any(|&(b, local)| {
+                                    !matches!(
+                                        &t.row(
+                                            definition.bodies[b as usize].locals[local as usize].ty
+                                        )
+                                        .kind,
+                                        TypeKind::Function(_)
+                                    )
+                                });
+                        if retains_data {
+                            error(&mut errors, None, "scoped data callable environment");
+                        }
+                    }
                     // Inspect the original declaration before any generic substitution.
                     let function = match callee {
                         Callee::Definition { path, .. } => signatures
@@ -488,23 +520,31 @@ pub(super) fn check(
                         }
                     };
                     for a in arguments {
-                        if read(body, state, &a.value).values().all(BTreeSet::is_empty) {
+                        if read(t, body, state, &a.value)
+                            .values()
+                            .all(BTreeSet::is_empty)
+                        {
                             continue;
                         }
-                        let allowed = function
-                            .as_ref()
-                            .and_then(|f| f.parameters.get(a.parameter.0 as usize))
-                            .is_some_and(|p| {
-                                p.passing != PassingMode::Take
-                                    && matches!(
-                                        t.get(p.ty).map(|t| &t.kind),
-                                        Some(TypeKind::Function(_))
-                                    )
-                            });
+                        let data_observer = matches!(callee, Callee::Definition { path, .. }
+                            if ["list.len", "array.len", "bytes.len", "string.byte_len"].iter().any(|name| path.is_core(name)))
+                            && a.parameter.0 == 0
+                            && a.value.usage == hirsel_types::UseKind::Borrow;
+                        let allowed = data_observer
+                            || function
+                                .as_ref()
+                                .and_then(|f| f.parameters.get(a.parameter.0 as usize))
+                                .is_some_and(|p| {
+                                    p.passing != PassingMode::Take
+                                        && matches!(
+                                            t.get(p.ty).map(|t| &t.kind),
+                                            Some(TypeKind::Function(_))
+                                        )
+                                });
                         if !allowed {
                             error(&mut errors, None, "scoped may-retain source call");
                         }
-                        if allowed {
+                        if allowed && !data_observer {
                             let expected =
                                 function.as_ref().unwrap().parameters[a.parameter.0 as usize].ty;
                             let actual = body.places[a.value.place.0 as usize].ty;

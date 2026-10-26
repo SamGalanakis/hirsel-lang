@@ -282,22 +282,11 @@ fn ready_sealed_bits_33_refuses_heap_roots_before_emission() {
         ),
         "original pointer-free root",
     );
-    let (t, declarations, _, _, _) = root_view_fixture(ViewRoot::Heap);
-    let (unit, table, manifest) = t.finish();
-    sealed_rejection(
-        &checked_raw(
-            unit.into_stage::<hirsel_lir::stage::Ready>(),
-            &table,
-            &manifest,
-            &declarations,
-        ),
-        "original pointer-free root",
-    );
 }
 
 #[test]
 fn ready_sealed_bits_33_root_view_keeps_exclusive_owner_correspondence() {
-    for kind in [ViewRoot::Unit, ViewRoot::Scalar] {
+    for kind in [ViewRoot::Unit, ViewRoot::Scalar, ViewRoot::Heap] {
         let (t, declarations, _, _, other_owner) = root_view_fixture(kind);
         let (unit, table, manifest) = t.finish();
         let mut unit = unit.into_stage::<hirsel_lir::stage::Ready>();
@@ -1121,7 +1110,7 @@ fn sealed_root_scalar_can_outlive_the_loan_but_a_heap_view_cannot_escape() {
             discharge: None,
             memo: Default::default(),
         };
-        let errors = hirsel_lir::validate::check_scoped_transport(&unit, &inputs);
+        let errors = hirsel_lir::validate::check(&unit, &inputs);
         match kind {
             ViewRoot::Scalar => {
                 assert!(errors.is_empty(), "{errors:?}");

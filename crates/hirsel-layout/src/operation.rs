@@ -399,6 +399,31 @@ impl OperationRegistry {
         } else {
             abi
         };
+        let abi = if materialized && signature.definition.path().is_core("region.with") {
+            let TypeKind::Function(function) = &types.row(callable).kind else {
+                unreachable!()
+            };
+            let nested =
+                builder.fn_abi(types, function.parameters[1].ty, CallableShape::Closure)?;
+            let nested = builder.with_scoped_contract(
+                nested,
+                vec![hirsel_lir::abi_types::ParameterPath {
+                    parameter: 0,
+                    fields: Vec::new(),
+                }],
+                Vec::new(),
+            )?;
+            builder.with_scoped_entry(
+                abi,
+                hirsel_lir::abi_types::ParameterPath {
+                    parameter: 1,
+                    fields: Vec::new(),
+                },
+                nested,
+            )?
+        } else {
+            abi
+        };
         let abi = if materialized || signature.metadata.track_caller {
             builder.with_caller_site(abi)?
         } else {

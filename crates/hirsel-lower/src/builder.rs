@@ -237,6 +237,22 @@ impl<'a, 'b> Builder<'a, 'b> {
                 Self::binding_origin(decisions.lexical, b.owner, &b.binding);
             this.bindings.push((b.owner, b.binding, place));
         }
+        if let NameSite::Expression(literal) = owner {
+            let reader = input.checked.calls.iter().any(|call| {
+                matches!(&call.target, hirsel_types::CallTarget::Definition(path) if path.is_core("region.with"))
+                    && call.arguments.iter().any(|a| a.expression == literal
+                        && a.parameter.as_ref().is_some_and(|(p, _)| *p == 1))
+            });
+            if reader && !this.body.scoped_parameters.iter().any(|p| p.parameter == 0) {
+                this.body.scoped_parameters.insert(
+                    0,
+                    ScopedParameter {
+                        parameter: 0,
+                        fields: Vec::new(),
+                    },
+                );
+            }
+        }
         // H's implicit finalizer self is a resolver local, but the runtime
         // supplies it at entry just like a borrowed parameter. Consume the
         // producer row rather than assigning a new resolver identity or type.

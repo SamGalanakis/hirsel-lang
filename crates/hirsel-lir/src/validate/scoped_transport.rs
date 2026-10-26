@@ -173,10 +173,45 @@ fn reaching<S: Stage>(cx: &Cx<'_, S>, facts: &Facts) -> BTreeMap<Site, Vec<BTree
     before
 }
 
+/// Data entry claims are new storage-safety obligations. Ordinary validation
+/// must prove them too; legacy callable qualification remains opt-in.
+pub(super) fn has_data_contract<S: Stage>(cx: &Cx<'_, S>) -> bool {
+    let abi = &cx.layouts.0.fn_abis[cx.unit.header.abi.0 as usize];
+    [
+        (&abi.nonretaining, &cx.unit.parameters),
+        (&abi.nonretaining_captures, &cx.unit.captures),
+    ]
+    .into_iter()
+    .any(|(paths, values)| {
+        paths.iter().any(|p| {
+            let selected = values
+                .get(p.parameter as usize)
+                .map(|v| cx.value_layout(*v))
+                .and_then(|layout| {
+                    p.fields.iter().try_fold(layout, |layout, field| {
+                        cx.layouts
+                            .get(layout)?
+                            .fields
+                            .iter()
+                            .find(|f| f.ordinal == *field)
+                            .map(|f| f.layout)
+                    })
+                });
+            !selected.is_some_and(|layout| {
+                matches!(
+                    cx.layouts.get(layout).map(|r| &r.kind),
+                    Some(crate::layout_types::LayoutKind::Callable { .. })
+                )
+            })
+        })
+    })
+}
+
 pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report) {
     let u = cx.unit;
     let abi = &cx.layouts.0.fn_abis[u.header.abi.0 as usize];
     let mut n = vec![Paths::new(); u.values.len()];
+    let mut callable_origins = BTreeSet::new();
     for (paths, values) in [
         (&abi.nonretaining, &u.parameters),
         (&abi.nonretaining_captures, &u.captures),
@@ -196,21 +231,27 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                     };
                     layout = next.layout;
                     true
-                }) && cx
-                    .layouts
-                    .0
-                    .layouts
-                    .get(layout.0 as usize)
-                    .is_some_and(|r| {
-                        matches!(r.kind, crate::layout_types::LayoutKind::Callable { .. })
-                    });
+                }) && cx.layouts.0.layouts.get(layout.0 as usize).is_some();
+                if valid
+                    && matches!(
+                        cx.layouts.0.layouts[layout.0 as usize].kind,
+                        crate::layout_types::LayoutKind::Callable { .. }
+                    )
+                {
+                    callable_origins.insert(v);
+                }
                 if !valid {
                     report.add(
                         Site::UNIT,
                         K::Type("scoped contract capture/parameter path"),
                     );
                 }
-                n[v.index()].entry(fields(p)).or_default().insert(v);
+                if !(cx.repr(v) == ValueRepr::Unit
+                    || matches!(cx.repr(v), ValueRepr::Scalar(k)
+                    if k != crate::layout_types::ScalarKind::Pointer))
+                {
+                    n[v.index()].entry(fields(p)).or_default().insert(v);
+                }
             } else {
                 report.add(Site::UNIT, K::Type("scoped contract ordinal"));
             }
@@ -221,6 +262,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
             Inst::Closure {
                 result, closure, ..
             } if u.tables.closures[closure.index()].scoped => {
+                callable_origins.insert(result);
                 n[result.index()]
                     .entry(Vec::new())
                     .or_default()
@@ -236,6 +278,9 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 // elsewhere in the unit; seed them before the empty fast path.
                 // Unit/scalar reads copy bits instead of retaining owner storage;
                 // ownership/sealed validation still checks their exclusive loan.
+                if cx.repr(result) == ValueRepr::Callable {
+                    callable_origins.insert(owner);
+                }
                 let roots = n[result.index()].entry(Vec::new()).or_default();
                 roots.scoped.insert(owner);
                 roots.referents.insert(loan);
@@ -304,10 +349,16 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                         ..
                     } => {
                         let path = &facts.addresses[address.index()].as_ref().unwrap().path;
-                        union(
-                            &mut n[result.index()],
-                            &project(&old[reaching.index()], path),
-                        );
+                        let mut projected = project(&old[reaching.index()], path);
+                        if cx.repr(result) == ValueRepr::Unit
+                            || matches!(cx.repr(result), ValueRepr::Scalar(k)
+                                if k != crate::layout_types::ScalarKind::Pointer)
+                        {
+                            for origins in projected.values_mut() {
+                                origins.scoped.retain(|v| callable_origins.contains(v));
+                            }
+                        }
+                        union(&mut n[result.index()], &projected);
                     }
                     Inst::Weaken { result, value }
                     | Inst::Recast { result, value }
@@ -490,6 +541,17 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 | Inst::EndOrigin { .. }
                 | Inst::Drop { .. }
                 | Inst::Release { .. } => {}
+                Inst::SeqLen { value, .. } => {
+                    // The length reads storage without retaining it. Callable
+                    // origins cannot be reinterpreted as data observations.
+                    if n[value.index()]
+                        .values()
+                        .flat_map(|r| &r.scoped)
+                        .any(|v| callable_origins.contains(v))
+                    {
+                        reject(report, at, value, "callable used as data");
+                    }
+                }
                 Inst::Store { address, value, .. } | Inst::Replace { address, value, .. } => {
                     let a = facts.addresses[address.index()].as_ref().unwrap();
                     let local = matches!(a.root, Root::Slot(s) if !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_) | SlotKind::Capture(_)))
@@ -588,6 +650,21 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
             Terminator::Call { call, .. } => {
                 let call = &u.tables.calls[call.index()];
                 let callee = &cx.layouts.0.fn_abis[call.abi.0 as usize];
+                let environment = call.callee.value();
+                if let Some(v) = environment {
+                    if n[v.index()]
+                        .values()
+                        .flat_map(|r| &r.scoped)
+                        .any(|origin| !callable_origins.contains(origin))
+                    {
+                        reject(
+                            report,
+                            at,
+                            v,
+                            "data-root callable environment lacks contract",
+                        );
+                    }
+                }
                 for a in call.arguments.get(&u.pools.call_arguments).unwrap_or(&[]) {
                     match a.value {
                         ArgumentValue::Value(v) => {

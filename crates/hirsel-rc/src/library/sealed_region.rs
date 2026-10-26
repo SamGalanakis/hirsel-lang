@@ -23,6 +23,17 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
         .layouts
         .fn_abi(cx.types, callback, CallableShape::Closure)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
+    let abi = cx
+        .layouts
+        .with_scoped_contract(
+            abi,
+            vec![hirsel_lir::abi_types::ParameterPath {
+                parameter: 0,
+                fields: Vec::new(),
+            }],
+            Vec::new(),
+        )
+        .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
     let native =
         hirsel_layout::operation::collect_arguments(cx.types, &[GenericArgument::Type(root)])
             .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
@@ -33,14 +44,6 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
         .layouts
         .seal_descriptor(&cx.program.operation_registry(), native)
         .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
-    if !matches!(
-        cx.record(descriptor.root_layout).kind,
-        LayoutKind::Unit | LayoutKind::Scalar(_)
-    ) {
-        return cx.unsupported(
-            "sealed payload callback needs an independently qualified data-root entry",
-        );
-    }
     let mut b = Body::new(cx)?;
     let [owner, callback] = b.parameters[..] else {
         return Err(PassError::Malformed("region.with parameters".into()));

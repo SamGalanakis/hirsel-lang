@@ -56,10 +56,14 @@ impl OperationDeclarations for ReadDeclarations {
     }
 }
 
-fn check_read_body(source: &str, root_kind: TypeKind, root_type: NativeType) {
+fn check_read_body(
+    source: &str,
+    root_kind: impl FnOnce(&hirsel_types::TypeInterner) -> TypeKind,
+    root_type: NativeType,
+) {
     let program = compile(source);
     let types = &program.types;
-    let root = types.intern(Type::with_kind(root_kind));
+    let root = types.intern(Type::with_kind(root_kind(types)));
     let result = types.intern(Type::with_kind(TypeKind::Primitive(
         hirsel_types::Primitive::U64,
     )));
@@ -123,15 +127,20 @@ fn check_read_body(source: &str, root_kind: TypeKind, root_type: NativeType) {
     hirsel_lir::validate::ScopedQualification::new(&target, &manifest, &declarations, None)
         .qualify(std::slice::from_ref(&unit), &table)
         .expect("linked callback contract");
-    let checked = hirsel_lir::validate::validate(unit, &inputs);
-    assert!(checked.is_ok(), "{:?}", checked.err().map(|e| e.violations));
+    hirsel_lir::validate::validate(unit.clone(), &inputs)
+        .unwrap_or_else(|e| panic!("Value C: {:?}", e.violations));
+    let placed = hirsel_rc::placement::place(unit, &table, &Default::default()).unwrap();
+    let counted = hirsel_rc::insert::insert(placed, &table, &Default::default()).unwrap();
+    let ready = hirsel_rc::ready::ready(counted, &table, &Default::default()).unwrap();
+    hirsel_lir::validate::validate_ready(ready, &inputs)
+        .unwrap_or_else(|e| panic!("Ready C: {:?}", e.violations));
 }
 
 #[test]
 fn unregistered_region_with_unit_body_validates_its_owner_and_callback_loans() {
     check_read_body(
         include_str!("../../../../conformance/MEM/MEM-4-sealed-empty-unit-run.hir"),
-        TypeKind::Tuple(vec![].into()),
+        |_| TypeKind::Tuple(vec![].into()),
         NativeType::Tuple(vec![]),
     );
 }
@@ -140,7 +149,7 @@ fn unregistered_region_with_unit_body_validates_its_owner_and_callback_loans() {
 fn unregistered_region_with_scalar_body_validates_its_owner_and_callback_loans() {
     check_read_body(
         include_str!("../../../../conformance/MEM/MEM-4-sealed-scalar-zero-run.hir"),
-        TypeKind::Primitive(hirsel_types::Primitive::U64),
+        |_| TypeKind::Primitive(hirsel_types::Primitive::U64),
         NativeType::Primitive(hirsel_lir::operation::Primitive::U64),
     );
 }
@@ -258,4 +267,104 @@ fn unregistered_arena_seal_scalar_body_preserves_consumable_grant_entry() {
         TypeKind::Primitive(hirsel_types::Primitive::U64),
         NativeType::Primitive(hirsel_lir::operation::Primitive::U64),
     );
+}
+
+#[test]
+fn unregistered_region_with_list_body_reaches_ready_under_its_owner_loan() {
+    check_read_body(
+        "pub fn read(mut r: Region[List[u64]]) -> u64 {region.with(mut r, fn(root: List[u64]) -> u64 {list.len(root)})}",
+        |types| {
+            let element = types.intern(Type::with_kind(TypeKind::Primitive(
+                hirsel_types::Primitive::U64,
+            )));
+            TypeKind::Builtin {
+                kind: hirsel_types::BuiltinType::List,
+                arguments: vec![GenericArgument::Type(element)].into(),
+            }
+        },
+        NativeType::Builtin(
+            hirsel_lir::operation::BuiltinType::List,
+            vec![OperationArgument::Type(NativeType::Primitive(
+                hirsel_lir::operation::Primitive::U64,
+            ))],
+        ),
+    );
+}
+
+#[test]
+fn sealed_data_callback_sum_is_independently_proved_by_v_and_c() {
+    let program = compile(
+        "pub fn read(mut r: Region[List[u64]]) -> u64 {region.with(mut r, fn(root: List[u64]) -> u64 {root[0] + root[1]})}",
+    );
+    let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
+    for (path, signature) in &program.signatures {
+        signatures.insert(hirsel_syntax::DefId::intern(path), (**signature).clone());
+    }
+    let definition = &program.definitions[&crate::rc_support::path("read")];
+    let proof = hirsel_validate::qualify_scoped_transport(
+        definition,
+        &program.types,
+        &signatures,
+        &mut vec![],
+    );
+    assert!(proof.violations.is_empty(), "V: {:?}", proof.violations);
+    let target = target();
+    let mut layouts = LayoutBuilder::new(&target, &program.owners);
+    layouts.prepare_native_controls();
+    let mut instances = hirsel_rc::instance::expand(&program, &mut layouts).unwrap();
+    let id = instances
+        .ids()
+        .find(|id| {
+            matches!(
+                instances.roles[id.index()],
+                hirsel_rc::instance::InstanceRole::Closure { .. }
+            )
+        })
+        .expect("source callback");
+    let imported =
+        hirsel_rc::import::import_instance(&program, &mut instances, id, None, &mut layouts)
+            .unwrap();
+    assert!(imported.required.is_empty(), "reader only observes bits");
+    let table = layouts.finish();
+    let abi = &table.fn_abis[imported.unit.header.abi.0 as usize];
+    assert_eq!(
+        abi.nonretaining,
+        [hirsel_lir::abi_types::ParameterPath {
+            parameter: 0,
+            fields: vec![]
+        }]
+    );
+    let manifest = manifest(&program);
+    let mut declarations = program.operation_registry();
+    let selected = hirsel_lir::ir::Symbol {
+        kind: hirsel_lir::ir::SymbolKind::Function,
+        definition: imported.unit.header.definition.clone(),
+        instance: Some(imported.unit.header.instance),
+    };
+    let evidence = hirsel_rc::invocations::bind_source(
+        definition,
+        declarations.invocations[definition.path.path()].clone(),
+        &selected,
+        instances.view(id).body,
+    )
+    .unwrap();
+    declarations
+        .invocations
+        .insert(evidence.body.definition.clone(), evidence.invocations);
+    declarations.invocation_bodies.push(evidence.body);
+    let inputs = hirsel_lir::validate::Inputs {
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &declarations,
+        discharge: None,
+        memo: Default::default(),
+    };
+    hirsel_lir::validate::qualify_scoped_transport(std::slice::from_ref(&imported.unit), &inputs)
+        .expect("C proves callback body");
+    let placed = hirsel_rc::placement::place(imported.unit, &table, &Default::default()).unwrap();
+    let counted = hirsel_rc::insert::insert(placed, &table, &Default::default()).unwrap();
+    let ready = hirsel_rc::ready::ready(counted, &table, &Default::default()).unwrap();
+    hirsel_lir::validate::qualify_scoped_transport(&[ready], &inputs)
+        .expect("Ready C proves callback body");
 }
