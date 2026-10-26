@@ -1040,13 +1040,28 @@ fn a_binding_introduced_before_a_loop_continues_across_its_backedge() {
             })
             .map(|(index, _)| index)
             .unwrap();
+        let hirsel_tir::InstructionKind::Charge(event) = body.blocks[latch].instructions[0].kind
+        else {
+            panic!("lowering must charge before entering the loop body");
+        };
+        assert_eq!(event.kind, hirsel_tir::SourceEventKind::Iteration);
+        // Moving the charge behind a rebinding is independently invalid (CT-4).
         body.blocks[latch].instructions.insert(0, rebind);
+        assert_eq!(
+            kinds(&forged, &signatures),
+            [ViolationKind::WrongKind {
+                entity: "charge placement",
+                index: event.source,
+            }]
+        );
+        // Keep the charge first so the forged rebinding reaches PROV-1.
+        forged.bodies[0].blocks[latch].instructions.swap(0, 1);
+        let violations = kinds(&forged, &signatures);
         assert!(
-            kinds(&forged, &signatures)
+            violations
                 .iter()
                 .any(|kind| matches!(kind, ViolationKind::InvalidOrigin(_))),
-            "{:?}",
-            kinds(&forged, &signatures)
+            "{violations:?}"
         );
     });
 }

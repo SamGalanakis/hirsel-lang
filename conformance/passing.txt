@@ -911,6 +911,7 @@ conformance/CT/CT-3-shape-record-run.hir
 conformance/CT/CT-3-shape-runtime-bad.hir
 conformance/CT/CT-3-shape-runtime-ok.hir
 conformance/CT/CT-3-shape-variant-run.hir
+conformance/CT/CT-4-loop-entry-charge-56-run.hir
 conformance/CT/CT-4-mutual-cycle-bad.hir
 conformance/CT/CT-4-mutual-cycle-ok.hir
 conformance/CT/CT-4-self-cycle-bad.hir

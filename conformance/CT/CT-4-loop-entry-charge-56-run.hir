@@ -1,0 +1,85 @@
+// rule: CT-4
+// expect: run
+// Loop-entry charges precede rebinding and mechanical incoming loan ends.
+type R {
+  k: u64,
+}
+
+fn make(r: R) -> Option[u8 of r] {
+  None
+}
+
+fn inspect(r: R, p: Option[u8 of r]) -> u64 {
+  r.k
+}
+
+fn replaced(take r0: R, n: u64) -> u64 {
+  let mut r = take r0
+  let mut i = 0u64
+  while i < n {
+    r = R(k: i)
+    i += 1u64
+  }
+  inspect(r, make(r))
+}
+
+fn written(take r0: R, n: u64) -> u64 {
+  let mut r = take r0
+  for i in 0u64..n {
+    r.k = i
+  }
+  inspect(r, make(r))
+}
+
+fn reassigned(take r0: R) -> u64 {
+  let mut r = take r0
+  let mut k = true
+  while k {
+    r = r
+    k = false
+  }
+  inspect(r, make(r))
+}
+
+fn introduced(n: u64) -> u64 {
+  let mut r = R(k: 0u64)
+  let ns: List[u64] = [1u64, n]
+  for i in ns {
+    r = R(k: i)
+  }
+  inspect(r, make(r))
+}
+
+fn view(x: Bytes) -> Bytes in x {
+  copy x
+}
+
+fn bump(mut x: Bytes) {
+  x = b"changed"
+}
+
+fn loan_ends(x: Bytes, y: Bytes) -> Bytes in {x, y} {
+  let mut slot = view(x)
+  let mut n = 0u32
+  while n < 3u32 {
+    slot = view(y)
+    n += 1u32
+  }
+  slot
+}
+
+pub fn main() -> Result[(), ()] {
+  let mut x = b"x"
+  let mut y = b"y"
+  let received = loan_ends(x, y)
+  let correct = received == b"y"
+  bump(mut y)
+  if replaced(R(k: 9u64), 3u64) == 2u64 && replaced(R(k: 9u64), 0u64) == 9u64 && written(
+    R(k: 9u64),
+    3u64
+  ) == 2u64 && reassigned(R(k: 7u64)) == 7u64 && introduced(4u64) == 4u64 && correct && y == b"changed" {
+    Ok(())
+  } else {
+    Error(())
+  }
+}

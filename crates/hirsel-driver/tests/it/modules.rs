@@ -244,3 +244,4 @@ mod source_index_loader;
 mod ctor_tail;
 mod ordinary_lower;
 mod isolate_resume_56;
+mod charge_placement_56;
