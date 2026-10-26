@@ -338,6 +338,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
         "$intrinsic.SharedThawTurn" => Some("hirsel_rt_v2_thaw_turn".into()),
         // `task.isolate`'s compiled body reads its caught chain through these (`isolate.rs`).
         "$intrinsic.IsolateBegin" => Some("hirsel_rt_v2_isolate_begin".into()),
+        "$intrinsic.IsolateEnd" => Some("hirsel_rt_v2_isolate_end".into()),
         "$intrinsic.IsolateCount" => Some("hirsel_rt_v2_isolate_count".into()),
         "$intrinsic.IsolateKind" => Some("hirsel_rt_v2_isolate_kind".into()),
         "$intrinsic.IsolateRule" => Some("hirsel_rt_v2_isolate_rule".into()),
@@ -937,6 +938,13 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
         symbol: "hirsel_rt_v2_isolate_begin",
         destination: false,
         result: Some((8, 8)),
+        parameters: &[Physical::Pointer],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_isolate_end",
+        destination: false,
+        result: None,
         parameters: &[Physical::Pointer],
     },
     AbiExport {
@@ -2569,6 +2577,7 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.MappedView",
     "$intrinsic.MappedCheck",
     "$intrinsic.IsolateBegin",
+    "$intrinsic.IsolateEnd",
     "$intrinsic.IsolateCount",
     "$intrinsic.IsolateKind",
     "$intrinsic.IsolateRule",

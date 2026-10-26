@@ -112,6 +112,7 @@ pub(super) struct Task {
     /// Per failure, the spawn path of the child it came from (None: this task's own).
     spawns: Vec<Option<Vec<u32>>>,
     unanchored: std::collections::BTreeSet<usize>,
+    pub(super) isolations: Vec<super::isolate::Invocation>,
     state: State,
     scope: Option<u32>,
     pub(super) path: Vec<u32>,
@@ -148,6 +149,7 @@ impl Task {
             failures: Vec::new(),
             spawns: Vec::new(),
             unanchored: Default::default(),
+            isolations: Vec::new(),
             state: State::Ready,
             scope,
             path,
@@ -198,8 +200,6 @@ pub(super) struct Tasks {
     switch: Option<(u32, bool)>,
     /// The running task's spawn path per failure (`Task::spawns` while it runs).
     spawns: Vec<Option<Vec<u32>>>,
-    /// The chain the last `task.isolate` caught, which its body reads.
-    pub(super) isolated: Vec<(ObservedFailure, Vec<u32>)>,
     /// Each task's suspended operation.
     pub(super) suspended: std::collections::BTreeMap<u32, Suspended>,
     /// The live scopes' deadlines that have not fired, as (deadline, scope): by deadline, ties
@@ -259,6 +259,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         "$intrinsic.AtomicStore",
         "$intrinsic.SharedThawTurn",
         "$intrinsic.IsolateBegin",
+        "$intrinsic.IsolateEnd",
         "$intrinsic.IsolateCount",
         "$intrinsic.IsolateKind",
         "$intrinsic.IsolateRule",
@@ -282,7 +283,6 @@ impl Tasks {
             parked: Vec::new(),
             channels: Default::default(),
             sync: Default::default(),
-            isolated: Vec::new(),
             suspended: Default::default(),
             armed: Default::default(),
             switch: None,

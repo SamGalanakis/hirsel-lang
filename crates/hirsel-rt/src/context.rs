@@ -217,6 +217,8 @@ pub struct TaskCtx {
     /// A compact frame the shared dispatcher owns off any stack, between its
     /// save and its activation (`crate::continuation::Compact`).
     pub(crate) compact: Option<Box<crate::continuation::Compact>>,
+    /// LIFO catches owned by their invocation, including stackful wrappers.
+    pub(crate) isolations: crate::isolate::Invocations,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -472,6 +474,7 @@ impl TaskCtx {
             frozen: Vec::new(),
             roots: Default::default(),
             isolated: Vec::new(),
+            isolations: Default::default(),
             foreign: crate::foreign::ForeignScope::NONE,
             callback_permits: 0,
             callback_depth: 0,

@@ -33,6 +33,7 @@ const KINDS: u32 = 5;
 
 pub(super) struct Entries {
     begin: Intrinsic,
+    end: Intrinsic,
     count: Intrinsic,
     kind: Intrinsic,
     rule: Intrinsic,
@@ -81,18 +82,7 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         .ok_or_else(|| PassError::Malformed("task.isolate's Result has no error".into()))?;
     let shape = shape(&b, failure)?;
     let tasks = b.read_bits(tasks.address)?;
-    let propagate = b.failure(None);
-    let callee = operation(&mut b, &entries.begin);
-    let start = invoke(
-        &mut b,
-        callee,
-        entries.begin.abi,
-        vec![argument(0, Passing::Borrow, tasks)],
-        &[],
-        propagate,
-        BlockKind::Body,
-    )
-    .ok_or_else(|| PassError::Malformed("IsolateBegin returns a count".into()))?;
+    let start = begin(&mut b, &entries, tasks)?;
     // The callable dies with this frame on both outcomes.
     let f = b.take(body.address)?;
     let (f_slot, f_address) = local(&mut b, f)?;
@@ -145,12 +135,12 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         },
     };
     let value = variant(&mut b, returned, "Result", RESULT_OK, &ok);
-    b.ret(Some(value));
+    returning(&mut b, &entries, tasks, value)?;
 
     b.at(caught);
     let failure = chain(&mut b, &entries, &shape, tasks)?;
     let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[failure]);
-    b.ret(Some(value));
+    returning(&mut b, &entries, tasks, value)?;
     Ok(b.finish())
 }
 
@@ -159,6 +149,7 @@ pub(super) fn entries(cx: &mut Cx<'_>) -> R<Entries> {
     let mut entry = |name: &str| intrinsic(cx, name, Vec::new());
     Ok(Entries {
         begin: entry("IsolateBegin")?,
+        end: entry("IsolateEnd")?,
         count: entry("IsolateCount")?,
         kind: entry("IsolateKind")?,
         rule: entry("IsolateRule")?,
@@ -184,7 +175,51 @@ pub(super) fn shape(b: &Body<'_, '_>, failure: LayoutId) -> R<Shape> {
 
 /// `IsolateBegin(tasks)`: the running task's failure record count, the start of a catch.
 pub(super) fn begin(b: &mut Body<'_, '_>, entries: &Entries, tasks: ValueId) -> R<ValueId> {
-    read(b, &entries.begin, tasks, None)
+    let mark = read(b, &entries.begin, tasks, None)?;
+    let at = b.current();
+    let held = b.held_state();
+    let ending = b.block(BlockKind::FailureCleanup, &[]);
+    b.at(ending);
+    b.restore_held(&[]);
+    end_at(b, entries, tasks, BlockKind::FailureCleanup);
+    b.terminate(Terminator::Propagate);
+    b.at(at);
+    b.restore_held(&held);
+    b.propagation(Some(ending));
+    Ok(mark)
+}
+
+fn returning(b: &mut Body<'_, '_>, entries: &Entries, tasks: ValueId, value: ValueId) -> R<()> {
+    let (slot, address) = local(b, value)?;
+    end(b, entries, tasks);
+    let value = b.take(address)?;
+    b.push(Inst::StorageDead {
+        slot,
+        if_live: false,
+    });
+    b.ret(Some(value));
+    Ok(())
+}
+
+pub(super) fn end(b: &mut Body<'_, '_>, entries: &Entries, tasks: ValueId) {
+    end_at(b, entries, tasks, BlockKind::Body);
+}
+
+fn end_at(b: &mut Body<'_, '_>, entries: &Entries, tasks: ValueId, after: BlockKind) {
+    // End is non-failing; its syntactic failure edge must not execute End twice.
+    let propagation = b.propagation(None);
+    let failure = b.failure(None);
+    let callee = operation(b, &entries.end);
+    invoke(
+        b,
+        callee,
+        entries.end.abi,
+        vec![argument(0, Passing::Borrow, tasks)],
+        &[],
+        failure,
+        after,
+    );
+    b.propagation(propagation);
 }
 
 /// Call a runtime entry of the caught chain; its outcome propagates.

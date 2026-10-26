@@ -794,6 +794,7 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     drop(std::mem::take(&mut ctx.failure));
     drop(std::mem::take(&mut ctx.frozen));
     drop(std::mem::take(&mut ctx.isolated));
+    drop(std::mem::take(&mut ctx.isolations));
     unsafe { crate::pool::free::finish_current(ctx) }
 }
 

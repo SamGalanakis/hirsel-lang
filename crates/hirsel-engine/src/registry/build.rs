@@ -964,6 +964,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         ("T", "$intrinsic.SharedThawTurn", "root: Shared[T]", "bool"),
         // `task.isolate`'s caught chain, read record by record to build its `Failure` (FAIL-2).
         ("", "$intrinsic.IsolateBegin", "tasks: Tasks", "u64"),
+        ("", "$intrinsic.IsolateEnd", "tasks: Tasks", "()"),
         ("", "$intrinsic.IsolateCount", "tasks: Tasks", "u64"),
         (
             "",

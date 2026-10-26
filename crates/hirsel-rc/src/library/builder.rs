@@ -323,6 +323,7 @@ pub struct Body<'c, 'a> {
     /// The failure cleanup of each `held` list already built.
     cleanups: std::collections::HashMap<(Vec<SlotId>, Option<BlockId>), BlockId>,
     drop_anchor: Option<CleanupAnchorId>,
+    propagation: Option<BlockId>,
 }
 
 impl<'c, 'a> Body<'c, 'a> {
@@ -374,6 +375,7 @@ impl<'c, 'a> Body<'c, 'a> {
             entry_held: Vec::new(),
             cleanups: std::collections::HashMap::new(),
             drop_anchor: None,
+            propagation: None,
         };
         for p in &abi.parameters {
             let ty = body.ty(p.layout);
@@ -589,7 +591,7 @@ impl<'c, 'a> Body<'c, 'a> {
     /// A failure edge into the cleanup that drops every slot the body
     /// still holds (`held`), latest first, then propagates.
     pub fn failure(&mut self, rule: Option<&str>) -> FailureId {
-        let block = self.cleanup(self.held.clone(), None);
+        let block = self.cleanup(self.held.clone(), self.propagation);
         self.failure_to(block, &[], rule)
     }
 
@@ -656,9 +658,16 @@ impl<'c, 'a> Body<'c, 'a> {
     /// holds there (its owned `take` parameters) whatever it holds now.
     pub fn entry_failure(&mut self) -> FailureId {
         let held = std::mem::replace(&mut self.held, self.entry_held.clone());
+        let propagation = self.propagation.take();
         let failure = self.failure(None);
+        self.propagation = propagation;
         self.held = held;
         failure
+    }
+
+    /// Select the boundary bookkeeping retired after failure cleanup.
+    pub fn propagation(&mut self, tail: Option<BlockId>) -> Option<BlockId> {
+        std::mem::replace(&mut self.propagation, tail)
     }
     pub fn held_state(&self) -> Vec<(SlotId, AddressId)> {
         self.held.clone()

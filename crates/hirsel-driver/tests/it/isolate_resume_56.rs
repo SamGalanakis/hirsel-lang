@@ -53,6 +53,42 @@ fn isolate_resume_56_capture_drop_failure_discards_owned_result_before_catch() {
     agrees(&source, b"caught MEM-14\ncause SEM-1\n");
 }
 
+#[test]
+fn isolate_resume_56_nested_cleanup_catches_preserve_the_active_prefix() {
+    agrees(
+        r#"
+resource type Nested { tasks: Tasks }
+drop(x) {
+  let child: Result[u64, Failure] = task.isolate(x.tasks, fn() -> u64 {
+    let grandchild: Result[u64, Failure] = task.isolate(x.tasks, fn() -> u64 {
+      failure.check(false, Bounds())
+      0u64
+    })
+    match grandchild { Error(f) => failure.check(f.rule == "MEM-14", Arithmetic()), Ok(_) => failure.check(false, Arithmetic()) }
+    failure.check(false, Arithmetic())
+    0u64
+  })
+  match child { Error(f) => failure.check(f.rule == "SEM-1" && f.cause == None(), Bounds()), Ok(_) => failure.check(false, Bounds()) }
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let status: Result[u64, Failure] = task.isolate(tasks, fn() -> u64 {
+    let nested = Nested(tasks: tasks)
+    failure.check(false, Arithmetic())
+    0u64
+  })
+  match status {
+    Error(f) => { failure.check(f.cause == None(), Bounds()); let _ = out.print(output, f"caught {f.rule}\n") },
+    Ok(_) => failure.check(false, Bounds()),
+  }
+  Ok(())
+}
+"#,
+        b"caught SEM-1\n",
+    );
+}
+
 fn agrees(source: &str, output: &[u8]) {
     with_compiler_stack(|| {
         let mut engine = crate::source_std::engine();

@@ -797,6 +797,7 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_file_read_dir", HOST),
     // isolate.rs
     ops("hirsel_rt_v2_isolate_begin", &["task.isolate"]),
+    entry("hirsel_rt_v2_isolate_end", Local),
     ops("hirsel_rt_v2_isolate_catch", &["task.isolate"]),
     entry("hirsel_rt_v2_isolate_count", Local),
     entry("hirsel_rt_v2_isolate_kind", Local),

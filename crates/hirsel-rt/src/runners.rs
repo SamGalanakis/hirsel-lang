@@ -1576,7 +1576,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_reply(
     let bytes = unsafe { crate::io::slice_bytes(owner, start, length) }.to_vec();
     if let Some(call) = native::call(ctx) {
         let chain = if tag == REPLY_FAILED {
-            unsafe { (*ctx).isolated.clone() }
+            crate::isolate::caught(ctx).clone()
         } else {
             Vec::new()
         };
@@ -1593,7 +1593,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_runner_reply(
     }
     if tag == REPLY_FAILED {
         // SAFETY: the context is live.
-        callee(ctx).chain = unsafe { (*ctx).isolated.clone() };
+        callee(ctx).chain = crate::isolate::caught(ctx).clone();
     }
     if callee(ctx).reply.replace((tag, bytes)).is_some() {
         fault("a callee replied twice");

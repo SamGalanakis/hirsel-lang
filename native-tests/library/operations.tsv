@@ -14,6 +14,7 @@ $intrinsic.IsolateBegin	f86d888777e8f62b5763a9c6f2fa6287c7243dfa62df079f96095be7
 $intrinsic.IsolateColumn	c830f775d01299e32686f7bd022eee832375a688636f1657985407edbb564755	0:b:n;1:b:n->n
 $intrinsic.IsolateCount	24ef5fffb0137966d4e9ece1aeb4c4db8dbbf87c881223fe51dbd1444762353e	0:b:n->n
 $intrinsic.IsolateDefinition	3153ab8e022162e45bb672d86814181a81c9be9e6c433a3ef69b8864b8fb2a0d	0:b:n;1:b:n->n
+$intrinsic.IsolateEnd	09b7c684c348819fc68a506a09ec7baf4dc90bd0a8228e88367f979005f05b27	0:b:n->n
 $intrinsic.IsolateKind	85072998de725894f554997d74c7337c78bbb9584a9ab5a85b9bee223b405a3c	0:b:n;1:b:n->n
 $intrinsic.IsolateLine	a187f87a359186a9ce504e1d24e5dd39a9f5c17af4c56b47edd31c3910190d2e	0:b:n;1:b:n->n
 $intrinsic.IsolateRule	e35699f6ac0e08949a918b10af4c4d0fb60ae14b426b42a4917b536ff564170c	0:b:n;1:b:n->n

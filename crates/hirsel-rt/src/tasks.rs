@@ -1616,6 +1616,7 @@ unsafe fn depart_to(ctx: &mut TaskCtx, next: u32) -> ! {
     drop(std::mem::take(&mut ctx.failure));
     drop(std::mem::take(&mut ctx.frozen));
     drop(std::mem::take(&mut ctx.isolated));
+    drop(std::mem::take(&mut ctx.isolations));
     if let Some(metrics) = &ctx.run_ref().worker_metrics {
         metrics.switch();
     }

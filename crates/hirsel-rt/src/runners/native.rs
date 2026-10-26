@@ -567,7 +567,16 @@ mod tests {
                 Ok(Completion::Monotonic(Ok(7)))
             ));
             if tag == REPLY_FAILED {
-                (*ctx).isolated.push((
+                let mut mark = 0;
+                crate::isolate::hirsel_rt_v2_isolate_begin(ctx, &mut mark, &tasks);
+                (*ctx).failure.record(crate::failure::FailureRecord {
+                    kind: 1,
+                    rule: 2,
+                    site: 3,
+                    operation_site: 4,
+                });
+                crate::isolate::hirsel_rt_v2_isolate_catch(ctx, mark);
+                *crate::isolate::caught(ctx) = vec![(
                     crate::failure::FailureRecord {
                         kind: 1,
                         rule: 2,
@@ -575,9 +584,12 @@ mod tests {
                         operation_site: 4,
                     },
                     vec![0, 1],
-                ));
+                )];
             }
             hirsel_rt_v2_runner_reply(ctx, tag, argument.owner, argument.start, argument.length);
+            if tag == REPLY_FAILED {
+                crate::isolate::hirsel_rt_v2_isolate_end(ctx, &tasks);
+            }
             crate::release::release_block(&mut *ctx, argument.owner, std::ptr::null(), 0, 0);
             STATUS_OK
         }

@@ -5,6 +5,12 @@
 //! line and column come from the operations model, which holds the sources.
 use super::*;
 
+#[derive(Clone)]
+pub(super) struct Invocation {
+    pub(super) mark: usize,
+    pub(super) caught: Option<Vec<(ObservedFailure, Vec<u32>)>>,
+}
+
 impl<S: Stage> Machine<'_, S> {
     /// The `Isolate` terminator: catch every failure since `start`.
     pub(super) fn isolate_catch(&mut self, f: &mut Frame, start: ValueId) -> Checked<()> {
@@ -26,11 +32,20 @@ impl<S: Stage> Machine<'_, S> {
         let spawns = s.task_spawns();
         spawns.resize(start + failures.len(), None);
         let spawns = spawns.split_off(start);
-        s.isolated = failures
+        let chain = failures
             .into_iter()
             .zip(spawns)
             .map(|(failure, spawn)| (failure, spawn.unwrap_or_else(|| own.clone())))
             .collect();
+        let scope = s
+            .task(current)?
+            .isolations
+            .last_mut()
+            .ok_or_else(|| err(V::Malformed, "isolation catch without begin"))?;
+        if scope.mark != start || scope.caught.is_some() {
+            return fail(V::Malformed, "isolation catch does not match its begin");
+        }
+        scope.caught = Some(chain);
         f.failing = false;
         Ok(())
     }
@@ -43,6 +58,15 @@ impl<S: Stage> Machine<'_, S> {
         arguments: &[CallArgument],
         normal: Option<EdgeId>,
     ) -> Checked<Control> {
+        if name == "$intrinsic.IsolateEnd" {
+            let s = self.scheduler();
+            let current = s.current;
+            s.task(current)?
+                .isolations
+                .pop()
+                .ok_or_else(|| err(V::Malformed, "isolation ended without begin"))?;
+            return self.task_return(f, arguments, None, normal);
+        }
         let result = site
             .result
             .ok_or_else(|| err(V::Malformed, "an isolation entry without a result"))?;
@@ -53,17 +77,21 @@ impl<S: Stage> Machine<'_, S> {
         let val = match name {
             "$intrinsic.IsolateBegin" => {
                 let count = self.failures.len() as u64;
+                let s = self.scheduler();
+                let current = s.current;
+                s.task(current)?.isolations.push(Invocation {
+                    mark: count as usize,
+                    caught: None,
+                });
                 self.task_yield()?;
                 bits(ScalarKind::U64, count)
             }
-            "$intrinsic.IsolateCount" => {
-                bits(ScalarKind::U64, self.scheduler().isolated.len() as u64)
-            }
+            "$intrinsic.IsolateCount" => bits(ScalarKind::U64, self.isolate_caught()?.len() as u64),
             _ => {
                 let index = self.task_word(f, &Self::task_argument(arguments, 1)?)?;
                 let (failure, spawn) = usize::try_from(index)
                     .ok()
-                    .and_then(|i| self.scheduler().isolated.get(i).cloned())
+                    .and_then(|i| self.isolate_caught().ok()?.get(i).cloned())
                     .ok_or_else(|| err(V::Malformed, "an isolated failure index out of range"))?;
                 // A site inside a library body, which only a resource failure such as an
                 // allocation's reaches, has no source position: it is line and column 0, as
@@ -127,5 +155,15 @@ impl<S: Stage> Machine<'_, S> {
             }
         };
         self.task_return(f, arguments, Some((result, val)), normal)
+    }
+
+    fn isolate_caught(&mut self) -> Checked<&[(ObservedFailure, Vec<u32>)]> {
+        let s = self.scheduler();
+        let current = s.current;
+        s.task(current)?
+            .isolations
+            .last()
+            .and_then(|scope| scope.caught.as_deref())
+            .ok_or_else(|| err(V::Malformed, "isolation read without a caught invocation"))
     }
 }

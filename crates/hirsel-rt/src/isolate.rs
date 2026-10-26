@@ -18,6 +18,52 @@ use crate::text::allocate_bytes;
 use crate::views::Slice;
 use crate::{STATUS_OK, fault};
 
+/// Task-owned invocation records move with TaskCtx, never with a worker or a
+/// native stack. A count is a failure mark, not an invocation identity.
+#[derive(Default)]
+pub(crate) struct Invocations {
+    generation: u64,
+    scopes: Vec<Invocation>,
+}
+
+struct Invocation {
+    generation: u64,
+    parent: Option<u64>,
+    mark: usize,
+    caught: Option<Vec<Chained>>,
+}
+
+impl Invocations {
+    fn begin(&mut self, mark: usize) {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .unwrap_or_else(|| fault("isolation invocation generation exhausted"));
+        self.scopes.push(Invocation {
+            generation: self.generation,
+            parent: self.scopes.last().map(|scope| scope.generation),
+            mark,
+            caught: None,
+        });
+    }
+
+    fn active(&mut self) -> &mut Invocation {
+        self.scopes
+            .last_mut()
+            .unwrap_or_else(|| fault("isolation without a live invocation"))
+    }
+
+    fn end(&mut self) {
+        let scope = self
+            .scopes
+            .pop()
+            .unwrap_or_else(|| fault("isolation ended twice"));
+        if scope.parent != self.scopes.last().map(|scope| scope.generation) {
+            fault("isolation invocation parent changed");
+        }
+    }
+}
+
 /// One failure site of the program: its source position.
 #[derive(Clone, Copy)]
 struct Site {
@@ -194,9 +240,10 @@ pub(crate) fn attach(ctx: &mut TaskCtx, table: FailureTable) {
 }
 
 /// The running task's caught chain.
-fn caught(ctx: *mut TaskCtx) -> &'static mut Vec<Chained> {
+pub(crate) fn caught(ctx: *mut TaskCtx) -> &'static mut Vec<Chained> {
     // SAFETY: the running task's context outlives its use of the scratch.
-    unsafe { &mut (*ctx).isolated }
+    unsafe { (*ctx).isolations.active().caught.as_mut() }
+        .unwrap_or_else(|| fault("isolation read before catch"))
 }
 
 fn record(ctx: *mut TaskCtx, index: u64) -> &'static Chained {
@@ -221,7 +268,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     // SAFETY: caller contract.
     unsafe {
-        out.write((*ctx).failure.count() as u64);
+        let mark = (*ctx).failure.count();
+        (*ctx).isolations.begin(mark);
+        out.write(mark as u64);
         crate::tasks::yield_now(&mut *ctx);
     }
     STATUS_OK
@@ -238,12 +287,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_catch(ctx: *mut TaskCtx, start: u6
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let path = crate::tasks::current_path(ctx);
     let start = usize::try_from(start).unwrap_or_else(|_| fault("an isolation start overflows"));
+    // SAFETY: the task owns its current invocation.
+    let invocation = unsafe { (*ctx).isolations.active() };
+    if invocation.mark != start || invocation.caught.is_some() {
+        fault("isolation catch does not match its unhandled begin");
+    }
     // SAFETY: caller contract.
     let chain = unsafe { (*ctx).failure.split_off(start, &path) };
     if chain.is_empty() {
         fault("an isolation caught no failure");
     }
-    *caught(ctx) = chain;
+    // SAFETY: catch cannot suspend or change the active invocation.
+    unsafe { (*ctx).isolations.active().caught = Some(chain) };
+}
+
+/// Retire only invocation bookkeeping, leaving the language failure chain intact.
+/// # Safety
+/// `ctx` owns an active invocation and all its caught-chain readers have finished.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_isolate_end(ctx: *mut TaskCtx, _tasks: *const u64) -> u8 {
+    // SAFETY: caller contract; End never yields or runs language cleanup.
+    unsafe { (*ctx).isolations.end() };
+    STATUS_OK
 }
 
 /// `$intrinsic.IsolateCount(tasks)`: the caught chain's length.
@@ -392,4 +457,63 @@ pub(crate) fn foreign_location(ctx: *mut TaskCtx, code: u64) -> String {
 /// A compiler-supplied site in the attached program's immutable source table.
 pub(crate) fn source_site(ctx: *mut TaskCtx, code: u64) -> hirsel_run_schema::Site {
     table(ctx).located(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(site: u64) -> Vec<Chained> {
+        vec![(
+            crate::failure::FailureRecord {
+                kind: 1,
+                rule: 1,
+                site,
+                operation_site: site,
+            },
+            vec![2, 3],
+        )]
+    }
+
+    #[test]
+    fn equal_marks_have_distinct_generations_and_child_end_restores_parent_catch() {
+        let mut scopes = Invocations::default();
+        scopes.begin(0);
+        let parent = scopes.active().generation;
+        scopes.active().caught = Some(chain(11));
+        scopes.begin(0);
+        let child = scopes.active().generation;
+        assert_ne!(parent, child);
+        scopes.active().caught = Some(chain(22));
+        scopes.begin(0);
+        assert_ne!(child, scopes.active().generation);
+        scopes.active().caught = Some(chain(33));
+        scopes.end();
+        assert_eq!(scopes.active().generation, child);
+        assert_eq!(scopes.active().caught, Some(chain(22)));
+        scopes.end();
+        assert_eq!(scopes.active().generation, parent);
+        assert_eq!(scopes.active().caught, Some(chain(11)));
+        scopes.end();
+        scopes.begin(0);
+        assert!(scopes.active().generation > child);
+        assert!(scopes.active().caught.is_none());
+        scopes.end();
+    }
+
+    #[test]
+    fn an_inner_catch_preserves_the_active_prefix_and_attribution() {
+        let mut failures = crate::failure::FailureState::default();
+        let before = chain(11).pop().unwrap().0;
+        let after = chain(22).pop().unwrap().0;
+        failures.record(before);
+        let mut scopes = Invocations::default();
+        scopes.begin(failures.count());
+        failures.record(after);
+        let suffix = failures.split_off(scopes.active().mark, &[7, 8]);
+        scopes.active().caught = Some(suffix);
+        assert_eq!(failures.take_chain(&[7, 8]), vec![(before, vec![7, 8])]);
+        assert_eq!(scopes.active().caught, Some(vec![(after, vec![7, 8])]));
+        scopes.end();
+    }
 }

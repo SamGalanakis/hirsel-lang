@@ -853,7 +853,9 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.at(replied);
     b.restore_held(&returned_held);
     drop_local(&mut b, result_slot, result_address);
-    finish(&mut b, a_slot, a_address, io, f_slot, f_address);
+    finish(
+        &mut b, a_slot, a_address, io, f_slot, f_address, &isolation, tasks,
+    );
 
     // The caught chain as one `Failure`.
     b.at(caught);
@@ -868,11 +870,14 @@ fn main(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         failure_address,
     )?;
     drop_local(&mut b, failure_slot, failure_address);
-    finish(&mut b, a_slot, a_address, io, f_slot, f_address);
+    finish(
+        &mut b, a_slot, a_address, io, f_slot, f_address, &isolation, tasks,
+    );
     Ok(b.finish())
 }
 
 /// Drop the callee's argument, root Io and entry, and return.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     b: &mut Body<'_, '_>,
     a_slot: SlotId,
@@ -880,12 +885,15 @@ fn finish(
     io: Option<(SlotId, AddressId)>,
     f_slot: SlotId,
     f_address: AddressId,
+    isolation: &super::isolate::Entries,
+    tasks: ValueId,
 ) {
     drop_local(b, a_slot, a_address);
     if let Some((slot, address)) = io {
         drop_local(b, slot, address);
     }
     drop_local(b, f_slot, f_address);
+    super::isolate::end(b, isolation, tasks);
     let unit =
         b.cx.fn_abi()
             .result
