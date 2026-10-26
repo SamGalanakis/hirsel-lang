@@ -12,6 +12,8 @@ use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::Ready;
 
 mod begin;
+mod cleanup;
+pub use cleanup::{CleanupOwner, SynchronousCleanup, SynchronousCleanupPlan};
 mod protocol;
 pub use protocol::{CallPoint, CleanupPoint, HeldResult, InstructionPoint, IsolateProtocol};
 
