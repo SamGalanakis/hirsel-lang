@@ -430,8 +430,35 @@ fn assignment_planner_34_reference_checked_workflows() {
 
 // This test also records every fixture and replays each immutable tape through
 // both native backends and both interpreters, without files/readiness scripts.
+// Keep the complete fixture matrix in six disjoint test actions. Every
+// partition has fresh tapes and native programs and shares only its checked
+// source queries between its reference and checked replay consumers.
 #[test]
 fn assignment_planner_34_native_four_engine_replay() {
+    native_four_engine_replay(0);
+}
+#[test]
+fn assignment_planner_34_native_four_engine_replay_part_1() {
+    native_four_engine_replay(1);
+}
+#[test]
+fn assignment_planner_34_native_four_engine_replay_part_2() {
+    native_four_engine_replay(2);
+}
+#[test]
+fn assignment_planner_34_native_four_engine_replay_part_3() {
+    native_four_engine_replay(3);
+}
+#[test]
+fn assignment_planner_34_native_four_engine_replay_part_4() {
+    native_four_engine_replay(4);
+}
+#[test]
+fn assignment_planner_34_native_four_engine_replay_part_5() {
+    native_four_engine_replay(5);
+}
+
+fn native_four_engine_replay(partition: usize) {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("native-");
         let path = package(&root);
@@ -489,7 +516,15 @@ fn assignment_planner_34_native_four_engine_replay() {
         let mut receipts = vec![];
         let mut controls_failed = false;
         let mut missing_live_stderr = vec![];
-        for row in cases().iter().filter(|r| selected(r)) {
+        let rows = cases();
+        let mut compared = 0;
+        for row in rows
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| index % 6 == partition && selected(row))
+            .map(|(_, row)| row)
+        {
+            compared += 1;
             let id = row["id"].as_str().unwrap();
             let world = fixture(row, 4);
             let cap_oracles: Value = serde_json::from_str(include_str!(
@@ -714,11 +749,15 @@ fn assignment_planner_34_native_four_engine_replay() {
                         );
                         fs::write(root.join(format!("{id}-{}-{}-native-replay.json",dir.file_name().unwrap().to_str().unwrap(),replay_dir.file_name().unwrap().to_str().unwrap())), serde_json::to_vec_pretty(&json!({"id":id,"tape":tape,"completed":true,"passed":true,"player":replay_dir.file_name().unwrap().to_str()})).unwrap()).unwrap();
                     }
-                    for replay in [
-                        hirsel_driver::replay_observations,
-                        hirsel_driver::replay_observations_checked,
-                    ] {
-                        let replayed = replay(&path, &tape, Some(1_000_000));
+                    // Replay state is fresh for every tape and engine. Reuse
+                    // the checked source graph already used for the reference.
+                    for checked in [false, true] {
+                        let replayed = hirsel_driver::replay_loaded_observations(
+                            &mut loaded,
+                            &tape,
+                            Some(1_000_000),
+                            checked,
+                        );
                         if known_steps(id) {
                             let error = replayed.unwrap_err().to_string();
                             assert!(
@@ -785,13 +824,15 @@ fn assignment_planner_34_native_four_engine_replay() {
                                     hirsel_rt::launch::render_recording(&changed).unwrap(),
                                 )
                                 .unwrap();
-                                for replay in [
-                                    hirsel_driver::replay_observations,
-                                    hirsel_driver::replay_observations_checked,
-                                ] {
-                                    let error = replay(&path, &bad, Some(1_000_000))
-                                        .unwrap_err()
-                                        .to_string();
+                                for checked in [false, true] {
+                                    let error = hirsel_driver::replay_loaded_observations(
+                                        &mut loaded,
+                                        &bad,
+                                        Some(1_000_000),
+                                        checked,
+                                    )
+                                    .unwrap_err()
+                                    .to_string();
                                     assert!(error.contains(expected), "{kind}: {error}");
                                 }
                                 for (player, replay_dir) in &runnables {
@@ -908,6 +949,16 @@ fn assignment_planner_34_native_four_engine_replay() {
             }
         }
         assert!(!receipts.is_empty());
+        let selected_count = rows
+            .iter()
+            .enumerate()
+            .filter(|(index, row)| index % 6 == partition && selected(row))
+            .count();
+        assert_eq!(compared, selected_count);
+        eprintln!(
+            "assignment partition={partition}/6 inventory={} compared={compared}",
+            rows.len()
+        );
         assert!(
             !controls_failed,
             "a refusal control failed; independent cells retained"
