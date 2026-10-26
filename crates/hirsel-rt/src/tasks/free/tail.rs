@@ -20,6 +20,10 @@ use std::sync::Arc;
 
 mod close;
 mod mutex;
+#[allow(unused_imports)]
+pub(in crate::tasks) use close::{
+    attach as attach_close, poll as poll_close, requeue as close_requeue,
+};
 pub(crate) use close::{invoke_finalize, invoke_release, invoke_root_drop};
 #[cfg(test)]
 mod tests;

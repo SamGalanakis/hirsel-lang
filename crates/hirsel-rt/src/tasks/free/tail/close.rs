@@ -303,7 +303,7 @@ impl Driver {
 
 /// Attach before consuming the last root credit or entering any user cleanup.
 /// The cursor and all masks/value locations are already in retained storage.
-pub(super) unsafe fn attach(
+pub(in crate::tasks) unsafe fn attach(
     ctx: *mut TaskCtx,
     cursor: Box<Cursor>,
     anchor: u64,
@@ -319,7 +319,7 @@ pub(super) unsafe fn attach(
 
 /// A task-owned driver is not removed from its box while it executes. Nested
 /// opaque finalizers can grow the handle vector without moving any ancestor.
-pub(super) unsafe fn poll(ctx: *mut TaskCtx, index: usize) -> Stopped<Poll<u8>> {
+pub(in crate::tasks) unsafe fn poll(ctx: *mut TaskCtx, index: usize) -> Stopped<Poll<u8>> {
     let driver = unsafe { &mut *(&mut (*ctx).free_ops.tails.drivers)[index] as *mut Driver };
     let result = unsafe { (*driver).poll(ctx) }?;
     if result.is_ready() {
@@ -523,3 +523,11 @@ mod channel_tests;
 
 #[cfg(test)]
 mod cut_tests;
+
+/// Whether a Pending publication was rejected before dependency subscription.
+/// Requeue this owner; a subscribed object wait instead parks for its wake.
+/// # Safety
+/// The Active task owns a live driver index returned by attach, after Pending.
+pub(in crate::tasks) unsafe fn requeue(ctx: *mut TaskCtx, index: usize) -> bool {
+    unsafe { (&(*ctx).free_ops.tails.drivers)[index].rest }
+}
