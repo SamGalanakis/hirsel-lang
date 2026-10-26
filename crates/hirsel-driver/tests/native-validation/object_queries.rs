@@ -807,11 +807,31 @@ fn codegen_task_create_is_lazy_and_waits_for_complete_optimizer_inventory() {
         address: id.address,
         ..product(store.as_ref(), "emitted")
     };
+    let denied = task_snapshot(
+        ObjectTaskRequest::Codegen {
+            key: key.clone(),
+            ready: owner,
+            weight: MemoryWeight::default(),
+        },
+        ready.clone(),
+        store.clone(),
+        result,
+    );
+    assert!(matches!(
+        ObjectTaskFactory::new(denied.clone()).create(id),
+        Err(error) if error == input(store.as_ref(), "object task frame exceeds retained allowance")
+    ));
+    assert_eq!(denied.makes.load(Ordering::SeqCst), 0);
     let snapshot = task_snapshot(
         ObjectTaskRequest::Codegen {
             key,
             ready: owner,
-            weight: MemoryWeight::default(),
+            // The factory owns a Codegen continuation and its key. This
+            // synthetic request must admit that frame before dependency reads.
+            weight: MemoryWeight {
+                retained: 4096,
+                ..MemoryWeight::default()
+            },
         },
         ready.clone(),
         store,
@@ -851,7 +871,12 @@ fn codegen_task_rejects_stale_optimizer_and_dependency_failure_before_emission()
             ObjectTaskRequest::Codegen {
                 key,
                 ready: owner,
-                weight: MemoryWeight::default(),
+                // The factory owns a Codegen continuation and its key. This
+                // synthetic request must admit that frame before dependency reads.
+                weight: MemoryWeight {
+                    retained: 4096,
+                    ..MemoryWeight::default()
+                },
             },
             ready.clone(),
             store.clone(),
