@@ -105,6 +105,19 @@ fn check_case(
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path, source).unwrap();
+        // Keep the written local vector explicit, without implicitly adding
+        // std's specialization namespace to this source-check fixture.
+        let manifest = path.with_extension("json");
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema":1,"package":{"name":"scheduled_check","version":"1"},
+                "sources":[{"path":"main.hir","module":[]}],
+                "dependencies":[],"entry":{"module":[],"name":"main"}
+            })
+            .to_string(),
+        )
+        .unwrap();
         let store = Arc::new(MemStore::default());
         let mut program = COMPILER
             .with_config(CompileConfig {
@@ -113,8 +126,9 @@ fn check_case(
                 ..Default::default()
             })
             .with_owned_engines()
-            .load_program(&path)
+            .load_program(&manifest)
             .unwrap();
+        assert_eq!(program.files.len(), 1, "the complete local source vector");
         let definitions = program.engine.front_source_roots();
         let budget = ProcessBudget::new(1 << 30);
         let errors = crate::scheduled_front::errors();
