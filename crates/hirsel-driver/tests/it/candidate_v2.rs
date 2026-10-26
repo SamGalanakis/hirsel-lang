@@ -283,7 +283,7 @@ fn candidate_v2_h6_manifest_and_graph_errors_are_incomplete() {
         "{\"schema\":1,\"schema\":1}".into(),
         manifest("app", "01", &[("main.hir", &[])], vec![]),
         manifest("app", "1", &[], vec![]),
-        manifest("app", "1", &[("main.hir", &[])], vec![]).replace("\"schema\":1", "\"schema\":2"),
+        manifest("app", "1", &[("main.hir", &[])], vec![]).replace("\"schema\":1", "\"schema\":3"),
         manifest("app", "1", &[("main.hir", &[])], vec![])
             .replace("\"schema\":1", "\"unknown\":0,\"schema\":1"),
         manifest(
