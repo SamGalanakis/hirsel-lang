@@ -691,3 +691,21 @@ fn nested_unique_borrowed_views_keep_conditional_nominal_fields() {
     let ds = source_diagnostics(source);
     assert!(ds.is_empty(), "{ds:?}");
 }
+
+#[test]
+fn nested_unique_mutable_handbacks_preserve_payload_contracts() {
+    let ds = source_diagnostics("fn share(mut r: (unique Bytes,)) { let alias = copy r }");
+    assert!(ds.iter().any(|d| d.rule.as_str() == "MODE-2"), "{ds:?}");
+    let ds = source_diagnostics(
+        "fn touch(mut r: (unique Bytes,)) {}\nfn load(take r: (unique Bytes,)) -> (unique Bytes,) { let mut held = take r; touch(mut held); take held }",
+    );
+    assert!(ds.is_empty(), "{ds:?}");
+}
+
+#[test]
+fn nested_unique_projected_mutation_cannot_retain_unique_payloads() {
+    let ds = source_diagnostics(
+        "fn weaken(mut bytes: Bytes) {}\nfn load(take r: List[unique Bytes]) -> List[unique Bytes] { let mut held = take r; weaken(mut held[0]); take held }",
+    );
+    assert!(ds.iter().any(|d| d.rule.as_str() == "MODE-2"), "{ds:?}");
+}

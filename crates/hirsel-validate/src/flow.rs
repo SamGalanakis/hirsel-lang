@@ -131,6 +131,8 @@ pub(super) struct State {
     must: BitRows<MustFacts>,
     ownership_conflicts: BitRows<bool>,
     shared: BitRows<bool>,
+    /// Real payload aliases, excluding root weakening by a mutable hand-back.
+    nested_shared: BitRows<bool>,
     /// MODE-2: a shared root whose only aliases are a related call result's
     /// counted shares. They are local to its borrow, so none outlives the
     /// body except through a counted result: the hand-back of a body
@@ -268,6 +270,8 @@ impl State {
             }
         }
         self.shared.or_since(&base.shared, &other.shared);
+        self.nested_shared
+            .or_since(&base.nested_shared, &other.nested_shared);
         self.borrowed_shares
             .union_since(&base.borrowed_shares, &other.borrowed_shares, |a, b| {
                 a.extend(b)
@@ -1197,6 +1201,8 @@ impl Model {
                 .with_copy_counter(Counter::ValidateCopiedRows),
             shared: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
+            nested_shared: BitRows::new(false, body.locals.len())
+                .with_copy_counter(Counter::ValidateCopiedRows),
             borrow_only: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             borrowed_shares: Rows::new(BTreeSet::new(), body.locals.len())
@@ -1466,6 +1472,7 @@ impl Model {
 /// The root may now share counted storage with another value (MODE-2).
 fn share_root(state: &mut State, root: usize) {
     state.shared.set(root, true);
+    state.nested_shared.set(root, true);
     state.borrow_only.set(root, false);
 }
 fn result_read_sites(body: &Body) -> BTreeSet<(u32, Option<u32>)> {
@@ -4665,6 +4672,7 @@ impl Checker<'_> {
                 });
             if !held {
                 state.shared.set(root, false);
+                state.nested_shared.set(root, false);
                 state.borrow_only.set(root, false);
             }
         }
@@ -4701,6 +4709,17 @@ impl Checker<'_> {
                         } else {
                             "mutable unique hand-back"
                         },
+                    },
+                );
+            }
+            if state.nested_shared[root]
+                && !(state.borrow_only[root] && !model.returning_shares.borrow().contains(&root))
+                && self.has_unique_parts(self.t, ty)
+            {
+                self.flow_error(
+                    report,
+                    ViolationKind::TypeMismatch {
+                        entity: "mutable nested unique hand-back",
                     },
                 );
             }
@@ -5540,6 +5559,10 @@ impl Checker<'_> {
                             self.body.places[destination.0 as usize].root.0 as usize,
                             true,
                         );
+                        state.nested_shared.set(
+                            self.body.places[destination.0 as usize].root.0 as usize,
+                            true,
+                        );
                     }
                     self.set_current_global(state, *destination, global);
                     self.set_current_sendable(state, *destination, sendable);
@@ -6165,10 +6188,19 @@ impl Checker<'_> {
                             && unique
                             && self.callee_preserves_unique(callee, a.parameter))
                     {
-                        share_root(
-                            state,
-                            self.body.places[a.value.place.0 as usize].root.0 as usize,
-                        );
+                        // A checked callee may weaken this root, but its fixed
+                        // nested contracts must survive the mutable hand-back.
+                        let root = self.body.places[a.value.place.0 as usize].root.0 as usize;
+                        state.shared.set(root, true);
+                        state.borrow_only.set(root, false);
+                        if !self.body.places[a.value.place.0 as usize]
+                            .projection
+                            .is_empty()
+                            && self.t.row(self.place_type(a.value.place)).modes.uniqueness
+                                == hirsel_types::Uniqueness::Unique
+                        {
+                            state.nested_shared.set(root, true);
+                        }
                         self.set_borrowed_shares(
                             state,
                             a.value.place,

@@ -3726,12 +3726,20 @@ impl Checker<'_, '_> {
             // MODE-2: a `mut x: unique T` parameter, or a `@preserves_unique` proof's
             // selection, is handed back unique at every exit and failure site.
             let promised = self.unique_proof == Some(parameter);
+            let nested_unique_lost = state.slots[index]
+                .value
+                .shared_parts
+                .0
+                .iter()
+                .any(|(path, _, deep)| self.unique_contract_on(binding.ty, path, *deep));
             if self.graph.clause.is_none()
                 && state.slots[index].available == LIVE
-                && (promised
-                    || self.unique_proof.is_none()
-                        && self.t.get(binding.ty).unwrap().modes.uniqueness == Uniqueness::Unique)
-                && state.slots[index].value.modes.uniqueness != Uniqueness::Unique
+                && (nested_unique_lost
+                    || (promised
+                        || self.unique_proof.is_none()
+                            && self.t.get(binding.ty).unwrap().modes.uniqueness
+                                == Uniqueness::Unique)
+                        && state.slots[index].value.modes.uniqueness != Uniqueness::Unique)
                 && !(state.slots[index].value.borrow_only && !held.contains(&index))
                 && !self.properties[binding.ty].plain
                 && !self.properties[binding.ty].shared
@@ -7651,7 +7659,16 @@ impl Checker<'_, '_> {
                                     .property(*argument)
                                     .is_some_and(|p| p.plain || p.shared);
                     if *mutable && !preserves_unique {
-                        state.slots[storage.binding].value.share();
+                        // A checked mutable hand-back may weaken the root, but
+                        // must preserve its declared nested payload contracts.
+                        // Keep prior real shares; this call creates no new copy.
+                        state.slots[storage.binding].value.share_root();
+                        if !storage.projections.is_empty() {
+                            state.slots[storage.binding]
+                                .value
+                                .shared_parts
+                                .insert(storage.projections.clone(), *argument);
+                        }
                     }
                     if *mutable && storage.projections.is_empty() {
                         let receipts =

@@ -670,7 +670,7 @@ impl Checker<'_> {
             && self.t.row(expected).modes.relation.has_environment()
     }
 
-    fn has_unique_parts(&self, store: &TypeInterner, root: TypeId) -> bool {
+    pub(super) fn has_unique_parts(&self, store: &TypeInterner, root: TypeId) -> bool {
         if let Some(required) = self.unique_parts_cache.borrow().get(&root) {
             return *required;
         }
@@ -699,7 +699,7 @@ impl Checker<'_> {
             return false;
         };
         let source = &self.body.places[value.place.0 as usize];
-        if !(value.usage == UseKind::Copy || state.shared[source.root.0 as usize])
+        if !(value.usage == UseKind::Copy || state.nested_shared[source.root.0 as usize])
             || !self.has_unique_parts(self.t, self.place_type(destination))
             || self.flat_value(value.place)
             || super::handle_root(self.t, self.place_type(value.place))
@@ -721,7 +721,7 @@ impl Checker<'_> {
         // Borrowed pattern transports retain a view of the referent's type;
         // only an owned receiving position exports its payload contracts.
         if !matches!(value.usage, UseKind::Take | UseKind::Copy)
-            || !(state.shared[access.root.0 as usize] || value.usage == UseKind::Copy)
+            || !(state.nested_shared[access.root.0 as usize] || value.usage == UseKind::Copy)
             || !self.has_unique_parts(store, destination)
             || self.flat_value(value.place)
             || super::handle_root(self.t, self.place_type(value.place))
@@ -1205,6 +1205,7 @@ impl Checker<'_> {
         let place = &self.body.places[destination.0 as usize];
         if place.projection.is_empty() {
             state.shared.set(place.root.0 as usize, false);
+            state.nested_shared.set(place.root.0 as usize, false);
             state.borrow_only.set(place.root.0 as usize, false);
         }
     }

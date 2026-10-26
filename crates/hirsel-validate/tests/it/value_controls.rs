@@ -1270,3 +1270,115 @@ fn nested_unique_local_transports_do_not_restore_exportable_receipts() {
         }
     }
 }
+
+#[test]
+fn nested_unique_mutable_handback_rejects_payload_aliases() {
+    let mut f = Fixture::unit();
+    let mut bytes = ty(TypeKind::Primitive(Primitive::Bytes));
+    bytes.modes.uniqueness = Uniqueness::Unique;
+    let bytes = f.definition.types.push(bytes);
+    let source = param(&mut f, TypeKind::Tuple(vec![bytes].into()));
+    let plain = f
+        .definition
+        .types
+        .push(ty(TypeKind::Primitive(Primitive::Bytes)));
+    let alias = f.slot(TypeKind::Tuple(vec![plain].into()), Storage::Local);
+    let cleanup = f.cleanup(vec![drop(alias)]);
+    f.assign(alias, Rvalue::Use(copy(source)), 0);
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(&mut f, PassingMode::Mut);
+    assert!(
+        f.kinds().contains(&ViolationKind::TypeMismatch {
+            entity: "mutable nested unique hand-back"
+        }),
+        "{:?}",
+        f.kinds()
+    );
+}
+
+#[test]
+fn nested_unique_mutable_calls_weaken_only_root_receipts() {
+    for aliased in [false, true] {
+        let mut f = Fixture::unit();
+        let mut bytes = ty(TypeKind::Primitive(Primitive::Bytes));
+        bytes.modes.uniqueness = Uniqueness::Unique;
+        let bytes = f.definition.types.push(bytes);
+        let kind = TypeKind::Tuple(vec![bytes].into());
+        let source = param(&mut f, kind.clone());
+        let plain = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::Bytes)));
+        let alias = f.slot(TypeKind::Tuple(vec![plain].into()), Storage::Local);
+        if aliased {
+            f.assign(alias, Rvalue::Use(copy(source)), 0);
+        }
+        let result = f.slot(TypeKind::Tuple(vec![].into()), Storage::Temporary);
+        f.emit(InstructionKind::BeginLoan {
+            id: LoanId(0),
+            place: PlaceId(source),
+            mutable: true,
+            if_inactive: false,
+        });
+        let access = f.through_loan(source, 0);
+        let mut failed_actions = vec![CleanupAction::EndLoan {
+            loan: LoanId(0),
+            if_active: false,
+        }];
+        if aliased {
+            failed_actions.push(drop(alias));
+        }
+        failed_actions.push(drop(source));
+        let failed = f.cleanup(failed_actions);
+        f.body().blocks[0].terminator = Terminator::Call {
+            callee: Callee::Definition {
+                path: path("touch"),
+                arguments: vec![],
+            },
+            arguments: vec![CallArgument {
+                parameter: ParamId(0),
+                value: operand(access, UseKind::Mut),
+            }],
+            returns: Some(CallReturn {
+                destination: PlaceId(result),
+                next: BlockId(1),
+            }),
+            on_failure: CleanupId(failed),
+        };
+        let cleanup = if aliased {
+            f.cleanup(vec![drop(alias)])
+        } else {
+            0
+        };
+        f.body().blocks.push(block(
+            vec![Instruction {
+                kind: InstructionKind::EndLoan {
+                    loan: LoanId(0),
+                    if_active: false,
+                },
+                span: Span::default(),
+                on_failure: CleanupId(0),
+            }],
+            ret(source, cleanup),
+        ));
+        f.body().result = f.body().places[source as usize].ty;
+        owner_signature(&mut f, PassingMode::Take);
+        let sig = function_signature(
+            "touch",
+            vec![(PassingMode::Mut, kind)],
+            TypeKind::Tuple(vec![].into()),
+        );
+        f.signatures.insert(sig.definition.clone(), sig);
+        if aliased {
+            assert!(
+                f.kinds().contains(&ViolationKind::TypeMismatch {
+                    entity: "value modes"
+                }),
+                "{:?}",
+                f.kinds()
+            );
+        } else {
+            f.valid();
+        }
+    }
+}
