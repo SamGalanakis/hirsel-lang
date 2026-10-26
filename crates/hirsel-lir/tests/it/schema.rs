@@ -881,6 +881,21 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
         },
         Inst::Dispose { token: v(7) },
         Inst::TokenNone { result: v(24) },
+        Inst::HoleOpen {
+            result: v(3),
+            hole: v(4),
+            construct: ConstructId(2),
+            open: LayoutId(2),
+            failure: f,
+        },
+        Inst::HoleFill {
+            hole: v(4),
+            value: v(1),
+        },
+        Inst::HoleAbandon {
+            hole: v(4),
+            root: Some(v(3)),
+        },
         Inst::RegionEnter {
             result: v(8),
             region: RegionInstanceId(0),

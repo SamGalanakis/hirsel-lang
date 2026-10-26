@@ -1581,6 +1581,10 @@ conformance/LANG/LANG-1-test-sublanguage-bad.hir
 conformance/LANG/LANG-1-test-sublanguage-ok.hir
 conformance/LANG/LANG-1-track-caller-closure-bad.hir
 conformance/LANG/LANG-1-track-caller-closure-ok.hir
+conformance/LANG/LANG-10-constructor-tail-ensures-bad.hir
+conformance/LANG/LANG-10-constructor-tail-later-field-bad.hir
+conformance/LANG/LANG-10-constructor-tail-let-bound-bad.hir
+conformance/LANG/LANG-10-constructor-tail-run.hir
 conformance/LANG/LANG-10-later-local-function-bad.hir
 conformance/LANG/LANG-10-later-local-function-ok.hir
 conformance/LANG/LANG-10-local-generic-recursion-bad.hir

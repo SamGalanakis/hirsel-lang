@@ -1,0 +1,47 @@
+// rule: LANG-10
+// expect: fail LANG-10 at line 31
+// Shows "Every other site stays ordinary recursion under the limit above: a field after the call."
+type Chain = End | Link(u64, box Chain)
+
+fn sum(take c: box Chain) -> u64 {
+  let mut cur = take c
+  let mut total = 0u64
+  let mut going = true
+  while going {
+    match take cur {
+      End => {
+        going = false
+        cur = box End
+      },
+      Link(n, next) => {
+        total = total + n
+        cur = take next
+      },
+    }
+  }
+  total
+}
+
+type Rev = Stop | Step(box Rev, u64)
+
+fn rev(n: u64) -> Rev {
+  if n == 0 {
+    Stop
+  } else {
+    Step(box rev(n - 1), n)
+  }
+}
+
+fn chain(n: u64) -> Chain {
+  match rev(n) {
+    Stop => End,
+    Step(_, k) => Link(k, box End),
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let c = box chain(2000)
+  let _ = out.print(io.stdout(rt)?, u64.to_string(sum(take c)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}

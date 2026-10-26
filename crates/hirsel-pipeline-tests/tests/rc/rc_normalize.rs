@@ -156,6 +156,8 @@ fn forge(program: &mut Program, name: &str, f: impl FnOnce(&mut hirsel_tir::Body
     program.definitions.insert(path, std::sync::Arc::new(def));
 }
 
+/// A ConstructorHole witness on a plain self tail names no constructor chain:
+/// normalization refuses it (LANG-10).
 #[test]
 fn a_forged_constructor_hole_is_rejected_and_its_twin_loops() {
     let program = compile(LOOPS[0].0);
@@ -170,7 +172,7 @@ fn a_forged_constructor_hole_is_rejected_and_its_twin_loops() {
     match hirsel_rc::import::lower(&forged, &target()) {
         Err(LowerError::Normalize(_, NormalizeError::ConstructorHole { .. })) => {}
         Err(e) => panic!("{e:?}"),
-        Ok(_) => panic!("a ConstructorHole site lowered (reserved until spec #46)"),
+        Ok(_) => panic!("a ConstructorHole site without its chain lowered"),
     }
 }
 

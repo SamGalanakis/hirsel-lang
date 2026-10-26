@@ -1,0 +1,40 @@
+// rule: LANG-10
+// expect: run
+// stdout: 12502500
+// Shows "A self call in constructor-tail position is a guaranteed loop too."
+// 5,000 levels run in one activation, past the limit of 1,024.
+type Chain = End | Link(u64, box Chain)
+
+fn sum(take c: box Chain) -> u64 {
+  let mut cur = take c
+  let mut total = 0u64
+  let mut going = true
+  while going {
+    match take cur {
+      End => {
+        going = false
+        cur = box End
+      },
+      Link(n, next) => {
+        total = total + n
+        cur = take next
+      },
+    }
+  }
+  total
+}
+
+fn chain(n: u64) -> Chain {
+  if n == 0 {
+    End
+  } else {
+    Link(n, box chain(n - 1))
+  }
+}
+
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let c = box chain(5000)
+  let _ = out.print(io.stdout(rt)?, u64.to_string(sum(take c)))
+  let _ = out.print(io.stdout(rt)?, "\n")
+  Ok(())
+}
