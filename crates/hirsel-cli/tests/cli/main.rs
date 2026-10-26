@@ -249,7 +249,7 @@ fn export_tir_writes_the_proof_seam_export_and_rejected_source_exits_one() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let text = std::fs::read_to_string(&out).unwrap();
     assert!(
-        text.starts_with("(Export\n  (Header \"hirsel.tir.export.v13\" 13\n"),
+        text.starts_with("(Export\n  (Header \"hirsel.tir.export.v15\" 15\n"),
         "{text}"
     );
     assert!(text.contains("\"SEM-1\" \"failure-edge\" 0"), "{text}");
