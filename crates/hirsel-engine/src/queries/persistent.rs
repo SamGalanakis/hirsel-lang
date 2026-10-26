@@ -2191,6 +2191,16 @@ impl QueryEngine {
         &mut self,
         path: &DefPath,
     ) -> Option<Arc<Entry<hirsel_tir::DefinitionRef>>> {
+        self.load_lower_with_replay(path, &mut false)
+    }
+    /// A current producer body may lack this consumer's private execution
+    /// receipt. Its admitted root must independently replay through the normal
+    /// Lower publication path before a check-only worker drops the body.
+    pub(super) fn load_lower_with_replay(
+        &mut self,
+        path: &DefPath,
+        replay: &mut bool,
+    ) -> Option<Arc<Entry<hirsel_tir::DefinitionRef>>> {
         if !self.s1.is_empty() {
             return None;
         }
@@ -2247,6 +2257,7 @@ impl QueryEngine {
                     // A body product does not supply private execution authority.
                     // Retain only existing mode inputs for the required replay.
                     self.restore_execution_dependencies(&variant.reads);
+                    *replay = true;
                     return None;
                 };
                 Some(receipt)

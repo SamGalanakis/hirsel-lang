@@ -1002,6 +1002,25 @@ impl QueryEngine {
         let prepare = timings::interval(Interval::FrontPrepare);
         self.note_environment();
         self.prepare_materialization_environment();
+        // Settle only the first admitted durable candidate. An imported body
+        // never supplies execution authority: replay it through ordinary Lower
+        // publication when this consumer has not issued its own receipt yet.
+        // Later roots cannot cross an earlier failure/registration boundary.
+        if prefix
+            && !matches!(kind, RootKind::Constant)
+            && let Some(first) = definitions.first()
+        {
+            let mut replay = false;
+            if let Some(entry) = self.load_lower_with_replay(first, &mut replay) {
+                self.lowered.insert(DefId::intern(first), entry);
+                drop(prepare);
+                return Some(vec![self.scalar_root_outcome(first, kind)]);
+            }
+            if replay {
+                drop(prepare);
+                return Some(vec![self.scalar_root_outcome(first, kind)]);
+            }
+        }
         let mut results: Vec<Option<RootOutcome>> = vec![None; definitions.len()];
         let mut tasks = vec![];
         for (index, definition) in definitions.iter().enumerate() {
