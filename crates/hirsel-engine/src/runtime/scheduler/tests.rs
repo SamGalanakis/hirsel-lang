@@ -1501,3 +1501,49 @@ fn public_default_capacity_matches_effective_worker_stack_admission() {
         }
     }
 }
+
+#[test]
+fn shutdown_returns_one_charge_after_cleanup_and_reuses_it_across_admitted_rounds() {
+    for jobs in [1, 2] {
+        let budget = ProcessBudget::new(8 << 20);
+        let mut parent = budget.reserve(8 << 20).unwrap();
+        for round in 0..3 {
+            let grant = parent.split(6 << 20).unwrap();
+            let mut rt =
+                AdmittedRuntime::with_reservation(Jobs::new(jobs), grant, errors(), STACK).unwrap();
+            let claims = install(&mut rt, &[(0, Spec::deps(&[1])), (1, Spec::deps(&[]))]);
+            let factory_owner = Arc::downgrade(&claims);
+            let request = rt.request(&[query(0)]);
+            assert_eq!(rt.wait(request), Ok(vec![product(query(0))]));
+            assert_eq!(claims.load(Ordering::SeqCst), 2);
+            drop(claims);
+            let grant = rt
+                .shutdown_with_reservation()
+                .expect("one live runtime charge");
+            assert_eq!(grant.bytes(), 6 << 20);
+            assert_eq!(rt.stats().active, 0);
+            assert_eq!(rt.stats().bookkeeping_bytes, 0);
+            assert_eq!(rt.stats().charged_bytes, 0);
+            assert!(
+                factory_owner.upgrade().is_none(),
+                "round {round}: factories retire before grant return"
+            );
+            assert!(rt.shutdown_with_reservation().is_none());
+            assert_eq!(budget.reserved(), 8 << 20);
+            assert!(
+                budget.reserve(1).is_err(),
+                "returned reservation stays charged"
+            );
+            assert!(parent.join(grant).is_ok());
+            drop(rt);
+            assert_eq!(parent.bytes(), 8 << 20);
+            assert_eq!(
+                budget.reserved(),
+                8 << 20,
+                "old runtime Drop cannot release a reused charge"
+            );
+        }
+        drop(parent);
+        assert_eq!(budget.reserved(), 0);
+    }
+}

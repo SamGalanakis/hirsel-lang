@@ -409,6 +409,13 @@ impl AdmittedRuntime {
         }
     }
     pub fn shutdown(&mut self) {
+        drop(self.shutdown_with_reservation());
+    }
+    /// Join every worker and retire scheduler ownership before returning the
+    /// original process charge. A staged caller may join it into its parent
+    /// reservation and lend it to another round without a second admission.
+    /// Subsequent shutdown calls return None and never release that charge.
+    pub fn shutdown_with_reservation(&mut self) -> Option<MemoryReservation> {
         {
             let mut state = self.shared.lock();
             state.stopped = true;
@@ -429,7 +436,7 @@ impl AdmittedRuntime {
         state.factories.clear();
         state.observer = None;
         state.account();
-        self.reservation.take();
+        self.reservation.take()
     }
 }
 type OutcomeList = Result<Vec<ProductRef>, Reference>;
