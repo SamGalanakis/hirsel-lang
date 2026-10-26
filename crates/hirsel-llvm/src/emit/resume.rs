@@ -331,7 +331,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.materialize_live(&state.live,state.state)?;
         let entry=self.runtime(RuntimeEntry::ResumeTail)?;
         let number=self.module.const_int(self.module.int_type(32),state.state.into());
-        let kind=self.module.const_int(self.module.int_type(32),48);
+        let tag = if matches!(self.unit.types[self.unit.values[state.value.index()].ty.index()].repr, ValueRepr::Block) {
+            if matches!(self.layout(state.layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
+        } else { 50 };
+        let kind=self.module.const_int(self.module.int_type(32),tag);
         let bytes=self.module.const_int(self.module.int_type(32),bytes.into());
         let (anchor,site)=self.failure_sites(self.cleanup_code(state.anchor)?);
         self.builder.call(entry,&[self.context,frame,number,kind,bytes,anchor,site]);

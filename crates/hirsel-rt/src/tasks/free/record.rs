@@ -562,8 +562,19 @@ pub(super) fn poll_publish<T>(
     phase: Phase,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<Option<T>> {
+    let replay = super::replay::token(ctx);
+    poll_publish_with_replay(ctx, phase, replay.as_ref(), action)
+}
+
+/// Use the owner-local token captured before taking a cell lock.
+pub(super) fn poll_publish_with_replay<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    replay: Option<&super::replay::Token>,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<Option<T>> {
     if !on(ctx) {
-        return match super::replay::token(ctx) {
+        return match replay {
             Some(replay) => replay.poll_publish(ctx, phase, || action(None)),
             None => Ok(Some(action(None))),
         };
@@ -575,6 +586,19 @@ pub(super) fn poll_publish<T>(
         return Ok(None);
     }
     poll_phase(ctx, phase, action)
+}
+
+/// The action is shared with the synchronous adapter; only admission may
+/// return Pending. No role lookup is performed while a cell lock is held.
+pub(super) fn publish_entered<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    replay: Option<&super::replay::Token>,
+    polling: bool,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<Option<T>> {
+    if polling { poll_publish_with_replay(ctx, phase, replay, action) }
+    else { publish_with_replay(ctx, phase, replay, action).map(Some) }
 }
 
 fn poll_phase<T>(

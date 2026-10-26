@@ -129,7 +129,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let place = self.stack(layout)?;
         self.store(self.value_shape(value)?, self.get(value)?, place);
         let ownership_cleanup = self.ownership_cleanup_begin(value)?;
-        if ownership_cleanup.is_none()
+        if self.resume.is_none() && ownership_cleanup.is_none()
             && live == MaskRef::All
             && glue::covered(self.inputs.layouts, layout)
         {
@@ -165,6 +165,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             ],
         );
         self.ownership_cleanup_end(ownership_cleanup)?;
+        if self.resume.is_some() { self.resume_propagate(status)?; }
         self.status_guard(status, failure)
     }
 

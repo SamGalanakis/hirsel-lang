@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 mod mutex;
 mod close;
-pub(crate) use close::invoke_root_drop;
+pub(crate) use close::{invoke_root_drop, invoke_release, invoke_finalize};
 #[cfg(test)]
 mod tests;
 #[allow(unused_imports)]
@@ -82,6 +82,7 @@ pub(super) struct Record {
     ordinal: Option<u64>,
     suffix_done: bool,
     yielded: bool,
+    rest: bool,
     pub(super) owners: Owners,
 }
 
@@ -97,6 +98,15 @@ impl Record {
         ready: impl FnOnce(&mut bool) -> Stopped<bool>,
         apply: impl FnOnce(&mut Owners) -> Stopped<u8>,
     ) -> Stopped<Poll<u8>> {
+        self.poll_entered(|| Ok(begin()), ready, |owners| apply(owners).map(Some))
+    }
+
+    pub(super) fn poll_entered(
+        &mut self,
+        begin: impl FnOnce() -> Stopped<Option<u64>>,
+        ready: impl FnOnce(&mut bool) -> Stopped<bool>,
+        apply: impl FnOnce(&mut Owners) -> Stopped<Option<u8>>,
+    ) -> Stopped<Poll<u8>> {
         match self.stage {
             Stage::EffectDone(status) | Stage::Releasing(status) | Stage::Complete(status) => {
                 return Ok(Poll::Ready(status));
@@ -107,7 +117,7 @@ impl Record {
         if self.stage == Stage::Prepared {
             // The record already owns its inputs before entry can observe stop.
             self.stage = Stage::Applying;
-            self.ordinal = begin();
+            self.ordinal = begin()?;
             self.stage = Stage::Waiting { entered: false };
         }
         let Stage::Waiting { mut entered } = self.stage else {
@@ -115,13 +125,19 @@ impl Record {
         };
         // A stopped admission never leaves a retryable record behind.
         self.stage = Stage::Abandoned;
+        self.rest = false;
         if !ready(&mut entered)? {
             self.stage = Stage::Waiting { entered };
             return Ok(Poll::Pending);
         }
         self.stage = Stage::Applying;
         match apply(&mut self.owners) {
-            Ok(status) => {
+            Ok(None) => {
+                self.rest = true;
+                self.stage = Stage::Waiting { entered };
+                Ok(Poll::Pending)
+            }
+            Ok(Some(status)) => {
                 status_is_terminal(status);
                 self.stage = Stage::EffectDone(status);
                 Ok(Poll::Ready(status))
@@ -210,6 +226,7 @@ impl Records {
             ordinal: None,
             suffix_done: false,
             yielded: false,
+            rest: false,
             owners,
         }));
         ticket
@@ -287,7 +304,15 @@ pub(crate) unsafe fn invoke_mutex(
         }
     };
     loop {
-        match unsafe { crate::stop::check(ctx, poll_mutex(ctx, ticket, crate::continuation::binding::can_leave(ctx, site))) } {
+        let leave = unsafe { crate::continuation::binding::can_leave(ctx, site) };
+        let result = unsafe { poll_mutex(ctx, ticket, leave) };
+        if let Err(ref stop) = result
+            && leave && super::replay::cut_rejection(ctx, stop) {
+            unsafe { crate::stop::check(ctx, crate::tasks::park_left(ctx, crate::tasks::Wait::Final)) };
+            crate::tasks::compact::wait(ctx);
+            return Some(crate::STATUS_SUSPENDED);
+        }
+        match unsafe { crate::stop::check(ctx, result) } {
             Poll::Ready(status) => {
                 unsafe {
                     let retired = (*ctx)
@@ -305,7 +330,7 @@ pub(crate) unsafe fn invoke_mutex(
                 if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
                     // A committed yield schedules this saved continuation itself.
                     // An object dependency wait is awakened by its own token.
-                    if unsafe { (*ctx).free_ops.tails.active(site.task, ticket).yielded } {
+                    if unsafe { let record = (*ctx).free_ops.tails.active(site.task, ticket); record.yielded || record.rest } {
                         return Some(crate::STATUS_SUSPENDED);
                     }
                     unsafe {
@@ -319,6 +344,10 @@ pub(crate) unsafe fn invoke_mutex(
                     };
                     crate::tasks::compact::wait(ctx);
                     return Some(crate::STATUS_SUSPENDED);
+                }
+                if unsafe { (*ctx).free_ops.tails.active(site.task, ticket).rest } {
+                    unsafe { super::suspend(&mut *ctx, true) };
+                    continue;
                 }
                 unsafe {
                     crate::stop::check(

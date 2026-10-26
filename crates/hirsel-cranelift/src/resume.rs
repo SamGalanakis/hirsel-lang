@@ -452,7 +452,10 @@ impl FnEmitter<'_, '_, '_> {
         let (state,bytes)=(state.clone(),resume.plan.cost.frame_bytes);
         self.materialize_live(&state.live,state.state)?;
         let number=self.b.ins().iconst(types::I32,i64::from(state.state));
-        let kind=self.b.ins().iconst(types::I32,48);
+        let tag = if matches!(self.unit.types[self.unit.values[state.value.index()].ty.index()].repr, ValueRepr::Block) {
+            if matches!(self.layout(state.layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
+        } else { 50 };
+        let kind=self.b.ins().iconst(types::I32,tag);
         let bytes=self.b.ins().iconst(types::I32,bytes as i64);
         let code=self.cleanup_code(state.anchor)?;
         let (anchor,site)=self.failure_sites(code);

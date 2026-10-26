@@ -7,7 +7,7 @@ pub(super) fn sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,usize)> 
         block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate().filter_map(move |(i,inst)| {
             match *inst {
                 Inst::Release{layout,live:MaskRef::All,..}
-                    if matches!(table.layout(layout).map(|l|&l.kind),Some(LayoutKind::Shared{..})) =>Some((BlockId(b as u32),i)),
+                    if eligible(u, table, layout) =>Some((BlockId(b as u32),i)),
                 _=>None,
             }
         })
@@ -23,7 +23,7 @@ pub(super) fn root_states(
     for (b, block) in u.blocks.iter().enumerate() {
         for (i, inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
             let Inst::Release {value,layout,live:MaskRef::All,anchor,failure}=*inst else {continue};
-            if !matches!(table.layout(layout).map(|l|&l.kind),Some(LayoutKind::Shared{..})) {continue;}
+            if !eligible(u, table, layout) {continue;}
             if u.values[value.index()].holding!=Holding::Owned {return Err("cleanup root has no owning credit".into());}
             let block=BlockId(b as u32);
             if successors_of(u,block).into_iter().any(|next|reaches(u,next,block)) {
@@ -67,4 +67,12 @@ pub(super) fn root_states(
         }
     }
     Ok(out)
+}
+
+// Only ordinary owning representations. Donors, arenas, sealed owners and
+// metadata release protocols cannot inherit this instruction's binder.
+fn eligible(_u: &LirUnit<Ready>, table: &LayoutTable, layout: LayoutId) -> bool {
+    table.layout(layout).is_some_and(|l| matches!(l.kind,
+        LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
+        | LayoutKind::Resource | LayoutKind::Handle) && l.size.storage().is_some())
 }

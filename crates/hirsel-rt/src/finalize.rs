@@ -174,6 +174,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_finalize(
     // code or releases a root enters the role itself.
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     unsafe { crate::tasks::role::task_owned(ctx) };
+    if let Some(status) = unsafe { crate::tasks::free::tail::invoke_finalize(ctx, index, value) } {
+        assert!(live_mask.is_null(), "a bound inline cleanup has an unproved live mask");
+        return status;
+    }
     // SAFETY: caller contract.
     unsafe {
         let ctx = &mut *ctx;

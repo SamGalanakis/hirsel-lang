@@ -1445,7 +1445,9 @@ fn root_instruction_sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,us
     for (b,block) in u.blocks.iter().enumerate() {
         for (i,inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
             if let Inst::Release{layout,live:MaskRef::All,..}=inst
-                && table.layout(*layout).is_some_and(|r|matches!(r.kind,LayoutKind::Shared{..})) {
+                && table.layout(*layout).is_some_and(|r| matches!(r.kind,
+                    LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
+                    | LayoutKind::Resource | LayoutKind::Handle) && r.size.storage().is_some()) {
                 sites.push((BlockId(b as u32),i));
             }
         }

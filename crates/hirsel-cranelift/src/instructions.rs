@@ -714,6 +714,7 @@ impl FnEmitter<'_, '_, '_> {
                     RuntimeEntry::Release,
                     &[context, block, descriptor, mask, anchor, operation_site],
                 )?;
+                if self.resume.is_some() { self.resume_propagate(status)?; }
                 self.status_guard(status, failure)
             }
             Inst::Reset {

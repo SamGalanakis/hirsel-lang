@@ -32,8 +32,21 @@ pub(super) fn touched(
     replay: Option<&super::replay::Object>,
     action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
 ) -> Stopped<()> {
+    touched_entered(ctx, phase, cell, state, replay, false, action).map(|v| v.expect("blocking phase"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn touched_entered(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    cell: &crate::sync::MutexCell,
+    state: &mut crate::sync::MutexImage,
+    replay: Option<&super::replay::Object>,
+    polling: bool,
+    action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
+) -> Stopped<Option<()>> {
     super::record::track(ctx, cell.object.get());
-    super::record::publish_with_replay(ctx, phase, replay.map(|object| object.token()), |writer| {
+    super::record::publish_entered(ctx, phase, replay.map(|object| object.token()), polling, |writer| {
         let outcome = action(state);
         if let Some(writer) = writer {
             writer.touch(
@@ -46,7 +59,7 @@ pub(super) fn touched(
             replay.touch(outcome)?;
         }
         Ok(())
-    })?
+    })?.transpose()
 }
 
 /// # Safety
@@ -245,6 +258,15 @@ pub(super) unsafe fn put_action(
     word: u64,
     payload: *mut u8,
 ) -> Stopped<Option<u32>> {
+    unsafe { put_action_entered(ctx, word, payload, false) }.map(|v| v.expect("blocking phase"))
+}
+
+pub(super) unsafe fn put_action_entered(
+    ctx: *mut TaskCtx,
+    word: u64,
+    payload: *mut u8,
+    polling: bool,
+) -> Stopped<Option<Option<u32>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     super::objects::keep_mutex(ctx, word, &cell);
@@ -252,12 +274,13 @@ pub(super) unsafe fn put_action(
     let mut state = cell.lock();
     let mut next = None;
     let mut token = None;
-    let publication = touched(
+    let publication = touched_entered(
         ctx,
         Phase::Done,
         &cell,
         &mut state,
         replay.as_ref(),
+        polling,
         |state| {
             next = unsafe { cell.put(state, payload) };
             token = next.and_then(|next| state.take_token(next));
@@ -269,8 +292,7 @@ pub(super) unsafe fn put_action(
     drop(cell);
     drop(replay);
     unsafe { role::enter(ctx) };
-    publication?;
-    Ok(next)
+    Ok(publication?.map(|()| next))
 }
 
 /// # Safety
@@ -297,6 +319,15 @@ pub(super) unsafe fn kill_action(
     ctx: *mut TaskCtx,
     word: u64,
 ) -> Stopped<std::collections::VecDeque<u32>> {
+    unsafe { kill_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+}
+
+pub(super) unsafe fn kill_action_entered(
+    ctx: *mut TaskCtx,
+    word: u64,
+    
+    polling: bool,
+) -> Stopped<Option<std::collections::VecDeque<u32>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     // Capture the chain only after the replay wait, then avoid stop-aware
     // accessors while this frame owns it or the detached wake list.
@@ -314,23 +345,24 @@ pub(super) unsafe fn kill_action(
     let mut state = cell.lock();
     let mut waiters = Default::default();
     let mut tokens = Vec::new();
-    touched(
+    let publication = touched_entered(
         ctx,
         Phase::Done,
         &cell,
         &mut state,
         replay.as_ref(),
+        polling,
         |state| {
             waiters = state.kill(chain);
             tokens = state.take_tokens();
             "kill"
         },
-    )?;
+    );
     drop(state);
     drop(tokens);
     drop(cell);
     drop(replay);
-    Ok(waiters)
+    Ok(publication?.map(|()| waiters))
 }
 
 /// # Safety
@@ -366,15 +398,25 @@ unsafe fn close_inner(
 /// # Safety
 /// The role is held and the current ordinal has passed its object admission.
 pub(super) unsafe fn close_action(ctx: *mut TaskCtx, word: u64) -> Stopped<crate::sync::ClosedMutex> {
+    unsafe { close_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+}
+
+pub(super) unsafe fn close_action_entered(
+    ctx: *mut TaskCtx,
+    word: u64,
+    
+    polling: bool,
+) -> Stopped<Option<crate::sync::ClosedMutex>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let empty = crate::channels::Ring::new(cell.element.size, 1);
     let mut state = cell.lock();
     super::record::track(ctx, cell.object.get());
-    let publication = super::record::publish_with_replay(
+    let publication = super::record::publish_entered(
         ctx,
         Phase::Done,
         replay.as_ref().map(|object| object.token()),
+        polling,
         |writer| {
             let version = state.permit.observe();
             if let Some(writer) = writer {
@@ -395,7 +437,7 @@ pub(super) unsafe fn close_action(ctx: *mut TaskCtx, word: u64) -> Stopped<crate
     drop(state);
     drop(cell);
     drop(replay);
-    publication?
+    publication?.transpose()
 }
 
 /// Destroy a closed cell's detached payload on its closing task, at the
@@ -451,25 +493,35 @@ pub(super) unsafe fn cause_action(
     ctx: *mut TaskCtx,
     word: u64,
 ) -> Stopped<std::sync::Arc<Vec<crate::failure::Chained>>> {
+    unsafe { cause_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+}
+
+pub(super) unsafe fn cause_action_entered(
+    ctx: *mut TaskCtx,
+    word: u64,
+    
+    polling: bool,
+) -> Stopped<Option<std::sync::Arc<Vec<crate::failure::Chained>>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let mut state = cell.lock();
     let chain = state.dead().expect("a dead mutex cause").clone();
-    touched(
+    let publication = touched_entered(
         ctx,
         Phase::Done,
         &cell,
         &mut state,
         replay.as_ref(),
+        polling,
         |state| {
             state.permit.observe();
             "cause"
         },
-    )?;
+    );
     drop(state);
     drop(cell);
     drop(replay);
-    Ok(chain)
+    Ok(publication?.map(|()| chain))
 }
 
 #[cfg(test)]

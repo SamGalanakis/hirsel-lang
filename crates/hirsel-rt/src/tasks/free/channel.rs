@@ -391,6 +391,12 @@ unsafe fn close_inner(
 pub(super) unsafe fn close_action(
     ctx: *mut TaskCtx, word: u64, channel: u32, sender: bool,
 ) -> Stopped<(Option<(crate::channels::Ring, u32)>, bool)> {
+    unsafe { close_action_entered(ctx, word, channel, sender, false) }.map(|v| v.expect("blocking phase"))
+}
+
+pub(super) unsafe fn close_action_entered(
+    ctx: *mut TaskCtx, word: u64, channel: u32, sender: bool, polling: bool,
+) -> Stopped<Option<(Option<(crate::channels::Ring, u32)>, bool)>> {
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe {
         role::with_held(ctx, |s| {
@@ -408,10 +414,11 @@ pub(super) unsafe fn close_action(
     };
     super::record::track(ctx, cell.object.get());
     let mut tokens = Default::default();
-    let publication = super::record::publish_with_replay(
+    let publication = super::record::publish_entered(
         ctx,
         Phase::Done,
         replay.as_ref().map(|object| object.token()),
+        polling,
         |writer| {
             let left = unsafe {
                 role::with_held(ctx, |s| s.channels.close_locked(word, &cell, &mut state))
@@ -441,7 +448,8 @@ pub(super) unsafe fn close_action(
         unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) };
     }
     drop(tokens);
-    let left = publication??.into_left();
+    let Some(left) = publication?.transpose()? else { return Ok(None) };
+    let left = left.into_left();
     // Close is Keep: it still publishes runnable receivers before returning
     // to a segment that may never yield. No stop-aware ctx accessor can
     // abandon a detached ring on this frame.
@@ -452,7 +460,7 @@ pub(super) unsafe fn close_action(
         })
     };
     unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
-    Ok((left, inert))
+    Ok(Some((left, inert)))
 }
 
 /// Destroy the messages a last receiver's close detached, oldest first, on

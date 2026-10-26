@@ -508,6 +508,49 @@ pub(super) fn poll_object(
     }
 }
 
+/// An entered object wait also polls its phase-root prefix. `rest` means
+/// no dependency was installed, so its owning frame must requeue itself.
+pub(super) fn poll_object_entered(
+    ctx: *mut TaskCtx,
+    handle: Handle,
+    entered: &mut bool,
+    rest: &std::cell::Cell<bool>,
+) -> Stopped<bool> {
+    if !on(ctx) { return Ok(true); }
+    loop {
+        let object = object(ctx, handle).expect("admitted object replay");
+        if !*entered && unsafe { (*ctx).roots.has_pending() } {
+            if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+                rest.set(true);
+                return Ok(false);
+            }
+            *entered = true;
+        }
+        if !object.token.admits(Phase::Done) {
+            if !*entered {
+                if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+                    rest.set(true);
+                    return Ok(false);
+                }
+                *entered = true;
+            }
+            return Err(Stop::Requested);
+        }
+        let id = object.id()?;
+        let Some(dependency) = object.token.diverged(|task| task.cursor.admission(task.op, 0, &id).map(pending))? else {
+            return Ok(true);
+        };
+        if !*entered {
+            if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+                rest.set(true);
+                return Ok(false);
+            }
+            *entered = true;
+        }
+        if !dependency.subscribe(subscriber(ctx)) { return Ok(false); }
+    }
+}
+
 /// Queue the running task for the next `wake_retrying`: live host-key waits,
 /// which a publication's key ends wake under the role.
 pub(super) fn retry_later(ctx: *mut TaskCtx) {

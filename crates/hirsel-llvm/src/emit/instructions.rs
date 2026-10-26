@@ -1782,7 +1782,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 live,
                 anchor,
                 failure,
-            } if live == MaskRef::All && glue::covered(self.inputs.layouts, layout) => {
+            } if self.resume.is_none() && live == MaskRef::All && glue::covered(self.inputs.layouts, layout) => {
                 // Compiled drop glue; the runtime walks the step program of every other
                 // layout and of a partly moved block.
                 let block = self.get(value)?;
@@ -1868,6 +1868,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     operation_site,
                 ];
                 let status = self.builder.call(release, &arguments);
+                if self.resume.is_some() { self.resume_propagate(status)?; }
                 self.status_guard(status, failure)
             }
             Inst::Reset {

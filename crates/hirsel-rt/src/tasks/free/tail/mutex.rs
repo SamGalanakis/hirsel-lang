@@ -65,11 +65,16 @@ pub(in crate::tasks::free) unsafe fn poll_mutex(
     ticket: Ticket,
     leave: bool,
 ) -> Stopped<Poll<u8>> {
-    unsafe {
+    let rest = std::cell::Cell::new(false);
+    let result = unsafe {
         poll_mutex_with(ctx, ticket, leave, |site, entered| {
-            replay::poll_object(ctx, site.object, entered)
+            replay::poll_object_entered(ctx, site.object, entered, &rest)
         })
+    };
+    if matches!(result, Ok(Poll::Pending)) && rest.get() {
+        unsafe { (*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).rest = true };
     }
+    result
 }
 
 unsafe fn poll_mutex_with(
@@ -84,29 +89,33 @@ unsafe fn poll_mutex_with(
     // Consume only the physical leave marker; ordinal/Entered live in record.
     crate::tasks::compact::waited(ctx);
     assert!(matches!(site.kind, Kind::Put | Kind::Kill | Kind::Cause));
-    let result = unsafe { &mut *record }.poll(
+    let result = unsafe { &mut *record }.poll_entered(
         || {
-            record::begin(ctx);
-            record::on(ctx).then(|| record::position(ctx).1.op)
+            if !record::begin_entered(ctx) { return Err(crate::stop::Stop::Requested); }
+            Ok(record::on(ctx).then(|| record::position(ctx).1.op))
         },
         |entered| ready(site, entered),
         |owners| {
             match site.kind {
                 Kind::Put => {
                     let image = owners.image.as_ref().expect("an owned put image");
-                    let next = unsafe { mutex::put_action(ctx, site.object.1, image.at(0)) }?;
+                    let Some(next) = (unsafe { mutex::put_action_entered(ctx, site.object.1, image.at(0), true) })? else { return Ok(None) };
                     owners.wakes.extend(next);
                     // cell.put installed its exact None; all language credits
                     // belong to the cell now, so this only reclaims image bytes.
                     owners.image.take();
                 }
-                Kind::Kill => owners.wakes = unsafe { mutex::kill_action(ctx, site.object.1) }?,
+                Kind::Kill => {
+                    let Some(wakes) = (unsafe { mutex::kill_action_entered(ctx, site.object.1, true) })? else { return Ok(None) };
+                    owners.wakes = wakes;
+                }
                 Kind::Cause => {
-                    owners.chain = Some(unsafe { mutex::cause_action(ctx, site.object.1) }?)
+                    let Some(chain) = (unsafe { mutex::cause_action_entered(ctx, site.object.1, true) })? else { return Ok(None) };
+                    owners.chain = Some(chain);
                 }
                 _ => unreachable!("a non-mutex tail"),
             }
-            Ok(STATUS_OK)
+            Ok(Some(STATUS_OK))
         },
     )?;
     let Poll::Ready(status) = result else {
@@ -130,7 +139,7 @@ unsafe fn poll_mutex_with(
       if !(*record).yielded {
         (*record).yielded = true;
         if site.kind == Kind::Cause {
-            replay::start(ctx);
+            if replay::at_cut(ctx) { return Err(crate::stop::Stop::Requested); }
         } else if crate::tasks::free::try_yield_entered(&mut *ctx, leave)? {
             return Ok(Poll::Pending);
         }

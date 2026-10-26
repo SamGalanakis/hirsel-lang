@@ -17,6 +17,7 @@ pub(super) struct Driver {
     task: TaskKey,
     anchor: u64,
     operation_site: u64,
+    rest: bool,
 }
 
 enum Node {
@@ -24,6 +25,7 @@ enum Node {
         cursor: Box<Cursor>,
         // The cursor's tagged work pointer may name this pinned allocation.
         _inline: Option<Box<std::mem::MaybeUninit<Cleanup>>>,
+        _image: Option<Ring>,
     },
     Close(Close),
 }
@@ -46,8 +48,8 @@ impl Driver {
     /// This internal constructor grants no permission to leave a native stack.
     pub(super) fn new(task: TaskKey, cursor: Box<Cursor>, anchor: u64, operation_site: u64) -> Self {
         Self {
-            stack: vec![Box::new(Node::Release { cursor, _inline: None })],
-            task, anchor, operation_site,
+            stack: vec![Box::new(Node::Release { cursor, _inline: None, _image: None })],
+            task, anchor, operation_site, rest: false,
         }
     }
 
@@ -55,11 +57,15 @@ impl Driver {
     /// must retain this Driver in task storage before invoking it: a cut can
     /// abandon the current Rust stack. Pending retains every ancestor and shield.
     pub(super) unsafe fn poll(&mut self, ctx: *mut TaskCtx) -> Stopped<Poll<u8>> {
-        unsafe { self.poll_with(ctx, |object, entered| replay::poll_object(ctx, object, entered)) }
+        let rest = std::cell::Cell::new(false);
+        let result = unsafe { self.poll_with(ctx, |object, entered| replay::poll_object_entered(ctx, object, entered, &rest)) };
+        self.rest |= rest.get();
+        result
     }
 
     unsafe fn poll_with(&mut self, ctx: *mut TaskCtx,
         mut ready: impl FnMut(hirsel_free::session::Handle, &mut bool) -> Stopped<bool>) -> Stopped<Poll<u8>> {
+        self.rest = false;
         assert_eq!(self.task, crate::tasks::running_key(ctx), "stale cleanup driver task");
         loop {
             let node = self.stack.last_mut().expect("completed cleanup driver polled") as *mut Box<Node>;
@@ -107,13 +113,22 @@ impl Driver {
                     if !close.done {
                         let effect = unsafe { (*ctx).free_ops.tails.active(self.task, close.ticket) as *mut Record };
                         let object = unsafe { (*effect).site.object };
-                        let result = unsafe { &mut *effect }.poll(
-                            || { record::begin(ctx); record::on(ctx).then(|| record::position(ctx).1.op) },
+                        let result = unsafe { &mut *effect }.poll_entered(
+                            || {
+                                if !record::begin_entered(ctx) { return Err(crate::stop::Stop::Requested); }
+                                Ok(record::on(ctx).then(|| record::position(ctx).1.op))
+                            },
                             |entered| ready(object, entered),
                             |_| {
                                 let (left, inert) = match close.channel {
-                                    Some((channel, sender)) => unsafe { channel::close_action(ctx, close.word, channel, sender) }?,
-                                    None => (unsafe { mutex::close_action(ctx, close.word) }?.into_left(), false),
+                                    Some((channel, sender)) => {
+                                        let Some(left) = (unsafe { channel::close_action_entered(ctx, close.word, channel, sender, true) })? else { return Ok(None) };
+                                        left
+                                    }
+                                    None => {
+                                        let Some(closed) = (unsafe { mutex::close_action_entered(ctx, close.word, true) })? else { return Ok(None) };
+                                        (closed.into_left(), false)
+                                    },
                                 };
                                 if let Some((image, descriptor)) = left {
                                     if !inert {
@@ -124,10 +139,13 @@ impl Driver {
                                         close.image = Some(unsafe { (*ctx).detached_images.keep(image) });
                                     }
                                 }
-                                Ok(STATUS_OK)
+                                Ok(Some(STATUS_OK))
                             },
                         )?;
-                        if result.is_pending() { return Ok(Poll::Pending); }
+                        if result.is_pending() {
+                            self.rest = unsafe { (*effect).rest };
+                            return Ok(Poll::Pending);
+                        }
                         unsafe { (*effect).releasing() };
                         close.done = true;
                         if replay::at_cut(ctx) { return Err(crate::stop::Stop::Requested); }
@@ -142,7 +160,7 @@ impl Driver {
                         // Commit the FIFO position only when its child has a sole
                         // pinned owner; the parent cannot resume before it returns.
                         close.next += 1;
-                        self.stack.push(Box::new(Node::Release { cursor, _inline:Some(inline) }));
+                        self.stack.push(Box::new(Node::Release { cursor, _inline:Some(inline), _image:None }));
                         unsafe { crate::release::push(&mut *ctx, item, true) };
                         continue;
                     }
@@ -197,60 +215,106 @@ pub(super) unsafe fn poll(ctx: *mut TaskCtx, index: usize) -> Stopped<Poll<u8>> 
 #[cfg(test)]
 mod tests;
 
-/// Entered instruction site for a root drop. The saved operation, rather
-/// than the reloaded source operand, owns the consumed root on every retry.
-/// # Safety
-/// All caller frames are certified, including value/mask/cleanup ancestry.
-pub(crate) unsafe fn invoke_root_drop(ctx:*mut TaskCtx, block:*mut Header) -> Option<u8> {
-    const ROOT_DROP:u32=48;
-    let site=unsafe {crate::continuation::binding::take_bound(ctx,ROOT_DROP)}?;
+/// Root credit consumption belongs to the first entry, never to its retry.
+pub(crate) unsafe fn invoke_root_drop(ctx: *mut TaskCtx, block: *mut Header) -> Option<u8> {
+    unsafe { invoke_cleanup(ctx, 48, |ctx, site| {
+        let cursor = Box::new(Cursor::new((*ctx).work, block, ptr::null(), false, site.anchor, site.operation_site));
+        let index = attach(ctx, cursor, site.anchor, site.operation_site);
+        if !crate::roots::consume(&mut *ctx, block) {
+            (*ctx).free_ops.tails.drivers.pop();
+            return None;
+        }
+        crate::release::push(&mut *ctx, block, true);
+        Some(index)
+    }) }
+}
+
+/// Ordinary counted holders use the same last-credit rules as release_block.
+pub(crate) unsafe fn invoke_release(ctx: *mut TaskCtx, block: *mut Header) -> Option<u8> {
+    unsafe { invoke_cleanup(ctx, 49, |ctx, site| {
+        let count = (*block).count;
+        if count >= crate::count::COUNT_ARENA_SHARED { return None; }
+        if count > 1 { (*block).count = count - 1; return None; }
+        let cursor = Box::new(Cursor::new((*ctx).work, block, ptr::null(), false, site.anchor, site.operation_site));
+        let index = attach(ctx, cursor, site.anchor, site.operation_site);
+        crate::release::push(&mut *ctx, block, true);
+        Some(index)
+    }) }
+}
+
+/// A native inline temporary is moved into task-owned bytes before any push.
+/// Its Cleanup is pinned before its tagged address reaches the work chain.
+pub(crate) unsafe fn invoke_finalize(ctx: *mut TaskCtx, descriptor: u32, value: *mut u8) -> Option<u8> {
+    unsafe { invoke_cleanup(ctx, 50, |ctx, site| {
+        let layout = &*(*ctx).descriptor(descriptor);
+        assert!(layout.flags & crate::release::LAYOUT_DYNAMIC == 0);
+        let mut image = Ring::new(layout.size as usize, layout.align as usize);
+        image.push(value, layout.size as usize);
+        let mut inline = Box::new(std::mem::MaybeUninit::<Cleanup>::uninit());
+        let item = crate::finalize::finalize_item(inline.as_mut_ptr(), descriptor, image.at(0));
+        let cursor = Box::new(Cursor::new((*ctx).work, item, ptr::null(), false, site.anchor, site.operation_site));
+        let index = attach(ctx, cursor, site.anchor, site.operation_site);
+        let driver = &mut *(&mut (*ctx).free_ops.tails.drivers)[index];
+        let Node::Release { _inline, _image, .. } = &mut *driver.stack[0] else { unreachable!() };
+        *_inline = Some(inline);
+        *_image = Some(image);
+        crate::release::push(&mut *ctx, item, true);
+        Some(index)
+    }) }
+}
+
+/// Dispatch by entered invocation before reading the original operand. After
+/// transfer, only the task-owned driver owns the in-progress obligation.
+unsafe fn invoke_cleanup(
+    ctx: *mut TaskCtx,
+    kind: u32,
+    prepare: impl FnOnce(*mut TaskCtx, crate::continuation::binding::BoundSite) -> Option<usize>,
+) -> Option<u8> {
+    let site = unsafe { crate::continuation::binding::take_bound(ctx, kind) }?;
     if !crate::tasks::free::enabled(ctx) {
-        unsafe {crate::continuation::binding::complete_bound(ctx,site)};
+        unsafe { crate::continuation::binding::complete_bound(ctx, site) };
         return None;
     }
-    let previous=unsafe {(*ctx).free_ops.tails.cleanup_sites.last().filter(|(s,_)|*s==site).map(|(_,index)|*index)};
-    let index=match previous {
-        Some(index)=>index,
-        None=> {
-            // Both record and backing capacity exist before consuming credit.
-            let cursor=Box::new(Cursor::new(unsafe {(*ctx).work},block,ptr::null(),false,site.anchor,site.operation_site));
-            let index=unsafe {attach(ctx,cursor,site.anchor,site.operation_site)};
-            unsafe {(*ctx).free_ops.tails.cleanup_sites.push((site,index))};
-            if !unsafe {crate::roots::consume(&mut *ctx,block)} {
-                unsafe {
-                    (*ctx).free_ops.tails.drivers.pop();
-                    (*ctx).free_ops.tails.cleanup_sites.pop();
-                    crate::continuation::binding::complete_bound(ctx,site);
-                }
+    let previous = unsafe { (*ctx).free_ops.tails.cleanup_sites.last().filter(|(s, _)| *s == site).map(|(_, index)| *index) };
+    let index = match previous {
+        Some(index) => index,
+        None => match prepare(ctx, site) {
+            Some(index) => {
+                unsafe { (*ctx).free_ops.tails.cleanup_sites.push((site, index)) };
+                index
+            }
+            None => {
+                unsafe { crate::continuation::binding::complete_bound(ctx, site) };
                 return Some(STATUS_OK);
             }
-            unsafe {crate::release::push(&mut *ctx,block,true)};
-            index
         }
     };
     crate::tasks::compact::waited(ctx);
     loop {
-        let result=unsafe {poll(ctx,index)};
-        match result {
-            Ok(Poll::Ready(status))=> {
+        match unsafe { poll(ctx, index) } {
+            Ok(Poll::Ready(status)) => {
                 unsafe {
-                    assert_eq!((*ctx).free_ops.tails.cleanup_sites.pop(),Some((site,index)));
-                    crate::continuation::binding::complete_bound(ctx,site);
+                    assert_eq!((*ctx).free_ops.tails.cleanup_sites.pop(), Some((site, index)));
+                    crate::continuation::binding::complete_bound(ctx, site);
                 }
                 return Some(status);
             }
-            waiting=> {
-                let leave=unsafe {crate::continuation::binding::can_leave(ctx,site)};
-                if let Err(stop)=waiting {
-                    if !(leave && replay::cut_rejection(ctx,&stop)) {
-                        unsafe {crate::stop::check(ctx,Err::<(),_>(stop))};
+            waiting => {
+                let leave = unsafe { crate::continuation::binding::can_leave(ctx, site) };
+                if let Err(stop) = waiting {
+                    if !(leave && replay::cut_rejection(ctx, &stop)) {
+                        unsafe { crate::stop::check(ctx, Err::<(), _>(stop)) };
                         unreachable!();
                     }
-                    unsafe {crate::stop::check(ctx,crate::tasks::park_left(ctx,crate::tasks::Wait::Final))};
+                    unsafe { crate::stop::check(ctx, crate::tasks::park_left(ctx, crate::tasks::Wait::Final)) };
+                } else if unsafe { (&(*ctx).free_ops.tails.drivers)[index].rest } {
+                    if leave { return Some(crate::STATUS_SUSPENDED); }
+                    unsafe { crate::tasks::free::suspend(&mut *ctx, true) };
+                    continue;
                 } else if leave {
-                    unsafe {crate::stop::check(ctx,crate::tasks::park_left(ctx,crate::tasks::Wait::Retry{cancelable:false}))};
+                    unsafe { crate::stop::check(ctx, crate::tasks::park_left(ctx, crate::tasks::Wait::Retry { cancelable: false })) };
                 } else {
-                    unsafe {crate::stop::check(ctx,crate::tasks::try_block(&mut *ctx,crate::tasks::Wait::Retry{cancelable:false},false,site.operation_site))};
+                    unsafe { crate::stop::check(ctx, crate::tasks::try_block(&mut *ctx, crate::tasks::Wait::Retry { cancelable: false }, false, site.operation_site)) };
                     continue;
                 }
                 crate::tasks::compact::wait(ctx);
