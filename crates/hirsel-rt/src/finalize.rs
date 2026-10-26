@@ -146,7 +146,7 @@ fn shielded(ctx: &mut TaskCtx, call: impl FnOnce(*mut TaskCtx) -> u8) -> u8 {
 
 /// FAIL-3: a failure inside the drop of a type from an `unsafe ffi` package ends the process.
 #[cold]
-fn terminate_unsafe_ffi() -> ! {
+pub(crate) fn terminate_unsafe_ffi() -> ! {
     eprintln!(
         "hirsel-rt: FAIL-3: a finalizer of a type declared in an unsafe ffi package failed; the process ends"
     );

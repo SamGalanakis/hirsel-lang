@@ -908,10 +908,34 @@ pub(crate) struct Cursor {
     kept_root: bool,
     close: Option<u64>,
     complete: bool,
+    finalizer: Option<Finalizer>,
+    finalizer_serial: u64,
+    finalizer_own: bool,
 }
 
 pub(crate) enum ReleasePoll {
     Close(u64),
+    Complete(Drained),
+}
+
+/// One original user-finalizer invocation exposed before its first action.
+/// The caller must retain the borrowed value and own admission/shield custody;
+/// this token grants no scheduling permission and never names a TaskCtx.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Finalizer {
+    pub(crate) layout: *const Layout,
+    pub(crate) value: *mut u8,
+    pub(crate) anchor: u64,
+    pub(crate) operation_site: u64,
+    serial: u64,
+}
+
+/// Opt-in traversal for a checked finalizer driver. Ordinary poll never
+/// exposes user code and retains its synchronous status contract.
+#[allow(dead_code)]
+pub(crate) enum FinalizerPoll {
+    Close(u64),
+    Finalizer(Finalizer),
     Complete(Drained),
 }
 
@@ -941,6 +965,9 @@ impl Cursor {
             kept_root: false,
             close: None,
             complete: false,
+            finalizer: None,
+            finalizer_serial: 0,
+            finalizer_own: false,
         }
     }
 
@@ -951,17 +978,91 @@ impl Cursor {
     /// As for new. No ordinary finalizer called by this walk can compact its
     /// synchronous Rust caller; only the returned close may leave this stack.
     pub(crate) unsafe fn poll(&mut self, ctx: &mut TaskCtx) -> ReleasePoll {
+        assert!(
+            self.finalizer.is_none(),
+            "entered finalizer requires its original driver"
+        );
+        match unsafe { self.poll_with::<false>(ctx) } {
+            FinalizerPoll::Complete(result) => ReleasePoll::Complete(result),
+            FinalizerPoll::Close(handle) => ReleasePoll::Close(handle),
+            FinalizerPoll::Finalizer(_) => unreachable!("synchronous finalizer exposed"),
+        }
+    }
+
+    /// Yield the original finalizer before invoking it, retaining the next
+    /// mechanical cursor. Repeated polls return that same invocation; fields
+    /// and sibling owners cannot advance until finalized consumes its token.
+    /// # Safety
+    /// As for new; the checked caller additionally retains each exposed
+    /// finalizer's borrowed self, nested frame, admission and shield through
+    /// Pending. Opaque finalizers must still use synchronous run_finalizer.
+    #[allow(dead_code)]
+    pub(crate) unsafe fn poll_finalizers(&mut self, ctx: &mut TaskCtx) -> FinalizerPoll {
+        unsafe { self.poll_with::<true>(ctx) }
+    }
+
+    unsafe fn poll_with<const FINALIZERS: bool>(&mut self, ctx: &mut TaskCtx) -> FinalizerPoll {
         assert!(!self.complete, "release cursor polled after completion");
+        if let Some(finalizer) = self.finalizer {
+            return FinalizerPoll::Finalizer(finalizer);
+        }
         if let Some(handle) = self.close {
-            return ReleasePoll::Close(handle);
+            return FinalizerPoll::Close(handle);
         }
         unsafe {
             if self.mask.is_null() && !self.keep_root {
-                poll_items::<false>(ctx, self)
+                poll_items::<false, FINALIZERS>(ctx, self)
             } else {
-                poll_items::<true>(ctx, self)
+                poll_items::<true, FINALIZERS>(ctx, self)
             }
         }
+    }
+
+    fn handoff(&mut self, layout: *const Layout, value: *mut u8, own: bool) -> FinalizerPoll {
+        assert!(self.finalizer.is_none() && self.close.is_none());
+        self.finalizer_serial = self
+            .finalizer_serial
+            .checked_add(1)
+            .expect("finalizer serial overflow");
+        let finalizer = Finalizer {
+            layout,
+            value,
+            anchor: self.anchor,
+            operation_site: self.operation_site,
+            serial: self.finalizer_serial,
+        };
+        self.finalizer = Some(finalizer);
+        self.finalizer_own = own;
+        FinalizerPoll::Finalizer(finalizer)
+    }
+
+    /// Complete only the original invocation after its nested body and local
+    /// cleanup finish. STEP_END_FINALIZE still owns activation retirement;
+    /// this does not re-admit, re-shield or repeat a finalizer.
+    /// # Safety
+    /// The Active task owns this cursor and completed the token's borrowed
+    /// invocation. Failure is already recorded; unsafe-FFI failure is fatal.
+    #[allow(dead_code)]
+    pub(crate) unsafe fn finalized(&mut self, ctx: &mut TaskCtx, token: Finalizer, status: u8) {
+        assert!(
+            status == STATUS_OK || status == STATUS_FAILURE,
+            "pending is not a finalizer completion"
+        );
+        assert_eq!(self.finalizer, Some(token), "stale finalizer completion");
+        if status == STATUS_FAILURE {
+            if ctx.heap().diagnostic && !ctx.failure.active() {
+                fault("a finalizer failed without recording a failure");
+            }
+            if unsafe { (*token.layout).flags } & LAYOUT_UNSAFE_FFI != 0 {
+                crate::finalize::terminate_unsafe_ffi();
+            }
+        }
+        self.finalizer = None;
+        self.status |= status;
+        if self.finalizer_own && !is_cleanup(self.item) {
+            unsafe { ctx.heap().set_state(self.item, STATE_FIELDS_PENDING) };
+        }
+        self.finalizer_own = false;
     }
 
     pub(crate) fn closed(&mut self, status: u8) {
@@ -981,13 +1082,17 @@ impl Cursor {
 enum Walk {
     Child(*mut Header, u64),
     Close(u64, u64),
+    Finalizer(*const Layout, *mut u8, u64),
     Complete,
 }
 
 /// [`drain`]. `ROOTED` is false when the root has neither a live mask nor `keep_root`, so every
 /// item runs alike: an ordinary release.
 #[inline(always)]
-unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) -> ReleasePoll {
+unsafe fn poll_items<const ROOTED: bool, const FINALIZERS: bool>(
+    ctx: &mut TaskCtx,
+    state: &mut Cursor,
+) -> FinalizerPoll {
     let Cursor {
         base,
         mut root,
@@ -1010,6 +1115,15 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
                 if item != root || mask.is_null() {
                     if !is_cleanup(item) {
                         ctx.heap().set_state(item, STATE_FINALIZING);
+                    }
+                    if FINALIZERS && (*layout).finalizer.is_some() {
+                        state.root = root;
+                        state.item = item;
+                        state.parent = parent;
+                        state.fresh = false;
+                        state.status = status;
+                        state.kept_root = kept_root;
+                        return state.handoff(layout, value, true);
                     }
                     status |= run_finalizer(ctx, layout, value, anchor, operation_site);
                 }
@@ -1034,7 +1148,7 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
                 // Resume inside loops: rebuild the frame of the step that killed the child.
                 let nest = (cursor >> STEP_CURSOR_BITS) - 1;
                 let frame = locate(steps, end, value, pc - 1, nest);
-                let walked = walk_frames(
+                let walked = walk_frames::<FINALIZERS>(
                     ctx,
                     item,
                     steps,
@@ -1058,7 +1172,18 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
                         state.status = status;
                         state.kept_root = kept_root;
                         state.close = Some(handle);
-                        return ReleasePoll::Close(handle);
+                        return FinalizerPoll::Close(handle);
+                    }
+                    Walk::Finalizer(finalizer, borrowed, next) => {
+                        save_cursor(item, next, layout);
+                        state.root = root;
+                        state.item = item;
+                        state.parent = parent;
+                        state.fresh = fresh;
+                        state.status = status;
+                        state.kept_root = kept_root;
+
+                        return state.handoff(finalizer, borrowed, false);
                     }
                 }
             } else {
@@ -1102,7 +1227,7 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
                         }
                     } else {
                         let frame = Frame::root(value, end);
-                        let walked = walk_frames(
+                        let walked = walk_frames::<FINALIZERS>(
                             ctx,
                             item,
                             steps,
@@ -1126,7 +1251,18 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
                                 state.status = status;
                                 state.kept_root = kept_root;
                                 state.close = Some(handle);
-                                return ReleasePoll::Close(handle);
+                                return FinalizerPoll::Close(handle);
+                            }
+                            Walk::Finalizer(finalizer, borrowed, next) => {
+                                save_cursor(item, next, layout);
+                                state.root = root;
+                                state.item = item;
+                                state.parent = parent;
+                                state.fresh = fresh;
+                                state.status = status;
+                                state.kept_root = kept_root;
+
+                                return state.handoff(finalizer, borrowed, false);
                             }
                         }
                         break;
@@ -1221,7 +1357,7 @@ unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) 
     state.status = status;
     state.kept_root = kept_root;
     state.complete = true;
-    ReleasePoll::Complete(Drained { status, kept_root })
+    FinalizerPoll::Complete(Drained { status, kept_root })
 }
 
 /// Run one step that opens no frame on its field at `at`, advancing `pc` past a skipped tag
@@ -1305,7 +1441,7 @@ unsafe fn run_step(
 /// ends) and the count word to resume from.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
-unsafe fn walk_frames(
+unsafe fn walk_frames<const FINALIZERS: bool>(
     ctx: &mut TaskCtx,
     item: *mut Header,
     steps: *const Step,
@@ -1401,6 +1537,9 @@ unsafe fn walk_frames(
                 }
                 _ => {
                     let at = step_at(step, frame.base, frame.index);
+                    if FINALIZERS && step.kind == STEP_FINALIZE {
+                        return Walk::Finalizer(step.layout, at, suspended(pc, &frame, nest));
+                    }
                     if step.kind == STEP_CLOSE_HANDLE {
                         let handle = at.cast::<u64>().read_unaligned();
                         return Walk::Close(handle, suspended(pc, &frame, nest));

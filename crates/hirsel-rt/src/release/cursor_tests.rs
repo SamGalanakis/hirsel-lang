@@ -218,3 +218,206 @@ fn bad_pending_close_status_cannot_complete_a_release_step() {
     cursor.close = Some(7);
     cursor.closed(crate::STATUS_SUSPENDED);
 }
+
+unsafe extern "C" fn entered_counter(
+    ctx: *mut TaskCtx,
+    value: *mut u8,
+    anchor: u64,
+    site: u64,
+) -> u8 {
+    unsafe {
+        let counter = value.cast::<u64>();
+        let before = counter.read();
+        counter.write(before + 1);
+        if before == 20 {
+            crate::failure::hirsel_rt_v2_failure_begin(ctx, 1, 17, anchor, site);
+            STATUS_FAILURE
+        } else {
+            STATUS_OK
+        }
+    }
+}
+
+#[test]
+fn entered_finalizers_keep_original_fresh_and_loop_suffixes_without_repeating_admission() {
+    let mut resource_steps = [Step {
+        variant: 1,
+        ..step(STEP_END_FINALIZE, 0)
+    }];
+    let resource = Layout {
+        finalizer: Some(entered_counter),
+        ..layout(16, &resource_steps)
+    };
+    resource_steps[0].layout = &resource;
+    let end = Step {
+        layout: &resource,
+        ..step(STEP_END_FINALIZE, 0)
+    };
+    let loop_steps = [
+        Step {
+            span: 3,
+            stride: 16,
+            count: 3,
+            ..step(STEP_LOOP, 0)
+        },
+        Step {
+            layout: &resource,
+            ..step(STEP_FINALIZE, 0)
+        },
+        step(STEP_CLOSE_HANDLE, 8),
+        end,
+    ];
+    let elements = Layout {
+        flags: LAYOUT_WIDE_CURSOR,
+        ..layout(48, &loop_steps)
+    };
+    let mut root_steps = [
+        step(STEP_RELEASE, 8),
+        step(STEP_CLOSE_HANDLE, 16),
+        Step {
+            variant: 1,
+            layout: &resource,
+            ..end
+        },
+    ];
+    let root_layout = Layout {
+        finalizer: Some(entered_counter),
+        ..layout(24, &root_steps)
+    };
+    root_steps[2].layout = &root_layout;
+    let ctx = Context::new(&[&root_layout, &elements, &resource]);
+    unsafe {
+        let root = ctx.alloc(2, 24);
+        let child = ctx.alloc(3, 48);
+        let words = root.add(1).cast::<u64>();
+        words.write(0);
+        words.add(1).write(child as u64);
+        words.add(2).write(9);
+        for (i, word) in [10, 1, 20, 2, 30, 3].into_iter().enumerate() {
+            child.add(1).cast::<u64>().add(i).write(word);
+        }
+        push(&mut *ctx.0, root, true);
+        let mut cursor = Box::new(Cursor::new(
+            ptr::null_mut(),
+            root,
+            ptr::null(),
+            false,
+            31,
+            41,
+        ));
+        let mut finalizers = Vec::new();
+        let mut closes = Vec::new();
+        let mut previous = None;
+        loop {
+            match cursor.poll_finalizers(&mut *ctx.0) {
+                FinalizerPoll::Finalizer(token) => {
+                    let before = token.value.cast::<u64>().read();
+                    let admissions = (*ctx.0).cleanup_invocations.len();
+                    assert!(
+                        matches!(cursor.poll_finalizers(&mut *ctx.0), FinalizerPoll::Finalizer(t) if t == token)
+                    );
+                    assert_eq!(token.value.cast::<u64>().read(), before);
+                    assert_eq!((*ctx.0).cleanup_invocations.len(), admissions);
+                    assert_eq!((token.anchor, token.operation_site), (31, 41));
+                    if let Some(stale) = previous {
+                        assert!(
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                cursor.finalized(&mut *ctx.0, stale, STATUS_OK)
+                            }))
+                            .is_err()
+                        );
+                    }
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            cursor.finalized(&mut *ctx.0, token, crate::STATUS_SUSPENDED)
+                        }))
+                        .is_err()
+                    );
+                    finalizers.push(before);
+                    let status = run_finalizer(
+                        &mut *ctx.0,
+                        token.layout,
+                        token.value,
+                        token.anchor,
+                        token.operation_site,
+                    );
+                    assert_eq!((*ctx.0).cleanup_invocations.len(), admissions + 1);
+                    assert_eq!((*ctx.0).shield, 0);
+                    cursor.finalized(&mut *ctx.0, token, status);
+                    assert_eq!(token.value.cast::<u64>().read(), before + 1);
+                    previous = Some(token);
+                }
+                FinalizerPoll::Close(word) => {
+                    closes.push(word);
+                    assert!(
+                        matches!(cursor.poll_finalizers(&mut *ctx.0), FinalizerPoll::Close(w) if w == word)
+                    );
+                    cursor.closed(STATUS_OK);
+                }
+                FinalizerPoll::Complete(result) => {
+                    assert_eq!(result.status, STATUS_FAILURE);
+                    break;
+                }
+            }
+        }
+        assert_eq!(finalizers, [0, 30, 20, 10]);
+        assert_eq!(closes, [3, 2, 1, 9]);
+        assert_eq!(ctx.live(), 0);
+        assert!((*ctx.0).work.is_null());
+        assert_eq!((*ctx.0).cleanup_invocations.len(), 0);
+        assert_eq!((*ctx.0).shield, 0);
+        crate::failure::hirsel_rt_v2_failure_clear(ctx.0);
+    }
+}
+
+unsafe extern "C" fn abandoned_finalizer(_: *mut TaskCtx, value: *mut u8, _: u64, _: u64) -> u8 {
+    unsafe {
+        let observed = &*value.cast::<*const std::sync::atomic::AtomicUsize>().read();
+        observed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    STATUS_OK
+}
+
+#[test]
+fn abandoning_an_exposed_finalizer_runs_no_body_or_language_cleanup() {
+    let observed = Box::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut steps = [Step {
+        variant: 1,
+        ..step(STEP_END_FINALIZE, 0)
+    }];
+    let resource = Layout {
+        finalizer: Some(abandoned_finalizer),
+        ..layout(8, &steps)
+    };
+    steps[0].layout = &resource;
+    let ctx = Context::new(&[&resource]);
+    unsafe {
+        let root = ctx.alloc(2, 8);
+        root.add(1)
+            .cast::<*const std::sync::atomic::AtomicUsize>()
+            .write(&*observed);
+        push(&mut *ctx.0, root, true);
+        let mut cursor = Box::new(Cursor::new(
+            ptr::null_mut(),
+            root,
+            ptr::null(),
+            false,
+            31,
+            41,
+        ));
+        assert!(matches!(
+            cursor.poll_finalizers(&mut *ctx.0),
+            FinalizerPoll::Finalizer(_)
+        ));
+        drop(cursor);
+        assert_eq!(ctx.live(), 1);
+        assert_eq!((*ctx.0).cleanup_invocations.len(), 0);
+        assert_eq!((*ctx.0).shield, 0);
+    }
+    // Host stop abandons the task's mechanical work before normal wholesale
+    // teardown; normal successful exit correctly refuses a pending cursor.
+    unsafe { (*ctx.0).abandon() };
+    assert!(unsafe { (*ctx.0).work.is_null() });
+    drop(ctx);
+    assert_eq!(observed.load(std::sync::atomic::Ordering::Acquire), 0);
+}
