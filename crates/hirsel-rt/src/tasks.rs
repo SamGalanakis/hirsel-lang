@@ -218,6 +218,10 @@ struct Task {
     shield: u32,
     /// Scopes this task has entered and not yet exited, innermost last.
     scopes: Vec<u32>,
+    /// Entered Free scope exits retain their cursor and detached runtime rows
+    /// independently of the fiber. Nested runtime calls use distinct records.
+    scope_exits: Vec<free::lifecycle::scope_exit::Operation>,
+    scope_exit_generation: u64,
     code: Option<(TaskCode, *mut Header, u64)>,
     slot: Option<Slot>,
     /// What the task waits for while parked.
@@ -991,6 +995,8 @@ impl Task {
             children: Vec::new(),
             shield: 0,
             scopes: Vec::new(),
+            scope_exits: Vec::new(),
+            scope_exit_generation: 0,
             code: None,
             slot: None,
             wait: None,

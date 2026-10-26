@@ -33,134 +33,23 @@ unsafe fn exit_scope(
     caller_site: u64,
     out: Option<*mut u8>,
 ) -> Stopped<u8> {
-    super::record::begin(ctx);
-    let (scope, me, cancellations) = role::with_role(ctx, |s| {
-        let scope = s.scope_handle(word);
-        let me = s.current;
-        let failing = error != 0 || unsafe { (*ctx).failure.active() };
-        let mut cancellations = Vec::new();
-        if failing {
-            for child in s.scope(scope).children.clone() {
-                cancellations.push((child, s.prepare_cancel(child)));
+    let operation = scope_exit::start(ctx, word, error);
+    loop {
+        match unsafe { scope_exit::drive(ctx, operation, out) }? {
+            scope_exit::Step::Wait(wait) => {
+                unsafe { try_block(&mut *ctx, wait, false, caller_site) }?;
             }
-        }
-        (scope, me, cancellations)
-    });
-    super::record::publish(ctx, Phase::Entered, |_| unsafe {
-        role::with_held(ctx, |s| {
-            assert_eq!(s.task(me).scopes.pop(), Some(scope));
-            s.cancel_epoch.changed();
-            for (child, targets) in &cancellations {
-                s.cancel_prepared(*child, CANCEL_PARENT, targets);
+            scope_exit::Step::Rest(child) => unsafe { hand_off(&mut *ctx, child.slot) },
+            scope_exit::Step::Yield => {
+                unsafe { try_yield(&mut *ctx) }?;
+                scope_exit::yielded(ctx, operation);
             }
-        })
-    })?;
-    drop(cancellations);
-    let ready = unsafe {
-        role::with_held(ctx, |s| {
-            let children = s.scope(scope).children.clone();
-            children.iter().all(|&child| {
-                readiness::saved(s, child)
-                    && matches!(
-                        s.tasks[child as usize].as_ref().unwrap().state,
-                        State::Holding | State::Done
-                    )
-            })
-        })
-    };
-    if !ready {
-        unsafe { try_block(&mut *ctx, Wait::Exit { scope }, false, caller_site) }?;
-    }
-    let children = role::with_role(ctx, |s| s.scope(scope).children.clone());
-    for &child in children.iter().rev() {
-        if role::with_role(ctx, |s| take_held(s, child)) {
-            unsafe { hand_off(&mut *ctx, child) };
+            scope_exit::Step::Complete { status } => return Ok(status),
         }
     }
-    let (own_path, token) = role::with_role(ctx, |s| {
-        let own_path = s.task(me).path.clone();
-        s.reserve_retirements(children.len());
-        s.scope_slots.reserve(1);
-        // Simulate reverse retirement's child promotion counts before the
-        // section. Each actual parent precedes its descendants in spawn order.
-        let mut counts: Vec<_> = s
-            .tasks
-            .iter()
-            .map(|row| row.as_ref().map_or(0, |row| row.children.len()))
-            .collect();
-        let mut capacity = counts.clone();
-        for &child in children.iter().rev() {
-            let (state, parent) = {
-                let row = s.task(child);
-                (row.state, row.parent)
-            };
-            assert_eq!(state, State::Done);
-            assert!(readiness::saved(s, child));
-            if let Some((parent, _)) = parent {
-                counts[parent as usize] = counts[parent as usize] - 1 + counts[child as usize];
-                capacity[parent as usize] = capacity[parent as usize].max(counts[parent as usize]);
-            }
-        }
-        for (index, maximum) in capacity.into_iter().enumerate() {
-            if let Some(row) = s.tasks[index].as_mut() {
-                row.children.reserve(maximum - row.children.len());
-            }
-        }
-        let token = s.scope(scope).deadline.as_ref().and_then(|d| d.token);
-        (own_path, token)
-    });
-    let mut retired = Vec::with_capacity(children.len());
-    // The timer is owned by this scope until all called child rests return.
-    // Removing its host interest may bridge to home, outside every section.
-    if let Some(token) = token {
-        // Home may be merging a readiness snapshot under the role. No table
-        // borrow may cross its synchronous bridge, or both threads can wait
-        // for one another. This scope and its child rests remain owner-held.
-        let _segment = unsafe { role::Segment::new(ctx) };
-        unsafe { crate::host_waits::disarm(ctx, token) };
-    }
-    let replay = super::replay::token(ctx);
-    let publication = super::record::publish(ctx, Phase::Done, |writer| unsafe {
-        role::with_held(ctx, |s| {
-            let mut expired = s.scope(scope).deadline.as_ref().map(|d| d.expired);
-            if let Some(value) = expired.as_mut() {
-                if let Some(writer) = writer {
-                    writer.expired(*value);
-                } else if let Some(replay) = &replay {
-                    *value = replay.expired(*value)?;
-                }
-            }
-            for &child in children.iter().rev() {
-                let chain = s.task(child).failure.take();
-                retired.push((s.retire_task(child), chain));
-            }
-            let row = s.take_scope(scope);
-            if let Some(out) = out {
-                out.write(u8::from(expired.unwrap_or(false)));
-            }
-            Ok(row)
-        })
-    });
-    drop(replay);
-    let retired_scope = publication??;
-    drop(retired_scope);
-    // Failure order is by spawn path, independent of reverse row retirement.
-    for (row, chain) in retired {
-        if let Some(chain) = chain {
-            unsafe { (*ctx).failure.merge_chain(&own_path, chain) };
-        }
-        drop(row);
-    }
-    drop(children);
-    drop(own_path);
-    let status = if unsafe { (*ctx).failure.active() } {
-        STATUS_FAILURE
-    } else {
-        STATUS_OK
-    };
-    unsafe { try_yield(&mut *ctx) }?;
-    Ok(status)
 }
+
+pub(in crate::tasks) mod scope_exit;
 
 /// Take a holding child's result slot for its owner to resume the rest.
 fn take_held(s: &mut Scheduler, child: u32) -> bool {
