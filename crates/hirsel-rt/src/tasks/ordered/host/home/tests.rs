@@ -98,8 +98,9 @@ fn repeated_home_refusals_leave_the_next_parked_completion_and_output_intact() {
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
         let probe = probe.lock().unwrap();
-        assert_eq!(probe.entered, [1, 2, 3]);
-        assert_eq!(probe.finished, [1, 2, 3]);
+        // Home tokens start at zero; the poll re-enters the same parked token.
+        assert_eq!(probe.entered, [0, 1, 2, 2]);
+        assert_eq!(probe.finished, [0, 1, 2]);
         assert_eq!(probe.valid_attempts, 2);
     }
 }
