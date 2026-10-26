@@ -5,7 +5,7 @@ use std::task::Poll;
 mod budget;
 mod future_task;
 mod scheduler;
-pub use budget::{MemoryReservation, ProcessBudget};
+pub use budget::{MemoryReservation, MemoryReservationPool, ProcessBudget};
 pub use future_task::{LocalFutureTask, QueryReads};
 pub use scheduler::{
     AdmittedRuntime, RuntimeCompletion, RuntimeErrors, RuntimeEvent, RuntimeObserver, RuntimeStats,
