@@ -2094,6 +2094,7 @@ pub fn plan_captured_executable_link(
             &objects,
             inputs.loader,
         )
+        .map(|plan| plan.with_data_abi(program.data_abi.clone()))
         .map_err(|error| NativeError::new(StageName::Link, error))
 }
 
@@ -2116,7 +2117,18 @@ fn executable_objects(
     )?;
     let main = write(directory, "main.o", &main)?;
     check_link_manifest(program, entry, objects)?;
-    write_link_objects(directory, objects, &[main])
+    let mut inputs = write_link_objects(directory, objects, &[main])?;
+    inputs.extend(data_abi_object(program, directory)?);
+    Ok(inputs)
+}
+
+/// The published data ABI's identity symbols, which foreign code compiled
+/// from a generated header links against (MEM-7, PROG-4).
+fn data_abi_object(program: &ReadyProgram, dir: &Path) -> Result<Option<PathBuf>, NativeError> {
+    match &program.data_abi {
+        Some(abi) => Ok(Some(write(dir, "data-abi.o", &abi.object()?)?)),
+        None => Ok(None),
+    }
 }
 
 /// Fully selected kit input. The ordinary reference binds all actual kit leaves
@@ -2313,9 +2325,7 @@ fn link_launcher(
     // compiled from a generated header against its data ABI identities (MEM-7).
     let foreign = foreign_inputs(&kit, &target.triple, &program.foreign_links)?;
     let mut inputs = inputs;
-    if let Some(abi) = &program.data_abi {
-        inputs.push(write(dir, "data-abi.o", &abi.object()?)?);
-    }
+    inputs.extend(data_abi_object(program, dir)?);
     let debug = toolchain.debug_info;
     let (kind, runtime) = match output {
         Output::Image(_) => unreachable!("an image links above"),
@@ -2545,10 +2555,12 @@ refuse:\n ret i32 3\n}}\n",
     for (entry, _) in tests {
         check_link_manifest(program, entry, objects)?;
     }
-    let objects = write_link_objects(dir, objects, &launchers)?;
+    let mut objects = write_link_objects(dir, objects, &launchers)?;
+    objects.extend(data_abi_object(program, dir)?);
     inputs
         .platform
         .plan_inputs(inputs.store, &program.target, dir, &objects, inputs.loader)
+        .map(|plan| plan.with_data_abi(program.data_abi.clone()))
         .map_err(|error| NativeError::new(StageName::Link, error))
 }
 

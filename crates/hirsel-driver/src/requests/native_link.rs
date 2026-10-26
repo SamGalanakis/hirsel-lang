@@ -192,14 +192,20 @@ impl NativeLinkExecutor for FrozenPlatform {
         } else {
             native.plan_captured_executable(input.root, input.ready, inputs)
         }?;
-        let capture = plan.capture(
-            self.store.as_ref(),
-            &self.inputs.platform,
-            self.inputs.limits,
-        )?;
+        // Foreign code compiled against another data ABI is PROG-4's refusal.
+        let refused = |error: String| plan.refusal(&error).unwrap_or(error);
+        let capture = plan
+            .capture(
+                self.store.as_ref(),
+                &self.inputs.platform,
+                self.inputs.limits,
+            )
+            .map_err(refused)?;
         capture.validate(self.store.as_ref())?;
         let executable = scratch.path().join("program");
-        capture.link(self.store.as_ref(), &executable)?;
+        capture
+            .link(self.store.as_ref(), &executable)
+            .map_err(refused)?;
         self.validate_image(&executable)?;
         let limit = self.inputs.limits.archive_bytes;
         let mut bytes = Vec::new();

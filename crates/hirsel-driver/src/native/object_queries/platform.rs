@@ -367,6 +367,7 @@ impl CapturedPlatform {
             },
             platform: self.identity,
             objects,
+            data_abi: None,
         })
     }
 
@@ -439,8 +440,18 @@ pub struct CapturedPlatformPlan {
     plan: super::super::ExecutableLinkPlan,
     platform: ContentHash,
     objects: Vec<PathBuf>,
+    data_abi: Option<super::super::c_abi::DataAbi>,
 }
 impl CapturedPlatformPlan {
+    pub(crate) fn with_data_abi(mut self, abi: Option<super::super::c_abi::DataAbi>) -> Self {
+        self.data_abi = abi;
+        self
+    }
+    /// PROG-4's refusal when foreign code was compiled against another data
+    /// ABI than this program publishes; None for any other link failure.
+    pub fn refusal(&self, linker: &str) -> Option<String> {
+        super::super::c_abi::refusal(self.data_abi.as_ref()?, linker)
+    }
     pub fn build_id(&self) -> [u8; 20] {
         self.plan.build_id
     }
