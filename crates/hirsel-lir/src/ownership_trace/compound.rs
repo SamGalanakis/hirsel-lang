@@ -177,15 +177,58 @@ pub(super) fn parts<S: Stage>(
         &descendant,
         &mut walk,
     )?;
-    // A forged cut cannot omit another physical descendant of this exact
-    // cleanup action, even when the retained prefix has valid completions.
-    for (block, _) in unit.blocks.iter().enumerate() {
-        if let Some((address, action)) = finalizer::begin(unit, BlockId(block as u32))
-            && action == anchor
-            && descendant(address)
-            && !walk.parts.contains(&(BlockId(block as u32), address))
-        {
-            return None;
+    // Alternative semantic drops can share a source cleanup anchor. Their
+    // finalizers outside this entry's CFG are independent obligations. A cut
+    // is incomplete only if its own continuation still reaches a descendant
+    // retirement before leaving or reinitializing the original storage.
+    let mut pending = vec![(normal, index)];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some((block, start)) = pending.pop() {
+        if block == failure || !seen.insert((block, start)) {
+            continue;
+        }
+        let code = unit
+            .blocks
+            .get(block.index())?
+            .instructions
+            .get(&unit.instructions)?;
+        let mut stopped = false;
+        for inst in code.get(start as usize..)? {
+            match *inst {
+                Inst::StorageDead { slot: at, .. } | Inst::StorageLive { slot: at }
+                    if at == slot =>
+                {
+                    stopped = true;
+                    break;
+                }
+                Inst::FinalizeBegin {
+                    address,
+                    anchor: action,
+                } => {
+                    if action == anchor && descendant(address) {
+                        return None;
+                    }
+                    stopped = true;
+                    break;
+                }
+                _ => (),
+            }
+        }
+        if stopped {
+            continue;
+        }
+        let term = unit.terminators.get(block.index())?;
+        // An unrelated source call starts another operation. It cannot be a
+        // completion of this cleanup; ordinary C checks the remaining program.
+        if matches!(term, Terminator::Call { .. }) {
+            continue;
+        }
+        for edge in term.normal_edges(&unit.pools) {
+            pending.push((unit.tables.edges.get(edge.index())?.target, 0));
+        }
+        for failure in term.failure_edges(&unit.tables) {
+            let edge = unit.tables.failures.get(failure.index())?.cleanup;
+            pending.push((unit.tables.edges.get(edge.index())?.target, 0));
         }
     }
     (walk.normal && !walk.parts.is_empty()).then_some(walk.parts)

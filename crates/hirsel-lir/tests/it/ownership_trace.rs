@@ -3260,8 +3260,14 @@ fn ownership_trace_nested_source_construction_transfers_fields_without_a_shell_t
     );
 }
 
-#[test]
-fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_finalizers() {
+fn compound_drop_fixture(
+    alternatives: bool,
+) -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    Plan,
+    CleanupAnchorId,
+) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
     let pair = &mut t.table.layouts[l::PAIR.0 as usize];
@@ -3285,49 +3291,65 @@ fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_final
     t.param(version);
     let address = t.at(ENTRY, slot, &[], &[support::Undo::Drop(slot)]);
     let anchor = t.cleanup_anchor();
-    let failure = t.fails();
-    t.builder.push(
-        ENTRY,
-        Inst::Drop {
-            address,
-            if_live: false,
-            anchor,
-            failure,
-        },
-    );
-    t.builder.push(
-        ENTRY,
-        Inst::StorageDead {
-            slot,
-            if_live: false,
-        },
-    );
-    t.builder.ret(ENTRY, None);
+    let bodies = if alternatives {
+        let yes = t.builder.block(BlockKind::Body, &[]);
+        let no = t.builder.block(BlockKind::Body, &[]);
+        t.branch(ENTRY, (yes, &[]), (no, &[]));
+        vec![yes, no]
+    } else {
+        vec![ENTRY]
+    };
+    for &body in &bodies {
+        let failure = t.fails();
+        t.builder.push(
+            body,
+            Inst::Drop {
+                address,
+                if_live: false,
+                anchor,
+                failure,
+            },
+        );
+        t.builder.push(
+            body,
+            Inst::StorageDead {
+                slot,
+                if_live: false,
+            },
+        );
+        t.builder.ret(body, None);
+    }
     let (unit, table, _) = t.finish();
     let unit = checked_native_fixture(unit, &table).into_raw();
-    let index = unit.blocks[0]
-        .instructions
-        .get(&unit.instructions)
-        .unwrap()
-        .iter()
-        .position(|instruction| matches!(instruction, Inst::Drop { .. }))
-        .unwrap() as u32;
     let plan = Plan::new(
         &unit,
-        vec![Observation {
-            point: Point::Instruction {
-                block: ENTRY,
-                index,
-                moment: Moment::Before,
-            },
-            marker: ObserveOwnership {
-                id: MarkerId(0),
-                kind: Kind::Drop,
-                site: unit.tables.cleanup_anchors[anchor.index()].site,
-                token: Location::Address(address),
-                owner: Location::Address(address),
-            },
-        }],
+        bodies
+            .iter()
+            .enumerate()
+            .map(|(id, &block)| {
+                let index = unit.blocks[block.index()]
+                    .instructions
+                    .get(&unit.instructions)
+                    .unwrap()
+                    .iter()
+                    .position(|instruction| matches!(instruction, Inst::Drop { .. }))
+                    .unwrap() as u32;
+                Observation {
+                    point: Point::Instruction {
+                        block,
+                        index,
+                        moment: Moment::Before,
+                    },
+                    marker: ObserveOwnership {
+                        id: MarkerId(id as u32),
+                        kind: Kind::Drop,
+                        site: unit.tables.cleanup_anchors[anchor.index()].site,
+                        token: Location::Address(address),
+                        owner: Location::Address(address),
+                    },
+                }
+            })
+            .collect(),
     );
     let finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
         l::RES,
@@ -3346,6 +3368,12 @@ fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_final
     )
     .unwrap();
     let after = checked_native_fixture(after, &table);
+    (after, output, plan, anchor)
+}
+
+#[test]
+fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_finalizers() {
+    let (after, output, plan, anchor) = compound_drop_fixture(false);
     assert_eq!(output.observations.len(), 1);
     assert_eq!(output.observations[0].marker, plan.observations[0].marker);
     assert!(matches!(
@@ -3418,4 +3446,34 @@ fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_final
         check(&missing, &missing_plan).is_err(),
         "a missing physical completion cannot be inferred"
     );
+}
+
+#[test]
+fn ownership_trace_compound_drop_keeps_same_anchor_alternatives_separate() {
+    let (after, output, input, _) = compound_drop_fixture(true);
+    assert_eq!(output.observations.len(), 2);
+    let checked = check(after.unit(), &output).unwrap();
+    let mut entries = Vec::new();
+    for (old, row) in input.observations.iter().zip(&output.observations) {
+        assert_eq!(row.marker, old.marker);
+        let Point::CompoundDrop { block, .. } = row.point else {
+            panic!("missing typed bundle")
+        };
+        entries.push(block);
+        assert!(checked.commits(after.unit(), row.marker.id).unwrap().len() >= 6);
+    }
+    assert_ne!(entries[0], entries[1]);
+    let first = checked.commits(after.unit(), MarkerId(0)).unwrap()[0];
+    let Point::Instruction { block, index, .. } = first else {
+        unreachable!()
+    };
+    let mut truncated = output.clone();
+    if let Point::CompoundDrop {
+        normal, index: cut, ..
+    } = &mut truncated.observations[0].point
+    {
+        *normal = block;
+        *cut = index + 1;
+    }
+    assert!(check(after.unit(), &truncated).is_err());
 }
