@@ -1667,3 +1667,49 @@ fn a_callback_tuple_of_unique_parts_is_a_unique_result() {
         }]
     );
 }
+
+fn inferred_promise(f: &mut Fixture) {
+    let summary = hirsel_types::UniqueSummary {
+        preserves_unique: vec![ParamId(0)],
+        results: vec![],
+    };
+    f.signatures
+        .get_mut(id("main"))
+        .unwrap()
+        .metadata
+        .inferred_unique = summary.clone();
+    f.definition.inferred_unique = summary;
+}
+
+#[test]
+fn inferred_preservation_bits_get_the_declared_body_reproof() {
+    let (mut good, _) = handback(false);
+    finish(&mut good);
+    inferred_promise(&mut good);
+    good.valid();
+    let mut bad = sharing(false);
+    inferred_promise(&mut bad);
+    handback_error(&bad, "preserved unique hand-back", 1);
+}
+
+#[test]
+fn inferred_result_root_cannot_forge_an_ordinary_call_result() {
+    let mut f = Fixture::result_call(TypeKind::Primitive(Primitive::String), true);
+    owner_signature(&mut f, PassingMode::Take);
+    let summary = hirsel_types::UniqueSummary {
+        preserves_unique: vec![],
+        results: vec![hirsel_types::UniqueResultRow::Root],
+    };
+    f.signatures
+        .get_mut(id("main"))
+        .unwrap()
+        .metadata
+        .inferred_unique = summary.clone();
+    f.definition.inferred_unique = summary;
+    assert!(f.kinds().iter().any(|v| matches!(
+        v,
+        ViolationKind::TypeMismatch {
+            entity: "private unique result proof"
+        }
+    )));
+}

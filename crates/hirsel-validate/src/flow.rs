@@ -43,6 +43,15 @@ mod evidence_laws;
 // Transfer functions are monotone; every bit only increases at a join. No path
 // enumeration, recursion, iteration cutoff, or reducibility assumption.
 const DEAD: u8 = 1;
+pub(super) fn unique_row_path(row: hirsel_types::UniqueResultRow) -> Vec<crossing::Part> {
+    match row {
+        hirsel_types::UniqueResultRow::Root => vec![],
+        hirsel_types::UniqueResultRow::Tuple(field) => vec![crossing::Part::Field(field)],
+        hirsel_types::UniqueResultRow::Payload { variant, field } => {
+            vec![crossing::Part::Variant(variant, field)]
+        }
+    }
+}
 const LIVE: u8 = 2;
 const MOVED: u8 = 4;
 
@@ -133,6 +142,7 @@ pub(super) struct State {
     /// Current content evidence, independent of the receiving storage contract.
     current_unique: BitRows<bool>,
     crossing_parts: Rows<crossing::Parts>,
+    unique_parts: Rows<crossing::Parts>,
     tags: Shared<tags::Facts>,
     loans: BitRows<u8>,
     /// Known installed-content partitions, with correlated expiration when
@@ -264,6 +274,8 @@ impl State {
             });
         self.current_unique
             .and_since(&base.current_unique, &other.current_unique);
+        self.unique_parts
+            .join_since(&base.unique_parts, &other.unique_parts, |a, b| a.join(b));
         self.crossing_parts
             .join_since(&base.crossing_parts, &other.crossing_parts, |a, b| {
                 a.join(b)
@@ -1191,6 +1203,7 @@ impl Model {
                 .with_copy_counter(Counter::ValidateCopiedRows),
             current_unique: BitRows::new(false, body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
+            unique_parts: Rows::new(crossing::Parts::default(), body.locals.len()),
             crossing_parts: Rows::new(crossing::Parts::default(), body.locals.len())
                 .with_copy_counter(Counter::ValidateCopiedRows),
             tags: BTreeMap::new().into(),
@@ -3225,6 +3238,7 @@ impl Checker<'_> {
                 self.proof_failure(error, hirsel_types::Sendability::NotSendable)
             }) == hirsel_types::Sendability::Sendable;
         share_root(state, access.root.0 as usize);
+        state.unique_parts[access.root.0 as usize] = crossing::Parts::default();
         if !independent {
             let path = crossing::path(&access.projection);
             let mut parts = state.crossing_parts[access.root.0 as usize].project(&path);
@@ -4523,6 +4537,15 @@ impl Checker<'_> {
             let SignatureKind::Function(f) = &signature.kind else {
                 return false;
             };
+            if hirsel_types::unique_summary::same_module(path, self.definition.path.path())
+                && signature
+                    .metadata
+                    .inferred_unique
+                    .preserves_unique
+                    .contains(&ordinal)
+            {
+                return true;
+            }
             // A foreign declaration has no body to prove a promise (LANG-7).
             f.foreign.is_none()
                 && (f.state_promises.iter().any(|p| {
@@ -5326,6 +5349,7 @@ impl Checker<'_> {
                     let fresh_receipt = self.rvalue_fresh_receipt(state, rvalue);
                     let sendable = self.rvalue_sendable(state, *destination, rvalue);
                     let crossing_parts = self.rvalue_crossing_parts(state, *destination, rvalue);
+                    let unique_parts = self.rvalue_unique_parts(state, *destination, rvalue);
                     let mut global = self.rvalue_global(state, *destination, rvalue);
                     // PROV-4: scoped content of an unplaced local holder is
                     // bounded by a placement its type no longer names. This
@@ -5507,6 +5531,12 @@ impl Checker<'_> {
                     self.set_fresh_receipt(state, *destination, fresh_receipt);
                     self.set_current_global(state, *destination, global);
                     self.set_current_sendable(state, *destination, sendable);
+                    self.install_unique_parts(
+                        state,
+                        *destination,
+                        &unique_parts,
+                        model.crossing_depth,
+                    );
                     self.install_crossing_parts(
                         state,
                         *destination,
@@ -5891,6 +5921,9 @@ impl Checker<'_> {
                 }
                 for argument in arguments {
                     if argument.value.usage == UseKind::Mut {
+                        state.unique_parts
+                            [self.body.places[argument.value.place.0 as usize].root.0 as usize] =
+                            crossing::Parts::default();
                         self.invalidate_tags(state, argument.value.place);
                     }
                 }
@@ -6311,10 +6344,34 @@ impl Checker<'_> {
                         a.value.usage == UseKind::Take
                             && self.callee_preserves_unique(callee, a.parameter)
                     });
+                let inferred = match callee {
+                    Callee::Definition { path, .. }
+                        if hirsel_types::unique_summary::same_module(
+                            path,
+                            self.definition.path.path(),
+                        ) =>
+                    {
+                        self.signatures
+                            .get(path)
+                            .map(|s| s.metadata.inferred_unique.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => hirsel_types::UniqueSummary::default(),
+                };
+                let mut inferred_parts = crossing::Parts::default();
+                for row in &inferred.results {
+                    inferred_parts.set(&unique_row_path(*row), true);
+                }
+                self.install_unique_parts(
+                    state,
+                    destination,
+                    &inferred_parts,
+                    model.crossing_depth,
+                );
                 self.set_current_unique(
                     state,
                     destination,
-                    promised
+                    inferred.results.contains(&hirsel_types::UniqueResultRow::Root) || promised
                         || parametric
                         // An owning core cursor transfers parts of its
                         // currently unique owner; the result owns no aliases.
@@ -6390,6 +6447,38 @@ impl Checker<'_> {
             }
             Terminator::Return { value, cleanup } => {
                 self.return_creation(model, state, value, report);
+                if self.site.body == self.definition.entry {
+                    let rows = hirsel_types::unique_summary::result_rows(
+                        self.t,
+                        self.body.result,
+                        &self
+                            .signatures
+                            .get(self.definition.path)
+                            .map(|s| s.metadata.roles.clone())
+                            .unwrap_or_default(),
+                        &mut |d| self.signatures.get(d).cloned().map(std::sync::Arc::new),
+                    );
+                    let parts = self.operand_unique_parts(state, value);
+                    for claimed in &self.definition.inferred_unique.results {
+                        let valid =
+                            rows.iter()
+                                .find(|(row, _)| row == claimed)
+                                .is_some_and(|(_, ty)| {
+                                    !needs_release(self, *ty, self.t)
+                                        || super::handle_root(self.t, *ty)
+                                        || self.operand_unique(state, value)
+                                        || parts.get(&unique_row_path(*claimed)) == Some(true)
+                                });
+                        if !valid {
+                            self.flow_error(
+                                report,
+                                ViolationKind::TypeMismatch {
+                                    entity: "private unique result proof",
+                                },
+                            );
+                        }
+                    }
+                }
                 if model
                     .unique_proof
                     .is_some_and(|root| !model.mutable_parameters[root])

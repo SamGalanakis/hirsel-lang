@@ -60,6 +60,7 @@ fn encode_signature(
         fingerprint: _,
     } = signature;
     let SignatureMetadata {
+        inferred_unique,
         visibility,
         alias,
         constant_alias,
@@ -85,6 +86,28 @@ fn encode_signature(
         hirsel_syntax::Visibility::Public => "public",
         hirsel_syntax::Visibility::PublicOpaque => "opaque",
     });
+    if !inferred_unique.is_empty() {
+        e.tag("private-unique-v1");
+        e.number(inferred_unique.preserves_unique.len() as u64);
+        for parameter in &inferred_unique.preserves_unique {
+            e.number(parameter.0 as u64);
+        }
+        e.number(inferred_unique.results.len() as u64);
+        for row in &inferred_unique.results {
+            match row {
+                UniqueResultRow::Root => e.tag("root"),
+                UniqueResultRow::Tuple(field) => {
+                    e.tag("tuple");
+                    e.number(*field as u64);
+                }
+                UniqueResultRow::Payload { variant, field } => {
+                    e.tag("payload");
+                    e.number(*variant as u64);
+                    e.number(*field as u64);
+                }
+            }
+        }
+    }
     e.boolean(*alias);
     if let Some(target) = constant_alias {
         e.tag("dictionary-alias-v1");

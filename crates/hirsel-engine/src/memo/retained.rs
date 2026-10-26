@@ -482,6 +482,7 @@ impl Weight {
             fingerprint: _,
         } = &**value;
         let hirsel_types::SignatureMetadata {
+            inferred_unique,
             visibility: _,
             alias: _,
             constant_alias,
@@ -493,6 +494,8 @@ impl Weight {
             recursive_group: _,
             implementations,
         } = metadata;
+        self.flat_vec(&inferred_unique.preserves_unique);
+        self.flat_vec(&inferred_unique.results);
         for binder in implementations {
             self.def_path(binder.family.path());
         }

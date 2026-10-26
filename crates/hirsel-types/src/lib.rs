@@ -4,7 +4,9 @@
 hirsel_guard::install!();
 
 pub mod unique_summary;
-pub use unique_summary::{UniqueResultRow, UniqueSummary};
+pub use unique_summary::{
+    UniqueClaim, UniqueFailure, UniqueInference, UniqueResultRow, UniqueSummary,
+};
 pub mod core_roles;
 pub mod encoding;
 pub mod entry;
@@ -1038,6 +1040,8 @@ pub struct BorrowCursorDecision {
 /// Complete static decisions; cleanup lowering still determines ordered drops.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct OwnershipFacts {
+    pub inferred_unique: UniqueSummary,
+    pub unique_failures: Vec<UniqueFailure>,
     /// Confined counted-result owners released after a completed statement.
     /// Lowering emits ordinary cleanup; V reconstructs shares independently.
     #[serde(default)]
@@ -1384,6 +1388,13 @@ pub trait SignatureProvider {
     /// definition's own source file, for a secondary label. A citation of
     /// another item: the span is relative to that item's anchor, and the
     /// provider records the read so a change to the cited text invalidates it.
+    fn cite_unique_failure(
+        &mut self,
+        _definition: &DefPath,
+        _claim: UniqueClaim,
+    ) -> Option<UniqueFailure> {
+        None
+    }
     fn cite_name(&mut self, definition: &DefPath) -> Option<hirsel_span::Span> {
         let _ = definition;
         None

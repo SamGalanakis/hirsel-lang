@@ -24,7 +24,7 @@ use hirsel_types::{
 /// v12 binds the combined grant and logical invocation semantics.
 /// v13 adds compile-time source-event charges (CT-4).
 /// v14 publishes inferred private-helper uniqueness evidence.
-pub const TIR_VERSION: u32 = 14;
+pub const TIR_VERSION: u32 = 15;
 
 pub mod representation;
 

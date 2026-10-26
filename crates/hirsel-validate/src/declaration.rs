@@ -7,6 +7,43 @@ use hirsel_type_analysis::cleanup::{
 use hirsel_types::*;
 
 pub(super) fn valid(t: &TypeInterner, s: &Signature, signatures: &Reader<'_>) -> bool {
+    if !s.metadata.inferred_unique.is_empty() {
+        let SignatureKind::Function(f) = &s.kind else {
+            return false;
+        };
+        if s.metadata.visibility != hirsel_syntax::Visibility::Private
+            || f.foreign.is_some()
+            || s.metadata
+                .inferred_unique
+                .preserves_unique
+                .windows(2)
+                .any(|p| p[0] >= p[1])
+            || s.metadata
+                .inferred_unique
+                .results
+                .windows(2)
+                .any(|p| p[0] >= p[1])
+            || s.metadata.inferred_unique.preserves_unique.iter().any(|p| {
+                f.parameters
+                    .get(p.0 as usize)
+                    .is_none_or(|p| p.passing != hirsel_syntax::PassingMode::Mut)
+            })
+        {
+            return false;
+        }
+        let rows =
+            hirsel_types::unique_summary::result_rows(t, f.result, &s.metadata.roles, &mut |d| {
+                signatures.get(d).cloned().map(std::sync::Arc::new)
+            });
+        if s.metadata
+            .inferred_unique
+            .results
+            .iter()
+            .any(|row| !rows.iter().any(|(r, _)| row == r))
+        {
+            return false;
+        }
+    }
     if s.metadata.track_caller
         && !matches!(&s.kind, SignatureKind::Function(f) if f.foreign.is_none())
     {

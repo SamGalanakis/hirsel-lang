@@ -864,6 +864,7 @@ snapshot_enum!(SchemaConstraint {
 impl Snapshot<Cx> for SignatureMetadata {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("SignatureMetadata");
+        self.inferred_unique.write(w);
         self.track_caller.write(w);
         self.visibility.write(w);
         self.alias.write(w);
@@ -887,6 +888,7 @@ impl Snapshot<Cx> for SignatureMetadata {
     fn read(r: &mut Reader<'_, Cx>) -> Result<Self, DecodeError> {
         r.open("SignatureMetadata")?;
         let value = SignatureMetadata {
+            inferred_unique: Snapshot::read(r)?,
             track_caller: Snapshot::read(r)?,
             visibility: Snapshot::read(r)?,
             alias: Snapshot::read(r)?,

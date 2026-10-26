@@ -114,6 +114,12 @@ impl<'q> Signatures<'q> {
             });
         available
     }
+    pub fn unique_failure(&self, path: &DefPath, claim: UniqueClaim) -> Option<UniqueFailure> {
+        self.reader
+            .borrow_mut()
+            .provider()
+            .cite_unique_failure(path, claim)
+    }
     /// A signature an earlier read retained; flow makes no new reads.
     pub fn cached(&self, definition: DefId) -> Option<SignatureRef> {
         self.reader.borrow().cached(definition)

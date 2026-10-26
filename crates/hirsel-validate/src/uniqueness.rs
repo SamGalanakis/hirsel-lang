@@ -1003,6 +1003,8 @@ impl Checker<'_> {
             return matches!(value.usage, UseKind::Take | UseKind::Mut)
                 && !state.shared[root]
                 && (state.current_unique[root]
+                    || state.unique_parts[root].get(&crossing::path(&place.projection))
+                        == Some(true)
                     || state.must[root].has(MustFacts::OWNED)
                         && state.must[root].has(MustFacts::FRESH_RECEIPT)
                         && self.t.get(place.ty).unwrap().modes.uniqueness == Uniqueness::Unique
@@ -1106,4 +1108,92 @@ pub(super) fn erased_environment(kind: &hirsel_types::TypeKind) -> bool {
                 ..
             }
     )
+}
+
+impl Checker<'_> {
+    pub(super) fn operand_unique_parts(&self, state: &State, value: &Operand) -> crossing::Parts {
+        let place = &self.body.places[value.place.0 as usize];
+        if value.usage == UseKind::Copy || state.shared[place.root.0 as usize] {
+            return crossing::Parts::default();
+        }
+        let mut parts =
+            state.unique_parts[place.root.0 as usize].project(&crossing::path(&place.projection));
+        if self.operand_unique(state, value) {
+            parts.set(&[], true);
+        }
+        parts
+    }
+    pub(super) fn rvalue_unique_parts(
+        &self,
+        state: &State,
+        destination: PlaceId,
+        value: &Rvalue,
+    ) -> crossing::Parts {
+        match value {
+            Rvalue::Use(value) => self.operand_unique_parts(state, value),
+            Rvalue::Construct {
+                constructor,
+                fields,
+                ..
+            } => {
+                let mut parts = crossing::Parts::default();
+                if let Constructor::Variant { variant, .. } = constructor {
+                    let roles = self
+                        .signatures
+                        .get(self.definition.path)
+                        .map(|s| s.metadata.roles.clone())
+                        .unwrap_or_default();
+                    for (row, _) in hirsel_types::unique_summary::result_rows(
+                        self.t,
+                        self.place_type(destination),
+                        &roles,
+                        &mut |d| self.signatures.get(d).cloned().map(std::sync::Arc::new),
+                    ) {
+                        if let hirsel_types::UniqueResultRow::Payload {
+                            variant: other,
+                            field,
+                        } = row
+                            && other != *variant
+                        {
+                            parts.set(&[crossing::Part::Variant(other, field)], true);
+                        }
+                    }
+                }
+                for field in fields {
+                    let prefix = match constructor {
+                        Constructor::Variant { variant, .. } => {
+                            vec![crossing::Part::Variant(*variant, field.field)]
+                        }
+                        Constructor::Sequence => vec![crossing::Part::Elements],
+                        _ => vec![crossing::Part::Field(field.field)],
+                    };
+                    let mut incoming = self.operand_unique_parts(state, &field.value);
+                    if !needs_release(self, self.place_type(field.value.place), self.t) {
+                        incoming.set(&[], true);
+                    }
+                    parts.install(&prefix, &incoming);
+                }
+                parts
+            }
+            _ => crossing::Parts::default(),
+        }
+    }
+    pub(super) fn install_unique_parts(
+        &self,
+        state: &mut State,
+        destination: PlaceId,
+        parts: &crossing::Parts,
+        depth: usize,
+    ) {
+        let place = &self.body.places[destination.0 as usize];
+        let prefix = crossing::path(&place.projection);
+        if prefix.is_empty() {
+            state.unique_parts[place.root.0 as usize] = parts.clone();
+        } else {
+            // Replacing a part can invalidate an ancestor's complete proof.
+            state.unique_parts[place.root.0 as usize] = crossing::Parts::default();
+            state.unique_parts[place.root.0 as usize].install(&prefix, parts);
+        }
+        state.unique_parts[place.root.0 as usize].restrict(depth);
+    }
 }

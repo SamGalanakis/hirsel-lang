@@ -266,6 +266,7 @@ struct ValueData {
     content: Content,
     crossing_parts: CrossingParts,
     shared_parts: SharedParts,
+    unique_parts: BTreeSet<Vec<Projection>>,
     crossing_borrows: Arc<Vec<CrossingBorrow>>,
     invalid: bool,
     deep_copy: bool,
@@ -335,6 +336,7 @@ impl Value {
             content: Content::default(),
             crossing_parts: CrossingParts::default(),
             shared_parts: SharedParts::default(),
+            unique_parts: BTreeSet::new(),
             crossing_borrows: Arc::new(Vec::new()),
             invalid: false,
             deep_copy: false,
@@ -363,6 +365,7 @@ impl ValueData {
         self.parked = Arc::default();
     }
     fn share(&mut self) {
+        self.unique_parts.clear();
         self.borrow_only = false;
         self.parked = Arc::default();
         self.modes.uniqueness = Uniqueness::Aliased;
@@ -548,6 +551,14 @@ impl ValueData {
         if path.is_empty() {
             return;
         }
+        if self.unique_parts.iter().any(|p| path.starts_with(p)) {
+            self.modes.uniqueness = Uniqueness::Unique;
+        }
+        self.unique_parts = self
+            .unique_parts
+            .iter()
+            .filter_map(|p| p.strip_prefix(path).map(|p| p.to_vec()))
+            .collect();
         self.crossing_parts.project(path);
         self.shared_parts.project(path);
         self.crossing_borrows = Arc::new(
@@ -695,6 +706,7 @@ impl ValueData {
         self.fresh_receipt &= other.fresh_receipt;
         self.crossing_parts.join(&other.crossing_parts);
         self.shared_parts.join(&other.shared_parts);
+        self.unique_parts.retain(|p| other.unique_parts.contains(p));
         for borrow in other.crossing_borrows.iter() {
             if !self.crossing_borrows.contains(borrow) {
                 Arc::make_mut(&mut self.crossing_borrows).push(borrow.clone());
@@ -1377,6 +1389,8 @@ struct Checker<'a, 's> {
     /// Proving `@preserves_unique` on this parameter: it and every non-plain
     /// taken or `mut` parameter enter unique, and it must leave unique.
     unique_proof: Option<ParamId>,
+    unique_results: Option<BTreeSet<UniqueResultRow>>,
+    unique_failures: Vec<UniqueFailure>,
     arenas: crate::arenas::Arenas,
     /// The holders live after each graph node (LANG-3).
     live: &'a LiveSets,
@@ -1402,6 +1416,8 @@ pub(super) const UNIQUE_PROOF_FAILED: &str =
     "this body does not prove its @preserves_unique promise";
 
 pub(super) struct FlowOutput {
+    pub unique_results: Vec<UniqueResultRow>,
+    pub unique_failures: Vec<UniqueFailure>,
     pub mutation_sites: Vec<ExprId>,
     pub replacements: BTreeMap<ExprId, Option<bool>>,
     pub return_uniqueness: BTreeMap<ParamId, bool>,
@@ -1812,6 +1828,8 @@ pub(super) fn check(
         confined: BTreeSet::new(),
         confined_nodes: BTreeSet::new(),
         unique_proof: proof,
+        unique_results: None,
+        unique_failures: vec![],
         live: &live,
         constants: constants.into_iter().map(|e| (e, None)).collect(),
     };
@@ -2037,6 +2055,28 @@ pub(super) fn check(
         return Err(error);
     }
     Ok(FlowOutput {
+        unique_failures: checker.unique_failures,
+        unique_results: checker
+            .unique_results
+            .unwrap_or_else(|| {
+                checker
+                    .graph
+                    .result_ty
+                    .map(|root| {
+                        hirsel_types::unique_summary::result_rows(
+                            t,
+                            root,
+                            &own.metadata.roles,
+                            &mut |d| signatures.cached(d),
+                        )
+                        .into_iter()
+                        .map(|(row, _)| row)
+                        .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .into_iter()
+            .collect(),
         mutation_sites: checker.mutation_sites,
         replacements: checker.replacement_live,
         return_uniqueness: checker.return_uniqueness,
@@ -3366,7 +3406,19 @@ impl Checker<'_, '_> {
                         .is_some()
                     })
             });
-        promised && self.callee_definition(callee).is_some()
+        (promised && self.callee_definition(callee).is_some())
+            || self.callee_definition(callee).is_some_and(|path| {
+                hirsel_types::unique_summary::same_module(path, self.own.definition.path())
+                    && self
+                        .signatures
+                        .cached(DefId::intern(path))
+                        .is_some_and(|s| {
+                            s.metadata
+                                .inferred_unique
+                                .preserves_unique
+                                .contains(&ParamId(ordinal as u32))
+                        })
+            })
     }
     /// User-visible destruction (DROP-1/2): a noncopyable value, which may
     /// hold a resource, or a once callable.
@@ -6475,6 +6527,15 @@ impl Checker<'_, '_> {
                     );
                 }
                 if !place.projections.is_empty() {
+                    state.slots[place.binding].value.unique_parts.retain(|p| {
+                        !p.starts_with(&place.projections) && !place.projections.starts_with(p)
+                    });
+                    if value.modes.uniqueness == Uniqueness::Unique {
+                        state.slots[place.binding]
+                            .value
+                            .unique_parts
+                            .insert(place.projections.clone());
+                    }
                     let mut shared = SharedParts::default();
                     if value.modes.uniqueness != Uniqueness::Unique
                         && !self.property(*rhs).is_some_and(|p| p.plain || p.shared)
@@ -7092,6 +7153,12 @@ impl Checker<'_, '_> {
                                     },
                                     _ => Projection::Field(*ordinal),
                                 };
+                                self.construction_part(
+                                    &mut value,
+                                    &projection,
+                                    argument.expression,
+                                    &self.value(state, argument.expression),
+                                );
                                 value.install_crossing_borrows(
                                     &[projection.clone()],
                                     &self.value(state, argument.expression),
@@ -7102,6 +7169,29 @@ impl Checker<'_, '_> {
                                     &self.value(state, argument.expression),
                                     self.retention_depth,
                                 );
+                            }
+                        }
+                        if let CallTarget::Constructor(ContextualName::Variant { variant, .. }) =
+                            &call.target
+                            && let Some(root) = self.ty(*expression)
+                        {
+                            for (row, _) in hirsel_types::unique_summary::result_rows(
+                                self.t,
+                                root,
+                                &self.own.metadata.roles,
+                                &mut |d| self.signatures.cached(d),
+                            ) {
+                                if let UniqueResultRow::Payload {
+                                    variant: other,
+                                    field,
+                                } = row
+                                    && other != variant.0
+                                {
+                                    value.unique_parts.insert(vec![Projection::VariantField {
+                                        variant: other,
+                                        field,
+                                    }]);
+                                }
                             }
                         }
                         value.install_content(retained);
@@ -7471,6 +7561,12 @@ impl Checker<'_, '_> {
                 let parametric =
                     self.parametric_unique(*callee, arguments, requirements, &unique_arguments);
                 for (storage, mutable, argument) in &loans {
+                    if *mutable {
+                        state.slots[storage.binding].value.unique_parts.retain(|p| {
+                            !p.starts_with(&storage.projections)
+                                && !storage.projections.starts_with(p)
+                        });
+                    }
                     let declared = self.t.get(self.body.bindings[storage.binding].ty).unwrap();
                     let preserves_state = arguments.iter().zip(requirements).any(|(arg, req)| {
                         arg.value == *argument
@@ -7660,6 +7756,25 @@ impl Checker<'_, '_> {
                 if parametric {
                     value.modes.uniqueness = Uniqueness::Unique;
                 }
+                if let Some(path) = self.callee_definition(*callee)
+                    && hirsel_types::unique_summary::same_module(path, self.own.definition.path())
+                    && let Some(header) = self.signatures.cached(DefId::intern(path))
+                {
+                    for row in &header.metadata.inferred_unique.results {
+                        match row {
+                            UniqueResultRow::Root => value.modes.uniqueness = Uniqueness::Unique,
+                            UniqueResultRow::Tuple(field) => {
+                                value.unique_parts.insert(vec![Projection::Field(*field)]);
+                            }
+                            UniqueResultRow::Payload { variant, field } => {
+                                value.unique_parts.insert(vec![Projection::VariantField {
+                                    variant: *variant,
+                                    field: *field,
+                                }]);
+                            }
+                        }
+                    }
+                }
                 state.values.insert(*expression, value);
             }
             Op::Capture {
@@ -7680,6 +7795,7 @@ impl Checker<'_, '_> {
                 result,
             } => self.propagate(state, *expression, *value, result),
             Op::Return { value, result } => {
+                self.observe_unique_result(&self.value(state, *value), self.span_of(*value));
                 self.creation_return(state, *value);
                 let mut result = result.clone();
                 if self.environment_frame {
@@ -7772,6 +7888,66 @@ impl Checker<'_, '_> {
         };
         if let Some(expression) = failure_site {
             self.mutable_crossing_exit(state, self.span_of(expression), &BTreeSet::new());
+        }
+    }
+    fn observe_unique_result(&mut self, actual: &Value, site: Span) {
+        if !self.emit
+            || self.unique_proof.is_some()
+            || self.graph.owner != NameSite::Item
+            || self.graph.clause.is_some()
+        {
+            return;
+        }
+        let proven: BTreeSet<_> = self
+            .graph
+            .result_ty
+            .into_iter()
+            .flat_map(|root| {
+                hirsel_types::unique_summary::result_rows(
+                    self.t,
+                    root,
+                    &self.own.metadata.roles,
+                    &mut |d| self.signatures.cached(d),
+                )
+            })
+            .filter_map(|(row, ty)| {
+                let path = match row {
+                    UniqueResultRow::Root => vec![],
+                    UniqueResultRow::Tuple(field) => vec![Projection::Field(field)],
+                    UniqueResultRow::Payload { variant, field } => {
+                        vec![Projection::VariantField { variant, field }]
+                    }
+                };
+                let plain = self
+                    .properties
+                    .get(ty)
+                    .is_some_and(|p| p.plain || p.handle_root);
+                let unique = actual.modes.uniqueness == Uniqueness::Unique
+                    || plain
+                    || !path.is_empty() && actual.unique_parts.iter().any(|p| path.starts_with(p));
+                unique.then_some(row)
+            })
+            .collect();
+        for (row, _) in self.graph.result_ty.into_iter().flat_map(|root| {
+            hirsel_types::unique_summary::result_rows(
+                self.t,
+                root,
+                &self.own.metadata.roles,
+                &mut |d| self.signatures.cached(d),
+            )
+        }) {
+            let claim = UniqueClaim::Result(row);
+            if !proven.contains(&row) && !self.unique_failures.iter().any(|f| f.claim == claim) {
+                self.unique_failures.push(UniqueFailure {
+                    claim,
+                    span: site,
+                    message: "this return may retain counted shared storage".into(),
+                });
+            }
+        }
+        match &mut self.unique_results {
+            Some(old) => old.retain(|row| proven.contains(row)),
+            None => self.unique_results = Some(proven),
         }
     }
     /// LANG-8: `value ?` returns `Error(e)` for the error payload `e` of
@@ -7909,6 +8085,61 @@ impl Checker<'_, '_> {
                 );
             }
         }
+        let mapper = self
+            .body
+            .resolution
+            .paths
+            .iter()
+            .find_map(|(site, name)| match name {
+                ResolvedName::Definition(path) if *site == NameSite::Expression(expression) => {
+                    Some(path)
+                }
+                _ => None,
+            })
+            .and_then(|path| {
+                self.signatures
+                    .cached(DefId::intern(path))
+                    .map(|s| (path, s))
+            });
+        let mapped_unique = if let Some((path, signature)) = mapper {
+            if let SignatureKind::Function(function) = &signature.kind {
+                self.t.row(function.result).modes.uniqueness == Uniqueness::Unique
+                    || hirsel_types::unique_summary::same_module(path, self.own.definition.path())
+                        && signature
+                            .metadata
+                            .inferred_unique
+                            .results
+                            .contains(&UniqueResultRow::Root)
+            } else {
+                false
+            }
+        } else {
+            actual.modes.uniqueness == Uniqueness::Unique
+                || property.is_some_and(|p| p.plain || p.handle_root)
+        };
+        let mut returned = Value::new(Modes::global());
+        returned.modes.uniqueness = if mapped_unique {
+            Uniqueness::Unique
+        } else {
+            Uniqueness::Aliased
+        };
+        if let Some(root) = self.graph.result_ty {
+            for (row, _) in hirsel_types::unique_summary::result_rows(
+                self.t,
+                root,
+                &self.own.metadata.roles,
+                &mut |d| self.signatures.cached(d),
+            ) {
+                if let UniqueResultRow::Payload { variant, field } = row
+                    && (variant != error || mapped_unique)
+                {
+                    returned
+                        .unique_parts
+                        .insert(vec![Projection::VariantField { variant, field }]);
+                }
+            }
+        }
+        self.observe_unique_result(&returned, self.span_of(expression));
         if property.is_some_and(|p| p.plain) || self.mapper_releases(expression) {
             return;
         }
@@ -8422,6 +8653,20 @@ impl Checker<'_, '_> {
                 .shared_parts
                 .insert(vec![projection.clone()], child);
         }
+        if part.modes.uniqueness == Uniqueness::Unique
+            || self
+                .property(child)
+                .is_some_and(|p| p.plain || p.handle_root)
+        {
+            aggregate.unique_parts.insert(vec![projection.clone()]);
+        }
+        for path in &part.unique_parts {
+            let mut installed = vec![projection.clone()];
+            installed.extend(path.iter().cloned());
+            if installed.len() <= self.retention_depth {
+                aggregate.unique_parts.insert(installed);
+            }
+        }
         aggregate
             .shared_parts
             .install(std::slice::from_ref(projection), &part.shared_parts);
@@ -8649,6 +8894,27 @@ impl Checker<'_, '_> {
                         .required(Fact::new(Requirement::Unique, context.span, &[]))
                         .into();
                     pending.uniqueness = c.uniqueness_origin(expression);
+                    if let Some(call) = c.owned_call_source(state, expression)
+                        && let ExprKind::Call { callee, .. } =
+                            c.tree.expressions[call.0 as usize].kind
+                        && let Some(path) = c.callee_definition(callee)
+                        && hirsel_types::unique_summary::same_module(path, c.own.definition.path())
+                        && let Some(failure) = c
+                            .signatures
+                            .unique_failure(path, UniqueClaim::Result(UniqueResultRow::Root))
+                    {
+                        pending.explanation.provided.push(Fact::new(
+                            Cause::UniquenessLoss,
+                            failure.span,
+                            &[
+                                "the result",
+                                &format!(
+                                    "`{}` no longer returns unique content: {}",
+                                    path.0.name, failure.message
+                                ),
+                            ],
+                        ));
+                    }
                     pending
                 },
             ) {

@@ -26,7 +26,7 @@ pub struct Place {
     pub binding: usize,
     pub projections: Vec<Projection>,
 }
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Projection {
     Field(u32),
     VariantField {
@@ -148,6 +148,20 @@ pub fn check_ownership_with_clauses(
     let mut graphs = cfg::build(
         t, syntax, signature, body, captures, clauses, results, &rows,
     )?;
+    // Direct-call evidence lives in the declaration metadata, independently
+    // of the callable row. Read these headers even for structurally plain calls.
+    let direct: Vec<_> = body
+        .resolution
+        .expressions
+        .iter()
+        .filter_map(|(_, name)| match name {
+            ResolvedName::Definition(path) => Some(DefId::intern(path)),
+            _ => None,
+        })
+        .collect();
+    for definition in direct {
+        signatures.read(definition, Arc::make_mut(&mut body.resolution.reads))?;
+    }
     let projection_lifetimes =
         properties::projection_lifetimes(t, body, signature, &mut signatures)?;
     let pattern_declarations = properties::pattern_declarations(t, body, &mut signatures)?;
@@ -283,6 +297,26 @@ pub fn check_ownership_with_clauses(
     if association.is_some() && !promised.contains(&ParamId(1)) {
         promised.push(ParamId(1));
     }
+    let declared_promises = promised.clone();
+    let infer = syntax.item.visibility == hirsel_syntax::Visibility::Private
+        && !syntax
+            .item
+            .attributes
+            .iter()
+            .any(|a| a.name.as_str() == "test")
+        && matches!(
+            &syntax.item.kind,
+            hirsel_syntax::ItemKind::Function { body: Some(_), .. }
+        )
+        && matches!(&signature.kind, SignatureKind::Function(f) if f.foreign.is_none());
+    if infer && let SignatureKind::Function(f) = &signature.kind {
+        for (i, p) in f.parameters.iter().enumerate() {
+            let id = ParamId(i as u32);
+            if p.passing == PassingMode::Mut && !promised.contains(&id) {
+                promised.push(id);
+            }
+        }
+    }
     for parameter in promised {
         for graph in graphs
             .iter()
@@ -316,10 +350,32 @@ pub fn check_ownership_with_clauses(
             );
             signatures.record(Arc::make_mut(&mut body.resolution.reads));
             checked?;
+            if infer
+                && let Some(d) = proof_diagnostics
+                    .iter()
+                    .find(|d| d.message.starts_with(flow::UNIQUE_PROOF_FAILED))
+            {
+                let cause = d
+                    .secondary
+                    .iter()
+                    .find(|l| l.message.starts_with("provided:") && l.span != d.primary);
+                facts.unique_failures.push(UniqueFailure {
+                    claim: UniqueClaim::Parameter(parameter),
+                    span: cause.map_or(d.primary, |l| l.span),
+                    message: cause.map_or_else(|| d.message.clone(), |l| l.message.clone()),
+                });
+            }
+            if infer
+                && !proof_diagnostics
+                    .iter()
+                    .any(|d| d.message.starts_with(flow::UNIQUE_PROOF_FAILED))
+            {
+                facts.inferred_unique.preserves_unique.push(parameter);
+            }
             diagnostics.extend(
                 proof_diagnostics
                     .into_iter()
-                    .filter(|d| d.message.starts_with(flow::UNIQUE_PROOF_FAILED))
+                    .filter(|d| declared_promises.contains(&parameter) && d.message.starts_with(flow::UNIQUE_PROOF_FAILED))
                     .map(|mut d| {
                         if let Some(nominal) = &association {
                             d.primary = syntax.item.name_span;
@@ -365,6 +421,10 @@ pub fn check_ownership_with_clauses(
             &checked.return_uniqueness,
             &checked.return_sendability,
         );
+        if infer && graph.owner == NameSite::Item && graph.clause.is_none() {
+            facts.inferred_unique.results = checked.unique_results;
+            facts.unique_failures.extend(checked.unique_failures);
+        }
         mutation_sites.extend(checked.mutation_sites);
         for (expression, live) in checked.replacements {
             replacement_live

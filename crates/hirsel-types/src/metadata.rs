@@ -43,6 +43,8 @@ pub struct Metadata {
 /// Persistent semantic declaration metadata. Locations/build manifest maps stay outside.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub struct SignatureMetadata {
+    /// Private body facts, never part of FunctionType or indirect-call evidence.
+    pub inferred_unique: UniqueSummary,
     pub visibility: ast::Visibility,
     pub alias: bool,
     /// Explicit GEN-6 constant alias edge; consumers normalize terminal identity.
@@ -77,6 +79,7 @@ pub struct ImplementationBinder {
 impl Default for SignatureMetadata {
     fn default() -> Self {
         Self {
+            inferred_unique: UniqueSummary::default(),
             visibility: ast::Visibility::Private,
             alias: false,
             constant_alias: None,

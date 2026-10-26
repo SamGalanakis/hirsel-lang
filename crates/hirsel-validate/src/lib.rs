@@ -449,7 +449,10 @@ fn validate_input(
         errors.extend(checker.proof_errors.into_inner());
         errors.extend(checker.errors);
     }
-    if !definition.inferred_unique.is_empty() {
+    let inferred_header = signatures.get(definition.path);
+    if inferred_header.map_or(!definition.inferred_unique.is_empty(), |s| {
+        s.metadata.inferred_unique != definition.inferred_unique
+    }) {
         errors.push(Violation {
             body: None,
             block: None,
@@ -642,18 +645,25 @@ fn unique_promises(
     let Some(hirsel_types::SignatureKind::Function(f)) = signature.map(|s| &s.kind) else {
         return Vec::new();
     };
-    let mut promised: Vec<_> = f
-        .state_promises
-        .iter()
-        .filter(|p| p.preserve_unique && p.selector.fields.is_empty())
-        .filter_map(|p| match p.selector.parameter {
-            hirsel_types::ParameterRef::Bound {
-                depth: 0,
-                parameter,
-            } => Some(parameter),
-            _ => None,
-        })
+    let mut promised: Vec<_> = signature
+        .into_iter()
+        .flat_map(|s| s.metadata.inferred_unique.preserves_unique.iter().copied())
         .collect();
+    promised.extend(
+        f.state_promises
+            .iter()
+            .filter(|p| p.preserve_unique && p.selector.fields.is_empty())
+            .filter_map(|p| match p.selector.parameter {
+                hirsel_types::ParameterRef::Bound {
+                    depth: 0,
+                    parameter,
+                } => Some(parameter),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+    );
+    promised.sort();
+    promised.dedup();
     if signature.is_some_and(|s| format_association(t, s, signatures))
         && !promised.contains(&hirsel_types::ParamId(1))
     {
