@@ -15,6 +15,7 @@ pub(super) struct Declarations {
     registry: OperationRegistry,
     selected: Vec<(DefPath, ContentHash, SourceEventKind)>,
     root: NativeType,
+    source: ContentHash,
 }
 impl OperationDeclarations for Declarations {
     fn derive(
@@ -82,6 +83,38 @@ impl OperationDeclarations for Declarations {
             ));
         }
         self.registry.seal_descriptor(n, l, t)
+    }
+    fn seal_source_witness(
+        &self,
+        d: &DefPath,
+        i: ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::SealSourceWitness> {
+        // The original text and independently selected library revision bind
+        // these expectations before any candidate unit is constructed.
+        let events = self.seal_events(d, i)?;
+        let payloads = self.seal_payloads(d, i)?;
+        Some(
+            hirsel_lir::sealed_payload_source::SealSourceWitness::from_expectations(
+                self.source,
+                d.clone(),
+                hirsel_rc::library::revision(d),
+                i,
+                &events,
+                &payloads,
+            ),
+        )
+    }
+    fn seal_payloads(
+        &self,
+        d: &DefPath,
+        i: ContentHash,
+    ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
+        // These independently selected scalar/Unit bodies neither allocate nor
+        // replace source payloads. This is expected-empty, never unknown-empty.
+        self.selected
+            .iter()
+            .any(|(def, instance, _)| def == d && *instance == i)
+            .then(Vec::new)
     }
     fn seal_events(&self, d: &DefPath, i: ContentHash) -> Option<Vec<SourceEvent>> {
         let (_, _, kind) = self
@@ -270,6 +303,7 @@ pub(super) fn original_with_ready_observer(
         registry: lowered.operation_registry(&program),
         selected,
         root: root_native,
+        source: ContentHash::of_bytes(source.as_bytes()),
     };
     hirsel_rc::import::prune_pretransfer(
         &mut lowered.units,
