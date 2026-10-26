@@ -206,7 +206,7 @@ pub(super) fn used_edges<S>(unit: &LirUnit<S>) -> std::collections::BTreeSet<Edg
 /// same block as its call. C independently checks the ordinary unit; this
 /// checker replays the named slot's live/initialized version and loan rather
 /// than trusting a producer's alias target or an equal callable layout.
-fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> bool {
+pub(super) fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> bool {
     fn whole<S>(unit: &LirUnit<S>, mut address: AddressId) -> Option<SlotId> {
         for _ in 0..unit.addresses.len() {
             let info = unit.addresses.get(address.index())?;

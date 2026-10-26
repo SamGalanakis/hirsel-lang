@@ -2706,7 +2706,7 @@ fn ownership_trace_value_once_captures_keep_original_operands_and_ordinals() {
 }
 
 #[test]
-fn ownership_trace_once_captures_survive_all_recipes_but_still_refuse_native_emission() {
+fn ownership_trace_once_captures_survive_all_recipes_but_refuse_missing_native_target() {
     let (unit, table, _, _, _) = once_capture_value_fixture();
     let input = native::LeafPlan::prepare_value(&unit, &table).unwrap();
     let operations = support::registry();
@@ -2757,11 +2757,15 @@ fn ownership_trace_once_captures_survive_all_recipes_but_still_refuse_native_emi
     assert_eq!(output.recipes.last().unwrap().after, output.plan.unit);
     let ready = checked_native_fixture(output.unit, &table);
     check(ready.unit(), &output.plan).unwrap();
-    let refusal = native::LeafPlan::from_relocated(&ready, &table, &output.plan).unwrap_err();
-    assert!(
-        refusal.contains("unsupported instruction") && refusal.contains("Closure"),
-        "{refusal}"
-    );
+    let plans = std::collections::BTreeMap::from([(ready.unit().digest(), output.plan)]);
+    let refusal = native::Request::Relocated(&plans).prepare(&[&ready], &table).unwrap_err();
+    assert!(refusal.contains("unspecialized diagnostic call target"), "{refusal}");
+    let mut raw = ready.into_raw();
+    let code = raw.tables.closures[0].code.unwrap();
+    raw.tables.symbols[code.symbol.index()].instance = Some(hirsel_syntax::ContentHash([91; 32]));
+    let ready = checked_native_fixture(raw, &table);
+    let refusal = native::Request::Leaf.prepare(&[&ready], &table).unwrap_err();
+    assert!(refusal.contains("missing diagnostic call target"), "{refusal}");
 }
 
 #[test]

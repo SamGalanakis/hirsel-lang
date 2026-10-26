@@ -1,6 +1,6 @@
 //! Native emission of leaf ownership transitions. This staged adapter accepts
-//! whole local storage, owned direct calls and disjoint join transfers within
-//! a checked closed call graph; captures, nested
+//! whole local storage, owned calls, checked once captures and disjoint join transfers
+//! within a closed call graph; nested
 //! ownership and compound operations fail closed. It supplies Ready-local
 //! coverage, not the still-required earlier compiler-pass transport proof.
 use super::*;
@@ -94,8 +94,8 @@ impl LeafPlan {
          -> Result<(), String> {
             // A source callable carries its captured lineage; it does not
             // create an additional resource token for the callable shell.
-            // Native encoding still refuses it until environment transport
-            // has an independently checked representation.
+            // Alias binds a borrowed environment to its still-owned caller slot;
+            // native callable retirement must prove every capture is gone.
             let carrier_move = matches!(kind, Kind::Move | Kind::Drop | Kind::Alias)
                 && layouts
                     .layout(layout)
@@ -110,6 +110,25 @@ impl LeafPlan {
             );
             let site =
                 super::check::site(unit, point).ok_or("ownership observation has no source")?;
+            let observation = Observation {
+                point,
+                marker: ObserveOwnership {
+                    id,
+                    site,
+                    kind,
+                    token: from,
+                    owner: to,
+                },
+            };
+            if kind == Kind::Alias && !super::check::call_alias(unit, &observation) {
+                if source_only {
+                    // Preserve source observations for callable holders whose
+                    // custody this native vocabulary cannot yet prove. Native
+                    // preparation must refuse rather than omit the relation.
+                    return Ok(());
+                }
+                return Err("native ownership tracing: unsupported callable owner binding".into());
+            }
             if !source_only {
                 markers.insert(
                     id,
@@ -129,16 +148,7 @@ impl LeafPlan {
                     },
                 );
             }
-            observations.push(Observation {
-                point,
-                marker: ObserveOwnership {
-                    id,
-                    site,
-                    kind,
-                    token: from,
-                    owner: to,
-                },
-            });
+            observations.push(observation);
             Ok(())
         };
         {
@@ -788,10 +798,39 @@ pub fn local_call_sites(
             return Err("native ownership tracing: duplicate diagnostic call target".into());
         }
     }
+    let resolve = |symbol: &Symbol, abi: Option<crate::abi_types::FnAbiId>| {
+        let instance = symbol
+            .instance
+            .ok_or("native ownership tracing: unspecialized diagnostic call target")?;
+        let target = symbols
+            .get(&(&symbol.definition, instance))
+            .ok_or("native ownership tracing: missing diagnostic call target")?;
+        if abi.is_some_and(|abi| abi != target.1) {
+            return Err("native ownership tracing: closure code ABI differs from emitted body");
+        }
+        Ok(target.0)
+    };
     let mut calls = BTreeMap::new();
     for unit in units {
         let body = unit.unit();
         let mut targets = BTreeMap::new();
+        // Constructors and references can escape without a local invocation.
+        // They still require diagnostic bodies; an ordinary unobserved object
+        // must never fill a hole in the emitted closure.
+        for inst in &body.instructions {
+            match *inst {
+                Inst::Closure { closure, .. } => {
+                    let code = body.tables.closures[closure.index()]
+                        .code
+                        .ok_or("native ownership tracing: closure has no diagnostic code")?;
+                    resolve(&body.tables.symbols[code.symbol.index()], Some(code.abi))?;
+                }
+                Inst::FunctionRef { symbol, .. } => {
+                    resolve(&body.tables.symbols[symbol.index()], None)?;
+                }
+                _ => (),
+            }
+        }
         let codes = calls::discover(body);
         for (block, terminator) in body.terminators.iter().enumerate() {
             let Terminator::Call { call, .. } = terminator else {
@@ -814,18 +853,7 @@ pub fn local_call_sites(
                     return Err("native ownership tracing: operation call target".into());
                 }
             };
-            let instance = symbol
-                .instance
-                .ok_or("native ownership tracing: unspecialized diagnostic call target")?;
-            let target = symbols
-                .get(&(&symbol.definition, instance))
-                .ok_or("native ownership tracing: missing diagnostic call target")?;
-            if abi.is_some_and(|abi| abi != target.1) {
-                return Err(
-                    "native ownership tracing: closure code ABI differs from emitted body".into(),
-                );
-            }
-            targets.insert(BlockId(block as u32), target.0);
+            targets.insert(BlockId(block as u32), resolve(symbol, abi)?);
         }
         calls.insert(body.digest().0, targets);
     }
