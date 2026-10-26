@@ -266,6 +266,17 @@ impl Catalog {
     pub(super) fn facts(&self, path: &DefPath) -> Option<&SourceFacts> {
         Some(&self.candidates.get(path)?.first()?.facts)
     }
+    /// Ordinary heads cannot become generic generators through syntax
+    /// shadowing. Consult the live syntax map only for positive candidates.
+    pub(super) fn has_instance_bodied(&self, mut shadowed: impl FnMut(&DefPath) -> bool) -> bool {
+        self.candidates.iter().any(|(path, candidates)| {
+            candidates
+                .first()
+                .is_some_and(|candidate| candidate.facts.instance_bodied)
+                && !shadowed(path)
+        })
+    }
+
     pub(super) fn source_items(&self, file: FileId) -> Option<Vec<SourceItem>> {
         self.files.contains_key(&file).then(|| {
             let mut items: Vec<_> = self
@@ -920,6 +931,81 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::store::ResultStore;
+
+    #[test]
+    fn generated_probe_uses_positive_heads_and_preserves_syntax_shadowing() {
+        crate::with_compiler_stack(|| {
+            for generic in [false, true] {
+                let store = Arc::new(crate::store::MemStore::default());
+                let create = || {
+                    QueryEngine::new(
+                        default_environment(),
+                        PhaseAdapters {
+                            lexer: Some(Arc::new(crate::LexerAdapter)),
+                            parser: Some(Arc::new(crate::ParserAdapter)),
+                            ..Default::default()
+                        },
+                    )
+                    .with_result_store(store.clone())
+                };
+                let context = default_context();
+                let mut source = (0..64)
+                    .map(|i| format!("fn ordinary_{i}() {{}}\n"))
+                    .collect::<String>();
+                if generic {
+                    source.push_str("fn generated[T]() = comptime make()\n");
+                }
+                let mut seed = create();
+                let file = seed.sources.add("probe.hir", source.clone()).unwrap();
+                seed.index_source(file, &context).unwrap();
+                let mut engine = create();
+                let file = engine.sources.add("probe.hir", source).unwrap();
+                engine.index_source(file, &context).unwrap();
+                assert!(
+                    engine.items.is_empty(),
+                    "probe uses durable heads without materializing bodies"
+                );
+                assert_eq!(engine.catalog.paths().count(), 64 + usize::from(generic));
+                let mut probes = 0;
+                assert_eq!(
+                    engine.catalog.has_instance_bodied(|_| {
+                        probes += 1;
+                        false
+                    }),
+                    generic
+                );
+                assert_eq!(
+                    probes,
+                    usize::from(generic),
+                    "ordinary heads need no path lookup"
+                );
+                assert!(
+                    !engine.catalog.has_instance_bodied(|_| true),
+                    "live non-generated syntax shadows a positive stored head"
+                );
+                for path in engine.catalog.paths() {
+                    assert_eq!(
+                        engine.instance_bodied(path),
+                        engine.catalog.facts(path).unwrap().instance_bodied
+                    );
+                }
+                if generic {
+                    let path = engine
+                        .catalog
+                        .paths()
+                        .find(|path| path.0.name == "generated")
+                        .unwrap()
+                        .clone();
+                    engine.materialize(&path).unwrap();
+                    assert!(
+                        engine.instance_bodied(&path),
+                        "classification survives materialization"
+                    );
+                    assert!(!engine.catalog.has_instance_bodied(|_| false));
+                }
+            }
+        });
+    }
 
     #[test]
     fn parse_heads_refuse_every_single_byte_corruption() {
