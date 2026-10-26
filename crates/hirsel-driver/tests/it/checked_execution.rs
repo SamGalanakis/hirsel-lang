@@ -1185,12 +1185,13 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
 fn a_forged_private_unique_result_still_traps_with_both_checkers_bypassed() {
     with_compiler_stack(|| {
         let source = r#"
-const NAME: String = "counted"
-fn counted() -> String { NAME }
-fn fresh() -> String { "fresh" }
-fn need(take text: unique String) {}
+fn counted(input: List[u64]) -> List[u64] in input { copy input }
+fn fresh(input: List[u64]) -> List[u64] { [1] }
+fn need(take values: unique List[u64]) {}
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
-    need(fresh())
+    let original = [2u64]
+    need(fresh(original))
+    let _ = list.len(original)
     Ok(())
 }
 "#;
@@ -1203,9 +1204,9 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
                 .results
                 .contains(&hirsel_types::UniqueResultRow::Root)
         );
-        // Reuse a real lowered counted-constant producer, keeping the proved
-        // header and the caller's unique parameter. The constant retains the
-        // other counted owner after this producer returns.
+        // Reuse a lowered producer that shares its borrowed input, keeping
+        // the proved header and the caller's unique parameter. The caller
+        // retains the other owner after this producer returns.
         let counted = lowered(&mut engine, "counted");
         fresh.bodies = counted.bodies;
         without_unique_locals(engine.types(), &mut fresh);

@@ -96,6 +96,14 @@ fn mode2_recipes_52_r2_generic_wrapper() {
                 .replace("take c: Credit", "take c: unique Credit")
                 .replace("take t: T", "take t: unique T"),
         );
+        // Keep the original explicit-result contract control as well.
+        accepted(
+            &mut engine,
+            &source
+                .replace("take c: Credit", "take c: unique Credit")
+                .replace("take t: T", "take t: unique T")
+                .replace("-> Envelope", "-> unique Envelope"),
+        );
         rejected(
             &mut engine,
             &source
