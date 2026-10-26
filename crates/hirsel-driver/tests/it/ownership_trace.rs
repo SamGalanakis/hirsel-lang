@@ -1411,3 +1411,23 @@ pub fn main() -> Result[(), ()] {
         2,
     );
 }
+
+#[test]
+#[ignore = "native: executes original uncalled capture cleanup on both backends"]
+fn ownership_native_uncalled_once_environment_drops_original_resources_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn discard(take token: Token) {
+    let captured: once fn() -> Token = fn() -> Token { take token }
+}
+pub fn main() -> Result[(), ()] {
+    discard(Token(value: 7u64))
+    discard(Token(value: 7u64))
+    Ok(())
+}
+"#,
+        2,
+    );
+}
