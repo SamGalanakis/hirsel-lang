@@ -1763,7 +1763,17 @@ fn original_plan_inputs_bind_source_edits_membership_options_and_foreign_bytes()
             assert_ne!(original, source_output(&changed));
         }
         std::fs::write(&path, SOURCE).unwrap();
-        let graph = proof_graph(&path, &store, &budget, errors, weight);
+        // Keep the original two-declaration input vector explicit. A standalone
+        // .hir load implicitly imports std, whose generated declarations need
+        // their own accepted namespace and are not inputs to this binding test.
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(
+            &manifest,
+            r#"{"schema":1,"package":{"name":"plan_inputs","version":"1"},"sources":[{"path":"plan.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#,
+        )
+        .unwrap();
+        let graph = proof_graph(&manifest, &store, &budget, errors, weight);
+        assert_eq!(graph.paths.len(), 2);
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let calls = Arc::new(AtomicU64::new(0));
         let query = |case: u8, foreign: Vec<Reference>| {
