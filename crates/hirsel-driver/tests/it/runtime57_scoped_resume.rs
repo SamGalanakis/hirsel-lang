@@ -270,14 +270,27 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 
 fn check_scope_until(deadline: &str, expired: &str) {
     with_compiler_stack(|| {
-        let source = UNTIL.replace("DEADLINE", deadline).replace("EXPIRED", expired);
+        let source = UNTIL
+            .replace("DEADLINE", deadline)
+            .replace("EXPIRED", expired);
         let program = ready(&source);
         let plans = native::continuation::plans(&program);
         native::continuation::validate(&program, &plans).unwrap();
         assert!(plans.plans.values().any(|p| p.states.iter().any(|s| {
-            s.runtime.as_ref().is_some_and(|r| r.kind == RuntimeOpKind::ScopeExitUntil)
+            s.runtime
+                .as_ref()
+                .is_some_and(|r| r.kind == RuntimeOpKind::ScopeExitUntil)
         })));
-        agree_on(&source, &Fixture { monotonic: Some(0), ..Fixture::default() }, "owned deadline scope", true, &[false]);
+        agree_on(
+            &source,
+            &Fixture {
+                monotonic: Some(0),
+                ..Fixture::default()
+            },
+            "owned deadline scope",
+            true,
+            &[false],
+        );
     });
 }
 
@@ -378,9 +391,19 @@ fn runtime57_free_owned_scope_physically_leaves_its_pending_exit_and_replays() {
         let target = TargetSpec::x86_64_unknown_linux_gnu();
         let program = native::build(&validated, &native::Options::new(target.clone())).unwrap();
         let plans = native::continuation::plans(&program);
-        let witness = program.units.iter().find(|u| u.unit().header.definition.0.name == "witness").unwrap();
-        assert_eq!(plans.get(witness.unit().header.instance).unwrap().representation, Representation::Resumable,
-            "owned parent must enter the scope through a complete retained call chain");
+        let witness = program
+            .units
+            .iter()
+            .find(|u| u.unit().header.definition.0.name == "witness")
+            .unwrap();
+        assert_eq!(
+            plans
+                .get(witness.unit().header.instance)
+                .unwrap()
+                .representation,
+            Representation::Resumable,
+            "owned parent must enter the scope through a complete retained call chain"
+        );
         assert!(plans.plans.values().any(|p| p.states.iter().any(|s| {
             s.runtime
                 .as_ref()
@@ -432,13 +455,16 @@ fn runtime57_free_owned_scope_physically_leaves_its_pending_exit_and_replays() {
                         .arg(&grants);
                 }
                 let output = if replay {
-                    command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+                    command
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped());
                     finish_physical_run(command.spawn().unwrap())
                 } else {
                     // The child cannot finish before this exact parent's X2 save.
                     // No clock delay, scheduler knob or output-only inference is used.
                     use std::io::Write;
-                    command.stdin(std::process::Stdio::piped())
+                    command
+                        .stdin(std::process::Stdio::piped())
                         .stdout(std::process::Stdio::piped())
                         .stderr(std::process::Stdio::piped());
                     let mut process = command.spawn().unwrap();
@@ -512,10 +538,19 @@ fn runtime57_free_owned_scope_physically_leaves_its_pending_exit_and_replays() {
 // The diagnostic proves Pending at the entered exit and a subsequent physical
 // pool return by that same task; unrelated compact leaves cannot satisfy it.
 fn pending_exit_left(text: &str) -> bool {
-    let lines = text.lines().map(|line| line.split_whitespace().collect::<Vec<_>>()).collect::<Vec<_>>();
+    let lines = text
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
     lines.iter().enumerate().any(|(index, words)| {
-        words.first() == Some(&"runtime") && words.get(4) == Some(&"18") && words.get(5) == Some(&"settle")
-        && lines[index+1..].iter().any(|line| line.first() == Some(&"leave") && line.get(1) == words.get(1) && line.get(4) == Some(&"1"))
+        words.first() == Some(&"runtime")
+            && words.get(4) == Some(&"18")
+            && words.get(5) == Some(&"settle")
+            && lines[index + 1..].iter().any(|line| {
+                line.first() == Some(&"leave")
+                    && line.get(1) == words.get(1)
+                    && line.get(4) == Some(&"1")
+            })
     })
 }
 
