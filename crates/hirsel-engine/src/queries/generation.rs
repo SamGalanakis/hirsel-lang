@@ -931,11 +931,10 @@ impl QueryEngine {
     pub(crate) fn instance_bodied(&self, path: &DefPath) -> bool {
         match self.items.get(path) {
             Some(items) => items.first().is_some_and(|s| instance_bodied(s)),
-            None if self.catalog.body(path).is_some() => self
+            None => self
                 .catalog
                 .facts(path)
                 .is_some_and(|facts| facts.instance_bodied),
-            None => false,
         }
     }
 
@@ -1245,7 +1244,9 @@ impl QueryEngine {
         let any = self.items.iter().any(|(_, items)| {
             self.work.selection_probe_visits += 1;
             items.first().is_some_and(|s| instance_bodied(s))
-        }) || self.catalog.paths().any(|path| self.instance_bodied(path));
+        }) || self
+            .catalog
+            .has_instance_bodied(|path| self.items.contains_key(path));
         let mut selected = BTreeSet::new();
         if !any {
             return Ok(selected);
