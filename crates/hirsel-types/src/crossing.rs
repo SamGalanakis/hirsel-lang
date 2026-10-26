@@ -335,8 +335,70 @@ pub fn owned_crossing_receipts(
     declarations: &GenericDeclarations,
     lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
 ) -> Result<Vec<(Vec<OwnedTypePart>, bool)>, QueryError> {
-    // Expansions go to scratch: pushing to a clone of a shared body store
-    // would copy every row of the body once per call.
+    owned_receipts(source, root, declarations, lookup, false)
+}
+
+/// Unique counted payload contracts below a value's root. Sharing a wrapper
+/// cannot retain these claims. Plain/Flat values and immutable/independent
+/// handles do not transfer exclusive access to their contents.
+pub fn owned_unique_parts(
+    source: &TypeInterner,
+    root: TypeId,
+    declarations: &GenericDeclarations,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+) -> Result<Vec<Vec<OwnedTypePart>>, QueryError> {
+    // Inspect the finite occurrence graph before proving it. A type
+    // without a nested unique contract owes no receipt, even when its nominal
+    // declaration grows type arguments indefinitely (as Holder[Iter[T]] can).
+    let mut pending = vec![(root, false)];
+    let mut seen = std::collections::HashSet::new();
+    let mut required = false;
+    while let Some((id, nested)) = pending.pop() {
+        if !seen.insert((id, nested)) {
+            continue;
+        }
+        let Some(row) = source.get(id) else {
+            continue;
+        };
+        if matches!(
+            row.kind,
+            TypeKind::Builtin {
+                kind: BuiltinType::Shared
+                    | BuiltinType::Mutex
+                    | BuiltinType::Atomic
+                    | BuiltinType::Sender
+                    | BuiltinType::Receiver
+                    | BuiltinType::Ptr
+                    | BuiltinType::FnPtr
+                    | BuiltinType::TypeShape
+                    | BuiltinType::SlotId,
+                ..
+            }
+        ) {
+            continue;
+        }
+        if nested && row.modes.uniqueness == Uniqueness::Unique {
+            required = true;
+            break;
+        }
+        pending.extend(row.kind.value_parts().into_iter().map(|part| (part, true)));
+    }
+    if !required {
+        return Ok(Vec::new());
+    }
+    Ok(owned_receipts(source, root, declarations, lookup, true)?
+        .into_iter()
+        .filter_map(|(path, _)| (!path.is_empty()).then_some(path))
+        .collect())
+}
+
+fn owned_receipts(
+    source: &TypeInterner,
+    root: TypeId,
+    declarations: &GenericDeclarations,
+    lookup: &mut impl FnMut(DefId) -> Result<Option<SignatureRef>, QueryError>,
+    unique: bool,
+) -> Result<Vec<(Vec<OwnedTypePart>, bool)>, QueryError> {
     let store = source;
     let mut pending = vec![(root, Vec::new(), false)];
     let mut nominals = NominalExpansions::default();
@@ -349,7 +411,30 @@ pub fn owned_crossing_receipts(
         let Some(row) = store.get(id).cloned() else {
             continue;
         };
-        if row.sendability_requirement == SendabilityRequirement::Sendable {
+        if unique {
+            if matches!(
+                row.kind,
+                TypeKind::Builtin {
+                    kind: BuiltinType::Shared
+                        | BuiltinType::Mutex
+                        | BuiltinType::Sender
+                        | BuiltinType::Receiver
+                        | BuiltinType::Atomic
+                        | BuiltinType::Ptr
+                        | BuiltinType::FnPtr
+                        | BuiltinType::TypeShape
+                        | BuiltinType::SlotId,
+                    ..
+                }
+            ) || structural_property(store, id, StructuralProperty::Plain, declarations, lookup)?
+                || structural_flat(store, id, declarations, lookup)?
+            {
+                continue;
+            }
+            if row.modes.uniqueness == Uniqueness::Unique {
+                receipts.push((path.clone(), false));
+            }
+        } else if row.sendability_requirement == SendabilityRequirement::Sendable {
             let independent = sendability_after_sharing(store, id, declarations, lookup)?
                 == Sendability::Sendable;
             receipts.push((path.clone(), independent));
@@ -395,6 +480,17 @@ pub fn owned_crossing_receipts(
                     | BuiltinType::SlotId,
                 ..
             } => (),
+            TypeKind::Named { arguments, .. } if unique => {
+                // Written actual arguments are independent contracts. Unique
+                // fields inside a declaration remain conditional on the owned
+                // projection receipt (MODE-2); borrowing or copying a nominal
+                // view does not export that receipt. Keep CONC-5's boundary.
+                for argument in arguments {
+                    if let GenericArgument::Type(part) = argument {
+                        push(part, OwnedTypePart::Elements);
+                    }
+                }
+            }
             TypeKind::Named {
                 definition,
                 arguments,
@@ -579,5 +675,46 @@ mod tests {
                 !forgets
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod unique_parts_tests {
+    use super::*;
+
+    #[test]
+    fn sharing_checks_owned_payloads_but_not_immutable_handles() {
+        let store = TypeInterner::new(None);
+        let mut bytes = Type::with_kind(TypeKind::Primitive(Primitive::Bytes));
+        bytes.modes.uniqueness = Uniqueness::Unique;
+        let bytes = store.intern(bytes);
+        let wrapper = store.intern(Type::with_kind(TypeKind::Tuple(vec![bytes].into())));
+        let mut lookup = |_: DefId| Ok(None);
+        let declarations = GenericDeclarations::default();
+        assert_eq!(
+            owned_unique_parts(&store, wrapper, &declarations, &mut lookup).unwrap(),
+            vec![vec![OwnedTypePart::Field(0)]]
+        );
+        for kind in [BuiltinType::Shared, BuiltinType::Mutex, BuiltinType::Sender] {
+            let handle = store.intern(Type::with_kind(TypeKind::Builtin {
+                kind,
+                arguments: vec![GenericArgument::Type(wrapper)].into(),
+            }));
+            let root = store.intern(Type::with_kind(TypeKind::Tuple(vec![handle].into())));
+            assert!(
+                owned_unique_parts(&store, root, &declarations, &mut lookup)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let mut scalar = Type::with_kind(TypeKind::Primitive(Primitive::U8));
+        scalar.modes.uniqueness = Uniqueness::Unique;
+        let scalar = store.intern(scalar);
+        let root = store.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+        assert!(
+            owned_unique_parts(&store, root, &declarations, &mut lookup)
+                .unwrap()
+                .is_empty()
+        );
     }
 }
