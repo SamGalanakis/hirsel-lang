@@ -143,12 +143,13 @@ fn ownership_repairs_payloads_and_lifetimes_agree_on_h_llvm_and_cranelift() {
     });
 }
 
-fn checked_capture(source: &str) -> hirsel_engine::CheckOutput {
-    let mut engine = crate::source_std::engine();
+fn checked_capture(
+    engine: &mut hirsel_engine::QueryEngine,
+    source: &str,
+) -> hirsel_engine::CheckOutput {
     let file = engine.sources.add("snapshot.hir", source.into()).unwrap();
     let output =
-        hirsel_engine::check_progress(&mut engine, file, &hirsel_engine::default_context())
-            .unwrap();
+        hirsel_engine::check_progress(engine, file, &hirsel_engine::default_context()).unwrap();
     assert_eq!(output.completion, hirsel_engine::CheckCompletion::Complete);
     output
 }
@@ -169,6 +170,7 @@ fn mutable_capture_error(output: &hirsel_engine::CheckOutput) -> &hirsel_diag::D
 #[test]
 fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
     with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
         for (prefix, saved) in [
             ("", "saved"),
             ("let saved=1u64;", "saved_2"),
@@ -176,7 +178,7 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
         ] {
             let source =
                 format!("// λ 🐑\nfn f()->fn()->u64 {{{prefix}let mut n=0u64;fn()->u64 {{n}}}}");
-            let output = checked_capture(&source);
+            let output = checked_capture(&mut engine, &source);
             let d = mutable_capture_error(&output);
             assert_eq!(output.sources.slice(d.primary), Some("fn()->u64 {n}"));
             assert_eq!(
@@ -214,7 +216,10 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
                 "fn()->u64 {n}",
                 &format!("let {saved}=n;fn()->u64 {{{saved}}}"),
             );
-            assert!(checked_capture(&twin).diagnostics.is_empty(), "{twin}");
+            assert!(
+                checked_capture(&mut engine, &twin).diagnostics.is_empty(),
+                "{twin}"
+            );
         }
         // capture-take-reconcile-30/REPORT.md: Many invocations borrow their
         // capture slots. Mutation also violates the read-only alias contract.
@@ -228,7 +233,7 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
                 &["CLO-4"][..],
             ),
         ] {
-            let output = checked_capture(source);
+            let output = checked_capture(&mut engine, source);
             let errors: Vec<_> = output
                 .diagnostics
                 .iter()
@@ -245,11 +250,14 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
         }
         // The exact planning witness and explicit immutable twin keep CLO-4.
         let source = "fn f()->fn()->u64 {let mut n=0u64;fn()->u64 {n}}";
-        mutable_capture_error(&checked_capture(source));
+        mutable_capture_error(&checked_capture(&mut engine, source));
         assert!(
-            checked_capture("fn f()->fn()->u64 {let mut n=0u64;let saved=n;fn()->u64 {saved}}")
-                .diagnostics
-                .is_empty()
+            checked_capture(
+                &mut engine,
+                "fn f()->fn()->u64 {let mut n=0u64;let saved=n;fn()->u64 {saved}}"
+            )
+            .diagnostics
+            .is_empty()
         );
     });
 }
@@ -257,11 +265,12 @@ fn ownership_repairs_6_mutable_capture_plain_snapshot_and_fresh_names() {
 #[test]
 fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
     with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
         for source in [
             "fn f()->fn()->u64 {let mut n=[1u64,2,3];fn()->u64 {n[0]}}",
             "fn f(mut n:List[u64])->fn()->u64 {fn()->u64 {n[0]}}",
         ] {
-            let output = checked_capture(source);
+            let output = checked_capture(&mut engine, source);
             let d = mutable_capture_error(&output);
             let human = d.render_human(&output.sources);
             assert!(human.contains("let saved = unique copy n"), "{human}");
@@ -274,7 +283,10 @@ fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
                 "fn()->u64 {n[0]}",
                 "let saved=unique copy n;fn()->u64 {saved[0]}",
             );
-            assert!(checked_capture(&twin).diagnostics.is_empty(), "{twin}");
+            assert!(
+                checked_capture(&mut engine, &twin).diagnostics.is_empty(),
+                "{twin}"
+            );
         }
         for source in [
             "resource type Token { n:u64 } drop(x) {}\nfn f()->fn()->u64 {let mut n=Token(n:1);fn()->u64 {n.n}}",
@@ -282,7 +294,7 @@ fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
             "fn f[T:copyable + inert](mut n:T)->fn()->T {fn()->T {copy n}}",
             "fn f(mut n:fn()->u64)->fn()->u64 {fn()->u64 {n()}}",
         ] {
-            let output = checked_capture(source);
+            let output = checked_capture(&mut engine, source);
             let d = output
                 .diagnostics
                 .iter()
@@ -304,7 +316,7 @@ fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
             assert!(!human.contains("uses {net}"), "{human}");
         }
         let source = "@noalloc fn f(mut n:List[u64])->fn()->u64 {fn()->u64 {n[0]}}";
-        let output = checked_capture(source);
+        let output = checked_capture(&mut engine, source);
         let d = output
             .diagnostics
             .iter()
@@ -326,7 +338,10 @@ fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
                 "let saved=unique copy n;fn()->u64 {saved[0]}",
             ),
         ] {
-            let output = checked_capture(&source.replace("fn()->u64 {n[0]}", replacement));
+            let output = checked_capture(
+                &mut engine,
+                &source.replace("fn()->u64 {n[0]}", replacement),
+            );
             assert!(
                 output
                     .diagnostics
@@ -341,9 +356,10 @@ fn ownership_repairs_6_mutable_counted_snapshot_and_restrictions() {
 #[test]
 fn ownership_repairs_6_mutable_snapshot_preserves_authority_failure() {
     with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
         let source =
             "fn f(dir:Dir)->fn()->Dir uses {Dir} { let g:fn()->Dir uses {} = fn()->Dir {dir}; g }";
-        let output = checked_capture(source);
+        let output = checked_capture(&mut engine, source);
         let d = mutable_capture_error(&output);
         assert_eq!(output.sources.slice(d.primary), Some("dir"));
         assert!(
