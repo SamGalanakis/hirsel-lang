@@ -95,7 +95,7 @@ impl QueryEngine {
         let previous_sources = self.sources.clone();
         let source_before = self.sources.retained_payload_bytes();
         let previous = self.generated.get(&definition).cloned();
-        let allowance = Arc::new(allowance);
+        let mut allowance = allowance;
         let result = (|| -> Result<Arc<AcceptedFrontRegistration>, QueryError> {
             let text = output.text()?.to_owned();
             let snapshot = self.snapshot(&definition)?;
@@ -139,22 +139,27 @@ impl QueryEngine {
                 weight.add(bytes);
             }
             let retained = weight.bytes();
-            if retained > allowance.bytes() {
-                return Err(refusal());
-            }
-            self.sources = self.sources.clone().retain_owner(allowance.clone());
+            // The caller admits an output ceiling before generation. Keep only
+            // the measured successful product through source/view clones; the
+            // unused part releases when this acceptance call returns.
+            let retained_allowance = Arc::new(allowance.split(retained).ok_or_else(refusal)?);
+            self.sources = self
+                .sources
+                .clone()
+                .retain_owner(retained_allowance.clone());
             Ok(Arc::new(AcceptedFrontRegistration {
                 syntax,
                 reads,
                 output,
                 original: (snapshot.anchor, snapshot.occurrence, snapshot.text_hash),
-                _allowance: allowance.clone(),
+                _allowance: retained_allowance,
                 retained,
             }))
         })();
         match result {
             Ok(accepted) => Ok(accepted),
             Err(mut error) => {
+                let allowance = Arc::new(allowance);
                 let mut weight = self.front_registration_source_weight(&definition, source_before);
                 weight.add(
                     crate::memo::retained::retained_query_error_bytes(&error)
