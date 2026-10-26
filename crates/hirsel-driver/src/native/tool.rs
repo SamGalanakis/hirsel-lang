@@ -157,6 +157,8 @@ pub fn run_path_native_backend_with_trace_events(
                 evidence: evidence.cloned().map(std::sync::Arc::new),
                 test_entries: vec![],
                 supplemental_sources: vec![],
+                output: crate::requests::NativeOutput::Executable,
+                optimization: None,
             },
         ))?;
         match &selected.result {
