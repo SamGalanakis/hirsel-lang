@@ -27,6 +27,7 @@ pub(crate) mod record;
 pub(crate) mod replay;
 pub(crate) mod sets;
 mod spawn;
+pub(crate) mod tail;
 
 #[derive(Default)]
 pub(crate) struct Driver {

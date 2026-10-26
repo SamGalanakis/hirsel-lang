@@ -72,6 +72,9 @@ pub(crate) struct OpLocal {
     pub(super) mutex_wait: Option<u64>,
     /// Registry rows a role-free close left for this task's next role entry.
     retired: Vec<Retired>,
+    /// Entered effect tails, subordinate to the task's continuation owner.
+    #[allow(dead_code)] // Admission follows the checker/emitter custody proof.
+    pub(super) tails: super::tail::Records,
 }
 
 /// A closed object's registry row, retired under the role.

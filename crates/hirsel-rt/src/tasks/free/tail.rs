@@ -1,0 +1,221 @@
+//! Task-owned Free effect tails. These records are subordinate to the task's
+//! existing Active/Saved continuation; they never schedule or activate a task.
+//!
+//! Tokio ce685ee6916549ed, runtime/task/state.rs:147-182 and
+//! runtime/task/harness.rs:502-559 separate running ownership, pending work
+//! and stored output. Here the effect and its cleanup suffix also have distinct
+//! stages: polling a stored completion cannot begin or apply the effect again.
+//! Run stop drops storage without calling language cleanup. Admission from
+//! compiled code remains disabled until the caller's complete custody is proved.
+#![cfg_attr(not(test), allow(dead_code))]
+
+use std::task::Poll;
+
+use crate::channels::Ring;
+use crate::failure::Chained;
+use crate::stop::Stopped;
+use crate::tasks::registry::TaskKey;
+use crate::{STATUS_FAILURE, STATUS_OK};
+use std::sync::Arc;
+
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Kind {
+    Put,
+    Kill,
+    Cause,
+    CloseMutex,
+    CloseChannel,
+}
+
+/// An invocation, including repeated executions of the same compiled site.
+/// A handle is useful only in its task generation and is never reused there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Ticket {
+    task: TaskKey,
+    invocation: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Site {
+    pub(super) object: hirsel_free::session::Handle,
+    pub(super) kind: Kind,
+    pub(super) anchor: u64,
+    pub(super) operation: u64,
+}
+
+/// Physical owners only: dropping an image reclaims bytes, never its language
+/// values. The certified adapter must transfer/empty the canonical carrier
+/// before installing an image, and restore it on language failure if needed.
+#[derive(Default)]
+pub(super) struct Owners {
+    pub(super) image: Option<Ring>,
+    pub(super) descriptor: Option<u32>,
+    pub(super) chain: Option<Arc<Vec<Chained>>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Stage {
+    Prepared,
+    Waiting { entered: bool },
+    Applying,
+    EffectDone(u8),
+    Releasing(u8),
+    Complete(u8),
+    Abandoned,
+}
+
+/// A pinned allocation in Records, never an element whose address Vec growth
+/// can move. No stack Cleanup, mask, output address, guard or waker lives here.
+pub(super) struct Record {
+    ticket: Ticket,
+    pub(super) site: Site,
+    stage: Stage,
+    ordinal: Option<u64>,
+    pub(super) owners: Owners,
+}
+
+impl Record {
+    /// Poll the effect, using the original entry, admission and mutation code.
+    /// `begin` must perform only entry/begin, `ready` subscribes and rechecks,
+    /// and `apply` completes one bounded admitted phase without suspension.
+    /// None may publish a child operation. An error terminates the record;
+    /// a caller cannot recover by applying a possibly completed action again.
+    pub(super) fn poll(
+        &mut self,
+        begin: impl FnOnce() -> Option<u64>,
+        ready: impl FnOnce(&mut bool) -> Stopped<bool>,
+        apply: impl FnOnce(&mut Owners) -> Stopped<u8>,
+    ) -> Stopped<Poll<u8>> {
+        match self.stage {
+            Stage::EffectDone(status) | Stage::Releasing(status) | Stage::Complete(status) => {
+                return Ok(Poll::Ready(status));
+            }
+            Stage::Applying | Stage::Abandoned => panic!("poll of a terminal or active Free tail"),
+            Stage::Prepared | Stage::Waiting { .. } => {}
+        }
+        if self.stage == Stage::Prepared {
+            // The record already owns its inputs before entry can observe stop.
+            self.stage = Stage::Applying;
+            self.ordinal = begin();
+            self.stage = Stage::Waiting { entered: false };
+        }
+        let Stage::Waiting { mut entered } = self.stage else {
+            unreachable!();
+        };
+        // A stopped admission never leaves a retryable record behind.
+        self.stage = Stage::Abandoned;
+        if !ready(&mut entered)? {
+            self.stage = Stage::Waiting { entered };
+            return Ok(Poll::Pending);
+        }
+        self.stage = Stage::Applying;
+        match apply(&mut self.owners) {
+            Ok(status) => {
+                status_is_terminal(status);
+                self.stage = Stage::EffectDone(status);
+                Ok(Poll::Ready(status))
+            }
+            Err(stop) => {
+                self.stage = Stage::Abandoned;
+                Err(stop)
+            }
+        }
+    }
+
+    /// Cleanup starts only after Done and resumes independently of the effect.
+    pub(super) fn releasing(&mut self) {
+        let Stage::EffectDone(status) = self.stage else {
+            panic!("Free tail cleanup before effect completion");
+        };
+        self.stage = Stage::Releasing(status);
+    }
+
+    /// Only completed cleanup statuses enter the accumulator. Pending is not
+    /// a failure bit and must never become a stored language status.
+    pub(super) fn released(&mut self, status: u8) {
+        status_is_terminal(status);
+        let Stage::Releasing(previous) = self.stage else {
+            panic!("Free tail child completion outside cleanup");
+        };
+        self.stage = Stage::Releasing(previous | status);
+    }
+
+    pub(super) fn finish(&mut self) {
+        let (Stage::EffectDone(status) | Stage::Releasing(status)) = self.stage else {
+            panic!("Free tail suffix completed twice or before Done");
+        };
+        assert!(
+            self.owners.image.is_none(),
+            "Free tail lost a payload owner"
+        );
+        assert!(self.owners.chain.is_none(), "Free tail lost a cause owner");
+        self.stage = Stage::Complete(status);
+    }
+}
+
+fn status_is_terminal(status: u8) {
+    assert!(
+        status == STATUS_OK || status == STATUS_FAILURE,
+        "a pending Free tail is not a cleanup completion"
+    );
+}
+
+/// Strictly nested obligations. The parent stays allocated and cannot be
+/// polled while its child owns the next ordinal. Records carry no scheduling
+/// references, so retiring one cannot keep a task runnable.
+#[derive(Default)]
+pub(crate) struct Records {
+    next: u64,
+    // Boxes retain every ancestor's address across growth and child retirement.
+    #[allow(clippy::vec_box)]
+    stack: Vec<Box<Record>>,
+}
+
+impl Records {
+    pub(super) fn prepare(&mut self, task: TaskKey, site: Site, owners: Owners) -> Ticket {
+        if let Some(parent) = self.stack.last() {
+            assert_eq!(parent.ticket.task, task, "Free tail moved to another task");
+            assert!(
+                matches!(parent.stage, Stage::EffectDone(_) | Stage::Releasing(_)),
+                "a child Free operation before its parent's Done"
+            );
+        }
+        self.next = self
+            .next
+            .checked_add(1)
+            .expect("Free tail identity overflow");
+        let ticket = Ticket {
+            task,
+            invocation: self.next,
+        };
+        self.stack.push(Box::new(Record {
+            ticket,
+            site,
+            stage: Stage::Prepared,
+            ordinal: None,
+            owners,
+        }));
+        ticket
+    }
+
+    /// Only the task's Active continuation may access its innermost record.
+    /// The dispatcher, rather than a tail flag, proves physical save ack.
+    pub(super) fn active(&mut self, task: TaskKey, ticket: Ticket) -> &mut Record {
+        assert_eq!(ticket.task, task, "a stale Free tail task generation");
+        let record = self.stack.last_mut().expect("a retired Free tail");
+        assert_eq!(record.ticket, ticket, "a stale or paused Free tail");
+        record
+    }
+
+    /// Consume completion exactly once, after the compiler's exact suffix.
+    pub(super) fn retire(&mut self, task: TaskKey, ticket: Ticket) -> u8 {
+        let Stage::Complete(status) = self.active(task, ticket).stage else {
+            panic!("retiring an unfinished Free tail");
+        };
+        self.stack.pop();
+        status
+    }
+}
