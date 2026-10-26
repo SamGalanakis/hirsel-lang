@@ -346,12 +346,6 @@ impl QueryEngine {
         {
             return Err(refusal());
         }
-        let input_bytes =
-            FrontGrowthQueries::input_bytes(&definitions, weight).ok_or_else(refusal)?;
-        let output_budget = allowance
-            .bytes()
-            .checked_sub(input_bytes)
-            .ok_or_else(refusal)?;
         let roots = definitions
             .iter()
             .map(|path| {
@@ -363,6 +357,20 @@ impl QueryEngine {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // The prospective inventory above remains an admission bound. The
+        // settled owner retains only root IDs and handles to the exact front
+        // source. Charge its real backing before assigning the remainder of
+        // this same reservation to its completed output.
+        let source = front.stage_source();
+        let package = root.0.package.clone();
+        let mut retained = crate::NativeMetadataWeight::default();
+        retained.add(std::mem::size_of::<FrontGrowthQueries>() + 2 * std::mem::size_of::<usize>());
+        retained.flat_vec(&roots);
+        retained.add(package.name.capacity() + package.version.capacity());
+        let output_budget = allowance
+            .bytes()
+            .checked_sub(retained.bytes())
+            .ok_or_else(refusal)?;
         let query = QueryId {
             kind: FRONT_GROWTH_KIND,
             address: hirsel_artifact_store::Address(ContentHash::of_parts(
@@ -382,11 +390,13 @@ impl QueryEngine {
             query,
             roots,
             front,
-            items: Arc::new(crate::NativeRecordContext::capture(self)),
-            records: crate::NativeRecords::new(self.types.clone(), store.clone()),
+            // The front owner remains held here, including its original
+            // source/context reservation. No copied anchor/path tables.
+            items: source.anchors,
+            records: source.records,
             sources: self.sources.clone(),
-            snapshot: self.signature_inputs(),
-            package: root.0.package.clone(),
+            snapshot: source.snapshot,
+            package,
             store,
             completed: Mutex::new(None),
             failure: Mutex::new(None),
