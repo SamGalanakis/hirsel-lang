@@ -206,6 +206,11 @@ impl QueryTask for Task {
     fn weight(&self) -> MemoryWeight {
         self.owner.weight
     }
+    /// A settled output is charged to the owner's output budget, so only
+    /// this frame holds the runtime grant.
+    fn continuation_bytes(&self) -> u64 {
+        self.owner.weight.retained
+    }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
         let result = if let Some(result) = self.terminal {
             result
