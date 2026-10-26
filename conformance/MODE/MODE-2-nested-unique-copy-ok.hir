@@ -1,0 +1,10 @@
+// rule: MODE-2
+// expect: accept
+fn load(take r: Result[Bytes, ()]) -> (Result[Bytes, ()], Result[Bytes, ()]) {
+  (copy r, take r)
+}
+
+fn shared_view(take r: Result[unique Bytes, ()]) -> (Result[Bytes, ()], Result[Bytes, ()]) {
+  let shared: Result[Bytes, ()] = take r
+  (copy shared, take shared)
+}

@@ -66,49 +66,62 @@ impl Eq for Content {}
 /// uniqueness stays `Modes::uniqueness`, which joins its parts. Paths travel
 /// with values; I checks nested `unique` contracts and publishes rows by them.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(super) struct SharedParts(Arc<Vec<(Vec<Projection>, ExprId)>>);
+pub(super) struct SharedParts(Arc<Vec<(Vec<Projection>, ExprId, bool)>>);
 impl SharedParts {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
     fn paths(&self) -> impl Iterator<Item = &[Projection]> {
-        self.0.iter().map(|(path, _)| path.as_slice())
+        self.0.iter().map(|(path, _, _)| path.as_slice())
     }
-    fn covers(&self, path: &[Projection]) -> bool {
-        self.paths().any(|p| path.starts_with(p))
-    }
-    /// `path` holds aliased content; `site` is the operand that put it there.
+    /// A shallow entry loses only its root proof; a real share also aliases
+    /// descendants. An ordinary unqualified wrapper may still own unique parts.
     fn insert(&mut self, path: Vec<Projection>, site: ExprId) {
-        if self.covers(&path) {
+        self.insert_with(path, site, false);
+    }
+    fn insert_deep(&mut self, path: Vec<Projection>, site: ExprId) {
+        self.insert_with(path, site, true);
+    }
+    fn insert_with(&mut self, path: Vec<Projection>, site: ExprId, deep: bool) {
+        if self
+            .0
+            .iter()
+            .any(|(p, _, d)| (*d && path.starts_with(p)) || *p == path && (!deep || *d))
+        {
             return;
         }
         let entries = Arc::make_mut(&mut self.0);
-        entries.retain(|(p, _)| !p.starts_with(&path));
-        entries.push((path, site));
-        entries.sort_by_key(|(p, site)| (p.iter().map(projection_key).collect::<Vec<_>>(), *site));
+        entries.retain(|(p, _, _)| *p != path && !(deep && p.starts_with(&path)));
+        entries.push((path, site, deep));
+        entries.sort_by_key(|(p, site, deep)| {
+            (
+                p.iter().map(projection_key).collect::<Vec<_>>(),
+                *site,
+                *deep,
+            )
+        });
     }
     fn install(&mut self, path: &[Projection], incoming: &Self) {
-        for (p, site) in incoming.0.iter() {
+        for (p, site, deep) in incoming.0.iter() {
             let mut installed = path.to_vec();
             installed.extend(p.iter().cloned());
-            self.insert(installed, *site);
+            self.insert_with(installed, *site, *deep);
         }
     }
-    /// A projected part keeps the shared parts below it; one that is itself
-    /// shared is aliased at its root, as the joined root already is.
     fn project(&mut self, path: &[Projection]) {
         let mut parts = Self::default();
-        for (p, site) in self.0.iter() {
+        for (p, site, deep) in self.0.iter() {
             if p.len() > path.len() && p.starts_with(path) {
-                parts.insert(p[path.len()..].to_vec(), *site);
+                parts.insert_with(p[path.len()..].to_vec(), *site, *deep);
+            } else if *deep && path.starts_with(p) {
+                parts.insert_deep(vec![], *site);
             }
         }
         *self = parts;
     }
-    /// Replaces the parts at `path` with `incoming`'s.
     fn replace(&mut self, path: &[Projection], incoming: &Self) {
         if self.paths().any(|p| p.starts_with(path)) {
-            Arc::make_mut(&mut self.0).retain(|(p, _)| !p.starts_with(path));
+            Arc::make_mut(&mut self.0).retain(|(p, _, _)| !p.starts_with(path));
         }
         self.install(path, incoming);
     }
@@ -116,22 +129,26 @@ impl SharedParts {
         if self == other {
             return;
         }
-        for (p, site) in other.0.iter() {
-            self.insert(p.clone(), *site);
+        for (p, site, deep) in other.0.iter() {
+            self.insert_with(p.clone(), *site, *deep);
         }
     }
-    /// Past `depth`, a shared part covers its whole prefix.
     fn truncate(&mut self, depth: usize) {
         if self.paths().any(|p| p.len() > depth) {
             let entries = self.0.as_ref().clone();
             let mut parts = Self::default();
-            for (p, site) in entries {
-                parts.insert(p[..p.len().min(depth)].to_vec(), site);
+            for (p, site, deep) in entries {
+                parts.insert_with(
+                    p[..p.len().min(depth)].to_vec(),
+                    site,
+                    deep || p.len() > depth,
+                );
             }
             *self = parts;
         }
     }
 }
+
 fn projection_key(p: &Projection) -> (u8, u32, u32) {
     match p {
         Projection::Field(f) => (0, *f, 0),
@@ -364,8 +381,20 @@ impl ValueData {
         self.borrow_only = false;
         self.parked = Arc::default();
     }
+    fn share_root(&mut self) {
+        self.unique_parts.clear();
+        self.borrow_only = false;
+        self.parked = Arc::default();
+        self.modes.uniqueness = Uniqueness::Aliased;
+        self.fresh_receipt = false;
+    }
     fn share(&mut self) {
         self.unique_parts.clear();
+        // A real share invalidates the complete owned payload, on both aliases.
+        // G11's borrow-only shares use borrow_share and retain their restoration.
+        if let Some(site) = self.site {
+            self.shared_parts.insert_deep(vec![], site);
+        }
         self.borrow_only = false;
         self.parked = Arc::default();
         self.modes.uniqueness = Uniqueness::Aliased;
@@ -3121,6 +3150,21 @@ impl Checker<'_, '_> {
         }
     }
     fn record(&mut self, expression: ExprId, value: &mut Value) {
+        // Ordinary root sharing already has the root MODE-2 judgment. Carry
+        // the additional descendant obligation only for a type that actually
+        // promised unique descendants before it was shared.
+        if value
+            .shared_parts
+            .0
+            .iter()
+            .any(|(path, _, deep)| path.is_empty() && *deep)
+            && self
+                .ty(expression)
+                .is_some_and(|ty| !self.unique_contract_on(ty, &[], true))
+        {
+            Arc::make_mut(&mut value.shared_parts.0)
+                .retain(|(path, _, deep)| !path.is_empty() || !*deep);
+        }
         if value.modes.uniqueness == Uniqueness::Unique
             || self
                 .property(expression)
@@ -5026,8 +5070,12 @@ impl Checker<'_, '_> {
                     && !property.shared
                     && *context != Context::Unique
                 {
-                    state.slots[place.binding].value.share();
+                    state.slots[place.binding].value.share_root();
                     state.slots[place.binding].value.copy_site = Some(*operation);
+                    state.slots[place.binding]
+                        .value
+                        .shared_parts
+                        .insert_deep(place.projections.clone(), *expression);
                     let copied_independently = property.sendable_aliased
                         || value.modes.sendability == Sendability::Sendable
                             && self
@@ -8681,10 +8729,13 @@ impl Checker<'_, '_> {
         expression: ExprId,
         site: Span,
     ) -> bool {
+        if matches!(actual.usage, UseKind::Borrow | UseKind::Mut) {
+            return true;
+        }
         let row = self.ty(expression);
-        let Some(&(_, cause)) = actual.shared_parts.0.iter().find(|(path, _)| {
-            self.unique_contract_on(root, path)
-                && row.is_none_or(|row| self.unique_contract_on(row, path))
+        let Some(&(_, cause, _)) = actual.shared_parts.0.iter().find(|(path, _, deep)| {
+            self.unique_contract_on(root, path, *deep)
+                && row.is_none_or(|row| self.unique_contract_on(row, path, *deep))
         }) else {
             return true;
         };
@@ -8703,7 +8754,38 @@ impl Checker<'_, '_> {
         false
     }
     /// Whether a row on `path` below `root` promises unique counted content.
-    fn unique_contract_on(&self, root: TypeId, path: &[Projection]) -> bool {
+    fn unique_contract_on(&self, root: TypeId, path: &[Projection], deep: bool) -> bool {
+        if !deep {
+            return self.shallow_unique_contract_on(root, path);
+        }
+        // Keep the existing root/ancestor judgment, and inspect every owned
+        // descendant under a shared prefix, including nominal variant payloads.
+        let parts = owned_unique_parts(
+            self.t,
+            root,
+            &self.body.resolution.generic_declarations,
+            &mut |p| Ok(self.signatures.cached(p)),
+        )
+        .unwrap_or_else(|error| {
+            *self.proof_error.borrow_mut() = Some(error);
+            Vec::new()
+        });
+        parts.into_iter().any(|parts| {
+            let parts: Vec<_> = parts
+                .into_iter()
+                .map(|p| match p {
+                    OwnedTypePart::Field(f) => Projection::Field(f),
+                    OwnedTypePart::VariantField { variant, field } => {
+                        Projection::VariantField { variant, field }
+                    }
+                    OwnedTypePart::Elements => Projection::Elements,
+                })
+                .collect();
+            deep && parts.starts_with(path) || path.starts_with(&parts)
+        })
+    }
+
+    fn shallow_unique_contract_on(&self, root: TypeId, path: &[Projection]) -> bool {
         let mut ty = root;
         for projection in path {
             let Some(row) = self.t.get(ty) else {

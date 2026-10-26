@@ -3569,7 +3569,12 @@ conformance/MODE/MODE-2-nested-copy-element-dropped-run.hir
 conformance/MODE/MODE-2-nested-copy-element-no-copy-run.hir
 conformance/MODE/MODE-2-nested-copy-element-ordinary-run.hir
 conformance/MODE/MODE-2-nested-copy-element-repair-run.hir
+conformance/MODE/MODE-2-nested-unique-copy-bad.hir
+conformance/MODE/MODE-2-nested-unique-copy-ok.hir
+conformance/MODE/MODE-2-nested-unique-deep-copy-ok.hir
+conformance/MODE/MODE-2-nested-unique-isolation-run.hir
 conformance/MODE/MODE-2-nested-unique-projection-37-aliased-bad.hir
+conformance/MODE/MODE-2-nested-unique-retained-bad.hir
 conformance/MODE/MODE-2-nested-view-borrow-ok.hir
 conformance/MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 conformance/MODE/MODE-2-nested-view-copy-kept-bad.hir

@@ -441,6 +441,11 @@ MODE/MODE-2-map-insert-counted-key-bad.hir
 MODE/MODE-2-map-insert-plain-key-ok.hir
 MODE/MODE-2-map-insert-taken-key-copied-bad.hir
 MODE/MODE-2-map-insert-taken-key-unique-ok.hir
+MODE/MODE-2-nested-unique-copy-bad.hir
+MODE/MODE-2-nested-unique-copy-ok.hir
+MODE/MODE-2-nested-unique-deep-copy-ok.hir
+MODE/MODE-2-nested-unique-isolation-run.hir
+MODE/MODE-2-nested-unique-retained-bad.hir
 MODE/MODE-2-nested-view-borrow-still-unique-ok.hir
 MODE/MODE-2-nested-view-deep-ok.hir
 MODE/MODE-2-nested-view-field-ok.hir

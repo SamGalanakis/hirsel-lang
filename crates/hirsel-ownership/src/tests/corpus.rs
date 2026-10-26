@@ -652,3 +652,42 @@ fn constant_table_elements_are_not_carried_through_every_flow_state() {
     let large = rows(4096);
     assert!(large <= 8 * small + 1024, "small {small}, large {large}");
 }
+
+#[test]
+fn nested_unique_exports_refuse_counted_aliases() {
+    for source in [
+        "fn load(take r: Result[unique Bytes, ()]) -> (Result[unique Bytes, ()], Result[unique Bytes, ()]) { (copy r, take r) }",
+        "fn load(take r: Result[unique Bytes, ()]) -> Result[unique Bytes, ()] { let alias = copy r; take r }",
+        "fn load(take r: (unique Bytes,)) -> ((unique Bytes,), (unique Bytes,)) { (copy r, take r) }",
+        "type R[T] { xs: T }\nfn load(take r: R[unique Bytes]) -> (R[unique Bytes], R[unique Bytes]) { (copy r, take r) }",
+        "type R { xs: unique Bytes }\nfn make() -> R { R(xs: b\"x\") }\nfn load() -> (unique Bytes, unique Bytes) { let r = make(); let alias = copy r; let R(xs: x) = take r; let R(xs: y) = take alias; (take x, take y) }",
+    ] {
+        let ds = source_diagnostics(source);
+        assert!(
+            ds.iter().any(|d| d.rule.as_str() == "MODE-2"),
+            "{source}: {ds:?}"
+        );
+    }
+}
+
+#[test]
+fn nested_unique_exports_keep_independent_and_shared_twins() {
+    for source in [
+        "fn load(take r: Result[Bytes, ()]) -> (Result[Bytes, ()], Result[Bytes, ()]) { (copy r, take r) }",
+        "type R { xs: unique Bytes }\nfn load(r: R) -> R { unique r }",
+        "type R { xs: unique Bytes }\nfn make() -> R { R(xs: b\"x\") }\nfn load() -> unique Bytes { let R(xs: x) = make(); take x }",
+        "fn load(take r: Result[unique Bytes, ()]) -> (Result[Bytes, ()], Result[Bytes, ()]) { let shared: Result[Bytes, ()] = take r; (copy shared, take shared) }",
+        "fn load(take r: Result[unique Bytes, ()]) -> (unique Result[unique Bytes, ()], Result[unique Bytes, ()]) { (unique r, take r) }",
+        "fn load(take r: Result[unique Bytes, ()], take s: Result[unique Bytes, ()]) -> (Result[unique Bytes, ()], Result[unique Bytes, ()]) { (take r, take s) }",
+    ] {
+        let ds = source_diagnostics(source);
+        assert!(ds.is_empty(), "{source}: {ds:?}");
+    }
+}
+
+#[test]
+fn nested_unique_borrowed_views_keep_conditional_nominal_fields() {
+    let source = "type R { xs: unique List[Bytes] }\nfn probe(take r: R) { let built = box unique { fn(agree_x: R) { agree_x }(r) }.xs; let frozen = shared.freeze(take built) }";
+    let ds = source_diagnostics(source);
+    assert!(ds.is_empty(), "{ds:?}");
+}

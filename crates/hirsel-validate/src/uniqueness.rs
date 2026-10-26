@@ -394,6 +394,7 @@ impl Checker<'_> {
         value: &Operand,
         report: bool,
     ) {
+        self.nested_unique_transfer(state, store, root, value, report);
         if !self.has_crossing_receipt(store, root) {
             return;
         }
@@ -452,6 +453,8 @@ impl Checker<'_> {
                 &roles,
             );
             if let Ok(Some(root)) = root {
+                let incoming = self.copied_with(&value.value, values.iter().map(|v| &v.value));
+                self.nested_unique_transfer(state, store, root, &incoming, report);
                 self.nested_crossing_receipt(state, store, root, &value.value, report);
             }
         }
@@ -624,6 +627,112 @@ impl Checker<'_> {
         }
     }
 
+    fn copied_with<'a>(
+        &self,
+        value: &Operand,
+        mut others: impl Iterator<Item = &'a Operand>,
+    ) -> Operand {
+        let mut incoming = value.clone();
+        let access = &self.body.places[value.place.0 as usize];
+        if others.any(|other| {
+            let source = &self.body.places[other.place.0 as usize];
+            other.usage == UseKind::Copy
+                && !self.flat_value(other.place)
+                && !super::handle_root(self.t, self.place_type(other.place))
+                && access.root == source.root
+                && (access.projection.starts_with(&source.projection)
+                    || source.projection.starts_with(&access.projection))
+        }) {
+            incoming.usage = UseKind::Copy;
+        }
+        incoming
+    }
+
+    fn local_value_transport(&self, expected: TypeId) -> bool {
+        let (Some(block), Some(instruction)) = (self.site.block, self.site.instruction) else {
+            return false;
+        };
+        let InstructionKind::Assign { destination, value } =
+            self.body.blocks[block.0 as usize].instructions[instruction as usize].kind
+        else {
+            return false;
+        };
+        let place = &self.body.places[destination.0 as usize];
+        matches!(self.body.rvalues[value.0 as usize], Rvalue::Use(_))
+            && place.projection.is_empty()
+            && place.ty == expected
+            && matches!(
+                self.body.locals[place.root.0 as usize].storage,
+                Storage::Temporary | Storage::Local
+            )
+            && self.t.row(expected).modes.relation.has_environment()
+    }
+
+    pub(super) fn rvalue_shares_unique_parts(
+        &self,
+        state: &State,
+        destination: PlaceId,
+        value: &Rvalue,
+    ) -> bool {
+        let Rvalue::Use(value) = value else {
+            return false;
+        };
+        let source = &self.body.places[value.place.0 as usize];
+        if !(value.usage == UseKind::Copy || state.shared[source.root.0 as usize])
+            || self.flat_value(value.place)
+            || super::handle_root(self.t, self.place_type(value.place))
+        {
+            return false;
+        }
+        hirsel_types::owned_unique_parts(
+            self.t,
+            self.place_type(destination),
+            &self.generic_declarations(),
+            &mut |p| Ok(self.signatures.get(p).cloned().map(std::sync::Arc::new)),
+        )
+        .map(|parts| !parts.is_empty())
+        .unwrap_or_else(|error| self.proof_failure(error, false))
+    }
+
+    fn nested_unique_transfer(
+        &mut self,
+        state: &State,
+        store: &TypeInterner,
+        destination: TypeId,
+        value: &Operand,
+        report: bool,
+    ) {
+        let access = &self.body.places[value.place.0 as usize];
+        // Borrowed pattern transports retain a view of the referent's type;
+        // only an owned receiving position exports its payload contracts.
+        if !matches!(value.usage, UseKind::Take | UseKind::Copy)
+            || !(state.shared[access.root.0 as usize] || value.usage == UseKind::Copy)
+            || self.flat_value(value.place)
+            || super::handle_root(self.t, self.place_type(value.place))
+            // Copy also stages borrowed matches in environment-local slots.
+            // Such a slot retains the lost proof; calls, fields and returns
+            // still check it before exporting any owned payload contract.
+            || self.local_value_transport(destination)
+        {
+            return;
+        }
+        let parts = hirsel_types::owned_unique_parts(
+            store,
+            destination,
+            &self.generic_declarations(),
+            &mut |p| Ok(self.signatures.get(p).cloned().map(std::sync::Arc::new)),
+        )
+        .unwrap_or_else(|error| self.proof_failure(error, Vec::new()));
+        if !parts.is_empty() {
+            self.flow_error(
+                report,
+                ViolationKind::TypeMismatch {
+                    entity: "value modes",
+                },
+            );
+        }
+    }
+
     pub(super) fn mode_transfer(
         &mut self,
         state: &State,
@@ -643,6 +752,7 @@ impl Checker<'_> {
         borrowed_capture: bool,
         report: bool,
     ) {
+        self.nested_unique_transfer(state, store, destination, value, report);
         let mut actual = self.transferred_type(state, value, store);
         if borrowed_capture {
             let promised = &store.get(destination).unwrap().modes.sendability;
@@ -754,6 +864,9 @@ impl Checker<'_> {
                 if let Some(parts) = self.constructor_layout(store, ty, constructor, fields.len()) {
                     for field in fields {
                         if let Some(expected) = parts.get(field.field as usize).copied() {
+                            let incoming =
+                                self.copied_with(&field.value, fields.iter().map(|f| &f.value));
+                            self.nested_unique_transfer(state, store, expected, &incoming, report);
                             if store.get(expected).unwrap().sendability_requirement
                                 == hirsel_types::SendabilityRequirement::Sendable
                             {

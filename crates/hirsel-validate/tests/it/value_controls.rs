@@ -1063,3 +1063,210 @@ fn copied_run_owned_handles_bound_a_unique_constructions_graph() {
         }
     }
 }
+
+// Forged producer TIR: no source checker or lowering participates. A counted
+// wrapper copy must not export the nested unique claim, on either alias.
+fn nested_unique_export(unique: bool, retained: bool, deep: bool) -> Fixture {
+    let mut f = Fixture::unit();
+    let mut payload = ty(TypeKind::Primitive(Primitive::Bytes));
+    if unique {
+        payload.modes.uniqueness = Uniqueness::Unique;
+    }
+    let payload = f.definition.types.push(payload);
+    let kind = TypeKind::Tuple(vec![payload].into());
+    let source = param(&mut f, kind.clone());
+    let alias = f.slot(kind, Storage::Temporary);
+    if retained && !deep {
+        let shared = f
+            .definition
+            .types
+            .push(ty(TypeKind::Primitive(Primitive::Bytes)));
+        row(&mut f, alias, |t| {
+            t.kind = TypeKind::Tuple(vec![shared].into())
+        });
+    }
+    if deep {
+        row(&mut f, alias, |t| t.modes.uniqueness = Uniqueness::Unique);
+    }
+    let failure = f.cleanup(vec![drop(source)]);
+    f.assign(
+        alias,
+        if deep {
+            Rvalue::Unary {
+                op: hirsel_syntax::UnaryOp::Unique,
+                value: copy(source),
+            }
+        } else {
+            Rvalue::Use(copy(source))
+        },
+        failure,
+    );
+    let returned = if retained { source } else { alias };
+    let other = if retained { alias } else { source };
+    let cleanup = f.cleanup(vec![drop(other)]);
+    f.body().result = f.body().places[returned as usize].ty;
+    f.body().blocks[0].terminator = ret(returned, cleanup);
+    owner_signature(&mut f, PassingMode::Take);
+    f
+}
+
+#[test]
+fn nested_unique_exports_require_unshared_content_without_checker_help() {
+    for retained in [false, true] {
+        nested_unique_export(false, retained, false).valid();
+        let f = nested_unique_export(true, retained, false);
+        assert!(
+            f.kinds().contains(&ViolationKind::TypeMismatch {
+                entity: "value modes"
+            }),
+            "{:?}",
+            f.kinds()
+        );
+        nested_unique_export(true, retained, true).valid();
+    }
+}
+
+#[test]
+fn nested_unique_aggregate_exports_require_unshared_content() {
+    for (unique, first_unique) in [(false, false), (true, false), (true, true)] {
+        let mut f = Fixture::unit();
+        let mut payload = ty(TypeKind::Primitive(Primitive::Bytes));
+        if unique {
+            payload.modes.uniqueness = Uniqueness::Unique;
+        }
+        let payload = f.definition.types.push(payload);
+        let kind = TypeKind::Tuple(vec![payload].into());
+        let source = param(&mut f, kind);
+        let wrapper = f.body().places[source as usize].ty;
+        let first = if first_unique {
+            wrapper
+        } else {
+            let payload = f
+                .definition
+                .types
+                .push(ty(TypeKind::Primitive(Primitive::Bytes)));
+            f.definition
+                .types
+                .push(ty(TypeKind::Tuple(vec![payload].into())))
+        };
+        let pair = f.slot(
+            TypeKind::Tuple(vec![first, wrapper].into()),
+            Storage::Temporary,
+        );
+        let cleanup = f.cleanup(vec![drop(source)]);
+        f.assign(
+            pair,
+            Rvalue::Construct {
+                constructor: Constructor::Tuple,
+                fields: vec![
+                    ConstructField {
+                        field: 0,
+                        value: copy(source),
+                    },
+                    ConstructField {
+                        field: 1,
+                        value: take(source),
+                    },
+                ],
+                destination: Destination::Inferred,
+            },
+            cleanup,
+        );
+        f.body().result = f.body().places[pair as usize].ty;
+        f.body().blocks[0].terminator = ret(pair, 0);
+        owner_signature(&mut f, PassingMode::Take);
+        if unique {
+            assert!(
+                f.kinds().contains(&ViolationKind::TypeMismatch {
+                    // A receiving field cannot silently change a nested type
+                    // argument; exact copied claims also require flow evidence.
+                    entity: if first_unique {
+                        "value modes"
+                    } else {
+                        "constructor field"
+                    }
+                }),
+                "{:?}",
+                f.kinds()
+            );
+        } else {
+            f.valid();
+        }
+    }
+}
+
+#[test]
+fn shared_nested_unique_storage_can_be_borrowed_without_exporting_its_claims() {
+    let mut f = nested_unique_export(true, true, false);
+    let source = 1;
+    let alias = 2;
+    let kind = interner()
+        .get(f.body().places[source].ty)
+        .unwrap()
+        .kind
+        .clone();
+    let view = f.slot(kind, Storage::Temporary);
+    f.body().scopes.push(Scope {
+        parent: Some(ScopeId(0)),
+        span: Span::default(),
+    });
+    f.body().locals[view as usize].scope = ScopeId(1);
+    f.emit(InstructionKind::BeginLoan {
+        id: LoanId(0),
+        place: PlaceId(source as u32),
+        mutable: false,
+        if_inactive: false,
+    });
+    let borrowed = f.through_loan(source as u32, 0);
+    f.assign(view, Rvalue::Use(operand(borrowed, UseKind::Borrow)), 0);
+    f.emit(InstructionKind::EndScope(ScopeId(1)));
+    f.emit(InstructionKind::EndLoan {
+        loan: LoanId(0),
+        if_active: false,
+    });
+    let cleanup = f.cleanup(vec![drop(alias), drop(source as u32)]);
+    f.body().result = f.body().places[0].ty;
+    f.body().blocks[0].terminator = ret(0, cleanup);
+    owner_signature(&mut f, PassingMode::Take);
+    f.valid();
+}
+
+#[test]
+fn nested_unique_local_transports_do_not_restore_exportable_receipts() {
+    for exported in [false, true] {
+        let mut f = Fixture::unit();
+        let mut bytes = ty(TypeKind::Primitive(Primitive::Bytes));
+        bytes.modes.uniqueness = Uniqueness::Unique;
+        let bytes = f.definition.types.push(bytes);
+        let kind = TypeKind::Tuple(vec![bytes].into());
+        let source = param(&mut f, kind.clone());
+        let view = f.slot(kind.clone(), Storage::Temporary);
+        let moved = f.slot(kind, Storage::Temporary);
+        for slot in [view, moved] {
+            row(&mut f, slot, |t| t.modes.relation = Relation::environment());
+        }
+        f.assign(view, Rvalue::Use(copy(source)), 0);
+        f.assign(moved, Rvalue::Use(take(view)), 0);
+        let cleanup = f.cleanup(vec![drop(moved)]);
+        if exported {
+            // Keep the view's exact physical row so lifetime typing cannot
+            // pre-empt the current-content uniqueness check at the export.
+            f.body().result = f.body().places[moved as usize].ty;
+            f.body().blocks[0].terminator = ret(moved, 0);
+        } else {
+            f.body().blocks[0].terminator = ret(0, cleanup);
+        }
+        owner_signature(&mut f, PassingMode::Borrow);
+        if exported {
+            assert!(
+                f.kinds().contains(&ViolationKind::TypeMismatch {
+                    entity: "value modes"
+                }),
+                "{:?}",
+                f.kinds()
+            );
+        } else {
+            f.valid();
+        }
+    }
+}

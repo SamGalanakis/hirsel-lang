@@ -5345,6 +5345,8 @@ impl Checker<'_> {
                             .collect()
                     };
                     let authority = self.rvalue_authority(model, state, rvalue);
+                    let nested_shared =
+                        self.rvalue_shares_unique_parts(state, *destination, rvalue);
                     let unique = self.rvalue_unique(state, rvalue);
                     let fresh_receipt = self.rvalue_fresh_receipt(state, rvalue);
                     let sendable = self.rvalue_sendable(state, *destination, rvalue);
@@ -5529,6 +5531,16 @@ impl Checker<'_> {
                     self.reset_unique(state, *destination);
                     self.set_current_unique(state, *destination, unique);
                     self.set_fresh_receipt(state, *destination, fresh_receipt);
+                    if nested_shared
+                        && self.body.places[destination.0 as usize]
+                            .projection
+                            .is_empty()
+                    {
+                        state.shared.set(
+                            self.body.places[destination.0 as usize].root.0 as usize,
+                            true,
+                        );
+                    }
                     self.set_current_global(state, *destination, global);
                     self.set_current_sendable(state, *destination, sendable);
                     self.install_unique_parts(

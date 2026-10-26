@@ -1,0 +1,18 @@
+// rule: MODE-2
+// expect: run
+// entry: trial
+// Port Rc's independent-copy mutation assertion without refcount restoration.
+fn split(take wrapped: (unique List[u64],)) -> ((unique List[u64],), (unique List[u64],)) {
+  (unique wrapped, take wrapped)
+}
+
+pub fn trial(t: Test) -> Result[(), ()] {
+  let original: unique List[u64] = unique [75u64]
+  let (changed_wrapper, unchanged_wrapper) = split((take original,))
+  let mut (changed,) = take changed_wrapper
+  let (unchanged,) = take unchanged_wrapper
+  list.push(mut changed, 76u64)
+  test.check(t, list.len(changed) == 2)
+  test.check(t, list.len(unchanged) == 1)
+  Ok(())
+}
