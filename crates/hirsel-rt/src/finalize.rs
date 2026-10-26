@@ -11,6 +11,8 @@ use crate::context::TaskCtx;
 use crate::release::{LAYOUT_UNSAFE_FFI, Layout, drain, push};
 use crate::{STATUS_FAILURE, STATUS_OK, fault};
 
+pub(crate) mod entered;
+
 /// A user drop body: borrowed `value`, the cleanup `anchor`, and the status protocol. On failure
 /// it records the failure with `hirsel_rt_v2_failure_begin` after cleaning its own locals.
 pub type DropThunk =
