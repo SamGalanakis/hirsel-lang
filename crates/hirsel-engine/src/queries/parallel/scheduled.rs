@@ -146,6 +146,7 @@ struct Input {
     implementation: ContentHash,
     signature: Result<Arc<QueryOutput<SignatureRef>>, QueryError>,
     signature_reads: Arc<Reads>,
+    registration: Option<Arc<AcceptedFrontRegistration>>,
     key: EntryKey,
     weight: MemoryWeight,
 }
@@ -255,6 +256,15 @@ impl FrontBodyQueries {
         self.snapshot.clone()
     }
     fn syntax(&self, input: &Input) -> Option<Arc<ItemSyntax>> {
+        // Accepted literals are parser-created immutable source, and legitimately
+        // combine the written header's anchor with generated body anchors. They
+        // never enter the ordinary single-source untrusted archive decoder.
+        if let Some(registration) = &input.registration {
+            let syntax = &registration.syntax;
+            return (syntax.item.definition == *input.definition.path()
+                && syntax.text_hash == input.implementation)
+                .then(|| syntax.clone());
+        }
         let bytes = self.store.get_content(input.syntax)?;
         let (mut syntax, occurrence): (ItemSyntax, u32) =
             self.input_records.decode(&*self.anchors, &bytes)?;
@@ -670,6 +680,13 @@ impl FrontBodyQueries {
             .values()
             .map(|outcome| outcome.reference)
             .collect()
+    }
+    pub(crate) fn registration(&self, path: &DefPath) -> Option<&AcceptedFrontRegistration> {
+        self.inputs
+            .values()
+            .find(|input| input.definition.path() == path)?
+            .registration
+            .as_deref()
     }
     fn worker(&self) -> Worker<'_> {
         Worker {
@@ -1180,6 +1197,17 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontBodyQueries>, QueryError> {
+        self.front_body_queries_with_registrations(definitions, &[], weight, allowance, errors)
+    }
+    /// Freeze original bodies together with explicitly accepted generated views.
+    pub fn front_body_queries_with_registrations(
+        &mut self,
+        definitions: &[DefPath],
+        registrations: &[Arc<AcceptedFrontRegistration>],
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontBodyQueries>, QueryError> {
         let refusal = || {
             QueryError::Operational(hirsel_types::OperationalFailure {
                 operation: "front query admission".into(),
@@ -1209,27 +1237,41 @@ impl QueryEngine {
         let mut siblings = BTreeMap::new();
         let mut selected = Vec::new();
         for definition in definitions {
-            if self
-                .source_facts(definition)
-                .is_some_and(|facts| facts.generator)
-            {
-                return Err(refusal());
+            let registration = registrations
+                .iter()
+                .find(|accepted| accepted.definition() == definition);
+            if let Some(accepted) = registration {
+                accepted.validate(self)?;
             }
             self.materialize(definition)?;
-            let syntax = self.snapshot(definition)?;
-            if generation::generator(&syntax).is_some() {
-                return Err(refusal());
-            }
+            let original = self.snapshot(definition)?;
+            let syntax = if generation::generator(&original).is_some() {
+                registration.ok_or_else(refusal)?.syntax.clone()
+            } else {
+                if registration.is_some() {
+                    return Err(refusal());
+                }
+                original
+            };
+            let implementation = syntax.text_hash;
             let text = self.key_text(definition, QueryKind::Modes)?;
-            let key = self
-                .store_key(definition, QueryKind::Modes)
-                .ok_or_else(refusal)?;
+            let key = match registration {
+                Some(accepted) => self.accepted_front_store_key(accepted, QueryKind::Modes)?,
+                None => self
+                    .store_key(definition, QueryKind::Modes)
+                    .ok_or_else(refusal)?,
+            };
             // Immutable S0 variants provide body reuse. The construction
             // inventory itself must never pin a mutable engine's checked body
             // after a request settles, including the explicit zero hold policy.
             let bytes = input_records
                 .encode(&*anchors, &(&syntax, syntax.occurrence))
-                .ok_or_else(refusal)?;
+                .ok_or_else(|| {
+                    QueryError::Operational(hirsel_types::OperationalFailure {
+                        operation: "front syntax archive".into(),
+                        message: format!("cannot archive accepted source for {definition}"),
+                    })
+                })?;
             if required > allowance.bytes() {
                 return Err(refusal());
             }
@@ -1262,13 +1304,14 @@ impl QueryEngine {
                 definition.clone(),
                 syntax,
                 text,
-                self.snapshot(definition)?.text_hash,
+                implementation,
                 key,
+                registration.cloned(),
             ));
         }
         let snapshot = self.signature_inputs();
         let mut inputs = BTreeMap::new();
-        for (definition, syntax, text, implementation, key) in selected {
+        for (definition, syntax, text, implementation, key, registration) in selected {
             let id = DefId::intern(&definition);
             let signature = match snapshot.signature(id) {
                 Some(Ok(signature)) => self
@@ -1280,13 +1323,24 @@ impl QueryEngine {
                 Some(Err(error)) => Err(error.clone()),
                 None => Err(QueryError::NotImplemented),
             };
+            let mut signature_reads = ReadsBuilder::new();
+            if let Some(reads) = self.shared_memo_reads(&definition, QueryKind::Signature) {
+                signature_reads.merge(&reads);
+            }
+            if let Some(accepted) = &registration {
+                signature_reads.merge(&accepted.reads);
+            }
             inputs.insert(
                 key.0,
                 Input {
                     signature,
-                    signature_reads: self
-                        .shared_memo_reads(&definition, QueryKind::Signature)
-                        .unwrap_or_else(|| Arc::new(Reads::empty())),
+                    signature_reads: Arc::new(signature_reads.finish().map_err(|read| {
+                        QueryError::Operational(hirsel_types::OperationalFailure {
+                            operation: "front inherited reads".into(),
+                            message: format!("inconsistent registration read: {read:?}"),
+                        })
+                    })?),
+                    registration,
                     definition: id,
                     syntax,
                     text,

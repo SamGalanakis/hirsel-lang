@@ -820,6 +820,16 @@ impl FrontLowerQueries {
             None => return Err(source.refused(selected.err().unwrap_or(self.errors.protocol))),
         };
         source.merge(&body.outcome.reads);
+        if let Some(registration) = self.front.registration(path) {
+            source
+                .evidence
+                .borrow_mut()
+                .dependency(true, registration.acceptance());
+            source
+                .depth
+                .borrow_mut()
+                .observe_transparent(registration.depth());
+        }
         // As a materialization of the checked body, Lower also depends on the
         // private shapes that body read, beyond their representation digests.
         for (read, _) in body.outcome.reads.iter() {
@@ -1445,10 +1455,20 @@ impl QueryEngine {
             inputs.insert(
                 path.clone(),
                 Input {
-                    lower: self.store_key(path, QueryKind::Lower).ok_or_else(refusal)?,
-                    evaluate: self
-                        .store_key(path, QueryKind::Evaluate)
-                        .ok_or_else(refusal)?,
+                    lower: match front.registration(path) {
+                        Some(accepted) => {
+                            self.accepted_front_store_key(accepted, QueryKind::Lower)?
+                        }
+                        None => self.store_key(path, QueryKind::Lower).ok_or_else(refusal)?,
+                    },
+                    evaluate: match front.registration(path) {
+                        Some(accepted) => {
+                            self.accepted_front_store_key(accepted, QueryKind::Evaluate)?
+                        }
+                        None => self
+                            .store_key(path, QueryKind::Evaluate)
+                            .ok_or_else(refusal)?,
+                    },
                     implementation: syntax.text_hash,
                     site: syntax.item.name_span,
                 },

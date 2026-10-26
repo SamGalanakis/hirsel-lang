@@ -49,6 +49,9 @@ impl FrontRegistrationOutput {
     pub fn depth(&self) -> &DepthEvidence<Span> {
         &self.data.depth
     }
+    pub(in crate::queries) fn acceptance(&self) -> Option<&hirsel_validate::ExecutionReceipt> {
+        self.data.acceptance.as_ref()
+    }
     pub fn has_execution_acceptance(&self) -> bool {
         self.data.acceptance.is_some()
     }

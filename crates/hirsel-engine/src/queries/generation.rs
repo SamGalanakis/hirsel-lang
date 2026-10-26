@@ -13,7 +13,9 @@ use hirsel_syntax::{
     TypeExpr, TypeExprId, TypeExprKind, TypeModifier, Visibility,
 };
 use hirsel_types::SignatureKind;
+mod accepted;
 pub(crate) mod task;
+pub use accepted::{AcceptedFrontRegistration, FrontRegistrationFailure};
 
 /// A declaration's generated source, for diagnostics and `hirsel expand`.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -646,17 +648,16 @@ impl QueryEngine {
         input.decode(result)
     }
 
-    /// Parse the generated function literal, compare its type with the header,
-    /// and check its body after the written header.
-    fn generated_body(
+    /// Parse and normalize accepted text without checking a body or entering
+    /// any source execution controller. The raw declaration stays unchanged.
+    fn generated_syntax(
         &mut self,
         definition: &DefPath,
         snapshot: &Arc<ItemSyntax>,
         body: ExprId,
-        signature: &Signature,
         generated: FileId,
         reads: &mut Recording,
-    ) -> Result<QueryOutput<TypedBody>, QueryError> {
+    ) -> Result<Arc<ItemSyntax>, QueryError> {
         let source = &snapshot.item;
         let ItemKind::Function {
             signature: source_signature,
@@ -669,12 +670,10 @@ impl QueryEngine {
             package: definition.0.package.clone(),
             modules: definition.0.modules.clone(),
         };
-        let (Some(lexer), Some(parser), Some(signer), Some(resolver), Some(checker)) = (
+        let (Some(lexer), Some(parser), Some(signer)) = (
             self.adapters.lexer.clone(),
             self.adapters.parser.clone(),
             self.adapters.signature.clone(),
-            self.adapters.resolver.clone(),
-            self.adapters.checker.clone(),
         ) else {
             return Err(QueryError::NotImplemented);
         };
@@ -844,7 +843,26 @@ impl QueryEngine {
                 self.generated[definition].text.as_bytes(),
             ],
         );
-        let syntax = Arc::new(syntax);
+        Ok(Arc::new(syntax))
+    }
+
+    /// Check the normalized literal with the ordinary body phases.
+    fn generated_body(
+        &mut self,
+        definition: &DefPath,
+        snapshot: &Arc<ItemSyntax>,
+        body: ExprId,
+        signature: &Signature,
+        generated: FileId,
+        reads: &mut Recording,
+    ) -> Result<QueryOutput<TypedBody>, QueryError> {
+        let (Some(resolver), Some(checker)) = (
+            self.adapters.resolver.clone(),
+            self.adapters.checker.clone(),
+        ) else {
+            return Err(QueryError::NotImplemented);
+        };
+        let syntax = self.generated_syntax(definition, snapshot, body, generated, reads)?;
         let resolution = self.recorded(definition, reads, |t, m, r| {
             let declarations = r.engine.frozen_declarations();
             let mut products = PhaseProducts::default();

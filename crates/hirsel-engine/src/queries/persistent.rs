@@ -1131,6 +1131,19 @@ impl QueryEngine {
                 return None;
             }
         }
+        let mut text = self.key_text(path, kind).ok()?;
+        if kind == QueryKind::Lower && self.source_owned_generator(path) {
+            let generated = self.generated.get(path)?;
+            text = ContentHash::of_parts(
+                "hirsel.generated-lower.inputs.v1",
+                [text.0.as_slice(), generated.text.as_bytes()],
+            );
+        }
+        Some(self.product_store_key(path, kind, text))
+    }
+    /// A canonical product address is independent of its source-admission gate.
+    /// Callers must establish the ordinary gate or an opaque accepted view.
+    fn product_store_key(&self, path: &DefPath, kind: QueryKind, text: ContentHash) -> EntryKey {
         let env = ContentHash::of_parts(
             "hirsel.persisted-products.v1",
             [
@@ -1142,21 +1155,29 @@ impl QueryEngine {
                     .as_slice(),
             ],
         );
-        let mut text = self.key_text(path, kind).ok()?;
-        if kind == QueryKind::Lower && self.source_owned_generator(path) {
-            let generated = self.generated.get(path)?;
+        EntryKey::new(env, path, text, kind, LoweringPolicy::Reachable)
+    }
+    pub(super) fn accepted_front_store_key(
+        &mut self,
+        accepted: &AcceptedFrontRegistration,
+        kind: QueryKind,
+    ) -> Result<EntryKey, QueryError> {
+        accepted.validate(self)?;
+        if !matches!(
+            kind,
+            QueryKind::Modes | QueryKind::Lower | QueryKind::Evaluate
+        ) {
+            return Err(QueryError::NotImplemented);
+        }
+        let path = accepted.definition();
+        let mut text = self.key_text(path, kind)?;
+        if kind == QueryKind::Lower {
             text = ContentHash::of_parts(
                 "hirsel.generated-lower.inputs.v1",
-                [text.0.as_slice(), generated.text.as_bytes()],
+                [text.0.as_slice(), accepted.text().as_bytes()],
             );
         }
-        Some(EntryKey::new(
-            env,
-            path,
-            text,
-            kind,
-            LoweringPolicy::Reachable,
-        ))
+        Ok(self.product_store_key(path, kind, text))
     }
     fn source_owned_generator(&self, path: &DefPath) -> bool {
         self.items
