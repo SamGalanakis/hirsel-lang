@@ -111,9 +111,25 @@ pub(crate) fn offer(
                         && !edits.is_empty()
                         && matches!(tree.types[result.0 as usize].kind, TypeExprKind::Named { ref arguments, .. } if !arguments.is_empty())
                     {
-                        edits.push((result_span, format!("unique {text}")));
-                        candidates.push(Candidate { edits, site: syntax.item.name_span,
-                            note: format!("R2 generic wrapper: declare `{}` and `-> unique {text}` on `{}`; the edited wrapper and its caller check (no copy)", inputs.join(", "), syntax.item.name) });
+                        let note = if syntax.item.visibility == Visibility::Private {
+                            format!(
+                                "R2 generic wrapper: declare `{}` on `{}`; its body proves the result evidence at same-module direct calls (no copy)",
+                                inputs.join(", "),
+                                syntax.item.name
+                            )
+                        } else {
+                            edits.push((result_span, format!("unique {text}")));
+                            format!(
+                                "R2 generic wrapper: declare `{}` and `-> unique {text}` on `{}`; the edited wrapper and its caller check (no copy)",
+                                inputs.join(", "),
+                                syntax.item.name
+                            )
+                        };
+                        candidates.push(Candidate {
+                            edits,
+                            site: syntax.item.name_span,
+                            note,
+                        });
                     }
                 }
             }

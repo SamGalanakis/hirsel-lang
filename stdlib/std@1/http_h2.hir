@@ -723,6 +723,8 @@ fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
         Error(_) => return Error(Malformed(ContentLength())),
       },
     }
+    let location = header(headers, "location")
+    let content_type = header(headers, "content-type")
     let head = ResponseHead(
       version: Http2(),
       status: status,
@@ -731,8 +733,8 @@ fn http_h2_receive_head(mut r: Request) -> Result[ResponseHead, HttpError] {
       content_length: length,
       chunked: false,
       keep_alive: true,
-      location: header(headers, "location"),
-      content_type: header(headers, "content-type")
+      location: location,
+      content_type: content_type
     )
     if status == 301 || status == 302 || status == 303 || status == 307 || status == 308 {
       http_redirect(mut r, head)?
@@ -867,6 +869,7 @@ fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -
     c.stream_id = id
     let headers = http_h2_headers(fields, c.config.max_headers)?
     let method = http_h2_value(fields, b":method")?
+    let head_request = method == "HEAD"
     let mut incoming = ServerRequest(
       method: unique method,
       target: http_h2_value(fields, b":path")?,
@@ -931,7 +934,7 @@ fn http_h2_receive_request(mut c: HttpExchange, clock: Option[MonotonicClock]) -
     let _ = http_server_remaining(clock, deadline)?
     incoming.body = core@1/bytes.from_list(take body)
     c.version = Http2()
-    c.head_request = method == "HEAD"
+    c.head_request = head_request
     c.keep_alive = true
     c.state = 1
     return Ok(take incoming)

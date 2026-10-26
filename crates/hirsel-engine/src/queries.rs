@@ -937,16 +937,13 @@ impl QueryEngine {
             let stored = self.load_signature(definition);
             self.active
                 .remove(&(definition.clone(), QueryKind::Signature));
-            if let Some(entry) = stored {
-                if id.path().0.name == "epoch_day" && !self.private_summary_active {
-                    eprintln!(
-                        "[DEBUG-private59] restored epoch_day {:?}, inferred {:?}",
-                        entry
-                            .result()
-                            .map(|o| o.value.metadata.inferred_unique.clone()),
-                        self.private_summaries.get(&id)
-                    );
-                }
+            if let Some(entry) = stored.filter(|entry| {
+                self.private_summaries.get(&id).is_none_or(|summary| {
+                    entry
+                        .result()
+                        .is_ok_and(|output| output.value.metadata.inferred_unique == *summary)
+                })
+            }) {
                 self.signatures.insert(id, entry.clone());
                 return entry.result();
             }
@@ -983,11 +980,12 @@ impl QueryEngine {
         };
         recorder.engine.signature_stack.pop();
         recorder.observed.products = Arc::new(products);
-        let observed = recorder.observed;
+        let mut observed = recorder.observed;
         let reads = recorder.reads;
         let mut result = result;
         if let Ok(output) = &mut result {
             self.attach_private_summary(&mut output.value, &output.dependencies);
+            self.observe_private_summary(id, &mut observed);
         }
         let covered = result
             .as_ref()

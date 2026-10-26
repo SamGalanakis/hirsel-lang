@@ -20,6 +20,28 @@ impl QueryEngine {
         }
     }
 
+    pub(super) fn observe_private_summary(&self, id: DefId, observed: &mut Observed) {
+        let Some(bodies) = self.private_summary_bodies.get(&id) else {
+            return;
+        };
+        observed.merged.record(
+            crate::memo::ReadKey::NameSet(
+                crate::memo::PackageKey::of(&id.path().0.package),
+                crate::memo::ModuleKey::of(&id.path().0.modules),
+            ),
+            ContentHash::of_parts(
+                "hirsel.private-unique.members",
+                bodies.iter().map(|(p, _)| p.0.name.as_bytes()),
+            ),
+        );
+        for (body, _) in bodies {
+            observed.merged.record(
+                crate::memo::ReadKey::CitedText(DefId::intern(body)),
+                self.citation_source().cited_text(DefId::intern(body)),
+            );
+        }
+    }
+
     pub(crate) fn prepare_private_summaries(&mut self) {
         self.note_environment();
         if self.private_summary_active
@@ -38,9 +60,6 @@ impl QueryEngine {
         // A failed source still gets its ordinary per-definition diagnostics.
         // No failed computation publishes optimistic candidate bits.
         {
-            if let Err(error) = &result {
-                eprintln!("[DEBUG-private59] inference aborted: {error:?}");
-            }
             let inferred = result.unwrap_or_default();
             self.private_unique_failures = inferred
                 .iter()
@@ -72,6 +91,7 @@ impl QueryEngine {
                         signature.fingerprint = fingerprint;
                         output.value = Arc::new(signature);
                         let mut observed = Observed::default();
+                        observed.products = entry.products.clone();
                         for (key, value) in entry.reads().iter() {
                             if !matches!(key, crate::memo::ReadKey::NameSet(..))
                                 && !matches!(key, crate::memo::ReadKey::CitedText(d)
@@ -80,27 +100,7 @@ impl QueryEngine {
                                 observed.merged.record(*key, *value);
                             }
                         }
-                        observed.merged.record(
-                            crate::memo::ReadKey::NameSet(
-                                crate::memo::PackageKey::of(&id.path().0.package),
-                                crate::memo::ModuleKey::of(&id.path().0.modules),
-                            ),
-                            ContentHash::of_parts(
-                                "hirsel.private-unique.members",
-                                self.private_summary_bodies
-                                    .get(&id)
-                                    .into_iter()
-                                    .flatten()
-                                    .map(|(p, _)| p.0.name.as_bytes()),
-                            ),
-                        );
-                        for (body, _) in self.private_summary_bodies.get(&id).into_iter().flatten()
-                        {
-                            observed.merged.record(
-                                crate::memo::ReadKey::CitedText(DefId::intern(body)),
-                                self.citation_source().cited_text(DefId::intern(body)),
-                            );
-                        }
+                        self.observe_private_summary(id, &mut observed);
                         let mut next = self.record(
                             entry.memo.key,
                             entry.memo.text,
@@ -111,14 +111,6 @@ impl QueryEngine {
                         next.covered = entry.covered.clone();
                         self.signatures.insert(id, Arc::new(next));
                         if summary != previous {
-                            if id.path().0.name == "epoch_day" {
-                                eprintln!(
-                                    "[DEBUG-private59] epoch_day {:?}: {:?} -> {:?}",
-                                    self.graph.revision(),
-                                    previous,
-                                    summary
-                                );
-                            }
                             changed.push(id.path().clone());
                         }
                     }

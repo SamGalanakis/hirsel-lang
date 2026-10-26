@@ -306,3 +306,105 @@ fn private_helper_uniqueness_59_stored_headers_settle_before_body_receipts() {
             .unwrap();
     });
 }
+
+#[test]
+fn private_helper_uniqueness_59_precompute_keeps_published_header_receipts() {
+    with_compiler_stack(|| {
+        let dir = std::env::temp_dir().join(format!(
+            "hirsel-private-summary-precompute-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("days.hir"),
+            "@noalloc fn epoch_day() -> i128 uses {} { 1 }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("format.hir"),
+            "pub fn format() -> i128 uses {} { epoch_day() }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("hirsel.json"), r#"{"schema":1,"package":{"name":"summary_test","version":"1"},"sources":[{"path":"days.hir","module":["time"]},{"path":"format.hir","module":["time"]}],"dependencies":[]}"#).unwrap();
+        COMPILER
+            .precompute_package(&dir.join("hirsel.json"), &dir.join("products"))
+            .unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    });
+}
+
+#[test]
+fn private_helper_uniqueness_59_option_and_tuple_rows_survive_shared_siblings() {
+    with_compiler_stack(|| {
+        let source = r#"
+const NAME: String = "shared"
+fn pair() -> (String, List[u64]) { (NAME, [1]) }
+fn maybe(flag: bool) -> Option[List[u64]] {
+  if flag { Some([1]) } else { None() }
+}
+fn need(take xs: unique List[u64]) {}
+pub fn main() {
+  let (_, values) = pair()
+  need(take values)
+  match maybe(true) { Some(payload) => need(take payload), None() => () }
+}
+"#;
+        let (mut engine, output) = check(source);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let input = engine.export_native_input().unwrap();
+        let pair = input
+            .signatures
+            .values()
+            .find(|s| s.definition.path().0.name == "pair")
+            .unwrap();
+        assert_eq!(
+            pair.metadata.inferred_unique.results,
+            [UniqueResultRow::Tuple(1)]
+        );
+        let maybe = input
+            .signatures
+            .values()
+            .find(|s| s.definition.path().0.name == "maybe")
+            .unwrap();
+        assert!(
+            maybe
+                .metadata
+                .inferred_unique
+                .results
+                .contains(&UniqueResultRow::Payload {
+                    variant: 1,
+                    field: 0
+                })
+        );
+        engine.import_native_input(input).unwrap();
+    });
+}
+
+#[test]
+fn private_helper_uniqueness_59_body_edit_invalidates_summary_and_caller() {
+    with_compiler_stack(|| {
+        let good = "const EMPTY: List[u64] = []\nfn add(mut xs: List[u64]) { list.push(mut xs, 1) }\nfn need(take xs: unique List[u64]) {}\npub fn main() { let mut xs: unique List[u64] = []; add(mut xs); need(take xs) }";
+        let (mut engine, output) = check(good);
+        assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+        let file = engine
+            .sources
+            .add_snapshot(
+                hirsel_span::FileId(0),
+                good.replace("list.push(mut xs, 1)", "xs = EMPTY"),
+            )
+            .unwrap();
+        let output = check_progress(&mut engine, file, &default_context()).unwrap();
+        let diagnostic = output
+            .diagnostics
+            .iter()
+            .find(|d| d.rule.as_str() == "MODE-2")
+            .unwrap_or_else(|| panic!("{:?}", output.diagnostics));
+        assert!(
+            diagnostic
+                .secondary
+                .iter()
+                .any(|l| l.message.contains("add")),
+            "{diagnostic:?}"
+        );
+    });
+}

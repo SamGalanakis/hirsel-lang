@@ -25,6 +25,11 @@ fn checked(source: &str) -> CheckOutput {
 fn helper_unique_promise_19_original_handback_names_checked_recipe() {
     with_compiler_stack(|| {
         accepted(INCIDENT);
+        rejected(
+            &INCIDENT.replacen("fn add", "pub fn add", 1),
+            "need(take xs)",
+            true,
+        );
     });
 }
 

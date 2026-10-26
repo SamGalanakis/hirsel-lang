@@ -25,7 +25,7 @@ pub fn write_checked[D: inert, P: serializable](
   if core@1/bytes.len(core@1/string.as_bytes(candidate)) > o.limits.max_input_bytes {
     return Error(Boundary(FormatLimit(InputBytes(o.limits.max_input_bytes))))
   }
-  let wire = match std@1/json.parse(unique candidate) {
+  let wire = match std@1/json.parse(unique copy candidate) {
     Ok(wire) => wire,
     Error(error) => return Error(Boundary(Json(take error))),
   }
