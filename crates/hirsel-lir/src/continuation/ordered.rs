@@ -1,5 +1,5 @@
 //! Retained result cells for the reviewed Ordered host entries. This is a
-//! storage proof; only the independently checked sleep entry is admitted.
+//! storage proof; only independently checked typed entries are admitted.
 use super::*;
 use crate::abi_types::CallableShape;
 
@@ -154,8 +154,11 @@ pub(super) fn check_result_cell(
         && claimed.align == align
 }
 
-pub(super) fn sleep(u: &LirUnit<Ready>, call: CallId) -> bool {
-    host_kind(u, call) == Some(RuntimeOpKind::OrderedSleepUntil)
+pub(super) fn admitted(u: &LirUnit<Ready>, call: CallId) -> bool {
+    matches!(
+        host_kind(u, call),
+        Some(RuntimeOpKind::OrderedSleepUntil | RuntimeOpKind::OrderedPrint)
+    )
 }
 
 pub(super) fn plan(
@@ -163,22 +166,32 @@ pub(super) fn plan(
     table: &LayoutTable,
     state: &mut ResumeState,
 ) -> Result<(), String> {
-    if !sleep(u, state.boundary.call) {
+    if !admitted(u, state.boundary.call) {
         return Ok(());
     }
+    let (kind, helper) = match host_kind(u, state.boundary.call) {
+        Some(RuntimeOpKind::OrderedSleepUntil) => (
+            RuntimeOpKind::OrderedSleepUntil,
+            "hirsel_rt_v2_ordered_sleep_until",
+        ),
+        Some(RuntimeOpKind::OrderedPrint) => {
+            (RuntimeOpKind::OrderedPrint, "hirsel_rt_v2_ordered_print")
+        }
+        _ => return Ok(()),
+    };
     if state.callee.is_some() || state.runtime.is_some() {
-        return Err("nested or entered frame at clock.sleep_until".into());
+        return Err("nested or entered frame at Ordered host call".into());
     }
     let result = ordered_host_result(u, table, state.boundary.call, state.bytes)
-        .ok_or("unproved clock.sleep_until result cell")?;
+        .ok_or("unproved Ordered host result cell")?;
     state.bytes = result
         .offset
         .checked_add(result.bytes)
         .and_then(|n| n.checked_next_multiple_of(8))
-        .ok_or("clock.sleep_until frame overflow")?;
+        .ok_or("Ordered host frame overflow")?;
     state.runtime = Some(RuntimeOpPlan {
-        kind: RuntimeOpKind::OrderedSleepUntil,
-        helper: "hirsel_rt_v2_ordered_sleep_until".into(),
+        kind,
+        helper: helper.into(),
         results: vec![result],
         scope: None,
     });
@@ -186,7 +199,7 @@ pub(super) fn plan(
     Ok(())
 }
 
-pub(super) fn check_sleep(
+pub(super) fn check_host(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
     state: &ResumeState,
@@ -206,10 +219,17 @@ pub(super) fn check_sleep(
     let Some(operation) = u.tables.operations.get(op.index()) else {
         return false;
     };
-    operation.definition.is_core("clock.sleep_until")
+    let identity = if operation.definition.is_core("clock.sleep_until") {
+        runtime.kind == RuntimeOpKind::OrderedSleepUntil
+            && runtime.helper == "hirsel_rt_v2_ordered_sleep_until"
+    } else if operation.definition.is_core("out.print") {
+        runtime.kind == RuntimeOpKind::OrderedPrint
+            && runtime.helper == "hirsel_rt_v2_ordered_print"
+    } else {
+        false
+    };
+    identity
         && state.callee.is_none()
-        && runtime.kind == RuntimeOpKind::OrderedSleepUntil
-        && runtime.helper == "hirsel_rt_v2_ordered_sleep_until"
         && runtime.scope.is_none()
         && runtime.results.len() == 1
         && check_ordered_host_result(u, table, state.boundary.call, after, &runtime.results[0])

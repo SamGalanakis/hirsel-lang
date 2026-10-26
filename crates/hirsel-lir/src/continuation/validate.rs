@@ -667,8 +667,8 @@ fn check_state(
         if !ordered_reads::check(u, table, state, runtime_base) {
             return Err(ContinuationError::RuntimeOperation(id, n));
         }
-    } else if ordered::sleep(u, expected.call) {
-        if !ordered::check_sleep(u, table, state, runtime_base) {
+    } else if ordered::admitted(u, expected.call) {
+        if !ordered::check_host(u, table, state, runtime_base) {
             return Err(ContinuationError::RuntimeOperation(id, n));
         }
     } else if scope::check(u, table, units, state, runtime_base)? != end {

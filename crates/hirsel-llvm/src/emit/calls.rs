@@ -744,10 +744,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 Some(self.runtime(entry)?),
                 Some(entry.declaration().symbol.to_owned()),
             )
-        } else if self.ordered_sleep(call) {
+        } else if let Some(entry) = self.ordered_host(call) {
             (
-                Some(self.runtime(RuntimeEntry::OrderedSleepUntil)?),
-                Some("hirsel_rt_v2_ordered_sleep_until".to_owned()),
+                Some(self.runtime(entry)?),
+                Some(entry.declaration().symbol.to_owned()),
             )
         } else if let Some(align) = self.ordered_join_align(call) {
             args.push(

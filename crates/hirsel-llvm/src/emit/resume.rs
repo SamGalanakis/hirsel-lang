@@ -444,12 +444,25 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.frame_place(slot.offset, slot.layout).map(Some)
     }
 
-    pub(super) fn ordered_sleep(&self, call: CallId) -> bool {
-        self.resume
-            .as_ref()
-            .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
-            .and_then(|s| s.runtime.as_ref())
-            .is_some_and(|r| r.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedSleepUntil)
+    pub(super) fn ordered_host(&self, call: CallId) -> Option<RuntimeEntry> {
+        let runtime = self
+            .resume
+            .as_ref()?
+            .plan
+            .states
+            .iter()
+            .find(|s| s.boundary.call == call)?
+            .runtime
+            .as_ref()?;
+        match runtime.kind {
+            hirsel_lir::continuation::RuntimeOpKind::OrderedSleepUntil => {
+                Some(RuntimeEntry::OrderedSleepUntil)
+            }
+            hirsel_lir::continuation::RuntimeOpKind::OrderedPrint => {
+                Some(RuntimeEntry::OrderedPrint)
+            }
+            _ => None,
+        }
     }
 
     pub(super) fn ordered_read(

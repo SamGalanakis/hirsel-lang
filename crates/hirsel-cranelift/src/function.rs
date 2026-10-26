@@ -2371,8 +2371,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             self.em
                 .manifest_import(&helper, ObjectSymbolKind::Runtime, None, None);
             Some(helper)
-        } else if self.ordered_sleep(call) {
-            let helper = "hirsel_rt_v2_ordered_sleep_until".to_owned();
+        } else if let Some(entry) = self.ordered_host(call) {
+            let helper = entry.declaration().symbol.to_owned();
             self.em
                 .manifest_import(&helper, ObjectSymbolKind::Runtime, None, None);
             Some(helper)
