@@ -267,3 +267,4 @@ mod ordered_host_fanout_57;
 mod isolate_finalizer_frame_56;
 mod scheduled_instance_registration;
 mod ordered_print_resume_57;
+mod isolate_finalizer_coverage_56;
