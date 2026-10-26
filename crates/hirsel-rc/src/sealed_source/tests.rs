@@ -379,6 +379,7 @@ pub(super) fn witness_definition(body: Body) -> DefinitionRef {
         path: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core(
             "seal_source_witness_fixture",
         )),
+        inferred_unique: Default::default(),
         signature_hash: hirsel_syntax::ContentHash([0; 32]),
         bodies: vec![body],
         entry: BodyId(0),

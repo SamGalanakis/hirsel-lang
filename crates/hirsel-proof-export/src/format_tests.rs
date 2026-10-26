@@ -3,8 +3,8 @@ use super::*;
 
 #[test]
 fn sealed_regions_33_combined_format_refuses_each_previous_identity() {
-    assert_eq!(TIR_VERSION, 13);
-    assert_eq!(FORMAT, "hirsel.tir.export.v13");
+    assert_eq!(TIR_VERSION, 14);
+    assert_eq!(FORMAT, "hirsel.tir.export.v14");
     let environment = Environment {
         interface_version: 1,
         compiler_version: "combined-depth-grant-format-control".into(),
@@ -31,11 +31,11 @@ fn sealed_regions_33_combined_format_refuses_each_previous_identity() {
     assert_eq!(export(&accepted.to_input()), text);
     let header = format!("(Header \"{FORMAT}\" {TIR_VERSION}\n");
     assert_eq!(text.matches(&header).count(), 1);
-    for previous in [11, 12] {
+    for previous in [11, 12, 13] {
         for (format, version, at) in [
             (
                 format!("hirsel.tir.export.v{previous}"),
-                13,
+                TIR_VERSION,
                 "header.format",
             ),
             (FORMAT.into(), previous, "header.tir_version"),
@@ -125,4 +125,32 @@ fn bounded_export_output_includes_digest_and_refuses_partial_text() {
             Some(expected)
         );
     }
+}
+
+#[test]
+fn private_uniqueness_rows_round_trip_without_entering_callable_types() {
+    use hirsel_types::{ParamId, UniqueResultRow, UniqueSummary};
+    let types = TypeInterner::new(None);
+    let locator: Locator = Rc::new(|_| Location::unknown());
+    let summary = UniqueSummary {
+        preserves_unique: vec![ParamId(0), ParamId(2)],
+        results: vec![
+            UniqueResultRow::Root,
+            UniqueResultRow::Tuple(1),
+            UniqueResultRow::Payload {
+                variant: 0,
+                field: 0,
+            },
+            UniqueResultRow::Payload {
+                variant: 1,
+                field: 0,
+            },
+        ],
+    };
+    let mut writer = Writer::with_context(Cx::new(locator.clone(), types.clone()));
+    summary.write(&mut writer);
+    let (text, _) = writer.finish();
+    let mut reader = Reader::with_context(&text, Cx::new(locator, types));
+    assert_eq!(UniqueSummary::read(&mut reader).unwrap(), summary);
+    reader.finish().unwrap();
 }

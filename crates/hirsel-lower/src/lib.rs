@@ -217,6 +217,7 @@ pub fn lower(input: Input<'_>) -> Result<Definition> {
         protocol_associations,
         types: std::sync::Arc::new([]),
         path: hirsel_syntax::DefId::intern(&input.path),
+        inferred_unique: Default::default(),
         signature_hash: input.signature_hash,
         bodies: bodies.into_iter().map(Option::unwrap).collect(),
         entry: entry_body(),

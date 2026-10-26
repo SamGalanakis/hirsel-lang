@@ -287,6 +287,7 @@ impl LoweringPhase for Fake {
             protocol_associations: vec![],
             types: Arc::from([]),
             path: signature.definition,
+            inferred_unique: Default::default(),
             signature_hash: signature.fingerprint,
             bodies: if self.reject == Some("invalid-tir") {
                 vec![]

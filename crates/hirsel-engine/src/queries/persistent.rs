@@ -3333,6 +3333,7 @@ mod malformed_tests {
         let definition = Definition {
             path: syntax.owner().def,
             types: vec![ty].into(),
+            inferred_unique: Default::default(),
             signature_hash: ContentHash::default(),
             entry: BodyId(0),
             caller_bodies: vec![],
@@ -3908,6 +3909,7 @@ mod malformed_tests {
                     depth,
                     output: output(Arc::new(hirsel_tir::Definition {
                         path: DefId::intern(path),
+                        inferred_unique: Default::default(),
                         signature_hash: ContentHash::default(),
                         caller_bodies: vec![],
                         protocol_associations: vec![],

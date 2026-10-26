@@ -1963,6 +1963,7 @@ mod instance_keys {
             protocol_associations: vec![],
             types: vec![unit_ty].into(),
             path: hirsel_syntax::DefId::intern(&path("f")),
+            inferred_unique: Default::default(),
             signature_hash: hash("f signature"),
             bodies: vec![super::tir_coverage_body()],
             entry: hirsel_tir::BodyId(0),

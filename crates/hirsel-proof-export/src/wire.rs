@@ -33,8 +33,8 @@ use hirsel_types::{
     ProtocolAssociation, Reach, RegionId, Relation, RelationPlace, ScalarDomain, SchemaConstraint,
     Sendability, SendabilityRequirement, SerializableCheck, SharedPath, SharedSlice, Signature,
     SignatureDependency, SignatureKind, SignatureMetadata, Size, SizeParamId, StatePromise, Type,
-    TypeDefinition, TypeId, TypeInterner, TypeKind, TypeParamId, Uniqueness, UseKind, Uses,
-    Variant, VariantId, WrapperKind,
+    TypeDefinition, TypeId, TypeInterner, TypeKind, TypeParamId, UniqueResultRow, UniqueSummary,
+    Uniqueness, UseKind, Uses, Variant, VariantId, WrapperKind,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
@@ -1127,11 +1127,18 @@ snapshot_struct!(ProtocolAssociationReceipt {
     open,
     next
 } in Cx);
+snapshot_enum!(UniqueResultRow {
+    Root,
+    Tuple(field),
+    Payload { variant, field }
+} in Cx);
+snapshot_struct!(UniqueSummary { preserves_unique, results } in Cx);
 /// `types` is not written: it is the definition's closure, recomputed on read.
 impl Snapshot<Cx> for Definition {
     fn write(&self, w: &mut Writer<Cx>) {
         w.open("Definition");
         tabled(w, |w| {
+            self.inferred_unique.write(w);
             self.caller_bodies.write(w);
             self.protocol_associations.write(w);
             self.path.write(w);
@@ -1154,6 +1161,7 @@ impl Snapshot<Cx> for Definition {
             protocol_associations: Snapshot::read(r)?,
             types: Arc::from([]),
             path: Snapshot::read(r)?,
+            inferred_unique: Snapshot::read(r)?,
             signature_hash: Snapshot::read(r)?,
             bodies: Snapshot::read(r)?,
             entry: Snapshot::read(r)?,

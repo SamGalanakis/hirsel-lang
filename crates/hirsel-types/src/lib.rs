@@ -3,6 +3,8 @@
 #[cfg(test)]
 hirsel_guard::install!();
 
+pub mod unique_summary;
+pub use unique_summary::{UniqueResultRow, UniqueSummary};
 pub mod core_roles;
 pub mod encoding;
 pub mod entry;

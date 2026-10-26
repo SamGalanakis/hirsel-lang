@@ -296,6 +296,7 @@ fn frame(tree: Shadow, projection: Vec<hirsel_tir::Projection>) -> crate::frame:
         protocol_associations: vec![],
         types: vec![unit].into(),
         path: (&path).into(),
+        inferred_unique: Default::default(),
         signature_hash: Default::default(),
         bodies: vec![body],
         entry: BodyId(0),

@@ -465,6 +465,7 @@ fn declaration(path: &DefPath) -> tir::DefinitionRef {
         protocol_associations: vec![],
         types: Default::default(),
         path: DefId::intern(path),
+        inferred_unique: Default::default(),
         signature_hash: revision(path),
         bodies: Vec::new(),
         entry: tir::BodyId(0),

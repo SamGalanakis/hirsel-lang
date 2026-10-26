@@ -449,6 +449,16 @@ fn validate_input(
         errors.extend(checker.proof_errors.into_inner());
         errors.extend(checker.errors);
     }
+    if !definition.inferred_unique.is_empty() {
+        errors.push(Violation {
+            body: None,
+            block: None,
+            instruction: None,
+            kind: ViolationKind::TypeMismatch {
+                entity: "unproved private uniqueness summary",
+            },
+        });
+    }
     // A nested body's entry conventions come from its closure producer. Do not
     // run flow in any body until every producer has passed type validation.
     if !errors.is_empty() {

@@ -300,6 +300,7 @@ impl Builder {
             protocol_associations: vec![],
             types: std::sync::Arc::from([]),
             path: DefId::intern(&path(name)),
+            inferred_unique: Default::default(),
             signature_hash: ContentHash::default(),
             bodies: vec![self.body],
             entry: BodyId(0),

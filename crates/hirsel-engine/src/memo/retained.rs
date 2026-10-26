@@ -37,6 +37,7 @@ pub(crate) fn decoded_tir_bytes(definition: &Definition) -> u64 {
 fn tir_bytes(definition: &Definition, mut weight: Weight) -> u64 {
     weight.add(arc_bytes(definition));
     let Definition {
+        inferred_unique,
         caller_bodies,
         protocol_associations,
         types,
@@ -46,6 +47,8 @@ fn tir_bytes(definition: &Definition, mut weight: Weight) -> u64 {
         entry: _,
         contracts,
     } = definition;
+    weight.flat_vec(&inferred_unique.preserves_unique);
+    weight.flat_vec(&inferred_unique.results);
     weight.flat_vec(caller_bodies);
     weight.vec(protocol_associations, |w, r| {
         w.def_path(&r.association.source)
@@ -854,6 +857,7 @@ mod tests {
             protocol_associations: vec![],
             types: vec![unit].into(),
             path: hirsel_syntax::DefId::intern(&DefPath::core("held")),
+            inferred_unique: Default::default(),
             signature_hash: Default::default(),
             bodies: vec![Body {
                 arena_scope_grant: None,
