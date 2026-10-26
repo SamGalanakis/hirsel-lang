@@ -156,11 +156,14 @@ fn task_set_signal_suspensions_replay_exact_readiness() {
             let tape = dir.join(format!("{backend}.tape"));
             record(&dir.join(backend), None, &tape, &grants);
             let original = fs::read(&tape).unwrap();
-            for replay in [
-                hirsel_driver::replay_observations,
-                hirsel_driver::replay_observations_checked,
-            ] {
-                let observed = replay(&manifest, &tape, Some(1_000_000)).unwrap();
+            for checked in [false, true] {
+                let observed = hirsel_driver::replay_loaded_observations(
+                    &mut loaded,
+                    &tape,
+                    Some(1_000_000),
+                    checked,
+                )
+                .unwrap();
                 assert_eq!(observed.output, b"ready\ncanceled\n");
                 assert_eq!(observed.exit_code, Some(0));
                 assert!(observed.failures.is_empty() && observed.blocked.is_none());
