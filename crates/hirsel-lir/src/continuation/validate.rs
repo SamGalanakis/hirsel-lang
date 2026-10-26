@@ -558,12 +558,7 @@ fn check_state(
     {
         return Err(ContinuationError::CleanupAnchor(id, n));
     }
-    let action = match state.callee {
-        Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
-        None => ResumeAction::RetryUnenteredCall(expected.call),
-    };
-    if state.action != action
-        || state.target.state != n
+    if state.target.state != n
         || state.target.edge != normal
         || state.target.block != u.tables.edges[normal.index()].target
     {
@@ -595,6 +590,15 @@ fn check_state(
     }
     if state.bytes != end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
+    }
+    // Check the action only after independently checking the nested frame,
+    // so a forged frame retains its structural rejection.
+    let action = match state.callee {
+        Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
+        None => ResumeAction::RetryUnenteredCall(expected.call),
+    };
+    if state.action != action {
+        return Err(ContinuationError::ResumeLabel(id, n));
     }
     Ok(())
 }
