@@ -471,3 +471,14 @@ mod generation_tests {
         assert_eq!(outcome.ended, Ok(STATUS_OK));
     }
 }
+
+// The service still owns request/job/wait custody; only its caller's physical
+// suspension representation differs from the existing stackful request loop.
+pub(super) unsafe fn start_entered(ctx: *mut TaskCtx, request: Request) {
+    unsafe { drive::start(ctx, request) };
+}
+pub(super) unsafe fn drive_entered(
+    ctx: *mut TaskCtx,
+) -> Stopped<super::super::super::inop::Drive<Result<Completion, AdapterError>>> {
+    unsafe { drive::drive(ctx) }
+}

@@ -367,3 +367,15 @@ mod tests;
 
 #[cfg(test)]
 mod wait_tests;
+
+/// Begin the same owned request protocol for a certified retained caller.
+pub(super) unsafe fn start_entered(ctx: *mut TaskCtx, request: Request) {
+    unsafe { service::start_entered(ctx, request) };
+}
+
+/// All adapter callbacks and home loans end before a Pending result.
+pub(super) unsafe fn drive_entered(
+    ctx: *mut TaskCtx,
+) -> Stopped<super::super::inop::Drive<Result<Completion, AdapterError>>> {
+    unsafe { service::drive_entered(ctx) }
+}

@@ -42,6 +42,7 @@ pub(super) struct Host {
     token: u64,
     yielded: bool,
     phase: HostPhase,
+    pub(super) binding: Option<super::host::entered::Binding>,
 }
 
 impl Host {
@@ -50,13 +51,17 @@ impl Host {
             token,
             yielded,
             phase: HostPhase::Begin,
+            binding: None,
         }
     }
 }
 
 // Record access is bounded bookkeeping under the already-held role. It must
 // not insert a stop between a committed transition and its successor phase.
-fn with_operation<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut super::driver::Driver, u64) -> T) -> T {
+pub(super) fn with_operation<T>(
+    ctx: *mut TaskCtx,
+    f: impl FnOnce(&mut super::driver::Driver, u64) -> T,
+) -> T {
     unsafe {
         role::with_held(ctx, |s| {
             let me = s.current;
@@ -300,7 +305,7 @@ fn with_join<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut Join) -> T) -> T {
     })
 }
 
-fn retained_offset(
+pub(super) fn retained_offset(
     frame: usize,
     extent: usize,
     address: usize,

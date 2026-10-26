@@ -6,12 +6,13 @@ use crate::io_concurrent::ConcurrentAdapter;
 use crate::tasks::*;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicPtr, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering},
 };
 
 #[derive(Default)]
 struct Host {
     run: AtomicPtr<crate::context::RunShared>,
+    home_joined: AtomicBool,
     calls: Mutex<Vec<u64>>,
     finishes: AtomicUsize,
     saves: Mutex<Vec<(u64, bool)>>,
@@ -425,6 +426,142 @@ fn retained_join_bounds_refuse_header_overlap_alignment_escape_and_overflow() {
 
 #[test]
 fn retained_join_releases_its_stack_and_never_rereads_the_taken_handle() {
+    retained_join_run(sleeper, false, false);
+}
+
+#[test]
+fn retained_host_and_join_release_both_stacks_and_capture_original_inputs_once() {
+    retained_join_run(compact_sleeper, true, false);
+}
+
+// The home adapter uses the same scripted readiness relation, including
+// its original enter/finish token. It never retains the callback's borrow.
+struct HomeHost {
+    host: Arc<Host>,
+    token: u64,
+}
+impl crate::io::Adapter for HomeHost {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Ok(None)
+    }
+    fn enter(&mut self, token: u64) {
+        self.token = token;
+    }
+    fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        assert!(matches!(
+            request,
+            Request::SleepUntil {
+                clock: 11,
+                deadline: 10
+            }
+        ));
+        self.host.calls.lock().unwrap().push(self.token);
+        if self.host.home_joined.load(Ordering::Acquire) {
+            Ok(Completion::Wait(Ok(())))
+        } else {
+            Err(AdapterError::Blocked)
+        }
+    }
+    fn ready(&mut self) -> Result<Ready, AdapterError> {
+        Ok(if self.host.home_joined.load(Ordering::Acquire) {
+            Ready::Every
+        } else {
+            Ready::Tokens(vec![])
+        })
+    }
+    fn finish(&mut self, token: u64) {
+        self.host.finish(token);
+    }
+    fn wait(&mut self) -> Result<bool, AdapterError> {
+        Ok(true)
+    }
+}
+
+#[test]
+fn retained_home_host_and_join_release_both_stacks_with_original_home_token() {
+    retained_join_run(compact_sleeper, true, true);
+}
+
+unsafe extern "C" fn compact_sleeper(
+    ctx: *mut TaskCtx,
+    env: *mut Header,
+    caller: u64,
+    site: u64,
+) -> u8 {
+    unsafe {
+        crate::continuation::hirsel_rt_v2_resume_run(ctx, env, caller, site, sleep_dispatcher, 48)
+    }
+}
+
+unsafe extern "C" fn sleep_dispatcher(
+    ctx: *mut TaskCtx,
+    _: *mut Header,
+    _: u64,
+    _: u64,
+    frame: *mut u8,
+) -> u8 {
+    let words = frame.cast::<u64>();
+    let first = unsafe { words.read() } == 0;
+    if first {
+        unsafe {
+            words.add(1).write(11);
+            words.add(2).write(10);
+            words
+                .add(3)
+                .cast::<crate::io::UnitResult>()
+                .write(crate::io::UnitResult {
+                    tag: 99,
+                    error: 99,
+                    code: 99,
+                });
+            words.write(1);
+        }
+    }
+    unsafe { crate::continuation::binding::hirsel_rt_v2_resume_tail(ctx, frame, 1, 33, 48, 0, 0) };
+    let status = unsafe {
+        super::super::host::entered::hirsel_rt_v2_ordered_sleep_until(
+            ctx,
+            0,
+            0,
+            std::ptr::null_mut(),
+            if first {
+                words.add(3).cast()
+            } else {
+                std::ptr::null_mut()
+            },
+            if first {
+                words.add(1)
+            } else {
+                std::ptr::null()
+            },
+            if first {
+                words.add(2)
+            } else {
+                std::ptr::null()
+            },
+        )
+    };
+    if status == STATUS_SUSPENDED {
+        unsafe {
+            words.add(1).write(u64::MAX);
+            words.add(2).write(u64::MAX);
+        }
+        return status;
+    }
+    assert_eq!(status, STATUS_OK);
+    assert_eq!(
+        unsafe { words.add(3).cast::<crate::io::UnitResult>().read() },
+        crate::io::UnitResult {
+            tag: 0,
+            error: 0,
+            code: 0
+        }
+    );
+    unsafe { words.write(2) };
+    unsafe { finish_value(ctx, 7) }
+}
+
+fn retained_join_run(sleeper: crate::tasks::TaskCode, require_host_release: bool, home: bool) {
     for width in [1, 4] {
         let environment = layout();
         let result = layout();
@@ -434,10 +571,19 @@ fn retained_join_releases_its_stack_and_never_rereads_the_taken_handle() {
         let observe = host.clone();
         let compact_saves = Arc::new(AtomicUsize::new(0));
         let count_saves = compact_saves.clone();
+        let host_saves = Arc::new(AtomicUsize::new(0));
+        let count_host_saves = host_saves.clone();
         let mut run = crate::host::BodyRun::new(width, true);
         run.config.layouts = layouts.as_ptr();
         run.config.layout_count = 2;
-        run.concurrent_adapter = Some(host.clone());
+        if home {
+            run.adapter = Some(Box::new(HomeHost {
+                host: host.clone(),
+                token: 0,
+            }));
+        } else {
+            run.concurrent_adapter = Some(host.clone());
+        }
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
             move |ctx| unsafe {
@@ -450,11 +596,27 @@ fn retained_join_releases_its_stack_and_never_rereads_the_taken_handle() {
                     if completed {
                         return;
                     }
+                    if s.tasks
+                        .iter()
+                        .flatten()
+                        .any(|row| matches!(row.wait, Some(Wait::Join { child: 1, .. })))
+                    {
+                        observe.home_joined.store(true, Ordering::Release);
+                    }
                     let Logical::Ordered(d) = &s.logical else {
                         unreachable!()
                     };
                     let id = handle(task, s.tasks[task as usize].as_ref().unwrap().generation);
                     if let Some(op) = d.in_operations.get(&id) {
+                        if matches!(op, Operation::Host(_))
+                            && s.tasks[task as usize]
+                                .as_ref()
+                                .unwrap()
+                                .context_home
+                                .is_some()
+                        {
+                            count_host_saves.fetch_add(1, Ordering::Relaxed);
+                        }
                         if matches!(op, Operation::Join(_))
                             && s.tasks[task as usize]
                                 .as_ref()
@@ -543,9 +705,18 @@ fn retained_join_releases_its_stack_and_never_rereads_the_taken_handle() {
             compact_saves.load(Ordering::Relaxed) > 0,
             "join never released its original stack"
         );
+        if require_host_release {
+            assert!(
+                host_saves.load(Ordering::Relaxed) > 0,
+                "host never released its original stack"
+            );
+        }
         assert_eq!(outcome.ended, Ok(STATUS_OK));
         assert_eq!(outcome.pending, 0);
-        assert_eq!(*host.calls.lock().unwrap(), [1, 1]);
+        assert_eq!(
+            *host.calls.lock().unwrap(),
+            if home { [0, 0] } else { [1, 1] }
+        );
         assert_eq!(host.finishes.load(Ordering::Acquire), 1);
         let saves = host.saves.lock().unwrap();
         assert!(

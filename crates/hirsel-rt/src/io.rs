@@ -4676,7 +4676,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
     };
     // WaitError::Clock(e) is error 0 with the ClockError ordinal as its payload;
     // WaitError::Canceled(cause) is error 1 with the cause.
-    let result = match value {
+    let result = wait_result(value);
+    unsafe { out.write(result) };
+    crate::STATUS_OK
+}
+pub(crate) fn wait_result(value: Result<(), WaitError>) -> UnitResult {
+    match value {
         Ok(()) => UnitResult {
             tag: 0,
             error: 0,
@@ -4695,9 +4700,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_clock_sleep_until(
             error: 1,
             code: cause,
         },
-    };
-    unsafe { out.write(result) };
-    crate::STATUS_OK
+    }
 }
 /// # Safety
 /// Context is bound, the Random word readable and the result writable. A zero count

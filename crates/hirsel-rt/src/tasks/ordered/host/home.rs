@@ -23,6 +23,7 @@ pub(super) struct Invocation {
     print: bool,
     read: Option<Request>,
     parked: bool,
+    finish_in_drive: bool,
 }
 
 fn with<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut concurrent::Pending, &mut Invocation) -> T) -> T {
@@ -36,7 +37,7 @@ fn phase(ctx: *mut TaskCtx, next: Phase) {
     with(ctx, |_, i| i.phase = next);
 }
 
-unsafe fn start(ctx: *mut TaskCtx, request: Request) {
+unsafe fn start(ctx: *mut TaskCtx, request: Request, finish_in_drive: bool) {
     let close = matches!(request, Request::Close { .. });
     let print = matches!(request, Request::Print { .. } | Request::PrintStderr { .. });
     let read = matches!(request, Request::NetRead { .. }).then(|| request.clone());
@@ -52,6 +53,7 @@ unsafe fn start(ctx: *mut TaskCtx, request: Request) {
                 print,
                 read,
                 parked: false,
+                finish_in_drive,
             },
         )));
     }
@@ -102,12 +104,13 @@ unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<(Result<Completion, AdapterE
                 });
             }
             Phase::Complete => {
-                let (result, read, parked, print) = with(ctx, |p, i| {
+                let (result, read, parked, print, finish_in_drive) = with(ctx, |p, i| {
                     (
                         p.result.as_ref().unwrap() as *const _,
                         i.read.take(),
                         i.parked,
                         i.print,
+                        i.finish_in_drive,
                     )
                 });
                 let result = unsafe { &*result };
@@ -118,13 +121,31 @@ unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<(Result<Completion, AdapterE
                 if print && super::super::events::observing(ctx) {
                     let _ = super::super::events::certify_host(ctx);
                 }
-                phase(ctx, if close { Phase::Close } else { Phase::Deliver });
+                let finish = finish_in_drive && !parked;
+                // Capability refusal precedes the post-effect finish, exactly
+                // as in capability_call. Invalid authority still spends that
+                // finish and returns language failure without initializing out.
+                if finish_in_drive
+                    && let Err(error) = result
+                    && !matches!(error, AdapterError::InvalidHandle(_))
+                {
+                    return Err(crate::stop::Stop::refusal(error.clone()));
+                }
+                phase(
+                    ctx,
+                    if close || finish {
+                        Phase::Close
+                    } else {
+                        Phase::Deliver
+                    },
+                );
             }
             Phase::Close => {
                 if !engine::head_step(ctx)? {
                     return Ok(Drive::Pending { head_only: true });
                 }
-                let (progress, private) = finish_start(ctx, Next::Keep)?;
+                let (progress, private) =
+                    finish_start(ctx, if close { Next::Keep } else { Next::Yield })?;
                 assert!(!private);
                 phase(ctx, Phase::CloseHead);
                 if progress == Progress::Poll {
@@ -152,7 +173,7 @@ pub(crate) unsafe fn request(
     ctx: *mut TaskCtx,
     request: Request,
 ) -> Stopped<(Result<Completion, AdapterError>, bool)> {
-    unsafe { start(ctx, request) };
+    unsafe { start(ctx, request, false) };
     let result = loop {
         match unsafe { drive(ctx) } {
             Ok(Drive::Complete(value)) => break Ok(value),
@@ -186,6 +207,7 @@ pub(crate) unsafe fn finish_result(
         print: false,
         read: None,
         parked,
+        finish_in_drive: false,
     };
     unsafe {
         (*ctx).pending_ordered_host = Some(Box::new(concurrent::Pending::home_result(
@@ -255,3 +277,16 @@ unsafe fn drive_finish(ctx: *mut TaskCtx) -> Stopped<Drive<()>> {
 #[cfg(test)]
 #[path = "home/modules.rs"]
 mod test_modules;
+
+/// A certified capability retains its result through the original finish.
+pub(super) unsafe fn start_entered(ctx: *mut TaskCtx, request: Request) {
+    unsafe { start(ctx, request, true) };
+}
+pub(super) unsafe fn drive_entered(
+    ctx: *mut TaskCtx,
+) -> Stopped<Drive<Result<Completion, AdapterError>>> {
+    unsafe { drive(ctx) }.map(|outcome| match outcome {
+        Drive::Complete((result, _)) => Drive::Complete(result),
+        Drive::Pending { head_only } => Drive::Pending { head_only },
+    })
+}

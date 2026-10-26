@@ -93,6 +93,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::Alloc
         | R::TaskSpawnAhead
         | R::OrderedJoin
+        | R::OrderedSleepUntil
         | R::ResumeTail
         | R::ResumePoint
         | R::ResumeRun

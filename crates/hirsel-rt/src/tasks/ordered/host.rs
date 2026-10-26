@@ -5,6 +5,7 @@ use crate::ordered::{Next, Progress};
 
 pub(crate) mod concurrent;
 pub(crate) mod home;
+pub(super) mod entered;
 
 /// A completed read owns its selected outcome, not a readiness prediction.
 /// Its original wait row remains the return-value owner until the issuer takes
