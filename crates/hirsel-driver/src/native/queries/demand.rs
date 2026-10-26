@@ -72,6 +72,7 @@ struct Discovery {
     schema: u32,
     owner: NamedKey,
     ready_source: Vec<u8>,
+    seal_demand: hirsel_rc::seal_demand::equations::LocalDemandEquations,
     callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     requests: Vec<Request>,
     selection_reads: Vec<SelectionRead>,
@@ -87,6 +88,9 @@ struct Discovery {
 pub struct DiscoveredInstance {
     pub product: Arc<InstanceProduct>,
     pub ready_source: ReadySourceFacts,
+    /// Ordinary physical-capacity equations, never source or C authority.
+    /// These retain no Value body and are bound to this discovery output.
+    pub seal_demand: hirsel_rc::seal_demand::equations::LocalDemandEquations,
     pub callees: Vec<hirsel_rc::arena_credit::equations::Function>,
     pub dependencies: Vec<InstanceAddress>,
     pub selection_reads: Vec<SelectionRead>,
@@ -517,7 +521,7 @@ impl DemandInstances {
         ))
         .map_err(|e| e.to_string())?;
         Ok(Action(ContentHash::of_parts(
-            "hirsel.native.demand-import-action.v11",
+            "hirsel.native.demand-import-action.v12",
             [bytes.as_slice()],
         )))
     }
@@ -532,7 +536,10 @@ impl DemandInstances {
             .get_content(product.discovery)
             .ok_or("missing native discovery")?;
         let discovery: Discovery = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if discovery.schema != 8
+        discovery.seal_demand.validate()?;
+        if discovery.schema != 9
+            || discovery.seal_demand.owner()
+                != &(key.instance.definition().clone(), key.instance.digest())
             || !discovery.discharge.canonical()
             || !discovery.emission.canonical()
             || !discovery.operation_freedom.canonical()
@@ -570,6 +577,7 @@ impl DemandInstances {
         let output = Arc::new(DiscoveredInstance {
             product,
             ready_source,
+            seal_demand: discovery.seal_demand,
             callees: discovery.callees,
             dependencies,
             selection_reads: discovery.selection_reads,
@@ -928,9 +936,12 @@ impl DemandInstances {
         let discovery = self.put(
             INSTANCE_DISCOVERY_DOMAIN,
             &serde_json::to_vec(&Discovery {
-                schema: 8,
+                schema: 9,
                 owner: NamedKey::of(&key.instance),
                 ready_source,
+                seal_demand: hirsel_rc::seal_demand::equations::LocalDemandEquations::extract(
+                    &unit,
+                )?,
                 callees,
                 requests,
                 selection_reads,

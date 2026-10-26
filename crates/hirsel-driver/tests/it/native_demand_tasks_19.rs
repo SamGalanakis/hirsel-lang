@@ -152,6 +152,24 @@ fn native_demand_tasks_import_and_reuse_actual_settled_source_without_a_controll
                 )
             });
             let completed = tasks.completed_instances(result[0]).unwrap();
+            // The same compact flow archive survives cold publication and a
+            // fresh hit with lowering disabled. This observes no Value body.
+            for (key, output) in &completed {
+                output.seal_demand.validate().unwrap();
+                assert_eq!(
+                    output.seal_demand.owner(),
+                    &(key.instance.definition().clone(), key.instance.digest())
+                );
+                let encoded = serde_json::to_vec(&output.seal_demand).unwrap();
+                let restored: hirsel_rc::seal_demand::equations::LocalDemandEquations =
+                    serde_json::from_slice(&encoded).unwrap();
+                assert_eq!(restored, output.seal_demand);
+                let mut malformed: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+                malformed["seals"] = serde_json::json!([u32::MAX]);
+                let malformed: hirsel_rc::seal_demand::equations::LocalDemandEquations =
+                    serde_json::from_value(malformed).unwrap();
+                assert!(malformed.validate().is_err());
+            }
             assert_eq!(
                 completed
                     .iter()

@@ -272,6 +272,7 @@ impl InstanceTasks {
     }
     fn charge_output(&self, output: &DiscoveredInstance) -> Result<(), String> {
         let ordinary = serde_json::to_vec(&(
+            &output.seal_demand,
             &output.callees,
             &output.selection_reads,
             &output.constant_reads,
