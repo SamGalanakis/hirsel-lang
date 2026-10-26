@@ -268,6 +268,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) -> Option<Fac
     c.block_kinds(&facts);
     c.instructions(&mut facts);
     c.terminators(&facts);
+    c.isolate_protocol();
     c.versions(&mut facts);
     c.init_flags(&mut facts);
     c.capture_mask(&mut facts);
@@ -3294,6 +3295,130 @@ impl<S: Stage> Checker<'_, '_, S> {
             && unit.tables.operations[operation.index()]
                 .definition
                 .is_core("$intrinsic.IsolateBegin")
+    }
+
+    /// Check scope transitions independently of the library builder and physical
+    /// continuation plan. Failure edges retain the invocation until its End;
+    /// a successful begin creates it, and a catch handles its suffix only once.
+    fn isolate_protocol(&mut self) {
+        let unit = self.cx.unit;
+        if !unit
+            .terminators
+            .iter()
+            .any(|term| matches!(term, Terminator::Isolate { .. }))
+        {
+            return;
+        }
+        #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+        struct State {
+            scope: Option<(ValueId, bool)>,
+            failing: bool,
+        }
+        let mut pending = vec![(
+            unit.entry,
+            State {
+                scope: None,
+                failing: false,
+            },
+        )];
+        let mut seen = BTreeSet::new();
+        let target = |edge: EdgeId| unit.tables.edges[edge.index()].target;
+        while let Some((block, mut state)) = pending.pop() {
+            if !seen.insert((block, state)) {
+                continue;
+            }
+            let site = Site::at(block, unit.blocks[block.index()].instructions.len);
+            for inst in unit.blocks[block.index()]
+                .instructions
+                .get(&unit.instructions)
+                .unwrap_or(&[])
+            {
+                if let Some(failure) = inst.failure() {
+                    pending.push((
+                        target(unit.tables.failures[failure.index()].cleanup),
+                        State {
+                            failing: true,
+                            ..state
+                        },
+                    ));
+                }
+            }
+            match unit.terminators[block.index()] {
+                Terminator::Call {
+                    call,
+                    normal,
+                    failure,
+                } => {
+                    let call = &unit.tables.calls[call.index()];
+                    let operation = match call.callee {
+                        Callee::Operation(op) => {
+                            Some(&unit.tables.operations[op.index()].definition)
+                        }
+                        _ => None,
+                    };
+                    let begin =
+                        operation.is_some_and(|path| path.is_core("$intrinsic.IsolateBegin"));
+                    let end = operation.is_some_and(|path| path.is_core("$intrinsic.IsolateEnd"));
+                    if end {
+                        if state.scope.take().is_none() {
+                            self.add(site, K::Placement("isolation End without its active begin"));
+                        }
+                    }
+                    pending.push((
+                        target(unit.tables.failures[failure.index()].cleanup),
+                        State {
+                            failing: true,
+                            ..state
+                        },
+                    ));
+                    if begin {
+                        if state.scope.is_some() {
+                            self.add(site, K::Placement("isolation begin repeated before End"));
+                        }
+                        state.scope = call.result.map(|mark| (mark, false));
+                    } else if matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
+                        && state.scope.is_none()
+                    {
+                        self.add(site, K::Placement("isolation callback before its begin"));
+                    }
+                    if let Some(normal) = normal {
+                        pending.push((target(normal), state));
+                    }
+                }
+                Terminator::Isolate { start, caught } => {
+                    if state.scope != Some((start, false)) || !state.failing {
+                        self.add(
+                            site,
+                            K::Placement(
+                                "isolation catch without its unhandled failing invocation",
+                            ),
+                        );
+                    }
+                    state.scope = state.scope.map(|(mark, _)| (mark, true));
+                    state.failing = false;
+                    pending.push((target(caught), state));
+                }
+                Terminator::Return(_) | Terminator::Propagate => {
+                    if state.scope.is_some() {
+                        self.add(site, K::Placement("isolation terminal path without End"));
+                    }
+                }
+                ref term => {
+                    for edge in term.normal_edges(&unit.pools) {
+                        pending.push((target(edge), state));
+                    }
+                    for failure in term.failure_edges(&unit.tables) {
+                        pending.push((
+                            target(unit.tables.failures[failure.index()].cleanup),
+                            State {
+                                failing: true,
+                                ..state
+                            },
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     fn tag_variants(&self, value: ValueId) -> Option<BTreeSet<u32>> {

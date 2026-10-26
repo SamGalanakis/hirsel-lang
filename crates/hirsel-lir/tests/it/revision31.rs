@@ -25,6 +25,8 @@ enum Mutant {
     WrongBegin,
     DirectImpostor,
     Forwarded,
+    MissingEnd,
+    DoubleEnd,
 }
 
 /// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
@@ -99,11 +101,48 @@ fn isolated(m: Mutant) -> Vec<K> {
     } else {
         mark
     };
+    let begin_operation = t.builder.unit.tables.operations[0].clone();
+    let begin_registry = t.operations.clone();
+    let begin_row = t.manifest.rows().next().unwrap().clone();
+    let end_abi = t.abi(&params, None);
+    let end_signature = super::operation_abi::scalar_signature(
+        "$intrinsic.IsolateEnd",
+        &[(
+            hirsel_syntax::PassingMode::Borrow,
+            hirsel_types::Primitive::U64,
+        )],
+        None,
+    );
+    t.declare_operation(end_signature, Default::default(), end_abi);
+    t.operations.signatures.extend(begin_registry.signatures);
+    let end_operation = t.builder.unit.tables.operations[0].clone();
+    let end_row = t.manifest.rows().next().unwrap().clone();
+    t.builder.unit.tables.operations = vec![begin_operation.clone(), end_operation.clone()];
+    t.manifest = hirsel_core_contract::Manifest::skeleton([begin_operation, end_operation]);
+    t.manifest.replace(begin_row).unwrap();
+    t.manifest.replace(end_row).unwrap();
     let caught = if m == Mutant::Unresumed {
         t.builder.propagate()
     } else {
         let caught = t.builder.block(BlockKind::Body, &[]);
-        t.builder.ret(caught, None);
+        let mut returning = caught;
+        if m != Mutant::MissingEnd {
+            for _ in 0..if m == Mutant::DoubleEnd { 2 } else { 1 } {
+                let next = t.builder.block(BlockKind::Body, &[]);
+                t.call_to(
+                    returning,
+                    Callee::Operation(OperationRef(1)),
+                    end_abi,
+                    &params,
+                    None,
+                    &[ArgumentValue::Value(count)],
+                    (next, &[]),
+                    propagate,
+                );
+                returning = next;
+            }
+        }
+        t.builder.ret(returning, None);
         caught
     };
     let kind = if m == Mutant::Ordinary {
@@ -122,6 +161,18 @@ fn isolated(m: Mutant) -> Vec<K> {
         t.builder.term(after, Terminator::Raise(raise));
     }
     t.check()
+}
+
+#[test]
+fn an_isolation_ends_once_on_its_terminal_path() {
+    pair(
+        |m| isolated(if m { Mutant::MissingEnd } else { Mutant::None }),
+        |k| *k == K::Placement("isolation terminal path without End"),
+    );
+    pair(
+        |m| isolated(if m { Mutant::DoubleEnd } else { Mutant::None }),
+        |k| *k == K::Placement("isolation End without its active begin"),
+    );
 }
 
 #[test]
