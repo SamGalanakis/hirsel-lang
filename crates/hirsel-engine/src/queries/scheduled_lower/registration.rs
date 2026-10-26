@@ -28,6 +28,7 @@ struct Data {
     reads: Reads,
     depth: DepthEvidence<Span>,
     acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    _allowance: Option<MemoryReservation>,
 }
 type Completed = (ProductRef, Arc<Data>);
 /// Opaque text/evidence transport, without namespace or execution authority.
@@ -35,7 +36,6 @@ type Completed = (ProductRef, Arc<Data>);
 pub struct FrontRegistrationOutput {
     definition: DefId,
     data: Arc<Data>,
-    _owner: Arc<FrontRegistrationQueries>,
 }
 impl FrontRegistrationOutput {
     pub fn definition(&self) -> &DefPath {
@@ -64,8 +64,9 @@ pub struct FrontRegistrationQueries {
     outcomes: Mutex<BTreeMap<ContentHash, Completed>>,
     weight: MemoryWeight,
     errors: RuntimeErrors,
-    remaining: Mutex<u64>,
-    allowance: MemoryReservation,
+    remaining: Mutex<MemoryReservation>,
+    total: u64,
+    _inputs: MemoryReservation,
 }
 impl FrontRegistrationQueries {
     pub fn input_bytes(definitions: &[DefPath]) -> u64 {
@@ -87,7 +88,12 @@ impl FrontRegistrationQueries {
         Arc::new(Factory(self.clone()))
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.allowance.bytes() - *self.remaining.lock().unwrap_or_else(|e| e.into_inner())
+        self.total
+            - self
+                .remaining
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bytes()
     }
     pub fn outcome(self: &Arc<Self>, product: ProductRef) -> Option<FrontRegistrationOutput> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -95,7 +101,6 @@ impl FrontRegistrationQueries {
         (*selected == product).then(|| FrontRegistrationOutput {
             definition: self.inputs[&product.address.0].definition,
             data: data.clone(),
-            _owner: self.clone(),
         })
     }
     pub fn failed(self: &Arc<Self>, reference: Reference) -> Option<FrontRegistrationOutput> {
@@ -104,7 +109,6 @@ impl FrontRegistrationQueries {
         Some(FrontRegistrationOutput {
             definition: self.inputs[address].definition,
             data: data.clone(),
-            _owner: self.clone(),
         })
     }
     async fn run(self: Arc<Self>, id: QueryId, reads: QueryReads) -> Result<ProductRef, Reference> {
@@ -145,11 +149,12 @@ impl FrontRegistrationQueries {
             .and_then(|_| source.evidence.borrow().finish(&observed));
         let mut depth = source.depth.borrow().clone();
         depth.first[0] = None;
-        let data = Arc::new(Data {
+        let mut data = Arc::new(Data {
             text,
             reads: observed,
             depth,
             acceptance,
+            _allowance: None,
         });
         let bytes = self
             .lower
@@ -186,9 +191,12 @@ impl FrontRegistrationQueries {
             );
         }
         let mut remaining = self.remaining.lock().unwrap_or_else(|e| e.into_inner());
-        *remaining = remaining
-            .checked_sub(weight.bytes())
+        let allowance = remaining
+            .split(weight.bytes())
             .ok_or(self.errors.resource)?;
+        Arc::get_mut(&mut data)
+            .expect("unpublished generator output")
+            ._allowance = Some(allowance);
         drop(remaining);
         let failed = data.text.is_err();
         let record = self
@@ -343,7 +351,7 @@ impl QueryEngine {
         definitions: &[DefPath],
         lower: Arc<FrontLowerQueries>,
         weight: MemoryWeight,
-        allowance: MemoryReservation,
+        mut allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontRegistrationQueries>, QueryError> {
         let refused = || {
@@ -389,6 +397,8 @@ impl QueryEngine {
                 },
             );
         }
+        let total = allowance.bytes();
+        let inputs_allowance = allowance.split(required).ok_or_else(refused)?;
         Ok(Arc::new(FrontRegistrationQueries {
             inputs,
             lower,
@@ -396,8 +406,9 @@ impl QueryEngine {
             outcomes: Mutex::new(BTreeMap::new()),
             weight,
             errors,
-            remaining: Mutex::new(allowance.bytes() - required),
-            allowance,
+            remaining: Mutex::new(allowance),
+            total,
+            _inputs: inputs_allowance,
         }))
     }
 }
