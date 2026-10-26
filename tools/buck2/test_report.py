@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shutil
 import signal
 import subprocess
 import sys
@@ -18,6 +19,65 @@ import time
 
 ACTION_TIMEOUT_SECONDS = 600
 INNER_DEADLINE_SECONDS = ACTION_TIMEOUT_SECONDS * 0.95
+STACK_DUMP_SECONDS = 20
+
+
+def owned_descendants():
+    # Include adopted orphans and children created by any worker thread.
+    pending = [os.getpid()]
+    owned = set()
+    while pending:
+        parent = pending.pop()
+        for task in Path(f'/proc/{parent}/task').glob('*'):
+            try:
+                children = (task / 'children').read_text().split()
+            except OSError:
+                continue
+            for child in map(int, children):
+                if child not in owned:
+                    owned.add(child)
+                    pending.append(child)
+    return sorted(owned)
+
+
+def dump_owned_stacks():
+    # Spend only the existing reporting reserve, even if a debugger hangs.
+    end = time.monotonic() + STACK_DUMP_SECONDS
+    debugger = shutil.which('gdb') or shutil.which('eu-stack')
+    for pid in owned_descendants():
+        if time.monotonic() >= end:
+            print('HIRSEL_TEST_STACKS reporting budget exhausted', file=sys.stderr, flush=True)
+            break
+        print(f'HIRSEL_TEST_STACKS pid={pid} debugger={debugger or "unavailable"}',
+              file=sys.stderr, flush=True)
+        # Keep useful thread/wait information when the action has no debugger
+        # or its sandbox denies ptrace. Never inspect unrelated processes.
+        for task in sorted(Path(f'/proc/{pid}/task').glob('*')):
+            if time.monotonic() >= end:
+                break
+            fields = {}
+            for name in ('comm', 'wchan', 'stack'):
+                try:
+                    fields[name] = (task / name).read_text().strip()
+                except OSError as error:
+                    fields[name] = str(error)
+            print(f'HIRSEL_TEST_THREAD tid={task.name} {json.dumps(fields)}',
+                  file=sys.stderr, flush=True)
+        if debugger:
+            command = ([debugger, '-q', '-nx', '-batch', '-p', str(pid),
+                        '-ex', 'set pagination off', '-ex', 'thread apply all bt']
+                       if Path(debugger).name == 'gdb' else [debugger, '-p', str(pid)])
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                        stdout=sys.stderr, stderr=sys.stderr,
+                                        timeout=min(5, remaining))
+                print(f'HIRSEL_TEST_STACKS pid={pid} exit={result.returncode}',
+                      file=sys.stderr, flush=True)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                print(f'HIRSEL_TEST_STACKS pid={pid} {error}', file=sys.stderr, flush=True)
 
 
 def reap_owned_children(child):
@@ -142,6 +202,8 @@ def supervise(command, *, deadline=INNER_DEADLINE_SECONDS, raw_json=False):
                 remaining = end - time.monotonic()
                 if stopped or remaining <= 0:
                     progress.interrupted(f'signal={stopped}' if stopped else f'after {deadline:g}s')
+                    if not stopped:
+                        dump_owned_stacks()
                     return 128 + stopped if stopped else 124
                 for key, _ in selector.select(min(remaining, 0.1)):
                     stream = key.fileobj

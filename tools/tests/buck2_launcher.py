@@ -237,6 +237,80 @@ while True: signal.pause()
             self.assertNotIn('HIRSEL_TEST_RUNNING queued', result.stderr)
             self.assertIn('HIRSEL_TEST_INNER_DEADLINE', result.stderr)
 
+    def test_deadline_dumps_all_threads_of_owned_children_before_cleanup(self):
+        self.fixture()
+        harness = self.root / 'harness'
+        harness.write_text(harness.read_text().replace('signal.signal(signal.SIGTERM', '''
+import threading, subprocess
+from pathlib import Path
+ready = threading.Event()
+def worker():
+    Path('worker.tid').write_text(str(threading.get_native_id()))
+    ready.set()
+    threading.Event().wait()
+threading.Thread(target=worker, daemon=True).start()
+ready.wait()
+child = subprocess.Popen([sys.executable, '-c', 'import signal; signal.pause()'])
+Path('child.pid').write_text(str(child.pid))
+signal.signal(signal.SIGTERM'''))
+        debugger = self.root / 'gdb'
+        debugger.write_text('''#!/usr/bin/env python3
+import os, sys
+from pathlib import Path
+pid = sys.argv[sys.argv.index('-p') + 1]
+assert 'thread apply all bt' in sys.argv, sys.argv
+assert Path('/proc/' + pid).exists(), 'dump ran after cleanup'
+print('fixture all-thread stack for pid=' + pid)
+''')
+        debugger.chmod(0o755)
+        self.env['PATH'] = str(self.root) + ':' + os.environ['PATH']
+        result = self.run_report()
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn('HIRSEL_TEST_STACKS pid=', result.stderr)
+        self.assertIn('fixture all-thread stack for pid=', result.stderr)
+        tid = (self.root / 'worker.tid').read_text()
+        pid = (self.root / 'child.pid').read_text()
+        self.assertIn(f'HIRSEL_TEST_THREAD tid={tid} ', result.stderr)
+        self.assertIn(f'fixture all-thread stack for pid={pid}', result.stderr)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(pid), 0)
+
+    def stack_reporter(self):
+        import runpy
+        return runpy.run_path(str(self.reporter()))['dump_owned_stacks']
+
+    def test_stack_dump_without_a_debugger_keeps_thread_waits(self):
+        import contextlib
+        import io
+        from unittest.mock import patch
+        dump = self.stack_reporter()
+        output = io.StringIO()
+        with patch.dict(dump.__globals__, owned_descendants=lambda: [os.getpid()]), \
+             patch.object(dump.__globals__['shutil'], 'which', return_value=None), \
+             contextlib.redirect_stderr(output):
+            dump()
+        self.assertIn('debugger=unavailable', output.getvalue())
+        self.assertIn(f'HIRSEL_TEST_THREAD tid={os.getpid()} ', output.getvalue())
+        self.assertIn('"wchan":', output.getvalue())
+
+    def test_stuck_debugger_is_bounded_by_one_reporting_budget(self):
+        import time
+        from unittest.mock import patch
+        dump = self.stack_reporter()
+        debugger = self.root / 'gdb'
+        debugger.write_text('#!/usr/bin/env python3\nimport time\ntime.sleep(60)\n')
+        debugger.chmod(0o755)
+        with tempfile.TemporaryFile(mode='w+') as output, \
+             patch.dict(dump.__globals__, owned_descendants=lambda: [os.getpid()],
+                        STACK_DUMP_SECONDS=0.1), \
+             patch.object(dump.__globals__['shutil'], 'which', return_value=str(debugger)), \
+             patch.object(sys, 'stderr', output):
+            start = time.monotonic()
+            dump()
+            self.assertLess(time.monotonic() - start, 2)
+            output.seek(0)
+            self.assertIn('timed out', output.read())
+
     def test_real_libtest_results_and_inner_deadline(self):
         fixture = os.environ.get('HIRSEL_TEST_REPORT_FIXTURE')
         if not fixture:
@@ -263,6 +337,8 @@ while True: signal.pause()
         self.assertIn('HIRSEL_TEST_RUNNING c_hangs', result.stderr)
         self.assertIn('HIRSEL_TEST_FINISHED ok a_pass', result.stderr)
         self.assertIn('HIRSEL_TEST_FINISHED ignored b_fail', result.stderr)
+        self.assertIn('HIRSEL_TEST_STACKS pid=', result.stderr)
+        self.assertIn('HIRSEL_TEST_THREAD tid=', result.stderr)
 
     def test_unittest_partial_start_names_the_hanging_method(self):
         (self.root / 'harness').write_text(r'''#!/usr/bin/env python3
