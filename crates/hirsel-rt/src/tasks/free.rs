@@ -704,3 +704,6 @@ mod tests {
         assert!(!home_rechecks(&mut s, true));
     }
 }
+
+#[cfg(test)]
+mod entered_tests;

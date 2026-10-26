@@ -80,3 +80,11 @@ pub(crate) fn held(task: u32) {
 pub(crate) fn resumed(task: u32) {
     line(format_args!("resume {task} {}", worker()));
 }
+
+/// An entered runtime invocation returns Pending through its certified frames.
+pub(crate) fn runtime_wait(task: u32, state: u32, kind: u32, phase: &str, invocation: u64) {
+    line(format_args!(
+        "runtime {task} {state} {} {kind} {phase} {invocation}",
+        worker()
+    ));
+}

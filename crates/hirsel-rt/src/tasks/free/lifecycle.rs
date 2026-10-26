@@ -11,6 +11,9 @@ pub(crate) unsafe fn scope_exit(
     error: u8,
     caller_site: u64,
 ) -> Stopped<u8> {
+    if let Some(site) = unsafe { crate::continuation::binding::take_bound(ctx, 18) } {
+        return unsafe { scope_exit::poll(ctx, word, error, caller_site, None, site) };
+    }
     unsafe { exit_scope(ctx, word, error, caller_site, None) }
 }
 
@@ -23,6 +26,9 @@ pub(crate) unsafe fn scope_exit_until(
     caller_site: u64,
     out: *mut u8,
 ) -> Stopped<u8> {
+    if let Some(site) = unsafe { crate::continuation::binding::take_bound(ctx, 19) } {
+        return unsafe { scope_exit::poll(ctx, word, error, caller_site, Some(out), site) };
+    }
     unsafe { exit_scope(ctx, word, error, caller_site, Some(out)) }
 }
 
@@ -35,7 +41,10 @@ unsafe fn exit_scope(
 ) -> Stopped<u8> {
     let operation = scope_exit::start(ctx, word, error);
     loop {
-        match unsafe { scope_exit::drive(ctx, operation, out) }? {
+        match unsafe { scope_exit::drive(ctx, operation, out, false) }? {
+            scope_exit::Step::Admission | scope_exit::Step::Cut => {
+                unreachable!("stackful admission completes synchronously")
+            }
             scope_exit::Step::Wait(wait) => {
                 unsafe { try_block(&mut *ctx, wait, false, caller_site) }?;
             }
@@ -49,6 +58,7 @@ unsafe fn exit_scope(
     }
 }
 
+pub(in crate::tasks) mod scope_enter;
 pub(in crate::tasks) mod scope_exit;
 
 /// Take a holding child's result slot for its owner to resume the rest.
@@ -476,7 +486,10 @@ pub(crate) unsafe fn spawn(
 
 /// # Safety
 /// The role is held and out is writable for the scope word.
-pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<()> {
+pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<u8> {
+    if let Some(site) = unsafe { crate::continuation::binding::take_bound(ctx, 16) } {
+        return unsafe { scope_enter::poll(ctx, out, None, site) };
+    }
     super::record::begin(ctx);
     let (index, current, row) = prepare_scope(ctx, None);
     let generation = row.generation;
@@ -484,7 +497,8 @@ pub(crate) unsafe fn scope_enter(ctx: *mut TaskCtx, out: *mut u64) -> Stopped<()
         role::with_held(ctx, |s| install_scope(s, index, current, row));
         out.write(handle(index, generation));
     })?;
-    unsafe { try_yield(&mut *ctx) }
+    unsafe { try_yield(&mut *ctx) }?;
+    Ok(STATUS_OK)
 }
 
 /// # Safety
@@ -493,7 +507,10 @@ pub(crate) unsafe fn scope_enter_until(
     ctx: *mut TaskCtx,
     out: *mut u64,
     deadline: *const [u64; 2],
-) -> Stopped<()> {
+) -> Stopped<u8> {
+    if let Some(site) = unsafe { crate::continuation::binding::take_bound(ctx, 17) } {
+        return unsafe { scope_enter::poll(ctx, out, Some(deadline.read()), site) };
+    }
     let [clock, at] = unsafe { deadline.read() };
     super::record::begin(ctx);
     let (index, current, row) = prepare_scope(
@@ -525,7 +542,8 @@ pub(crate) unsafe fn scope_enter_until(
         });
         out.write(handle(index, generation));
     })?;
-    unsafe { try_yield(&mut *ctx) }
+    unsafe { try_yield(&mut *ctx) }?;
+    Ok(STATUS_OK)
 }
 
 fn prepare_scope(ctx: *mut TaskCtx, deadline: Option<ScopeDeadline>) -> (u32, u32, Scope) {

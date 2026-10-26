@@ -9,6 +9,7 @@
 //! an abandoned task reclaims bookkeeping without executing language cleanup.
 
 use super::*;
+use crate::continuation::binding::{self, BoundSite};
 use registry::ScopeKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +35,7 @@ enum Phase {
 
 pub(in crate::tasks) struct Operation {
     key: Key,
+    binding: Option<BoundSite>,
     scope: ScopeKey,
     phase: Phase,
     error: u8,
@@ -49,6 +51,8 @@ pub(in crate::tasks) struct Operation {
 }
 
 pub(super) enum Step {
+    Admission,
+    Cut,
     Wait(Wait),
     Rest(TaskKey),
     Yield,
@@ -73,6 +77,7 @@ pub(super) fn start(ctx: *mut TaskCtx, word: u64, error: u8) -> Key {
         };
         row.scope_exits.push(Operation {
             key,
+            binding: None,
             scope,
             phase: Phase::Begin,
             error,
@@ -125,16 +130,42 @@ fn inspect<R>(
     role::with_role(ctx, |s| with(s, key, f))
 }
 
+/// Recreate one bounded action from the owned phase. A rejected admission has
+/// no effects and returns with every encoder/slot loan released.
+fn publish<T>(
+    ctx: *mut TaskCtx,
+    leave: bool,
+    phase: super::super::Phase,
+    action: impl FnOnce(Option<&mut hirsel_free::concurrent::Writer<'_, '_>>) -> T,
+) -> Stopped<Option<T>> {
+    if leave {
+        super::super::record::poll_publish(ctx, phase, action)
+    } else {
+        super::super::record::publish(ctx, phase, action).map(Some)
+    }
+}
+
 /// Drive committed phases until the adapter must wait, call one child rest,
 /// yield, or consume completion. Recording and home bridges remain stackful
 /// here; none of their Rust loans may escape as Pending.
 /// # Safety
 /// The running task owns this invocation and holds the role.
-pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) -> Stopped<Step> {
+pub(super) unsafe fn drive(
+    ctx: *mut TaskCtx,
+    key: Key,
+    out: Option<*mut u8>,
+    leave: bool,
+) -> Stopped<Step> {
     loop {
         match inspect(ctx, key, |_, op| op.phase) {
             Phase::Begin => {
-                super::super::record::begin(ctx);
+                if leave {
+                    if !super::super::record::begin_entered(ctx) {
+                        return Ok(Step::Cut);
+                    }
+                } else {
+                    super::super::record::begin(ctx);
+                }
                 inspect(ctx, key, |s, op| {
                     if op.error != 0 || unsafe { (*ctx).failure.active() } {
                         for child in s.scope(op.scope.slot).children.clone() {
@@ -145,7 +176,7 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) ->
                 });
             }
             Phase::Enter => {
-                super::super::record::publish(ctx, super::super::Phase::Entered, |_| unsafe {
+                if publish(ctx, leave, super::super::Phase::Entered, |_| unsafe {
                     role::with_held(ctx, |s| {
                         with(s, key, |s, op| {
                             assert_eq!(s.task(key.owner.slot).scopes.pop(), Some(op.scope.slot));
@@ -156,7 +187,11 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) ->
                             op.phase = Phase::Settle;
                         })
                     })
-                })?;
+                })?
+                .is_none()
+                {
+                    return Ok(Step::Admission);
+                }
             }
             Phase::Settle => {
                 let wait = inspect(ctx, key, |s, op| {
@@ -261,39 +296,38 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) ->
             }
             Phase::Retire => {
                 let replay = super::super::replay::token(ctx);
-                let publication = super::super::record::publish(
-                    ctx,
-                    super::super::Phase::Done,
-                    |writer| unsafe {
-                        role::with_held(ctx, |s| {
-                            with(s, key, |s, op| {
-                                let mut expired =
-                                    s.scope(op.scope.slot).deadline.as_ref().map(|d| d.expired);
-                                if let Some(value) = expired.as_mut() {
-                                    if let Some(writer) = writer {
-                                        writer.expired(*value);
-                                    } else if let Some(replay) = &replay {
-                                        *value = replay.expired(*value)?;
-                                    }
+                let publication = publish(ctx, leave, super::super::Phase::Done, |writer| unsafe {
+                    role::with_held(ctx, |s| {
+                        with(s, key, |s, op| {
+                            let mut expired =
+                                s.scope(op.scope.slot).deadline.as_ref().map(|d| d.expired);
+                            if let Some(value) = expired.as_mut() {
+                                if let Some(writer) = writer {
+                                    writer.expired(*value);
+                                } else if let Some(replay) = &replay {
+                                    *value = replay.expired(*value)?;
                                 }
-                                for child in op.children.iter().rev() {
-                                    assert_eq!(s.key(child.slot), *child);
-                                    let chain = s.task(child.slot).failure.take();
-                                    op.retired.push((s.retire_task(child.slot), chain));
-                                }
-                                op.retired_scope = Some(s.take_scope(op.scope.slot));
-                                op.expired = expired.unwrap_or(false);
-                                if let Some(out) = out {
-                                    out.write(u8::from(op.expired));
-                                }
-                                op.phase = Phase::Merge;
-                                Ok(())
-                            })
+                            }
+                            for child in op.children.iter().rev() {
+                                assert_eq!(s.key(child.slot), *child);
+                                let chain = s.task(child.slot).failure.take();
+                                op.retired.push((s.retire_task(child.slot), chain));
+                            }
+                            op.retired_scope = Some(s.take_scope(op.scope.slot));
+                            op.expired = expired.unwrap_or(false);
+                            if let Some(out) = out {
+                                out.write(u8::from(op.expired));
+                            }
+                            op.phase = Phase::Merge;
+                            Ok(())
                         })
-                    },
-                );
+                    })
+                });
                 drop(replay);
-                publication??;
+                match publication? {
+                    Some(result) => result?,
+                    None => return Ok(Step::Admission),
+                }
             }
             Phase::Merge => {
                 // No stop-aware accessor between taking the chains and
@@ -740,3 +774,105 @@ mod failure_tests {
         }
     }
 }
+
+/// Drive the same installed exit after a certified runtime rebind. The record
+/// survives lexical pop and context relocation; resolving the old scope word
+/// again after retirement is forbidden.
+/// # Safety
+/// The native caller consumed its typed BoundSite and retains exact roots and
+/// ABI outputs in the compact frame for the whole entered invocation.
+pub(super) unsafe fn poll(
+    ctx: *mut TaskCtx,
+    word: u64,
+    error: u8,
+    caller_site: u64,
+    out: Option<*mut u8>,
+    site: BoundSite,
+) -> Stopped<u8> {
+    let existing = role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me)
+            .scope_exits
+            .last()
+            .and_then(|op| (op.binding == Some(site)).then_some(op.key))
+    });
+    let key = match existing {
+        Some(key) => key,
+        None => {
+            let key = start(ctx, word, error);
+            inspect(ctx, key, |_, op| op.binding = Some(site));
+            key
+        }
+    };
+    // The only producer of this flag is this invocation's previous Pending.
+    let _ = compact::waited(ctx);
+    loop {
+        let leave = unsafe { binding::can_leave(ctx, site) }
+            && out.is_none_or(|out| compact::contains_frame(ctx, out as usize, 1));
+        let step = match unsafe { drive(ctx, key, out, leave) } {
+            Err(stop) if leave && super::super::replay::cut_rejection(ctx, &stop) => Step::Cut,
+            result => result?,
+        };
+        match step {
+            Step::Admission => return Ok(crate::STATUS_SUSPENDED),
+            Step::Cut => {
+                unsafe { park_left_at(ctx, Wait::Final, caller_site) }?;
+                compact::wait(ctx);
+                return Ok(crate::STATUS_SUSPENDED);
+            }
+            Step::Wait(wait) if leave => {
+                #[cfg(feature = "diagnostic")]
+                crate::compact_trace::runtime_wait(
+                    site.task.slot,
+                    site.state,
+                    site.kind,
+                    "settle",
+                    site.invocation,
+                );
+                unsafe { park_left_at(ctx, wait, caller_site) }?;
+                compact::wait(ctx);
+                return Ok(crate::STATUS_SUSPENDED);
+            }
+            Step::Wait(wait) => unsafe { try_block(&mut *ctx, wait, false, caller_site) }?,
+            Step::Rest(child) if leave => {
+                #[cfg(feature = "diagnostic")]
+                crate::compact_trace::runtime_wait(
+                    site.task.slot,
+                    site.state,
+                    site.kind,
+                    "rest",
+                    site.invocation,
+                );
+                role::with_role(ctx, |s| {
+                    assert_eq!(s.key(child.slot), child);
+                    assert!(readiness::saved(s, child.slot));
+                    let me = s.current;
+                    s.task(me).state = State::Parked;
+                    let row = s.task(child.slot);
+                    assert_eq!(row.state, State::Holding);
+                    assert!(row.handoff.replace(me).is_none());
+                    row.state = State::Ready;
+                    s.runnable.push_back(child.slot);
+                });
+                compact::wait(ctx);
+                unsafe { super::super::dispatch_ready(ctx) };
+                return Ok(crate::STATUS_SUSPENDED);
+            }
+            Step::Rest(child) => unsafe { hand_off(&mut *ctx, child.slot) },
+            Step::Yield => {
+                let pending = unsafe { super::super::try_yield_entered(&mut *ctx, leave) }?;
+                yielded(ctx, key);
+                if pending {
+                    return Ok(crate::STATUS_SUSPENDED);
+                }
+            }
+            Step::Complete { status } => {
+                unsafe { binding::complete_bound(ctx, site) };
+                return Ok(status);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod compact_tests;

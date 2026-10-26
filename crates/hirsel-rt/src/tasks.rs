@@ -222,6 +222,7 @@ struct Task {
     /// Entered Free scope exits retain their cursor and detached runtime rows
     /// independently of the fiber. Nested runtime calls use distinct records.
     scope_exits: Vec<free::lifecycle::scope_exit::Operation>,
+    scope_entries: Vec<free::lifecycle::scope_enter::Entry>,
     scope_exit_generation: u64,
     code: Option<(TaskCode, *mut Header, u64)>,
     slot: Option<Slot>,
@@ -997,6 +998,7 @@ impl Task {
             shield: 0,
             scopes: Vec::new(),
             scope_exits: Vec::new(),
+            scope_entries: Vec::new(),
             scope_exit_generation: 0,
             code: None,
             slot: None,
@@ -2673,13 +2675,20 @@ unsafe fn block(ctx: &mut TaskCtx, wait: Wait, yielded: bool, site: u64) {
 /// As for [`try_block`]; the caller returns `STATUS_SUSPENDED` to its
 /// boundary call.
 pub(crate) unsafe fn park_left(ctx: *mut TaskCtx, wait: Wait) -> Stopped<()> {
+    unsafe { park_left_at(ctx, wait, 0) }
+}
+
+/// Park a certified entered operation, retaining its original failure site.
+/// # Safety
+/// As for park_left; the operation owns its wait and retained invocation.
+pub(crate) unsafe fn park_left_at(ctx: *mut TaskCtx, wait: Wait, site: u64) -> Stopped<()> {
     // SAFETY: the running task owns this entry until its suspension or return.
     let _role = unsafe { role::Guard::new(ctx) };
     crate::stop::observe(ctx)?;
     unsafe {
         role::with_held(ctx, |t| {
             let me = t.current;
-            t.task(me).wait_site = 0;
+            t.task(me).wait_site = site;
             t.park(wait);
         });
         free::dispatch_ready(ctx);
@@ -3013,11 +3022,15 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_enter");
     if ordered::engine::on(ctx) {
-        return unsafe { crate::stop::check(ctx, ordered::lifecycle::scope_enter(ctx, out)) };
+        let binding = unsafe { crate::continuation::binding::take_bound(ctx, 16) };
+        let status = unsafe { crate::stop::check(ctx, ordered::lifecycle::scope_enter(ctx, out)) };
+        if let Some(binding) = binding {
+            unsafe { crate::continuation::binding::complete_bound(ctx, binding) };
+        }
+        return status;
     }
     if free::enabled(ctx) {
-        unsafe { crate::stop::check(ctx, free::lifecycle::scope_enter(ctx, out)) };
-        return STATUS_OK;
+        return unsafe { crate::stop::check(ctx, free::lifecycle::scope_enter(ctx, out)) };
     }
     crate::free::enter(ctx, Phase::Done);
     let (index, generation) = open_scope(ctx, None);
@@ -3075,16 +3088,22 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_enter_until(
     let _segment = profile::Operation::new(ctx, "task_scope_enter_until");
     // SAFETY: caller contract.
     if ordered::engine::on(ctx) {
-        return unsafe {
+        let binding = unsafe { crate::continuation::binding::take_bound(ctx, 17) };
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::scope_enter_until(ctx, out, deadline),
             )
         };
+        if let Some(binding) = binding {
+            unsafe { crate::continuation::binding::complete_bound(ctx, binding) };
+        }
+        return status;
     }
     if free::enabled(ctx) {
-        unsafe { crate::stop::check(ctx, free::lifecycle::scope_enter_until(ctx, out, deadline)) };
-        return STATUS_OK;
+        return unsafe {
+            crate::stop::check(ctx, free::lifecycle::scope_enter_until(ctx, out, deadline))
+        };
     }
     let [clock, at] = unsafe { deadline.read() };
     crate::free::enter(ctx, Phase::Done);
@@ -3141,12 +3160,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit");
     if ordered::engine::on(ctx) {
-        return unsafe {
+        let binding = unsafe { crate::continuation::binding::take_bound(ctx, 18) };
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::scope_exit(ctx, scope, error, caller_site),
             )
         };
+        if let Some(binding) = binding {
+            unsafe { crate::continuation::binding::complete_bound(ctx, binding) };
+        }
+        return status;
     }
     if free::enabled(ctx) {
         return unsafe {
@@ -3180,12 +3204,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_scope_exit_until(
     #[cfg(feature = "measurement")]
     let _segment = profile::Operation::new(ctx, "task_scope_exit_until");
     if ordered::engine::on(ctx) {
-        return unsafe {
+        let binding = unsafe { crate::continuation::binding::take_bound(ctx, 19) };
+        let status = unsafe {
             crate::stop::check(
                 ctx,
                 ordered::lifecycle::scope_exit_until(ctx, scope, error, caller_site, out),
             )
         };
+        if let Some(binding) = binding {
+            unsafe { crate::continuation::binding::complete_bound(ctx, binding) };
+        }
+        return status;
     }
     if free::enabled(ctx) {
         return unsafe {
