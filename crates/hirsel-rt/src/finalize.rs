@@ -84,6 +84,10 @@ pub(crate) unsafe fn run_close(
     anchor: u64,
     operation_site: u64,
 ) -> u8 {
+    // This close step owns its semantic entry before dispatching a built-in
+    // or adapter. shielded retains cancellation scope and lends the role only
+    // while the chosen cleanup runs; every branch shares this outer guard.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if handle & crate::sync::MUTEX != 0 && handle & crate::channels::ENDPOINT == 0 {
         // SAFETY: the wrapper owns the cell; detach before invoking user code.
         return shielded(ctx, |ctx| unsafe {
