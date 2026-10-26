@@ -2763,3 +2763,78 @@ fn ownership_trace_once_captures_survive_all_recipes_but_still_refuse_native_emi
         "{refusal}"
     );
 }
+
+#[test]
+fn ownership_trace_once_invocation_borrows_environment_and_retains_both_caller_cleanups() {
+    use hirsel_lir::abi_types::{CallMultiplicity, CallableShape};
+    let mut t = Lir::<hirsel_lir::stage::Value>::new(&[(Passing::Take, l::ERASED_ONCE)], None);
+    let slot = t.slot(l::ERASED_ONCE, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(ENTRY, slot, &[], &[support::Undo::Drop(slot)]);
+    let loan = t.loan(address, false);
+    t.begin(ENTRY, loan);
+    let view = t.read(ENTRY, address, version, ReadMode::Borrow, Some(loan));
+    let abi = t.abi_shaped(CallableShape::Closure, &[], None);
+    t.table.fn_abis[abi.0 as usize].multiplicity = CallMultiplicity::Once;
+    let cleanup = [support::Undo::End(loan), support::Undo::Drop(slot)];
+    let next = t.cleanup_exit(&cleanup, None);
+    let failure = t.cleanup(&cleanup);
+    t.call_to(
+        ENTRY,
+        Callee::Indirect(view),
+        abi,
+        &[],
+        None,
+        &[],
+        (next, &[]),
+        failure,
+    );
+    let (raw, table, _) = t.finish();
+    let unit = checked_native_fixture(raw, &table);
+    let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+    assert!(
+        !plan
+            .observations
+            .iter()
+            .any(|row| matches!(row.point, Point::CallEntered(_) | Point::CallReturned(_)))
+    );
+    assert!(
+        !plan
+            .observations
+            .iter()
+            .any(|row| row.marker.kind == Kind::Create)
+    );
+    let drop_count = unit
+        .unit()
+        .instructions
+        .iter()
+        .filter(|row| matches!(row, Inst::Drop { .. }))
+        .count();
+    assert!(drop_count >= 2);
+    assert_eq!(
+        plan.observations
+            .iter()
+            .filter(|row| row.marker.kind == Kind::Drop)
+            .count(),
+        drop_count
+    );
+    let mut many = table.clone();
+    many.fn_abis[abi.0 as usize].multiplicity = CallMultiplicity::Many;
+    assert!(
+        native::LeafPlan::prepare_value(&unit, &many)
+            .unwrap_err()
+            .contains("indirect call transport")
+    );
+    let mut forged = plan.clone();
+    let dropped = forged
+        .observations
+        .iter_mut()
+        .find(|row| row.marker.kind == Kind::Drop)
+        .unwrap();
+    dropped.marker.token = Location::Value(view);
+    assert!(matches!(
+        check(unit.unit(), &forged),
+        Err(Error::InvalidBinding(_))
+    ));
+}

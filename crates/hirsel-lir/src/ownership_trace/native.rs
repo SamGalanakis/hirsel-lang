@@ -95,7 +95,7 @@ impl LeafPlan {
             // Native encoding still refuses it until environment transport
             // has an independently checked representation.
             let carrier_move = source_only
-                && kind == Kind::Move
+                && matches!(kind, Kind::Move | Kind::Drop)
                 && layouts
                     .layout(layout)
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
@@ -379,7 +379,17 @@ impl LeafPlan {
             match unit.terminators[b.index()] {
                 Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
-                    if !matches!(call.callee, Callee::Direct(_))
+                    // The call borrows its callable holder; C keeps that
+                    // holder alive on both exits. Only actual capture takes
+                    // move lineage. Native target/environment binding is
+                    // still required before emission can accept this call.
+                    let source_once = source_only
+                        && call.callee.value().is_some()
+                        && layouts.fn_abis.get(call.abi.0 as usize).is_some_and(|abi| {
+                            abi.environment
+                                && abi.multiplicity == crate::abi_types::CallMultiplicity::Once
+                        });
+                    if (!matches!(call.callee, Callee::Direct(_)) && !source_once)
                         || call.pretransfer_failure.is_some()
                     {
                         return Err("native ownership tracing: mutable or indirect call transport is not implemented".into());
