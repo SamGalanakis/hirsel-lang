@@ -401,6 +401,25 @@ fn witness(kind: u32, concurrent: bool, delayed: bool, mode: u8, cut: bool) {
             );
         }
         assert_eq!(read.deliveries.load(Ordering::Relaxed), usize::from(!cut));
+
+        if mode == 6 {
+            let jobs = read.jobs.lock().unwrap();
+            let jobs = jobs.as_ref().unwrap();
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while jobs.stats().reclaimed.load(Ordering::Acquire) != 1 || jobs.held() != 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "late read job not reclaimed"
+                );
+                std::thread::yield_now();
+            }
+            assert_eq!(jobs.stats().submitted.load(Ordering::Acquire), 1);
+            assert_eq!(jobs.stats().returned.load(Ordering::Acquire), 1);
+            assert_eq!(jobs.stats().delivered.load(Ordering::Acquire), 0);
+            assert_eq!(jobs.stats().quarantined.load(Ordering::Acquire), 1);
+        }
+        // The queued job can enter its adapter after the run has returned.
+        // Reclamation above proves that callback completed before inspecting it.
         let calls = read.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
@@ -417,22 +436,6 @@ fn witness(kind: u32, concurrent: bool, delayed: bool, mode: u8, cut: bool) {
             assert!(finishes.iter().all(|token| *token == calls[0]));
         } else {
             assert_eq!(*finishes, vec![calls[0]]);
-        }
-        if mode == 6 {
-            let jobs = read.jobs.lock().unwrap();
-            let jobs = jobs.as_ref().unwrap();
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while jobs.stats().reclaimed.load(Ordering::Acquire) != 1 || jobs.held() != 0 {
-                assert!(
-                    std::time::Instant::now() < until,
-                    "late read job not reclaimed"
-                );
-                std::thread::yield_now();
-            }
-            assert_eq!(jobs.stats().submitted.load(Ordering::Acquire), 1);
-            assert_eq!(jobs.stats().returned.load(Ordering::Acquire), 1);
-            assert_eq!(jobs.stats().delivered.load(Ordering::Acquire), 0);
-            assert_eq!(jobs.stats().quarantined.load(Ordering::Acquire), 1);
         }
     }
 }
