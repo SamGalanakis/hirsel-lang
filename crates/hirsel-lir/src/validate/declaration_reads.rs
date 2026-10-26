@@ -31,6 +31,118 @@ pub(super) struct StructuralRead {
     output: ContentHash,
 }
 hirsel_codec::snapshot_struct!(StructuralRead { source, output });
+/// Source expectations are independently read and checked against their witness.
+/// Neither the candidate's tables nor its header can manufacture this input.
+#[derive(Clone, Debug)]
+struct SealedRead {
+    definition: DefPath,
+    instance: ContentHash,
+    witness: crate::sealed_payload_source::SealSourceWitness,
+}
+hirsel_codec::snapshot_struct!(SealedRead {
+    definition,
+    instance,
+    witness
+});
+
+#[derive(Clone, Debug)]
+struct DescriptorRead {
+    source: NativeType,
+    owner: Option<(DefPath, ContentHash)>,
+    output: ContentHash,
+}
+hirsel_codec::snapshot_struct!(DescriptorRead {
+    source,
+    owner,
+    output
+});
+
+fn source_read(
+    declarations: &dyn OperationDeclarations,
+    definition: &DefPath,
+    instance: ContentHash,
+) -> Option<SealedRead> {
+    let witness = declarations.seal_source_witness(definition, instance)?;
+    let events = declarations.seal_events(definition, instance)?;
+    let payloads = declarations.seal_payloads(definition, instance)?;
+    if witness.definition != *definition
+        || witness.instance != instance
+        || witness
+            != crate::sealed_payload_source::SealSourceWitness::from_expectations(
+                witness.source,
+                definition.clone(),
+                witness.implementation_revision,
+                instance,
+                &events,
+                &payloads,
+            )
+    {
+        return None;
+    }
+    Some(SealedRead {
+        definition: definition.clone(),
+        instance,
+        witness,
+    })
+}
+
+fn expectation_identity<T: hirsel_codec::Snapshot>(value: &T) -> ContentHash {
+    ContentHash::of_bytes(hirsel_codec::to_text(value).as_bytes())
+}
+
+// Follow objects::table_ids_mut's complete descriptor walk. Hash physical
+// references by LayoutKey so a portable Binding's local numbering is irrelevant.
+fn descriptor_identity(
+    descriptor: &crate::sealed::SealDescriptor,
+    table: &LayoutTable,
+) -> Option<ContentHash> {
+    descriptor.check(table).ok()?;
+    let keys = crate::LayoutKeys::new(table);
+    let mut descriptor = descriptor.clone();
+    descriptor
+        .access
+        .sort_by_key(|access| keys.key(access.layout));
+    let mut references = Vec::new();
+    let mut erase = |layout: &mut crate::LayoutId| {
+        references.push(keys.key(*layout));
+        *layout = crate::LayoutId(0);
+    };
+    erase(&mut descriptor.root_layout);
+    for node in &mut descriptor.projection.nodes {
+        for layout in node.layouts_mut() {
+            erase(layout);
+        }
+    }
+    for access in &mut descriptor.access {
+        erase(&mut access.layout);
+        crate::layout_keys::scan_references_mut(&mut access.scan, &mut erase);
+    }
+    Some(expectation_identity(&(descriptor, references)))
+}
+impl DescriptorRead {
+    fn matches(
+        &self,
+        declarations: &dyn OperationDeclarations,
+        table: &LayoutTable,
+        target: &TargetSpec,
+    ) -> bool {
+        let output = match &self.owner {
+            Some((definition, instance)) => declarations.seal_descriptor_for_source(
+                definition,
+                *instance,
+                &self.source,
+                table,
+                target,
+            ),
+            None => declarations.seal_descriptor(&self.source, table, target),
+        };
+        output
+            .ok()
+            .and_then(|descriptor| descriptor_identity(&descriptor, table))
+            == Some(self.output)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AdapterRead {
     adapter: crate::ir::Symbol,
@@ -86,6 +198,8 @@ pub(super) struct Reads {
     pretransfer: Option<Vec<AdapterRead>>,
     unavailable_events: Vec<(DefPath, ContentHash)>,
     unavailable_payloads: Vec<(DefPath, ContentHash)>,
+    sealed: Vec<SealedRead>,
+    descriptors: Vec<DescriptorRead>,
 }
 hirsel_codec::snapshot_struct!(Reads {
     invocation_required,
@@ -95,7 +209,9 @@ hirsel_codec::snapshot_struct!(Reads {
     structural,
     pretransfer,
     unavailable_events,
-    unavailable_payloads
+    unavailable_payloads,
+    sealed,
+    descriptors
 });
 
 fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>) -> ContentHash {
@@ -125,7 +241,11 @@ impl Reads {
         declarations: &dyn OperationDeclarations,
         target: &TargetSpec,
     ) -> bool {
-        self.unavailable_events
+        self.sealed.iter().all(|read| {
+            source_read(declarations, &read.definition, read.instance)
+                .is_some_and(|current| current.witness == read.witness)
+        }) && self
+            .unavailable_events
             .iter()
             .all(|(definition, instance)| declarations.seal_events(definition, *instance).is_none())
             && self
@@ -151,7 +271,7 @@ impl Reads {
             })
     }
     pub(super) fn has_structural(&self) -> bool {
-        !self.structural.is_empty()
+        !self.structural.is_empty() || !self.descriptors.is_empty()
     }
     pub(super) fn matches_structural(
         &self,
@@ -159,11 +279,14 @@ impl Reads {
         table: &LayoutTable,
         target: &TargetSpec,
     ) -> bool {
-        self.structural.iter().all(|read| {
-            declarations
-                .structural_access(&read.source, table, target)
-                .is_ok_and(|plan| structural_identity(&plan) == read.output)
-        })
+        self.descriptors
+            .iter()
+            .all(|read| read.matches(declarations, table, target))
+            && self.structural.iter().all(|read| {
+                declarations
+                    .structural_access(&read.source, table, target)
+                    .is_ok_and(|plan| structural_identity(&plan) == read.output)
+            })
     }
 }
 
@@ -174,7 +297,9 @@ struct Observations {
     invocations: BTreeMap<DefPath, ContentHash>,
     bodies: BTreeMap<(DefPath, ContentHash), Option<u32>>,
     structural: BTreeMap<String, NativeType>,
-    unsupported: bool,
+    available_events: BTreeMap<(DefPath, ContentHash), ContentHash>,
+    available_payloads: BTreeMap<(DefPath, ContentHash), ContentHash>,
+    descriptors: BTreeMap<String, DescriptorRead>,
     unavailable_events: BTreeSet<(DefPath, ContentHash)>,
     unavailable_payloads: BTreeSet<(DefPath, ContentHash)>,
     pretransfer: bool,
@@ -197,7 +322,35 @@ impl<'a> Observed<'a> {
         target: &TargetSpec,
     ) -> Option<Reads> {
         let reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
-        if reads.unsupported {
+        let mut sealed = Vec::new();
+        let available = reads
+            .available_events
+            .keys()
+            .chain(reads.available_payloads.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for (definition, instance) in available {
+            let read = source_read(self.declarations, &definition, instance)?;
+            let events = self.declarations.seal_events(&definition, instance)?;
+            let payloads = self.declarations.seal_payloads(&definition, instance)?;
+            if reads
+                .available_events
+                .get(&(definition.clone(), instance))
+                .is_some_and(|hash| *hash != expectation_identity(&events))
+                || reads
+                    .available_payloads
+                    .get(&(definition, instance))
+                    .is_some_and(|hash| *hash != expectation_identity(&payloads))
+            {
+                return None;
+            }
+            sealed.push(read);
+        }
+        let descriptors = reads.descriptors.values().cloned().collect::<Vec<_>>();
+        if !descriptors
+            .iter()
+            .all(|read| read.matches(self.declarations, table, target))
+        {
             return None;
         }
         let structural = reads
@@ -231,6 +384,8 @@ impl<'a> Observed<'a> {
             None
         };
         Some(Reads {
+            sealed,
+            descriptors,
             unavailable_events: reads.unavailable_events.iter().cloned().collect(),
             unavailable_payloads: reads.unavailable_payloads.iter().cloned().collect(),
             pretransfer,
@@ -257,6 +412,33 @@ impl<'a> Observed<'a> {
         })
     }
 }
+impl Observed<'_> {
+    fn observe_descriptor(
+        &self,
+        source: &NativeType,
+        owner: Option<(DefPath, ContentHash)>,
+        descriptor: &crate::sealed::SealDescriptor,
+        table: &LayoutTable,
+    ) -> Result<(), LayoutError> {
+        let output = descriptor_identity(descriptor, table).ok_or_else(|| {
+            LayoutError::Invalid("invalid independently reconstructed seal descriptor".into())
+        })?;
+        let key = hirsel_codec::to_text(&(source.clone(), owner.clone()));
+        self.reads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .descriptors
+            .insert(
+                key,
+                DescriptorRead {
+                    source: source.clone(),
+                    owner,
+                    output,
+                },
+            );
+        Ok(())
+    }
+}
 impl OperationDeclarations for Observed<'_> {
     fn seal_source_witness(
         &self,
@@ -279,9 +461,10 @@ impl OperationDeclarations for Observed<'_> {
                 .unavailable_events
                 .insert((definition.clone(), instance));
         } else {
-            // Available receipt observations still require their own complete
-            // durable source/custody binding; ordinary None replay grants none.
-            reads.unsupported = true;
+            reads.available_events.insert(
+                (definition.clone(), instance),
+                expectation_identity(output.as_ref().unwrap()),
+            );
         }
         output
     }
@@ -299,11 +482,41 @@ impl OperationDeclarations for Observed<'_> {
                 .unavailable_payloads
                 .insert((definition.clone(), instance));
         } else {
-            // Available receipt observations still require their own complete
-            // durable source/custody binding; ordinary None replay grants none.
-            reads.unsupported = true;
+            reads.available_payloads.insert(
+                (definition.clone(), instance),
+                expectation_identity(output.as_ref().unwrap()),
+            );
         }
         output
+    }
+    fn seal_descriptor(
+        &self,
+        source: &NativeType,
+        table: &LayoutTable,
+        target: &TargetSpec,
+    ) -> Result<crate::sealed::SealDescriptor, LayoutError> {
+        let descriptor = self.declarations.seal_descriptor(source, table, target)?;
+        self.observe_descriptor(source, None, &descriptor, table)?;
+        Ok(descriptor)
+    }
+    fn seal_descriptor_for_source(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+        source: &NativeType,
+        table: &LayoutTable,
+        target: &TargetSpec,
+    ) -> Result<crate::sealed::SealDescriptor, LayoutError> {
+        let descriptor = self
+            .declarations
+            .seal_descriptor_for_source(definition, instance, source, table, target)?;
+        self.observe_descriptor(
+            source,
+            Some((definition.clone(), instance)),
+            &descriptor,
+            table,
+        )?;
+        Ok(descriptor)
     }
     fn pretransfer_adapters(&self) -> &[crate::pretransfer::AdapterReference] {
         self.reads

@@ -1173,3 +1173,200 @@ fn sealed_runtime_drop_33_descriptor_releases_exact_owner_with_shifted_offset() 
     );
     descriptor.check_finalizers(&table).unwrap();
 }
+
+#[test]
+fn sealed_native_cache_33_replays_independent_source_and_descriptor_reads() {
+    use hirsel_artifact_store::Store;
+    use hirsel_lir::sealed_payload_source::SealSourceWitness;
+    use hirsel_lir::stage::{Ready, StageKind};
+    use hirsel_lir::validate::{Inputs, NativeCache, NativeEnvironment};
+    use std::sync::Arc;
+    struct Selected {
+        declarations: Declarations,
+        source: hirsel_syntax::ContentHash,
+        alter_descriptor: bool,
+        witness: bool,
+        fixed_witness: Option<SealSourceWitness>,
+        payloads: Vec<hirsel_lir::sealed_payload_source::SourcePayload>,
+    }
+    impl OperationDeclarations for Selected {
+        fn derive(
+            &self,
+            op: &OperationId,
+            args: &[OperationArgument],
+            target: &TargetSpec,
+        ) -> Result<(hirsel_lir::FnAbi, LayoutTable), hirsel_lir::layout::LayoutError> {
+            self.declarations.derive(op, args, target)
+        }
+        fn seal_events(
+            &self,
+            d: &hirsel_syntax::DefPath,
+            i: hirsel_syntax::ContentHash,
+        ) -> Option<Vec<SourceEvent>> {
+            self.declarations.seal_events(d, i)
+        }
+        fn seal_payloads(
+            &self,
+            _: &hirsel_syntax::DefPath,
+            _: hirsel_syntax::ContentHash,
+        ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
+            Some(self.payloads.clone())
+        }
+        fn seal_source_witness(
+            &self,
+            d: &hirsel_syntax::DefPath,
+            i: hirsel_syntax::ContentHash,
+        ) -> Option<SealSourceWitness> {
+            if !self.witness || *d != support::path("f") || i != support::hash("f instance") {
+                return None;
+            }
+            if let Some(witness) = &self.fixed_witness {
+                return Some(witness.clone());
+            }
+            Some(SealSourceWitness::from_expectations(
+                self.source,
+                support::path("f"),
+                support::hash("f source"),
+                support::hash("f instance"),
+                self.declarations.expected.as_ref()?,
+                &self.payloads,
+            ))
+        }
+        fn seal_descriptor_for_source(
+            &self,
+            d: &hirsel_syntax::DefPath,
+            i: hirsel_syntax::ContentHash,
+            root: &NativeType,
+            table: &LayoutTable,
+            target: &TargetSpec,
+        ) -> Result<hirsel_lir::sealed::SealDescriptor, hirsel_lir::layout::LayoutError> {
+            let mut descriptor = self
+                .declarations
+                .seal_descriptor_for_source(d, i, root, table, target)?;
+            if self.alter_descriptor {
+                descriptor.logical.facts[0].bytes = LogicalBytes::Bytes(99);
+            }
+            Ok(descriptor)
+        }
+    }
+    let (t, declarations, _, _) = transition_fixture();
+    let (unit, table, manifest) = t.finish();
+    let unit = unit.into_stage::<Ready>();
+    let mut selected = Selected {
+        declarations,
+        source: support::hash("independent source query"),
+        alter_descriptor: false,
+        witness: true,
+        fixed_witness: None,
+        payloads: vec![],
+    };
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("sealed-native-cache-33-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let local = Store::new(root.clone());
+    let cache = NativeCache::new(Arc::new(local.clone()), Some(local.clone()));
+    let subject = support::hash("sealed cache subject");
+    let policy = support::hash("sealed cache policy");
+    let inputs = Inputs {
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &selected,
+        discharge: None,
+        memo: Default::default(),
+    };
+    let (_, output) = cache
+        .validate_and_publish(subject, policy, unit.clone(), &inputs, &[], &[])
+        .unwrap();
+    let output = output.expect("actual sealed C must capture its independent declaration reads");
+    drop(cache);
+    // A fresh authority table must decode and recheck all durable sealed reads.
+    let cache = NativeCache::new(Arc::new(local.clone()), Some(local));
+    let lookup = |selected: &Selected| {
+        cache.lookup(
+            subject,
+            policy,
+            StageKind::Ready,
+            &NativeEnvironment {
+                target: &target,
+                manifest: &manifest,
+                operations: selected,
+                discharge: None,
+            },
+        )
+    };
+    let trace = hirsel_lir::construction::ValueTrace::default();
+    let observe = trace.enter();
+    assert!(
+        lookup(&selected).is_some(),
+        "portable layout rebinding preserves independently derived descriptor identity"
+    );
+    selected.alter_descriptor = true;
+    assert!(lookup(&selected).is_none());
+    selected.alter_descriptor = false;
+    selected.source = support::hash("changed independent source query");
+    assert!(lookup(&selected).is_none());
+    selected.source = support::hash("independent source query");
+    selected.fixed_witness =
+        selected.seal_source_witness(&support::path("f"), support::hash("f instance"));
+    selected.declarations.expected.as_mut().unwrap()[0]
+        .anchor
+        .statement += 1;
+    assert!(lookup(&selected).is_none());
+    selected.declarations.expected.as_mut().unwrap()[0]
+        .anchor
+        .statement -= 1;
+    selected
+        .payloads
+        .push(hirsel_lir::sealed_payload_source::SourcePayload {
+            root_type: NativeType::Primitive(hirsel_lir::operation::Primitive::U64),
+            recipe: hirsel_lir::sealed_payload_source::PayloadRecipe {
+                source: selected.declarations.expected.as_ref().unwrap()[0]
+                    .anchor
+                    .clone(),
+                operation: hirsel_lir::sealed_payload_source::PayloadOperation::Boundary,
+                inputs: vec![],
+            },
+        });
+    assert!(
+        lookup(&selected).is_none(),
+        "a stale witness cannot hide changed payload expectations"
+    );
+    selected.payloads.clear();
+    assert!(lookup(&selected).is_some());
+    selected.declarations.expected = None;
+    assert!(
+        lookup(&selected).is_none(),
+        "available source inventory cannot become unavailable"
+    );
+    assert_eq!(trace.totals(), Default::default());
+    drop(observe);
+    let (_, declarations, _, _) = transition_fixture();
+    selected.declarations = declarations;
+    selected.witness = false;
+    selected.fixed_witness = None;
+    let inputs = Inputs {
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &selected,
+        discharge: None,
+        memo: Default::default(),
+    };
+    assert!(
+        cache
+            .validate_output(
+                support::hash("missing independent witness"),
+                policy,
+                unit,
+                &inputs,
+                &[]
+            )
+            .unwrap()
+            .1
+            .is_none()
+    );
+    assert_eq!(output.stage(), StageKind::Ready);
+    let _ = std::fs::remove_dir_all(root);
+}
