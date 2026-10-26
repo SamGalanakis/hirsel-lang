@@ -3071,7 +3071,20 @@ mod timed_provider_tests {
             events: io.tape().to_vec(),
         };
         let text = crate::launch::render_recording(&record).unwrap();
-        assert_eq!(crate::launch::parse_recording(&text).unwrap(), record);
+        // Inspection preserves every representable field; the binary assertion
+        // below also requires the resource footprints it deliberately omits.
+        let inspected = crate::launch::Recording {
+            events: record
+                .events
+                .iter()
+                .map(|event| Event {
+                    resources: None,
+                    ..event.clone()
+                })
+                .collect(),
+            ..record.clone()
+        };
+        assert_eq!(crate::launch::parse_recording(&text).unwrap(), inspected);
         let mut binary = Vec::new();
         {
             let mut header = record.clone();
@@ -3095,7 +3108,8 @@ mod timed_provider_tests {
             }
             writer.finish().unwrap();
         }
-        assert_eq!(crate::tape_binary::parse(&binary).unwrap(), record);
+        let decoded = crate::tape_binary::parse(&binary).unwrap();
+        assert_eq!(decoded, record);
         let mut corrupt = binary.clone();
         *corrupt.last_mut().unwrap() ^= 1;
         assert!(crate::tape_binary::parse(&corrupt).is_err());
@@ -3108,7 +3122,7 @@ mod timed_provider_tests {
         ] {
             assert!(crate::launch::parse_recording_bytes(&bytes).is_err());
         }
-        let mut replay = replay(&grant, record.events);
+        let mut replay = replay(&grant, decoded.events);
         spawn(&mut replay);
         replay.enter(17);
         assert_eq!(
