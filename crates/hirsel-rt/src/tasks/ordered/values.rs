@@ -1603,6 +1603,7 @@ mod tests {
             request,
             completion,
             fault: None,
+            resources: None,
         };
         let directory = Request::Directory {
             io: 1,

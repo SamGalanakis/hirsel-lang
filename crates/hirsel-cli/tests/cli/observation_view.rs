@@ -38,6 +38,7 @@ fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
             request: Request::Stdout { io: 1 },
             completion: Completion::Handle(Ok(2)),
             fault: None,
+            resources: None,
         },
         Event {
             request: Request::Print {
@@ -46,6 +47,7 @@ fn offline_view_requires_capture_identity_and_writes_logical_perfetto() {
             },
             completion: Completion::Unit(Ok(())),
             fault: None,
+            resources: None,
         },
     ];
     std::fs::write(&tape, fixture_bytes(&events)).unwrap();

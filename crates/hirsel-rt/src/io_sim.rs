@@ -151,6 +151,17 @@ impl ReplayTape {
             }
         }
     }
+    /// An event without moving the decoded window: metadata queries never
+    /// advance or reorder replay.
+    fn peek(&self, index: usize) -> Option<std::borrow::Cow<'_, Event>> {
+        if let Some(event) = self.cached(index) {
+            return Some(std::borrow::Cow::Borrowed(event));
+        }
+        match self {
+            Self::Owned(_) => None,
+            Self::Binary { tape, .. } => tape.event(index).ok().map(std::borrow::Cow::Owned),
+        }
+    }
     fn cached(&self, index: usize) -> Option<&Event> {
         match self {
             Self::Owned(events) => events.get(index),
@@ -162,6 +173,98 @@ impl ReplayTape {
                 .find(|(at, _)| *at == index)
                 .map(|(_, event)| event),
         }
+    }
+}
+/// The resource graph a keyed recording declared (determinism.md, Resource
+/// footprints). Replay serves it instead of discovering host storage, and
+/// refuses a footprint the graph so far contradicts.
+#[derive(Clone, Debug, Default)]
+struct Resources {
+    /// Whether request events carry footprints, fixed by the first one.
+    declared: Option<bool>,
+    identities: std::collections::BTreeMap<u64, (crate::io_keys::Key, crate::io_keys::Kind)>,
+    keys: std::collections::BTreeSet<crate::io_keys::Key>,
+}
+impl Resources {
+    fn known(&self, key: crate::io_keys::Key) -> bool {
+        key.0 < crate::io_keys::FIRST_RESOURCE || self.keys.contains(&key)
+    }
+    /// Check one request event against the graph without changing it: no handle
+    /// changes identity, a split half names a known stream, every domain owner and
+    /// result handle is identified, and every key is a system key, an established
+    /// resource or one of this request's domains.
+    fn check(&self, event: &Event) -> Result<(), &'static str> {
+        use crate::io_keys::Kind;
+        if self
+            .declared
+            .is_some_and(|declared| declared != event.resources.is_some())
+        {
+            return Err("request events disagree on recorded footprints");
+        }
+        let Some(footprint) = &event.resources else {
+            return Ok(());
+        };
+        let mut identities = std::collections::BTreeMap::new();
+        let mut keys = std::collections::BTreeSet::new();
+        for &(handle, key, kind) in &footprint.identities {
+            if key.0 < crate::io_keys::FIRST_RESOURCE && key != crate::io_keys::COUPLED
+                || self
+                    .identities
+                    .get(&handle)
+                    .is_some_and(|prior| *prior != (key, kind))
+            {
+                return Err("recorded handle identity changed");
+            }
+            if let Kind::Half { stream } = kind
+                && !self.known(stream)
+                && !keys.contains(&stream)
+            {
+                return Err("recorded split half names an unknown stream");
+            }
+            identities.insert(handle, (key, kind));
+            keys.insert(key);
+        }
+        let identified =
+            |handle: &u64| identities.contains_key(handle) || self.identities.contains_key(handle);
+        for (key, owner, label) in &footprint.domains {
+            if label.is_empty() || !identified(owner) {
+                return Err("recorded domain has no identified owner");
+            }
+            keys.insert(*key);
+        }
+        if !matches!(
+            event.completion,
+            Completion::Blocked { .. } | Completion::Held
+        ) {
+            let mut result = Ok(event.completion.clone());
+            if let Ok(fields) = crate::io_observation::fields(&mut result)
+                && !fields.into_iter().flatten().all(|word| identified(word))
+            {
+                return Err("recorded result handle has no identity");
+            }
+        }
+        if footprint
+            .keys
+            .keys()
+            .iter()
+            .any(|(key, _)| !self.known(*key) && !keys.contains(key))
+        {
+            return Err("recorded key names no established resource");
+        }
+        Ok(())
+    }
+    /// Install a checked request event's footprint.
+    fn apply(&mut self, footprint: Option<&crate::io_keys::Footprint>) {
+        self.declared = Some(footprint.is_some());
+        let Some(footprint) = footprint else {
+            return;
+        };
+        for &(handle, key, kind) in &footprint.identities {
+            self.identities.insert(handle, (key, kind));
+            self.keys.insert(key);
+        }
+        self.keys
+            .extend(footprint.domains.iter().map(|(key, _, _)| *key));
     }
 }
 #[derive(Clone, Debug)]
@@ -192,6 +295,7 @@ pub struct SimIo {
     unanswered_connects: std::collections::BTreeSet<u64>,
     /// The recorded run instance (RUN-11).
     pub(crate) instance: Option<[u8; 16]>,
+    resources: Resources,
 }
 impl SimIo {
     pub fn set_env(&mut self, env: std::collections::BTreeMap<String, Option<String>>) {
@@ -247,6 +351,7 @@ impl SimIo {
             unanswered_connects: Default::default(),
             legacy_barrier_waits: false,
             instance: None,
+            resources: Resources::default(),
         }
     }
     pub fn from_binary(tree: Tree, tape: crate::tape_binary::Tape) -> Self {
@@ -399,6 +504,19 @@ impl SimIo {
     }
 }
 impl SimIo {
+    /// The recorded footprint of `request`: its next event before the call, or
+    /// the event it just consumed after it.
+    fn footprint(&self, request: &Request) -> Option<crate::io_keys::Footprint> {
+        let at = |index: usize| {
+            self.tape
+                .peek(index)
+                .filter(|event| event.request == *request)
+                .map(|event| event.resources.as_deref().cloned())
+        };
+        at(self.position)
+            .or_else(|| self.position.checked_sub(1).and_then(at))
+            .flatten()
+    }
     fn ready_tokens(&mut self) -> Result<Ready, AdapterError> {
         let mut tokens = Vec::new();
         while let Some(Request::Ready { wait, points }) =
@@ -489,6 +607,17 @@ impl Adapter for SimIo {
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         self.state.preflight(request)
     }
+    fn keys(&self, request: &Request) -> Option<crate::io_keys::KeySet> {
+        self.footprint(request).map(|footprint| footprint.keys)
+    }
+    fn domains(&self, request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        self.footprint(request)
+            .map(|footprint| footprint.domains)
+            .unwrap_or_default()
+    }
+    fn identity(&self, handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        self.resources.identities.get(&handle).copied()
+    }
 
     fn enter(&mut self, token: u64) {
         self.waits.enter(token);
@@ -557,6 +686,7 @@ impl Adapter for SimIo {
             },
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         };
         if self.tape.get(self.position)? != Some(&event) {
             return Err(AdapterError::ReplayMismatch(self.position));
@@ -595,6 +725,7 @@ impl Adapter for SimIo {
             request: Request::ProcessTime { from, to },
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         }) = self.tape.get(self.position)?.cloned()
         {
             self.state.apply_process_time(from, to)?;
@@ -657,6 +788,10 @@ impl Adapter for SimIo {
         if event.request != request {
             return Err(AdapterError::ReplayMismatch(self.position));
         }
+        if self.resources.check(event).is_err() {
+            return Err(AdapterError::ReplayMismatch(self.position));
+        }
+        let footprint = event.resources.clone();
         if self.state.timed_process {
             match (&request, &event.completion) {
                 (Request::Monotonic { clock }, Completion::Monotonic(Ok(ticks)))
@@ -691,6 +826,7 @@ impl Adapter for SimIo {
                 request: event.request.clone(),
                 completion: input.completion(&request)?,
                 fault: None,
+                resources: None,
             };
             &unwrapped
         } else {
@@ -768,6 +904,7 @@ impl Adapter for SimIo {
                 self.unanswered_connects.insert(token);
             }
             self.position += 1;
+            self.resources.apply(footprint.as_deref());
             self.waits.park(committed);
             if matches!(request, Request::RunnerCall(_)) {
                 self.runner_waits.insert(self.waits.current());
@@ -796,6 +933,7 @@ impl Adapter for SimIo {
             {
                 let completion = event.completion.clone();
                 self.position += 1;
+                self.resources.apply(footprint.as_deref());
                 return Ok(completion);
             }
             (
@@ -884,6 +1022,7 @@ impl Adapter for SimIo {
         self.detached_roots = detached;
         self.mount_pins = mount_pins;
         self.position += 1;
+        self.resources.apply(footprint.as_deref());
         result
     }
 }
@@ -2158,11 +2297,13 @@ mod scripted_connect_tests {
                     request: Request::Net { io: 1 },
                     completion: Completion::Handle(Ok(2)),
                     fault: None,
+                    resources: None,
                 },
                 Event {
                     request: connect.clone(),
                     completion: Completion::Blocked { committed: false },
                     fault: None,
+                    resources: None,
                 },
             ],
         );
@@ -2225,6 +2366,7 @@ mod snapshot_wait_tests {
                     request: directory.clone(),
                     completion: Completion::Handle(Ok(2)),
                     fault: None,
+                    resources: None,
                 },
                 Event {
                     request: open.clone(),
@@ -2234,6 +2376,7 @@ mod snapshot_wait_tests {
                         Completion::Handle(Ok(3))
                     },
                     fault: None,
+                    resources: None,
                 },
                 Event {
                     request: read.clone(),
@@ -2243,6 +2386,7 @@ mod snapshot_wait_tests {
                         Completion::Blocked { committed: false }
                     },
                     fault: None,
+                    resources: None,
                 },
             ],
         );

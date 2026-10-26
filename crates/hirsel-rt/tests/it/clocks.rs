@@ -5,6 +5,7 @@ fn event(request: Request, completion: Completion) -> Event {
         request,
         completion,
         fault: None,
+        resources: None,
     }
 }
 

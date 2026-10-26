@@ -739,6 +739,7 @@ fn timeouts_record_and_replay_only_under_a_deadline() {
         request: Request::Monotonic { clock: now.0 },
         completion: Completion::Monotonic(Ok(now.1 + 1)),
         fault: None,
+        resources: None,
     });
     assert_eq!(
         replay(&below).last().unwrap(),

@@ -508,8 +508,8 @@ that issues no request, is never journaled.
 
 ### Durable journal
 
-An ordinary tape starts with `hirsel-io-tape 10` followed by NUL; a durable
-journal starts with `hirsel-journal 3` followed by newline. Both use the same
+An ordinary tape starts with `hirsel-io-tape 11` followed by NUL; a durable
+journal starts with `hirsel-journal 4` followed by newline. Both use the same
 binary frame envelope: a 32-bit little-endian payload length, 32-bit CRC32C,
 64-bit little-endian sequence number starting at zero, a kind byte, then the raw
 payload. CRC32C covers the encoded length, sequence, kind and payload (everything
@@ -529,9 +529,30 @@ No event payload is rendered as text or hexadecimal on the recording path.
 |---|---|
 | 1 Header | run identity, seeds, bound run record and admission evidence, arguments and initial tree; ordinary and durable use the same header payload |
 | 2 Prepared (durable) | request id, task spawn path (`Vec<u32>`, empty for root), issue ordinal, request |
-| 3 Event | request, completion, optional fault; durable prefixes this with an optional prepared id, absent for a scheduling input |
+| 3 Event | request, completion, optional fault, optional resource footprint; durable prefixes this with an optional prepared id, absent for a scheduling input |
 | 4 Withdrawn (durable) | prepared id (`u64`) |
 | 5 Trailer | ordinary: event count (`u64`); durable: count and run outcome |
+
+#### Resource footprints
+
+A keyed recorder (the home adapter and the concurrent service alike) gives every
+request event its resource footprint: the request's declared keys (key, mode),
+its auxiliary domains (key, owner handle, label), and every handle identity
+(handle, key, kind) established since the previous request event, initial grants
+included, in handle order. Key sets are canonical (ascending, each key once).
+Scheduling inputs carry none. Both live engines discover stdio storage from the
+process's own descriptors, so they record the same footprints. Recording and
+replay share the payload codec in `tape_wire.rs`. The inspection text omits
+footprints, so a text tape replays as a recording that declares none.
+
+Replay serves the footprint as its adapter metadata, so the Ordered trace sees
+the same coupled or exclusive resource graph the live run did. Before consuming a
+request event it refuses a footprint that contradicts the graph so far: events
+that disagree on carrying footprints, a handle whose identity changes, a system
+key other than the coupled key as an identity, a split half of an unknown stream,
+a domain without an identified owner, a result handle without an identity, or a
+key that is neither a system key, an established resource nor one of the
+request's domains.
 
 Ordinary binary replay indexes validated frame ranges in a shared buffered tape
 and decodes only the current event. It retains at most the current and previous

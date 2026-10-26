@@ -290,6 +290,7 @@ fn partial_write_replay(
             },
             completion: C::Handle(Ok(2)),
             fault: None,
+            resources: None,
         };
         let cases = [
             (
@@ -312,6 +313,7 @@ fn partial_write_replay(
                             error: IoError::Fault(71),
                             partial: 2,
                         }),
+                        resources: None,
                     },
                     Event {
                         request: R::Read {
@@ -320,6 +322,7 @@ fn partial_write_replay(
                         },
                         completion: C::Bytes(Ok(b"ab".to_vec())),
                         fault: None,
+                        resources: None,
                     },
                 ],
             ),
@@ -336,6 +339,7 @@ fn partial_write_replay(
                         },
                         completion: C::Handle(Ok(3)),
                         fault: None,
+                        resources: None,
                     },
                     Event {
                         request: R::WriteAll {
@@ -345,6 +349,7 @@ fn partial_write_replay(
                         },
                         completion: C::Unit(Ok(())),
                         fault: None,
+                        resources: None,
                     },
                     Event {
                         request: R::Commit {
@@ -356,6 +361,7 @@ fn partial_write_replay(
                             error: IoError::Canceled(2),
                             partial: 99,
                         }),
+                        resources: None,
                     },
                     Event {
                         request: R::Open {
@@ -367,6 +373,7 @@ fn partial_write_replay(
                             error: IoError::Fault(2),
                             partial: 0,
                         }),
+                        resources: None,
                     },
                 ],
             ),

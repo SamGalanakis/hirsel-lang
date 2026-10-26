@@ -12,6 +12,7 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 mod concurrent;
+mod discovery;
 pub use concurrent::ConcurrentIo;
 pub(crate) use concurrent::HOME_TOKEN;
 /// The home adapter, accepting custom streams with no `Send` bound.
@@ -56,6 +57,11 @@ pub struct RealCore<S: Streams> {
     current: u64,
     /// A script delivered an arrival at the last idle point (no cooperative readiness).
     signal_delivered: bool,
+    /// A keyed caller's events, recorded once it supplies their resource footprint.
+    staged: Option<Vec<Event>>,
+    /// The home adapter's resource discovery, admitted at its first use; the
+    /// concurrent service takes it over (`take_registry`).
+    registry: std::cell::RefCell<Option<crate::io_keys::Registry>>,
 }
 /// Stream access used by the real adapter. Implementations are sealed to this module.
 #[doc(hidden)]
@@ -73,6 +79,8 @@ pub trait Streams: sealed::Sealed {
 
     fn output(&mut self, stderr: bool) -> &mut dyn Write;
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<Option<usize>>;
+    /// The admitted storage of stdout, stderr and stdin, for resource discovery.
+    fn storages(&self) -> [crate::io_keys::Storage; 3];
 }
 mod sealed {
     pub trait Sealed {}
@@ -142,6 +150,19 @@ impl Streams for LocalStreams {
             Input::Cooperative(input) => input.read(bytes),
         }
     }
+    fn storages(&self) -> [crate::io_keys::Storage; 3] {
+        use crate::io_keys::Storage;
+        let output = |output: &Output| match output {
+            Output::Local(_) => Storage::Unknown,
+            Output::Send(output) => output.resource_storage(),
+        };
+        let input = match &self.input {
+            Input::Blocking(_) => Storage::Unknown,
+            Input::Send(_, storage) => *storage,
+            Input::Cooperative(input) => input.storage(),
+        };
+        [output(&self.output), output(&self.stderr), input]
+    }
 }
 impl Streams for SendStreams {
     type Journal = Box<dyn crate::journal::Journal + Send>;
@@ -161,6 +182,17 @@ impl Streams for SendStreams {
             SendInput::Blocking(input, _) => input.read(bytes).map(Some),
             SendInput::Cooperative(input) => input.read(bytes),
         }
+    }
+    fn storages(&self) -> [crate::io_keys::Storage; 3] {
+        let input = match &self.input {
+            SendInput::Blocking(_, storage) => *storage,
+            SendInput::Cooperative(input) => input.storage(),
+        };
+        [
+            self.output.resource_storage(),
+            self.stderr.resource_storage(),
+            input,
+        ]
     }
 }
 /// The home journal keeps its original non-Send extension point.
@@ -211,22 +243,9 @@ impl crate::journal::Journal for HomeJournal {
 }
 impl RealIo {
     pub(crate) fn namespace_coupled(&self) -> bool {
-        use crate::io_keys::Storage;
-        let output = |output: &Output| match output {
-            Output::Local(_) => Storage::Unknown,
-            Output::Send(output) => output.resource_storage(),
-        };
-        let input = match &self.streams.input {
-            Input::Blocking(_) => Storage::Unknown,
-            Input::Send(_, storage) => *storage,
-            Input::Cooperative(input) => input.storage(),
-        };
-        [
-            output(&self.streams.output),
-            output(&self.streams.stderr),
-            input,
-        ]
-        .contains(&Storage::Unknown)
+        self.streams
+            .storages()
+            .contains(&crate::io_keys::Storage::Unknown)
     }
     /// Preserve custom home-affine journals; explicit Send journals use send_journal_to.
     pub fn journal_to(&mut self, journal: Box<dyn crate::journal::Journal>) {
@@ -474,6 +493,8 @@ impl RealIo {
             signal_waits: BTreeMap::new(),
             current: 0,
             signal_delivered: false,
+            staged: None,
+            registry: Default::default(),
             file_reads: Default::default(),
             file_faults: Default::default(),
         })
@@ -569,6 +590,10 @@ impl<S: Streams> RealCore<S> {
         self.state.stdout.clear();
     }
     fn record(&mut self, event: Event) -> Result<(), AdapterError> {
+        if let Some(staged) = &mut self.staged {
+            staged.push(event);
+            return Ok(());
+        }
         if !self.journal.absent() {
             self.journal.record(&event).map_err(recording_failed)?;
         }
@@ -576,6 +601,226 @@ impl<S: Streams> RealCore<S> {
             self.tape.push(event);
         }
         Ok(())
+    }
+    /// Whether the run's events reach a journal or the retained history.
+    pub(crate) fn records_events(&self) -> bool {
+        !self.journal.absent() || self.retain_history
+    }
+    /// Hold the next call's events until [`Self::commit`] supplies their footprint.
+    pub(crate) fn stage(&mut self) {
+        debug_assert!(self.staged.is_none());
+        if self.records_events() {
+            self.staged = Some(Vec::new());
+        }
+    }
+    /// Record the staged events. Every request event carries the call's
+    /// footprint; the first also carries the identities established since the
+    /// previous request event. Scheduling inputs carry none. `footprint` runs
+    /// only when a request event was staged.
+    pub(crate) fn commit(
+        &mut self,
+        footprint: impl FnOnce() -> crate::io_keys::Footprint,
+    ) -> Result<(), AdapterError> {
+        let Some(events) = self.staged.take() else {
+            return Ok(());
+        };
+        let mut footprint = Some(footprint);
+        let mut later = None;
+        for mut event in events {
+            if !matches!(
+                event.request,
+                Request::Ready { .. }
+                    | Request::Schedule { .. }
+                    | Request::ProcessTime { .. }
+                    | Request::ProcessSettle { .. }
+            ) {
+                let resources = match footprint.take() {
+                    Some(footprint) => {
+                        let first = footprint();
+                        later = Some(crate::io_keys::Footprint {
+                            identities: Vec::new(),
+                            ..first.clone()
+                        });
+                        first
+                    }
+                    None => later.clone().expect("the first request event's footprint"),
+                };
+                event.resources = Some(Box::new(resources));
+            }
+            self.record(event)?;
+        }
+        Ok(())
+    }
+    /// Record a keyed call's staged events with its footprint. Identities wait
+    /// in the registry's log for the next recorded request event.
+    pub(crate) fn commit_with(
+        &mut self,
+        registry: &mut crate::io_keys::Registry,
+        keys: crate::io_keys::KeySet,
+        domains: Vec<(crate::io_keys::Key, u64, String)>,
+    ) -> Result<(), AdapterError> {
+        if !self.records_events() {
+            registry.established();
+        }
+        self.commit(|| crate::io_keys::Footprint {
+            keys,
+            domains,
+            identities: registry.established(),
+        })
+    }
+    /// One unkeyed call: the concurrent service supplies its own footprint.
+    pub(crate) fn call_once(&mut self, request: Request) -> Result<Completion, AdapterError> {
+        if self.state.timed_process {
+            let virtual_clock = self
+                .cooperative
+                .as_ref()
+                .and_then(|(r, _)| r.virtual_time());
+            if virtual_clock.is_none() {
+                return Err(AdapterError::Unsupported(
+                    "timed process requires an isolated virtual clock".into(),
+                ));
+            }
+        }
+        let _ = self.preflight(&request)?;
+        // Close, split/join, TLS and new grants use this protocol. Invalidate
+        // before any authority mutation, including failed or canceled operations.
+        self.live_streams = [None; 2];
+        if self.state.awaits_injection(&request) {
+            return Err(AdapterError::Blocked);
+        }
+        let parks = self.cooperative.is_some() && crate::host_waits::may_park(&request);
+        // A durable journal prepares the request first; one that may park waits for the
+        // barrier that makes its record durable, parked as for the host (group commit).
+        let token = parks.then(|| self.cooperative.as_ref().unwrap().1.current());
+        if !self.journal.absent()
+            && self
+                .journal
+                .before(&request, token)
+                .map_err(recording_failed)?
+                == crate::journal::Gate::Hold
+        {
+            let (_, log) = self.cooperative.as_mut().unwrap();
+            log.park(false);
+            self.record(Event {
+                request,
+                completion: Completion::Held,
+                fault: None,
+                resources: None,
+            })?;
+            return Err(AdapterError::Blocked);
+        }
+        let network = crate::net::is_net_request(&request)
+            || matches!(request, Request::Close { .. })
+            || self.state.timed_process
+                && matches!(
+                    request,
+                    Request::ChildWrite { .. }
+                        | Request::ChildCloseStdin { .. }
+                        | Request::ChildKill { .. }
+                );
+        let scripted =
+            self.state.scripted(&request) || self.file_reads.blocked(&self.state, &request);
+        if !parks {
+            let result = self.perform(request);
+            if self.state.timed_process {
+                if let Some((r, _)) = &self.cooperative {
+                    r.provider_deadline(self.state.next_process_time());
+                }
+            }
+            if network && let Some((readiness, _)) = &self.cooperative {
+                readiness.progressed();
+            }
+            return result;
+        }
+        let retry = request.clone();
+        let connect = scripted
+            && matches!(
+                request,
+                Request::Connect { .. } | Request::ConnectAddr { .. } | Request::UnixConnect { .. }
+            );
+        // Retrying an unanswered connect must not consume the next scripted attempt.
+        let pending_connect = connect
+            && self
+                .cooperative
+                .as_ref()
+                .unwrap()
+                .0
+                .pending_scripted_connect();
+        let result = if pending_connect {
+            Err(AdapterError::Blocked)
+        } else {
+            self.perform(request)
+        };
+        if self.state.timed_process {
+            if let Request::SleepUntil { clock, deadline } = &retry
+                && !self.state.test_clocks.contains(clock)
+            {
+                if matches!(result, Err(AdapterError::Blocked)) {
+                    self.state.timed_sleeps.insert(self.current, *deadline);
+                } else {
+                    self.state.timed_sleeps.remove(&self.current);
+                }
+            }
+            if let Some((r, _)) = &self.cooperative {
+                r.provider_deadline(self.state.next_process_time());
+            }
+        }
+        match result {
+            Err(AdapterError::Blocked) => {
+                let (readiness, log) = self.cooperative.as_mut().unwrap();
+                let token = log.current();
+                if connect {
+                    readiness.scripted_connect();
+                } else if scripted
+                    || self.state.timed_process
+                        && matches!(
+                            retry,
+                            Request::ChildRead { .. }
+                                | Request::ChildWait { .. }
+                                | Request::GroupWait { .. }
+                        )
+                {
+                    readiness.scripted();
+                    if self.state.timed_process {
+                        self.state.timed_requests.insert(token, retry.clone());
+                    }
+                }
+                let committed = !readiness.cancellable(token);
+                // Re-issued while its task stays parked (a held request a journal barrier
+                // released first registers its interest here): Readiness reports it from now.
+                if log.rows_of(token).is_some_and(|row| row.parked) {
+                    readiness.parked(token);
+                    if let Some(clock) = &self.test_clock {
+                        clock.parked(token);
+                    }
+                }
+                log.park(committed);
+                self.record(Event {
+                    request: retry,
+                    completion: Completion::Blocked { committed },
+                    fault: None,
+                    resources: None,
+                })?;
+                Err(AdapterError::Blocked)
+            }
+            result => {
+                if network && let Some((readiness, _)) = &self.cooperative {
+                    readiness.progressed();
+                }
+                result
+            }
+        }
+    }
+    fn with_registry<T>(&self, f: impl FnOnce(&mut crate::io_keys::Registry) -> T) -> T {
+        let mut registry = self.registry.borrow_mut();
+        f(registry.get_or_insert_with(|| discovery::admit(self)))
+    }
+    /// The home discovery so far, for the concurrent service that takes over.
+    pub(crate) fn take_registry(&mut self) -> crate::io_keys::Registry {
+        match self.registry.get_mut().take() {
+            Some(registry) => registry,
+            None => discovery::admit(self),
+        }
     }
     pub fn tape(&self) -> &[Event] {
         &self.tape
@@ -980,145 +1225,33 @@ impl<S: Streams> Adapter for RealCore<S> {
     fn issuer(&mut self, task: &[u32]) {
         self.journal.issuer(task);
     }
+    /// The home adapter is a keyed recorder: its keys, domains and identities
+    /// are the concurrent service's, from the same discovery.
+    fn keys(&self, request: &Request) -> Option<crate::io_keys::KeySet> {
+        Some(self.with_registry(|registry| registry.keys(request)))
+    }
+    fn domains(&self, request: &Request) -> Vec<(crate::io_keys::Key, u64, String)> {
+        self.with_registry(|registry| discovery::domains(self, registry, request))
+    }
+    fn identity(&self, handle: u64) -> Option<(crate::io_keys::Key, crate::io_keys::Kind)> {
+        self.with_registry(|registry| registry.identity(handle))
+    }
     fn call(&mut self, request: Request) -> Result<Completion, AdapterError> {
-        if self.state.timed_process {
-            let virtual_clock = self
-                .cooperative
-                .as_ref()
-                .and_then(|(r, _)| r.virtual_time());
-            if virtual_clock.is_none() {
-                return Err(AdapterError::Unsupported(
-                    "timed process requires an isolated virtual clock".into(),
-                ));
-            }
-        }
-        let _ = self.preflight(&request)?;
-        // Close, split/join, TLS and new grants use this protocol. Invalidate
-        // before any authority mutation, including failed or canceled operations.
-        self.live_streams = [None; 2];
-        if self.state.awaits_injection(&request) {
-            return Err(AdapterError::Blocked);
-        }
-        let parks = self.cooperative.is_some() && crate::host_waits::may_park(&request);
-        // A durable journal prepares the request first; one that may park waits for the
-        // barrier that makes its record durable, parked as for the host (group commit).
-        let token = parks.then(|| self.cooperative.as_ref().unwrap().1.current());
-        if !self.journal.absent()
-            && self
-                .journal
-                .before(&request, token)
-                .map_err(recording_failed)?
-                == crate::journal::Gate::Hold
-        {
-            let (_, log) = self.cooperative.as_mut().unwrap();
-            log.park(false);
-            self.record(Event {
-                request,
-                completion: Completion::Held,
-                fault: None,
-            })?;
-            return Err(AdapterError::Blocked);
-        }
-        let network = crate::net::is_net_request(&request)
-            || matches!(request, Request::Close { .. })
-            || self.state.timed_process
-                && matches!(
-                    request,
-                    Request::ChildWrite { .. }
-                        | Request::ChildCloseStdin { .. }
-                        | Request::ChildKill { .. }
-                );
-        let scripted =
-            self.state.scripted(&request) || self.file_reads.blocked(&self.state, &request);
-        if !parks {
-            let result = self.perform(request);
-            if self.state.timed_process {
-                if let Some((r, _)) = &self.cooperative {
-                    r.provider_deadline(self.state.next_process_time());
-                }
-            }
-            if network && let Some((readiness, _)) = &self.cooperative {
-                readiness.progressed();
-            }
-            return result;
-        }
-        let retry = request.clone();
-        let connect = scripted
-            && matches!(
-                request,
-                Request::Connect { .. } | Request::ConnectAddr { .. } | Request::UnixConnect { .. }
-            );
-        // Retrying an unanswered connect must not consume the next scripted attempt.
-        let pending_connect = connect
-            && self
-                .cooperative
-                .as_ref()
-                .unwrap()
-                .0
-                .pending_scripted_connect();
-        let result = if pending_connect {
-            Err(AdapterError::Blocked)
+        let keys = self.with_registry(|registry| registry.keys(&request));
+        let domains = if self.records_events() {
+            self.domains(&request)
         } else {
-            self.perform(request)
+            Vec::new()
         };
-        if self.state.timed_process {
-            if let Request::SleepUntil { clock, deadline } = &retry
-                && !self.state.test_clocks.contains(clock)
-            {
-                if matches!(result, Err(AdapterError::Blocked)) {
-                    self.state.timed_sleeps.insert(self.current, *deadline);
-                } else {
-                    self.state.timed_sleeps.remove(&self.current);
-                }
-            }
-            if let Some((r, _)) = &self.cooperative {
-                r.provider_deadline(self.state.next_process_time());
-            }
-        }
-        match result {
-            Err(AdapterError::Blocked) => {
-                let (readiness, log) = self.cooperative.as_mut().unwrap();
-                let token = log.current();
-                if connect {
-                    readiness.scripted_connect();
-                } else if scripted
-                    || self.state.timed_process
-                        && matches!(
-                            retry,
-                            Request::ChildRead { .. }
-                                | Request::ChildWait { .. }
-                                | Request::GroupWait { .. }
-                        )
-                {
-                    readiness.scripted();
-                    if self.state.timed_process {
-                        self.state.timed_requests.insert(token, retry.clone());
-                    }
-                }
-                let committed = !readiness.cancellable(token);
-                // Re-issued while its task stays parked (a held request a journal barrier
-                // released first registers its interest here): Readiness reports it from now.
-                if log.rows_of(token).is_some_and(|row| row.parked) {
-                    readiness.parked(token);
-                    if let Some(clock) = &self.test_clock {
-                        clock.parked(token);
-                    }
-                }
-                log.park(committed);
-                self.record(Event {
-                    request: retry,
-                    completion: Completion::Blocked { committed },
-                    fault: None,
-                })?;
-                Err(AdapterError::Blocked)
-            }
-            result => {
-                if network && let Some((readiness, _)) = &self.cooperative {
-                    readiness.progressed();
-                }
-                result
-            }
-        }
+        let publication = discovery::Publication::of(self, &request);
+        self.stage();
+        let result = self.call_once(request);
+        let mut registry = self.take_registry();
+        publication.publish(self, &mut registry, &result);
+        let committed = self.commit_with(&mut registry, keys, domains);
+        *self.registry.get_mut() = Some(registry);
+        committed?;
+        result
     }
     fn enter(&mut self, token: u64) {
         self.current = token;
@@ -1174,6 +1307,7 @@ impl<S: Streams> Adapter for RealCore<S> {
             request: Request::Schedule { count, choice },
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         })?;
         Ok(choice)
     }
@@ -1200,6 +1334,7 @@ impl<S: Streams> Adapter for RealCore<S> {
                         request: Request::ProcessTime { from, to },
                         completion: Completion::Ready,
                         fault: None,
+                        resources: None,
                     })?;
                     if let Some((r, _)) = &self.cooperative {
                         r.provider_deadline(self.state.next_process_time());
@@ -1233,6 +1368,7 @@ impl<S: Streams> Adapter for RealCore<S> {
             },
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         })?;
         if let Some((child, report)) = self
             .state
@@ -1410,6 +1546,7 @@ impl<S: Streams> RealCore<S> {
                 request: Request::Ready { wait, points },
                 completion: Completion::Ready,
                 fault: None,
+                resources: None,
             })
             .collect();
         for event in events {
@@ -1480,6 +1617,7 @@ impl<S: Streams> RealCore<S> {
                     request,
                     completion: completion.clone(),
                     fault: None,
+                    resources: None,
                 })?;
                 return Ok(completion);
             }
@@ -1490,6 +1628,7 @@ impl<S: Streams> RealCore<S> {
                     request,
                     completion: Completion::Ready,
                     fault: None,
+                    resources: None,
                 })?;
                 return Ok(Completion::Ready);
             }
@@ -1703,6 +1842,7 @@ impl<S: Streams> RealCore<S> {
                     request,
                     completion: Completion::Refused(id),
                     fault: None,
+                    resources: None,
                 })?;
                 return Err(AdapterError::InvalidHandle(id));
             }
@@ -1814,6 +1954,7 @@ impl<S: Streams> RealCore<S> {
                 },
                 request,
                 fault,
+                resources: None,
             })?;
         }
         Ok(completion)
@@ -3367,6 +3508,8 @@ impl RealIo {
             signal_waits,
             current,
             signal_delivered,
+            staged,
+            registry,
         } = self;
         let Output::Send(output) = streams.output else {
             unreachable!()
@@ -3408,6 +3551,8 @@ impl RealIo {
             signal_waits,
             current,
             signal_delivered,
+            staged,
+            registry,
         };
         Ok(ConcurrentIo::new(core))
     }

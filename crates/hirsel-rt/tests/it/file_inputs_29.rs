@@ -15,11 +15,13 @@ fn setup(request: R, completion: C) -> (SimIo, R) {
                 },
                 completion: C::Handle(Ok(2)),
                 fault: None,
+                resources: None,
             },
             Event {
                 request: request.clone(),
                 completion,
                 fault: None,
+                resources: None,
             },
         ],
     );
@@ -129,11 +131,13 @@ fn simulated_files_reject_forged_host_inputs() {
                 request: request.clone(),
                 completion: C::Handle(Ok(3)),
                 fault: None,
+                resources: None,
             },
             Event {
                 request: size.clone(),
                 completion: C::FileInput(FileInput::Size(4)),
                 fault: None,
+                resources: None,
             },
         ],
     );

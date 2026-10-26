@@ -123,7 +123,7 @@ impl JournalFile for std::fs::File {
 }
 
 /// The first bytes of every durable journal.
-pub const MAGIC: &[u8] = b"hirsel-journal 3\n";
+pub const MAGIC: &[u8] = b"hirsel-journal 4\n";
 /// Frame header: payload length, CRC-32C, sequence number, kind.
 const FRAME: usize = 4 + 4 + 8 + 1;
 /// Group commit bounds (determinism.md, Durable journal).
@@ -533,6 +533,7 @@ pub fn incomplete(recovered: &Recovered) -> String {
             request: prepared.request.clone(),
             completion: Completion::Checked(false),
             fault: None,
+            resources: None,
         })
         .unwrap_or_default();
         text.push_str(&format!(
@@ -1061,6 +1062,7 @@ mod tests {
             request: print(bytes),
             completion: Completion::Unit(Ok(())),
             fault: None,
+            resources: None,
         }
     }
 
@@ -1077,6 +1079,7 @@ mod tests {
             request: read.clone(),
             completion: Completion::Held,
             fault: None,
+            resources: None,
         })
         .unwrap();
         gate.parked(9);
@@ -1089,6 +1092,7 @@ mod tests {
             request: print(b"b"),
             completion: Completion::Unit(Err(IoError::Fault(5))),
             fault: None,
+            resources: None,
         })
         .unwrap();
         gate
@@ -1226,8 +1230,11 @@ mod tests {
         let unsynced = std::mem::take(&mut journal.buffer);
         journal.file.append(&unsynced).unwrap();
         let mut seen = std::collections::BTreeSet::new();
-        for seed in 0..64 {
-            let recovered = recover(&journal.file().crash(seed)).unwrap();
+        // A crash keeps a seeded prefix of the unsynced record, rarely all of it, so the
+        // complete survivor is also checked directly: every appended byte reached the disk.
+        let survivors = (0..64).map(|seed| journal.file().crash(seed));
+        for crashed in survivors.chain([journal.file().bytes().to_vec()]) {
+            let recovered = recover(&crashed).unwrap();
             seen.insert(recovered.recording.events.len());
             if recovered.recording.events.is_empty() {
                 assert_eq!(recovered.in_doubt, complete.prepared[..1]);

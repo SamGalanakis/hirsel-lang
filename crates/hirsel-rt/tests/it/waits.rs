@@ -83,6 +83,7 @@ fn system_draws_fill_the_count_from_the_host_and_replay_only_the_recorded_bytes(
                 request: Request::RandomBytes { random: 2, count },
                 completion: Completion::Random(Ok(bytes)),
                 fault: None,
+                resources: None,
             },
         ];
         let mut sim = replay(&bad);

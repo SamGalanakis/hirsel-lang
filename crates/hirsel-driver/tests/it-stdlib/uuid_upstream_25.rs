@@ -389,16 +389,19 @@ fn effects(group: &str) {
                 request: Request::WallClock { io: 1 },
                 completion: Completion::ClockGrant(Ok(2)),
                 fault: None,
+                resources: None,
             },
             Event {
                 request: Request::Random { io: 1 },
                 completion: Completion::Handle(Ok(3)),
                 fault: None,
+                resources: None,
             },
             Event {
                 request: Request::Stdout { io: 1 },
                 completion: Completion::Handle(Ok(4)),
                 fault: None,
+                resources: None,
             },
         ];
         let mut expected = Vec::new();
@@ -427,6 +430,7 @@ fn effects(group: &str) {
                     request: Request::Wall { clock: 2 },
                     completion: Completion::Wall(wall),
                     fault: None,
+                    resources: None,
                 });
             }
             if input["reads"]
@@ -447,6 +451,7 @@ fn effects(group: &str) {
                         Ok(random)
                     }),
                     fault: None,
+                    resources: None,
                 });
             }
             let line = row["expected_output"].as_str().unwrap().as_bytes();
@@ -458,6 +463,7 @@ fn effects(group: &str) {
                 },
                 completion: Completion::Unit(Ok(())),
                 fault: None,
+                resources: None,
             });
         }
         source.push_str("Ok(())\n}\n");

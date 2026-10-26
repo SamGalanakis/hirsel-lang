@@ -419,6 +419,7 @@ fn request_text(request: &Request) -> Result<String, String> {
         request: request.clone(),
         completion: Completion::Checked(false),
         fault: None,
+        resources: None,
     })?;
     Ok(text.split_once(" -> ").ok_or("missing request")?.0.into())
 }
@@ -478,6 +479,7 @@ mod tests {
                 request: Request::Stdout { io: 1 },
                 completion: Completion::Handle(Ok(2)),
                 fault: None,
+                resources: None,
             },
             Event {
                 request: Request::Print {
@@ -486,6 +488,7 @@ mod tests {
                 },
                 completion: Completion::Unit(Ok(())),
                 fault: None,
+                resources: None,
             },
         ]
     }
@@ -672,6 +675,7 @@ mod tests {
             request,
             completion,
             fault: None,
+            resources: None,
         })
         .collect::<Vec<_>>();
         let mut recording = launch::parse_recording_bytes(ordinary()).unwrap();
@@ -981,6 +985,7 @@ pub fn main(rt: Io) -> Result[(), FileError] {
                 error: hirsel_rt::io::IoError::Fault(1),
                 partial: 2,
             }),
+            resources: None,
         };
         assert_eq!(accepted_bytes(&event), Some(2));
         assert_eq!(

@@ -365,11 +365,13 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         request: Request::MonotonicClock { io: 1 },
         completion: Completion::ClockGrant(Ok(20)),
         fault: None,
+        resources: None,
     });
     events.push(Event {
         request: Request::Random { io: 1 },
         completion: Completion::Handle(Ok(21)),
         fault: None,
+        resources: None,
     });
     events.push(Event {
         request: Request::TestDir {
@@ -378,6 +380,7 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         },
         completion: Completion::Handle(Ok(23)),
         fault: None,
+        resources: None,
     });
     events.push(Event {
         request: Request::TestCheck {
@@ -386,6 +389,7 @@ fn launch_recording_round_trips_inputs_empty_fields_and_faults_and_refuses_malfo
         },
         completion: Completion::Checked(false),
         fault: None,
+        resources: None,
     });
     let text = render_tape(&events).unwrap();
     assert_eq!(parse_tape(&text).unwrap(), events);
@@ -1386,6 +1390,7 @@ fn runner_protocol_replays_legacy_outcomes_and_rejects_forged_poll_replies() {
         request: request.clone(),
         completion: outcome.clone(),
         fault: None,
+        resources: None,
     }];
     let text = hirsel_rt::launch::render_tape(&old).unwrap();
     let old = hirsel_rt::launch::parse_tape(&text).unwrap();
@@ -1402,16 +1407,19 @@ fn runner_protocol_replays_legacy_outcomes_and_rejects_forged_poll_replies() {
             request: request.clone(),
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         },
         Event {
             request: poll.clone(),
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         },
         Event {
             request: Request::RunnerPoll { key, cancel: None },
             completion: outcome,
             fault: None,
+            resources: None,
         },
     ];
     let mut replay = SimIo::new(Tree::default(), events);
@@ -1434,6 +1442,7 @@ fn runner_protocol_replays_legacy_outcomes_and_rejects_forged_poll_replies() {
                 request: poll.clone(),
                 completion,
                 fault: None,
+                resources: None,
             }],
         );
         assert_eq!(

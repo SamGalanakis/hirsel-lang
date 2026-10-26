@@ -500,6 +500,7 @@ fn round_trips(draws: usize) {
                     },
                     partial: n.rotate_left(13) as usize,
                 }),
+                resources: None,
             })
             .collect();
         let rendered = render_tape(&events).unwrap();

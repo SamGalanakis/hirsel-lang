@@ -25,19 +25,12 @@ pub struct ConcurrentIo {
     /// Ready tokens one poll found for the other side: [service, home binding].
     /// Readiness hands each finding out once, and both sides share it.
     deferred: Mutex<[Vec<u64>; 2]>,
+    /// Whether events are recorded, each request event with its footprint.
+    records: bool,
     #[cfg(test)]
     before_file: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     before_path: Option<Arc<dyn Fn(&Request) + Send + Sync>>,
-}
-
-/// The request words [`ConcurrentIo::attempt_observed`] publishes after the call.
-#[derive(Clone, Copy)]
-enum Published {
-    Split(u64),
-    Alias(u64),
-    Join(u64),
-    Other,
 }
 
 #[derive(Debug)]
@@ -52,24 +45,15 @@ impl ConcurrentIo {
         let readiness = core.readiness().unwrap_or_default();
         readiness.mark_shared();
         core.set_cooperative_net(readiness);
-        let mut registry = Registry::default();
-        // Discover all admitted storage before the first request, even before its
-        // language grant is projected. Unknown writers may alias any filesystem.
-        registry.sink(u64::MAX - 1, core.streams.output.resource_storage());
-        registry.sink(u64::MAX - 2, core.streams.stderr.resource_storage());
-        registry.sink(u64::MAX - 3, input_storage(&core.streams.input));
-        for reserved in [u64::MAX - 1, u64::MAX - 2, u64::MAX - 3] {
-            registry.forget(reserved);
-        }
-        for (handle, grant) in core.state.handles.rows.sorted() {
-            discover(&core, &mut registry, handle, grant);
-        }
+        let records = core.records_events();
+        let registry = core.take_registry();
         Self {
             core: Mutex::new(core),
             registry: Mutex::new(registry),
             calls: KeyTable::default(),
             tls_pem: Default::default(),
             deferred: Default::default(),
+            records,
             #[cfg(test)]
             before_file: None,
             #[cfg(test)]
@@ -154,7 +138,13 @@ impl ConcurrentIo {
         ) {
             return Err(AdapterError::InvalidCompletion);
         }
-        let positions = self.calls.take(&self.keys(&request));
+        let keys = self.keys(&request);
+        let domains = if self.records {
+            self.domains(&request)
+        } else {
+            Vec::new()
+        };
+        let positions = self.calls.take(&keys);
         self.calls.wait(&positions);
         let mut core = self.core.lock().unwrap();
         core.enter(token);
@@ -237,9 +227,7 @@ impl ConcurrentIo {
             core.enter(token);
             core.disk.prefetched_output = Some(output);
         }
-        let tls_split = matches!(&request, Request::NetSplit { stream, .. }
-            if matches!(core.state.handles.rows.get(stream), Some(crate::handles::Grant::Stream { tls: true, .. })));
-        let first_new = core.state.handles.next();
+        let publication = super::discovery::Publication::of(&core, &request);
         core.disk.observed_output = None;
         if let Request::TlsConnect { stream, .. } = &request
             && let Some(pem) = self.tls_pem.lock().unwrap().remove(stream)
@@ -249,18 +237,8 @@ impl ConcurrentIo {
         if let Request::Close { handle } = &request {
             self.tls_pem.lock().unwrap().remove(handle);
         }
-        // Publication needs only these handle words: the call consumes the request.
-        let published = match &request {
-            Request::NetSplit { stream, .. } => Published::Split(*stream),
-            Request::NarrowFile { file, .. }
-            | Request::ReadOnlyDir { directory: file }
-            | Request::NarrowDir {
-                directory: file, ..
-            } => Published::Alias(*file),
-            Request::NetJoin { read, .. } => Published::Join(*read),
-            _ => Published::Other,
-        };
-        let result = core.call(request);
+        core.stage();
+        let result = core.call_once(request);
         *observed = core.disk.observed_output.take();
         debug_assert!(
             core.disk.prefetched.is_none()
@@ -268,41 +246,10 @@ impl ConcurrentIo {
                 && core.disk.prefetched_path.is_none()
         );
         let mut registry = self.registry.lock().unwrap();
-        if let Published::Split(stream) = published
-            && let Ok(Completion::Halves(Ok((read, write)))) = &result
-        {
-            if tls_split {
-                let (parent, _) = registry.identity(stream).expect("registered TLS stream");
-                registry.bind(*read, parent, Kind::Other);
-                registry.bind(*write, parent, Kind::Other);
-            } else {
-                registry.split(stream, *read, *write);
-            }
-        }
-        if let Published::Alias(file) = published
-            && let Ok(Completion::OptionalFile(Some(to)) | Completion::Handle(Ok(to))) = &result
-        {
-            registry.alias(file, *to);
-        }
-        if let Published::Join(read) = published
-            && let Some((key, kind)) = registry.identity(read)
-            && let Ok(Completion::NetHandle(Ok(joined))) = &result
-        {
-            let parent = match kind {
-                Kind::Half { stream } => stream,
-                _ => key,
-            };
-            registry.bind(*joined, parent, Kind::Other);
-        }
-        for handle in first_new..core.state.handles.next() {
-            if registry.identity(handle).is_none()
-                && let Some(grant) = core.state.handles.rows.get(&handle)
-            {
-                discover(&core, &mut registry, handle, grant);
-            }
-        }
+        publication.publish(&core, &mut registry, &result);
         // Closed physical words never get reused. Retain resource metadata for the
         // owner that is publishing a consuming operation's result.
+        core.commit_with(&mut registry, keys, domains)?;
         result
     }
 }
@@ -315,43 +262,8 @@ impl ConcurrentAdapter for ConcurrentIo {
         self.registry.lock().unwrap().keys(request)
     }
     fn domains(&self, request: &Request) -> Vec<(Key, u64, String)> {
-        use Request as R;
         let core = self.core.lock().unwrap();
-        let mut registry = self.registry.lock().unwrap();
-        match request {
-            R::Connect { net, .. }
-            | R::ConnectAddr { net, .. }
-            | R::Listen { net, .. }
-            | R::UdpBind { net, .. }
-            | R::UnixConnect { net, .. }
-            | R::UnixListen { net, .. }
-                if matches!(
-                    core.state.handles.rows.get(net),
-                    Some(crate::handles::Grant::Net { .. })
-                ) =>
-            {
-                registry
-                    .net_ports(*net)
-                    .map(|key| vec![(key, *net, "ports".into())])
-                    .unwrap_or_default()
-            }
-            R::ProcessRun { process, .. }
-            | R::ProcessSpawn { process, .. }
-            | R::ProcessPipeline { process, .. }
-                if matches!(
-                    core.state.handles.rows.get(process),
-                    Some(crate::handles::Grant::Process { .. })
-                ) =>
-            {
-                registry
-                    .inherited_domains()
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, key)| (key, *process, format!("inherited-{index}")))
-                    .collect()
-            }
-            _ => Vec::new(),
-        }
+        super::discovery::domains(&core, &mut self.registry.lock().unwrap(), request)
     }
     fn identity(&self, handle: u64) -> Option<(Key, Kind)> {
         self.registry.lock().unwrap().identity(handle)
@@ -491,105 +403,6 @@ impl ConcurrentAdapter for ConcurrentIo {
     }
 }
 
-fn input_storage(input: &SendInput) -> crate::io_keys::Storage {
-    match input {
-        SendInput::Blocking(_, storage) => *storage,
-        SendInput::Cooperative(input) => input.storage(),
-    }
-}
-
-fn discover(
-    core: &RealCore<SendStreams>,
-    registry: &mut Registry,
-    handle: u64,
-    grant: &crate::handles::Grant,
-) {
-    use crate::handles::Grant as G;
-    // Repeated and narrowed grants of the same provider share its draw/observation
-    // sequence. In particular random's one generator must not get independent keys.
-    let alias = core
-        .state
-        .handles
-        .rows
-        .sorted()
-        .into_iter()
-        .find(|(other, candidate)| {
-            *other != handle
-                && registry.identity(*other).is_some()
-                && match (grant, *candidate) {
-                    (G::Random, G::Random)
-                    | (G::Stdin, G::Stdin)
-                    | (G::MonotonicClock, G::MonotonicClock)
-                    | (G::WallClock, G::WallClock)
-                    | (G::Signals, G::Signals)
-                    | (G::Telemetry, G::Telemetry) => true,
-                    (G::Net { world: a, .. }, G::Net { world: b, .. }) => a == b,
-                    (G::Process { world: a, .. }, G::Process { world: b, .. }) => a == b,
-                    _ => false,
-                }
-        })
-        .map(|(other, _)| other);
-    if let Some(other) = alias {
-        registry.alias(other, handle);
-        return;
-    }
-    match grant {
-        G::Stdout => {
-            registry.sink(handle, core.streams.output.resource_storage());
-        }
-        G::Stderr => {
-            registry.sink(handle, core.streams.stderr.resource_storage());
-        }
-        G::Stdin => {
-            registry.sink(handle, input_storage(&core.streams.input));
-        }
-        G::File { .. } | G::AtomicFile { .. } | G::Mapped { .. } => {
-            let storage = match grant {
-                G::File { .. } => core
-                    .disk
-                    .files
-                    .get(&handle)
-                    .map(|file| crate::io_keys::Storage::of_descriptor(file.as_raw_fd())),
-                G::AtomicFile {
-                    temporary,
-                    directory,
-                    ..
-                } => core
-                    .disk
-                    .prepared
-                    .get(&(*directory, temporary.clone()))
-                    .map(|file| crate::io_keys::Storage::of_descriptor(file.as_raw_fd())),
-                G::Mapped { .. } => core
-                    .disk
-                    .maps
-                    .get(&handle)
-                    .map(crate::mapping::Mapping::storage),
-                _ => unreachable!(),
-            };
-            match storage {
-                Some(crate::io_keys::Storage::Descriptor { dev, ino, .. }) => {
-                    registry.inode(handle, Kind::File, dev, ino);
-                }
-                // Scripted files have no host descriptor and cannot alias the host filesystem.
-                None => {
-                    registry.resource(handle, Kind::File);
-                }
-                _ => {
-                    registry.sink(handle, crate::io_keys::Storage::Unknown);
-                }
-            }
-        }
-        G::Watcher { .. } | G::Directory { .. } => {
-            registry.resource(handle, Kind::File);
-        }
-        G::Span { telemetry, .. } => registry.alias(*telemetry, handle),
-        G::Half { .. } => {} // registered with their parent before result publication
-        _ => {
-            registry.resource(handle, Kind::Other);
-        }
-    }
-}
-
 fn file_call(file: &File, offset: u64, request: &Request) -> FileResult {
     if let Request::FileRead { max, .. } = request {
         let mut bytes = vec![0; (*max).min(65536) as usize];
@@ -635,5 +448,7 @@ fn file_call(file: &File, offset: u64, request: &Request) -> FileResult {
     }
 }
 
+#[cfg(test)]
+mod footprint_tests;
 #[cfg(test)]
 mod tests;

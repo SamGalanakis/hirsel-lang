@@ -772,9 +772,7 @@ fn run_loaded_on_host_traced(
 ) -> Result<(RunOutcome, Option<hirsel_run_schema::CalleeOutcome>), ToolError> {
     program.check_for_execution()?;
     program.refuse_foreign_interpretation()?;
-    let host = snapshot.unwrap_or_else(|| {
-        hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout)
-    });
+    let host = snapshot.unwrap_or_else(|| hirsel_rt::host_launch::HostGrants::process());
     let tape = match launch {
         HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
             record.map(Path::to_path_buf)

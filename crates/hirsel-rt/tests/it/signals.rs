@@ -80,6 +80,7 @@ fn replay_refuses_a_completion_that_contradicts_the_grant_or_the_waited_kinds() 
         request: Request::Signals { io: 1 },
         completion: Completion::Handle(Ok(2)),
         fault: None,
+        resources: None,
     };
     for (kinds, completion) in [
         // A kind the wait did not name.
@@ -100,6 +101,7 @@ fn replay_refuses_a_completion_that_contradicts_the_grant_or_the_waited_kinds() 
                 request: Request::SignalWait { signals: 2, kinds },
                 completion,
                 fault: None,
+                resources: None,
             },
         ];
         let mut sim = SimIo::new(Tree::default(), tape.clone());

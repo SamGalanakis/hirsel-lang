@@ -870,6 +870,9 @@ pub struct Event {
     pub request: Request,
     pub completion: Completion,
     pub fault: Option<Fault>,
+    /// The keyed recorder's resource footprint of this request event; None
+    /// where the recorder declared none (scheduling inputs, coupled adapters).
+    pub resources: Option<Box<crate::io_keys::Footprint>>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]

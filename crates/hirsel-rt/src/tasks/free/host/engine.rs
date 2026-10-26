@@ -444,6 +444,7 @@ pub fn linked_recording(bytes: &[u8]) -> Result<crate::launch::Recording, String
                             request,
                             completion,
                             fault: None,
+                            resources: None,
                         });
                     }
                 }
@@ -460,6 +461,7 @@ pub fn linked_recording(bytes: &[u8]) -> Result<crate::launch::Recording, String
                 request,
                 completion: Completion::Ready,
                 fault: None,
+                resources: None,
             });
         }
     }

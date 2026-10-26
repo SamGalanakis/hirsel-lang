@@ -493,6 +493,7 @@ fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
             request: Request::Stdout { io: 1 },
             completion: Completion::Handle(Ok(2)),
             fault: None,
+            resources: None,
         },
         Event {
             request: Request::Print {
@@ -501,6 +502,7 @@ fn binary_frames_preserve_arbitrary_bytes_and_reject_every_torn_event() {
             },
             completion: Completion::Unit(Ok(())),
             fault: None,
+            resources: None,
         },
     ];
     {

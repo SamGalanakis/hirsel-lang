@@ -354,6 +354,9 @@ pub struct HostGrants {
     io: Option<RealIo>,
     output: Option<Box<dyn std::io::Write>>,
     stderr: Option<Box<dyn std::io::Write>>,
+    /// The process's own descriptors, as native admission binds them, so
+    /// both engines discover the same stdio storage.
+    process_streams: bool,
 }
 impl HostGrants {
     /// Native admission: a record that grants `io.tasks` gets the cooperative providers, so a
@@ -368,6 +371,7 @@ impl HostGrants {
             io: None,
             output: Some(Box::new(output)),
             stderr: None,
+            process_streams: false,
         }
     }
     /// The stream a granted `io.stderr` writes to, instead of the process's standard error.
@@ -381,6 +385,14 @@ impl HostGrants {
         Self {
             always_cooperative: true,
             ..Self::new(output)
+        }
+    }
+    /// Interpreter admission of a root run on the process's own streams
+    /// (`Sinks::process`), as a native executable runs.
+    pub fn process() -> Self {
+        Self {
+            process_streams: true,
+            ..Self::cooperative(crate::launch::RawStdout)
         }
     }
     /// Interpreter admission of a callee run (RUN-12): cooperative providers that park on
@@ -543,6 +555,9 @@ impl HostAuthority for HostGrants {
         }
         if let Some(grant) = run.signals_grant() {
             io.set_signal_grant(grant)?;
+        }
+        if self.process_streams && !is_snapshot {
+            crate::host::Sinks::process().preserve_send_streams(&mut io);
         }
         self.io = Some(io);
         Ok(())

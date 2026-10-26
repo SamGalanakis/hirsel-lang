@@ -29,7 +29,7 @@ pub(crate) fn run_tir_on_host(
             )));
         }
     }
-    let host = hirsel_rt::host_launch::HostGrants::cooperative(hirsel_rt::launch::RawStdout);
+    let host = hirsel_rt::host_launch::HostGrants::process();
     let tape = match launch {
         HostLaunch::Live { record, .. } | HostLaunch::Callee { record, .. } => {
             record.map(Path::to_path_buf)

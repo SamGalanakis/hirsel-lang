@@ -505,8 +505,68 @@ wire_struct!(crate::io::Fault { error, partial });
 wire_struct!(crate::io::Event {
     request,
     completion,
-    fault
+    fault,
+    resources
 });
+
+impl Wire for crate::io_keys::Key {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.0.encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        Ok(Self(Wire::decode(input)?))
+    }
+}
+
+wire_enum!(crate::io_keys::Mode {
+    0 => Shared,
+    1 => Exclusive
+});
+
+wire_enum!(crate::io_keys::Kind {
+    0 => File,
+    1 => Sink { file_backed },
+    2 => Other,
+    3 => Half { stream }
+});
+
+/// Only the canonical form: ascending keys, each once.
+impl Wire for crate::io_keys::KeySet {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.keys().to_vec().encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        let keys = Vec::<(crate::io_keys::Key, crate::io_keys::Mode)>::decode(input)?;
+        if !keys.windows(2).all(|pair| pair[0].0 < pair[1].0) {
+            return Err("non-canonical recorded key set".into());
+        }
+        Ok(Self::new(keys))
+    }
+}
+
+/// Identities in ascending handle order, each handle once.
+impl Wire for crate::io_keys::Footprint {
+    fn encode(&self, out: &mut Vec<u8>) {
+        self.keys.encode(out);
+        self.domains.encode(out);
+        self.identities.encode(out);
+    }
+    fn decode(input: &mut Decode<'_>) -> Result<Self, String> {
+        let value = Self {
+            keys: Wire::decode(input)?,
+            domains: Wire::decode(input)?,
+            identities: Wire::decode(input)?,
+        };
+        if !value
+            .identities
+            .windows(2)
+            .all(|pair| pair[0].0 < pair[1].0)
+        {
+            return Err("non-canonical recorded identities".into());
+        }
+        Ok(value)
+    }
+}
 
 wire_enum!(crate::io::FileKind {
     0 => Regular,

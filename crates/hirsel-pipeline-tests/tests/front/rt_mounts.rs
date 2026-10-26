@@ -236,6 +236,7 @@ fn an_authorized_empty_virtual_mount_issues_a_directory_in_each_simulation() {
         },
         completion: C::Handle(Ok(2)),
         fault: None,
+        resources: None,
     }];
     let mut sim = SimIo::new(tree, tape);
     sim.set_mounts([("work".into(), Access::Read)]).unwrap();

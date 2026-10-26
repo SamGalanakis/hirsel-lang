@@ -45,7 +45,7 @@ pub const COUPLED: Key = Key(1);
 pub const ROOT: Key = Key(2);
 /// The in-process place runner calls go to.
 pub const PLACE: Key = Key(3);
-const FIRST_RESOURCE: u32 = 4;
+pub(crate) const FIRST_RESOURCE: u32 = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Mode {
@@ -100,6 +100,17 @@ pub enum Kind {
     Half { stream: Key },
 }
 
+/// What a keyed recorder declared for one request event, so replay serves the
+/// same resource graph the live run observed (determinism.md, Resource footprints):
+/// the request's keys and auxiliary domains, and every handle identity established
+/// since the previous request event, initial grants included, in handle order.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Footprint {
+    pub keys: KeySet,
+    pub domains: Vec<(Key, u64, String)>,
+    pub identities: Vec<(u64, Key, Kind)>,
+}
+
 /// Assigns logical keys as resources appear, with live alias discovery.
 #[derive(Debug)]
 pub struct Registry {
@@ -111,6 +122,9 @@ pub struct Registry {
     ports: HashMap<Key, Key>,
     sinks: Vec<Key>,
     unknown_storage: bool,
+    /// Handles whose identity was set since the last [`Registry::established`],
+    /// while a recorder asks for them.
+    log: Option<Vec<u64>>,
 }
 
 impl Default for Registry {
@@ -123,6 +137,7 @@ impl Default for Registry {
             ports: HashMap::new(),
             sinks: Vec::new(),
             unknown_storage: false,
+            log: None,
         }
     }
 }
@@ -130,6 +145,30 @@ impl Default for Registry {
 impl Registry {
     pub(crate) fn namespace_coupled(&self) -> bool {
         self.unknown_storage
+    }
+    /// Log identity changes for [`Self::established`] from now on.
+    pub(crate) fn record(&mut self) {
+        self.log.get_or_insert_with(Vec::new);
+    }
+    /// The identities set since the last call, in handle order, omitting handles
+    /// since forgotten: a recorder's footprint identities.
+    pub(crate) fn established(&mut self) -> Vec<(u64, Key, Kind)> {
+        let mut handles = self.log.as_mut().map(std::mem::take).unwrap_or_default();
+        handles.sort_unstable();
+        handles.dedup();
+        handles
+            .into_iter()
+            .filter_map(|handle| {
+                let (key, kind) = self.identity(handle)?;
+                Some((handle, key, kind))
+            })
+            .collect()
+    }
+    fn set(&mut self, handle: u64, row: (Key, Kind)) {
+        self.handles.insert(handle, row);
+        if let Some(log) = &mut self.log {
+            log.push(handle);
+        }
     }
     fn fresh(&mut self) -> Key {
         let key = Key(self.next);
@@ -142,7 +181,7 @@ impl Registry {
     /// A new resource for `handle`.
     pub fn resource(&mut self, handle: u64, kind: Kind) -> Key {
         let key = self.fresh();
-        self.handles.insert(handle, (key, kind));
+        self.set(handle, (key, kind));
         key
     }
     /// `handle` names the host object `(dev, ino)`: the key of the resource already holding
@@ -156,7 +195,7 @@ impl Registry {
                 key
             }
         };
-        self.handles.insert(handle, (key, kind));
+        self.set(handle, (key, kind));
         key
     }
     /// Sink `handle` writes to `storage`: clones and wrappers of one storage share its key.
@@ -186,8 +225,7 @@ impl Registry {
                 (COUPLED, true)
             }
         };
-        self.handles
-            .insert(handle, (key, Kind::Sink { file_backed }));
+        self.set(handle, (key, Kind::Sink { file_backed }));
         if !self.sinks.contains(&key) {
             self.sinks.push(key);
         }
@@ -198,13 +236,13 @@ impl Registry {
         self.next = self
             .next
             .max(key.0.checked_add(1).expect("logical key space exhausted"));
-        self.handles.insert(handle, (key, kind));
+        self.set(handle, (key, kind));
     }
     /// `to` names the same resource as `from` (a narrowed file, an accepted stream's
     /// listener is not one): it keeps `from`'s key.
     pub fn alias(&mut self, from: u64, to: u64) {
         if let Some(&row) = self.handles.get(&from) {
-            self.handles.insert(to, row);
+            self.set(to, row);
         }
     }
     /// Register the two handles returned by a successful `NetSplit`. Like `resource`

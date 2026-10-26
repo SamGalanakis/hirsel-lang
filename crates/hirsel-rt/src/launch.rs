@@ -1032,6 +1032,7 @@ pub fn parse_tape(text: &str) -> Result<Vec<Event>, String> {
                 request,
                 completion,
                 fault,
+                resources: None,
             })
         })
         .collect()

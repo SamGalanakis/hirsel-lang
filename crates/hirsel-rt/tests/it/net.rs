@@ -796,6 +796,7 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             request: request.clone(),
             completion: completion.clone(),
             fault: None,
+            resources: None,
         })
         .collect();
     // Cooperative scheduling inputs: a parked request and a ready one.
@@ -805,16 +806,19 @@ fn tape_v7_round_trips_every_network_event_and_scheduling_input_and_other_versio
             request: requests[0].clone(),
             completion: Completion::Blocked { committed: false },
             fault: None,
+            resources: None,
         },
         Event {
             request: requests[1].clone(),
             completion: Completion::Blocked { committed: true },
             fault: None,
+            resources: None,
         },
         Event {
             request: Request::Ready { wait: 1, points: 7 },
             completion: Completion::Ready,
             fault: None,
+            resources: None,
         },
     ]);
     let text = render_tape(&events).unwrap();

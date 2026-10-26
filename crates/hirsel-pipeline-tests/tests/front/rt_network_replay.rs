@@ -371,6 +371,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
             request: Request::Net { io: 1 },
             completion: Completion::Handle(Ok(2)),
             fault: None,
+            resources: None,
         },
         Event {
             request: Request::Connect {
@@ -381,6 +382,7 @@ fn fault_inputs_come_from_the_original_fixture_not_the_comparison_tape() {
             },
             completion: Completion::NetHandle(Err(NetError::Fault(17))),
             fault: None,
+            resources: None,
         },
     ];
     let mut native = SimIo::new(tree.clone(), tape.clone());

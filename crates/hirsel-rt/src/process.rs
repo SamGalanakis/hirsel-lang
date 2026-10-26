@@ -2787,6 +2787,7 @@ mod timed_provider_tests {
                 request: Request::ProcessTime { from, to },
                 completion: Completion::Ready,
                 fault: None,
+                resources: None,
             });
             let original = tape.clone();
             let mut io = replay(&grant, tape);

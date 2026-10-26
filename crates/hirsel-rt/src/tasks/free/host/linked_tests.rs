@@ -61,6 +61,7 @@ fn fixture() -> (Recording, Recording, RunnerRequest, RunnerCompletion) {
         request: Request::CallReturn(CalleeOutcome::Ok(vec![9])),
         completion: Completion::Ready,
         fault: None,
+        resources: None,
     });
     let completion = RunnerCompletion {
         outcome: CallOutcome::Ok(vec![9]),
@@ -73,6 +74,7 @@ fn event(request: Request, completion: Completion) -> crate::io::Event {
         request,
         completion,
         fault: None,
+        resources: None,
     }
 }
 fn records(op: u64, request: Request, completion: Option<Completion>) -> Vec<Record> {

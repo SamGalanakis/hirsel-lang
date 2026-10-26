@@ -366,6 +366,7 @@ mod tests {
             request: Request::Stdout { io: 1 },
             completion: Completion::Handle(Ok(2)),
             fault: None,
+            resources: None,
         };
         timed.event(None, &event).unwrap();
         timed.barrier().unwrap();
@@ -418,6 +419,7 @@ mod tests {
             },
             completion: Completion::Unit(Ok(())),
             fault: None,
+            resources: None,
         };
         for _ in 0..count {
             timed.event(None, &event).unwrap();

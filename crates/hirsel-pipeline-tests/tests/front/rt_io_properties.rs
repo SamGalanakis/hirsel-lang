@@ -332,6 +332,7 @@ fn confinement(seeds: u64, draws: usize) {
                 request,
                 completion: expected,
                 fault: None,
+                resources: None,
             });
         }
         let mut paths: Vec<String> = [
@@ -398,6 +399,7 @@ fn confinement(seeds: u64, draws: usize) {
                     request,
                     completion: expected,
                     fault: None,
+                    resources: None,
                 });
                 count += 1;
             }
@@ -701,6 +703,7 @@ fn net_arguments(request: &Request, completion: &Completion) -> (&'static str, V
             request: request.clone(),
             completion: completion.clone(),
             fault: None,
+            resources: None,
         },
         crate::rt_replay::ReplayFixture {
             events: &[],

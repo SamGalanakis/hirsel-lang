@@ -1616,6 +1616,7 @@ fn timed_refusal_controls(
                     request: R::ProcessTime { from: 0, to: 5 },
                     completion: C::Ready,
                     fault: None,
+                    resources: None,
                 });
                 "InvalidCompletion".into()
             }
