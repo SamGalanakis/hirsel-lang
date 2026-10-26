@@ -801,41 +801,41 @@ pub(super) fn install(
     }
     let launch_entry = program.launch_entry().cloned();
     let foreign_unreplayable = program.engine.foreign_unreplayable;
-    // Closed `with` specializations are ordinary selected roots (GEN-6).
-    let indexed = program.engine.indexed_definitions();
-    program.engine.register_specializations(&indexed);
-    let sources = program.engine.sources.clone();
-    let required = program.engine.front_source_roots();
-    let definitions = indexed
-        .into_iter()
-        .chain(required)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let footprint = match program.engine.front_input_footprint(&definitions) {
-        Ok(footprint) => footprint,
-        Err(error) => return Err(loading.failed(program.error(error))),
-    };
-    let mut run_inputs = if needs_run {
-        match program.engine.front_run_inputs(limits.snapshot_bytes) {
-            Ok(inputs) => Some(inputs),
+    // Capturing the footprint and the Run and native inputs can still name a
+    // specialization (GEN-6); select again until no new root appears.
+    let mut definitions = selected_definitions(&mut program.engine);
+    let (footprint, mut run_inputs, mut native_catalogue) = loop {
+        let footprint = match program.engine.front_input_footprint(&definitions) {
+            Ok(footprint) => footprint,
             Err(error) => return Err(loading.failed(program.error(error))),
-        }
-    } else {
-        None
-    };
-    let mut native_catalogue = if matches!(request.operation, CompileOperation::NativeOwnership(_))
-    {
-        match program
-            .engine
-            .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
+        };
+        let run_inputs = if needs_run {
+            match program.engine.front_run_inputs(limits.snapshot_bytes) {
+                Ok(inputs) => Some(inputs),
+                Err(error) => return Err(loading.failed(program.error(error))),
+            }
+        } else {
+            None
+        };
+        let native_catalogue = if matches!(request.operation, CompileOperation::NativeOwnership(_))
         {
-            Ok(inputs) => Some(inputs),
-            Err(error) => return Err(loading.failed(program.error(error))),
+            match program
+                .engine
+                .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
+            {
+                Ok(inputs) => Some(inputs),
+                Err(error) => return Err(loading.failed(program.error(error))),
+            }
+        } else {
+            None
+        };
+        let selected = selected_definitions(&mut program.engine);
+        if selected == definitions {
+            break (footprint, run_inputs, native_catalogue);
         }
-    } else {
-        None
+        definitions = selected;
     };
+    let sources = program.engine.sources.clone();
     let plan = Plan::new(
         limits,
         config,
@@ -1257,4 +1257,19 @@ fn runtime_errors(store: &dyn ResultStore) -> Result<RuntimeErrors, ToolError> {
         protocol: record(b"compiler query protocol failure")?,
         panicked: record(b"compiler query producer panicked")?,
     })
+}
+
+/// Every indexed definition and required source root, after registering the
+/// closed `with` specializations they name (GEN-6), which become roots too.
+fn selected_definitions(engine: &mut hirsel_engine::QueryEngine) -> Vec<DefPath> {
+    let indexed = engine.indexed_definitions();
+    engine.register_specializations(&indexed);
+    let required = engine.front_source_roots();
+    engine.register_specializations(&required);
+    indexed
+        .into_iter()
+        .chain(engine.front_source_roots())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
