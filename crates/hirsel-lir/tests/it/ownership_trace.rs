@@ -3598,3 +3598,150 @@ fn ownership_trace_native_compound_completions_keep_original_marker_and_exact_ch
     forged.observations[0].marker.owner = Location::Value(ValueId(0));
     assert!(native::LeafPlan::from_relocated(&after, &table, &forged).is_err());
 }
+
+#[test]
+fn ownership_trace_compound_failure_boundary_stays_before_independent_cleanup_splice() {
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep};
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR), (Passing::Take, l::PAIR)], None);
+    let pair = &mut t.table.layouts[l::PAIR.0 as usize];
+    pair.fields[0].layout = l::RES;
+    pair.fields[1].layout = l::RES;
+    pair.copy = CopyRecipe::NotCopyable;
+    pair.drop = vec![
+        DropStep::Child {
+            offset: 8,
+            layout: l::RES,
+        },
+        DropStep::Child {
+            offset: 0,
+            layout: l::RES,
+        },
+    ];
+    pair.scan.clear();
+    let abi = t.abi(&[(Passing::Borrow, l::RES)], None);
+    let first = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
+    let first_version = t.version_of(first);
+    t.param(first_version);
+    let second = t.slot(l::PAIR, SlotKind::Parameter(1), ROOT);
+    let second_version = t.version_of(second);
+    t.param(second_version);
+    // Lowering visits the source drop first. Its failure successor is then
+    // spliced into a distinct compound cleanup with its own original anchor.
+    let cleanup = t.builder.block(BlockKind::FailureCleanup, &[]);
+    let body = t.builder.block(BlockKind::Body, &[]);
+    let undo = [support::Undo::Drop(second), support::Undo::Drop(first)];
+    let first_address = t.at(ENTRY, first, &[], &undo);
+    let second_address = t.at(ENTRY, second, &[], &undo);
+    t.builder.jump(ENTRY, body, &[]);
+    let anchor = t.cleanup_anchor();
+    let independent = t.cleanup_anchor();
+    let failed = t.failure(cleanup);
+    t.builder.push(
+        body,
+        Inst::Drop {
+            address: first_address,
+            if_live: false,
+            anchor,
+            failure: failed,
+        },
+    );
+    t.builder.push(
+        body,
+        Inst::StorageDead {
+            slot: first,
+            if_live: false,
+        },
+    );
+    let failure = t.fails();
+    t.builder.push(
+        body,
+        Inst::Drop {
+            address: second_address,
+            if_live: false,
+            anchor: independent,
+            failure,
+        },
+    );
+    t.builder.push(
+        body,
+        Inst::StorageDead {
+            slot: second,
+            if_live: false,
+        },
+    );
+    t.builder.ret(body, None);
+    t.builder.push(
+        cleanup,
+        Inst::StorageDead {
+            slot: first,
+            if_live: false,
+        },
+    );
+    let failure = t.fails();
+    t.builder.push(
+        cleanup,
+        Inst::Drop {
+            address: second_address,
+            if_live: false,
+            anchor: independent,
+            failure,
+        },
+    );
+    t.builder.push(
+        cleanup,
+        Inst::StorageDead {
+            slot: second,
+            if_live: false,
+        },
+    );
+    t.builder.term(cleanup, Terminator::Propagate);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table).into_raw();
+    let plan = Plan::new(
+        &unit,
+        vec![Observation {
+            point: Point::Instruction {
+                block: body,
+                index: 0,
+                moment: Moment::Before,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                site: unit.tables.cleanup_anchors[anchor.index()].site,
+                kind: Kind::Drop,
+                token: Location::Address(first_address),
+                owner: Location::Address(first_address),
+            },
+        }],
+    );
+    let finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
+        l::RES,
+        hirsel_rc::cleanup::Finalizer {
+            origin: UnitOrigin::Source,
+            definition: support::path("Res"),
+            instance: support::hash("Res.drop"),
+            abi,
+        },
+    )]));
+    let (after, output, _) = hirsel_rc::cleanup::lower_observed(
+        unit,
+        &finalizers,
+        &hirsel_lir::LayoutIndex::new(&table),
+        &plan,
+    )
+    .unwrap();
+    let after = checked_native_fixture(after, &table);
+    let checked = check(after.unit(), &output).unwrap();
+    assert_eq!(output.observations[0].marker, plan.observations[0].marker);
+    let commits = checked.commits(after.unit(), MarkerId(0)).unwrap();
+    assert!(commits.len() >= 6);
+    for point in commits {
+        let Point::Instruction { block, index, .. } = point else {
+            panic!("not a physical completion")
+        };
+        assert!(
+            matches!(after.unit().blocks[block.index()].instructions.get(&after.unit().instructions).unwrap()[index as usize],
+            Inst::FinalizeEnd { anchor: action, .. } if action == anchor)
+        );
+    }
+}

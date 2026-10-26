@@ -261,7 +261,11 @@ impl Reporter for Observations {
                         } else {
                             shifted_cut
                         },
-                        failure: if failure == block { tail } else { failure },
+                        // This is an external successor's entry boundary,
+                        // not a position in the detached instruction suffix.
+                        // Its incoming edges still enter the original block
+                        // and must stop before that independent cleanup.
+                        failure,
                     }
                 }
                 Point::FinalizerDrop { block: b } if b == block => {
