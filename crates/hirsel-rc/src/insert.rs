@@ -4549,7 +4549,7 @@ pub(crate) fn copy_on_write(
     let mut lent = BTreeSet::new();
     // Lists lent `mut` to a storage primitive that writes them in place.
     let mut in_place = BTreeSet::new();
-    for term in &unit.terminators {
+    for (b, term) in unit.terminators.iter().enumerate() {
         if let Terminator::Call { call, .. } = *term {
             let site = &unit.tables.calls[call.index()];
             for a in call_arguments(&unit, call) {
@@ -4589,7 +4589,7 @@ pub(crate) fn copy_on_write(
                                     .any(|name| d.is_core(name))
                             })
                         {
-                            in_place.insert(address);
+                            in_place.insert((BlockId(b as u32), address));
                         }
                     }
                 }
@@ -4604,15 +4604,7 @@ pub(crate) fn copy_on_write(
                 && (!p.crossings.is_empty() || holding.contains(&a))
         })
     };
-    // Their loans detach the List where each begins, before the call.
-    let lending: BTreeSet<LoanId> = (0..unit.tables.loans.len())
-        .map(|l| LoanId(l as u32))
-        .filter(|l| {
-            let loan = &unit.tables.loans[l.index()];
-            loan.mutable && in_place.contains(&loan.address)
-        })
-        .collect();
-    if lending.is_empty() && !written.iter().any(|&a| crossing(a)) {
+    if in_place.is_empty() && !written.iter().any(|&a| crossing(a)) {
         return Ok(unit);
     }
     let Some(bool_layout) = table
@@ -4651,7 +4643,7 @@ pub(crate) fn copy_on_write(
         ValueRepr::Scalar(hirsel_lir::layout_types::ScalarKind::Bool),
         LayoutId(bool_layout as u32),
     );
-    let mut targets = detach_targets(&ed, lay, &facts, &writes, lending);
+    let mut targets = detach_targets(&ed, lay, &facts, &writes, &in_place);
     // Back to front, so earlier positions in a block stay put.
     let mut order: Vec<usize> = (0..targets.len()).collect();
     order.sort_by_key(|&k| (targets[k].block, std::cmp::Reverse(targets[k].index)));
@@ -4803,13 +4795,14 @@ struct Target {
 /// detach moves back to the latest point of its block where nothing but a
 /// region mark is pending, so its failure cleanup only drops slots, and no
 /// later operation it passes defines an index the places use or touches the
-/// root slot. Each `lending` loan also detaches its block where it begins.
+/// root slot. Each loan active at an `in_place` call detaches its block where
+/// it begins.
 fn detach_targets(
     ed: &Editor<Rc>,
     lay: Lay<'_>,
     facts: &Facts,
     writes: &[Write],
-    lending: BTreeSet<LoanId>,
+    in_place: &BTreeSet<(BlockId, AddressId)>,
 ) -> Vec<Target> {
     let flow = Flow {
         unit: &ed.unit,
@@ -4828,7 +4821,55 @@ fn detach_targets(
     };
     let loan_place = |l: LoanId| projection_of(&ed.unit, ed.unit.tables.loans[l.index()].address);
     let mut targets = Vec::new();
-    let mut lent = lending;
+    let mut lent = BTreeSet::new();
+    let mut loans_by_address: BTreeMap<AddressId, Vec<LoanId>> = in_place
+        .iter()
+        .map(|&(_, address)| (address, Vec::new()))
+        .collect();
+    if !loans_by_address.is_empty() {
+        for (l, loan) in ed.unit.tables.loans.iter().enumerate() {
+            if loan.mutable
+                && let Some(loans) = loans_by_address.get_mut(&loan.address)
+            {
+                loans.push(LoanId(l as u32));
+            }
+        }
+    }
+    // An address can be lent by several distinct calls. Only the loan active
+    // at the in-place primitive needs a detach: earlier reserve and push loans
+    // make their own storage writable and must not copy the empty list first.
+    for &(block, address) in in_place {
+        let Some(state) = &states[block.index()] else {
+            continue;
+        };
+        // Only BeginLoan and EndLoan change this component within a block.
+        // Retain its terminal facts without cloning every instruction's slots
+        // and credits just to inspect the state at the primitive call.
+        let mut loans: BTreeSet<_> = loans_by_address
+            .get(&address)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|l| state.loans[l.index()] != Tri::No)
+            .collect();
+        for inst in &ed.code[block.index()] {
+            match *inst {
+                Inst::BeginLoan {
+                    loan,
+                    address: borrowed,
+                    mutable: true,
+                    ..
+                } if borrowed == address => {
+                    loans.insert(loan);
+                }
+                Inst::EndLoan { loan, .. } => {
+                    loans.remove(&loan);
+                }
+                _ => {}
+            }
+        }
+        lent.extend(loans);
+    }
     for w in writes {
         let pre = pre_states(w.block);
         let Some(state) = pre.get(w.index) else {
