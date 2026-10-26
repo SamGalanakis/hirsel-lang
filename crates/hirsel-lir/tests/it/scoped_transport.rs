@@ -294,11 +294,24 @@ fn carrier_retainer(scoped: bool, sink: CarrierSink) -> Vec<K> {
             t.builder.push(ENTRY, Inst::StorageLive { slot: local });
             let a = t.at(ENTRY, local, &[], &[Undo::Release(v)]);
             let version = t.store(ENTRY, a, v, local);
-            let a = t.at(
-                ENTRY,
-                local,
+            // Ready cleanup consumes the whole carrier and releases it; the
+            // pre-Ready semantic Drop is not part of this stage's vocabulary.
+            let cleanup = t.builder.block(BlockKind::FailureCleanup, &[]);
+            let held = t.read(cleanup, a, version, ReadMode::Take, None);
+            t.release(cleanup, held, &[]);
+            t.builder.term(cleanup, Terminator::Propagate);
+            let a = t.address(
+                AddressBase::Slot(local),
                 &[ProjectionStep::Field(0)],
-                &[Undo::Drop(local)],
+                l::ERASED,
+            );
+            let failure = t.failure(cleanup);
+            t.builder.push(
+                ENTRY,
+                Inst::Address {
+                    address: a,
+                    failure,
+                },
             );
             let result = t.read(ENTRY, a, version, ReadMode::Take, None);
             t.builder.push(
@@ -359,6 +372,9 @@ fn carrier_retainer(scoped: bool, sink: CarrierSink) -> Vec<K> {
             t.builder.push(ENTRY, Inst::StorageLive { slot: displaced });
             let version = t.version_of(s);
             let displaced_version = t.version_of(displaced);
+            // Prepare whole displaced storage while it is still empty, then
+            // read its replaced owner without an intervening failing action.
+            let displaced_address = t.at(ENTRY, displaced, &[], &[Undo::Release(copied)]);
             let failure = t.fails();
             t.builder.push(
                 ENTRY,
@@ -372,8 +388,13 @@ fn carrier_retainer(scoped: bool, sink: CarrierSink) -> Vec<K> {
                     failure,
                 },
             );
-            let a = t.at(ENTRY, displaced, &[], &[Undo::Drop(displaced)]);
-            let old = t.read(ENTRY, a, displaced_version, ReadMode::Take, None);
+            let old = t.read(
+                ENTRY,
+                displaced_address,
+                displaced_version,
+                ReadMode::Take,
+                None,
+            );
             t.builder.push(
                 ENTRY,
                 Inst::StorageDead {
