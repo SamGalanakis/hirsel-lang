@@ -59,8 +59,9 @@ fn isolate_resume_56_nested_cleanup_catches_preserve_the_active_prefix() {
         r#"
 resource type Nested { tasks: Tasks }
 drop(x) {
-  let child: Result[u64, Failure] = task.isolate(x.tasks, fn() -> u64 {
-    let grandchild: Result[u64, Failure] = task.isolate(x.tasks, fn() -> u64 {
+  let tasks = x.tasks
+  let child: Result[u64, Failure] = task.isolate(tasks, fn() -> u64 {
+    let grandchild: Result[u64, Failure] = task.isolate(tasks, fn() -> u64 {
       failure.check(false, Bounds())
       0u64
     })
