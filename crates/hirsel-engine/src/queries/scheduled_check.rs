@@ -81,6 +81,8 @@ pub struct FrontCheckQueries {
     lint: Option<DeadArmLint>,
     constants: BTreeSet<DefId>,
     sources: SourceMap,
+    /// The indexed modules, read only to explain a missing name (PROG-1).
+    declarations: Arc<crate::snapshot::Declarations>,
     records: crate::NativeRecords,
     anchors: crate::NativeRecordContext,
     store: Arc<dyn ResultStore>,
@@ -581,7 +583,16 @@ impl Task {
         if completion == CheckCompletion::Complete && !has_errors(&diagnostics) {
             diagnostics.extend(queries.dead_arm_warnings());
         }
-        let diagnostics = crate::select_diagnostics(diagnostics, Some(&queries.sources));
+        let mut diagnostics = crate::select_diagnostics(diagnostics, Some(&queries.sources));
+        let files: Vec<_> = (queries.plan.files.iter())
+            .map(|(file, cx, _)| (*file, cx))
+            .collect();
+        crate::package::diagnostic_guidance::append(
+            &files,
+            &queries.sources,
+            &queries.declarations,
+            &mut diagnostics,
+        );
         let bytes = queries
             .records
             .encode(
@@ -767,6 +778,7 @@ impl QueryEngine {
             lint,
             constants,
             sources: self.sources.clone(),
+            declarations: self.declarations.frozen(),
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             anchors: crate::NativeRecordContext::capture(self),
             store,

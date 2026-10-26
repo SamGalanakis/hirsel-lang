@@ -38,23 +38,28 @@ fn missing(diagnostic: &Diagnostic) -> Option<(Option<PackageId>, Vec<String>)> 
     (segments.len() >= 2).then_some((package, segments))
 }
 
-pub(super) fn append(program: &LoadedProgram, diagnostics: &mut [Diagnostic]) {
+pub(crate) fn append(
+    files: &[(FileId, &FileContext)],
+    sources: &SourceMap,
+    declarations: &crate::snapshot::Declarations,
+    diagnostics: &mut [Diagnostic],
+) {
     // In particular, a successful check never traverses selected sources or
-    // asks for a frozen index merely to improve diagnostic prose.
+    // builds a package index merely to improve diagnostic prose.
     for diagnostic in diagnostics {
         let Some((package, segments)) = missing(diagnostic) else {
             continue;
         };
-        let site = program.engine.sources.resolve(diagnostic.primary);
-        let Some((_, viewer)) = program.files.iter().find(|(file, _)| *file == site.file) else {
+        let site = sources.resolve(diagnostic.primary);
+        let Some((_, viewer)) = files.iter().find(|(file, _)| *file == site.file) else {
             continue;
         };
         let (member, modules) = segments.split_last().unwrap();
         let (stem, prefix) = modules.split_last().unwrap();
         let mut index = None;
         let mut candidates = BTreeSet::new();
-        for (file, registered) in &program.files {
-            let Some(source) = program.engine.sources.file(*file) else {
+        for (file, registered) in files {
+            let Some(source) = sources.file(*file) else {
                 continue;
             };
             if source.path.file_stem().and_then(|s| s.to_str()) != Some(stem.as_str())
@@ -64,13 +69,7 @@ pub(super) fn append(program: &LoadedProgram, diagnostics: &mut [Diagnostic]) {
             {
                 continue;
             }
-            let index = index.get_or_insert_with(|| {
-                program
-                    .engine
-                    .declarations
-                    .frozen()
-                    .index(viewer.package.clone())
-            });
+            let index = index.get_or_insert_with(|| declarations.index(viewer.package.clone()));
             let mut proposed = registered.modules.clone();
             proposed.push(member.clone());
             // lookup_spelling proves both membership and PROG-2 access using

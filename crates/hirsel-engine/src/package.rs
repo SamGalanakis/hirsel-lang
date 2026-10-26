@@ -1,6 +1,6 @@
 //! PROG-1: explicit source packages and the toolchain std for manifestless sources.
 mod dependency_card;
-mod diagnostic_guidance;
+pub(crate) mod diagnostic_guidance;
 mod slots;
 pub use dependency_card::render_dependency_cards;
 pub use slots::{ImplementationSlot, PackageSlots};
@@ -260,7 +260,13 @@ impl LoadedProgram {
         }
         let _merge = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::Merge);
         let mut diagnostics = select_diagnostics(diagnostics, Some(&self.engine.sources));
-        diagnostic_guidance::append(self, &mut diagnostics);
+        let files: Vec<_> = self.files.iter().map(|(file, cx)| (*file, cx)).collect();
+        diagnostic_guidance::append(
+            &files,
+            &self.engine.sources,
+            &self.engine.declarations.frozen(),
+            &mut diagnostics,
+        );
         Ok(CheckOutput {
             diagnostics,
             completion,
