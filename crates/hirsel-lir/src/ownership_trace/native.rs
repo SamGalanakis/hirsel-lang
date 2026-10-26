@@ -768,13 +768,27 @@ impl LeafPlan {
     }
 }
 
-/// Independently derived parent/target unit identities for diagnostic objects.
-/// Every direct target must be present: an ordinary object cannot silently
-/// supply an unobserved callee. Descriptor finalizers remain checked separately.
+/// Ordinary checked calls, excluding exact implicit cleanup protocols. Cleanup
+/// lowering uses Function symbols too: classification must prove the borrowed
+/// receiver and every matching finalization exit, never a symbol name or merely
+/// a FinalizeBegin elsewhere in the block. All targets remain required by the
+/// complete physical local_call_sites inventory before this projection.
 pub fn local_calls(
     units: &[&ValidatedUnit<Ready>],
 ) -> Result<BTreeMap<[u8; 32], std::collections::BTreeSet<[u8; 32]>>, String> {
-    Ok(local_call_sites(units)?
+    let mut calls = local_call_sites(units)?;
+    for unit in units {
+        let body = unit.unit();
+        let sites = calls
+            .get_mut(&body.digest().0)
+            .ok_or("missing checked call inventory")?;
+        sites.retain(|block, _| {
+            !super::finalizer::begin(body, *block).is_some_and(|(address, _)| {
+                super::finalizer::exits(body, *block, address).is_some()
+            })
+        });
+    }
+    Ok(calls
         .into_iter()
         .map(|(unit, sites)| (unit, sites.into_values().collect()))
         .collect())

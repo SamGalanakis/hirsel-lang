@@ -3075,3 +3075,80 @@ fn ownership_trace_alias_refuses_ended_owner_scope_and_reactivated_stale_view() 
         );
     }
 }
+
+#[test]
+fn ownership_trace_call_inventory_separates_implicit_cleanup_without_losing_physical_targets() {
+    use hirsel_lir::stage::Ready;
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let caller = hirsel_rc::ready::ready_indexed(before, &finalizers, &index).unwrap();
+    let caller = checked_native_fixture(caller, &table);
+    let symbol = caller
+        .unit()
+        .tables
+        .symbols
+        .iter()
+        .find(|symbol| symbol.kind == SymbolKind::Function)
+        .unwrap();
+    // Cleanup deliberately uses Function symbols, just like source calls.
+    let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::RES)], None);
+    let slot = t.slot(l::RES, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    t.builder.ret(ENTRY, None);
+    let (mut target, target_table, _) = t.finish();
+    target.header.definition = symbol.definition.clone();
+    target.header.instance = symbol.instance.unwrap();
+    let target = checked_native_fixture(target, &target_table);
+    let selected = [&caller, &target];
+    let calls = native::local_calls(&selected).unwrap();
+    assert!(calls.values().all(|targets| targets.is_empty()));
+    let sites = native::local_call_sites(&selected).unwrap();
+    assert_eq!(
+        sites[&caller.unit().digest().0]
+            .values()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![target.unit().digest().0]
+    );
+    assert!(
+        native::local_calls(&[&caller])
+            .unwrap_err()
+            .contains("missing diagnostic call target")
+    );
+
+    // The same borrowed receiver and callee remain ordinary without the
+    // matching finalization protocol. Symbol identity is never a shortcut.
+    let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::RES)], None);
+    let slot = t.slot(l::RES, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let loan = t.loan(address, false);
+    t.begin(ENTRY, loan);
+    let receiver = t.read(ENTRY, address, version, ReadMode::Borrow, Some(loan));
+    let normal = t.builder.block(BlockKind::Body, &[]);
+    let failure = t.cleanup(&[support::Undo::End(loan)]);
+    t.call(
+        ENTRY,
+        &[(Passing::Borrow, l::RES)],
+        None,
+        &[ArgumentValue::Value(receiver)],
+        (normal, &[]),
+        failure,
+    );
+    t.end(normal, loan);
+    t.builder.ret(normal, None);
+    let (mut ordinary, ordinary_table, _) = t.finish();
+    ordinary.header.definition = support::path("ordinary");
+    ordinary.tables.symbols[0] = symbol.clone();
+    let ordinary = checked_native_fixture(ordinary, &ordinary_table);
+    let calls = native::local_calls(&[&ordinary, &target]).unwrap();
+    assert_eq!(
+        calls[&ordinary.unit().digest().0]
+            .iter()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![target.unit().digest().0]
+    );
+}

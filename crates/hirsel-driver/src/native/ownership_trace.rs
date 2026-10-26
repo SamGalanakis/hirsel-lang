@@ -117,10 +117,14 @@ pub(crate) fn emit_relocated(
         .revision(entry)
         .ok_or_else(|| failed("ownership emission has no checked semantic entry binding"))?
         .digest();
-    let calls = hirsel_lir::ownership_trace::native::local_calls(selected)
-        .map_err(|message| NativeError::new(StageName::Emission, message))?;
     let call_sites =
         hirsel_lir::ownership_trace::native::local_call_sites(selected).map_err(failed)?;
+    // Runtime frames include implicit finalizers as well as ordinary calls.
+    // Source classification cannot remove a physical target from decoding.
+    let calls = call_sites
+        .iter()
+        .map(|(unit, sites)| (*unit, sites.values().copied().collect()))
+        .collect();
     let mut units = BTreeMap::new();
     for unit in selected {
         let original = plans
