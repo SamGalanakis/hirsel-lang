@@ -6,7 +6,7 @@ use crate::support;
 use hirsel_core_contract::Passing;
 use hirsel_lir::effect::Opcode;
 use hirsel_lir::ir::*;
-use hirsel_lir::stage::Value;
+use hirsel_lir::stage::{Rc, Stage, Value};
 use support::*;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -27,12 +27,29 @@ enum Mutant {
     Forwarded,
     MissingEnd,
     DoubleEnd,
+    InfallibleRelease,
+    FallibleRelease,
 }
 
 /// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
 /// and its cleanup catches the failures since that count and returns.
 fn isolated(m: Mutant) -> Vec<K> {
-    let mut t = Lir::<Value>::new(&[(Passing::Borrow, l::U64)], None);
+    if matches!(m, Mutant::InfallibleRelease | Mutant::FallibleRelease) {
+        isolated_stage::<Rc>(m)
+    } else {
+        isolated_stage::<Value>(m)
+    }
+}
+
+fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
+    let released = match m {
+        Mutant::InfallibleRelease => Some(l::BLK),
+        Mutant::FallibleRelease => Some(l::RESBLK),
+        _ => None,
+    };
+    let mut parameters = vec![(Passing::Borrow, l::U64)];
+    parameters.extend(released.map(|layout| (Passing::Take, layout)));
+    let mut t = Lir::<S>::new(&parameters, None);
     if m != Mutant::Source {
         t.builder.unit.header.origin = UnitOrigin::Library;
     }
@@ -40,6 +57,15 @@ fn isolated(m: Mutant) -> Vec<K> {
     t.param(count);
     let after = t.builder.block(BlockKind::Body, &[]);
     let propagate = t.builder.propagate();
+    let owner = released.map(|layout| {
+        let owner = t.owned(layout);
+        t.param(owner);
+        owner
+    });
+    let begin_failed = match owner {
+        Some(owner) => t.releasing(&[owner]),
+        None => propagate,
+    };
     let params = [(Passing::Borrow, l::U64)];
     let abi = t.abi(&params, Some(l::U64));
     let name = if m == Mutant::WrongBegin {
@@ -74,9 +100,15 @@ fn isolated(m: Mutant) -> Vec<K> {
             Some(l::U64),
             &[ArgumentValue::Value(count)],
             (after, &[]),
-            propagate,
+            begin_failed,
         )
         .unwrap();
+    if let Some(owner) = owner {
+        // Only the release's failure bypasses End. Its normal path still
+        // reaches the ordinary catch and retires the invocation exactly once.
+        let failure = t.failure(propagate);
+        t.release_with(after, owner, failure);
+    }
     let start = if m == Mutant::Start {
         t.int(after)
     } else if m == Mutant::Parameter {
@@ -172,6 +204,20 @@ fn an_isolation_ends_once_on_its_terminal_path() {
     pair(
         |m| isolated(if m { Mutant::DoubleEnd } else { Mutant::None }),
         |k| *k == K::Placement("isolation End without its active begin"),
+    );
+}
+
+#[test]
+fn only_descriptor_proved_infallible_release_edges_may_skip_end() {
+    pair(
+        |m| {
+            isolated(if m {
+                Mutant::FallibleRelease
+            } else {
+                Mutant::InfallibleRelease
+            })
+        },
+        |k| *k == K::Placement("isolation terminal path without End"),
     );
 }
 
