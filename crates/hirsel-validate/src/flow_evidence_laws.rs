@@ -36,6 +36,7 @@ fn with_model(f: &Fixture, run: impl FnOnce(&mut Checker<'_>, &Model, State)) {
         returned: BTreeMap::new(),
         static_data: None,
         proof_errors: std::cell::RefCell::new(Vec::new()),
+        unique_parts_cache: Default::default(),
     };
     checker.types();
     assert!(checker.errors.is_empty(), "{:?}", checker.errors);
@@ -117,6 +118,7 @@ fn normalized(state: &State, model: &Model) -> (State, [Vec<u32>; 5]) {
         must,
         ownership_conflicts,
         shared,
+        nested_shared,
         borrow_only,
         borrowed_shares,
         current_unique,
@@ -154,6 +156,7 @@ fn normalized(state: &State, model: &Model) -> (State, [Vec<u32>; 5]) {
         must,
         ownership_conflicts,
         shared,
+        nested_shared,
         borrow_only,
         borrowed_shares,
         current_unique,
