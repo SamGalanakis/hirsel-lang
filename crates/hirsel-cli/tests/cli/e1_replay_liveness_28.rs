@@ -1,9 +1,5 @@
 //! A deadline/select with an unanswered connect exposed a home/role wait cycle.
-use std::{
-    path::Path,
-    process::{Command, Output, Stdio},
-    time::{Duration, Instant},
-};
+use std::path::Path;
 
 const PROGRAM: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
@@ -33,35 +29,7 @@ const PROGRAM: &str = r#"pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 "#;
 
-fn bounded(command: &mut Command, label: &str) -> Output {
-    eprintln!("REPLAY_LIVENESS STARTED {label}");
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        if child.try_wait().unwrap().is_some() {
-            let output = child.wait_with_output().unwrap();
-            assert!(
-                output.status.success() && output.stderr.is_empty(),
-                "{label}: {output:?}"
-            );
-            eprintln!("REPLAY_LIVENESS COMPLETED {label}");
-            return output;
-        }
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
-            panic!("{label}: replay did not finish within 20s: {output:?}");
-        }
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
-
-fn package(root: &Path) -> std::path::PathBuf {
+pub(super) fn package(root: &Path) -> std::path::PathBuf {
     std::fs::write(root.join("main.hir"), PROGRAM).unwrap();
     let stdlib = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../stdlib/std@1/hirsel.json")
@@ -72,58 +40,6 @@ fn package(root: &Path) -> std::path::PathBuf {
     manifest
 }
 
-#[test]
-fn deadline_select_native_replay_finishes_repeatedly_at_each_width() {
-    let scratch = tempfile::tempdir().unwrap();
-    let root = scratch.path();
-    let manifest = package(root);
-    let cli = env!("CARGO_BIN_EXE_hirsel");
-    let grants = root.join("grants.json");
-    std::fs::write(&grants, serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"net":{"provider":"net.script@2","rules":[{"address":"/firstreply/0.sock","service":"0","operation":"unix_connect"},{"address":"/firstreply/1.sock","service":"0","operation":"unix_connect"}],"peers":[{"address":"/firstreply/0.sock","port":0,"resolves_to":[],"tls":"plain","connections":[{"open":[{"send":[120]}]}]},{"address":"/firstreply/1.sock","port":0,"resolves_to":[],"tls":"plain","connections":["unanswered"]}]}},"placement":{"cores":4,"commit":"shared","reorder":"auto"}}).to_string()).unwrap();
-    for engine in ["llvm", "cranelift"] {
-        let exe = root.join(engine);
-        let tape = root.join(format!("{engine}.tape"));
-        // Compilation is setup, outside the replay's normal completion bound.
-        let built = Command::new(cli)
-            .args(["build", "--backend", engine])
-            .arg(&manifest)
-            .arg("-o")
-            .arg(&exe)
-            .output()
-            .unwrap();
-        assert!(built.status.success(), "{engine}: {built:?}");
-        let recorded = bounded(
-            Command::new(&exe)
-                .arg("--hirsel-record")
-                .arg(&tape)
-                .arg("--hirsel-grants")
-                .arg(&grants),
-            &format!("{engine} record"),
-        );
-        assert_eq!(recorded.stdout, b"done\n");
-        let original = std::fs::read(&tape).unwrap();
-        let interpreted = bounded(
-            Command::new(cli)
-                .arg("run")
-                .arg(&manifest)
-                .arg("--replay")
-                .arg(&tape),
-            &format!("{engine} interpreter replay"),
-        );
-        assert_eq!(interpreted.stdout, recorded.stdout);
-        for width in [1, 2, 4] {
-            for repeat in 0..50 {
-                let output = bounded(
-                    Command::new(&exe)
-                        .arg("--hirsel-replay")
-                        .arg(&tape)
-                        .env("HIRSEL_RT_WORKERS", width.to_string())
-                        .env("HIRSEL_JOBS", "4"),
-                    &format!("{engine} workers={width} repeat={repeat}"),
-                );
-                assert_eq!(output.stdout, recorded.stdout);
-            }
-        }
-        assert_eq!(std::fs::read(tape).unwrap(), original);
-    }
+pub(super) fn write_grants(grants: &Path) {
+    std::fs::write(grants, serde_json::json!({"io":{"stdout":"stdout.bytes@1","tasks":"tasks.cooperative@1","monotonic_clock":"clock.monotonic.ns@1","dirs":[],"net":{"provider":"net.script@2","rules":[{"address":"/firstreply/0.sock","service":"0","operation":"unix_connect"},{"address":"/firstreply/1.sock","service":"0","operation":"unix_connect"}],"peers":[{"address":"/firstreply/0.sock","port":0,"resolves_to":[],"tls":"plain","connections":[{"open":[{"send":[120]}]}]},{"address":"/firstreply/1.sock","port":0,"resolves_to":[],"tls":"plain","connections":["unanswered"]}]}},"placement":{"cores":4,"commit":"shared","reorder":"auto"}}).to_string()).unwrap();
 }

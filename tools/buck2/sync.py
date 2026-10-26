@@ -846,7 +846,7 @@ def first_party(meta: dict) -> str:
     unguarded = []
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test", "hirsel_toolchain_bundle")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_deadline_replay_matrix", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_script_test", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -963,6 +963,9 @@ def first_party(meta: dict) -> str:
                 out.append("\n" + call("hirsel_test", **profile, name=f"{name}-test-{target['name']}", deps=own + test_deps, bin_exes=binaries,
                                          shards=count if count > 1 else None, costs=costs,
                                          **test_attrs(f"{name}-test-{target['name']}", src), **attrs))
+    out.append("\n" + call("hirsel_deadline_replay_matrix", name="deadline-select-replay",
+                            data=Raw('glob(["stdlib/**", "crates/hirsel-cli/Cargo.toml"])'),
+                            runtime_archives=RUNTIME_ARCHIVES, products=PRODUCTS))
     if unguarded:
         raise SystemExit("these binary and test roots do not install the memory guard; add "
                          "`hirsel_guard::install!();` (`#[cfg(test)]` in a library): " + ", ".join(unguarded))
@@ -1027,6 +1030,7 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
                             files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh",
+                                       "HIRSEL_TEST_NATIVE_ENVIRONMENT": "//tools/buck2/native-toolchain:environment.tsv",
                                        "HIRSEL_TEST_PRIVATE_NATIVE_INPUTS": "//tools/buck2:private_native_inputs.py",
                                        **{f"HIRSEL_TEST_{name.upper()}": f"//tools/buck2:{name}.bzl"
                                           for name in ("platforms", "test_requirements", "test_sizes", "exec_sizes")}}))

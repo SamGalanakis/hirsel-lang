@@ -188,7 +188,9 @@ def _platforms(ctx):
                 local_enabled = LOCAL,
                 remote_enabled = not LOCAL,
                 priority = PRIORITY,
-                remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class),
+                # Fixture build actions use the same exact-CPU platform as their
+                # consuming tests; only tests have an explicit executor override.
+                remote_execution_properties = pool_properties(cpu, memory_kb, cpu_class, exact_cpus = int(cpu) if name.startswith("pool_test_exact_") else 0),
                 remote_execution_use_case = "hirsel",
                 remote_output_paths = "output_paths",
             ),

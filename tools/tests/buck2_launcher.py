@@ -165,7 +165,7 @@ class PrivateNativeInputs(LauncherFixture):
     def test_native_environment_exports_stored_linker_and_auditor_packages(self):
         self.source_files()
         environment = self.root / 'native-environment.tsv'
-        rows = [line for line in (ROOT / 'tools/buck2/native-toolchain/environment.tsv').read_text().splitlines()
+        rows = [line for line in Path(os.environ.get('HIRSEL_TEST_NATIVE_ENVIRONMENT', ROOT / 'tools/buck2/native-toolchain/environment.tsv')).read_text().splitlines()
                 if line.startswith(('HIRSEL_CAPTURE_LINKER\t', 'HIRSEL_AUDITOR_PACKAGE\t'))]
         self.assertEqual(len(rows), 2)
         environment.write_text('\n'.join(rows) + '\n')

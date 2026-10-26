@@ -297,6 +297,7 @@ def _rust_test_impl(ctx):
         # those virtual bytes on the pool.
         "HIRSEL_MEMORY_LIMIT": "{}K".format(test_memory_limit(ctx.attrs.test_binary, int(ctx.attrs.request[1]))),
     }
+    env.update(ctx.attrs.extra_env)
     if ctx.attrs.test_binary in EXACT_TEST_CPUS:
         env["HIRSEL_TEST_EXACT_CPUS"] = str(EXACT_TEST_CPUS[ctx.attrs.test_binary])
     env.update({name: cmd_args(tree) for name, tree in tools.items()})
@@ -340,6 +341,11 @@ def _rust_test_impl(ctx):
         inputs.append(selection)
         env["HIRSEL_NATIVE_SELECTION"] = cmd_args(selection)
     command = cmd_args(ctx.attrs._launcher, ctx.attrs.harness[RunInfo], ctx.attrs.args, hidden = inputs)
+    if ctx.attrs.fixture_output:
+        fixture = ctx.actions.declare_output("fixture", dir = True)
+        env["HIRSEL_REPLAY_FIXTURE_OUT"] = cmd_args(fixture.as_output())
+        ctx.actions.run(command, env = env, category = "deadline_replay_fixture")
+        return [DefaultInfo(default_output = fixture)]
     return [
         DefaultInfo(default_output = ctx.attrs.harness[DefaultInfo].default_outputs[0]),
         RunInfo(args = command),
@@ -369,6 +375,8 @@ _rust_test = rule(
         "cwd": attrs.string(),
         # Environment variables naming input files.
         "files_env": attrs.dict(attrs.string(), attrs.source(), default = {}),
+        "extra_env": attrs.dict(attrs.string(), attrs.string(), default = {}),
+        "fixture_output": attrs.bool(default = False),
         "data": attrs.list(attrs.source(), default = []),
         "harness": attrs.transition_dep(cfg = "root//tools/buck2:test_tool_transition", providers = [RunInfo]),
         "labels": attrs.list(attrs.string(), default = []),
@@ -841,3 +849,46 @@ _runtime_archives = rule(
         "_llvm": attrs.exec_dep(default = "toolchains//:clang"),
     },
 )
+
+
+def hirsel_deadline_replay_matrix(name, data, runtime_archives, products):
+    """One immutable recording per backend, with independently bounded cells.
+
+    Fixture errors are artifacts too: every dependent libtest cell reports the
+    first failed phase. No width regenerates a tape or warms reference startup.
+    """
+    binary = "hirsel-cli-test-cli"
+    common = dict(
+        harness = ":" + binary + "-harness",
+        data = data,
+        bin_exes = {"hirsel": "//:hirsel-cli-bin-hirsel"},
+        bin_exe_dir = BIN_EXE_DIR + "/" + binary + "-harness",
+        runtime_archives = runtime_archives,
+        products = products,
+        llvm = "root//tools/buck2/native-toolchain:llvm",
+        native_tools = native_tool_inputs(),
+        cwd = "crates/hirsel-cli",
+        test_binary = binary,
+        request = _request(binary),
+        exec_compatible_with = _test_platform(binary),
+        pool = not TESTS_ON_HOST,
+        visibility = ["PUBLIC"],
+    )
+    for backend in ["llvm", "cranelift"]:
+        fixture = name + "-" + backend + "-fixture"
+        _rust_test(
+            name = fixture,
+            fixture_output = True,
+            extra_env = {"HIRSEL_REPLAY_BACKEND": backend},
+            args = ["--ignored", "--exact", "ordered_deadline_liveness_55::fixture", "--nocapture"],
+            **common
+        )
+        for cell in ["reference", "1", "2", "4"]:
+            _rust_test(
+                name = name + "-" + backend + "-" + cell,
+                files_env = {"HIRSEL_REPLAY_FIXTURE": ":" + fixture},
+                extra_env = {"HIRSEL_REPLAY_BACKEND": backend, "HIRSEL_REPLAY_CELL": cell},
+                args = ["--ignored", "--exact", "ordered_deadline_liveness_55::cell", "--nocapture"],
+                labels = [],
+                **common
+            )
