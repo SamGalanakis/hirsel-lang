@@ -5,8 +5,8 @@
 //! runtime/task/harness.rs:502-559 separate running ownership, pending work
 //! and stored output. Here the effect and its cleanup suffix also have distinct
 //! stages: polling a stored completion cannot begin or apply the effect again.
-//! Run stop drops storage without calling language cleanup. Admission from
-//! compiled code remains disabled until the caller's complete custody is proved.
+//! Run stop drops storage without calling language cleanup. Compiled entry
+//! requires independently checked custody of every retained caller and owner.
 #![cfg_attr(not(test), allow(dead_code))]
 
 use std::task::Poll;
