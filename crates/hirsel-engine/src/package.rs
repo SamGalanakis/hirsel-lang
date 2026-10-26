@@ -488,6 +488,8 @@ pub(crate) fn load_program_source(
 #[derive(Clone, Copy)]
 pub(crate) enum EntrySelection {
     Launch,
+    /// Validated declaration export, before foreign link artifacts exist.
+    Export,
     Check,
     Test,
 }
@@ -518,7 +520,11 @@ pub(crate) fn load_program_inputs_with_source_index(
         parse_sources,
     } = loading;
     let _timing = hirsel_intern::timings::interval(hirsel_intern::timings::Interval::S0);
-    let (graph, package) = Graph::program_inputs(path, inputs)?;
+    let (graph, package) = Graph::program_inputs_with_links(
+        path,
+        inputs,
+        !matches!(entry_selection, EntrySelection::Export),
+    )?;
     let root = graph.packages.get(&package).unwrap();
     let entry = if matches!(entry_selection, EntrySelection::Test)
         || (matches!(entry_selection, EntrySelection::Check) && root.entry.is_none())
@@ -843,6 +849,7 @@ type ForeignManifest = (
 );
 struct Graph<'a> {
     inputs: &'a dyn crate::loader_inputs::LoaderInputs,
+    require_link_files: bool,
     packages: BTreeMap<PackageId, SelectedPackage>,
     active: Vec<PathBuf>,
     /// Every edge selecting each package, in discovery order.
@@ -866,7 +873,15 @@ impl<'a> Graph<'a> {
         path: &Path,
         inputs: &'a dyn crate::loader_inputs::LoaderInputs,
     ) -> Result<(Self, PackageId), ToolError> {
+        Self::program_inputs_with_links(path, inputs, true)
+    }
+    fn program_inputs_with_links(
+        path: &Path,
+        inputs: &'a dyn crate::loader_inputs::LoaderInputs,
+        require_link_files: bool,
+    ) -> Result<(Self, PackageId), ToolError> {
         let mut graph = Self::with_inputs(inputs);
+        graph.require_link_files = require_link_files;
         let package = if path.extension().is_some_and(|e| e == "json") {
             graph.visit(path, None)?
         } else {
@@ -953,6 +968,7 @@ impl<'a> Graph<'a> {
     fn with_inputs(inputs: &'a dyn crate::loader_inputs::LoaderInputs) -> Self {
         Self {
             inputs,
+            require_link_files: true,
             packages: BTreeMap::new(),
             active: Vec::new(),
             selections: BTreeMap::new(),
@@ -1226,7 +1242,7 @@ impl<'a> Graph<'a> {
         }
         let unsafe_ffi = object
             .get("unsafe_ffi")
-            .map(|v| foreign_manifest(v, base, &package, self.inputs))
+            .map(|v| foreign_manifest(v, base, &package, self.inputs, self.require_link_files))
             .transpose()?;
         self.active.pop();
         self.packages.insert(
@@ -1255,6 +1271,7 @@ fn foreign_manifest(
     base: &Path,
     package: &PackageId,
     inputs: &dyn crate::loader_inputs::LoaderInputs,
+    require_link_files: bool,
 ) -> Result<ForeignManifest, ToolError> {
     let o = object_value(v, &["link", "headers_checked", "threads", "wrappers"])?;
     let link = array(required(o, "link")?)?
@@ -1262,7 +1279,15 @@ fn foreign_manifest(
         .map(|l| {
             let l = string(l)?;
             if l.contains('/') || [".a", ".o", ".so"].iter().any(|s| l.ends_with(s)) {
-                Ok(LinkInput::File(inputs.canonicalize(&base.join(l))?))
+                // Export consumes declarations and checked layouts, not link bytes.
+                // `base` is the canonical manifest directory. Ordinary loads still
+                // resolve the actual file, and build/link still read its bytes.
+                let path = base.join(l);
+                Ok(LinkInput::File(if require_link_files {
+                    inputs.canonicalize(&path)?
+                } else {
+                    path
+                }))
             } else if l
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_.+-".contains(&b))

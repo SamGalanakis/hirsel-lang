@@ -134,7 +134,10 @@ pub fn export_data_abi(
     target: TargetSpec,
     header: bool,
 ) -> Result<Result<String, NativeError>, ToolError> {
-    crate::session::with_program(source, hirsel_engine::Verify::On, |loaded| {
+    hirsel_engine::with_compiler_stack(|| {
+        let mut loaded = crate::COMPILER
+            .with_verify(hirsel_engine::Verify::On)
+            .load_export_package(source)?;
         loaded.check_for_execution()?;
         let engine = &mut loaded.engine;
         let input = engine

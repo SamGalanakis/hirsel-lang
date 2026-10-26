@@ -16,6 +16,10 @@ pub type Point {
 @layout(c)
 pub type Shape = Circle(Point, i32) | Square(Point) | Empty
 
+pub type Opaque {
+  hidden: i32,
+}
+
 pub flat type Label {
   id: u64,
   name: String,
@@ -104,8 +108,6 @@ fn fixture_with_main(name: &str, library: &str, main: &str) -> Fixture {
         "sources":[{"path":"lib.hir","module":[]}],"dependencies":[],
         "unsafe_ffi":{"link":["lib.o"],"headers_checked":true,"wrappers":wrappers}});
     std::fs::write(dir.join("hirsel.json"), manifest.to_string()).unwrap();
-    // The manifest names its link input before the C file is compiled against the header.
-    std::fs::write(dir.join("lib.o"), b"").unwrap();
     std::fs::write(root.join("main.hir"), main).unwrap();
     std::fs::write(
         root.join("grants.json"),
@@ -184,10 +186,16 @@ impl Fixture {
 fn c_code_reads_records_variants_and_flat_extents_through_the_generated_header() {
     with_compiler_stack(|| {
         let fixture = fixture("header", LIBRARY);
+        assert!(!fixture.root.join("geo/lib.o").exists());
+        // An unselected source is outside this manifest's program.
+        std::fs::write(fixture.root.join("geo/unselected.hir"), "not valid Hirsel").unwrap();
         let header = fixture.export(true);
         let abi = format!("_v{}_", hirsel_rt::ABI_VERSION);
         for expected in [
             "struct Point {\n    int32_t x;\n    int32_t y;\n};",
+            "union {",
+            "_Static_assert(sizeof(struct Point) == 8",
+            "_Static_assert(sizeof(struct Shape) == 16",
             "#define Shape_Circle 0u",
             "#define Shape_Empty 2u",
             "_Static_assert(offsetof(struct Shape, payload.Circle._1) == 12",
@@ -199,9 +207,12 @@ fn c_code_reads_records_variants_and_flat_extents_through_the_generated_header()
             header.contains(&format!("hirsel_data_abi{abi}Point_")),
             "{header}"
         );
+        // An ordinary nominal has no promised C representation.
+        assert!(!header.contains("struct Opaque"), "{header}");
         // Point precedes the Shape that holds it.
         assert!(header.find("struct Point {") < header.find("struct Shape {"));
-        let descriptor: serde_json::Value = serde_json::from_str(&fixture.export(false)).unwrap();
+        let descriptor_text = fixture.export(false);
+        let descriptor: serde_json::Value = serde_json::from_str(&descriptor_text).unwrap();
         assert_eq!(descriptor["target"], "x86_64-unknown-linux-gnu");
         assert_eq!(descriptor["abi_version"], hirsel_rt::ABI_VERSION);
         let shape = &descriptor["types"].as_array().unwrap()[1];
@@ -209,7 +220,14 @@ fn c_code_reads_records_variants_and_flat_extents_through_the_generated_header()
             (shape["name"].as_str(), shape["size"].as_u64()),
             (Some("Shape"), Some(16))
         );
+        assert!(!fixture.root.join("geo/lib.o").exists());
+        for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
+            let refusal = fixture.build(backend).unwrap_err();
+            assert!(refusal.contains("No such file"), "{backend:?}: {refusal}");
+        }
         fixture.compile(&header);
+        assert_eq!(fixture.export(true), header);
+        assert_eq!(fixture.export(false), descriptor_text);
         for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
             let executable = fixture
                 .build(backend)
@@ -259,5 +277,49 @@ fn foreign_code_from_another_abi_version_or_layout_refuses_to_link() {
                 "{name}: {refusal}"
             );
         }
+    });
+}
+
+/// Deferring foreign files does not defer selected source or manifest validation.
+#[test]
+fn declaration_export_refuses_source_and_manifest_errors_without_link_inputs() {
+    with_compiler_stack(|| {
+        let fixture = fixture("export-errors", LIBRARY);
+        let export = |header| {
+            native::export_data_abi(
+                &fixture.manifest,
+                native::TargetSpec::x86_64_unknown_linux_gnu(),
+                header,
+            )
+        };
+        std::fs::write(
+            fixture.root.join("main.hir"),
+            MAIN.replace("geo.point_sum(u, corner)", "geo.point_sum(u, true)"),
+        )
+        .unwrap();
+        for header in [true, false] {
+            assert!(matches!(export(header), Err(ToolError::Query { .. })));
+        }
+        std::fs::write(fixture.root.join("main.hir"), MAIN).unwrap();
+        let manifest = fixture.root.join("geo/hirsel.json");
+        let original = std::fs::read_to_string(&manifest).unwrap();
+        for (changed, expected) in [
+            (original.replace("lib.o", "-lz"), "invalid link library"),
+            (
+                original.replace("point_sum", "absent"),
+                "is not a non-extern function",
+            ),
+            (
+                original.replace("\"version\":\"1\"", "\"version\":\"2\""),
+                "selected package version does not match dependency",
+            ),
+        ] {
+            std::fs::write(&manifest, changed).unwrap();
+            for header in [true, false] {
+                let error = export(header).unwrap_err().to_string();
+                assert!(error.contains(expected), "{error}");
+            }
+        }
+        assert!(!fixture.root.join("geo/lib.o").exists());
     });
 }

@@ -240,6 +240,17 @@ impl Compiler {
             },
         )
     }
+    /// Load the selected launch program for checked declaration/layout export.
+    /// Manifest and source validation are unchanged; foreign link files may be
+    /// produced later by compiling against the exported declarations.
+    pub fn load_export_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_source(
+            self,
+            path,
+            None,
+            crate::package::EntrySelection::Export,
+        )
+    }
     /// Load sources for checking, accepting a package with no launch entry.
     pub fn load_check_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
         crate::package::load_program_source(self, path, None, crate::package::EntrySelection::Check)
