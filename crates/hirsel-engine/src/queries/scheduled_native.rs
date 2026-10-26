@@ -10,7 +10,7 @@ use std::{sync::Mutex, task::Poll};
 pub const FRONT_NATIVE_DEFINITION_KIND: u32 = 0x4600_0017;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0018,
-    schema: 1,
+    schema: 2,
 };
 const FAILURE: Domain = Domain {
     kind: 0x4600_0019,
@@ -24,6 +24,11 @@ struct SourceOwnership {
 struct Input {
     signature: SignatureRef,
     representation: Option<crate::representation::OwnerRecord>,
+    generated: Option<AcceptedNativeSource>,
+}
+struct AcceptedNativeSource {
+    source: crate::NativeSource,
+    registration: Arc<AcceptedFrontRegistration>,
 }
 /// Prepared bodyless catalogue inputs. Sizing and installation consume the
 /// same private data; the caller cannot supply source V or native authority.
@@ -386,6 +391,11 @@ impl Task {
                         &source.signature,
                         &source.signature_dependencies,
                         &source.source.syntax,
+                        source
+                            .source
+                            .generated
+                            .as_ref()
+                            .map(|source| (&source.text, source.site)),
                         &source.summary,
                         source.summary_identity,
                         (ordinary.as_ref().map(|p| p.body), lower_identity),
@@ -503,11 +513,14 @@ impl Task {
             definition: self.path.clone(),
             signature: input.signature.clone(),
             signature_dependencies: signature.dependencies.clone(),
-            source: crate::NativeSource {
-                implementation_revision: syntax.text_hash,
-                syntax,
-                generated: None,
-            },
+            source: input.generated.as_ref().map_or_else(
+                || crate::NativeSource {
+                    implementation_revision: syntax.text_hash,
+                    syntax,
+                    generated: None,
+                },
+                |accepted| accepted.source.clone(),
+            ),
             summary_identity: summaries::summary_identity(
                 owner.lower.signatures().types().clone(),
                 &summary.summary,
@@ -578,7 +591,11 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontNativeDefinitionQueries>, QueryError> {
-        let inputs = self.front_native_definition_inputs(definitions, allowance.bytes())?;
+        let inputs = self.front_native_definition_inputs_from(
+            definitions,
+            |path| front.registration_handle(path).cloned(),
+            allowance.bytes(),
+        )?;
         self.front_native_definition_queries_with_inputs(
             front, lower, inputs, weight, allowance, errors,
         )
@@ -589,11 +606,48 @@ impl QueryEngine {
         definitions: &[DefPath],
         limit: u64,
     ) -> Result<FrontNativeDefinitionInputs, QueryError> {
+        self.front_native_definition_inputs_with_registrations(definitions, &[], limit)
+    }
+
+    /// Generated inputs require the exact opaque source registrations accepted
+    /// in this engine. Syntax/text are observations, never native V authority.
+    pub fn front_native_definition_inputs_with_registrations(
+        &mut self,
+        definitions: &[DefPath],
+        registrations: &[Arc<AcceptedFrontRegistration>],
+        limit: u64,
+    ) -> Result<FrontNativeDefinitionInputs, QueryError> {
+        self.front_native_definition_inputs_from(
+            definitions,
+            |path| {
+                registrations
+                    .iter()
+                    .find(|accepted| accepted.definition() == path)
+                    .cloned()
+            },
+            limit,
+        )
+    }
+
+    fn front_native_definition_inputs_from(
+        &mut self,
+        definitions: &[DefPath],
+        registration: impl Fn(&DefPath) -> Option<Arc<AcceptedFrontRegistration>>,
+        limit: u64,
+    ) -> Result<FrontNativeDefinitionInputs, QueryError> {
         let refuse = || {
             QueryError::Operational(hirsel_types::OperationalFailure{operation:"native source admission".into(),message:"native source inputs exceed admission or differ from the pinned source namespace".into()})
         };
         let mut required =
             FrontNativeDefinitionQueries::input_bytes(definitions).ok_or_else(refuse)?;
+        if required > limit {
+            return Err(refuse());
+        }
+        for path in definitions {
+            if let Some(accepted) = registration(path) {
+                accepted.validate(self)?;
+            }
+        }
         let snapshot = self.signature_inputs();
         let original_context = self.native_original_context(definitions)?;
         let store = self
@@ -607,11 +661,43 @@ impl QueryEngine {
         let mut ids = BTreeMap::new();
         let namespace = serde_json::to_vec(definitions).map_err(|_| refuse())?;
         for path in definitions {
-            if self.generated.contains_key(path) {
-                return Err(native_selection_error(format!(
-                    "generated native catalogue input: {path}"
-                )));
-            }
+            let generated = if self.generated.contains_key(path) {
+                let accepted = registration(path).ok_or_else(|| {
+                    native_selection_error(format!("generated native catalogue input: {path}"))
+                })?;
+                let syntax = self.snapshot(path)?;
+                let source = self.generated_source(path).ok_or_else(refuse)?;
+                if source.text != accepted.text() {
+                    return Err(refuse());
+                }
+                let mut weight = crate::NativeMetadataWeight::default();
+                weight.add(
+                    crate::memo::retained::retained_syntax_bytes(&syntax)
+                        .try_into()
+                        .map_err(|_| refuse())?,
+                );
+                // String::clone copies only the current bytes. Admit that copy
+                // and the retained original syntax before allocating the text.
+                weight.add(source.text.len());
+                required = required.checked_add(weight.bytes()).ok_or_else(refuse)?;
+                if required > limit {
+                    return Err(refuse());
+                }
+                let source = source.clone();
+                Some(AcceptedNativeSource {
+                    source: crate::NativeSource {
+                        implementation_revision: syntax.text_hash,
+                        syntax,
+                        generated: Some(source),
+                    },
+                    registration: accepted,
+                })
+            } else {
+                if registration(path).is_some() {
+                    return Err(refuse());
+                }
+                None
+            };
             let signature = snapshot
                 .signature(DefId::intern(path))
                 .ok_or_else(refuse)?
@@ -656,6 +742,7 @@ impl QueryEngine {
                 Input {
                     signature,
                     representation,
+                    generated,
                 },
             );
         }
@@ -702,6 +789,23 @@ impl QueryEngine {
             return Err(native_selection_error(
                 "native catalogue is outside front/Lower namespace",
             ));
+        }
+        for (path, input) in &inputs.inputs {
+            if let Some(accepted) = &input.generated {
+                accepted.registration.validate(self)?;
+                if !front
+                    .registration_handle(path)
+                    .is_some_and(|registration| Arc::ptr_eq(registration, &accepted.registration))
+                {
+                    return Err(native_selection_error(
+                        "native catalogue and front use different accepted registrations",
+                    ));
+                }
+            } else if front.registration_handle(path).is_some() {
+                return Err(native_selection_error(
+                    "native catalogue omitted an accepted front registration",
+                ));
+            }
         }
         if inputs.required > allowance.bytes() {
             return Err(native_selection_error(

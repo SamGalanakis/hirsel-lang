@@ -1172,3 +1172,285 @@ fn bootstrap_refusal_control(zero_depth: bool, spare_grants: bool) {
         }
     });
 }
+
+#[test]
+fn accepted_generated_native_catalogue_preserves_raw_source_and_actual_lower_authority() {
+    use hirsel_engine::{runtime::*, *};
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            accepted_output_control(jobs, |program, budget, output| {
+                let original = program
+                    .engine
+                    .parse_definition(&program.entry)
+                    .unwrap()
+                    .value;
+                let accepted = program
+                    .engine
+                    .accept_front_registration(output, budget.reserve(16 << 20).unwrap())
+                    .unwrap();
+                let definitions = program.engine.front_source_roots();
+                let weight = MemoryWeight {
+                    retained: 2 << 20,
+                    scratch: 8 << 20,
+                    stack: 0,
+                };
+                let errors = crate::scheduled_front::errors();
+                let front = program
+                    .engine
+                    .front_body_queries_with_registrations(
+                        &definitions,
+                        &[accepted],
+                        weight,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let lower = program
+                    .engine
+                    .front_lower_queries(
+                        &definitions,
+                        front.clone(),
+                        weight,
+                        64,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let native = program
+                    .engine
+                    .front_native_definition_queries(
+                        &definitions,
+                        front.clone(),
+                        lower.clone(),
+                        weight,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let mut runtime = AdmittedRuntime::new(
+                    hirsel_intern::jobs::Jobs::new(jobs),
+                    budget.reserve(512 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+                runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+                runtime
+                    .register_local(FRONT_LOWER_KIND, lower.factory())
+                    .unwrap();
+                runtime
+                    .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                    .unwrap();
+                runtime
+                    .register(FRONT_NATIVE_DEFINITION_KIND, native.factory())
+                    .unwrap();
+                let request = runtime.request(&[native.query(&program.entry).unwrap()]);
+                let products = runtime
+                    .wait(request)
+                    .unwrap_or_else(|reference| panic!("{:?}", native.failure(reference)));
+                let output = native.outcome(products[0]).unwrap();
+                let source = &output.product.source;
+                assert_eq!(source.definition, program.entry);
+                assert_eq!(source.source.implementation_revision, original.text_hash);
+                assert_eq!(source.source.syntax.text_hash, original.text_hash);
+                assert_eq!(source.source.syntax.item, original.item);
+                let generated = source
+                    .source
+                    .generated
+                    .as_ref()
+                    .expect("native origin retains generated text");
+                let expected = program.engine.generated_source(&program.entry).unwrap();
+                assert_eq!(generated, expected);
+                assert!(
+                    source.lower.is_some(),
+                    "actual independently verified Lower output"
+                );
+                assert!(source.audit.is_some());
+                let reader = native
+                    .original_context()
+                    .reader(
+                        [output.original.as_deref().unwrap().clone()],
+                        program.engine.product_store().unwrap(),
+                    )
+                    .unwrap();
+                runtime.shutdown();
+                let body = reader
+                    .read(&program.entry)
+                    .expect("original source identity matches admitted Lower");
+                assert_eq!(body.definition().path.path(), &program.entry);
+            });
+        }
+    });
+}
+
+#[test]
+fn accepted_generated_native_inputs_bind_current_views_and_exact_metadata_grants() {
+    use hirsel_engine::{runtime::*, *};
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            accepted_output_control(jobs, |program, budget, output| {
+                let accepted = program
+                    .engine
+                    .accept_front_registration(output.clone(), budget.reserve(16 << 20).unwrap())
+                    .unwrap();
+                let definitions = program.engine.front_source_roots();
+                let weight = MemoryWeight {
+                    retained: 2 << 20,
+                    scratch: 8 << 20,
+                    stack: 0,
+                };
+                let errors = crate::scheduled_front::errors();
+                let front = program
+                    .engine
+                    .front_body_queries_with_registrations(
+                        &definitions,
+                        &[accepted.clone()],
+                        weight,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let lower = program
+                    .engine
+                    .front_lower_queries(
+                        &definitions,
+                        front.clone(),
+                        weight,
+                        64,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                let before = program.engine.work_stats();
+                assert!(
+                    program
+                        .engine
+                        .front_native_definition_inputs(&definitions, 16 << 20)
+                        .is_err(),
+                    "raw generated source alone grants no accepted namespace"
+                );
+                let inputs = program
+                    .engine
+                    .front_native_definition_inputs_with_registrations(
+                        &definitions,
+                        &[accepted.clone()],
+                        16 << 20,
+                    )
+                    .unwrap();
+                let required = inputs.input_bytes();
+                assert!(required > 0);
+                assert!(
+                    program
+                        .engine
+                        .front_native_definition_inputs_with_registrations(
+                            &definitions,
+                            &[accepted.clone()],
+                            required - 1
+                        )
+                        .is_err()
+                );
+                assert!(
+                    program
+                        .engine
+                        .front_native_definition_queries_with_inputs(
+                            front.clone(),
+                            lower.clone(),
+                            inputs,
+                            weight,
+                            budget.reserve(required - 1).unwrap(),
+                            errors
+                        )
+                        .is_err()
+                );
+                let inputs = program
+                    .engine
+                    .front_native_definition_inputs_with_registrations(
+                        &definitions,
+                        &[accepted.clone()],
+                        required,
+                    )
+                    .unwrap();
+                let native = program
+                    .engine
+                    .front_native_definition_queries_with_inputs(
+                        front.clone(),
+                        lower.clone(),
+                        inputs,
+                        weight,
+                        budget.reserve(required).unwrap(),
+                        errors,
+                    )
+                    .unwrap();
+                assert!(native.query(&program.entry).is_some());
+                drop(native);
+                assert_eq!(
+                    program.engine.work_stats(),
+                    before,
+                    "catalogue capture performs no semantic producer work"
+                );
+                let other = program
+                    .engine
+                    .accept_front_registration(output, budget.reserve(16 << 20).unwrap())
+                    .unwrap();
+                let before = program.engine.work_stats();
+                let mismatch = program
+                    .engine
+                    .front_native_definition_inputs_with_registrations(
+                        &definitions,
+                        &[other],
+                        16 << 20,
+                    )
+                    .unwrap();
+                let error = program
+                    .engine
+                    .front_native_definition_queries_with_inputs(
+                        front,
+                        lower,
+                        mismatch,
+                        weight,
+                        budget.reserve(16 << 20).unwrap(),
+                        errors,
+                    )
+                    .err()
+                    .expect("distinct accepted source views cannot be silently mixed");
+                let QueryError::Operational(error) = error else {
+                    panic!("{error:?}")
+                };
+                assert!(
+                    error.message.contains("different accepted registrations"),
+                    "{error:?}"
+                );
+                assert_eq!(
+                    program.engine.work_stats(),
+                    before,
+                    "catalogue capture performs no semantic producer work"
+                );
+                let path = program
+                    .engine
+                    .sources
+                    .file(program.primary)
+                    .unwrap()
+                    .path
+                    .clone();
+                assert!(
+                    program
+                        .replace_source(&path, ACCEPTED_SOURCE.replace("{7u8}", "{8u8}"))
+                        .unwrap()
+                );
+                program.parse_sources().unwrap();
+                let error = program
+                    .engine
+                    .front_native_definition_inputs_with_registrations(
+                        &definitions,
+                        &[accepted],
+                        16 << 20,
+                    )
+                    .err()
+                    .expect("stale generator helper reads must refuse before native capture");
+                let QueryError::Operational(error) = error else {
+                    panic!("{error:?}")
+                };
+                assert_eq!(error.operation, "generated syntax validation");
+            });
+        }
+    });
+}
