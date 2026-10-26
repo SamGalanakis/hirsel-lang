@@ -22,6 +22,7 @@ fn fixture() -> (Log, Units) {
             action,
             callee: None,
             cleanup: None,
+            cleanup_paths: BTreeMap::new(),
             additional_drops: Vec::new(),
             token_path: None,
             owner_path: None,
@@ -386,6 +387,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
             action,
             callee: None,
             cleanup: None,
+            cleanup_paths: BTreeMap::new(),
             additional_drops: Vec::new(),
             token_path: None,
             owner_path: None,
@@ -495,6 +497,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
                 action,
                 callee: None,
                 cleanup: None,
+                cleanup_paths: BTreeMap::new(),
                 additional_drops: Vec::new(),
                 token_path: None,
                 owner_path: None,
@@ -666,6 +669,7 @@ fn native_capture_cleanup_requires_actual_typed_retirements_before_scope_end() {
     let mut drop_carrier = rows[&2].clone();
     drop_carrier.action = 4;
     drop_carrier.cleanup = Some(vec![(0, 7)]);
+    drop_carrier.cleanup_paths = BTreeMap::from([(0, vec![0])]);
     rows.insert(31, drop_carrier);
     if let Row::Event { owner, .. } = &mut log.rows[2] {
         *owner = field;
@@ -775,6 +779,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
                 action,
                 callee: None,
                 cleanup: None,
+                cleanup_paths: BTreeMap::new(),
                 additional_drops: Vec::new(),
                 token_path: None,
                 owner_path: None,
@@ -806,6 +811,7 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
     retirement.action = 4;
     retirement.token = slot;
     retirement.cleanup = Some(vec![(1, 7), (0, 7)]);
+    retirement.cleanup_paths = BTreeMap::from([(1, vec![1]), (0, vec![0])]);
     units.get_mut(&unit).unwrap().insert(5, retirement);
     rows.extend([
         Row::CleanupBegin {
@@ -1030,4 +1036,119 @@ fn native_compound_drop_members_keep_original_marker_and_exact_field_lifetimes()
         .additional_drops
         .push(metadata.additional_drops[0].clone());
     assert!(decode_local_calls(&log, [49; 32], &ambiguous, &calls, 100).is_err());
+}
+
+#[test]
+fn native_nested_capture_retirements_require_complete_exact_declaration_paths() {
+    let (mut log, mut units) = fixture();
+    let unit = [7; 32];
+    let root = 1u64 << 32;
+    let first = (7u64 << 32) | 11;
+    let second = (7u64 << 32) | 12;
+    for (id, location, path) in [(1, first, vec![0, 0]), (4, second, vec![0, 1])] {
+        let marker = units.get_mut(&unit).unwrap().get_mut(&id).unwrap();
+        marker.owner = location;
+        marker.owner_path = Some(LocationPath { root, fields: path });
+    }
+    let mut cleanup = units[&unit][&2].clone();
+    cleanup.action = 4;
+    cleanup.token = root;
+    cleanup.owner = root;
+    cleanup.cleanup = Some(vec![(2, 7), (3, 7)]);
+    cleanup.cleanup_paths = BTreeMap::from([(2, vec![0, 1]), (3, vec![0, 0])]);
+    units.get_mut(&unit).unwrap().insert(20, cleanup);
+    let mut rows = [0, 1, 2, 4, 5]
+        .into_iter()
+        .map(|index| log.rows[index])
+        .collect::<Vec<_>>();
+    for row in &mut rows {
+        if let Row::Event { marker, owner, .. } = row {
+            if *marker == 1 {
+                *owner = first;
+            }
+            if *marker == 4 {
+                *owner = second;
+            }
+        }
+    }
+    rows.extend([
+        Row::CleanupBegin {
+            task: 0,
+            frame: 1,
+            marker: 20,
+        },
+        Row::CleanupDrop {
+            task: 0,
+            frame: 1,
+            marker: 20,
+            field: 2,
+            layout: 7,
+        },
+        Row::CleanupDrop {
+            task: 0,
+            frame: 1,
+            marker: 20,
+            field: 3,
+            layout: 7,
+        },
+        Row::CleanupEnd {
+            task: 0,
+            frame: 1,
+            marker: 20,
+        },
+        Row::Leave { task: 0, frame: 1 },
+    ]);
+    log.rows = rows;
+    log.row_count = log.rows.len() as u64;
+    let calls = LocalCalls::from([(unit, Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    assert_eq!(
+        trace
+            .events
+            .iter()
+            .filter_map(|e| match &e.action {
+                Action::Drop { token, .. } => Some(token.sequence),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        [1, 0]
+    );
+    let mut swapped = log.clone();
+    swapped.rows.swap(6, 7);
+    assert!(decode_local_calls(&swapped, [49; 32], &units, &calls, 100).is_err());
+    let mut missing = log.clone();
+    missing.rows.remove(6);
+    missing.row_count -= 1;
+    assert!(decode_local_calls(&missing, [49; 32], &units, &calls, 100).is_err());
+    let mut duplicate = log.clone();
+    duplicate.rows.insert(7, duplicate.rows[6]);
+    duplicate.row_count += 1;
+    assert!(decode_local_calls(&duplicate, [49; 32], &units, &calls, 100).is_err());
+    for kind in 0..4 {
+        let mut forged = units.clone();
+        let metadata = forged.get_mut(&unit).unwrap().get_mut(&20).unwrap();
+        match kind {
+            0 => {
+                metadata.cleanup_paths.remove(&2);
+            }
+            1 => metadata.cleanup_paths.get_mut(&2).unwrap().clear(),
+            2 => {
+                metadata.cleanup_paths.insert(2, vec![0, 0]);
+            }
+            _ => {
+                metadata.cleanup_paths.insert(2, vec![0, 2]);
+            }
+        }
+        assert!(decode_local_calls(&log, [49; 32], &forged, &calls, 100).is_err());
+    }
+    log.version = VERSION - 1;
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::Binding
+    );
 }

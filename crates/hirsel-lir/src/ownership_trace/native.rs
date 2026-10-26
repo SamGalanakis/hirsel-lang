@@ -1129,12 +1129,14 @@ pub fn rebind_plan(
 /// Its declaration ordinal selects the original logical custody path.
 #[derive(Clone, Debug)]
 pub struct CleanupCapture {
+    /// Scope-local binding key, never token identity or a byte offset.
     pub field: u32,
+    pub path: Vec<u32>,
     pub offset: u64,
     pub layout: LayoutId,
 }
 impl LeafPlan {
-    /// Exact leaf Resource cells of the callable released by this marker.
+    /// Exact statically nested leaf Resource cells of the callable released by this marker.
     /// Unknown code/environment identities and ambiguous cells fail closed.
     pub fn cleanup_captures(
         &self,
@@ -1178,30 +1180,111 @@ impl LeafPlan {
             .layout(environment)
             .ok_or("ownership cleanup environment is absent")?;
         let mut captures = Vec::new();
-        for field in record.fields.iter().rev() {
-            let layout = layouts
-                .layout(field.layout)
+        let mut next = record
+            .fields
+            .iter()
+            .map(|field| field.ordinal)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("ownership capture binding overflow")?;
+        let mut active = std::collections::BTreeSet::new();
+        #[allow(clippy::too_many_arguments)]
+        fn descend(
+            layouts: &LayoutTable,
+            layout: LayoutId,
+            offset: u64,
+            path: Vec<u32>,
+            binding: u32,
+            next: &mut u32,
+            active: &mut std::collections::BTreeSet<LayoutId>,
+            captures: &mut Vec<CleanupCapture>,
+        ) -> Result<(), String> {
+            let record = layouts
+                .layout(layout)
                 .ok_or("ownership cleanup field is absent")?;
-            if layout.drop.is_empty() && layout.finalizer.is_none() {
-                continue;
+            if record.drop.is_empty() && record.finalizer.is_none() {
+                return Ok(());
             }
-            if !matches!(layout.kind, LayoutKind::Resource)
-                || layout.finalizer.is_none()
-                || !leaf(layouts, field.layout)
+            if !active.insert(layout) {
+                return Err("ownership cleanup has recursive inline storage".into());
+            }
+            if matches!(record.kind, LayoutKind::Resource)
+                && record.finalizer.is_some()
+                && leaf(layouts, layout)
             {
-                return Err("ownership cleanup requires leaf Resource captures".into());
+                if captures.iter().any(|prior| prior.offset == offset) {
+                    return Err("ownership cleanup has ambiguous capture cells".into());
+                }
+                captures.push(CleanupCapture {
+                    field: binding,
+                    path,
+                    offset,
+                    layout,
+                });
+            } else if matches!(record.kind, LayoutKind::Aggregate) && record.finalizer.is_none() {
+                let mut seen = std::collections::BTreeSet::new();
+                for step in &record.drop {
+                    let crate::layout_types::DropStep::Child {
+                        offset: child_offset,
+                        layout: child_layout,
+                    } = *step
+                    else {
+                        return Err("ownership cleanup requires static inline child drops".into());
+                    };
+                    let fields = record
+                        .fields
+                        .iter()
+                        .filter(|field| {
+                            field.offset == child_offset && field.layout == child_layout
+                        })
+                        .collect::<Vec<_>>();
+                    let [field] = fields.as_slice() else {
+                        return Err(
+                            "ownership cleanup child has no unique declaration field".into()
+                        );
+                    };
+                    if !seen.insert(field.ordinal) {
+                        return Err("ownership cleanup repeats a declaration field".into());
+                    }
+                    let binding = *next;
+                    *next = next
+                        .checked_add(1)
+                        .ok_or("ownership capture binding overflow")?;
+                    let mut path = path.clone();
+                    path.push(field.ordinal);
+                    descend(
+                        layouts,
+                        child_layout,
+                        offset
+                            .checked_add(child_offset)
+                            .ok_or("ownership capture offset overflow")?,
+                        path,
+                        binding,
+                        next,
+                        active,
+                        captures,
+                    )?;
+                }
+            } else {
+                return Err(
+                    "ownership cleanup requires static aggregates of leaf Resource captures".into(),
+                );
             }
-            if captures
-                .iter()
-                .any(|prior: &CleanupCapture| prior.offset == field.offset)
-            {
-                return Err("ownership cleanup has ambiguous capture cells".into());
-            }
-            captures.push(CleanupCapture {
-                field: field.ordinal,
-                offset: field.offset,
-                layout: field.layout,
-            });
+            active.remove(&layout);
+            Ok(())
+        }
+        for field in record.fields.iter().rev() {
+            descend(
+                layouts,
+                field.layout,
+                field.offset,
+                vec![field.ordinal],
+                field.ordinal,
+                &mut next,
+                &mut active,
+                &mut captures,
+            )?;
         }
         Ok((value, captures))
     }

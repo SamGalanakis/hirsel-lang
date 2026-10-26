@@ -225,6 +225,16 @@ pub(crate) fn emit_relocated(
                 } else {
                     None
                 },
+                cleanup_paths: if marker.kind == 4 {
+                    plan.cleanup_captures(body, inputs.layouts, marker.id)
+                        .map_err(failed)?
+                        .1
+                        .into_iter()
+                        .map(|capture| (capture.field, capture.path))
+                        .collect()
+                } else {
+                    BTreeMap::new()
+                },
                 additional_drops: Vec::new(),
                 token: location(marker.token),
                 owner: location(marker.owner),
@@ -356,6 +366,7 @@ impl LeafObjects {
                 if let Some(fields) = &marker.cleanup {
                     w.flat_vec(fields);
                 }
+                w.map(&marker.cleanup_paths, |w, _, path| w.flat_vec(path));
                 w.vec(&marker.additional_drops, |w, member| {
                     w.add(member.value_type.capacity());
                     if let Some(path) = &member.path {

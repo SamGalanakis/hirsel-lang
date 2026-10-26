@@ -6,7 +6,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -80,6 +80,8 @@ pub struct Metadata {
     pub callee: Option<[u8; 32]>,
     /// Declaration ordinals and unit-local layouts in actual descriptor drop order.
     pub cleanup: Option<Vec<(u32, u32)>>,
+    /// Exact declaration path for every physical cleanup binding key.
+    pub cleanup_paths: BTreeMap<u32, Vec<u32>>,
     /// Other checked child completions of this same original compound Drop.
     /// Every row still names its exact physical child and original source id.
     pub additional_drops: Vec<DropMember>,
@@ -277,7 +279,7 @@ fn decode(
         unit: [u8; 32],
         environment: Option<Owner>,
         pending: Option<(Owner, [u8; 32])>,
-        cleanup: Option<(u32, Owner, Vec<(u32, u32)>)>,
+        cleanup: Option<(u32, Owner, Vec<(u32, u32, Owner)>)>,
     }
     let mut frames: Vec<Frame> = Vec::new();
     let mut entered = BTreeSet::new();
@@ -369,15 +371,26 @@ fn decode(
                     metadata.token,
                     metadata.token_path.as_ref(),
                 )?;
-                let live = fields
-                    .iter()
-                    .copied()
-                    .filter(|&(field, _)| {
-                        let mut at = root.clone();
-                        at.path.push(super::Projection::Field { field });
-                        tracker.inventory().owners.contains_key(&at)
-                    })
-                    .collect();
+                if metadata.cleanup_paths.len() != fields.len() {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                let mut live = Vec::new();
+                let mut seen = BTreeSet::new();
+                for &(field, layout) in fields {
+                    let path = metadata
+                        .cleanup_paths
+                        .get(&field)
+                        .ok_or(Error::InvalidMarker(marker))?;
+                    if path.is_empty() || !seen.insert(path.clone()) {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    let mut at = root.clone();
+                    at.path
+                        .extend(path.iter().map(|&field| super::Projection::Field { field }));
+                    if tracker.inventory().owners.contains_key(&at) {
+                        live.push((field, layout, at));
+                    }
+                }
                 current.cleanup = Some((marker, root, live));
             }
             Row::CleanupDrop {
@@ -391,15 +404,17 @@ fn decode(
                 if current.id != frame {
                     return Err(Error::InvalidFrame(frame));
                 }
-                let Some((expected, root, fields)) = &mut current.cleanup else {
+                let Some((expected, _, fields)) = &mut current.cleanup else {
                     return Err(Error::InvalidMarker(marker));
                 };
-                if *expected != marker || fields.first() != Some(&(field, layout)) {
+                if *expected != marker
+                    || fields
+                        .first()
+                        .is_none_or(|(key, kind, _)| (*key, *kind) != (field, layout))
+                {
                     return Err(Error::InvalidMarker(marker));
                 }
-                fields.remove(0);
-                let mut at = root.clone();
-                at.path.push(super::Projection::Field { field });
+                let (_, _, at) = fields.remove(0);
                 let source = &units[&current.unit][&marker].source;
                 let context = Context {
                     task: TaskPath::default(),

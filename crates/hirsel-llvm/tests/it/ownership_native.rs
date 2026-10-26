@@ -144,6 +144,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                             action: marker.kind,
                             callee: None,
                             cleanup: None,
+                            cleanup_paths: BTreeMap::new(),
                             additional_drops: Vec::new(),
                             token_path: None,
                             owner_path: None,
