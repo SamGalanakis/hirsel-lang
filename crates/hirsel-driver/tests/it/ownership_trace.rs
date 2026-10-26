@@ -1551,3 +1551,26 @@ pub fn main() -> Result[(), ()] {
         hirsel_run_schema::exit::FAILED,
     );
 }
+
+#[test]
+#[ignore = "native: executes retained aggregate capture cleanup on both backends"]
+fn ownership_native_uncalled_once_environment_drops_nested_original_children_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+type Pair { left: Token, right: Token }
+fn discard(take pair: Pair) {
+    let captured: once fn() -> Pair = fn() -> Pair { take pair }
+}
+pub fn main() -> Result[(), ()] {
+    let first = Token(value: 7u64)
+    let second = Token(value: 7u64)
+    let pair = Pair(left: take first, right: take second)
+    discard(take pair)
+    Ok(())
+}
+"#,
+        2,
+    );
+}
