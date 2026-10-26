@@ -1157,6 +1157,25 @@ impl QueryEngine {
         );
         EntryKey::new(env, path, text, kind, LoweringPolicy::Reachable)
     }
+    /// The bodyless header of a generic generated declaration is an ordinary
+    /// front product. This gate cannot admit a mono generator or an instance.
+    pub(super) fn front_declaration_store_key(
+        &mut self,
+        path: &DefPath,
+        kind: QueryKind,
+    ) -> Result<EntryKey, QueryError> {
+        let syntax = self.snapshot(path)?;
+        if !generation::instance_bodied(&syntax)
+            || !matches!(
+                kind,
+                QueryKind::Modes | QueryKind::Lower | QueryKind::Evaluate
+            )
+        {
+            return Err(QueryError::NotImplemented);
+        }
+        let text = self.key_text(path, kind)?;
+        Ok(self.product_store_key(path, kind, text))
+    }
     pub(super) fn accepted_front_store_key(
         &mut self,
         accepted: &AcceptedFrontRegistration,

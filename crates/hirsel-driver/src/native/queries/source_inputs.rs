@@ -45,7 +45,7 @@ pub trait NativeSourceProvider: NativeRecordSource {
         ),
         String,
     > {
-        if let Some(output) = self.source_output(path)? {
+        let (mut evidence, mut original) = if let Some(output) = self.source_output(path)? {
             let evidence = hirsel_rc::invocations::source_instance_from_output(
                 &output.invocations(),
                 path,
@@ -54,27 +54,76 @@ pub trait NativeSourceProvider: NativeRecordSource {
                 body,
             )
             .map_err(str::to_owned)?;
-            return Ok((evidence, None));
+            (evidence, None)
+        } else {
+            let original = self.original_source(path)?;
+            let program = &self.declarations().program;
+            let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
+            signatures.extend(
+                program
+                    .signatures
+                    .iter()
+                    .map(|(path, signature)| (path, (**signature).clone())),
+            );
+            let evidence = hirsel_rc::invocations::source_instance(
+                &program.types,
+                &original.0,
+                &signatures,
+                &program.operations,
+                selected,
+                body,
+            )
+            .map_err(str::to_owned)?;
+            (evidence, Some(original))
+        };
+        // A direct CT-5 call executes its registered concrete body. Derive
+        // that identity from the original call's closed arguments and the
+        // captured instance table, before C observes any candidate symbol.
+        let instances = &self.declarations().program.instance_bodies;
+        if evidence.invocations.iter().any(|row| {
+            row.callee.as_ref().is_some_and(|p| {
+                instances
+                    .declarations
+                    .contains(&hirsel_syntax::DefId::intern(p))
+            })
+        }) {
+            if original.is_none() {
+                original = Some(self.original_source(path)?);
+            }
+            let definition = &original.as_ref().unwrap().0;
+            let program = &self.declarations().program;
+            for row in &mut evidence.invocations {
+                let Some(callee) = &row.callee else {
+                    continue;
+                };
+                let callee = hirsel_syntax::DefId::intern(callee);
+                if !program.instance_bodies.declarations.contains(&callee) {
+                    continue;
+                }
+                let call = definition
+                    .bodies
+                    .get(row.body as usize)
+                    .and_then(|body| body.blocks.get(row.block as usize))
+                    .ok_or("generated invocation is outside original source")?;
+                let hirsel_tir::Terminator::Call {
+                    callee: hirsel_tir::Callee::Definition { path, arguments },
+                    ..
+                } = &call.terminator
+                else {
+                    return Err("generated invocation has no original direct call".into());
+                };
+                if path != callee.path() {
+                    return Err("generated invocation differs from original call".into());
+                }
+                let selected = program
+                    .instance_bodies
+                    .resolve(callee, &program.types, arguments)
+                    .map_err(|error| format!("generated invocation selection: {error:?}"))?
+                    .ok_or("generated invocation has no selected body")?;
+                row.callee = Some(selected.path().clone());
+            }
         }
-        let original = self.original_source(path)?;
-        let program = &self.declarations().program;
-        let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
-        signatures.extend(
-            program
-                .signatures
-                .iter()
-                .map(|(path, signature)| (path, (**signature).clone())),
-        );
-        let evidence = hirsel_rc::invocations::source_instance(
-            &program.types,
-            &original.0,
-            &signatures,
-            &program.operations,
-            selected,
-            body,
-        )
-        .map_err(str::to_owned)?;
-        Ok((evidence, Some(original)))
+        Ok((evidence, original))
     }
     fn source_observation(&self, path: &DefPath) -> Result<SourceObservation, String>;
     fn original_source(&mut self, path: &DefPath) -> Result<OriginalSource, String>;

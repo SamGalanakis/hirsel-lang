@@ -1329,7 +1329,20 @@ impl QueryEngine {
             }
             self.materialize(definition)?;
             let original = self.snapshot(definition)?;
-            let syntax = if generation::generator(&original).is_some() {
+            let declaration = generation::instance_bodied(&original);
+            let syntax = if declaration {
+                if registration.is_some() {
+                    return Err(refusal());
+                }
+                // As in declaration_check_query, a generic generated
+                // declaration checks its header. Only closed instances have
+                // executable generated bodies, each with an accepted view.
+                let mut header = (*original).clone();
+                if let hirsel_syntax::ItemKind::Function { body, .. } = &mut header.item.kind {
+                    *body = None;
+                }
+                Arc::new(header)
+            } else if generation::generator(&original).is_some() {
                 registration.ok_or_else(refusal)?.syntax.clone()
             } else {
                 if registration.is_some() {
@@ -1341,6 +1354,9 @@ impl QueryEngine {
             let text = self.key_text(definition, QueryKind::Modes)?;
             let key = match registration {
                 Some(accepted) => self.accepted_front_store_key(accepted, QueryKind::Modes)?,
+                None if declaration => {
+                    self.front_declaration_store_key(definition, QueryKind::Modes)?
+                }
                 None => self
                     .store_key(definition, QueryKind::Modes)
                     .ok_or_else(refusal)?,

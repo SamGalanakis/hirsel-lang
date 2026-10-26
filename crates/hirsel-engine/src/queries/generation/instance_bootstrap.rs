@@ -225,7 +225,12 @@ impl QueryEngine {
             if generator(&snapshot).is_none() {
                 return Err(refused("selected declaration is not a generator"));
             }
-            if !instance_bodied(&snapshot) {
+            if instance_bodied(&snapshot) {
+                // The declaration has no executable body, but remains a
+                // required checked header for Growth and package Check.
+                ordinary.reserve_exact(1);
+                ordinary.push(path.clone());
+            } else {
                 selected.push(path.clone());
             }
         }

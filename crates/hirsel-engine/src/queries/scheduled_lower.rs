@@ -528,6 +528,133 @@ impl FrontLowerQueries {
             .map(|selected| selected.map(|id| id.path().clone()))
     }
 
+    /// Close CT-5 calls through generic helpers using this view's settled
+    /// summaries and instance table. Unlike source registration, Run cannot
+    /// create a missing instance or execute its generator.
+    pub(crate) fn selected_instances(
+        &self,
+        roots: impl IntoIterator<Item = DefPath>,
+        limit: u64,
+    ) -> Result<BTreeSet<DefPath>, QueryError> {
+        if self.instances.declarations.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let refused = || {
+            QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "Run instance selection".into(),
+                message: "closed instance selection exceeds admission or lacks a settled summary"
+                    .into(),
+            })
+        };
+        let mut pending: Vec<_> = roots
+            .into_iter()
+            .map(|p| (DefId::intern(&p), BTreeMap::new()))
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut selected = BTreeSet::new();
+        let mut work = crate::NativeMetadataWeight::default();
+        work.flat_vec(&pending);
+        while let Some((path, bindings)) = pending.pop() {
+            let key: Vec<_> = bindings
+                .iter()
+                .map(
+                    |(site, actuals): (&hirsel_types::SiteRef, &hirsel_types::Actuals)| {
+                        (
+                            *site,
+                            hirsel_tir::InstanceBodies::key(
+                                self.snapshot.types(),
+                                &actuals.arguments,
+                            ),
+                        )
+                    },
+                )
+                .collect();
+            work.flat_vec(&key);
+            if !seen.insert((path, key)) {
+                continue;
+            }
+            work.add(
+                size_of::<(
+                    DefId,
+                    Vec<(
+                        hirsel_types::SiteRef,
+                        Option<hirsel_types::GeneratedActualKey>,
+                    )>,
+                )>() + 16 * size_of::<usize>(),
+            );
+            if seen.len() > 65536 || work.bytes() > limit {
+                return Err(refused());
+            }
+            if !self.inputs.contains_key(path.path()) || self.instances.declarations.contains(&path)
+            {
+                continue;
+            }
+            let product = self
+                .front
+                .checked_definition(path.path())
+                .ok_or_else(refused)?;
+            let summary = &product.summary.summary;
+            if bindings.is_empty() && summary.frames[0].generic {
+                continue;
+            }
+            for call in summary
+                .calls
+                .iter()
+                .filter(|call| call.target_frame.is_none())
+            {
+                if !self.inputs.contains_key(call.callee.path()) {
+                    continue;
+                }
+                let actuals = hirsel_types::close_arguments(
+                    self.snapshot.types(),
+                    &self.memo,
+                    &call.arguments,
+                    &bindings,
+                )
+                .map_err(|_| refused())?;
+                let closed =
+                    hirsel_tir::InstanceBodies::key(self.snapshot.types(), &actuals.arguments)
+                        .is_some();
+                let next = if self.instances.declarations.contains(&call.callee) {
+                    if !closed {
+                        continue;
+                    }
+                    let instance = self
+                        .instances
+                        .resolve(call.callee, self.snapshot.types(), &actuals.arguments)?
+                        .ok_or_else(refused)?;
+                    if !selected.contains(instance.path()) {
+                        work.tree::<DefPath, ()>(0);
+                        work.path(instance.path());
+                        if work.bytes() > limit {
+                            return Err(refused());
+                        }
+                        selected.insert(instance.path().clone());
+                    }
+                    (instance, BTreeMap::new())
+                } else if actuals.arguments.is_empty() {
+                    (call.callee, BTreeMap::new())
+                } else if closed {
+                    (call.callee, BTreeMap::from([(call.binder, actuals)]))
+                } else {
+                    continue;
+                };
+                // Bound all visited and queued cursor allocations cumulatively;
+                // released cursors never grant extra space to this walk.
+                work.add(size_of_val(&next) + 16 * size_of::<usize>());
+                work.tree::<hirsel_types::SiteRef, hirsel_types::Actuals>(next.1.len());
+                for actuals in next.1.values() {
+                    work.flat_vec(&actuals.arguments);
+                }
+                if work.bytes() > limit {
+                    return Err(refused());
+                }
+                pending.push(next);
+            }
+        }
+        Ok(selected)
+    }
+
     pub fn work(&self, path: &DefPath) -> FrontLowerWork {
         self.work
             .lock()
@@ -1509,11 +1636,17 @@ impl QueryEngine {
                         Some(accepted) => {
                             self.accepted_front_store_key(accepted, QueryKind::Lower)?
                         }
+                        None if generation::instance_bodied(&syntax) => {
+                            self.front_declaration_store_key(path, QueryKind::Lower)?
+                        }
                         None => self.store_key(path, QueryKind::Lower).ok_or_else(refusal)?,
                     },
                     evaluate: match front.registration(path) {
                         Some(accepted) => {
                             self.accepted_front_store_key(accepted, QueryKind::Evaluate)?
+                        }
+                        None if generation::instance_bodied(&syntax) => {
+                            self.front_declaration_store_key(path, QueryKind::Evaluate)?
                         }
                         None => self
                             .store_key(path, QueryKind::Evaluate)

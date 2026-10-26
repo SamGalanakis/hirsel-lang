@@ -49,6 +49,7 @@ struct Input {
     dependencies: BTreeSet<DefPath>,
     source: bool,
     executable: bool,
+    generated: bool,
     implementation: ContentHash,
 }
 /// Prepared immutable Run inputs and their exact charged bytes. The private
@@ -329,39 +330,56 @@ impl Task {
                 }
             }
         }
-        while let Some(path) = self.pending.last().cloned() {
-            if self.nodes.contains_key(&path) {
-                self.pending.pop();
-                continue;
-            }
-            match self.node(cx, &path) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                Poll::Ready(Ok((node, content, dependencies))) => {
+        loop {
+            while let Some(path) = self.pending.last().cloned() {
+                if self.nodes.contains_key(&path) {
                     self.pending.pop();
-                    self.pending.extend(
-                        dependencies
-                            .iter()
-                            .filter(|p| !self.nodes.contains_key(*p))
-                            .cloned(),
-                    );
-                    let semantic = node.dependencies.iter().collect::<BTreeSet<_>>();
-                    let semantic_dependencies = dependencies
-                        .into_iter()
-                        .filter(|p| semantic.contains(&p.to_string()))
-                        .collect();
-                    self.nodes.insert(path.clone(), node);
-                    self.contents.insert(path.clone(), content);
-                    self.uses.insert(path, semantic_dependencies);
+                    continue;
+                }
+                match self.node(cx, &path) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                    Poll::Ready(Ok((node, content, dependencies))) => {
+                        self.pending.pop();
+                        self.pending.extend(
+                            dependencies
+                                .iter()
+                                .filter(|p| !self.nodes.contains_key(*p))
+                                .cloned(),
+                        );
+                        let semantic = node.dependencies.iter().collect::<BTreeSet<_>>();
+                        let semantic_dependencies = dependencies
+                            .into_iter()
+                            .filter(|p| semantic.contains(&p.to_string()))
+                            .collect();
+                        self.nodes.insert(path.clone(), node);
+                        self.contents.insert(path.clone(), content);
+                        self.uses.insert(path, semantic_dependencies);
+                    }
+                }
+                // Canonical input bytes plus graph rows and decoded working bodies
+                // are bounded by this task's retained/scratch admission.
+                if self
+                    .graph_bytes()
+                    .is_none_or(|bytes| bytes > self.queries.weight.retained)
+                {
+                    return Poll::Ready(Err(self.queries.errors.resource));
                 }
             }
-            // Canonical input bytes plus graph rows and decoded working bodies
-            // are bounded by this task's retained/scratch admission.
-            if self
-                .graph_bytes()
-                .is_none_or(|bytes| bytes > self.queries.weight.retained)
+            match self
+                .queries
+                .lower
+                .selected_instances(self.nodes.keys().cloned(), self.queries.weight.scratch)
             {
-                return Poll::Ready(Err(self.queries.errors.resource));
+                Ok(instances) => self.pending.extend(
+                    instances
+                        .into_iter()
+                        .filter(|p| !self.nodes.contains_key(p)),
+                ),
+                Err(error) => return Poll::Ready(Err(self.queries.failure_record(error))),
+            }
+            if self.pending.is_empty() {
+                break;
             }
         }
         Poll::Ready(
@@ -391,6 +409,7 @@ impl Task {
         };
         let mut dependencies = input.dependencies.clone();
         let mut tir = None;
+        let mut generated_tokens = None;
         if input.source {
             let Some(id) = queries.front.query(path) else {
                 return Poll::Ready(Err(
@@ -427,6 +446,16 @@ impl Task {
                 return Poll::Ready(Err(
                     queries.failure_record(QueryError::Diagnostics(analyzed.diagnostics.clone()))
                 ));
+            }
+            if input.generated {
+                generated_tokens = match hirsel_fmt::semantic_item(&analyzed.value.typed.syntax) {
+                    Some(tokens) => Some(tokens),
+                    None => {
+                        return Poll::Ready(
+                            Err(queries.failure_record(QueryError::NotImplemented)),
+                        );
+                    }
+                };
             }
             dependencies.extend(
                 analyzed
@@ -525,10 +554,17 @@ impl Task {
                 .deserialize(&bytes)
                 .map_err(|_| operational("invalid Run input content"))
         })();
-        let source_content = match source_content {
+        let mut source_content = match source_content {
             Ok(content) => content,
             Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
         };
+        if let Some(tokens) = generated_tokens {
+            // Scalar semantic_body_node hashes the analyzed source: a generic
+            // generated header has no body, and a selected instance carries
+            // its accepted literal rather than the original generator call.
+            source_content.truncate(1);
+            source_content.extend(tokens);
+        }
         let content = if matches!(input.signature.kind, SignatureKind::Type(_)) {
             DefinitionContent::Body {
                 signature: input.owner_signature.clone(),
@@ -597,14 +633,26 @@ impl Task {
                 .try_fold(n, |n, d| n.checked_add(d.len() as u64))
         })
     }
-    fn program(&self, root: &DefPath) -> SemanticProgram {
+    fn program(&self, root: &DefPath) -> Result<SemanticProgram, QueryError> {
         self.program_from(vec![root.clone()])
     }
-    fn program_from(&self, mut pending: Vec<DefPath>) -> SemanticProgram {
+    fn program_from(&self, mut pending: Vec<DefPath>) -> Result<SemanticProgram, QueryError> {
         let mut definitions = BTreeSet::new();
-        while let Some(path) = pending.pop() {
-            if definitions.insert(path.clone()) {
-                pending.extend(self.uses.get(&path).into_iter().flatten().cloned());
+        loop {
+            while let Some(path) = pending.pop() {
+                if definitions.insert(path.clone()) {
+                    pending.extend(self.uses.get(&path).into_iter().flatten().cloned());
+                }
+            }
+            pending.extend(
+                self.queries
+                    .lower
+                    .selected_instances(definitions.iter().cloned(), self.queries.weight.scratch)?
+                    .into_iter()
+                    .filter(|p| !definitions.contains(p)),
+            );
+            if pending.is_empty() {
+                break;
             }
         }
         let mut nodes = vec![super::program_revision::runtime_node()];
@@ -613,14 +661,14 @@ impl Task {
                 .iter()
                 .filter_map(|p| self.nodes.get(p).cloned()),
         );
-        SemanticProgram {
+        Ok(SemanticProgram {
             nodes,
             uses: definitions
                 .iter()
                 .filter_map(|p| self.uses.get(p).map(|uses| (p.clone(), uses.clone())))
                 .collect(),
             definitions,
-        }
+        })
     }
     fn complete(&self) -> Result<ProductRef, QueryError> {
         let queries = &self.queries;
@@ -638,10 +686,11 @@ impl Task {
             else if matches!(&signature.kind, SignatureKind::Function(f) if f.foreign.is_some()) { Some((path.clone(), Escape::Extern)) }
             else { None }
         }).collect();
-        let reach = |root: &DefPath| {
-            self.program(root)
+        let reach = |root: &DefPath| -> Result<CodeReach, QueryError> {
+            Ok(self
+                .program(root)?
                 .reach(root, &escapes)
-                .map_or(CodeReach::Safe, |r| CodeReach::Escapes(r.spelled()))
+                .map_or(CodeReach::Safe, |r| CodeReach::Escapes(r.spelled())))
         };
         let facts = |path: &DefPath| -> Result<Option<(CalleeFacts, CallForm)>, QueryError> {
             let signature = &queries
@@ -659,10 +708,10 @@ impl Task {
             let code = hashes.get(path).ok_or(QueryError::NotImplemented)?;
             Ok(Some((
                 CalleeFacts {
-                    program: self.program(path).revision(path)?.digest(),
+                    program: self.program(path)?.revision(path)?.digest(),
                     code: code.0,
                     fingerprint: signature.fingerprint.0,
-                    reach: reach(path),
+                    reach: reach(path)?,
                 },
                 if roots.is_empty() {
                     CallForm::Compute
@@ -671,7 +720,7 @@ impl Task {
                 },
             )))
         };
-        let program = self.program(&self.root);
+        let program = self.program(&self.root)?;
         let mut callees = BTreeMap::new();
         for path in &program.definitions {
             let Some(DefinitionContent::Body { tir: Some(tir), .. }) = self.contents.get(path)
@@ -702,11 +751,11 @@ impl Task {
         // this entry unrecordable, as the checked package decides it.
         let unreplayable = !queries.check.unsafe_ffi().is_empty() && !foreign.unmodeled.is_empty();
         let revision = program.revision(&self.root)?;
-        let code = reach(&self.root);
+        let code = reach(&self.root)?;
         let semantic_program = if queries.native_roots.is_empty() {
             program.clone()
         } else {
-            self.program_from(queries.native_roots.clone())
+            self.program_from(queries.native_roots.clone())?
         };
         let bindings = semantic_program
             .definitions
@@ -926,11 +975,13 @@ impl QueryEngine {
                 }
             }
             let mut executable = false;
+            let mut generated = false;
             let mut implementation = ContentHash::default();
             if source {
                 self.materialize(&path)?;
                 let syntax = self.snapshot(&path)?;
                 executable = generation::executable(&syntax);
+                generated = generation::generator(&syntax).is_some();
                 implementation = syntax.text_hash;
                 content.extend(self.semantic_tokens(&syntax)?);
             }
@@ -961,6 +1012,7 @@ impl QueryEngine {
                     dependencies,
                     source,
                     executable,
+                    generated,
                     implementation,
                 },
             );
