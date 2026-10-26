@@ -585,6 +585,7 @@ mod failure_tests {
         for (parent_fails, children, mode, error) in [
             (true, 0, 0, 0),
             (false, 1, 2, 0),
+            (false, 2, 2, 0),
             (true, 2, 2, 0),
             (false, 2, 0, 1),
             (false, 2, 0, 0),
@@ -678,9 +679,15 @@ mod failure_tests {
                         expected.push((failure(1), vec![]));
                     }
                     if mode == 2 {
-                        // Rest execution is reverse order; failure presentation
-                        // still follows original spawn paths, never wake order.
-                        for id in 0..children {
+                        // Port the baseline merge_chain transcript exactly:
+                        // an own primary stays first and receives reverse-rest
+                        // causes; without it the earlier child path leads.
+                        let order: Vec<_> = if parent_fails {
+                            (0..children).rev().collect()
+                        } else {
+                            (0..children).collect()
+                        };
+                        for id in order {
                             expected.push((failure(10 + id), vec![id as u32]));
                         }
                     }
