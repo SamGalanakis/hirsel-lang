@@ -285,6 +285,9 @@ fn pnm_tiles_30_native_record_replay() {
         let records: Vec<Value> = serde_json::from_slice(&fs::read(record_path).unwrap()).unwrap();
         let mut receipts = Vec::new();
         assert!(!records.is_empty());
+        // Each replay opens fresh tape/provider state. Only the immutable source
+        // query graph is shared across tapes and reference/checked consumers.
+        let mut program = compiler.load_program(&manifest).unwrap();
         for row in records {
             if !selected(&row) {
                 continue;
@@ -333,7 +336,6 @@ fn pnm_tiles_30_native_record_replay() {
                     fs::write(receipt_path, serde_json::to_vec_pretty(&receipts).unwrap()).unwrap();
                     continue;
                 }
-                let mut program = compiler.load_program(&manifest).unwrap();
                 let replayed = hirsel_driver::replay_loaded_observations(
                     &mut program,
                     &tape,
