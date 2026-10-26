@@ -8,10 +8,15 @@ use hirsel_lir::ir::{Callee, UnitOrigin};
 const PROGRAM: &str = r#"
 fn first() -> u64 { 3u64 }
 fn second() -> u64 { 5u64 }
+// The getter in main remains stackful. Exercise nesting in a caller whose
+// entire callchain has a checked compact plan, independently of that getter.
+fn invoke(tasks: Tasks, args: Args) -> Result[u64, Failure] {
+  task.isolate(tasks, CALLBACK)
+}
 pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let output = io.stdout(rt)?
-  let value: Result[u64, Failure] = task.isolate(tasks, CALLBACK)
+  let value: Result[u64, Failure] = invoke(tasks, args)
   match value {
     Ok(n) => { let _ = out.print(output, f"{n}\n") },
     Error(_) => failure.check(false, Arithmetic()),
@@ -22,7 +27,17 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
 
 fn check(callback: &str, known: bool) {
     with_compiler_stack(|| {
-        let program = super::runtime50_continuation::ready(&PROGRAM.replace("CALLBACK", callback));
+        // Keep the original dynamic-target negative in its opaque root caller;
+        // only the positive needs a compact-eligible caller for its new assertion.
+        let source = if known {
+            PROGRAM.to_owned()
+        } else {
+            let start = PROGRAM.find("// The getter in main").unwrap();
+            let end = PROGRAM.find("pub fn main").unwrap();
+            format!("{}{}", &PROGRAM[..start], &PROGRAM[end..])
+                .replace("invoke(tasks, args)", "task.isolate(tasks, CALLBACK)")
+        };
+        let program = super::runtime50_continuation::ready(&source.replace("CALLBACK", callback));
         let wrappers: Vec<_> = program
             .units
             .iter()
