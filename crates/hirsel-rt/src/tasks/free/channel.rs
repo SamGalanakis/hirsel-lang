@@ -380,6 +380,17 @@ unsafe fn close_inner(
     super::record::begin(ctx);
     let (channel, sender) = role::with_role(ctx, |s| s.channels.endpoint_of(word));
     unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
+    let (left, inert) = unsafe { close_action(ctx, word, channel, sender) }?;
+    Ok(unsafe { destroy(ctx, left, inert, anchor, operation_site, super::replay::start) })
+}
+
+/// The original admitted close action; detached storage is returned before any
+/// stop-aware accessor or user cleanup can run.
+/// # Safety
+/// The role is held and this ordinal has passed its channel admission.
+pub(super) unsafe fn close_action(
+    ctx: *mut TaskCtx, word: u64, channel: u32, sender: bool,
+) -> Stopped<(Option<(crate::channels::Ring, u32)>, bool)> {
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe {
         role::with_held(ctx, |s| {
@@ -441,16 +452,7 @@ unsafe fn close_inner(
         })
     };
     unsafe { super::schedule_ready((*ctx).run_ptr(), ready) };
-    Ok(unsafe {
-        destroy(
-            ctx,
-            left,
-            inert,
-            anchor,
-            operation_site,
-            super::replay::start,
-        )
-    })
+    Ok((left, inert))
 }
 
 /// Destroy the messages a last receiver's close detached, oldest first, on

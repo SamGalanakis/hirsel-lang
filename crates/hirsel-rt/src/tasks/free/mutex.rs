@@ -358,6 +358,14 @@ unsafe fn close_inner(
 ) -> Stopped<u8> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+    let closed = unsafe { close_action(ctx, word) }?;
+    Ok(unsafe { destroy(ctx, closed, anchor, operation_site, super::replay::start) })
+}
+
+/// The original admitted close action, shared by blocking and owned drivers.
+/// # Safety
+/// The role is held and the current ordinal has passed its object admission.
+pub(super) unsafe fn close_action(ctx: *mut TaskCtx, word: u64) -> Stopped<crate::sync::ClosedMutex> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let empty = crate::channels::Ring::new(cell.element.size, 1);
@@ -387,15 +395,7 @@ unsafe fn close_inner(
     drop(state);
     drop(cell);
     drop(replay);
-    Ok(unsafe {
-        destroy(
-            ctx,
-            publication??,
-            anchor,
-            operation_site,
-            super::replay::start,
-        )
-    })
+    publication?
 }
 
 /// Destroy a closed cell's detached payload on its closing task, at the

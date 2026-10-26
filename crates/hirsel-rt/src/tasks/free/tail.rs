@@ -19,6 +19,7 @@ use crate::{STATUS_FAILURE, STATUS_OK};
 use std::sync::Arc;
 
 mod mutex;
+mod close;
 #[cfg(test)]
 mod tests;
 #[allow(unused_imports)]
@@ -174,6 +175,7 @@ fn status_is_terminal(status: u8) {
 #[derive(Default)]
 pub(crate) struct Records {
     next: u64,
+    drivers: Vec<Box<close::Driver>>,
     entered: Vec<(crate::continuation::binding::BoundSite, Ticket)>,
     // Boxes retain every ancestor's address across growth and child retirement.
     #[allow(clippy::vec_box)]
