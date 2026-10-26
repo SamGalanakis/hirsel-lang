@@ -811,3 +811,102 @@ fn ownership_reference_defused_owned_parent_still_releases_its_actual_child() {
 }
 
 mod closures;
+
+#[test]
+fn ownership_reference_finalizer_local_cleanup_precedes_queued_aggregate_sibling() {
+    for fail in [false, true] {
+        let audit_kind = TypeKind::Named {
+            definition: DefId::intern(&path("Audit")),
+            arguments: vec![].into(),
+        };
+        let mut builder = Builder::new();
+        let first = token(&mut builder);
+        let second = token(&mut builder);
+        let token_type = builder.type_id(kind());
+        let pair = builder.local(
+            TypeKind::Tuple(vec![token_type, token_type].into()),
+            Storage::Local,
+        );
+        builder.assign(
+            pair,
+            Rvalue::Construct {
+                constructor: Constructor::Tuple,
+                fields: vec![
+                    ConstructField {
+                        field: 0,
+                        value: take(first),
+                    },
+                    ConstructField {
+                        field: 1,
+                        value: take(second),
+                    },
+                ],
+                destination: Destination::Inferred,
+            },
+            4,
+            CleanupId(0),
+        );
+        let result = builder.unit();
+        let main = builder.finish("main", result);
+        let mut token_drop = Builder::new();
+        token_drop.borrowed_parameter(kind());
+        let audit = token_drop.local(audit_kind.clone(), Storage::Local);
+        token_drop.assign(
+            audit,
+            Rvalue::Construct {
+                constructor: Constructor::Record(path("Audit")),
+                fields: vec![],
+                destination: Destination::Inferred,
+            },
+            6,
+            CleanupId(0),
+        );
+        let unit = token_drop.unit();
+        let token_drop = if fail {
+            token_drop.block(
+                Terminator::Fail {
+                    rule: const { hirsel_diag::RuleId::of("FAIL-1") },
+                    cleanup: CleanupId(0),
+                },
+                9,
+            );
+            token_drop.definition("Token_drop")
+        } else {
+            token_drop.finish("Token_drop", unit)
+        };
+        let mut audit_drop = Builder::new();
+        audit_drop.borrowed_parameter(audit_kind);
+        let unit = audit_drop.unit();
+        let audit_drop = audit_drop.finish("Audit_drop", unit);
+        let mut runtime = runtime_types();
+        runtime.nominals.push(Nominal {
+            definition: path("Audit"),
+            resource: true,
+            distinct: false,
+            finalizer: Some((path("Audit_drop"), BodyId(0))),
+            fields: 0,
+            representation: None,
+        });
+        let traced = observed(vec![main, token_drop, audit_drop], &runtime);
+        assert_eq!(matches!(traced.execution.outcome, Outcome::Failed(_)), fail);
+        let trace = traced.trace.unwrap();
+        let analysis = trace.analyze([9; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (4, 4, 0)
+        );
+        let drops = trace
+            .events
+            .iter()
+            .filter_map(|event| match &event.action {
+                Action::Drop { token, .. } => Some(token.sequence),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            drops,
+            [2, 1, 3, 0],
+            "each finalizer local dies before its own receiver; fail={fail}"
+        );
+    }
+}

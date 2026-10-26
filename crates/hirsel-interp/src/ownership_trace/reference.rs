@@ -1479,7 +1479,9 @@ impl Observer for Resources {
         let owner = self.scratch();
         let result = self.tracker.move_tree(&context, &from, &owner);
         if self.checked(result).is_some() {
-            self.releases.push_back(owner);
+            // Work::Release for this active cleanup is pushed to the front.
+            // Pending siblings remain behind a finalizer's own local cleanup.
+            self.releases.push_front(owner);
         }
     }
     fn finish_frame(
