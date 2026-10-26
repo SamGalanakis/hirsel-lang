@@ -184,7 +184,11 @@ unsafe fn enter(
                         site.task.slot,
                         site.state,
                         site.kind,
-                        "host",
+                        if inop::host_wait_registered(ctx) {
+                            "host-park"
+                        } else {
+                            "host"
+                        },
                         site.invocation,
                     );
                     unsafe { (*ctx).ordered_inop_leave = Some(head_only) };

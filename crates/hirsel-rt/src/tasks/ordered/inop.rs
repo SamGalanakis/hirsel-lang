@@ -110,6 +110,16 @@ pub(super) fn set_host_wait(ctx: *mut TaskCtx, token: u64, yielded: bool) {
     });
 }
 
+/// Diagnostic identity of a genuine registered host wait, rather than a
+/// pending head/initial-yield phase. This reads no adapter or result storage.
+#[cfg(feature = "diagnostic")]
+pub(super) fn host_wait_registered(ctx: *mut TaskCtx) -> bool {
+    with_operation(
+        ctx,
+        |d, task| matches!(d.in_operations.get(&task), Some(Operation::Host(host)) if host.phase == HostPhase::Outcome),
+    )
+}
+
 fn host_phase(ctx: *mut TaskCtx, phase: HostPhase) {
     with_operation(ctx, |d, task| {
         let Operation::Host(host) = d.in_operations.get_mut(&task).unwrap() else {
