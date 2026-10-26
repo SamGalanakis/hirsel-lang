@@ -196,3 +196,66 @@ pub(super) unsafe fn poll(ctx: *mut TaskCtx, index: usize) -> Stopped<Poll<u8>> 
 
 #[cfg(test)]
 mod tests;
+
+/// Entered instruction site for a root drop. The saved operation, rather
+/// than the reloaded source operand, owns the consumed root on every retry.
+/// # Safety
+/// All caller frames are certified, including value/mask/cleanup ancestry.
+pub(crate) unsafe fn invoke_root_drop(ctx:*mut TaskCtx, block:*mut Header) -> Option<u8> {
+    const ROOT_DROP:u32=48;
+    let site=unsafe {crate::continuation::binding::take_bound(ctx,ROOT_DROP)}?;
+    if !crate::tasks::free::enabled(ctx) {
+        unsafe {crate::continuation::binding::complete_bound(ctx,site)};
+        return None;
+    }
+    let previous=unsafe {(*ctx).free_ops.tails.cleanup_sites.last().filter(|(s,_)|*s==site).map(|(_,index)|*index)};
+    let index=match previous {
+        Some(index)=>index,
+        None=> {
+            // Both record and backing capacity exist before consuming credit.
+            let cursor=Box::new(Cursor::new(unsafe {(*ctx).work},block,ptr::null(),false,site.anchor,site.operation_site));
+            let index=unsafe {attach(ctx,cursor,site.anchor,site.operation_site)};
+            unsafe {(*ctx).free_ops.tails.cleanup_sites.push((site,index))};
+            if !unsafe {crate::roots::consume(&mut *ctx,block)} {
+                unsafe {
+                    (*ctx).free_ops.tails.drivers.pop();
+                    (*ctx).free_ops.tails.cleanup_sites.pop();
+                    crate::continuation::binding::complete_bound(ctx,site);
+                }
+                return Some(STATUS_OK);
+            }
+            unsafe {crate::release::push(&mut *ctx,block,true)};
+            index
+        }
+    };
+    crate::tasks::compact::waited(ctx);
+    loop {
+        let result=unsafe {poll(ctx,index)};
+        match result {
+            Ok(Poll::Ready(status))=> {
+                unsafe {
+                    assert_eq!((*ctx).free_ops.tails.cleanup_sites.pop(),Some((site,index)));
+                    crate::continuation::binding::complete_bound(ctx,site);
+                }
+                return Some(status);
+            }
+            waiting=> {
+                let leave=unsafe {crate::continuation::binding::can_leave(ctx,site)};
+                if let Err(stop)=waiting {
+                    if !(leave && replay::cut_rejection(ctx,&stop)) {
+                        unsafe {crate::stop::check(ctx,Err::<(),_>(stop))};
+                        unreachable!();
+                    }
+                    unsafe {crate::stop::check(ctx,crate::tasks::park_left(ctx,crate::tasks::Wait::Final))};
+                } else if leave {
+                    unsafe {crate::stop::check(ctx,crate::tasks::park_left(ctx,crate::tasks::Wait::Retry{cancelable:false}))};
+                } else {
+                    unsafe {crate::stop::check(ctx,crate::tasks::try_block(&mut *ctx,crate::tasks::Wait::Retry{cancelable:false},false,site.operation_site))};
+                    continue;
+                }
+                crate::tasks::compact::wait(ctx);
+                return Some(crate::STATUS_SUSPENDED);
+            }
+        }
+    }
+}

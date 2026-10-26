@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 mod mutex;
 mod close;
+pub(crate) use close::invoke_root_drop;
 #[cfg(test)]
 mod tests;
 #[allow(unused_imports)]
@@ -176,6 +177,7 @@ fn status_is_terminal(status: u8) {
 pub(crate) struct Records {
     next: u64,
     drivers: Vec<Box<close::Driver>>,
+    cleanup_sites: Vec<(crate::continuation::binding::BoundSite,usize)>,
     entered: Vec<(crate::continuation::binding::BoundSite, Ticket)>,
     // Boxes retain every ancestor's address across growth and child retirement.
     #[allow(clippy::vec_box)]
@@ -245,6 +247,12 @@ pub(crate) unsafe fn invoke_mutex(
         _ => unreachable!(),
     };
     let site = unsafe { crate::continuation::binding::take_bound(ctx, tag) }?;
+    // Shared physical binding also supports Ordered entered operations. A
+    // Free tail must never bypass that policy's frontier or effect recorder.
+    if !crate::tasks::free::enabled(ctx) {
+        unsafe { crate::continuation::binding::complete_bound(ctx, site) };
+        return None;
+    }
     let existing = unsafe {
         (*ctx)
             .free_ops

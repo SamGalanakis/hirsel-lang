@@ -46,6 +46,7 @@ pub use scope::ScopeOpPlan;
 mod tail;
 mod validate;
 pub use tail::{OwnedTail, TailCarrier, TailKind};
+mod cleanup;
 pub use validate::{
     AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
     validate_runtime_operations,
@@ -440,6 +441,24 @@ pub struct ResumeState {
     pub bytes: u64,
 }
 
+/// An entered release instruction. Its identity is an instruction coordinate,
+/// never a fabricated CallId; the runtime owns its consumed operand until the
+/// instruction's original success/failure suffix can continue.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CleanupResumeState {
+    pub action: ResumeAction,
+    pub block: BlockId,
+    pub instruction: u32,
+    pub value: ValueId,
+    pub layout: LayoutId,
+    pub anchor: CleanupAnchorId,
+    pub failure: FailureId,
+    pub state: u32,
+    pub live: Vec<LiveOwnedSlot>,
+    pub storage: Vec<LiveStorage>,
+    pub bytes: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Representation {
     /// No boundary: run to completion where it starts.
@@ -478,6 +497,7 @@ pub struct ContinuationPlan {
     /// for the whole body, so addresses into it stay valid across a suspension.
     pub storage: Vec<LiveStorage>,
     pub states: Vec<ResumeState>,
+    pub cleanups: Vec<CleanupResumeState>,
     pub captures: Option<LayoutId>,
     pub cost: PlacementCost,
     pub certificate: ValidatedContinuation,
@@ -595,6 +615,9 @@ fn fixed(table: &LayoutTable, id: LayoutId) -> Option<(u64, u64)> {
 
 /// Forward may-live storage and active loans on entry to `at`'s terminator.
 fn storage_at(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
+    storage_before(u, at, usize::MAX)
+}
+fn storage_before(u: &LirUnit<Ready>, at: BlockId, before:usize) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
     let n = u.blocks.len();
     let mut slots_in: Vec<BTreeSet<SlotId>> = vec![BTreeSet::new(); n];
     let mut loans_in: Vec<BTreeSet<LoanId>> = vec![BTreeSet::new(); n];
@@ -617,11 +640,15 @@ fn storage_at(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<Lo
         let mut slots = slots_in[b.index()].clone();
         let mut loans = loans_in[b.index()].clone();
         let mut out = Vec::new();
-        for inst in u.blocks[b.index()]
+        for (i, inst) in u.blocks[b.index()]
             .instructions
             .get(&u.instructions)
-            .unwrap_or(&[])
+            .unwrap_or(&[]).iter().enumerate()
         {
+            if b == at && i == before {
+                result.0.extend(slots.iter().copied());
+                result.1.extend(loans.iter().copied());
+            }
             if let Some(f) = inst.failure() {
                 out.push((
                     u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target,
@@ -645,7 +672,7 @@ fn storage_at(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<Lo
                 _ => {}
             }
         }
-        if b == at {
+        if b == at && before == usize::MAX {
             result.0.extend(slots.iter().copied());
             result.1.extend(loans.iter().copied());
         }
@@ -1321,6 +1348,7 @@ pub(crate) fn certify(
     (parameters, records): (&[FrameParameter], &[FrameRegion]),
     storage: &[LiveStorage],
     states: &[ResumeState],
+    cleanups: &[CleanupResumeState],
     captures: Option<LayoutId>,
 ) -> ValidatedContinuation {
     let mut bytes = Vec::new();
@@ -1342,7 +1370,7 @@ pub(crate) fn certify(
         bytes.extend_from_slice(text.as_bytes());
     }
     let tail =
-        format!("{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{captures:?}");
+        format!("{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{cleanups:?}{captures:?}");
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
     ValidatedContinuation {
@@ -1465,6 +1493,7 @@ fn plan_unit(
         (&fixed.0, &fixed.1),
         &storage,
         &states,
+        &[],
         captures,
     );
     ContinuationPlan {
@@ -1475,6 +1504,7 @@ fn plan_unit(
         records: fixed.1,
         storage,
         states,
+        cleanups:Vec::new(),
         captures,
         cost,
         certificate,

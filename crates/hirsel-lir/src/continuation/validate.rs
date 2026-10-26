@@ -1009,6 +1009,9 @@ pub fn validate(
     for id in order.iter().rev() {
         let (id, plan) = (id, &plans.plans[id]);
         let u = index[id];
+        // Instruction-site support is admitted only after both native adapters
+        // consume this table. Until then no imported cleanup action is legal.
+        if !plan.cleanups.is_empty() { return Err(ContinuationError::States(*id)); }
         if plan.body != *id || plan.digest != u.digest() {
             return Err(ContinuationError::Body(*id));
         }
@@ -1137,6 +1140,7 @@ pub fn validate(
             (&plan.parameters, &plan.records),
             &plan.storage,
             &plan.states,
+            &plan.cleanups,
             plan.captures,
         );
         if certificate != plan.certificate {
