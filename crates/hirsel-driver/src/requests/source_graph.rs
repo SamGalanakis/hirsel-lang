@@ -571,26 +571,37 @@ impl Plan {
         } else {
             None
         };
+        // Every partition lives as long as the graph. A full-std receipt's
+        // staged peak (~580MB) is 29 times the front's retained outcomes
+        // and input rows (20MB), so a receipt leaves the front a sixteenth.
         let front_slack = if needs_ownership {
             slack * 2 / 3
+        } else if needs_receipt {
+            slack / 16
         } else {
             slack / 4
         };
         // A checked receipt is a root output after Check, like Run, and takes
         // the remainder with no Run inventory or rows. Its staged input and
         // construction hold every lowered original, while Lower itself keeps
-        // only settled metadata, so Lower cedes half of Run's split to it.
+        // only settled metadata (13MB with its rows for full std; a body's
+        // grant is the smaller continuation bound), so Lower keeps a sixteenth.
         let lower_slack = if needs_ownership {
             slack / 12
         } else if needs_receipt {
-            slack / 6
+            slack / 16
         } else if needs_run {
             slack / 3
         } else {
             slack / 2
         };
+        // A receipt's root continuation is already bounded by Check's
+        // thirty-second, and Growth's own output is its merged edges and reads
+        // (2MB for full std), so Growth keeps that thirty-second too.
         let growth_slack = if needs_ownership {
             slack / 10
+        } else if needs_receipt {
+            slack / 32
         } else {
             slack / 8
         };
