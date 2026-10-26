@@ -1410,6 +1410,19 @@ pub fn validate_runtime_operations(
         if plan.digest != u.digest() || plan.body != *id {
             return Err(ContinuationError::Body(*id));
         }
+        // The dispatcher allocates from this claimed extent, not from any
+        // individual state's size. Reject a forged allocation before emission
+        // can materialize owners or pass a runtime helper its frame address.
+        let frame = plan
+            .states
+            .iter()
+            .map(|state| state.bytes)
+            .chain(plan.cleanups.iter().map(|state| state.bytes))
+            .max()
+            .unwrap_or(0);
+        if frame > MAX_FRAME_BYTES || plan.cost.frame_bytes != frame {
+            return Err(ContinuationError::Frame(*id));
+        }
         let mut end = check_fixed(u, table, target, plan)?;
         for slot in &plan.storage {
             let row = u

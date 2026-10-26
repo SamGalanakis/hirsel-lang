@@ -253,3 +253,4 @@ mod runtime57_owned_tail;
 mod runtime57_cleanup;
 mod runtime57_tail_failures;
 mod isolate_cleanup_56;
+mod entered_runtime_extent_57;
