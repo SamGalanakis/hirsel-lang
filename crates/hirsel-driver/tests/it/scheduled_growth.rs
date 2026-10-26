@@ -32,7 +32,15 @@ fn admitted_source_growth_demands_unexecuted_required_roots() {
                     .with_owned_engines()
                     .load_program(&path)
                     .unwrap();
-                let definitions = program.engine.front_source_roots();
+                let mut definitions = program.engine.front_source_roots();
+                loop {
+                    program.engine.register_specializations(&definitions);
+                    let selected = program.engine.front_source_roots();
+                    if selected == definitions {
+                        break;
+                    }
+                    definitions = selected;
+                }
                 if expected_rule == Some("GEN-5") {
                     assert!(
                         definitions.iter().any(|path| path.0.name == "grow"),
