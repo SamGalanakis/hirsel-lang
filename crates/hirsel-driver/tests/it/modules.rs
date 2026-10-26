@@ -242,3 +242,4 @@ mod library_finalizer_discovery_19;
 mod runtime55_exclusive_slot;
 mod source_index_loader;
 mod ctor_tail;
+mod ordinary_lower;
