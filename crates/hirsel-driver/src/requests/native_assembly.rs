@@ -27,6 +27,8 @@ pub(super) struct NativeSourceInputs {
     pub lower: Arc<FrontLowerQueries>,
     pub run: Arc<FrontRunQueries>,
     pub store: Arc<dyn ResultStore>,
+    /// Accepted views of the selected generated declarations.
+    pub registrations: Vec<Arc<hirsel_engine::AcceptedFrontRegistration>>,
 }
 /// Selected evidence and its partitions of the native snapshot allowance.
 pub(super) struct NativeProofPlan {
@@ -91,14 +93,21 @@ impl NativeAssembly {
         let request_output = plan.output.clone();
         let catalogue = program
             .engine
-            .front_native_definition_queries(
+            .front_native_definition_inputs_with_registrations(
                 &inputs.definitions,
-                inputs.front.clone(),
-                inputs.lower.clone(),
-                plan.source_weight,
-                plan.catalogue,
-                plan.errors,
+                &inputs.registrations,
+                plan.catalogue.bytes(),
             )
+            .and_then(|catalogue| {
+                program.engine.front_native_definition_queries_with_inputs(
+                    inputs.front.clone(),
+                    inputs.lower.clone(),
+                    catalogue,
+                    plan.source_weight,
+                    plan.catalogue,
+                    plan.errors,
+                )
+            })
             .map_err(source_error)?;
         let source = program
             .engine

@@ -9,9 +9,10 @@ use super::{
 };
 use hirsel_engine::{
     CompileConfig, Compiler, FrontBodyQueries, FrontCheckPlan, FrontCheckQueries,
-    FrontGrowthQueries, FrontInputFootprint, FrontLowerQueries, FrontRegistrationBootstrap,
-    FrontRegistrationBootstrapAdmission, FrontRegistrationBootstrapError, FrontRunQueries,
-    LoadedProgram, LoweringPolicy, QueryError, QueryKind, ToolError,
+    FrontGrowthQueries, FrontInputFootprint, FrontLowerQueries, FrontNativeDefinitionInputs,
+    FrontRegistrationBootstrap, FrontRegistrationBootstrapAdmission,
+    FrontRegistrationBootstrapError, FrontRunQueries, LoadedProgram, LoweringPolicy, QueryError,
+    QueryKind, ToolError,
     loader_inputs::FrozenInputs,
     runtime::*,
     store::{Domain, RequestStore, ResultStore},
@@ -459,9 +460,6 @@ fn uninstalled() -> ToolError {
     ToolError::Runtime("selected compiler operation has no installed producer".into())
 }
 
-/// Root continuations a request can hold at once: Growth, Check, Run and the
-/// selected SafeCheck root.
-const ROOT_CONTINUATIONS: u64 = 4;
 /// Nested Lower/Evaluate continuations admitted under the active frames.
 const BODY_CONTINUATIONS: u64 = 32;
 
@@ -668,8 +666,9 @@ impl Plan {
             })?;
         // Every admitted worker may hold one active scratch frame. Suspended
         // continuations keep only their retained grant, so they share what
-        // the active frames leave: half for the root continuations (Growth,
-        // Check, Run, SafeCheck), half for a chain of nested Lower/Evaluate
+        // the active frames leave: half for the root continuations the request
+        // holds (Growth, Check and any selected Run, SafeCheck or native source
+        // root), half for a chain of nested Lower/Evaluate
         // bodies, such as a constant read by a constant read by a function.
         // A snapshot partition is not one task's executable memory allowance.
         let jobs = config.jobs.get() as u64;
@@ -678,7 +677,10 @@ impl Plan {
         // A native request adds its source root to the root continuations and
         // its bootstrap controller to the nested bodies.
         let native_frames = u64::from(needs_native || needs_ownership);
-        let root_bound = suspended / (2 * (ROOT_CONTINUATIONS + native_frames));
+        // Run accumulates the selected semantic closure, the largest retained
+        // root graph, so it holds two of the root shares.
+        let root_shares = 2 + 2 * u64::from(needs_run) + u64::from(needs_safe) + native_frames;
+        let root_bound = suspended / (2 * root_shares);
         let body_bound = suspended / (2 * (BODY_CONTINUATIONS + native_frames));
         // Only demanded Lower outputs consume producer retention. Potential
         // addresses carry compact input slots, not maximum future/body grants.
@@ -728,8 +730,8 @@ impl Plan {
             ownership,
             run: MemoryWeight {
                 // Run accumulates the selected semantic closure, so it uses
-                // its counted root continuation rather than one Lower body.
-                retained: (run_slack / 4).min(root_bound),
+                // its two root shares rather than one Lower body.
+                retained: (run_slack / 4).min(2 * root_bound),
                 scratch,
                 stack: 0,
             },
@@ -831,18 +833,24 @@ pub(super) fn install(
         } else {
             None
         };
-        let native_catalogue = if matches!(request.operation, CompileOperation::NativeOwnership(_))
-        {
-            match program
-                .engine
-                .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
-            {
-                Ok(inputs) => Some(inputs),
-                Err(error) => return Err(loading.failed(program.error(error))),
-            }
-        } else {
-            None
+        // A generated declaration's catalogue input needs its accepted view,
+        // which exists only after bootstrap.
+        let generated = match program.engine.front_generator_roots(&definitions) {
+            Ok(generators) => !generators.is_empty(),
+            Err(error) => return Err(loading.failed(program.error(error))),
         };
+        let native_catalogue =
+            if matches!(request.operation, CompileOperation::NativeOwnership(_)) && !generated {
+                match program
+                    .engine
+                    .front_native_definition_inputs(&definitions, limits.snapshot_bytes)
+                {
+                    Ok(inputs) => Some(inputs),
+                    Err(error) => return Err(loading.failed(program.error(error))),
+                }
+            } else {
+                None
+            };
         let selected = selected_definitions(&mut program.engine);
         if selected == definitions {
             break (footprint, run_inputs, native_catalogue);
@@ -861,7 +869,7 @@ pub(super) fn install(
     let inspection_bytes =
         GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
             .ok_or_else(uninstalled)?;
-    let plan_within = |limits| {
+    let plan_within = |limits, catalogue_bytes| {
         Plan::new(
             limits,
             config,
@@ -883,13 +891,14 @@ pub(super) fn install(
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             footprint,
             run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
-            native_catalogue
-                .as_ref()
-                .map_or(0, |inputs| inputs.input_bytes()),
+            catalogue_bytes,
             inspection_bytes,
         )
     };
-    let mut plan = plan_within(limits)?;
+    let catalogue_bytes = |catalogue: &Option<FrontNativeDefinitionInputs>| {
+        catalogue.as_ref().map_or(0, |inputs| inputs.input_bytes())
+    };
+    let mut plan = plan_within(limits, catalogue_bytes(&native_catalogue))?;
     // Written generators are accepted before the final front captures its
     // inputs. Their bootstrap borrows this graph's whole runtime and snapshot
     // charge, sized like the final front and Lower, and shuts down before the
@@ -953,10 +962,28 @@ pub(super) fn install(
         if let Err(error) = budget.readmit(&mut loading, lent.0, snapshot_bytes) {
             return Err(loading.failed(error));
         }
-        plan = plan_within(RequestLimits {
+        let limits = RequestLimits {
             snapshot_bytes,
             ..limits
-        })?;
+        };
+        if matches!(request.operation, CompileOperation::NativeOwnership(_)) {
+            native_catalogue = match program
+                .engine
+                .front_native_definition_inputs_with_registrations(
+                    &definitions,
+                    bootstrap.registrations(),
+                    limits.snapshot_bytes,
+                ) {
+                Ok(inputs) => Some(inputs),
+                Err(error) => return Err(loading.failed(program.error(error))),
+            };
+            // Capturing a native input can name a specialization; the
+            // bootstrapped selection must already contain it.
+            if selected_definitions(&mut program.engine) != definitions {
+                return Err(loading.failed(uninstalled()));
+            }
+        }
+        plan = plan_within(limits, catalogue_bytes(&native_catalogue))?;
         Some(bootstrap)
     };
     let GraphAdmission {
@@ -1152,6 +1179,10 @@ pub(super) fn install(
                     lower: lower.clone(),
                     run: run.take().ok_or_else(uninstalled)?,
                     store: store.clone(),
+                    registrations: bootstrap
+                        .as_ref()
+                        .map(|bootstrap| bootstrap.registrations().to_vec())
+                        .unwrap_or_default(),
                 },
                 native_request.clone(),
                 purpose,
