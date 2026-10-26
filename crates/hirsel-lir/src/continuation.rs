@@ -35,6 +35,7 @@ pub mod isolate;
 mod ordered;
 mod ordered_await;
 mod ordered_join;
+mod ordered_reads;
 mod runtime;
 mod scope;
 pub use ordered::{check_ordered_host_result, ordered_host_result};
@@ -1559,6 +1560,7 @@ fn plan_unit(
         }
         for state in &mut states {
             ordered::plan(u, inputs.table, state)?;
+            ordered_reads::plan(u, inputs.table, state)?;
         }
         if let Some(evidence) = &isolate {
             let callback = evidence

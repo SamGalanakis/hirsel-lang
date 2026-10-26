@@ -3,7 +3,7 @@
 use super::*;
 use crate::abi_types::CallableShape;
 
-fn host_kind(u: &LirUnit<Ready>, call: CallId) -> Option<RuntimeOpKind> {
+pub(super) fn host_kind(u: &LirUnit<Ready>, call: CallId) -> Option<RuntimeOpKind> {
     let site = u.tables.calls.get(call.index())?;
     let Callee::Operation(op) = site.callee else {
         return None;
@@ -27,6 +27,16 @@ pub fn ordered_host_result(
     call: CallId,
     after: u64,
 ) -> Option<RuntimeResultSlot> {
+    result_cell(u, table, call, after, false)
+}
+
+pub(super) fn result_cell(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    call: CallId,
+    after: u64,
+    read: bool,
+) -> Option<RuntimeResultSlot> {
     host_kind(u, call)?;
     let site = u.tables.calls.get(call.index())?;
     let abi = table.fn_abis.get(site.abi.0 as usize)?;
@@ -43,9 +53,10 @@ pub fn ordered_host_result(
         return None;
     }
     let arguments = site.arguments.get(&u.pools.call_arguments)?;
-    if arguments
-        .iter()
-        .any(|a| matches!(a.value, ArgumentValue::Address { .. }))
+    if !read
+        && arguments
+            .iter()
+            .any(|a| matches!(a.value, ArgumentValue::Address { .. }))
     {
         return None;
     }
@@ -73,6 +84,17 @@ pub fn check_ordered_host_result(
     call: CallId,
     after: u64,
     claimed: &RuntimeResultSlot,
+) -> bool {
+    check_result_cell(u, table, call, after, claimed, false)
+}
+
+pub(super) fn check_result_cell(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    call: CallId,
+    after: u64,
+    claimed: &RuntimeResultSlot,
+    read: bool,
 ) -> bool {
     if host_kind(u, call).is_none() {
         return false;
@@ -119,9 +141,10 @@ pub fn check_ordered_host_result(
         && result.borrowed_parameters.is_empty()
         && result.layout == ty.layout
         && ty.repr != ValueRepr::Hole
-        && !arguments
-            .iter()
-            .any(|a| matches!(a.value, ArgumentValue::Address { .. }))
+        && (read
+            || !arguments
+                .iter()
+                .any(|a| matches!(a.value, ArgumentValue::Address { .. })))
         && align <= 16
         && end <= MAX_FRAME_BYTES
         && claimed.source == RuntimeResultSource::CallResult(value)

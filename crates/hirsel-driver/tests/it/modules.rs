@@ -261,3 +261,5 @@ mod ordered_sleep_physical_57;
 mod isolate_physical_56;
 mod isolate_finalizer_source_56;
 mod sealed_graph_reference_59;
+mod ordered_read_resume_59;
+mod ordered_read_physical_59;

@@ -736,7 +736,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         {
             self.ahead_barrier()?;
         }
-        let (function, name) = if self.ordered_sleep(call) {
+        let (function, name) = if let Some(entry) = self.ordered_read(call) {
+            // Original read primitives have no hidden source sites. Only the
+            // certified helper receives those additional physical arguments.
+            args.splice(1..1, [codes.0, codes.1]);
+            (
+                Some(self.runtime(entry)?),
+                Some(entry.declaration().symbol.to_owned()),
+            )
+        } else if self.ordered_sleep(call) {
             (
                 Some(self.runtime(RuntimeEntry::OrderedSleepUntil)?),
                 Some("hirsel_rt_v2_ordered_sleep_until".to_owned()),

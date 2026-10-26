@@ -359,9 +359,18 @@ impl FnEmitter<'_, '_, '_> {
         let Some(runtime) = &state.runtime else {
             return Ok(None);
         };
-        let [slot] = runtime.results.as_slice() else {
+        let mut results = runtime.results.iter().filter(|s| {
+            matches!(
+                s.source,
+                hirsel_lir::continuation::RuntimeResultSource::CallResult(_)
+            )
+        });
+        let Some(slot) = results.next() else {
             return self.invalid("entered intrinsic result cell count");
         };
+        if results.next().is_some() {
+            return self.invalid("entered intrinsic result cell count");
+        }
         if slot.layout != layout
             || !matches!(slot.source,hirsel_lir::continuation::RuntimeResultSource::CallResult(value) if Some(value)==self.unit.tables.calls[call.index()].result)
         {
@@ -376,6 +385,29 @@ impl FnEmitter<'_, '_, '_> {
             .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
             .and_then(|s| s.runtime.as_ref())
             .is_some_and(|r| r.kind == hirsel_lir::continuation::RuntimeOpKind::OrderedSleepUntil)
+    }
+
+    pub(crate) fn ordered_read(
+        &self,
+        call: CallId,
+    ) -> Option<hirsel_lir::runtime_abi::RuntimeEntry> {
+        use hirsel_lir::continuation::RuntimeOpKind;
+        use hirsel_lir::runtime_abi::RuntimeEntry;
+        let kind = self
+            .resume
+            .as_ref()?
+            .plan
+            .states
+            .iter()
+            .find(|s| s.boundary.call == call)?
+            .runtime
+            .as_ref()?
+            .kind;
+        match kind {
+            RuntimeOpKind::OrderedStdinRead => Some(RuntimeEntry::OrderedStdinRead),
+            RuntimeOpKind::OrderedWatchNext => Some(RuntimeEntry::OrderedWatchNext),
+            _ => None,
+        }
     }
 
     pub(crate) fn ordered_join_align(&self, call: CallId) -> Option<u64> {
@@ -407,12 +439,15 @@ impl FnEmitter<'_, '_, '_> {
         else {
             return Ok(None);
         };
-        if runtime.kind != hirsel_lir::continuation::RuntimeOpKind::OrderedJoin {
+        if !matches!(
+            runtime.kind,
+            hirsel_lir::continuation::RuntimeOpKind::OrderedJoin
+                | hirsel_lir::continuation::RuntimeOpKind::OrderedStdinRead
+                | hirsel_lir::continuation::RuntimeOpKind::OrderedWatchNext
+        ) {
             return Ok(None);
         }
-        let [cell] = runtime.results.as_slice() else {
-            return self.invalid("join result count");
-        };
+        let Some(cell) = runtime.results.iter().find(|s| matches!(s.source, hirsel_lir::continuation::RuntimeResultSource::ArgumentSlot { parameter: p, .. } if p == parameter)) else { return Ok(None) };
         if cell.layout != layout
             || !matches!(cell.source,hirsel_lir::continuation::RuntimeResultSource::ArgumentSlot {parameter:p,..} if p==parameter)
         {

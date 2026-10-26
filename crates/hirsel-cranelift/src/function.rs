@@ -2361,7 +2361,17 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         } else {
             name
         };
-        let name = if self.ordered_sleep(call) {
+        let name = if let Some(entry) = self.ordered_read(call) {
+            args.splice(1..1, [codes.0, codes.1]);
+            physical_signature.params.splice(
+                1..1,
+                [ir::AbiParam::new(types::I64), ir::AbiParam::new(types::I64)],
+            );
+            let helper = entry.declaration().symbol.to_owned();
+            self.em
+                .manifest_import(&helper, ObjectSymbolKind::Runtime, None, None);
+            Some(helper)
+        } else if self.ordered_sleep(call) {
             let helper = "hirsel_rt_v2_ordered_sleep_until".to_owned();
             self.em
                 .manifest_import(&helper, ObjectSymbolKind::Runtime, None, None);

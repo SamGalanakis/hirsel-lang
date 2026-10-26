@@ -663,6 +663,10 @@ fn check_state(
         {
             return Err(ContinuationError::RuntimeOperation(id, n));
         }
+    } else if ordered_reads::candidate(u, expected.call) {
+        if !ordered_reads::check(u, table, state, runtime_base) {
+            return Err(ContinuationError::RuntimeOperation(id, n));
+        }
     } else if ordered::sleep(u, expected.call) {
         if !ordered::check_sleep(u, table, state, runtime_base) {
             return Err(ContinuationError::RuntimeOperation(id, n));
