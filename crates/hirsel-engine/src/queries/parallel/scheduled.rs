@@ -237,22 +237,13 @@ impl FrontBodyQueries {
         *retention = retention.checked_sub(charge)?;
         Some(())
     }
-    fn retain_dead_arms(&self, uses: Option<&crate::tools::DeadArmUse>) -> Option<()> {
+    fn retain_dead_arms(&self, uses: Option<&mut crate::tools::DeadArmUse>) -> Option<()> {
         let Some(uses) = uses else {
             return Some(());
         };
-        let mut weight = crate::NativeMetadataWeight::default();
-        weight.tree::<DefPath, ()>(uses.errors.len());
-        weight.tree::<(DefPath, u32), ()>(uses.constructed.len());
-        for path in uses
-            .errors
-            .iter()
-            .chain(uses.constructed.iter().map(|(path, _)| path))
-        {
-            weight.path(path);
-        }
+        let bytes = retained::dead_arms(uses);
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
-        *retention = retention.checked_sub(weight.bytes())?;
+        *retention = retention.checked_sub(bytes)?;
         Some(())
     }
     /// The package dead-arm lint's facts of `definition`'s settled checked
@@ -512,7 +503,7 @@ impl FrontBodyQueries {
                 } else {
                     let bytes = self.store.get_content(reference)?;
                     let input = self.inputs.get(key)?;
-                    let restored = persistent::restore_frozen_mode(
+                    let mut restored = persistent::restore_frozen_mode(
                         &self.records,
                         &self.types,
                         self.syntax(input)?,
@@ -671,7 +662,7 @@ impl BodyTask {
             return None;
         }
         let bytes = queries.store.get_content(variant.output)?;
-        let restored = persistent::restore_frozen_mode(
+        let mut restored = persistent::restore_frozen_mode(
             &queries.records,
             &queries.types,
             queries.syntax(input)?,
@@ -702,7 +693,7 @@ impl BodyTask {
             restored.table_keys.as_ref(),
             &memo_rows,
         )?;
-        queries.retain_dead_arms(restored.dead_arms.as_ref())?;
+        queries.retain_dead_arms(restored.dead_arms.as_mut())?;
         if let Some(table_keys) = restored.table_keys {
             queries
                 .table_keys
@@ -816,7 +807,7 @@ impl BodyTask {
         );
         let memo_rows = completed.memo_snapshot();
         let checked = completed.checked_product();
-        let dead_arms = completed.take_dead_arms();
+        let mut dead_arms = completed.take_dead_arms();
         let published = completed.outcome().clone();
         let outcome = ModeResult {
             definition: published.definition.clone(),
@@ -934,7 +925,7 @@ impl BodyTask {
             .retain(&outcome, &checked, table_keys.as_ref(), &memo_rows)
             .ok_or(queries.errors.resource)?;
         queries
-            .retain_dead_arms(dead_arms.as_ref())
+            .retain_dead_arms(dead_arms.as_mut())
             .ok_or(queries.errors.resource)?;
         queries
             .memos
