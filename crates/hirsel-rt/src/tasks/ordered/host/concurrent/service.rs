@@ -32,6 +32,7 @@ struct Row {
     request: Request,
     task: Option<(u32, u32)>,
     completion: Option<Result<Completion, AdapterError>>,
+    written: Option<u64>,
     /// A blocking built-in call owned by a bounded job, as in Free (S5).
     job: Option<Owned>,
 }
@@ -44,6 +45,7 @@ impl Row {
             request,
             task: None,
             completion: None,
+            written: None,
             job,
         }
     }
@@ -265,12 +267,13 @@ impl Service {
         if !slot.returned() {
             return Some((false, None));
         }
-        let (mut result, _) = job
+        let (mut result, written) = job
             .slot
             .take()
             .unwrap()
             .deliver()
             .expect("one owner delivery");
+        row.written = written;
         row.job = None;
         drop(rows);
         let discovered = if observing {

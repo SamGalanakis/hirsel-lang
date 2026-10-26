@@ -27,6 +27,7 @@ pub(in crate::tasks::ordered::host::concurrent) struct Invocation {
     phase: Phase,
     job: bool,
     discovery: Option<Discovered>,
+    output: Option<Result<Option<Vec<u8>>, &'static str>>,
 }
 
 /// Start reserves the record and park continuation before accepting an effect.
@@ -48,6 +49,7 @@ pub(super) unsafe fn start(ctx: *mut TaskCtx, request: Request) {
                 phase: Phase::Prepared,
                 job: false,
                 discovery: None,
+                output: None,
             }),
         }));
     }
@@ -168,7 +170,7 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                     engine::begin_host_job(ctx, wait);
                     return Ok(Drive::Pending { head_only: true });
                 }
-                let (result, discovered, _) = {
+                let (result, discovered, output) = {
                     let _segment = unsafe { role::Segment::new(ctx) };
                     invoke_attempt(adapter, token, cause, request.clone(), observing)
                 };
@@ -176,6 +178,7 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                 with(ctx, |p, i| {
                     assert!(p.result.replace(result).is_none());
                     i.discovery = Some(discovered);
+                    i.output = Some(output);
                     i.phase = Phase::InitialOutcome;
                 });
                 if finish {
@@ -190,6 +193,7 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                 let Row {
                     request,
                     completion,
+                    written,
                     ..
                 } = io
                     .rows
@@ -198,13 +202,23 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                     .remove(&(token | CONCURRENT))
                     .unwrap();
                 assert!(io.pending.fetch_sub(1, Ordering::Release) > 0);
+                let result = completion.expect("completed head job");
+                let output = if observing {
+                    let bytes = match &request {
+                        Request::Print { bytes, .. } | Request::PrintStderr { bytes, .. } => {
+                            Some(bytes.as_slice())
+                        }
+                        _ => None,
+                    };
+                    super::super::super::super::events::host_output::project(
+                        bytes, &result, written,
+                    )
+                } else {
+                    Ok(None)
+                };
                 with(ctx, |p, _| {
                     assert!(p.request.replace(request).is_none());
-                    assert!(
-                        p.result
-                            .replace(completion.expect("completed head job"))
-                            .is_none()
-                    );
+                    assert!(p.result.replace(result).is_none());
                 });
                 let discovered = if observing {
                     let result = with(ctx, |p, _| p.result.as_mut().unwrap() as *mut _);
@@ -215,6 +229,7 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                 };
                 with(ctx, |_, i| {
                     i.discovery = Some(discovered);
+                    i.output = Some(output);
                     i.phase = Phase::InitialOutcome;
                 });
             }
@@ -225,6 +240,10 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                     super::super::super::super::events::discover_host(ctx, result, &d)
                 });
                 super::super::super::super::events::record_host_initial(ctx, result);
+                let output = with(ctx, |_, i| {
+                    i.output.take().expect("original attempt output")
+                });
+                super::super::super::super::events::host_output::record(ctx, output);
                 if let Err(error) = discovery {
                     if !job && result != &Err(AdapterError::Blocked) {
                         super::super::super::super::events::complete_host(ctx, false, result);
@@ -258,6 +277,11 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                         super::super::super::bounded_read(ctx, request, result);
                     }
                     super::super::super::super::events::complete_host(ctx, false, result);
+                    if matches!(request, Request::Print { .. } | Request::PrintStderr { .. })
+                        && observing
+                    {
+                        let _ = super::super::super::super::events::certify_host(ctx);
+                    }
                     // The request's ownership stays valid across the finish wait.
                     phase(ctx, Phase::Finish);
                 }

@@ -331,9 +331,11 @@ fn call_attempt(
     request: Request,
 ) -> (Result<Completion, AdapterError>, Option<u64>) {
     if let Some(cause) = cause {
+        let written =
+            matches!(request, Request::Print { .. } | Request::PrintStderr { .. }).then_some(0);
         match crate::io_checks::cancel_concurrent(adapter, token, &request, cause) {
-            Ok(Some(completion)) => return (Ok(completion), None),
-            Err(error) => return (Err(error), None),
+            Ok(Some(completion)) => return (Ok(completion), written),
+            Err(error) => return (Err(error), written),
             Ok(None) => {}
         }
     }

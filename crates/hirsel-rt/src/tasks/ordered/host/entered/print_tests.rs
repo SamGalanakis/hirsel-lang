@@ -92,7 +92,7 @@ unsafe extern "C" fn child(
 }
 unsafe extern "C" fn dispatch(
     ctx: *mut TaskCtx,
-    _: *mut crate::Header,
+    env: *mut crate::Header,
     _: u64,
     _: u64,
     frame: *mut u8,
@@ -100,6 +100,12 @@ unsafe extern "C" fn dispatch(
     let words = frame.cast::<u64>();
     let first = unsafe { words.read() } == 0;
     if first {
+        if unsafe { crate::alloc::payload(env).cast::<u64>().read() } != 0 {
+            crate::tasks::role::with_role(ctx, |s| {
+                let me = s.current;
+                s.cancel(me, crate::tasks::CANCEL_REQUESTED);
+            });
+        }
         let text = unsafe {
             crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0)
         };
@@ -152,7 +158,13 @@ unsafe extern "C" fn dispatch(
     assert_eq!(status, crate::STATUS_OK);
     assert_eq!(
         unsafe { words.add(3).cast::<UnitResult>().read() },
-        UnitResult::of(Err(IoError::Fault(11)))
+        UnitResult::of(Err(
+            if unsafe { crate::alloc::payload(env).cast::<u64>().read() } != 0 {
+                IoError::Canceled(crate::tasks::CANCEL_REQUESTED)
+            } else {
+                IoError::Fault(11)
+            }
+        ))
     );
     let mut result = [1u64, 7];
     unsafe {
@@ -180,90 +192,125 @@ unsafe extern "C" fn dispatch(
 
 #[test]
 fn entered_print_job_owns_bytes_until_real_return_and_converts_failure_once() {
-    for width in [1, 4] {
-        let layout = layout();
-        let layouts = [&layout as *const crate::Layout, &layout];
-        let host = Arc::new(Print::default());
-        let setup = host.clone();
-        let observe = host.clone();
-        let mut run = crate::host::BodyRun::new(width, true);
-        run.config.layouts = layouts.as_ptr();
-        run.config.layout_count = 2;
-        run.concurrent_adapter = Some(host.clone());
-        unsafe { run.use_physical_dispatch() };
-        let outcome = run.run(
-            move |ctx| unsafe {
-                engine::enable(
-                    ctx,
-                    crate::ordered::Policy::admit(&Default::default(), None),
-                );
-                super::super::super::events::enable(ctx);
-                super::super::super::events::initial_host(ctx, Some(1), None);
-                engine::driver(ctx).after_save = Some(Box::new(move |s, task, completed| {
-                    if !completed
-                        && s.tasks[task as usize]
+    for canceled in [false, true] {
+        for width in [1, 4] {
+            let layout = layout();
+            let layouts = [&layout as *const crate::Layout, &layout];
+            let host = Arc::new(Print::default());
+            let setup = host.clone();
+            let observe = host.clone();
+            let prefixes = Arc::new(Mutex::new(Vec::new()));
+            let capture = prefixes.clone();
+            let mut run = crate::host::BodyRun::new(width, true);
+            run.config.layouts = layouts.as_ptr();
+            run.config.layout_count = 2;
+            run.concurrent_adapter = Some(host.clone());
+            unsafe { run.use_physical_dispatch() };
+            let outcome = run.run(
+                move |ctx| unsafe {
+                    engine::enable(
+                        ctx,
+                        crate::ordered::Policy::admit(&Default::default(), None),
+                    );
+                    super::super::super::events::enable(ctx);
+                    super::super::super::events::initial_host(ctx, Some(1), None);
+                    engine::driver(ctx).after_save = Some(Box::new(move |s, task, completed| {
+                        if !completed
+                            && s.tasks[task as usize]
+                                .as_ref()
+                                .unwrap()
+                                .context_home
+                                .is_some()
+                        {
+                            observe.saved.store(true, Ordering::Release);
+                        }
+                    }));
+                },
+                move |ctx| unsafe {
+                    let _role = role::Guard::new(ctx);
+                    assert_eq!(
+                        concurrent::request(ctx, &*setup, Request::Stdout { io: 1 }).unwrap(),
+                        Ok(Completion::Handle(Ok(11)))
+                    );
+                    let mut scope = 0;
+                    let mut handle = 0;
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                        crate::STATUS_OK
+                    );
+                    let env = crate::alloc::hirsel_rt_v2_alloc(
+                        ctx,
+                        2,
+                        16,
+                        8,
+                        crate::alloc::DOMAIN_HEAP,
+                        0,
+                    );
+                    crate::alloc::payload(env)
+                        .cast::<u64>()
+                        .write(u64::from(canceled));
+                    assert_eq!(
+                        hirsel_rt_v2_task_spawn(
+                            ctx,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            &mut handle,
+                            &scope,
+                            child,
+                            env,
+                            0
+                        ),
+                        crate::STATUS_OK
+                    );
+                    let mut result = [0u64; 2];
+                    assert_eq!(
+                        hirsel_rt_v2_task_join(
+                            ctx,
+                            0,
+                            0,
+                            &scope,
+                            &mut handle,
+                            result.as_mut_ptr().cast(),
+                            16
+                        ),
+                        crate::STATUS_OK
+                    );
+                    assert_eq!(result, [1, 7]);
+                    *capture.lock().unwrap() = engine::with_driver(ctx, |d| {
+                        d.events
                             .as_ref()
                             .unwrap()
-                            .context_home
-                            .is_some()
-                    {
-                        observe.saved.store(true, Ordering::Release);
-                    }
-                }));
-            },
-            move |ctx| unsafe {
-                let _role = role::Guard::new(ctx);
-                assert_eq!(
-                    concurrent::request(ctx, &*setup, Request::Stdout { io: 1 }).unwrap(),
-                    Ok(Completion::Handle(Ok(11)))
-                );
-                let mut scope = 0;
-                let mut handle = 0;
-                assert_eq!(
-                    hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                            .canonical
+                            .iter()
+                            .filter_map(|event| match &event.outcome {
+                                super::super::super::events::CanonicalOutcome::HostOutput(
+                                    bytes,
+                                ) => Some(bytes.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    });
+                    assert_eq!(
+                        hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                        crate::STATUS_OK
+                    );
                     crate::STATUS_OK
-                );
-                let env =
-                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
-                assert_eq!(
-                    hirsel_rt_v2_task_spawn(
-                        ctx,
-                        0,
-                        0,
-                        std::ptr::null_mut(),
-                        &mut handle,
-                        &scope,
-                        child,
-                        env,
-                        0
-                    ),
-                    crate::STATUS_OK
-                );
-                let mut result = [0u64; 2];
-                assert_eq!(
-                    hirsel_rt_v2_task_join(
-                        ctx,
-                        0,
-                        0,
-                        &scope,
-                        &mut handle,
-                        result.as_mut_ptr().cast(),
-                        16
-                    ),
-                    crate::STATUS_OK
-                );
-                assert_eq!(result, [1, 7]);
-                assert_eq!(
-                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
-                    crate::STATUS_OK
-                );
-                crate::STATUS_OK
-            },
-        );
-        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
-        assert!(host.saved.load(Ordering::Acquire));
-        assert_eq!(host.calls.load(Ordering::Acquire), 1);
-        assert_eq!(*host.bytes.lock().unwrap(), b"xyz");
-        assert_eq!(host.finishes.load(Ordering::Acquire), 2);
+                },
+            );
+            assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+            assert!(host.saved.load(Ordering::Acquire));
+            assert_eq!(host.calls.load(Ordering::Acquire), usize::from(!canceled));
+            assert_eq!(
+                *host.bytes.lock().unwrap(),
+                if canceled { b"".as_slice() } else { b"xyz" }
+            );
+            assert_eq!(
+                *prefixes.lock().unwrap(),
+                vec![if canceled { vec![] } else { b"x".to_vec() }],
+                "written prefix {width}/{canceled}"
+            );
+            assert_eq!(host.finishes.load(Ordering::Acquire), 2);
+        }
     }
 }
