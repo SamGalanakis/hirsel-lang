@@ -6,7 +6,7 @@ use crate::NoOperations;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::{AbiParameter, ParameterPassing, ScalarExtension};
 
-fn program(scalar: bool) -> Program<hirsel_lir::stage::Rc> {
+pub(super) fn program(scalar: bool) -> Program<hirsel_lir::stage::Rc> {
     let mut p = read_program(scalar);
     let mut arena = p.layouts.layouts[1].clone();
     arena.kind = LayoutKind::Arena;
@@ -162,7 +162,7 @@ fn take_grant(m: &mut Machine<'_, hirsel_lir::stage::Rc>, f: &mut Frame) -> Chec
     Ok(())
 }
 
-fn prepared(m: &mut Machine<'_, hirsel_lir::stage::Rc>, scalar: bool) -> (Frame, Ptr) {
+pub(super) fn prepared(m: &mut Machine<'_, hirsel_lir::stage::Rc>, scalar: bool) -> (Frame, Ptr) {
     let mut f = m.frame(0, Role::Entry, None);
     m.ledger.regions.push(crate::ledger::Region {
         storage: crate::ledger::sealed::StorageCustody::Scope,

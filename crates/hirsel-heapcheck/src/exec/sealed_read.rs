@@ -32,21 +32,16 @@ impl<S: Stage> Machine<'_, S> {
                 "sealed read result or owner has another root layout",
             );
         }
-        match (self.record(root_layout)?.kind.clone(), ty.repr) {
-            (LayoutKind::Unit, ValueRepr::Unit) => {}
-            (LayoutKind::Scalar(a), ValueRepr::Scalar(b)) if a == b && a != ScalarKind::Pointer => {
-            }
-            _ => {
-                return fail(
-                    V::Unsupported,
-                    "sealed storage-bearing root read is not linked",
-                );
-            }
-        }
-        if self.value_info(f.unit, result)?.holding != Holding::Plain {
+        let bits = matches!(ty.repr, ValueRepr::Unit | ValueRepr::Scalar(_));
+        let expected = if bits {
+            Holding::Plain
+        } else {
+            Holding::Borrowed(loan)
+        };
+        if self.value_info(f.unit, result)?.holding != expected {
             return fail(
                 V::TypeConfusion,
-                "sealed bit root carries an owning or borrowed credit",
+                "sealed root read has incorrect loan holding",
             );
         }
         let info = self

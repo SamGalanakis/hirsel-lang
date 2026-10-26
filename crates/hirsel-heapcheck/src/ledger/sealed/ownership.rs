@@ -1,6 +1,6 @@
 //! H-owned storage custody and affine owner/loan transitions. The language
-//! SealArena/BorrowSealedRoot adapter is still refused; callers must establish
-//! source authority and SSA borrow exclusion before using these transitions.
+//! SealArena/BorrowSealedRoot adapters establish source authority and SSA
+//! borrow exclusion before using these transitions.
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,7 +14,7 @@ pub(crate) struct SealedLoan {
 }
 
 #[derive(Clone)]
-struct BitRoot {
+struct StoredRoot {
     layout: LayoutId,
     value: Extent,
 }
@@ -38,16 +38,10 @@ pub(crate) struct SealedOwner {
     phase: Phase,
     loans: BTreeSet<u64>,
     next_loan: u64,
-    root: Option<BitRoot>,
+    root: Option<StoredRoot>,
     control: Option<Ptr>,
 }
 
-// These entry methods are independently tested before the instruction adapter
-// is connected. The audits below are already part of H's normal execution.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "sealed instruction adapter is not linked yet")
-)]
 impl Ledger {
     pub(crate) fn transfer_closed_scope(&mut self, region: usize, word: u64) -> Checked<SealedId> {
         let scope = self
@@ -120,7 +114,21 @@ impl Ledger {
         }
         // All fallible root checks precede the sole storage-custody transition.
         let id = self.transfer_closed_scope(region, word)?;
-        self.sealed_owners[id.0 as usize].root = Some(BitRoot { layout, value });
+        self.sealed_owners[id.0 as usize].root = Some(StoredRoot { layout, value });
+        Ok(id)
+    }
+
+    /// Called only after the H graph adapter has checked the typed image,
+    /// source events, evacuation and credits in its private staging ledger.
+    pub(crate) fn transfer_closed_scope_with_graph_root(
+        &mut self,
+        region: usize,
+        word: u64,
+        layout: LayoutId,
+        value: Extent,
+    ) -> Checked<SealedId> {
+        let id = self.transfer_closed_scope(region, word)?;
+        self.sealed_owners[id.0 as usize].root = Some(StoredRoot { layout, value });
         Ok(id)
     }
 
@@ -144,7 +152,7 @@ impl Ledger {
         let root = owner
             .root
             .as_ref()
-            .ok_or_else(|| err(V::TypeConfusion, "sealed owner has no typed bit root"))?;
+            .ok_or_else(|| err(V::TypeConfusion, "sealed owner has no typed root"))?;
         if root.layout != layout {
             return fail(V::TypeConfusion, "sealed root layout differs from its read");
         }

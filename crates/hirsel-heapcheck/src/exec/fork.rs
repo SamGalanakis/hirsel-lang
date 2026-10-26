@@ -17,6 +17,8 @@ impl<'p, S: Stage> Machine<'p, S> {
             config,
             ops,
             ledger: self.ledger.clone(),
+            seal_inventory: self.seal_inventory.clone(),
+            seal_allocations: self.seal_allocations.clone(),
             stack: self.stack.clone(),
             invocation_events: self.invocation_events.clone(),
             entry: self.entry,

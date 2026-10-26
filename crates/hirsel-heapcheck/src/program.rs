@@ -501,6 +501,10 @@ impl Operations for NoOperations {
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    /// Independently validated source/declaration inputs for direct graph execution.
+    /// Candidate receipt tables cannot populate these inputs.
+    pub seal_sources: Vec<hirsel_lir::sealed_payload_source::SourceSeal>,
+    pub seal_descriptors: Vec<hirsel_lir::sealed::SealDescriptor>,
     /// Finite counts saturate to sticky immortality above this (small values
     /// force saturation in tests).
     pub count_max: u64,
@@ -531,6 +535,8 @@ pub const DEFAULT_INSTRUCTION_LIMIT: u64 = 8_388_608;
 impl Default for Config {
     fn default() -> Self {
         Self {
+            seal_sources: Vec::new(),
+            seal_descriptors: Vec::new(),
             count_max: u32::MAX as u64 - 1,
             inject: None,
             check_every_step: true,

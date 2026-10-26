@@ -32,6 +32,7 @@ mod flat;
 mod primitive_work;
 mod projection;
 mod sealed_drop;
+mod sealed_graph;
 mod sealed_read;
 mod sealed_seal;
 mod structural;
@@ -304,6 +305,8 @@ enum Finished {
 
 pub(crate) struct Machine<'p, S> {
     invocation_events: BTreeMap<u32, Vec<bool>>,
+    seal_inventory: BTreeMap<usize, BTreeMap<AllocId, sealed_graph::Entry>>,
+    seal_allocations: BTreeMap<AllocId, (usize, SourceAnchor)>,
     program: &'p Program<S>,
     config: &'p Config,
     ops: &'p mut dyn Operations,
@@ -445,6 +448,8 @@ impl<'p, S: Stage> Machine<'p, S> {
             ledger,
             stack: Vec::new(),
             invocation_events: BTreeMap::new(),
+            seal_inventory: BTreeMap::new(),
+            seal_allocations: BTreeMap::new(),
             entry: 0,
             output: Vec::new(),
             failures: Vec::new(),
@@ -3663,11 +3668,23 @@ impl<'p, S: Stage> Machine<'p, S> {
                 grant,
                 root,
                 shape,
-                ..
+                origin,
+                failure,
             } => {
-                self.seal_bit_root(f, result, grant, root, shape)?;
+                if let Some(region) = self.seal_root(f, result, grant, root, (shape, origin))? {
+                    return self.exhaust(f, failure, region);
+                }
             }
-            Inst::PayloadReceipt { .. } | Inst::ArenaInventory { .. } => {
+            Inst::ArenaInventory {
+                arena,
+                allocation,
+                value,
+                shape,
+                previous,
+            } => {
+                self.record_seal_inventory(f, arena, allocation, value, shape, previous)?;
+            }
+            Inst::PayloadReceipt { .. } => {
                 return fail(V::Unsupported, "sealed storage H adapter is not linked");
             }
             Inst::BorrowSealedRoot {
@@ -5438,6 +5455,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                     }
                 }
                 let val = self.construct(f, site, None, layout)?;
+                if !self.config.seal_sources.is_empty()
+                    && let Val::Ptr(ptr) = &val
+                {
+                    let anchor = self.unit(unit).tables.source_anchors[site.anchor.index()].clone();
+                    self.seal_allocations.insert(ptr.alloc, (unit, anchor));
+                }
                 self.define_fresh(f, result, val)?;
             }
             // A constructor-tail box opens at its stand-in layout, whose
@@ -10962,3 +10985,6 @@ mod sealed_drop_tests;
 
 #[cfg(test)]
 mod sealed_seal_tests;
+
+#[cfg(test)]
+mod sealed_graph_tests;
