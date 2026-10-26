@@ -8,6 +8,8 @@ fn prepared_source_inputs_enforce_exact_caps_and_snapshot_identity_49() {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"prepared_source","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         std::fs::write(
             &path,
             "type Token { value:u64 }\npub fn main()->u64 { Token(value:7u64).value }\n",
@@ -21,7 +23,7 @@ fn prepared_source_inputs_enforce_exact_caps_and_snapshot_identity_49() {
                     ..Default::default()
                 })
                 .with_owned_engines()
-                .load_program(&path)
+                .load_program(&manifest)
                 .unwrap()
         };
         let mut program = load();
