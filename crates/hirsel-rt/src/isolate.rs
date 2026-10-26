@@ -18,6 +18,8 @@ use crate::text::allocate_bytes;
 use crate::views::Slice;
 use crate::{STATUS_OK, fault};
 
+pub(crate) mod entered;
+
 /// Task-owned invocation records move with TaskCtx, never with a worker or a
 /// native stack. A count is a failure mark, not an invocation identity.
 #[derive(Default)]

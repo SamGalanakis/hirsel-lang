@@ -28,6 +28,7 @@ mod terminal_tests;
 mod timer_tests;
 mod tuning;
 mod values;
+pub(crate) mod yielding;
 
 use std::cell::RefCell;
 

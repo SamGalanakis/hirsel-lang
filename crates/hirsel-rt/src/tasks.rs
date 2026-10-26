@@ -45,6 +45,7 @@
 //! or foreign word is an invariant fault rather than another task's row.
 
 pub(crate) mod compact;
+pub(crate) mod entered_yield;
 pub(crate) mod free;
 pub(crate) mod ordered;
 #[cfg(feature = "measurement")]
