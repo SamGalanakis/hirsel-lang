@@ -453,7 +453,12 @@ impl Checker<'_> {
                 &roles,
             );
             if let Ok(Some(root)) = root {
-                if self.has_unique_parts(store, root) {
+                if matches!(value.value.usage, UseKind::Take | UseKind::Copy)
+                    && (state.nested_shared
+                        [self.body.places[value.value.place.0 as usize].root.0 as usize]
+                        || values.iter().any(|v| v.value.usage == UseKind::Copy))
+                    && self.has_unique_parts(store, root)
+                {
                     let incoming = self.copied_with(&value.value, values.iter().map(|v| &v.value));
                     self.nested_unique_transfer(state, store, root, &incoming, report);
                 }
@@ -635,6 +640,9 @@ impl Checker<'_> {
         mut others: impl Iterator<Item = &'a Operand>,
     ) -> Operand {
         let mut incoming = value.clone();
+        if !matches!(value.usage, UseKind::Take | UseKind::Copy) {
+            return incoming;
+        }
         let access = &self.body.places[value.place.0 as usize];
         if others.any(|other| {
             let source = &self.body.places[other.place.0 as usize];
@@ -871,7 +879,15 @@ impl Checker<'_> {
                 if let Some(parts) = self.constructor_layout(store, ty, constructor, fields.len()) {
                     for field in fields {
                         if let Some(expected) = parts.get(field.field as usize).copied() {
-                            if self.has_unique_parts(store, expected) {
+                            if matches!(field.value.usage, UseKind::Take | UseKind::Copy)
+                                && (state.nested_shared[self.body.places
+                                    [field.value.place.0 as usize]
+                                    .root
+                                    .0
+                                    as usize]
+                                    || fields.iter().any(|f| f.value.usage == UseKind::Copy))
+                                && self.has_unique_parts(store, expected)
+                            {
                                 let incoming =
                                     self.copied_with(&field.value, fields.iter().map(|f| &f.value));
                                 self.nested_unique_transfer(
