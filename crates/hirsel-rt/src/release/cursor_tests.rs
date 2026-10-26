@@ -73,7 +73,10 @@ fn good_close_poll_retains_all_reversal_ancestors_loop_pc_and_failure_suffix() {
         step(STEP_RELEASE_LAST, 24),
     ];
     let parent_layout = layout(16, &parent_steps);
-    let leaf_layout = Layout { flags: LAYOUT_WIDE_CURSOR, ..layout(32, &leaf_steps) };
+    let leaf_layout = Layout {
+        flags: LAYOUT_WIDE_CURSOR,
+        ..layout(32, &leaf_steps)
+    };
     let plain = layout(8, &[]);
     let ctx = Context::new(&[&parent_layout, &leaf_layout, &plain]);
     unsafe {
