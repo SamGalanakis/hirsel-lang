@@ -666,6 +666,17 @@ impl FrontBodyQueries {
             _snapshot: self.clone(),
         })
     }
+    pub(crate) fn registration_handle(
+        &self,
+        path: &DefPath,
+    ) -> Option<&Arc<AcceptedFrontRegistration>> {
+        self.inputs
+            .values()
+            .find(|input| input.definition.path() == path)?
+            .registration
+            .as_ref()
+    }
+
     /// Immutable ordinary input transport. Decoding starts only on demand;
     /// this performs no compiler phase or namespace publication.
     pub(crate) fn native_input(
