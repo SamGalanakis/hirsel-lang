@@ -4,6 +4,8 @@ use super::*;
 use crate::memo::retained::Weight;
 
 struct Row {
+    /// The carry revision at which this row's reads were last known valid.
+    revision: u64,
     text: ContentHash,
     reads: Arc<Reads>,
     reference: Reference,
@@ -15,6 +17,85 @@ struct Row {
 struct Rows {
     entries: BTreeMap<Key, Row>,
     used: u64,
+    baseline: Option<Baseline>,
+}
+/// The previous graph's environment and definition texts, which the next
+/// graph diffs to find what changed.
+struct Baseline {
+    revision: u64,
+    environment: ContentHash,
+    texts: BTreeMap<DefId, ContentHash>,
+    charge: u64,
+}
+/// What changed since the previous graph, as a conservative read predicate:
+/// a row valid then, none of whose reads it matches, observes the same values.
+pub(super) struct CarryChanges {
+    revision: u64,
+    /// Changed, added and removed definitions, closed over signature reads.
+    defs: BTreeSet<DefId>,
+    /// Names of added and removed definitions.
+    declared: BTreeSet<String>,
+    /// Names of every changed, added or removed definition.
+    named: BTreeSet<String>,
+}
+impl CarryChanges {
+    fn none(revision: u64) -> Self {
+        Self {
+            revision,
+            defs: BTreeSet::new(),
+            declared: BTreeSet::new(),
+            named: BTreeSet::new(),
+        }
+    }
+    fn is_empty(&self) -> bool {
+        self.defs.is_empty() && self.declared.is_empty()
+    }
+    /// Definition- and name-keyed reads. Context reads are observed instead.
+    fn matches(&self, read: &ReadKey) -> bool {
+        match read {
+            ReadKey::Signature(def)
+            | ReadKey::FailedSignature(def)
+            | ReadKey::Representation(def)
+            | ReadKey::ExecutedBody(def)
+            | ReadKey::ExecutedSignature(def)
+            | ReadKey::CitedText(def)
+            | ReadKey::ValidationView(def)
+            | ReadKey::LayoutBody(def) => self.defs.contains(def),
+            ReadKey::DeclarationCandidates(def) => {
+                self.defs.contains(def) || self.named.contains(&def.path().0.name)
+            }
+            ReadKey::Lookup(key) => key
+                .segments()
+                .iter()
+                .any(|segment| self.declared.contains(segment)),
+            ReadKey::NameSet(..) => !self.declared.is_empty(),
+            ReadKey::UniverseErrors
+            | ReadKey::FirstHeap
+            | ReadKey::Environment
+            | ReadKey::ValidationUniverse(_) => false,
+        }
+    }
+}
+impl FrontBodyQueries {
+    /// Whether a read recorded at the previous revision can observe a different
+    /// value now. The environment equals the baseline's; the package-wide
+    /// validation context is observed directly; reads this codec never
+    /// validates (executed and layout bodies, name sets) always count.
+    fn carried_read_changed(
+        &self,
+        changes: &CarryChanges,
+        owner: &DefPath,
+        read: &ReadKey,
+        value: ContentHash,
+    ) -> bool {
+        match read {
+            ReadKey::ExecutedBody(_) | ReadKey::LayoutBody(_) | ReadKey::NameSet(..) => true,
+            ReadKey::UniverseErrors | ReadKey::FirstHeap | ReadKey::ValidationUniverse(_) => {
+                self.observe(owner, read) != Some(value)
+            }
+            _ => changes.matches(read),
+        }
+    }
 }
 /// Optional host-owned carry, independently bounded from ordinary body storage.
 /// Its rows are data only: current text and every read must validate before
@@ -50,9 +131,80 @@ impl FrontCarry {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Diff the next graph's environment and definition texts against the
+    /// previous graph's. Returns this graph's revision and its changes, or no
+    /// changes when there is no comparable baseline: then every row validates.
+    fn advance(
+        &self,
+        environment: ContentHash,
+        texts: BTreeMap<DefId, ContentHash>,
+        ambiguous: BTreeSet<DefId>,
+    ) -> (u64, Option<CarryChanges>) {
+        let mut rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let previous = rows.baseline.take();
+        let (revision, changes) = match &previous {
+            Some(base) if base.environment == environment => {
+                let mut defs: BTreeSet<DefId> = ambiguous;
+                let mut declared = BTreeSet::new();
+                for (def, text) in &texts {
+                    match base.texts.get(def) {
+                        Some(old) if old == text => {}
+                        Some(_) => {
+                            defs.insert(*def);
+                        }
+                        None => {
+                            defs.insert(*def);
+                            declared.insert(def.path().0.name.clone());
+                        }
+                    }
+                }
+                for def in base.texts.keys() {
+                    if !texts.contains_key(def) {
+                        defs.insert(*def);
+                        declared.insert(def.path().0.name.clone());
+                    }
+                }
+                if defs.is_empty() {
+                    (base.revision, Some(CarryChanges::none(base.revision)))
+                } else {
+                    let revision = base.revision + 1;
+                    let named = defs.iter().map(|def| def.path().0.name.clone()).collect();
+                    (
+                        revision,
+                        Some(CarryChanges {
+                            revision,
+                            defs,
+                            declared,
+                            named,
+                        }),
+                    )
+                }
+            }
+            Some(base) => (base.revision + 1, None),
+            None => (1, None),
+        };
+        rows.used -= previous.map_or(0, |base| base.charge);
+        let mut charge = crate::NativeMetadataWeight::default();
+        charge.tree::<DefId, ContentHash>(texts.len());
+        let charge = charge.bytes();
+        // Without room for a baseline the next graph validates every row.
+        if let Some(used) = rows.used.checked_add(charge)
+            && used <= self.allowance.bytes()
+        {
+            rows.used = used;
+            rows.baseline = Some(Baseline {
+                revision,
+                environment,
+                texts,
+                charge,
+            });
+        }
+        (revision, changes)
+    }
     fn remember(
         &self,
         key: Key,
+        revision: u64,
         text: ContentHash,
         reads: Arc<Reads>,
         reference: Reference,
@@ -81,6 +233,7 @@ impl FrontCarry {
         rows.entries.insert(
             key,
             Row {
+                revision,
                 text,
                 reads,
                 reference,
@@ -179,6 +332,40 @@ impl FrontBodyQueries {
         {
             return Err(carry);
         }
+        let mut texts = BTreeMap::new();
+        let mut ambiguous = BTreeSet::new();
+        for input in self.inputs.values() {
+            if texts
+                .insert(input.definition, input.key.1)
+                .is_some_and(|text| text != input.key.1)
+            {
+                ambiguous.insert(input.definition);
+            }
+        }
+        let (revision, mut changes) = carry.advance(self.environment, texts, ambiguous);
+        // A signature, view or representation of an unchanged definition can
+        // still change through what its signature reads.
+        if let Some(changes) = changes.as_mut().filter(|changes| !changes.is_empty()) {
+            loop {
+                let before = changes.defs.len();
+                for input in self.inputs.values() {
+                    if !changes.defs.contains(&input.definition)
+                        && input.signature_reads.iter().any(|(read, value)| {
+                            self.carried_read_changed(changes, input.definition.path(), read, *value)
+                        })
+                    {
+                        changes.defs.insert(input.definition);
+                    }
+                }
+                if changes.defs.len() == before {
+                    break;
+                }
+            }
+        }
+        *self
+            .carry_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = (revision, changes.map(Arc::new));
         *slot = Some(carry);
         Ok(())
     }
@@ -231,8 +418,14 @@ impl BodyTask {
         if decode_bytes > self.weight.scratch {
             return;
         }
+        let revision = queries
+            .carry_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .0;
         carry.remember(
             self.input,
+            revision,
             queries.inputs[&self.input].key.1,
             outcome.reads.clone(),
             reference,
@@ -247,18 +440,51 @@ impl BodyTask {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()?;
-        let rows = carry.rows.lock().unwrap_or_else(|e| e.into_inner());
-        let row = rows.entries.get(&self.input)?;
+        let (revision, changes) = queries
+            .carry_changes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut rows = carry.rows.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(row) = rows.entries.get_mut(&self.input) else {
+            crate::carl19_probe("absent");
+            return None;
+        };
         let input = &queries.inputs[&self.input];
-        if row.text != input.key.1
-            || row.decode_bytes > self.weight.scratch
-            || row
+        if row.text != input.key.1 || row.decode_bytes > self.weight.scratch {
+            return None;
+        }
+        // A row valid at this revision, or at the previous one with no read the
+        // change set matches, is adopted unscanned; any other row validates.
+        let clean = changes.as_ref().is_some_and(|changes| {
+            row.revision == revision
+                || (row.revision + 1 == revision
+                    && !row.reads.iter().any(|(read, value)| {
+                        queries.carried_read_changed(
+                            changes,
+                            input.definition.path(),
+                            read,
+                            *value,
+                        )
+                    }))
+        });
+        if !clean {
+            let why = match &changes {
+                None => "no-changes".to_string(),
+                Some(c) if row.revision + 1 != revision && row.revision != revision => format!("stale-rev row={} graph={}", row.revision, revision),
+                Some(c) => row.reads.iter().find(|(read, value)| queries.carried_read_changed(c, input.definition.path(), read, *value)).map_or("none?".into(), |(r, _)| format!("{:?}", r.kind())),
+            };
+            crate::carl19_probe(&why);
+        }
+        if !clean
+            && row
                 .reads
                 .first_changed(|read| queries.observe(input.definition.path(), read))
                 .is_some()
         {
             return None;
         }
+        row.revision = row.revision.max(revision);
         let facts: Facts = queries
             .records
             .decode_record(&row.bytes, |path, occurrence| {
@@ -302,7 +528,15 @@ impl BodyTask {
         };
         let mut weight = Weight::default();
         weight.reads(&row.reads);
-        let charge = view.bytes(false).checked_add(weight.bytes)?;
+        let mut clean_rows = crate::NativeMetadataWeight::default();
+        if clean {
+            clean_rows.tree::<crate::memo::MemoKey, ()>(0);
+            clean_rows.add(memo_rows.len() * size_of::<crate::memo::MemoKey>());
+        }
+        let charge = view
+            .bytes(false)
+            .checked_add(weight.bytes)?
+            .checked_add(clean_rows.bytes())?;
         let mut retention = queries.retention.lock().unwrap_or_else(|e| e.into_inner());
         let remaining = retention.checked_sub(charge)?;
         *retention = remaining;
@@ -323,6 +557,13 @@ impl BodyTask {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(self.input, keys);
+        }
+        if clean {
+            queries
+                .clean_memos
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(memo_rows.iter().map(|(key, _)| *key));
         }
         queries
             .memos
@@ -380,6 +621,7 @@ mod tests {
                 for key in &keys {
                     carry.remember(
                         *key,
+                        0,
                         *key,
                         Arc::new(Reads::empty()),
                         reference,
@@ -408,6 +650,7 @@ mod tests {
             for key in &keys {
                 short.remember(
                     *key,
+                    0,
                     *key,
                     Arc::new(Reads::empty()),
                     reference,

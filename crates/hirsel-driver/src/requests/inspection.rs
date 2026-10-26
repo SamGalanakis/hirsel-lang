@@ -299,13 +299,21 @@ impl GraphMeter {
             .checked_add(operation_delta)
             .ok_or_else(unavailable)?;
         if first {
-            // Every front and Lower memo this graph adopted, refused and
-            // recomputed, or computed: a full rescan touches each demanded one.
+            // Every front and Lower memo this graph validated, refused and
+            // recomputed, or computed. Front rows the carry adopted unscanned,
+            // because no change reached their reads, are not touched.
             let mut touched: std::collections::BTreeSet<MemoKey> =
                 std::mem::take(&mut work.touched_memos)
                     .into_iter()
                     .collect();
-            touched.extend(self.front.memo_snapshot().into_iter().map(|(key, _)| key));
+            let clean = self.front.clean_memos();
+            touched.extend(
+                self.front
+                    .memo_snapshot()
+                    .into_iter()
+                    .map(|(key, _)| key)
+                    .filter(|key| !clean.contains(key)),
+            );
             touched.extend(
                 self.lower
                     .memo_snapshot()

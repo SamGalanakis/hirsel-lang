@@ -12,6 +12,7 @@ use std::sync::{
 
 mod carry;
 mod retained;
+use carry::CarryChanges;
 pub use carry::FrontCarry;
 mod source;
 mod storage;
@@ -182,6 +183,12 @@ pub struct FrontBodyQueries {
     verify_store: crate::store::VerifyStore,
     outcomes: Mutex<BTreeMap<Key, FrontOutcome>>,
     carry: Mutex<Option<Arc<FrontCarry>>>,
+    /// This graph's carry revision and, against the previous graph, the reads
+    /// that can observe a change; `None` validates every carried row.
+    carry_changes: Mutex<(u64, Option<Arc<CarryChanges>>)>,
+    /// Memo rows adopted from the carry without validation. They were neither
+    /// marked nor scanned, so inspection does not count them as touched.
+    clean_memos: Mutex<BTreeSet<crate::memo::MemoKey>>,
     errors: RuntimeErrors,
     retention: Mutex<u64>,
     // Own immutable snapshot and output metadata admission until every task and
@@ -524,6 +531,12 @@ impl FrontBodyQueries {
     }
     /// Actual completed phase read rows, captured by the same compact phase
     /// finisher as scalar publication. This inspection executes no query.
+    pub fn clean_memos(&self) -> BTreeSet<crate::memo::MemoKey> {
+        self.clean_memos
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
     pub fn memo_snapshot(&self) -> Vec<(crate::memo::MemoKey, Arc<Reads>)> {
         self.memos
             .lock()
@@ -1502,6 +1515,8 @@ impl QueryEngine {
             store,
             outcomes: Mutex::new(BTreeMap::new()),
             carry: Mutex::new(None),
+            carry_changes: Mutex::new((0, None)),
+            clean_memos: Mutex::new(BTreeSet::new()),
             work: Mutex::new(BTreeMap::new()),
             table_keys: Mutex::new(BTreeMap::new()),
             memos: Mutex::new(BTreeMap::new()),
