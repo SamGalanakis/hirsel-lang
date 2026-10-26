@@ -1,5 +1,5 @@
 //! Retained constants use the ordinary type/anchor codec.
-//! Small values keep their decoded form; large values retain compact bytes and
+//! Small values keep their decoded form; large values retain their published record and
 //! reconstruct only when a consuming task or admitted inspector needs them.
 use super::*;
 
@@ -13,7 +13,7 @@ pub(super) struct Constants {
 #[derive(Clone)]
 enum Data {
     Decoded(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>),
-    Packed(Arc<[u8]>),
+    Packed(Reference),
 }
 impl Constants {
     pub(super) fn new(
@@ -38,60 +38,64 @@ impl Constants {
         &self,
         records: &crate::NativeRecords,
         anchors: &crate::NativeRecordContext,
+        store: &dyn ResultStore,
         allowance: u64,
     ) -> Option<(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>)> {
         match &self.data {
             Data::Decoded(value, substitutions) => Some((value.clone(), substitutions.clone())),
-            Data::Packed(bytes) => {
+            Data::Packed(record) => {
                 if self.decode_bytes > allowance {
                     return None;
                 }
-                let (value, substitutions) = records.decode(anchors, bytes)?;
+                let bytes = store.get_content(*record)?;
+                let (value, substitutions, _, _, _): (
+                    Materialized,
+                    Vec<(hirsel_syntax::ExprId, Materialized)>,
+                    Reads,
+                    DepthEvidence<Span>,
+                    bool,
+                ) = records.decode(anchors, &bytes)?;
                 Some((value, substitutions))
             }
         }
     }
     pub(super) fn encode(
-        &self,
-        owner: &FrontLowerQueries,
+        &mut self,
+        records: &crate::NativeRecords,
+        anchors: &crate::NativeRecordContext,
         reads: &Reads,
         depth: &DepthEvidence<Span>,
         executed: bool,
     ) -> Option<Vec<u8>> {
-        match &self.data {
-            Data::Decoded(value, substitutions) => owner.records.encode(
-                &owner.anchors,
-                &(value, substitutions, reads, depth, executed),
-            ),
-            Data::Packed(_) => None,
+        let Data::Decoded(value, substitutions) = &self.data else {
+            return None;
+        };
+        let (bytes, record_working) = records
+            .encode_with_decode_bytes(anchors, &(value, substitutions, reads, depth, executed))?;
+        let metadata = reads
+            .allocations()
+            .map(|(_, bytes)| bytes as u64)
+            .try_fold(size_of_val(&*depth.first) as u64, u64::checked_add)?;
+        self.decode_bytes = self
+            .data_bytes
+            .checked_add(metadata)?
+            .checked_mul(2)?
+            .checked_add(record_working)?;
+        Some(bytes)
+    }
+    pub(super) fn pack(&mut self, record: Reference) {
+        if self.data_bytes >= 4096 {
+            // The store already owns this immutable descriptor, as it owns
+            // Lower bodies. A settled value needs only its typed reference.
+            self.data = Data::Packed(record);
+            self.data_bytes = 0;
         }
     }
-    pub(super) fn pack(
-        &mut self,
-        records: &crate::NativeRecords,
-        anchors: &crate::NativeRecordContext,
-    ) -> Option<()> {
-        let Data::Decoded(value, substitutions) = &self.data else {
-            return Some(());
-        };
-        // Small inline/scalar outcomes cannot repay a separate packed record.
-        if self.data_bytes < 4096 {
-            return Some(());
-        }
-        let (bytes, record_working) =
-            records.encode_with_decode_bytes(anchors, &(value, substitutions))?;
-        let retained = (bytes.len() as u64).checked_add(2 * size_of::<usize>() as u64)?;
-        if retained < self.data_bytes {
-            // A decoded Vec can overlap its construction buffer. The ordinary
-            // codec's record/type/anchor workspace is independent of the tree.
-            self.decode_bytes = self
-                .data_bytes
-                .checked_mul(2)?
-                .checked_add(record_working)?;
-            self.data = Data::Packed(bytes.into());
-            self.data_bytes = retained;
-        }
-        Some(())
+    pub(super) fn working_bytes(&self) -> u64 {
+        self.decode_bytes
+    }
+    pub(super) fn set_working_bytes(&mut self, bytes: u64) {
+        self.decode_bytes = bytes;
     }
     pub(super) fn retained_bytes(&self) -> u64 {
         self.data_bytes
@@ -100,7 +104,11 @@ impl Constants {
         self.root_bytes
     }
     pub(super) fn decode_bytes(&self) -> u64 {
-        self.decode_bytes
+        if matches!(self.data, Data::Packed(_)) {
+            self.decode_bytes
+        } else {
+            0
+        }
     }
 }
 
@@ -112,10 +120,8 @@ mod tests {
     fn packed_tree_preserves_equal_leaves_and_substitutions_with_bounded_decode() {
         let engine = crate::QueryEngine::new(crate::default_environment(), Default::default());
         let anchors = crate::NativeRecordContext::capture(&engine);
-        let records = crate::NativeRecords::new(
-            engine.types().clone(),
-            Arc::new(crate::store::MemStore::default()),
-        );
+        let store = Arc::new(crate::store::MemStore::default());
+        let records = crate::NativeRecords::new(engine.types().clone(), store.clone());
         let ty = engine.types().intern(hirsel_types::Type::unit());
         let leaf = hirsel_tir::ValueNode {
             ty,
@@ -133,17 +139,27 @@ mod tests {
         let substitutions = vec![(hirsel_syntax::ExprId(0), value.clone())];
         let mut constants = Constants::new(value.clone(), substitutions.clone());
         let decoded_bytes = constants.retained_bytes();
-        constants.pack(&records, &anchors).unwrap();
+        let bytes = constants
+            .encode(
+                &records,
+                &anchors,
+                &Reads::default(),
+                &DepthEvidence::leaf(32),
+                false,
+            )
+            .unwrap();
+        let record = store.put_content(CONSTANT_DESCRIPTOR, &bytes).unwrap();
+        constants.pack(record);
         assert!(matches!(constants.data, Data::Packed(_)));
         assert!(constants.retained_bytes() < decoded_bytes / 2);
         assert!(constants.decode_bytes() >= 2 * decoded_bytes);
         assert!(
             constants
-                .decoded(&records, &anchors, constants.decode_bytes() - 1)
+                .decoded(&records, &anchors, &*store, constants.decode_bytes() - 1)
                 .is_none()
         );
         let (root, restored) = constants
-            .decoded(&records, &anchors, constants.decode_bytes())
+            .decoded(&records, &anchors, &*store, constants.decode_bytes())
             .unwrap();
         assert_eq!(root.root, value.root);
         assert_eq!(restored.len(), 1);
@@ -155,6 +171,6 @@ mod tests {
         let (Data::Packed(original), Data::Packed(copy)) = (&constants.data, &clone.data) else {
             unreachable!()
         };
-        assert!(Arc::ptr_eq(original, copy));
+        assert_eq!(original, copy);
     }
 }

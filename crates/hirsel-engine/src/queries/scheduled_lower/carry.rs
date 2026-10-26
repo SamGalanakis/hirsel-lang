@@ -21,6 +21,7 @@ struct Row {
     /// Store content the descriptor names: a Lower body and its constants.
     contents: Box<[(Domain, Arc<[u8]>)]>,
     lower: Option<Retained>,
+    constant_decode_bytes: u64,
     execution: Option<hirsel_validate::ExecutionReceipt>,
     charge: u64,
 }
@@ -178,6 +179,10 @@ impl FrontLowerQueries {
                 descriptor: descriptor.into(),
                 contents,
                 lower,
+                constant_decode_bytes: match &outcome.result {
+                    Ok(Value::Constant(value)) => value.working_bytes(),
+                    _ => 0,
+                },
                 execution: outcome.execution.clone(),
                 charge,
             },
@@ -231,6 +236,9 @@ impl FrontLowerQueries {
             };
             (Value::Lower(lower), reads, depth, executed)
         } else {
+            if row.constant_decode_bytes > self.weight.scratch {
+                return None;
+            }
             let (value, substitutions, reads, depth, executed): (
                 Materialized,
                 Vec<(hirsel_syntax::ExprId, Materialized)>,
@@ -238,12 +246,9 @@ impl FrontLowerQueries {
                 DepthEvidence<Span>,
                 bool,
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
-            (
-                Value::Constant(Constants::new(value, substitutions)),
-                reads,
-                depth,
-                executed,
-            )
+            let mut constants = Constants::new(value, substitutions);
+            constants.set_working_bytes(row.constant_decode_bytes);
+            (Value::Constant(constants), reads, depth, executed)
         };
         let (value, reads, depth, executed) = result;
         if reads.len() != row.reads.len() {

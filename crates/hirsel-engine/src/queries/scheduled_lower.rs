@@ -490,7 +490,12 @@ impl FrontLowerQueries {
             .ok_or(QueryError::NotImplemented)?;
         match &selected.1.result {
             Ok(Value::Constant(value)) => value
-                .decoded(&self.records, &self.anchors, self.weight.scratch)
+                .decoded(
+                    &self.records,
+                    &self.anchors,
+                    &*self.store,
+                    self.weight.scratch,
+                )
                 .map(|(value, _)| Arc::new(value))
                 .ok_or(QueryError::NotImplemented),
             Err(error) => Err(error.clone()),
@@ -694,7 +699,7 @@ impl FrontLowerQueries {
                 .validation_universe();
             source.merge(&observed.finish().map_err(|_| self.errors.protocol)?);
         }
-        let result = if source.framed && source.depth.borrow().limit() == 0 {
+        let mut result = if source.framed && source.depth.borrow().limit() == 0 {
             Err(source.overflow(self.inputs[&path].site))
         } else {
             self.compute(id.kind, &path, &mut source).await
@@ -717,7 +722,7 @@ impl FrontLowerQueries {
             .as_ref()
             .ok()
             .and_then(|_| source.evidence.borrow().finish(&observed));
-        let bytes = match &result {
+        let bytes = match &mut result {
             Ok(Value::Lower(lower)) => self.records.encode(
                 &self.anchors,
                 &(
@@ -731,7 +736,9 @@ impl FrontLowerQueries {
                     executed,
                 ),
             ),
-            Ok(Value::Constant(value)) => value.encode(&self, &observed, &depth, executed),
+            Ok(Value::Constant(value)) => {
+                value.encode(&self.records, &self.anchors, &observed, &depth, executed)
+            }
             Err(error) => self
                 .records
                 .encode(&self.anchors, &(&path, error, &observed, &depth, executed)),
@@ -795,9 +802,7 @@ impl FrontLowerQueries {
         }
         let failed = outcome.result.is_err();
         if let Ok(Value::Constant(value)) = &mut outcome.result {
-            value
-                .pack(&self.records, &self.anchors)
-                .ok_or(self.errors.resource)?;
+            value.pack(record);
         }
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
@@ -1225,6 +1230,7 @@ impl Source {
                 .decoded(
                     &self.owner.records,
                     &self.owner.anchors,
+                    &*self.owner.store,
                     self.owner.weight.scratch,
                 )
                 .ok_or(QueryError::NotImplemented),
