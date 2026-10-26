@@ -264,3 +264,4 @@ mod sealed_graph_reference_59;
 mod ordered_read_resume_59;
 mod ordered_read_physical_59;
 mod ordered_host_fanout_57;
+mod isolate_finalizer_frame_56;
