@@ -389,7 +389,7 @@ impl FrontBodyQueries {
             LookupSource::Head | LookupSource::Candidates => None,
         }
     }
-    fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
+    pub(crate) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         use crate::memo::LookupSource;
         Some(match *read {
             ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) => memos::signature_value(
@@ -423,7 +423,27 @@ impl FrontBodyQueries {
                         memos::provider_value(&self.snapshot.lookup(&context, &path).result)
                     }
                     LookupSource::Manifest => {
-                        let result = index.lookup(&context, &path);
+                        // As the resolver recorded it: a name the manifest index
+                        // misses (a prelude name) is the provider's, if visible.
+                        let mut result = index.lookup(&context, &path);
+                        if let Err(
+                            hirsel_resolve::LookupError::Missing
+                            | hirsel_resolve::LookupError::MissingMember(_),
+                        ) = &result
+                        {
+                            match self.snapshot.lookup(&context, &path).result {
+                                Ok(found) => {
+                                    if !matches!(&result, Err(hirsel_resolve::LookupError::MissingMember(candidates)) if !candidates.contains(&found))
+                                    {
+                                        result = index.access(&context, &found);
+                                    }
+                                }
+                                Err(QueryError::Diagnostics(ds)) if !ds.is_empty() => {
+                                    result = Err(hirsel_resolve::LookupError::Provider(ds));
+                                }
+                                _ => {}
+                            }
+                        }
                         let namespace = result
                             .as_ref()
                             .ok()
