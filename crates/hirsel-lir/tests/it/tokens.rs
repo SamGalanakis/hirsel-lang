@@ -616,7 +616,15 @@ fn a_take_through_a_borrowed_block_is_rejected() {
 /// the environment the closure was built with, never another payload, and
 /// never a callable whose closure is unknown (a parameter).
 fn closure_donor(mutant: bool) -> Vec<K> {
+    closure_donor_typed(mutant, false)
+}
+
+fn closure_donor_typed(mutant: bool, erased: bool) -> Vec<K> {
     let mut t = Lir::<Reuse>::new(&[], None);
+    if erased {
+        t.table.layouts[l::CLOSURE.0 as usize].kind =
+            hirsel_lir::layout_types::LayoutKind::Callable { environment: None };
+    }
     let k = t.int(ENTRY);
     let env = t.symbol(SymbolKind::Function);
     let abi = t.abi_shaped(hirsel_lir::abi_types::CallableShape::Closure, &[], None);
@@ -650,11 +658,20 @@ fn closure_donor(mutant: bool) -> Vec<K> {
             failure: fails,
         },
     );
+    // An erased callable may carry a Shared root, so its semantic cleanup
+    // anchor still owns the release even when its environment is known here.
+    let at = if erased {
+        let cleanup = t.builder.block(BlockKind::Cleanup, &[]);
+        t.builder.jump(ENTRY, cleanup, &[]);
+        cleanup
+    } else {
+        ENTRY
+    };
     let result = t.owned(l::HDR);
     let anchor = t.cleanup_anchor();
     let failure = t.fails();
     t.builder.push(
-        ENTRY,
+        at,
         Inst::Reset {
             result,
             value: c,
@@ -664,13 +681,21 @@ fn closure_donor(mutant: bool) -> Vec<K> {
             failure,
         },
     );
-    let y = reuse(&mut t, ENTRY, result, l::PAY, heap(0), &[]);
-    t.release(ENTRY, y, &[]);
-    t.builder.ret(ENTRY, None);
+    let y = reuse(&mut t, at, result, l::PAY, heap(0), &[]);
+    t.release(at, y, &[]);
+    t.builder.ret(at, None);
     t.check()
 }
 
 #[test]
 fn a_closure_donates_by_its_environment_layout() {
     pair(closure_donor, |k| matches!(k, K::TokenDonor(_)));
+}
+
+#[test]
+fn an_erased_closure_donor_requires_its_actual_environment() {
+    pair(
+        |mutant| closure_donor_typed(mutant, true),
+        |k| matches!(k, K::TokenDonor(_)),
+    );
 }

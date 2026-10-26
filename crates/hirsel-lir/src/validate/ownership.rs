@@ -2005,7 +2005,14 @@ impl<S: Stage> Walker<'_, '_, S> {
         self.discharged.insert(anchor);
         // A block destroys its payload; an inline value its own content.
         let own = self.cx.value_layout(value);
-        let destroyed = self.cx.layouts.released(own).unwrap_or(own);
+        let destroyed = if self.cx.repr(value) == ValueRepr::Callable {
+            // Erasure hides the environment type, not its actual SSA origin.
+            // Reconstruct the closure's descriptor with C's token provenance
+            // check; the Reset's claimed layout grants no authority here.
+            tokens::environment(self.cx, self.facts, value, &mut BTreeSet::new()).unwrap_or(own)
+        } else {
+            self.cx.layouts.released(own).unwrap_or(own)
+        };
         if self.cx.layouts.destructible(destroyed)
             && (self.cx.stage < StageKind::Ready
                 || self.cx.unit.header.origin != UnitOrigin::Library

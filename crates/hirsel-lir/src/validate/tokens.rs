@@ -350,7 +350,7 @@ fn evidence<S>(
 /// version it reads) and block parameters whose arguments all agree. None
 /// when any source is not a closure (a parameter, a call result, a function
 /// reference).
-fn environment<S>(
+pub(super) fn environment<S>(
     cx: &Cx<'_, S>,
     facts: &Facts,
     value: ValueId,
