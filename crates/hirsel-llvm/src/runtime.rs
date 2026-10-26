@@ -46,8 +46,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::HostArm => (MemoryEffects::ReadWrite, false, &[]),
         R::HashBytes => (MemoryEffects::ArgumentRead, true, &[1]),
         R::HashInit => (MemoryEffects::ArgumentReadWrite, true, &[0]),
-        // The state pointer is carried as u64, so its accesses are not LLVM
-        // argument memory. Keep the corresponding whole-memory effects.
+        // The integer state carrier is not argument memory. The typed private
+        // adapters below preserve its storage provenance during optimization.
         R::HashUpdate => (MemoryEffects::ReadWrite, true, &[1]),
         R::HashFinish => (MemoryEffects::Read, true, &[]),
         // Queries copy scalar FailureRecords; no pointer escapes. Reanchoring
@@ -177,6 +177,9 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
             AttributeSlot::Parameter(parameter),
             Attribute::CapturesNone,
         );
+    }
+    if entry == R::HashInit {
+        module.add_attribute(function, AttributeSlot::Parameter(0), Attribute::WriteOnly);
     }
     allocator(module, function, entry);
 }
@@ -415,6 +418,76 @@ fn fast<'m>(
         builder.position(module.append_block(function));
         let parameters: Vec<_> = (0..arity).map(|i| module.parameter(function, i)).collect();
         body(&builder, function, &parameters);
+    }
+    function
+}
+
+/// Keep caller-owned hashing scratch typed while LLVM removes dead work. The
+/// public runtime still carries its address in u64; these private adapters are
+/// expanded after optimization, as allocation fast paths are. Their memory
+/// effects describe the runtime bodies, whose only writes are to this scratch.
+pub(crate) fn hash_stream<'m>(
+    module: &'m Module<'m>,
+    runtime: Function<'m>,
+    finish: bool,
+) -> Function<'m> {
+    use crate::context::{Builder, Cast};
+    let (pointer, word) = (module.ptr_type(), module.int_type(64));
+    let (name, result, parameters, memory) = if finish {
+        (
+            "hirsel.fast.hash.finish",
+            word,
+            vec![pointer],
+            MemoryEffects::ArgumentRead,
+        )
+    } else {
+        (
+            "hirsel.fast.hash.update",
+            module.void_type(),
+            vec![pointer, pointer, word],
+            MemoryEffects::ArgumentReadWrite,
+        )
+    };
+    let fresh = !module.defines(name);
+    let function = module
+        .function(name, module.function_type(result, &parameters))
+        .expect("hash scratch adapter type");
+    if fresh {
+        module.make_private(function);
+        module.add_attribute(function, AttributeSlot::Function, Attribute::NoUnwind);
+        module.add_attribute(function, AttributeSlot::Function, Attribute::WillReturn);
+        module.add_attribute(function, AttributeSlot::Function, Attribute::NoInline);
+        module.add_attribute(function, AttributeSlot::Function, Attribute::Memory(memory));
+        module.add_attribute(
+            function,
+            AttributeSlot::Parameter(0),
+            Attribute::CapturesNone,
+        );
+        if !finish {
+            module.add_attribute(
+                function,
+                AttributeSlot::Parameter(1),
+                Attribute::CapturesNone,
+            );
+            module.add_attribute(function, AttributeSlot::Parameter(1), Attribute::ReadOnly);
+        }
+        let builder = Builder::new(module);
+        builder.position(module.append_block(function));
+        let state = builder.cast(Cast::PtrToInt, module.parameter(function, 0), word);
+        if finish {
+            let value = builder.call(runtime, &[state]);
+            builder.ret(value);
+        } else {
+            builder.call(
+                runtime,
+                &[
+                    state,
+                    module.parameter(function, 1),
+                    module.parameter(function, 2),
+                ],
+            );
+            builder.ret_void();
+        }
     }
     function
 }

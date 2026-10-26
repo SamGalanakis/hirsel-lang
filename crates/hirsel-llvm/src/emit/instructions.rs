@@ -1613,6 +1613,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     None
                 };
                 let update = self.runtime(RuntimeEntry::HashUpdate)?;
+                let update = crate::runtime::hash_stream(self.module, update, false);
                 let hasher = match compare::hasher(
                     self.module,
                     self.inputs.layouts,
@@ -1634,9 +1635,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     .alloca(state_ty, hirsel_lir::runtime_abi::HASH_STATE_ALIGN);
                 let init = self.runtime(RuntimeEntry::HashInit)?;
                 self.builder.call(init, &[storage, seed]);
-                let state = self
-                    .builder
-                    .cast(Cast::PtrToInt, storage, self.module.int_type(64));
+                let state = storage;
                 let i8_ty = self.module.int_type(8);
                 let deep = self.prologue.alloca(i8_ty, 1);
                 self.builder.store(self.module.const_int(i8_ty, 0), deep, 1);
@@ -1650,6 +1649,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                         .icmp(IntPredicate::Ne, flag, self.module.const_int(i8_ty, 0));
                 self.guard(too_deep, failure)?;
                 let finish = self.runtime(RuntimeEntry::HashFinish)?;
+                let finish = crate::runtime::hash_stream(self.module, finish, true);
                 let hash = self.builder.call(finish, &[hash]);
                 let hash = if let Some((done, fast, short)) = short {
                     let long = self.builder.current();

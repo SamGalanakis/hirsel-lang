@@ -2289,3 +2289,38 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     assert_eq!(observation.failures[0].rule, "SEM-1");
     assert_eq!(observation.failures[0].line, 3);
 }
+
+#[test]
+fn long_hash_inputs_preserve_aliases_and_independent_maps() {
+    let source = r#"
+fn lookup(m: Map[String, u64], text: String) -> u64 {
+  match map.get(m, text) { Some(value) => value, None => 0 }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let mut first: Map[String, u64] = map.empty()
+  let mut second: Map[String, u64] = map.empty()
+  let mut key = "long key crossing more than two hash words"
+  let retained = copy key
+  map.insert(mut first, copy key, 17)
+  map.insert(mut second, copy key, 29)
+  let saved = copy first
+  key = "a different key crossing two hash words"
+  map.insert(mut first, copy key, 41)
+  map.insert(mut second, copy retained, 53)
+  failure.check(lookup(saved, retained) == 17, TextInvariant())
+  failure.check(lookup(first, retained) == 17 && lookup(first, key) == 41, TextInvariant())
+  failure.check(lookup(second, retained) == 53 && lookup(second, key) == 0, TextInvariant())
+  let mut many: Map[String, u64] = map.empty()
+  for i in 0u64..32 {
+    let item = if i % 2 == 0 { copy retained } else { copy key }
+    map.insert(mut many, copy item, i)
+    failure.check(lookup(many, item) == i, TextInvariant())
+  }
+  let _ = out.print(io.stdout(rt)?, "hash aliases preserved\n")
+  Ok(())
+}
+"#;
+    let observation = agree("hash-stream-aliases", source, &topology_matrix(0));
+    assert_eq!(observation.output, b"hash aliases preserved\n");
+    assert!(observation.failures.is_empty(), "{observation:?}");
+}

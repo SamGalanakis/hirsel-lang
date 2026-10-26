@@ -935,9 +935,9 @@ impl<'m> Generator<'m, '_> {
 
 /// The hash function of `layout` in `module`, generating it and every hash function it calls.
 ///
-/// A hash function `hirsel.hash.<layout>(at, state, depth, deep, context) -> i64`
+/// A hash function `hirsel.hash.<layout>(at, state, depth, deep, context) -> ptr`
 /// feeds framed leaves into one caller-owned SipHash stream through `hash_update`.
-/// It returns the unchanged opaque state address; only the root finalizes it. Floats feed `-0.0` as `+0.0`, so values `Compare Eq` calls equal hash equal; a
+/// It returns the unchanged scratch pointer; only the root finalizes it. Floats feed `-0.0` as `+0.0`, so values `Compare Eq` calls equal hash equal; a
 /// variant feeds its active ordinal, a sequence its count, a String or Bytes slice its length
 /// and bytes. Complete logical admission happens before this physical traversal;
 /// its private depth and failure parameters retain the helper calling convention. `Opaque` containers (Map, Set) are lib-map's.
@@ -977,7 +977,7 @@ fn declare_hash<'m>(
     pending: &mut Vec<HashPending<'m>>,
 ) -> Function<'m> {
     let (ptr, i64_ty) = (module.ptr_type(), module.int_type(64));
-    let ty = module.function_type(i64_ty, &[ptr, i64_ty, i64_ty, ptr, ptr]);
+    let ty = module.function_type(ptr, &[ptr, ptr, i64_ty, ptr, ptr]);
     let name = format!("hirsel.hash.{}", keys.key(layout).hex());
     let fresh = !module.defines(&name);
     let function = module
@@ -1034,7 +1034,8 @@ impl<'m> HashGenerator<'m, '_> {
 
     /// `hash_bytes(state, bytes, length)`.
     fn feed(&self, state: Value<'m>, bytes: Value<'m>, length: Value<'m>) -> Value<'m> {
-        self.builder.call(self.hash_bytes, &[state, bytes, length])
+        self.builder.call(self.hash_bytes, &[state, bytes, length]);
+        state
     }
 
     /// Feeds an integer value through a stack slot of its width.
@@ -1084,7 +1085,7 @@ impl<'m> HashGenerator<'m, '_> {
                 let state = self.feed_int(state, ordinal, 4);
                 let done = self.module.append_block(self.function);
                 let here = self.builder.current();
-                let i64_ty = self.module.int_type(64);
+                let state_ty = self.module.ptr_type();
                 let mut arms = Vec::new();
                 let mut incoming = vec![(state, here)];
                 for variant in &tag.variants {
@@ -1102,7 +1103,7 @@ impl<'m> HashGenerator<'m, '_> {
                 self.builder.position(here);
                 self.builder.switch(ordinal, done, &arms);
                 self.builder.position(done);
-                let joined = self.builder.phi(i64_ty);
+                let joined = self.builder.phi(state_ty);
                 for (value, from) in incoming {
                     self.builder.add_incoming(joined, value, from);
                 }
@@ -1365,7 +1366,7 @@ impl<'m> HashGenerator<'m, '_> {
             self.builder.position(head);
             let i = self.builder.phi(word);
             let pointer = self.builder.phi(self.module.ptr_type());
-            let state_phi = self.builder.phi(word);
+            let state_phi = self.builder.phi(self.module.ptr_type());
             self.builder.add_incoming(i, self.u64(0), from);
             self.builder.add_incoming(pointer, first, from);
             self.builder.add_incoming(state_phi, state, from);
@@ -1403,7 +1404,7 @@ impl<'m> HashGenerator<'m, '_> {
         self.builder.position(head);
         let i = self.builder.phi(word);
         let previous = self.builder.phi(self.module.ptr_type());
-        let state_phi = self.builder.phi(word);
+        let state_phi = self.builder.phi(self.module.ptr_type());
         self.builder.add_incoming(i, self.u64(0), from);
         self.builder.add_incoming(previous, first, from);
         self.builder.add_incoming(state_phi, state, from);
@@ -1514,7 +1515,7 @@ impl<'m> HashGenerator<'m, '_> {
         self.builder.br(head);
         self.builder.position(head);
         let index = self.builder.phi(i64_ty);
-        let running = self.builder.phi(i64_ty);
+        let running = self.builder.phi(self.module.ptr_type());
         self.builder.add_incoming(index, self.u64(0), before);
         self.builder.add_incoming(running, state, before);
         let more = self.builder.icmp(IntPredicate::Ult, index, count);

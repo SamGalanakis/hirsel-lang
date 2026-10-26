@@ -202,6 +202,7 @@ pub(crate) enum Attribute {
     WillReturn,
     CapturesNone,
     WriteOnly,
+    ReadOnly,
     Memory(MemoryEffects),
     /// A return or parameter attribute: the pointer has exclusive access to its object.
     NoAlias,
@@ -298,6 +299,7 @@ impl Attribute {
             Attribute::WillReturn => "willreturn",
             Attribute::CapturesNone => "captures",
             Attribute::WriteOnly => "writeonly",
+            Attribute::ReadOnly => "readonly",
             Attribute::Memory(_) => "memory",
             Attribute::NoAlias => "noalias",
             Attribute::Dereferenceable(_) => "dereferenceable",
