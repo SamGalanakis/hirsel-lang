@@ -3,6 +3,7 @@
 //! into a source namespace remains a separate ordered transaction.
 use super::*;
 mod carry;
+mod constants;
 mod dependencies;
 mod evidence;
 mod registration;
@@ -11,6 +12,7 @@ use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
 use crate::store::{Domain, EntryKey, Reference, ResultStore};
 pub use carry::LowerCarry;
+use constants::Constants;
 use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
@@ -74,7 +76,7 @@ struct Input {
 #[derive(Clone)]
 enum Value {
     Lower(LowerProduct),
-    Constant(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>),
+    Constant(Constants),
 }
 #[derive(Clone)]
 struct LowerProduct {
@@ -129,10 +131,7 @@ impl Outcome {
                 // AcceptedArtifact and every other inline field belong to
                 // the typed B-tree row, charged by outcome_table_bytes.
             }
-            Ok(Value::Constant(value, substitutions)) => {
-                weight.materialized(value);
-                weight.vec(substitutions, |w, (_, value)| w.materialized(value));
-            }
+            Ok(Value::Constant(value)) => weight.add(value.retained_bytes().try_into().ok()?),
             Err(error) => weight.add(
                 crate::memo::retained::retained_query_error_bytes(error)
                     .try_into()
@@ -393,10 +392,21 @@ impl FrontLowerQueries {
             else {
                 continue;
             };
-            if let Ok(Value::Constant(value, _)) = &outcome.result {
+            if let Ok(Value::Constant(value)) = &outcome.result {
                 weight.path(path);
-                weight.materialized(value);
-                weight.materialized(value);
+                weight.add(
+                    value
+                        .root_clone_bytes()
+                        .checked_mul(2)
+                        .and_then(|n| usize::try_from(n).ok())
+                        .ok_or(QueryError::NotImplemented)?,
+                );
+                weight.add(
+                    value
+                        .decode_bytes()
+                        .try_into()
+                        .map_err(|_| QueryError::NotImplemented)?,
+                );
                 weight.add(size_of::<Materialized>() + 2 * size_of::<usize>());
             }
         }
@@ -447,13 +457,16 @@ impl FrontLowerQueries {
             .get(&(id.kind, id.address.0))
             .ok_or(QueryError::NotImplemented)?;
         match &outcome.result {
-            Ok(Value::Constant(value, _)) => {
-                let mut weight = crate::NativeMetadataWeight::default();
-                weight.add(std::mem::size_of::<Materialized>() + 2 * std::mem::size_of::<usize>());
-                weight.materialized(value);
-                weight
-                    .bytes()
-                    .checked_mul(2)
+            Ok(Value::Constant(value)) => {
+                let root = value
+                    .root_clone_bytes()
+                    .checked_add(
+                        (std::mem::size_of::<Materialized>() + 2 * std::mem::size_of::<usize>())
+                            as u64,
+                    )
+                    .and_then(|bytes| bytes.checked_mul(2))
+                    .ok_or(QueryError::NotImplemented)?;
+                root.checked_add(value.decode_bytes())
                     .ok_or(QueryError::NotImplemented)
             }
             Err(error) => Err(error.clone()),
@@ -476,7 +489,10 @@ impl FrontLowerQueries {
             .get(&(id.kind, id.address.0))
             .ok_or(QueryError::NotImplemented)?;
         match &selected.1.result {
-            Ok(Value::Constant(value, _)) => Ok(Arc::new(value.clone())),
+            Ok(Value::Constant(value)) => value
+                .decoded(&self.records, &self.anchors, self.weight.scratch)
+                .map(|(value, _)| Arc::new(value))
+                .ok_or(QueryError::NotImplemented),
             Err(error) => Err(error.clone()),
             _ => Err(QueryError::NotImplemented),
         }
@@ -715,10 +731,7 @@ impl FrontLowerQueries {
                     executed,
                 ),
             ),
-            Ok(Value::Constant(value, substitutions)) => self.records.encode(
-                &self.anchors,
-                &(value, substitutions, &observed, &depth, executed),
-            ),
+            Ok(Value::Constant(value)) => value.encode(&self, &observed, &depth, executed),
             Err(error) => self
                 .records
                 .encode(&self.anchors, &(&path, error, &observed, &depth, executed)),
@@ -757,7 +770,7 @@ impl FrontLowerQueries {
         key: &EntryKey,
         domain: Domain,
         bytes: &[u8],
-        outcome: Outcome,
+        mut outcome: Outcome,
     ) -> Result<ProductRef, Reference> {
         let record = self
             .store
@@ -781,6 +794,11 @@ impl FrontLowerQueries {
             cache.publish_execution(outcome.execution_subject, receipt);
         }
         let failed = outcome.result.is_err();
+        if let Ok(Value::Constant(value)) = &mut outcome.result {
+            value
+                .pack(&self.records, &self.anchors)
+                .ok_or(self.errors.resource)?;
+        }
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -941,7 +959,7 @@ impl FrontLowerQueries {
             if is_dictionary && !constants.iter().any(|(id, _)| *id == expression) {
                 constants.push((expression, value.clone()));
             }
-            return Ok(Value::Constant(value, constants));
+            return Ok(Value::Constant(Constants::new(value, constants)));
         }
         self.count(path, |work| work.lowerings += 1);
         let output = self.lowering.lower(
@@ -1203,7 +1221,13 @@ impl Source {
         site: Span,
     ) -> Result<(Materialized, Vec<(hirsel_syntax::ExprId, Materialized)>), QueryError> {
         match self.value(path, FRONT_EVALUATE_KIND, site).await? {
-            Value::Constant(v, c) => Ok((v, c)),
+            Value::Constant(value) => value
+                .decoded(
+                    &self.owner.records,
+                    &self.owner.anchors,
+                    self.owner.weight.scratch,
+                )
+                .ok_or(QueryError::NotImplemented),
             _ => Err(QueryError::NotImplemented),
         }
     }
@@ -1552,7 +1576,7 @@ mod retention_tests {
         let substitutions_bytes =
             substitutions.capacity() * std::mem::size_of::<(hirsel_syntax::ExprId, Materialized)>();
         let outcome = Outcome {
-            result: Ok(Value::Constant(
+            result: Ok(Value::Constant(Constants::new(
                 Materialized {
                     root: hirsel_tir::ValueNode {
                         ty: hirsel_types::TypeId::DANGLING,
@@ -1560,7 +1584,7 @@ mod retention_tests {
                     },
                 },
                 substitutions,
-            )),
+            ))),
             reads: Reads::from_vec(vec![(
                 ReadKey::Signature(DefId::intern(&DefPath::core(&"long".repeat(4096)))),
                 ContentHash::default(),

@@ -239,7 +239,7 @@ impl FrontLowerQueries {
                 bool,
             ) = self.records.decode(&self.anchors, &row.descriptor)?;
             (
-                Value::Constant(value, substitutions),
+                Value::Constant(Constants::new(value, substitutions)),
                 reads,
                 depth,
                 executed,
