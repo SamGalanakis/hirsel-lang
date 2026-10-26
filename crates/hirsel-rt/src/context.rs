@@ -308,6 +308,10 @@ pub(crate) struct RunShared {
     io_data: std::sync::atomic::AtomicPtr<std::ffi::c_void>,
     /// The bound Io binding's Path identities and launch arguments (`crate::paths`).
     pub(crate) names: Option<std::sync::Arc<crate::paths::Names>>,
+    /// Live private sealed control allocations, registered during preparation.
+    /// Check membership before dereferencing an opaque C owner, including after
+    /// release. Values bind the exact allocation generation within this run.
+    pub(crate) sealed_owners: std::sync::Mutex<crate::sealed_region::Owners>,
     pub(crate) region_owners:
         std::sync::Mutex<std::collections::BTreeMap<usize, crate::region::OwnerRecord>>,
     pub(crate) entry_result: RoleCell<Option<crate::exit_report::Returned>>,
@@ -985,6 +989,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         io_data: Default::default(),
         names: None,
         region_owners: Default::default(),
+        sealed_owners: Default::default(),
         entry_result: RoleCell::new(None),
         tasks: RoleCell::new(None),
         driver: RoleCell::new(crate::stop::Driver::default()),

@@ -15,8 +15,10 @@ use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod guard;
+mod owners;
 pub mod receipt;
 mod transaction;
+pub(crate) use owners::Owners;
 pub use transaction::{
     Block, BlockId, Charge, Error as SealError, Patch, Placement, Plan, Root, prepare_commit,
 };
@@ -106,6 +108,17 @@ impl<'ctx> PreparedSeal<'ctx> {
             extensions: None,
             shared: Vec::new(),
         });
+        // Registration can reserve metadata, so do it during private prepare,
+        // before the allocation-free publication point. Preparing owners still
+        // refuse reads; rollback removes this row without publishing anything.
+        ctx.run_ref()
+            .sealed_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(
+                (&*control as *const SealedRegion).expose_provenance(),
+                generation,
+            );
         Self {
             ctx,
             control: Some(control),
@@ -160,6 +173,12 @@ impl<'ctx> PreparedSeal<'ctx> {
 impl Drop for PreparedSeal<'_> {
     fn drop(&mut self) {
         if let Some(control) = &mut self.control {
+            self.ctx
+                .run_ref()
+                .sealed_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take_control((&**control as *const SealedRegion).addr());
             // These are staging acquisitions only. Source payload/guard and its
             // credits have not transferred and remain with entered-body cleanup.
             while let Some(root) = control.shared.pop() {
@@ -185,6 +204,104 @@ pub unsafe fn root(owner: *const SealedRegion) -> *const u8 {
     owner.root.data.as_ptr()
 }
 
+/// Move a freshly published Rust owner into the native opaque-handle domain.
+/// This changes metadata in place and cannot allocate after publication. Its
+/// never-reused generation identity is not a control or root address.
+///
+/// # Safety
+/// `ctx` belongs to the owner's live run; `owner` is the sole Published Rust
+/// owner with no active root loan. The caller gives up that Rust owner and must
+/// use the returned native handle exactly once for release.
+pub unsafe fn into_native_owner(
+    ctx: *mut TaskCtx,
+    owner: *mut SealedRegion,
+) -> *mut std::ffi::c_void {
+    unsafe {
+        let context = ctx
+            .as_ref()
+            .unwrap_or_else(|| fault("null sealed publication context"));
+        let mut registry = context
+            .run_ref()
+            .sealed_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let generation = registry.control(owner.addr());
+        let control = &*owner;
+        if control.generation != generation
+            || !ptr::eq(control.run, context.run_ref())
+            || control.state != State::Published
+        {
+            fault("sealed publication has no live owner");
+        }
+        std::ptr::without_provenance_mut(registry.publish(owner.addr()))
+    }
+}
+
+/// C boundary borrowing the typed root address. Neither the opaque input nor
+/// its returned view is an additional owner. The view expires with its loan.
+///
+/// # Safety
+/// `ctx` is current and exclusive in the owner's live run. `owner` is the
+/// native handle reserved by a validated exclusive call-bounded loan. The
+/// returned pointer must not be stored, transferred or used after that loan.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_sealed_root(
+    ctx: *mut TaskCtx,
+    owner: *const std::ffi::c_void,
+) -> *const u8 {
+    unsafe {
+        let context = ctx
+            .as_ref()
+            .unwrap_or_else(|| fault("null sealed read context"));
+        let (address, generation) = context
+            .run_ref()
+            .sealed_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .native(owner.addr());
+        let control = &*std::ptr::with_exposed_provenance::<SealedRegion>(address);
+        if control.generation != generation || !ptr::eq(control.run, context.run_ref()) {
+            fault("sealed owner generation or run mismatch");
+        }
+        root(control)
+    }
+}
+
+/// C boundary consuming the unique opaque native owner. Lookup and retirement
+/// precede dereferencing its control, including after allocator address reuse.
+///
+/// # Safety
+/// `ctx` is current and exclusive in the owner's live run; its sole native
+/// owner has no live root loan and is consumed exactly once.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_sealed_release(
+    ctx: *mut TaskCtx,
+    owner: *mut std::ffi::c_void,
+) {
+    if ctx.is_null() {
+        fault("null sealed release context");
+    }
+    // This semantic release owns its task through the existing root-release
+    // operations and allocator-home returns. Nested releases retain their policy.
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    unsafe {
+        let context = ctx
+            .as_ref()
+            .unwrap_or_else(|| fault("null sealed release context"));
+        let (address, generation) = context
+            .run_ref()
+            .sealed_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_native(owner.addr());
+        destroy_owner(
+            ctx,
+            std::ptr::with_exposed_provenance_mut(address),
+            generation,
+        );
+    }
+}
+
 /// Destroy all transferred obligations once, preserving repeated Shared credits.
 /// No allocation or user finalizer is introduced by this owner protocol.
 ///
@@ -194,7 +311,26 @@ pub unsafe fn root(owner: *const SealedRegion) -> *const u8 {
 pub unsafe fn drop_owner(ctx: *mut TaskCtx, owner: *mut SealedRegion) {
     // SAFETY: sole affine owner and exclusive current context are caller obligations.
     unsafe {
+        let context = ctx
+            .as_ref()
+            .unwrap_or_else(|| fault("null sealed release context"));
+        let generation = context
+            .run_ref()
+            .sealed_owners
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take_control(owner.addr());
+        destroy_owner(ctx, owner, generation);
+    }
+}
+
+/// The registry already retired exactly one owner in either domain.
+unsafe fn destroy_owner(ctx: *mut TaskCtx, owner: *mut SealedRegion, generation: u64) {
+    unsafe {
         let mut owner = Box::from_raw(owner);
+        if owner.generation != generation {
+            fault("sealed owner generation mismatch");
+        }
         if owner.state != State::Published {
             fault("sealed owner drop outside Published state");
         }

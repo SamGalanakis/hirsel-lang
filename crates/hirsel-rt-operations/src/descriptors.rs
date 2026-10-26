@@ -911,6 +911,10 @@ pub const ENTRIES: &[Entry] = &[
     // operation, source credit, task context or user finalizer.
     entry("hirsel_rt_v2_receipt_retain", Concurrent),
     entry("hirsel_rt_v2_receipt_release", Concurrent),
+    // Native sealed reads borrow a live owner. Releasing it follows the exact
+    // existing Shared-root release policy for each retained occurrence.
+    entry("hirsel_rt_v2_sealed_root", Concurrent),
+    ops("hirsel_rt_v2_sealed_release", &["root.release"]),
     // roots.rs: increments commute; releases can free counted frozen storage.
     entry("hirsel_rt_v2_root_dup", Concurrent),
     ops("hirsel_rt_v2_root_release", &["root.release"]),

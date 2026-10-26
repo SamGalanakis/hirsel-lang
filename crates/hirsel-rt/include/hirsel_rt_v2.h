@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 70
+#define HIRSEL_RT_V2_ABI_VERSION 71
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -638,6 +638,11 @@ void hirsel_rt_v2_root_release(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block
  * Both are mechanical NoAlloc helpers with no language failure or user code. */
 void hirsel_rt_v2_receipt_retain(void *receipt);
 void hirsel_rt_v2_receipt_release(void *receipt);
+/* Affine sealed owners (ABI 71): read borrows an owner reserved by the
+ * compiler-validated exclusive loan; release consumes its sole owner.
+ * Both require the owner's live run. No language credit is duplicated. */
+const void *hirsel_rt_v2_sealed_root(hirsel_rt_v2_ctx *ctx, const void *owner);
+void hirsel_rt_v2_sealed_release(hirsel_rt_v2_ctx *ctx, void *owner);
 uint8_t hirsel_rt_v2_root_drop(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *block, uint64_t anchor, uint64_t operation_site);
 
 /* Finalizers. */

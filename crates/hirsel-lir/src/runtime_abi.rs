@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 70;
+pub const ABI_VERSION: u32 = 71;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -581,6 +581,8 @@ pub enum RuntimeEntry {
     HostDefer,
     ReceiptRetain,
     ReceiptRelease,
+    SealedRoot,
+    SealedRelease,
     /// A resumable frame reached a boundary with its live state materialized: proceed
     /// with the boundary call (0) or return `STATUS_SUSPENDED` (1). The state argument
     /// carries [`RESUME_HINTS`] for an operation a non-head can issue.
@@ -662,7 +664,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 96] = [
+    pub const ALL: [RuntimeEntry; 98] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -758,6 +760,8 @@ impl RuntimeEntry {
         Self::ResumeRun,
         Self::ReceiptRetain,
         Self::ReceiptRelease,
+        Self::SealedRoot,
+        Self::SealedRelease,
         Self::HoleClose,
     ];
 
@@ -825,6 +829,16 @@ impl RuntimeEntry {
                 "hirsel_rt_v2_receipt_release",
                 VOID,
                 const { &[p("receipt", ptr(N::Void, 1))] },
+            ),
+            Self::SealedRoot => (
+                "hirsel_rt_v2_sealed_root",
+                cptr(N::Void),
+                const { &[CTX, p("owner", cptr(N::Void))] },
+            ),
+            Self::SealedRelease => (
+                "hirsel_rt_v2_sealed_release",
+                VOID,
+                const { &[CTX, p("owner", ptr(N::Void, 1))] },
             ),
             Self::AbiVersion => ("hirsel_rt_v2_abi_version", U32, const { &[] }),
             Self::CtxCreate => (
@@ -1521,6 +1535,8 @@ snapshot_enum!(RuntimeEntry {
     HostDefer,
     ReceiptRetain,
     ReceiptRelease,
+    SealedRoot,
+    SealedRelease,
     ResumePoint,
     ResumeRun,
     HoleClose,
