@@ -17,6 +17,7 @@ mod durability;
 mod env;
 mod file_faults;
 mod filesystem;
+mod input;
 mod net;
 mod numeric;
 mod process;
@@ -26,6 +27,7 @@ mod signals;
 /// logical handles numbered as the runtime's adapter numbers them.
 #[derive(Clone)]
 struct Io {
+    stdin: std::io::Cursor<Vec<u8>>,
     args: Vec<String>,
     file_reads: hirsel_run_schema::FileReadiness,
     file_faults: hirsel_run_schema::FileFaults,
@@ -101,6 +103,7 @@ impl Io {
             .map_err(|e| NativeError::new(StageName::Heap, e))?;
         let mut io = Self::new();
         io.args = world.args.clone();
+        io.stdin = std::io::Cursor::new(world.stdin.clone());
         io.mounts = world.mounts.clone();
         let tree = hirsel_rt::io::Tree::fixture(world.files.clone(), world.mounts.clone())
             .map_err(|e| NativeError::new(StageName::Launch, e.to_string()))?;
@@ -141,6 +144,7 @@ impl Io {
     }
     fn new() -> Self {
         Self {
+            stdin: std::io::Cursor::new(vec![]),
             args: vec![],
             file_reads: Default::default(),
             file_faults: Default::default(),
@@ -884,13 +888,7 @@ impl Io {
                         }),
                     }
                 } else {
-                    return Some(OpOutcome::Updated {
-                        value: io_ok(OpValue::Bits {
-                            scalar: ScalarKind::U64,
-                            bits: 0,
-                        }),
-                        arguments: vec![(1, buffer.clone())],
-                    });
+                    return Some(self.read_input(buffer, *max));
                 }
             }
             (Some("err"), "print" | "write", [OpValue::Handle(stream), OpValue::Bytes(_)]) => {
@@ -2280,6 +2278,8 @@ fn observation(
 /// What a launch grants H's model beyond its entry's handles.
 #[derive(Clone, Debug)]
 pub struct HeapWorld {
+    /// Shared bounded input stream, followed by EOF, as in SimulationConfig.
+    pub stdin: Vec<u8>,
     pub args: Vec<String>,
     pub files: BTreeMap<String, Vec<u8>>,
     pub mounts: BTreeMap<String, Access>,
@@ -2306,6 +2306,7 @@ pub struct HeapWorld {
 impl Default for HeapWorld {
     fn default() -> Self {
         Self {
+            stdin: vec![],
             args: vec![],
             files: Default::default(),
             mounts: hirsel_engine::SimulationConfig::default().mounts,

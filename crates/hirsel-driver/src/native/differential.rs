@@ -491,6 +491,7 @@ pub fn differential_in(
     fixture: &Fixture,
 ) -> Vec<(String, Outcome)> {
     let world = super::HeapWorld {
+        stdin: fixture.stdin.clone(),
         args: fixture.args.clone(),
         files: fixture.files.clone(),
         mounts: fixture.mounts.clone(),
