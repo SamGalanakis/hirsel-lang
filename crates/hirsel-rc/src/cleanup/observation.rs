@@ -103,9 +103,13 @@ impl Reporter for Observations {
     fn inserted(&mut self, insertions: &[(BlockId, usize)]) -> Result<(), PassError> {
         for row in &mut self.plan.observations {
             let at = match &mut row.point {
-                Point::Instruction { block, index, .. } | Point::ReleaseDrop { block, index } => {
-                    Some((block, index))
-                }
+                Point::Instruction { block, index, .. }
+                | Point::ReleaseDrop { block, index }
+                | Point::CompoundDrop {
+                    normal: block,
+                    index,
+                    ..
+                } => Some((block, index)),
                 _ => None,
             };
             if let Some((block, index)) = at {
@@ -184,6 +188,17 @@ impl Reporter for Observations {
                     block,
                     index: shift(block, index)?,
                 },
+                Point::CompoundDrop {
+                    block,
+                    normal,
+                    index,
+                    failure,
+                } => Point::CompoundDrop {
+                    block,
+                    normal,
+                    index: shift(normal, index)?,
+                    failure,
+                },
                 _ => point,
             })
         };
@@ -221,6 +236,34 @@ impl Reporter for Observations {
                 Point::Return(b) if b == block => Point::Return(tail),
                 Point::CallEntered(b) if b == block => Point::CallEntered(tail),
                 Point::CallReturned(b) if b == block => Point::CallReturned(tail),
+                Point::CompoundDrop {
+                    block: entry,
+                    normal,
+                    index: cut,
+                    failure,
+                } => {
+                    let shifted = inserted(observation.point)?;
+                    let Point::CompoundDrop {
+                        index: shifted_cut, ..
+                    } = shifted
+                    else {
+                        unreachable!()
+                    };
+                    Point::CompoundDrop {
+                        block: if entry == block { tail } else { entry },
+                        normal: if normal == block && cut as usize > index {
+                            tail
+                        } else {
+                            normal
+                        },
+                        index: if normal == block && cut as usize > index {
+                            relocate(cut)
+                        } else {
+                            shifted_cut
+                        },
+                        failure: if failure == block { tail } else { failure },
+                    }
+                }
                 Point::FinalizerDrop { block: b } if b == block => {
                     Point::FinalizerDrop { block: tail }
                 }

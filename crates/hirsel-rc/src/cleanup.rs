@@ -1598,6 +1598,16 @@ impl Lowering<'_, '_> {
                 whole_finalizer
                     .then_some(hirsel_lir::ownership_trace::Point::FinalizerDrop { block: b })
             });
+        let release = release.or_else(|| {
+            (!actions.is_empty() && !whole_release && !whole_finalizer).then_some(
+                hirsel_lir::ownership_trace::Point::CompoundDrop {
+                    block: b,
+                    normal: at,
+                    index: self.ed.code[at.index()].len() as u32,
+                    failure: self.ed.unit.tables.edges[site.failure.cleanup.index()].target,
+                },
+            )
+        });
         report.splice(observation::Splice {
             block: b,
             index: i,

@@ -26,10 +26,11 @@ use std::collections::BTreeMap;
 
 mod check;
 pub use check::{check, check_transform};
+mod compound;
 mod finalizer;
 pub mod native;
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -125,6 +126,15 @@ pub enum Point {
     FinalizerDrop {
         block: BlockId,
     },
+    /// One semantic aggregate drop, with exact normal/failure cleanup cuts.
+    /// Each descendant retirement is an actual finalizer completion; the
+    /// aggregate shell never invents a Resource identity or descendant drop.
+    CompoundDrop {
+        block: BlockId,
+        normal: BlockId,
+        index: u32,
+        failure: BlockId,
+    },
 }
 snapshot_enum!(Point {
     Entry,
@@ -134,7 +144,8 @@ snapshot_enum!(Point {
     CallReturned(block),
     Return(block),
     ReleaseDrop { block, index },
-    FinalizerDrop { block }
+    FinalizerDrop { block },
+    CompoundDrop { block, normal, index, failure }
 });
 
 /// At Create/Drop `token == owner`. At Move `token` is the previous shadow
@@ -255,6 +266,20 @@ impl<'a> CheckedPlan<'a> {
                     return Err(Error::InvalidBinding(id));
                 };
                 finalizer::exits(unit, block, address).ok_or(Error::InvalidBinding(id))
+            }
+            Point::CompoundDrop { .. } => {
+                let Location::Address(address) = observation.marker.token else {
+                    return Err(Error::InvalidBinding(id));
+                };
+                let parts = compound::parts(unit, observation.point, address)
+                    .ok_or(Error::InvalidBinding(id))?;
+                let mut commits = Vec::new();
+                for (block, address) in parts {
+                    commits.extend(
+                        finalizer::exits(unit, block, address).ok_or(Error::InvalidBinding(id))?,
+                    );
+                }
+                Ok(commits)
             }
             Point::ReleaseDrop { block, index } => Ok(vec![Point::Instruction {
                 block,

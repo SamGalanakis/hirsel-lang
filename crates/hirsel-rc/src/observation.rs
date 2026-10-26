@@ -70,6 +70,25 @@ pub(crate) fn finish<A: Stage, B: Stage>(
                 Point::CallEntered(block) => Point::CallEntered(remap_block(block)?),
                 Point::CallReturned(block) => Point::CallReturned(remap_block(block)?),
                 Point::Return(block) => Point::Return(remap_block(block)?),
+                Point::CompoundDrop {
+                    block,
+                    normal,
+                    index,
+                    failure,
+                } => Point::CompoundDrop {
+                    block: remap_block(block)?,
+                    normal: remap_block(normal)?,
+                    index: if index == before.blocks[normal.index()].instructions.len {
+                        origins[normal.index()].len() as u32
+                    } else {
+                        origins[normal.index()]
+                            .iter()
+                            .position(|origin| *origin == Some(index))
+                            .ok_or("ownership trace: lost compound cleanup cut")?
+                            as u32
+                    },
+                    failure: remap_block(failure)?,
+                },
                 Point::FinalizerDrop { block } => Point::FinalizerDrop {
                     block: remap_block(block)?,
                 },

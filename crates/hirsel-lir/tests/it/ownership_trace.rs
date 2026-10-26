@@ -3259,3 +3259,163 @@ fn ownership_trace_nested_source_construction_transfers_fields_without_a_shell_t
         "Ready refuses until nested physical retirements can be observed"
     );
 }
+
+#[test]
+fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_finalizers() {
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep};
+    let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
+    let pair = &mut t.table.layouts[l::PAIR.0 as usize];
+    pair.fields[0].layout = l::RES;
+    pair.fields[1].layout = l::RES;
+    pair.copy = CopyRecipe::NotCopyable;
+    pair.drop = vec![
+        DropStep::Child {
+            offset: 8,
+            layout: l::RES,
+        },
+        DropStep::Child {
+            offset: 0,
+            layout: l::RES,
+        },
+    ];
+    pair.scan.clear();
+    let abi = t.abi(&[(Passing::Borrow, l::RES)], None);
+    let slot = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(ENTRY, slot, &[], &[support::Undo::Drop(slot)]);
+    let anchor = t.cleanup_anchor();
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Drop {
+            address,
+            if_live: false,
+            anchor,
+            failure,
+        },
+    );
+    t.builder.push(
+        ENTRY,
+        Inst::StorageDead {
+            slot,
+            if_live: false,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table).into_raw();
+    let index = unit.blocks[0]
+        .instructions
+        .get(&unit.instructions)
+        .unwrap()
+        .iter()
+        .position(|instruction| matches!(instruction, Inst::Drop { .. }))
+        .unwrap() as u32;
+    let plan = Plan::new(
+        &unit,
+        vec![Observation {
+            point: Point::Instruction {
+                block: ENTRY,
+                index,
+                moment: Moment::Before,
+            },
+            marker: ObserveOwnership {
+                id: MarkerId(0),
+                kind: Kind::Drop,
+                site: unit.tables.cleanup_anchors[anchor.index()].site,
+                token: Location::Address(address),
+                owner: Location::Address(address),
+            },
+        }],
+    );
+    let finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
+        l::RES,
+        hirsel_rc::cleanup::Finalizer {
+            origin: UnitOrigin::Source,
+            definition: support::path("Res"),
+            instance: support::hash("Res.drop"),
+            abi,
+        },
+    )]));
+    let (after, output, _) = hirsel_rc::cleanup::lower_observed(
+        unit,
+        &finalizers,
+        &hirsel_lir::LayoutIndex::new(&table),
+        &plan,
+    )
+    .unwrap();
+    let after = checked_native_fixture(after, &table);
+    assert_eq!(output.observations.len(), 1);
+    assert_eq!(output.observations[0].marker, plan.observations[0].marker);
+    assert!(matches!(
+        output.observations[0].point,
+        Point::CompoundDrop { .. }
+    ));
+    let checked = check(after.unit(), &output).unwrap();
+    let commits = checked.commits(after.unit(), MarkerId(0)).unwrap();
+    assert!(
+        commits.len() >= 6,
+        "both children retain all exclusive completion paths: {commits:?}"
+    );
+    for point in commits {
+        let Point::Instruction {
+            block,
+            index,
+            moment: Moment::After,
+        } = point
+        else {
+            panic!("not an actual completion")
+        };
+        assert!(matches!(
+            after.unit().blocks[block.index()]
+                .instructions
+                .get(&after.unit().instructions)
+                .unwrap()[index as usize],
+            Inst::FinalizeEnd { .. }
+        ));
+    }
+    let mut forged = output.clone();
+    let Point::CompoundDrop {
+        normal, failure, ..
+    } = &mut forged.observations[0].point
+    else {
+        unreachable!()
+    };
+    *failure = *normal;
+    assert!(check(after.unit(), &forged).is_err());
+
+    let mut prefix_only = output.clone();
+    let first_end = checked.commits(after.unit(), MarkerId(0)).unwrap()[0];
+    let Point::Instruction { block, index, .. } = first_end else {
+        unreachable!()
+    };
+    if let Point::CompoundDrop {
+        normal, index: cut, ..
+    } = &mut prefix_only.observations[0].point
+    {
+        *normal = block;
+        *cut = index + 1;
+    }
+    assert!(
+        check(after.unit(), &prefix_only).is_err(),
+        "a checked prefix cannot omit the other child"
+    );
+
+    let mut missing = after.into_raw();
+    let end = missing
+        .instructions
+        .iter_mut()
+        .find(|instruction| {
+            matches!(instruction,
+        Inst::FinalizeEnd { anchor: action, .. } if *action == anchor)
+        })
+        .unwrap();
+    *end = Inst::FrameLeave;
+    let mut missing_plan = output;
+    missing_plan.unit = missing.digest();
+    assert!(
+        check(&missing, &missing_plan).is_err(),
+        "a missing physical completion cannot be inferred"
+    );
+}

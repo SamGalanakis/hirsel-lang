@@ -103,7 +103,7 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
         let replacement = (new.marker.kind == Kind::Drop)
             .then(|| drop_form(after, new.point))
             .flatten();
-        if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2))) {
+        if form != replacement && !(form == Some(0) && matches!(replacement, Some(1 | 2 | 3))) {
             return Err(Error::InvalidTransport(id));
         }
         if old.marker.kind == Kind::Move && !edge_transport(before, old.point, after, new.point) {
@@ -492,6 +492,10 @@ fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<boo
                 Inst::Release { value, live: MaskRef::All, .. },
             ]) if result == value && same(Drop, Address(*address)))
         }
+        Point::CompoundDrop { .. } => {
+            matches!(tuple, (Drop, Address(address), Address(owner)) if address == owner
+                && super::compound::parts(unit, observation.point, address).is_some())
+        }
         Point::FinalizerDrop { block } if m.kind == Move => {
             let Location::Value(parameter) = m.owner else { return Ok(false) };
             let Some(edges) = super::finalizer::failure_edges(unit, block, parameter) else { return Ok(false) };
@@ -562,6 +566,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
     let block_site = |b: BlockId| source(unit.blocks.get(b.index())?.anchor);
     match point {
         Point::Entry => block_site(unit.entry),
+        Point::CompoundDrop { block, .. } => cleanup(super::finalizer::begin(unit, block)?.1),
         Point::FinalizerDrop { block } => {
             // Drop markers use the cleanup action. Failure-join Move markers
             // retain the recipient block's source, as their original edge did.
@@ -602,7 +607,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
 // Exact cleanup identity is stricter than equal source ranges: two actions of
 // one source statement may have the same span and still name different drops.
 fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
-    if let Point::FinalizerDrop { block } = point {
+    if let Point::FinalizerDrop { block } | Point::CompoundDrop { block, .. } = point {
         let (_, anchor) = super::finalizer::begin(unit, block)?;
         return unit.tables.cleanup_anchors.get(anchor.index());
     }
@@ -659,6 +664,7 @@ fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
     match point {
         Point::ReleaseDrop { .. } => Some(1),
         Point::FinalizerDrop { .. } => Some(2),
+        Point::CompoundDrop { .. } => Some(3),
         Point::Instruction {
             block,
             index,
