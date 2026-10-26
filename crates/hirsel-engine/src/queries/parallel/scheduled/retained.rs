@@ -86,6 +86,10 @@ fn metadata_inner(
     if let Err(error) = &outcome.result {
         weight.error(error);
     }
+    if let Ok(output) = &outcome.result {
+        weight.vec(&output.diagnostics, Weight::diagnostic);
+        weight.add(lowering::LoweringUse::capture_bytes(&output.value.typed));
+    }
     weight.reads(&outcome.reads);
     weight.vec(&outcome.diagnostic_phases, |w, (diagnostic, phase)| {
         w.diagnostic(diagnostic);
