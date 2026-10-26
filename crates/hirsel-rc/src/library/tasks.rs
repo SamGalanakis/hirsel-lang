@@ -614,6 +614,9 @@ fn join_handle(
     let (slot, address) = local(&mut b, none)?;
     let size = b.u64(size)?;
     let failure = b.failure(None);
+    // The retained Option image is lent exclusively to TaskJoin. End this
+    // exact loan on both outcomes before inspecting or releasing the image.
+    let (_, result_loan) = b.borrow(address, true)?;
     let callee = operation(&mut b, entry);
     let arguments = vec![
         argument(0, Passing::Borrow, s),
@@ -626,7 +629,7 @@ fn join_handle(
         callee,
         entry.abi,
         arguments,
-        &[],
+        &[result_loan],
         failure,
         BlockKind::Body,
     );
