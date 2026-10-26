@@ -1,7 +1,7 @@
 //! Head-owned host operations. A parked request retains its original ordinal.
 use super::super::*;
 use super::engine;
-use crate::ordered::Next;
+use crate::ordered::{Next, Progress};
 
 pub(crate) mod concurrent;
 
@@ -110,6 +110,17 @@ pub(crate) fn begin(ctx: *mut TaskCtx, close: bool) -> Stopped<()> {
 }
 
 pub(crate) fn finish(ctx: *mut TaskCtx, next: Next) -> Stopped<()> {
+    let (progress, private) = finish_start(ctx, next)?;
+    if private {
+        engine::continue_after_read(ctx, progress)
+    } else {
+        engine::continue_at_head(ctx, progress)
+    }
+}
+
+/// Commit the finish once, leaving its continuation to the owning operation.
+/// Retirement polls still run to completion on their normal stackful owner.
+pub(super) fn finish_start(ctx: *mut TaskCtx, next: Next) -> Stopped<(Progress, bool)> {
     engine::at_head(ctx)?;
     let task = engine::current(ctx);
     assert!(engine::with_driver(ctx, |d| d
@@ -117,11 +128,8 @@ pub(crate) fn finish(ctx: *mut TaskCtx, next: Next) -> Stopped<()> {
         .remove(&task)
         .is_some()));
     let (_, progress) = engine::head_continuation(ctx, || ((), next))?;
-    if engine::with_driver(ctx, |d| d.bounded_reads.remove(&task)) && tail_enabled(ctx) {
-        engine::continue_after_read(ctx, progress)
-    } else {
-        engine::continue_at_head(ctx, progress)
-    }
+    let private = engine::with_driver(ctx, |d| d.bounded_reads.remove(&task)) && tail_enabled(ctx);
+    Ok((progress, private))
 }
 
 /// Record the bounded read's owned outcome before its canonical finish yields.

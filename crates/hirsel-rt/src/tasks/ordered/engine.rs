@@ -916,14 +916,12 @@ pub(super) fn reserve_host_poll(ctx: *mut TaskCtx, progress: Progress) {
 
 /// Save only the physical frame while a blocking file job owns the logical
 /// head. Home clears the job gate on completion; no retirement or poll occurs.
-pub(super) fn wait_host_job(ctx: *mut TaskCtx, token: u64) -> Stopped<()> {
+pub(super) fn begin_host_job(ctx: *mut TaskCtx, token: u64) {
     let task = current(ctx);
     with_driver(ctx, |d| {
         assert!(d.head_ready(task));
         assert!(d.head_job.replace((task, token)).is_none());
     });
-    suspend(ctx, task, true);
-    at_head(ctx)
 }
 
 /// The owning runtime entry keeps its carriers live while a pending command

@@ -70,6 +70,13 @@ fn with_operation<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut super::driver::Drive
     }
 }
 
+/// Already-entered phase bookkeeping must not observe a terminal cut before
+/// the effect's owned evidence has been recorded. This is an identity read,
+/// not another semantic entry; the calling phase chooses its next stop gate.
+pub(super) fn identity(ctx: *mut TaskCtx) -> u64 {
+    with_operation(ctx, |_, task| task)
+}
+
 pub(super) fn start(ctx: *mut TaskCtx, operation: Operation) {
     with_operation(ctx, |d, task| {
         assert!(
@@ -82,6 +89,20 @@ pub(super) fn start(ctx: *mut TaskCtx, operation: Operation) {
 pub(super) fn finish(ctx: *mut TaskCtx) {
     with_operation(ctx, |d, task| {
         assert!(d.in_operations.remove(&task).is_some());
+    });
+}
+
+/// Arm the reserved park continuation only after the original request moved
+/// into its wait row. The reservation predates begin and every adapter effect.
+pub(super) fn set_host_wait(ctx: *mut TaskCtx, token: u64, yielded: bool) {
+    with_operation(ctx, |d, task| {
+        let Operation::Host(host) = d.in_operations.get_mut(&task).unwrap() else {
+            unreachable!("host continuation identity")
+        };
+        assert_eq!(host.phase, HostPhase::Begin);
+        assert_eq!(host.token, 0);
+        host.token = token;
+        host.yielded = yielded;
     });
 }
 

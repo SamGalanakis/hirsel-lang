@@ -26,6 +26,7 @@ type Discovered = Result<Discovery, &'static str>;
 /// Request/result storage outlives a saved Rust continuation. Abandoning its
 /// fiber drops this owner with TaskCtx, rather than leaking a stack local.
 pub(crate) struct Pending {
+    invocation: Option<service::drive::Invocation>,
     request: Option<Request>,
     result: Option<Result<Completion, AdapterError>>,
 }
@@ -52,6 +53,7 @@ impl HomeRequest {
             assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
             unsafe {
                 (*ctx).pending_ordered_host = Some(Box::new(Pending {
+                    invocation: None,
                     request: Some(request),
                     result: None,
                 }))
@@ -169,6 +171,7 @@ pub(crate) unsafe fn finish_home(
     assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
     unsafe {
         (*ctx).pending_ordered_host = Some(Box::new(Pending {
+            invocation: None,
             request: None,
             result: completion.ok().map(Ok),
         }))
@@ -206,6 +209,7 @@ pub(crate) unsafe fn request(
     assert!(unsafe { (*ctx).pending_ordered_host.is_none() });
     unsafe {
         (*ctx).pending_ordered_host = Some(Box::new(Pending {
+            invocation: None,
             request: Some(request),
             result: None,
         }));
