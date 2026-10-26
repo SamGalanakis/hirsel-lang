@@ -70,6 +70,47 @@ fn checked(output: &crate::requests::CompileOutput) -> &hirsel_engine::CheckOutp
 }
 
 #[test]
+fn checked_product_requests_record_private_layout_reads_as_the_cold_receipt_does() {
+    hirsel_engine::with_compiler_stack(|| {
+        let (_directory, entry, source) = fixture();
+        // std@1/adler32's in-place update of its opaque state.
+        std::fs::write(
+            &source,
+            "pub opaque type State: plain + inert uses {} {\n  a: u32,\n  b: u32,\n}\n\
+             const MOD: u32 = 65521\nconst NMAX: u64 = 5552\n\
+             @noalloc\npub fn new() -> State uses {} {\n  State(a: 1, b: 0)\n}\n\
+             @noalloc\npub fn update(mut state: State, data: Bytes) -> () uses {} {\n\
+             let len = core@1/bytes.len(data)\nlet mut a = state.a\nlet mut b = state.b\nlet mut i: u64 = 0\n\
+             while i < len {\nlet mut end = i + NMAX\nif end > len {\nend = len\n}\n\
+             while i < end {\nlet byte: u32 = core@1/int.widen(data[i])\na += byte\nb += a\ni += 1\n}\n\
+             a %= MOD\nb %= MOD\n}\nstate.a = a\nstate.b = b\n}\n\
+             pub fn main()->u64{1}\n",
+        )
+        .unwrap();
+        let mut selected = request(&entry);
+        selected.operation = CompileOperation::CheckedProducts {
+            lowering: LoweringPolicy::Comptime,
+            canonical: true,
+        };
+        let mut host = Host::new(CompilerRequests::for_host(crate::COMPILER, config()));
+        let output = host.request(&selected).unwrap().wait().unwrap();
+        let CompileResult::CheckedProducts { products, .. } = &output.result else {
+            panic!("checked-products root returned another operation")
+        };
+        let mut cold = crate::COMPILER
+            .with_config(config())
+            .with_owned_engines()
+            .load_program(&entry)
+            .unwrap();
+        cold.check(LoweringPolicy::Comptime).unwrap();
+        let expected = cold.engine.checked_products(&cold.entry).unwrap();
+        assert_eq!(products.canonical, expected.canonical);
+        assert_eq!(products.canonical_reads(), expected.canonical_reads());
+        assert_eq!(products.digest, expected.digest);
+    });
+}
+
+#[test]
 fn checked_product_requests_match_the_cold_receipt_with_and_without_text() {
     hirsel_engine::with_compiler_stack(|| {
         let (_directory, entry, _source) = fixture();

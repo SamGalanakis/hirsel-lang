@@ -210,6 +210,9 @@ impl FrontLowerOutput {
 }
 pub struct FrontLowerQueries {
     inputs: BTreeMap<DefPath, Input>,
+    /// Implementation hashes of the opaque types a lowered body can read the
+    /// private representation of: its LayoutBody inputs.
+    layouts: BTreeMap<DefId, ContentHash>,
     front: Arc<FrontBodyQueries>,
     snapshot: Arc<SignatureSnapshot>,
     memo: Arc<hirsel_types::TypeMemo>,
@@ -799,6 +802,15 @@ impl FrontLowerQueries {
             .outcome(reference)
             .ok_or_else(|| source.refused(selected.err().unwrap_or(self.errors.protocol)))?;
         source.merge(&body.outcome.reads);
+        // As a materialization of the checked body, Lower also depends on the
+        // private shapes that body read, beyond their representation digests.
+        for (read, _) in body.outcome.reads.iter() {
+            if let ReadKey::Representation(id) = read
+                && let Some(hash) = self.layouts.get(id)
+            {
+                source.record(ReadKey::LayoutBody(*id), memos::optional(Some(*hash)));
+            }
+        }
         let analyzed = body.outcome.result?;
         source.execution_signatures(analyzed.dependencies.iter());
         let signature = source.signature(path)?;
@@ -1425,9 +1437,27 @@ impl QueryEngine {
             );
         }
         let snapshot = self.signature_inputs();
+        let packages: std::collections::BTreeSet<_> =
+            definitions.iter().map(|path| &path.0.package).collect();
+        let layouts: BTreeMap<_, _> = snapshot
+            .opaque_definitions()
+            .filter(|id| packages.contains(&id.path().0.package))
+            .filter_map(|id| Some((id, self.implementation_hash(id.path())?)))
+            .collect();
+        let layout_bytes = (layouts.len() as u64)
+            .checked_mul(
+                (std::mem::size_of::<(DefId, ContentHash)>() + 6 * std::mem::size_of::<usize>())
+                    as u64,
+            )
+            .ok_or_else(refusal)?;
+        {
+            let mut retention = retention.lock().unwrap_or_else(|e| e.into_inner());
+            *retention = retention.checked_sub(layout_bytes).ok_or_else(refusal)?;
+        }
         let runtime = self.comptime_runtime_types()?;
         Ok(Arc::new(FrontLowerQueries {
             inputs,
+            layouts,
             front,
             snapshot,
             memo: self.memo.clone(),

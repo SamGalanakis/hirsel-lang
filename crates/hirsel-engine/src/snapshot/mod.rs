@@ -376,6 +376,16 @@ impl SignatureSnapshot {
             _ => self.signature(d),
         }
     }
+    /// Every public opaque definition: what a body of its own package reads
+    /// the private representation of.
+    pub(crate) fn opaque_definitions(&self) -> impl Iterator<Item = DefId> + '_ {
+        self.signatures.iter().filter_map(|(d, signature)| {
+            signature
+                .as_ref()
+                .is_ok_and(|s| s.metadata.visibility == hirsel_syntax::Visibility::PublicOpaque)
+                .then_some(*d)
+        })
+    }
     /// `d`'s view in its own package (an opaque type's private view) with
     /// V's digest of it: what compile-time reflection of `d` reads.
     pub fn representation(
