@@ -239,11 +239,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         // Walk declares this only when a reached drop step needs it. Keep empty-demand
         // modules free of receipt imports, including ordinary compiled drop glue.
-        if self
-            .module
-            .declares(RuntimeEntry::ReceiptRelease.declaration().symbol)
-        {
-            self.runtime(RuntimeEntry::ReceiptRelease)?;
+        for entry in [RuntimeEntry::ReceiptRelease, RuntimeEntry::SealedRelease] {
+            if self.module.declares(entry.declaration().symbol) {
+                self.runtime(entry)?;
+            }
         }
         Ok(self.builder.load(i8_ty, status, 1))
     }

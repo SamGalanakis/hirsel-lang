@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 71;
+pub const ABI_VERSION: u32 = 72;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -222,7 +222,7 @@ pub const REGION_RECORD_BYTES: u64 = 64;
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
-pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 17;
+pub const LAYOUT_DESCRIPTOR_VERSION: u32 = 18;
 /// The finalizer belongs to an `unsafe ffi` package: its failure terminates (FAIL-3).
 pub const LAYOUT_UNSAFE_FFI: u32 = 1;
 /// The size is dynamic; the descriptor's size is the extent every value has.
@@ -291,6 +291,8 @@ pub const STEP_RELEASE_ROOT: u32 = 11;
 pub const STEP_END_FINALIZE: u32 = 12;
 /// Consume one private semantic metadata holder, independently of language credits.
 pub const STEP_RELEASE_RECEIPT: u32 = 13;
+/// Consume one opaque affine sealed owner, including its storage and Shared credits.
+pub const STEP_RELEASE_SEALED: u32 = 14;
 /// The finalizer is compiler implementation cleanup, adding no invocation itself.
 pub const LAYOUT_IMPLEMENTATION_FINALIZER: u32 = 4096;
 /// Step bits of the logical dead cursor; wide programs preserve forty mixed-radix

@@ -45,7 +45,8 @@ use crate::layout_types::{
 use crate::runtime_abi::{
     LAYOUT_DYNAMIC, LAYOUT_NO_EXTENT, LAYOUT_UNSAFE_FFI, NO_OFFSET, STEP_CLOSE_HANDLE, STEP_COLUMN,
     STEP_CURSOR_BITS, STEP_FINALIZE, STEP_LIVE_BIT, STEP_LOOP, STEP_NONNULL, STEP_RELEASE,
-    STEP_RELEASE_LAST, STEP_RELEASE_RECEIPT, STEP_RELEASE_ROOT, STEP_TAG, STEP_THAW, WHOLE_VALUE,
+    STEP_RELEASE_LAST, STEP_RELEASE_RECEIPT, STEP_RELEASE_ROOT, STEP_RELEASE_SEALED, STEP_TAG,
+    STEP_THAW, WHOLE_VALUE,
 };
 
 /// Whether `record`'s arena blocks omit the extent before their header ([`LAYOUT_NO_EXTENT`]):
@@ -93,6 +94,8 @@ pub enum StepKind {
     ReleaseRoot,
     /// Consume a private semantic metadata holder without language ownership effects.
     ReleaseReceipt,
+    /// Consume one affine sealed owner through its independent runtime identity.
+    ReleaseSealed,
 }
 
 impl StepKind {
@@ -111,6 +114,7 @@ impl StepKind {
             Self::Thaw => STEP_THAW,
             Self::ReleaseRoot => STEP_RELEASE_ROOT,
             Self::ReleaseReceipt => STEP_RELEASE_RECEIPT,
+            Self::ReleaseSealed => STEP_RELEASE_SEALED,
         }
     }
 }
@@ -926,8 +930,8 @@ impl Lower<'_> {
                     // Descriptor v15: release stride 24 marks a String/Bytes triple.
                     self.steps[step].stride = if slice { 24 } else { 0 };
                 }
-                DropStep::ReleaseSealed { .. } => {
-                    return malformed("sealed owner runtime drop is not linked");
+                DropStep::ReleaseSealed { offset } => {
+                    self.push(StepKind::ReleaseSealed, at + offset);
                 }
                 DropStep::ReleaseReceipt { offset } => {
                     self.push(StepKind::ReleaseReceipt, at + offset);

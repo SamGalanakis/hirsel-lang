@@ -404,3 +404,5 @@ fn native_sealed_access_33_real_c_same_address_stale_read_and_release_bad() {
         assert_eq!(stats(ctx).live_blocks, 0);
     });
 }
+
+mod drop_tests;

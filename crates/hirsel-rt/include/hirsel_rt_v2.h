@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 71
+#define HIRSEL_RT_V2_ABI_VERSION 72
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -168,7 +168,7 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
  * LayoutRecord drop program to it). Step offsets are from the enclosing frame's base: the value,
  * a loop's element, or a column's element. */
 #define HIRSEL_RT_V2_LAYOUT_MAGIC 0x484e4c31u
-#define HIRSEL_RT_V2_LAYOUT_VERSION 17
+#define HIRSEL_RT_V2_LAYOUT_VERSION 18
 #define HIRSEL_RT_V2_LAYOUT_UNSAFE_FFI 1
 #define HIRSEL_RT_V2_LAYOUT_DYNAMIC 2
 #define HIRSEL_RT_V2_LAYOUT_WIDE_CURSOR 4
@@ -223,6 +223,8 @@ _Static_assert(HIRSEL_RT_V2_PAGE_XTHREAD_FREE_OFFSET == HIRSEL_RT_V2_PAGE_OWNER_
 /* Consume one non-null private semantic metadata holder (descriptor version 17).
  * No language/Shared credit, allocation, user code, or suspension. */
 #define HIRSEL_RT_V2_STEP_RELEASE_RECEIPT 13
+/* Consume one affine opaque sealed owner; never a tail release. Descriptor version 18. */
+#define HIRSEL_RT_V2_STEP_RELEASE_SEALED 14
 #define HIRSEL_RT_V2_LAYOUT_IMPLEMENTATION_FINALIZER 4096
 #define HIRSEL_RT_V2_STEP_CURSOR_BITS 24
 #define HIRSEL_RT_V2_WHOLE_VALUE UINT32_MAX

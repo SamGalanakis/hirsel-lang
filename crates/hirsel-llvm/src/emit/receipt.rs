@@ -161,3 +161,6 @@ mod call_tests;
 
 #[cfg(test)]
 mod sealed_tests;
+
+#[cfg(test)]
+mod sealed_drop_tests;

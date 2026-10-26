@@ -1062,3 +1062,37 @@ fn sealed_root_scalar_can_outlive_the_loan_but_a_heap_view_cannot_escape() {
         }
     }
 }
+
+#[test]
+fn sealed_runtime_drop_33_descriptor_releases_exact_owner_with_shifted_offset() {
+    let (t, _, _, _) = transition_fixture();
+    let (unit, table, _) = t.finish();
+    let owner = unit
+        .instructions
+        .iter()
+        .find_map(|inst| {
+            if let Inst::SealArena { result, .. } = inst {
+                Some(*result)
+            } else {
+                None
+            }
+        })
+        .expect("the original seal transition produces an owner");
+    let owner_layout = unit.types[unit.values[owner.index()].ty.index()].layout;
+    let descriptor = hirsel_lir::rt_program::descriptor(&table, owner_layout).unwrap();
+    assert_eq!(descriptor.steps.len(), 1);
+    let step = &descriptor.steps[0];
+    assert_eq!(step.kind, hirsel_lir::rt_program::StepKind::ReleaseSealed);
+    assert_eq!(
+        step.kind.code(),
+        hirsel_lir::runtime_abi::STEP_RELEASE_SEALED
+    );
+    assert_eq!(step.offset, 0);
+    assert_eq!(step.field, hirsel_lir::runtime_abi::WHOLE_VALUE);
+    assert!(step.layout.is_none());
+    assert_eq!(
+        hirsel_lir::layout::shift_drop(&table.layouts[owner_layout.0 as usize].drop[0], 24),
+        hirsel_lir::layout_types::DropStep::ReleaseSealed { offset: 24 }
+    );
+    descriptor.check_finalizers(&table).unwrap();
+}

@@ -97,14 +97,12 @@ pub(crate) fn covered(layouts: &LayoutTable, layout: LayoutId) -> bool {
 fn plain(layouts: &LayoutTable, steps: &[DropStep]) -> bool {
     steps.iter().all(|step| match step {
         // A Shared root's frozen payload thaws in the runtime's walk.
-        DropStep::Finalize
-        | DropStep::ColumnsReverse(_)
-        | DropStep::Thaw { .. }
-        | DropStep::ReleaseSealed { .. } => false,
+        DropStep::Finalize | DropStep::ColumnsReverse(_) | DropStep::Thaw { .. } => false,
         // A Shared root's release is a runtime call under the root count contract.
         DropStep::Release { .. }
         | DropStep::ReleaseRoot { .. }
         | DropStep::ReleaseReceipt { .. }
+        | DropStep::ReleaseSealed { .. }
         | DropStep::Environment { .. }
         | DropStep::CloseHandle { .. } => true,
         DropStep::ActiveVariant { variants, .. } => {
@@ -724,8 +722,22 @@ impl<'m, 'g> Walk<'m, 'g> {
                 self.accumulate(self.builder.call(self.runtime.close_handle, &arguments));
                 Ok(())
             }
-            DropStep::ReleaseSealed { .. } => {
-                invalid("sealed owner drop requires linked runtime emission")
+            DropStep::ReleaseSealed { offset } => {
+                let owner = self
+                    .builder
+                    .load(ptr_ty, self.at(base, *offset), word(*offset));
+                let entry = hirsel_lir::runtime_abi::RuntimeEntry::SealedRelease;
+                let release = self
+                    .module
+                    .function(
+                        entry.declaration().symbol,
+                        self.module
+                            .function_type(self.module.void_type(), &[ptr_ty, ptr_ty]),
+                    )
+                    .map_err(GlueError)?;
+                crate::runtime::substrate(self.module, release, entry);
+                self.builder.call(release, &[self.context, owner]);
+                Ok(())
             }
             DropStep::ReleaseReceipt { offset } => {
                 let receipt = self

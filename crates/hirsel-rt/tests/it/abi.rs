@@ -79,6 +79,7 @@ fn header_constants_match_the_runtime() {
         ("LAYOUT_MAGIC", LAYOUT_MAGIC as u64),
         ("LAYOUT_VERSION", LAYOUT_VERSION as u64),
         ("STEP_RELEASE_RECEIPT", STEP_RELEASE_RECEIPT as u64),
+        ("STEP_RELEASE_SEALED", STEP_RELEASE_SEALED as u64),
         ("LAYOUT_UNSAFE_FFI", LAYOUT_UNSAFE_FFI as u64),
         ("LAYOUT_DYNAMIC", LAYOUT_DYNAMIC as u64),
         ("LAYOUT_MUTEX_ROOT", LAYOUT_MUTEX_ROOT as u64),

@@ -2311,6 +2311,7 @@ fn runtime_declarations_match_the_landed_c_header() {
         ("LIVE_BIT", runtime_abi::STEP_LIVE_BIT),
         ("RELEASE_LAST", runtime_abi::STEP_RELEASE_LAST),
         ("RELEASE_RECEIPT", runtime_abi::STEP_RELEASE_RECEIPT),
+        ("RELEASE_SEALED", runtime_abi::STEP_RELEASE_SEALED),
     ] {
         define(&format!("STEP_{name}"), &value.to_string());
     }
