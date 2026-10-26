@@ -103,6 +103,33 @@ impl OwnershipExecution {
                     .map_err(|error| error.to_string())
             })
     }
+    /// Decode the ordinary launch record against this exact selected source
+    /// and object owner. Ownership rows and exit codes cannot invent a failure
+    /// rule, source attribution or a clean runtime audit.
+    pub fn observe_run(
+        &self,
+        objects: &OwnershipObjects,
+        launched: &native::Launched,
+    ) -> Result<hirsel_run_schema::RunOutcome, String> {
+        if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
+            return Err("ownership objects belong to another selected completion".into());
+        }
+        self.tasks
+            .with_link_context(self.root, &self.link, |program, _, _, _| {
+                let sites = self.link.sites();
+                match native::observe_run(launched, program, &sites)
+                    .map_err(|error| error.to_string())?
+                {
+                    native::Observed::Ran(observation, waits) => observation
+                        .outcome(&sites, waits)
+                        .map_err(|error| error.to_string()),
+                    native::Observed::Refused(reason) => {
+                        Ok(hirsel_run_schema::RunOutcome::Refused(reason))
+                    }
+                    native::Observed::Stopped(outcome) => Ok(outcome),
+                }
+            })
+    }
     /// Each selected body re-enters C before a diagnostic consumer sees it.
     /// This read never runs source discovery or compiler transformations.
     pub fn with_unit<R>(

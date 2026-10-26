@@ -5,12 +5,17 @@ use hirsel_run_schema::ownership_trace::{Action, Trace};
 use std::sync::Arc;
 
 pub(super) fn source_calls(source: &str, created: u64) {
+    source_calls_exit(source, created, 0);
+}
+
+pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         let manifest = directory.path().join("hirsel.json");
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let mut traces = Vec::new();
+        let mut outcomes = Vec::new();
         for checked in [false, true] {
             let host = hirsel_driver::ownership_trace::run_resources_on_host(
                 &manifest,
@@ -28,10 +33,20 @@ pub(super) fn source_calls(source: &str, created: u64) {
                 1000,
             )
             .unwrap();
-            assert_eq!(host.outcome.exit_code(), 0);
+            assert_eq!(host.outcome.exit_code(), expected_exit);
+            if expected_exit == hirsel_run_schema::exit::FAILED {
+                let hirsel_run_schema::RunOutcome::Failed { primary, causes } = &host.outcome
+                else {
+                    panic!("expected actual language failure")
+                };
+                assert_eq!(primary.rule, "SEM-1");
+                assert!(causes.is_empty());
+            }
+            outcomes.push(host.outcome);
             traces.push(host.trace.unwrap());
         }
         assert_eq!(traces[0], traces[1]);
+        assert_eq!(outcomes[0], outcomes[1]);
         let config = CompileConfig {
             jobs: hirsel_intern::jobs::Jobs::ONE,
             store: Arc::new(MemStore::default()),
@@ -117,7 +132,12 @@ pub(super) fn source_calls(source: &str, created: u64) {
                     1000,
                 )
                 .unwrap();
-            assert_eq!(run.execution.exit, Some(0));
+            assert_eq!(run.execution.exit, Some(expected_exit));
+            let outcome = execution.observe_run(&objects, &run.execution).unwrap();
+            assert_eq!(
+                outcome, outcomes[0],
+                "{backend:?} ordinary source failure/outcome"
+            );
             assert!(run.execution.stdout.is_empty());
             assert!(
                 run.execution.stderr.is_empty(),

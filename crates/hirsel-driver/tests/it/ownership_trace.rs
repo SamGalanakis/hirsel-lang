@@ -1368,3 +1368,25 @@ pub fn main() -> Result[(), ()] {
         4,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn ownership_native_failed_finalizer_retires_callee_and_outer_resource_on_four_engines() {
+    super::ownership_owned_call_49::source_calls_exit(
+        r#"
+resource type Token { bad: bool }
+drop(x) {
+  if x.bad { let zero: u8 = 0u8
+    let _ = 1u8 / zero }
+}
+fn discard(take token: Token) {}
+pub fn main() -> Result[(), ()] {
+  let outer = Token(bad: false)
+  discard(Token(bad: true))
+  Ok(())
+}
+"#,
+        2,
+        hirsel_run_schema::exit::FAILED,
+    );
+}
