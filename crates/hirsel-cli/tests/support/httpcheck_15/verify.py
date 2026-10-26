@@ -53,6 +53,7 @@ class Server(socketserver.TCPServer):
 
     def __init__(self, port=0):
         self.requests = []
+        self.request_started = []
         self.errors = []
         self.stop = threading.Event()
         super().__init__(('127.0.0.1', port), Handler)
@@ -62,6 +63,7 @@ class Server(socketserver.TCPServer):
 class Handler(socketserver.BaseRequestHandler):
     def handle(self):
         try:
+            started = time.monotonic()
             self.request.settimeout(5)
             data = b''
             while b'\r\n\r\n' not in data:
@@ -89,6 +91,7 @@ class Handler(socketserver.BaseRequestHandler):
             assert not any(k == 'transfer-encoding' for k, _ in headers)
             custom = [(k, v) for k, v in headers if k in ('x-duplicate', 'content-type')]
             self.server.requests.append((method, route, body, custom))
+            self.server.request_started.append(started)
             status, extra = 200, b''
             payload = b'User-agent: *\nDisallow: /secret\n'
             if route == '/json':
@@ -283,7 +286,11 @@ def verify(hirsel, root, output, case=None):
         assert server.requests[before:] == requests, (label, server.requests[before:], requests)
         assert not server.errors, server.errors
         if label.endswith('-deadline'):
-            assert commands[-1]['seconds'] < 8, ('whole-request deadline did not bound trickle', commands[-1])
+            # CLI startup includes compilation. The transport deadline starts
+            # at this exchange, witnessed by the fixture accepting its socket.
+            request_seconds = time.monotonic() - server.request_started[before]
+            commands[-1]['request_seconds'] = request_seconds
+            assert request_seconds < 8, ('whole-request deadline did not bound trickle', commands[-1])
         result['cells'][cell] = 'passed'
         result['observations'] += 1
         save()
