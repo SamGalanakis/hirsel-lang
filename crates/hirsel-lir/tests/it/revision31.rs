@@ -34,6 +34,7 @@ enum Mutant {
     ErasedDrop,
     IteratorDrop,
     CapturedResourceDrop,
+    CapturedErasedDrop,
 }
 
 /// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
@@ -48,6 +49,7 @@ fn isolated(m: Mutant) -> Vec<K> {
             | Mutant::ErasedDrop
             | Mutant::IteratorDrop
             | Mutant::CapturedResourceDrop
+            | Mutant::CapturedErasedDrop
     ) {
         isolated_stage::<Rc>(m)
     } else {
@@ -61,18 +63,27 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
         Mutant::FallibleRelease | Mutant::FallibleDrop => Some(l::RESBLK),
         Mutant::ErasedDrop => Some(l::ERASED_ONCE),
         Mutant::IteratorDrop => Some(l::ITER),
-        Mutant::CapturedResourceDrop => Some(l::CLOSURE),
+        Mutant::CapturedResourceDrop | Mutant::CapturedErasedDrop => Some(l::CLOSURE),
         _ => None,
     };
     let mut parameters = vec![(Passing::Borrow, l::U64)];
     parameters.extend(released.map(|layout| (Passing::Take, layout)));
     let mut t = Lir::<S>::new(&parameters, None);
-    if m == Mutant::CapturedResourceDrop {
-        use hirsel_lir::layout_types::{DropStep, ScanStep};
+    if matches!(m, Mutant::CapturedResourceDrop | Mutant::CapturedErasedDrop) {
+        use hirsel_lir::layout_types::{CopyRecipe, DropStep, ScanStep, SizeSpec};
         let environment = &mut t.table.layouts[l::ENV.0 as usize];
-        environment.fields[0].layout = l::RESBLK;
-        environment.scan = vec![ScanStep::Counted { offset: 0 }];
-        environment.drop = vec![DropStep::Release { offset: 0 }];
+        if m == Mutant::CapturedResourceDrop {
+            environment.fields[0].layout = l::RESBLK;
+            environment.copy = CopyRecipe::Fields;
+            environment.scan = vec![ScanStep::Counted { offset: 0 }];
+            environment.drop = vec![DropStep::Release { offset: 0 }];
+        } else {
+            environment.fields[0].layout = l::ERASED_ONCE;
+            environment.size = SizeSpec::Fixed(16);
+            environment.copy = CopyRecipe::NotCopyable;
+            environment.scan = vec![ScanStep::Environment { offset: 8 }];
+            environment.drop = vec![DropStep::Environment { offset: 8 }];
+        }
     }
     if m != Mutant::Source {
         t.builder.unit.header.origin = UnitOrigin::Library;
@@ -97,6 +108,7 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
             | Mutant::ErasedDrop
             | Mutant::IteratorDrop
             | Mutant::CapturedResourceDrop
+            | Mutant::CapturedErasedDrop
     ) {
         let layout = released.unwrap();
         let slot = t.slot(layout, SlotKind::Local, ROOT);
@@ -302,6 +314,7 @@ fn callable_and_iterator_drops_keep_their_possible_failure_edges() {
         Mutant::ErasedDrop,
         Mutant::IteratorDrop,
         Mutant::CapturedResourceDrop,
+        Mutant::CapturedErasedDrop,
     ] {
         pair(
             |m| isolated(if m { mutant } else { Mutant::InfallibleDrop }),

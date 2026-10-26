@@ -1195,9 +1195,24 @@ impl<'a> Layouts<'a> {
             DropStep::ActiveVariant { variants, .. } => variants
                 .iter()
                 .any(|(_, steps)| self.steps_destructible(layout, steps, seen)),
-            DropStep::Release { offset }
-            | DropStep::ReleaseRoot { offset }
-            | DropStep::Environment { offset } => {
+            DropStep::Environment { offset } => {
+                // A lifted environment word may lie inside a callable field.
+                // Follow its containing descriptor, not the raw pointer word.
+                let variants = layout.tag.iter().flat_map(|t| &t.variants);
+                let mut covering = layout
+                    .fields
+                    .iter()
+                    .chain(variants.flat_map(|v| &v.fields))
+                    .filter(|f| {
+                        f.offset <= *offset
+                            && self
+                                .fixed_size(f.layout)
+                                .is_some_and(|size| *offset - f.offset < size)
+                    })
+                    .peekable();
+                covering.peek().is_none() || covering.any(|f| self.destructible_in(f.layout, seen))
+            }
+            DropStep::Release { offset } | DropStep::ReleaseRoot { offset } => {
                 match self.field_at(layout, *offset) {
                     Some(child) => self.destructible_in(child, seen),
                     // An environment or child we cannot see may finalize.
