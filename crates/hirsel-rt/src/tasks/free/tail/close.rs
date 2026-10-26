@@ -5,10 +5,38 @@ use super::*;
 use crate::TaskCtx;
 use crate::alloc::Header;
 use crate::finalize::Cleanup;
-use crate::release::{Cursor, ReleasePoll};
+use crate::release::{Cursor, Finalizer, FinalizerPoll, ReleasePoll};
 use crate::tasks::free::{channel, mutex, record, replay};
 use crate::tasks::role;
 use std::ptr;
+
+/// A resolved alternate and a disjoint retained extent of the checked root.
+/// Resolver inputs are source-proved by the caller; none are runtime hints.
+pub(in crate::tasks) struct ResolvedFinalizer {
+    pub(in crate::tasks) dispatch: crate::finalize::entered::Dispatch,
+    pub(in crate::tasks) frame: *mut u8,
+    pub(in crate::tasks) bytes: u32,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::tasks) struct FinalizerResolver {
+    pub(in crate::tasks) resolve:
+        unsafe fn(*mut TaskCtx, Finalizer, usize) -> Option<ResolvedFinalizer>,
+    pub(in crate::tasks) retained: usize,
+}
+
+pub(in crate::tasks) enum CleanupPending {
+    PublicationRetry,
+    ObjectWait,
+    /// The nested dispatcher already published its precise physical wait.
+    /// An ancestor must propagate Pending without replacing that wait.
+    Nested,
+}
+
+pub(in crate::tasks) enum CleanupPoll {
+    Ready(u8),
+    Pending(CleanupPending),
+}
 
 pub(super) struct Driver {
     // Boxes keep inline Cleanup addresses fixed across nested vector growth.
@@ -18,6 +46,8 @@ pub(super) struct Driver {
     anchor: u64,
     operation_site: u64,
     rest: bool,
+    nested: bool,
+    finalizers: Option<FinalizerResolver>,
 }
 
 enum Node {
@@ -28,6 +58,10 @@ enum Node {
         _image: Option<Ring>,
     },
     Close(Close),
+    Finalizer {
+        token: Finalizer,
+        driver: crate::finalize::entered::Driver,
+    },
 }
 
 struct Close {
@@ -62,6 +96,8 @@ impl Driver {
             anchor,
             operation_site,
             rest: false,
+            nested: false,
+            finalizers: None,
         }
     }
 
@@ -85,6 +121,7 @@ impl Driver {
         mut ready: impl FnMut(hirsel_free::session::Handle, &mut bool) -> Stopped<bool>,
     ) -> Stopped<Poll<u8>> {
         self.rest = false;
+        self.nested = false;
         assert_eq!(
             self.task,
             crate::tasks::running_key(ctx),
@@ -96,8 +133,47 @@ impl Driver {
                 .last_mut()
                 .expect("completed cleanup driver polled") as *mut Box<Node>;
             match unsafe { &mut **node } {
-                Node::Release { cursor, .. } => match unsafe { cursor.poll(&mut *ctx) } {
-                    ReleasePoll::Close(word) => {
+                Node::Release { cursor, .. } => match unsafe {
+                    if self.finalizers.is_some() {
+                        cursor.poll_finalizers(&mut *ctx)
+                    } else {
+                        match cursor.poll(&mut *ctx) {
+                            ReleasePoll::Close(word) => FinalizerPoll::Close(word),
+                            ReleasePoll::Complete(done) => FinalizerPoll::Complete(done),
+                        }
+                    }
+                } {
+                    FinalizerPoll::Finalizer(token) => {
+                        let resolver = self.finalizers.expect("finalizer without opt-in resolver");
+                        let Some(resolved) =
+                            (unsafe { (resolver.resolve)(ctx, token, resolver.retained) })
+                        else {
+                            // Unknown code keeps its synchronous extent; no status4
+                            // escapes run_finalizer or its ordinary shielded call.
+                            let status = unsafe {
+                                crate::finalize::run_finalizer(
+                                    &mut *ctx,
+                                    token.layout,
+                                    token.value,
+                                    token.anchor,
+                                    token.operation_site,
+                                )
+                            };
+                            unsafe { cursor.finalized(&mut *ctx, token, status) };
+                            continue;
+                        };
+                        let driver = unsafe {
+                            crate::finalize::entered::Driver::new(
+                                self.task,
+                                token,
+                                resolved.dispatch,
+                                resolved.frame,
+                                resolved.bytes,
+                            )
+                        };
+                        self.stack.push(Box::new(Node::Finalizer { token, driver }));
+                    }
+                    FinalizerPoll::Close(word) => {
                         let builtin =
                             word & crate::sync::MUTEX != 0 || word & crate::channels::ENDPOINT != 0;
                         if !builtin || word & crate::tasks::TASK_SET != 0 {
@@ -161,16 +237,32 @@ impl Driver {
                             crate::tasks::shield_changed(ctx);
                         }
                     }
-                    ReleasePoll::Complete(result) => {
+                    FinalizerPoll::Complete(result) => {
                         let status = result.status;
                         self.stack.pop();
                         match self.stack.last_mut().map(|n| &mut **n) {
                             Some(Node::Close(parent)) => parent.status |= status,
                             None => return Ok(Poll::Ready(status)),
-                            Some(Node::Release { .. }) => {
+                            Some(Node::Release { .. } | Node::Finalizer { .. }) => {
                                 unreachable!("release child without close")
                             }
                         }
+                    }
+                },
+                Node::Finalizer { token, driver } => match unsafe { driver.poll(ctx) }? {
+                    crate::finalize::entered::Poll::Pending => {
+                        self.nested = true;
+                        return Ok(Poll::Pending);
+                    }
+                    crate::finalize::entered::Poll::Complete(status) => {
+                        let token = *token;
+                        self.stack.pop();
+                        let Some(Node::Release { cursor, .. }) =
+                            self.stack.last_mut().map(|n| &mut **n)
+                        else {
+                            unreachable!("finalizer without original release cursor")
+                        };
+                        unsafe { cursor.finalized(&mut *ctx, token, status) };
                     }
                 },
                 Node::Close(close) => {
@@ -317,9 +409,59 @@ pub(in crate::tasks) unsafe fn attach(
     index
 }
 
+/// Attach the same cleanup driver with independently checked finalizer
+/// resolution. This grants no physical leave permission; the root owns the
+/// resolver's complete retained extent and every opaque ancestry remains live.
+/// # Safety
+/// As for attach; each successful resolution matches actual source finalizer
+/// code/ABI and a disjoint stable nested frame, with all caller coverage proved.
+pub(in crate::tasks) unsafe fn attach_finalizers(
+    ctx: *mut TaskCtx,
+    cursor: Box<Cursor>,
+    anchor: u64,
+    operation_site: u64,
+    resolver: FinalizerResolver,
+) -> usize {
+    let index = unsafe { attach(ctx, cursor, anchor, operation_site) };
+    unsafe { (&mut (*ctx).free_ops.tails.drivers)[index].finalizers = Some(resolver) };
+    index
+}
+
+/// Return the original child's wait disposition alongside Pending. Only a
+/// checked root may propagate Nested directly through its saved caller chain.
+/// # Safety
+/// The Active task owns the attached cursor, resolver and original root frame.
+pub(in crate::tasks) unsafe fn poll_finalizers(
+    ctx: *mut TaskCtx,
+    index: usize,
+) -> Stopped<CleanupPoll> {
+    match unsafe { poll_mode(ctx, index, true) }? {
+        Poll::Ready(status) => Ok(CleanupPoll::Ready(status)),
+        Poll::Pending => {
+            let driver = unsafe { &(&(*ctx).free_ops.tails.drivers)[index] };
+            Ok(CleanupPoll::Pending(if driver.nested {
+                CleanupPending::Nested
+            } else if driver.rest {
+                CleanupPending::PublicationRetry
+            } else {
+                CleanupPending::ObjectWait
+            }))
+        }
+    }
+}
+
 /// A task-owned driver is not removed from its box while it executes. Nested
 /// opaque finalizers can grow the handle vector without moving any ancestor.
 pub(in crate::tasks) unsafe fn poll(ctx: *mut TaskCtx, index: usize) -> Stopped<Poll<u8>> {
+    unsafe { poll_mode(ctx, index, false) }
+}
+
+unsafe fn poll_mode(ctx: *mut TaskCtx, index: usize, finalizers: bool) -> Stopped<Poll<u8>> {
+    let selected = unsafe { (&(*ctx).free_ops.tails.drivers)[index].finalizers.is_some() };
+    assert_eq!(
+        selected, finalizers,
+        "cleanup requires its original typed polling interface"
+    );
     let driver = unsafe { &mut *(&mut (*ctx).free_ops.tails.drivers)[index] as *mut Driver };
     let result = unsafe { (*driver).poll(ctx) }?;
     if result.is_ready() {
@@ -529,5 +671,16 @@ mod cut_tests;
 /// # Safety
 /// The Active task owns a live driver index returned by attach, after Pending.
 pub(in crate::tasks) unsafe fn requeue(ctx: *mut TaskCtx, index: usize) -> bool {
-    unsafe { (&(*ctx).free_ops.tails.drivers)[index].rest }
+    let driver = unsafe { &(&(*ctx).free_ops.tails.drivers)[index] };
+    assert!(
+        driver.finalizers.is_none(),
+        "typed finalizer wait requires its full disposition"
+    );
+    driver.rest
 }
+
+#[cfg(test)]
+mod finalizer_tests;
+
+#[cfg(test)]
+mod physical_finalizer_tests;

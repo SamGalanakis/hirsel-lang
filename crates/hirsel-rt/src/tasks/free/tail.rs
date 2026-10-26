@@ -22,7 +22,8 @@ mod close;
 mod mutex;
 #[allow(unused_imports)]
 pub(in crate::tasks) use close::{
-    attach as attach_close, poll as poll_close, requeue as close_requeue,
+    CleanupPending, CleanupPoll, FinalizerResolver, ResolvedFinalizer, attach as attach_close,
+    attach_finalizers, poll as poll_close, poll_finalizers, requeue as close_requeue,
 };
 pub(crate) use close::{invoke_finalize, invoke_release, invoke_root_drop};
 #[cfg(test)]
