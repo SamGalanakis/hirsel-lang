@@ -453,7 +453,7 @@ impl FnEmitter<'_, '_, '_> {
         self.materialize_live(&state.live,state.state)?;
         let number=self.b.ins().iconst(types::I32,i64::from(state.state));
         let tag = if matches!(self.unit.types[self.unit.values[state.value.index()].ty.index()].repr, ValueRepr::Block) {
-            if matches!(self.layout(state.layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
+            if matches!(self.layout(self.unit.types[self.unit.values[state.value.index()].ty.index()].layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
         } else { 50 };
         let kind=self.b.ins().iconst(types::I32,tag);
         let bytes=self.b.ins().iconst(types::I32,bytes as i64);

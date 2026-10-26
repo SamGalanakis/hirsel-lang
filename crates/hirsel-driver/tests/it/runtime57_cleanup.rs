@@ -83,9 +83,9 @@ pub fn main(rt:Io)->Result[(),GrantError] {
       let mut tx=take inner_tx
       let _=channel.send(tasks,mut tx,Leaf(tasks:tasks,done:copy done,id:1u64))
       let _=channel.send(tasks,mut tx,Leaf(tasks:tasks,done:copy done,id:2u64))
-      let (outer_tx,outer_rx):(Sender[Receiver[Leaf]],Receiver[Receiver[Leaf]])=channel.open(tasks)
+      let (outer_tx,outer_rx):(Sender[Sender[Leaf]],Receiver[Sender[Leaf]])=channel.open(tasks)
       let mut out_tx=take outer_tx
-      let _=channel.send(tasks,mut out_tx,take inner_rx)
+      let _=channel.send(tasks,mut out_tx,sender.dup(tasks,tx))
       41u64
     })
     task.await(s,take child)
@@ -96,12 +96,12 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 "#;
 
 #[test]
-fn runtime57_cleanup_channel_endpoint_payload_drains_nested_queue_fifo_on_both_backends() {
+fn runtime57_cleanup_sender_payload_runs_nested_close_on_both_backends() {
     with_compiler_stack(|| {
         let program=ready(CHANNEL);
         let plans=native::continuation::plans(&program);
         native::continuation::validate(&program,&plans).unwrap();
         assert!(plans.plans.values().any(|p|!p.cleanups.is_empty()), "no instruction custody: {plans:#?}");
-        assert_eq!(compact_runs_with(CHANNEL,"nested channel cleanup FIFO",true,"tasks.free@1").len(),4);
+        assert_eq!(compact_runs_with(CHANNEL,"nested sender cleanup",true,"tasks.free@1").len(),4);
     });
 }

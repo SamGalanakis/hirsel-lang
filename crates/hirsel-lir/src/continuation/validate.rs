@@ -1444,10 +1444,11 @@ fn root_instruction_sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,us
     let mut sites=Vec::new();
     for (b,block) in u.blocks.iter().enumerate() {
         for (i,inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
-            if let Inst::Release{layout,live:MaskRef::All,..}=inst
-                && table.layout(*layout).is_some_and(|r| matches!(r.kind,
-                    LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
-                    | LayoutKind::Resource | LayoutKind::Handle) && r.size.storage().is_some()) {
+            if let Inst::Release{value,layout,live:MaskRef::All,..}=inst
+                && (table.layout(u.types[u.values[value.index()].ty.index()].layout).is_some_and(|r|
+                    matches!(r.kind, LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }))
+                    || table.layout(*layout).is_some_and(|r| matches!(r.kind, LayoutKind::Resource | LayoutKind::Handle) && r.size.storage().is_some())) {
+                if !instruction_reaches_close(table,*layout) {continue;}
                 sites.push((BlockId(b as u32),i));
             }
         }
@@ -1490,6 +1491,7 @@ fn check_cleanup_instruction(u:&LirUnit<Ready>,table:&LayoutTable,live:&Live,
         values.extend(uses(u,inst));
         if let Some(f)=inst.failure() {values.extend(live.failure(u,f));}
     }
+    values.extend(super::carried_from(u,block,Some(instruction)).1);
     if state.live.iter().map(|v|v.value).collect::<Vec<_>>()!=values.iter().copied().collect::<Vec<_>>() {return Err(bad);}
     let mut end=base;
     for retained in &state.live {
@@ -1503,4 +1505,35 @@ fn check_cleanup_instruction(u:&LirUnit<Ready>,table:&LayoutTable,live:&Live,
     }
     if state.bytes!=end.next_multiple_of(8) || state.bytes>MAX_FRAME_BYTES {return Err(ContinuationError::Frame(id));}
     Ok(())
+}
+
+// Independently traverse the descriptor graph before admitting an instruction.
+fn instruction_reaches_close(table:&LayoutTable, layout:LayoutId)->bool {
+    use crate::layout_types::DropStep;
+    let mut pending=vec![layout]; let mut visited=BTreeSet::new();
+    while let Some(layout)=pending.pop() {
+        if !visited.insert(layout) {continue;}
+        let Some(record)=table.layout(layout) else {return false;};
+        let mut programs=vec![record.drop.as_slice()];
+        while let Some(steps)=programs.pop() {
+            for step in steps {
+                match step {
+                    DropStep::CloseHandle{..}=>return true,
+                    DropStep::ActiveVariant{variants,..}=>programs.extend(variants.iter().map(|(_,steps)|steps.as_slice())),
+                    _=>{},
+                }
+            }
+        }
+        match record.kind {
+            LayoutKind::Shared{payload}|LayoutKind::Block{payload}|LayoutKind::Box{payload}=>pending.push(payload),
+            LayoutKind::Frozen{value}=>pending.push(value),
+            LayoutKind::Inline{element,..}|LayoutKind::Sequence{element}|LayoutKind::Sequential{element}
+            |LayoutKind::SoaColumns{element}|LayoutKind::Slice{element}|LayoutKind::Iterator{element}=>pending.push(element),
+            LayoutKind::Callable{environment:Some(layout)}=>pending.push(layout),
+            _=>{},
+        }
+        pending.extend(record.fields.iter().map(|f|f.layout));
+        pending.extend(record.tag.iter().flat_map(|t|&t.variants).flat_map(|v|&v.fields).map(|f|f.layout));
+    }
+    false
 }

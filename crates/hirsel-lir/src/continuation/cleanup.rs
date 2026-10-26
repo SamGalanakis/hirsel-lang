@@ -6,8 +6,8 @@ pub(super) fn sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,usize)> 
     u.blocks.iter().enumerate().flat_map(|(b,block)| {
         block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate().filter_map(move |(i,inst)| {
             match *inst {
-                Inst::Release{layout,live:MaskRef::All,..}
-                    if eligible(u, table, layout) =>Some((BlockId(b as u32),i)),
+                Inst::Release{value,layout,live:MaskRef::All,..}
+                    if eligible(u, table, value, layout) && has_close(table, layout, &mut BTreeSet::new()) =>Some((BlockId(b as u32),i)),
                 _=>None,
             }
         })
@@ -23,7 +23,7 @@ pub(super) fn root_states(
     for (b, block) in u.blocks.iter().enumerate() {
         for (i, inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
             let Inst::Release {value,layout,live:MaskRef::All,anchor,failure}=*inst else {continue};
-            if !eligible(u, table, layout) {continue;}
+            if !eligible(u, table, value, layout) || !has_close(table, layout, &mut BTreeSet::new()) {continue;}
             if u.values[value.index()].holding!=Holding::Owned {return Err("cleanup root has no owning credit".into());}
             let block=BlockId(b as u32);
             if successors_of(u,block).into_iter().any(|next|reaches(u,next,block)) {
@@ -38,6 +38,7 @@ pub(super) fn root_states(
             let mut values:BTreeSet<ValueId>=(0..u.values.len()).map(|v|ValueId(v as u32))
                 .filter(|v|live.live_after(u,block,i,*v)).collect();
             values.insert(value);
+            values.extend(carried_from(u,block,Some(i)).1);
             // Current failure disposal belongs to this instruction as well as
             // everything the later suffix needs; a failure must not lose it.
             let f=&u.tables.failures[failure.index()];
@@ -71,8 +72,36 @@ pub(super) fn root_states(
 
 // Only ordinary owning representations. Donors, arenas, sealed owners and
 // metadata release protocols cannot inherit this instruction's binder.
-fn eligible(_u: &LirUnit<Ready>, table: &LayoutTable, layout: LayoutId) -> bool {
-    table.layout(layout).is_some_and(|l| matches!(l.kind,
-        LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
-        | LayoutKind::Resource | LayoutKind::Handle) && l.size.storage().is_some())
+fn eligible(u: &LirUnit<Ready>, table: &LayoutTable, value: ValueId, layout: LayoutId) -> bool {
+    let ty=&u.types[u.values[value.index()].ty.index()];
+    table.layout(ty.layout).is_some_and(|l| matches!(l.kind,
+        LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }))
+        || table.layout(layout).is_some_and(|l| matches!(l.kind, LayoutKind::Resource | LayoutKind::Handle) && l.size.storage().is_some())
+}
+
+/// A mechanical release without a reachable close cannot suspend. Opaque
+/// user finalizers alone keep their synchronous thunk contract.
+fn has_close(table: &LayoutTable, layout: LayoutId, seen: &mut BTreeSet<LayoutId>) -> bool {
+    use crate::layout_types::DropStep;
+    if !seen.insert(layout) { return false; }
+    let Some(record)=table.layout(layout) else {return false;};
+    fn closes(steps:&[DropStep])->bool {
+        steps.iter().any(|step|match step {
+            DropStep::CloseHandle{..}=>true,
+            DropStep::ActiveVariant{variants,..}=>variants.iter().any(|(_,steps)|closes(steps)),
+            _=>false,
+        })
+    }
+    if closes(&record.drop) {return true;}
+    let child=match record.kind {
+        LayoutKind::Block{payload}|LayoutKind::Box{payload}|LayoutKind::Shared{payload}=>Some(payload),
+        LayoutKind::Frozen{value}=>Some(value),
+        LayoutKind::Inline{element,..}|LayoutKind::Sequence{element}|LayoutKind::Sequential{element}
+        |LayoutKind::SoaColumns{element}|LayoutKind::Slice{element}|LayoutKind::Iterator{element}=>Some(element),
+        LayoutKind::Callable{environment}=>environment,
+        _=>None,
+    };
+    child.is_some_and(|l|has_close(table,l,seen))
+        || record.fields.iter().any(|field|has_close(table,field.layout,seen))
+        || record.tag.iter().flat_map(|t|&t.variants).flat_map(|v|&v.fields).any(|field|has_close(table,field.layout,seen))
 }

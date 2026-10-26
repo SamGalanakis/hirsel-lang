@@ -1022,12 +1022,22 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .map(|b| b.index())
                 .collect();
         }
+        if let Some(s)=cleanup {
+            adjacent[s.block.index()]=hirsel_lir::continuation::cleanup_successors(self.unit,s.block,s.instruction as usize).iter().map(|b|b.index()).collect();
+        }
         let order = hirsel_graph::reverse_postorder(&adjacent, start.index());
         if state == 0 {
             let entry = self.blocks[self.unit.entry.index()];
             self.b.ins().jump(entry, &[]);
         } else if let Some(s)=cleanup {
+            let mut skipped=vec![true;count];
+            for &b in &order {skipped[b]=b==start.index();}
             self.reload_live(&s.live)?;
+            let unit=self.unit;
+            for (block,i) in hirsel_lir::continuation::resume_preparations(unit,plan,state,&skipped) {
+                let inst=&self.pool(unit.blocks[block.index()].instructions,&unit.instructions)?[i];
+                self.instruction(inst)?;
+            }
             self.emit_block_suffix(s.block,s.instruction as usize,true)?;
         } else {
             let s = &plan.states[state as usize - 1];

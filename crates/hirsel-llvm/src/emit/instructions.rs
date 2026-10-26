@@ -1850,14 +1850,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             Inst::Release {
                 value,
-                layout: _,
+                layout,
                 live,
                 anchor,
                 failure,
             } => {
                 let release = self.runtime(RuntimeEntry::Release)?;
                 let block = self.get(value)?;
-                let descriptor = self.block_descriptor(block);
+                let certified=self.resume.as_ref().is_some_and(|r|r.plan.cleanups.iter().any(|s|s.value==value&&s.anchor==anchor));
+                let descriptor = if certified { self.descriptor(layout)? } else { self.block_descriptor(block) };
                 let (anchor, operation_site) = self.failure_sites(self.cleanup_code(anchor)?);
                 let arguments = [
                     self.context,

@@ -73,12 +73,11 @@ pub fn resume_preparations(
     state: u32,
     skipped: &[bool],
 ) -> Vec<(BlockId, usize)> {
-    let Some(resume) = state
-        .checked_sub(1)
-        .and_then(|i| plan.states.get(i as usize))
-    else {
-        return Vec::new();
-    };
+    let (boundary_block, live, instruction) = if let Some(resume) = state.checked_sub(1).and_then(|i| plan.states.get(i as usize)) {
+        (resume.boundary.block, resume.live.as_slice(), None)
+    } else if let Some(cleanup) = plan.cleanups.iter().find(|s|s.state==state) {
+        (cleanup.block, cleanup.live.as_slice(), Some(cleanup.instruction as usize))
+    } else { return Vec::new(); };
     let mut at = BTreeMap::new();
     for (b, block) in u.blocks.iter().enumerate() {
         if !skipped.get(b).copied().unwrap_or(false) {
@@ -91,6 +90,7 @@ pub fn resume_preparations(
             .iter()
             .enumerate()
         {
+            if instruction.is_some_and(|before| b==boundary_block.index() && i>=before) {continue;}
             if let Inst::Address { address, .. } = *inst {
                 at.insert(address, (BlockId(b as u32), i));
             }
@@ -102,14 +102,14 @@ pub fn resume_preparations(
             base => base,
         }
     }
-    let carried = carried(u, resume.boundary.block).0;
+    let carried = carried_from(u, boundary_block, instruction).0;
     // Every alternate has a place for each slot (frame-resident when live at
     // a boundary); a value base must be one the state reloads.
     let eligible = |a: AddressId| {
         carried.contains(&a)
             && match root(u, a) {
                 AddressBase::Slot(_) => true,
-                AddressBase::Value(v) => resume.live.iter().any(|l| l.value == v),
+                AddressBase::Value(v) => live.iter().any(|l| l.value == v),
                 AddressBase::Address(_) => false,
             }
     };
@@ -594,6 +594,10 @@ pub(crate) fn call_effect(
     {
         return CallEffect::Nested(id);
     }
+    // Keep does not exclude an entered replay wait in this retained wrapper.
+    if tail::known_wrapper(u) && core_name(&definition).as_deref()==Some("$intrinsic.MutexCause") {
+        return CallEffect::Boundary(definition);
+    }
     match (classify(&definition), body) {
         (Some(CalleeClass::Local), _) => CallEffect::Local,
         (Some(CalleeClass::Boundary), _) => CallEffect::Boundary(definition),
@@ -825,6 +829,16 @@ pub fn resumed_successors(u: &LirUnit<Ready>, block: BlockId) -> Vec<BlockId> {
         .collect()
 }
 
+/// Successors of a cleanup instruction's suffix; earlier failing checks
+/// already completed and cannot become new edges after a physical save.
+pub fn cleanup_successors(u:&LirUnit<Ready>,block:BlockId,before:usize)->Vec<BlockId> {
+    let mut out=resumed_successors(u,block);
+    for inst in u.blocks[block.index()].instructions.get(&u.instructions).unwrap_or(&[]).iter().skip(before) {
+        if let Some(f)=inst.failure() {out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);}
+    }
+    out
+}
+
 /// The address an instruction accesses, which its preparation must precede.
 fn accessed(inst: &Inst) -> Option<AddressId> {
     match *inst {
@@ -859,6 +873,10 @@ pub(crate) fn carried(
     u: &LirUnit<Ready>,
     block: BlockId,
 ) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
+    carried_from(u,block,None)
+}
+
+pub(crate) fn carried_from(u:&LirUnit<Ready>,block:BlockId,before:Option<usize>) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
     let mut used = Vec::new();
     let mut prepared = BTreeSet::new();
     let mut call_uses = |term: &Terminator, used: &mut Vec<AddressId>| {
@@ -874,9 +892,11 @@ pub(crate) fn carried(
             }
         }
     };
-    call_uses(&u.terminators[block.index()], &mut used);
     let mut seen = BTreeSet::new();
-    let mut pending = resumed_successors(u, block);
+    let mut pending = if before.is_some() { vec![block] } else {
+        call_uses(&u.terminators[block.index()], &mut used);
+        resumed_successors(u, block)
+    };
     while let Some(b) = pending.pop() {
         if !seen.insert(b) {
             continue;
@@ -884,7 +904,7 @@ pub(crate) fn carried(
         for inst in u.blocks[b.index()]
             .instructions
             .get(&u.instructions)
-            .unwrap_or(&[])
+            .unwrap_or(&[]).iter().skip(if b==block {before.unwrap_or(0)} else {0})
         {
             if let Inst::Address { address, .. } = *inst {
                 prepared.insert(address);
@@ -895,7 +915,7 @@ pub(crate) fn carried(
             used.extend(accessed(inst));
         }
         call_uses(&u.terminators[b.index()], &mut used);
-        pending.extend(successors_of(u, b));
+        pending.extend(if b==block { before.map(|i|cleanup_successors(u,b,i)).unwrap_or_else(||successors_of(u,b)) } else {successors_of(u,b)});
     }
     let mut addresses = BTreeSet::new();
     let mut values = BTreeSet::new();

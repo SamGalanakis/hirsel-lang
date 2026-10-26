@@ -323,3 +323,6 @@ unsafe fn invoke_cleanup(
         }
     }
 }
+
+#[cfg(test)]
+mod channel_tests;

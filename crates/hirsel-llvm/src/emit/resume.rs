@@ -332,7 +332,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let entry=self.runtime(RuntimeEntry::ResumeTail)?;
         let number=self.module.const_int(self.module.int_type(32),state.state.into());
         let tag = if matches!(self.unit.types[self.unit.values[state.value.index()].ty.index()].repr, ValueRepr::Block) {
-            if matches!(self.layout(state.layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
+            if matches!(self.layout(self.unit.types[self.unit.values[state.value.index()].ty.index()].layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
         } else { 50 };
         let kind=self.module.const_int(self.module.int_type(32),tag);
         let bytes=self.module.const_int(self.module.int_type(32),bytes.into());
@@ -532,11 +532,21 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .map(|b| b.index())
                 .collect();
         }
+        if let Some(s)=cleanup {
+            adjacent[s.block.index()]=hirsel_lir::continuation::cleanup_successors(self.unit,s.block,s.instruction as usize).iter().map(|b|b.index()).collect();
+        }
         let order = hirsel_graph::reverse_postorder(&adjacent, first.index());
         if state == 0 {
             self.builder.br(self.blocks[self.unit.entry.index()]);
         } else if let Some(s)=cleanup {
+            let mut skipped=vec![true;count];
+            for &b in &order {skipped[b]=b==first.index();}
             self.reload_live(&s.live)?;
+            let unit=self.unit;
+            for (block,i) in hirsel_lir::continuation::resume_preparations(unit,plan,state,&skipped) {
+                let inst=&self.pool(unit.blocks[block.index()].instructions,&unit.instructions)?[i];
+                self.instruction(inst)?;
+            }
             self.emit_block_suffix(s.block,s.instruction as usize,true)?;
         } else {
             let s = &plan.states[state as usize - 1];
