@@ -797,10 +797,24 @@ impl FrontLowerQueries {
         let front = self.front.query(path).ok_or(QueryError::NotImplemented)?;
         let selected = source.reads.read_consuming(front).await;
         let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
-        let body = self
-            .front
-            .outcome(reference)
-            .ok_or_else(|| source.refused(selected.err().unwrap_or(self.errors.protocol)))?;
+        let body = match self.front.outcome(reference) {
+            Some(body) => body,
+            None if selected.is_ok() => {
+                let materialize = self
+                    .front
+                    .body_query(path)
+                    .ok_or(QueryError::NotImplemented)?;
+                let product = source
+                    .reads
+                    .read_consuming(materialize)
+                    .await
+                    .map_err(|error| source.refused(error))?;
+                self.front
+                    .outcome(product.record)
+                    .ok_or_else(|| source.refused(self.errors.protocol))?
+            }
+            None => return Err(source.refused(selected.err().unwrap_or(self.errors.protocol))),
+        };
         source.merge(&body.outcome.reads);
         // As a materialization of the checked body, Lower also depends on the
         // private shapes that body read, beyond their representation digests.

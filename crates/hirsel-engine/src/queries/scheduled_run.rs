@@ -403,10 +403,22 @@ impl Task {
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Ready(Ok(product)) => product,
             };
-            let Some(output) = queries.front.outcome(product.record) else {
-                return Poll::Ready(Err(queries.failure_record(operational(format!(
-                    "missing settled P product for {path}"
-                )))));
+            let output = match queries.front.outcome(product.record) {
+                Some(output) => output,
+                None => {
+                    let Some(id) = queries.front.body_query(path) else {
+                        return Poll::Ready(Err(queries.errors.protocol));
+                    };
+                    let product = match self.read(cx, id) {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
+                        Poll::Ready(Ok(product)) => product,
+                    };
+                    let Some(output) = queries.front.outcome(product.record) else {
+                        return Poll::Ready(Err(queries.errors.protocol));
+                    };
+                    output
+                }
             };
             let analyzed = match &output.outcome.result {
                 Ok(body) => body,
