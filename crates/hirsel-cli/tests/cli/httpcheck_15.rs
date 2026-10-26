@@ -2,17 +2,12 @@
 use std::{path::Path, process::Command};
 
 #[test]
-fn httpcheck_15_scenarios_and_offline_replay() {
-    run(None);
-}
-
-#[test]
 fn httpcheck_15_h_body_cap() {
     run(Some("h-body-cap"));
 }
 
-// All selectors are exact names; each invocation owns its package, listener,
-// grants and tapes. The aggregate stays registered until every survivor runs.
+// Each exact engine/scenario case owns its package, listener, grants and
+// tapes. Cost-balanced shards execute the complete 57-by-three matrix.
 macro_rules! engine_cases {
     ($engine:literal) => {
         #[test]
