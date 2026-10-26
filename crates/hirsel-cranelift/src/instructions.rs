@@ -625,6 +625,7 @@ impl FnEmitter<'_, '_, '_> {
                     RuntimeEntry::RootDrop,
                     &[self.context, block, anchor, operation_site],
                 )?;
+                if self.resume.is_some() {self.resume_propagate(status)?;}
                 self.status_guard(status, failure)
             }
             Inst::Reset { value, .. } if self.is_root_value(value)? => {

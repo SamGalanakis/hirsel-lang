@@ -210,6 +210,9 @@ fn successors(u: &LirUnit<Ready>, b: BlockId) -> Vec<BlockId> {
 
 /// Storage and loans live on reaching `at`: a fixpoint over block states.
 fn storage(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
+    storage_before_instruction(u,at,usize::MAX)
+}
+fn storage_before_instruction(u:&LirUnit<Ready>,at:BlockId,before:usize)->(BTreeSet<SlotId>,BTreeSet<LoanId>) {
     type State = (BTreeSet<SlotId>, BTreeSet<LoanId>);
     let mut states: BTreeMap<BlockId, State> = BTreeMap::new();
     let start: BTreeSet<SlotId> = (0..u.slots.len() as u32)
@@ -227,11 +230,14 @@ fn storage(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanI
     while let Some(b) = queue.pop_front() {
         let (mut slots, mut loans) = states[&b].clone();
         let mut leaving: Vec<(BlockId, State)> = Vec::new();
-        for inst in u.blocks[b.index()]
+        for (i,inst) in u.blocks[b.index()]
             .instructions
             .get(&u.instructions)
-            .unwrap_or(&[])
+            .unwrap_or(&[]).iter().enumerate()
         {
+            if b==at && i==before {
+                at_state.0.extend(slots.iter().copied());at_state.1.extend(loans.iter().copied());
+            }
             if let Some(f) = inst.failure() {
                 let t = u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target;
                 leaving.push((t, (slots.clone(), loans.clone())));
@@ -252,7 +258,7 @@ fn storage(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanI
                 _ => {}
             }
         }
-        if b == at {
+        if b == at && before==usize::MAX {
             at_state.0.extend(slots.iter().copied());
             at_state.1.extend(loans.iter().copied());
         }
@@ -932,6 +938,7 @@ pub fn validate(
     let mut suspends = BTreeSet::new();
     let none = BTreeSet::new();
     for (id, u) in &index {
+        if !root_instruction_sites(u,inputs.table).is_empty() {suspends.insert(*id);}
         for call in &u.tables.calls {
             match call_effect(u, call, &index, &none, inputs.classify) {
                 CallEffect::Local => {}
@@ -1009,9 +1016,6 @@ pub fn validate(
     for id in order.iter().rev() {
         let (id, plan) = (id, &plans.plans[id]);
         let u = index[id];
-        // Instruction-site support is admitted only after both native adapters
-        // consume this table. Until then no imported cleanup action is legal.
-        if !plan.cleanups.is_empty() { return Err(ContinuationError::States(*id)); }
         if plan.body != *id || plan.digest != u.digest() {
             return Err(ContinuationError::Body(*id));
         }
@@ -1022,15 +1026,16 @@ pub fn validate(
             .map(|c| call_effect(u, c, &index, &suspends, inputs.classify))
             .collect();
         let sites = super::sites(u, inputs.table, &effects, &plans.plans);
+        let cleanup_sites=root_instruction_sites(u,inputs.table);
         match &plan.representation {
             Representation::Resumable => {
                 let Ok(sites) = sites else {
                     return Err(ContinuationError::Representation(*id));
                 };
-                if sites.is_empty() {
+                if sites.is_empty() && cleanup_sites.is_empty() {
                     return Err(ContinuationError::Representation(*id));
                 }
-                if plan.states.len() != sites.len() {
+                if plan.states.len() != sites.len() || plan.cleanups.len()!=cleanup_sites.len() {
                     return Err(ContinuationError::States(*id));
                 }
                 // No resume label may reach its own boundary again.
@@ -1059,6 +1064,7 @@ pub fn validate(
                 let union: BTreeSet<SlotId> = sites
                     .iter()
                     .flat_map(|s| storage(u, s.block).0)
+                    .chain(cleanup_sites.iter().flat_map(|(b,i)|storage_before_instruction(u,*b,*i).0))
                     .filter(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)))
                     .collect();
                 if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
@@ -1102,10 +1108,13 @@ pub fn validate(
                         base,
                     )?;
                 }
+                for (i,(state,&(block,instruction))) in plan.cleanups.iter().zip(&cleanup_sites).enumerate() {
+                    check_cleanup_instruction(u,inputs.table,&live,plan,state,block,instruction,plan.states.len() as u32+i as u32+1,base)?;
+                }
             }
             // A refused compact form is always safe.
             Representation::Stackful(_) => {
-                if !plan.states.is_empty()
+                if !plan.states.is_empty() || !plan.cleanups.is_empty()
                     || !plan.storage.is_empty()
                     || !plan.parameters.is_empty()
                     || !plan.records.is_empty()
@@ -1114,7 +1123,7 @@ pub fn validate(
                 }
             }
             Representation::Direct => {
-                if !matches!(sites, Ok(ref s) if s.is_empty())
+                if !matches!(sites, Ok(ref s) if s.is_empty()) || !cleanup_sites.is_empty() || !plan.cleanups.is_empty()
                     || !plan.states.is_empty()
                     || !plan.parameters.is_empty()
                     || !plan.records.is_empty()
@@ -1124,9 +1133,9 @@ pub fn validate(
             }
         }
         let captures = inputs.environments.get(id).copied().flatten();
-        let frame = plan.states.iter().map(|s| s.bytes).max().unwrap_or(0);
+        let frame = plan.states.iter().map(|s| s.bytes).chain(plan.cleanups.iter().map(|s|s.bytes)).max().unwrap_or(0);
         if plan.captures != captures
-            || plan.cost.boundaries != plan.states.len() as u32
+            || plan.cost.boundaries != (plan.states.len()+plan.cleanups.len()) as u32
             || plan.cost.frame_bytes != frame
         {
             return Err(ContinuationError::Frame(*id));
@@ -1423,5 +1432,70 @@ pub fn validate_runtime_operations(
             )?;
         }
     }
+    Ok(())
+}
+
+/// Identify releases from Ready instruction operands, independent of producer
+/// flags and metadata. A call coordinate is never accepted here.
+fn root_instruction_sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,usize)> {
+    let mut sites=Vec::new();
+    for (b,block) in u.blocks.iter().enumerate() {
+        for (i,inst) in block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate() {
+            if let Inst::Release{layout,live:MaskRef::All,..}=inst
+                && table.layout(*layout).is_some_and(|r|matches!(r.kind,LayoutKind::Shared{..})) {
+                sites.push((BlockId(b as u32),i));
+            }
+        }
+    }
+    sites
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_cleanup_instruction(u:&LirUnit<Ready>,table:&LayoutTable,live:&Live,
+    plan:&ContinuationPlan,state:&CleanupResumeState,block:BlockId,instruction:usize,number:u32,base:u64)
+    ->Result<(),ContinuationError> {
+    let id=u.header.instance;
+    let bad=ContinuationError::LiveOwner(id,number);
+    let inst=&u.blocks[block.index()].instructions.get(&u.instructions).unwrap_or(&[])[instruction];
+    let Inst::Release{value,layout,live:MaskRef::All,anchor,failure}=*inst else {return Err(bad)};
+    if state.block!=block || state.instruction!=instruction as u32 || state.value!=value || state.layout!=layout
+        || state.anchor!=anchor || state.failure!=failure || state.state!=number
+        || state.action!=(ResumeAction::ResumeCleanup{block,instruction:instruction as u32,anchor})
+        || u.values[value.index()].holding!=Holding::Owned {
+        return Err(ContinuationError::Boundary(id,number));
+    }
+    let mut seen=BTreeSet::new();let mut todo=successors(u,block);
+    while let Some(b)=todo.pop() {
+        if b==block {return Err(ContinuationError::Representation(id));}
+        if seen.insert(b) {todo.extend(successors(u,b));}
+    }
+    let (mut slots,loans)=storage_before_instruction(u,block,instruction);
+    if !loans.is_empty() {return Err(ContinuationError::Loan(id,number));}
+    slots.retain(|s|!matches!(u.slots[s.index()].kind,SlotKind::Parameter(_)));
+    let retained:Vec<_>=plan.storage.iter().filter(|s|slots.contains(&s.slot)).cloned().collect();
+    if state.storage!=retained || retained.len()!=slots.len() {return Err(ContinuationError::Storage(id,number));}
+    let mut values=live.after(u,block);
+    match u.terminators[block.index()] {
+        Terminator::Call{call,..}=>{let(defs,reads)=call_values(u,call);for d in defs {values.remove(&d);}values.extend(reads);}
+        Terminator::Branch{condition:v,..}|Terminator::Switch{value:v,..}|Terminator::Return(Some(v))=>{values.insert(v);}
+        _=>{}
+    }
+    for inst in u.blocks[block.index()].instructions.get(&u.instructions).unwrap_or(&[])[instruction..].iter().rev() {
+        for d in inst.defs() {values.remove(&d);}
+        values.extend(uses(u,inst));
+        if let Some(f)=inst.failure() {values.extend(live.failure(u,f));}
+    }
+    if state.live.iter().map(|v|v.value).collect::<Vec<_>>()!=values.iter().copied().collect::<Vec<_>>() {return Err(bad);}
+    let mut end=base;
+    for retained in &state.live {
+        let ty=&u.types[u.values[retained.value.index()].ty.index()];
+        let holding=u.values[retained.value.index()].holding;
+        let Some((size,align))=fixed(table,ty.layout) else {return Err(bad)};
+        if retained.layout!=ty.layout || retained.repr!=ty.repr || retained.holding!=holding || align>16
+            || retained.offset<end || retained.offset%align!=0 || matches!(holding,Holding::Borrowed(_))
+            || matches!(ty.repr,ValueRepr::Hole|ValueRepr::Token|ValueRepr::Uncounted) {return Err(bad);}
+        end=retained.offset.checked_add(size).ok_or(bad.clone())?;
+    }
+    if state.bytes!=end.next_multiple_of(8) || state.bytes>MAX_FRAME_BYTES {return Err(ContinuationError::Frame(id));}
     Ok(())
 }

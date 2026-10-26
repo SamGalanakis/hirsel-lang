@@ -1761,6 +1761,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 let status = self
                     .builder
                     .call(release, &[self.context, block, anchor, operation_site]);
+                if self.resume.is_some() {self.resume_propagate(status)?;}
                 self.status_guard(status, failure)
             }
             Inst::Reset { value, .. } if self.is_root_value(value)? => {

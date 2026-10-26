@@ -2,7 +2,18 @@
 //! is separate from call states: there is no CallId for a release instruction.
 use super::*;
 
-#[allow(dead_code)]
+pub(super) fn sites(u:&LirUnit<Ready>,table:&LayoutTable)->Vec<(BlockId,usize)> {
+    u.blocks.iter().enumerate().flat_map(|(b,block)| {
+        block.instructions.get(&u.instructions).unwrap_or(&[]).iter().enumerate().filter_map(move |(i,inst)| {
+            match *inst {
+                Inst::Release{layout,live:MaskRef::All,..}
+                    if matches!(table.layout(layout).map(|l|&l.kind),Some(LayoutKind::Shared{..})) =>Some((BlockId(b as u32),i)),
+                _=>None,
+            }
+        })
+    }).collect()
+}
+
 pub(super) fn root_states(
     u:&LirUnit<Ready>, table:&LayoutTable, storage:&[LiveStorage],
     base:u64, first:u32,
@@ -34,6 +45,10 @@ pub(super) fn root_states(
             let target=u.tables.edges[f.cleanup.index()].target;
             values.extend(live.live_in[target.index()].iter().filter(|v|!u.blocks[target.index()].parameters.get(&u.pools.values).unwrap_or(&[]).contains(v)));
             values.extend(u.tables.edges[f.cleanup.index()].arguments.get(&u.pools.values).unwrap_or(&[]));
+            if values.iter().any(|v|matches!(u.values[v.index()].holding,Holding::Borrowed(_))
+                || matches!(u.types[u.values[v.index()].ty.index()].repr,ValueRepr::Hole|ValueRepr::Token|ValueRepr::Uncounted)) {
+                return Err("cleanup with an unproved interior address or reuse owner".into());
+            }
             let values:Vec<_>=values.into_iter().collect();
             let layouts:Vec<_>=values.iter().map(|v|u.types[u.values[v.index()].ty.index()].layout).collect();
             if layouts.iter().any(|l|fixed(table,*l).is_none_or(|(_,align)|align>16)) {

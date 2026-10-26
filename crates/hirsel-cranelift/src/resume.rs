@@ -19,7 +19,7 @@ use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
     ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeAction,
-    ResumeState, resume_site_hint, resume_name,
+    ResumeState, LiveOwnedSlot, resume_name, resume_site_hint,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
@@ -147,10 +147,8 @@ impl FnEmitter<'_, '_, '_> {
                 self.store(shape, value, place)?;
             }
             // A value the state reloads is defined by its reload.
-            let reloaded = state
-                .checked_sub(1)
-                .and_then(|k| plan.states.get(k as usize))
-                .is_some_and(|s| s.live.iter().any(|l| l.value == record.value));
+            let reloaded = plan.states.iter().any(|s|s.target.state==state && s.live.iter().any(|l|l.value==record.value))
+                || plan.cleanups.iter().any(|s|s.state==state && s.live.iter().any(|l|l.value==record.value));
             match record.slot {
                 Some(slot) => self.slots[slot.index()] = Some(place),
                 None if reloaded => {}
@@ -195,7 +193,10 @@ impl FnEmitter<'_, '_, '_> {
 
     /// Store a state's live values and number before its boundary call.
     fn materialize(&mut self, state: &ResumeState) -> Emitted {
-        for live in &state.live {
+        self.materialize_live(&state.live,state.target.state)
+    }
+    fn materialize_live(&mut self,live:&[LiveOwnedSlot],number:u32)->Emitted {
+        for live in live {
             if self.versions_contains(live.value) {
                 continue;
             }
@@ -208,14 +209,17 @@ impl FnEmitter<'_, '_, '_> {
         let number = self
             .b
             .ins()
-            .iconst(types::I32, i64::from(state.target.state));
+            .iconst(types::I32, i64::from(number));
         self.b.ins().store(flags(), number, frame, 0);
         Ok(())
     }
 
     /// Define a state's live values from the frame; bytes get fresh copies.
     pub(crate) fn reload(&mut self, state: &ResumeState) -> Emitted {
-        for live in &state.live {
+        self.reload_live(&state.live)
+    }
+    pub(crate) fn reload_live(&mut self,live:&[LiveOwnedSlot])->Emitted {
+        for live in live {
             if self.versions_contains(live.value) {
                 continue;
             }
@@ -442,6 +446,21 @@ impl FnEmitter<'_, '_, '_> {
         Ok(())
     }
 
+    pub(crate) fn resume_cleanup_bind(&mut self,block:BlockId,instruction:usize)->Emitted {
+        let Some(resume)=self.resume.as_ref() else {return Ok(())};
+        let Some(state)=resume.plan.cleanups.iter().find(|s|s.block==block&&s.instruction==instruction as u32) else {return Ok(())};
+        let (state,bytes)=(state.clone(),resume.plan.cost.frame_bytes);
+        self.materialize_live(&state.live,state.state)?;
+        let number=self.b.ins().iconst(types::I32,i64::from(state.state));
+        let kind=self.b.ins().iconst(types::I32,48);
+        let bytes=self.b.ins().iconst(types::I32,bytes as i64);
+        let code=self.cleanup_code(state.anchor)?;
+        let (anchor,site)=self.failure_sites(code);
+        let frame=self.frame();
+        self.rt(RuntimeEntry::ResumeTail,&[self.context,frame,number,kind,bytes,anchor,site])?;
+        Ok(())
+    }
+
     /// After a nested resumable call: a suspended callee suspends this frame,
     /// whose state the boundary already recorded.
     pub(crate) fn resume_propagate(&mut self, status: Value) -> Emitted {
@@ -496,7 +515,7 @@ pub(crate) fn emit(
         let mut sig = emitter.entry_signature(abi, &header.definition)?;
         sig.ir.params.push(ir::AbiParam::new(PTR));
         let mut ids = Vec::new();
-        for state in std::iter::once(None).chain((0..=plan.states.len() as u32).map(Some)) {
+        for state in std::iter::once(None).chain((0..=(plan.states.len()+plan.cleanups.len()) as u32).map(Some)) {
             let name = resume_name(&header.definition, header.instance, state);
             let id = emitter.declare_function(&name, Linkage::Export, &sig.ir)?;
             emitter.manifested.exports.insert(

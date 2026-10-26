@@ -532,6 +532,7 @@ pub(crate) fn callee_symbol(u: &LirUnit<Ready>, call: &CallSite) -> Option<Symbo
 /// Which known bodies may reach a boundary, to a fixpoint over the call graph.
 fn suspending(
     units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
+    table:&LayoutTable,
     classify: &dyn Fn(&DefPath) -> Option<CalleeClass>,
 ) -> BTreeSet<ContentHash> {
     let mut out = BTreeSet::new();
@@ -542,7 +543,7 @@ fn suspending(
             if out.contains(id) {
                 continue;
             }
-            let suspends = u.tables.calls.iter().any(|call| {
+            let suspends = !cleanup::sites(u,table).is_empty() || u.tables.calls.iter().any(|call| {
                 match call_effect(u, call, units, &out, classify) {
                     CallEffect::Local => false,
                     CallEffect::Boundary(_) | CallEffect::Nested(_) | CallEffect::Unknown(_) => {
@@ -1194,7 +1195,7 @@ fn states(
     table: &LayoutTable,
     sites: &[Site],
     base: u64,
-) -> Result<(Vec<LiveStorage>, Vec<ResumeState>), String> {
+) -> Result<(Vec<LiveStorage>, Vec<ResumeState>,Vec<CleanupResumeState>), String> {
     let live = crate::liveness::liveness(u);
     let mut at_sites = Vec::new();
     let mut union = BTreeSet::new();
@@ -1212,6 +1213,9 @@ fn states(
         let (slots, loans) = storage_at(u, site.block);
         union.extend(slots.iter().copied().filter(|s| !parameter_slot(u, *s)));
         at_sites.push((slots, loans));
+    }
+    for (block,i) in cleanup::sites(u,table) {
+        union.extend(storage_before(u,block,i).0.into_iter().filter(|s|!parameter_slot(u,*s)));
     }
     let slots: Vec<_> = union.into_iter().collect();
     let (offsets, base) = place(
@@ -1335,7 +1339,8 @@ fn states(
             bytes,
         });
     }
-    Ok((storage, out))
+    let cleanups=cleanup::root_states(u,table,&storage,base, out.len() as u32+1)?;
+    Ok((storage, out, cleanups))
 }
 
 /// The certificate binds everything the plan was derived from.
@@ -1446,43 +1451,34 @@ fn plan_unit(
         .copied()
         .flatten();
     let built = sites(u, inputs.table, &effects, done).and_then(|sites| {
-        if sites.is_empty() {
-            return Ok((Fixed::default(), Vec::new(), Vec::new()));
+        if sites.is_empty() && cleanup::sites(u,inputs.table).is_empty() {
+            return Ok((Fixed::default(), Vec::new(), Vec::new(),Vec::new()));
         }
         let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
-        let (storage, mut states) = states(u, inputs.table, &sites, base)?;
+        let (storage, mut states, cleanups) = states(u, inputs.table, &sites, base)?;
         if scope::candidate(u) {
             let wrapper = scope::wrapper(u, units).ok_or("unproved scope callback or exit flow")?;
             for state in &mut states {
                 wrapper.plan(u, inputs.table, state)?;
             }
         }
-        Ok(((parameters, records), storage, states))
+        Ok(((parameters, records), storage, states, cleanups))
     });
-    let none = || (Fixed::default(), Vec::new(), Vec::new());
-    let (representation, (fixed, storage, states)) = match built {
+    let none = || (Fixed::default(), Vec::new(), Vec::new(),Vec::new());
+    let (representation, (fixed, storage, states,cleanups)) = match built {
         Err(why) => (Representation::Stackful(why), none()),
-        Ok((_, _, states)) if states.is_empty() => (Representation::Direct, none()),
-        Ok((_, _, states)) if states.iter().any(|s| s.bytes > MAX_FRAME_BYTES) => (
-            Representation::Stackful("oversize live image".into()),
-            none(),
+        Ok((_, _, states,cleanups)) if states.is_empty() && cleanups.is_empty() => (Representation::Direct, none()),
+        Ok((_, _, states,cleanups)) if states.iter().map(|s|s.bytes).chain(cleanups.iter().map(|s|s.bytes)).any(|bytes| bytes > MAX_FRAME_BYTES) => (
+            Representation::Stackful("oversize live image".into()),none(),
         ),
         Ok(built) => (Representation::Resumable, built),
     };
     let cost = PlacementCost {
         instructions: (u.instructions.len() + u.terminators.len()) as u32,
-        boundaries: states.len() as u32,
-        frame_bytes: states.iter().map(|s| s.bytes).max().unwrap_or(0),
-        owned: states
-            .iter()
-            .map(|s| {
-                s.live
-                    .iter()
-                    .filter(|l| l.holding == Holding::Owned)
-                    .count() as u32
-            })
-            .max()
-            .unwrap_or(0),
+        boundaries: (states.len()+cleanups.len()) as u32,
+        frame_bytes: states.iter().map(|s| s.bytes).chain(cleanups.iter().map(|s|s.bytes)).max().unwrap_or(0),
+        owned: states.iter().map(|s|&s.live).chain(cleanups.iter().map(|s|&s.live))
+            .map(|live|live.iter().filter(|l|l.holding==Holding::Owned).count() as u32).max().unwrap_or(0),
     };
     let certificate = certify(
         u,
@@ -1493,7 +1489,7 @@ fn plan_unit(
         (&fixed.0, &fixed.1),
         &storage,
         &states,
-        &[],
+        &cleanups,
         captures,
     );
     ContinuationPlan {
@@ -1504,7 +1500,7 @@ fn plan_unit(
         records: fixed.1,
         storage,
         states,
-        cleanups:Vec::new(),
+        cleanups,
         captures,
         cost,
         certificate,
@@ -1545,7 +1541,7 @@ impl ContinuationPlans {
             .map(|u| (u.unit().header.instance, u.unit()))
             .collect();
         let digests: BTreeMap<_, _> = index.iter().map(|(k, u)| (*k, u.digest())).collect();
-        let suspends = suspending(&index, inputs.classify);
+        let suspends = suspending(&index, inputs.table, inputs.classify);
         let mut plans = BTreeMap::new();
         for id in &suspends {
             plan_in_order(

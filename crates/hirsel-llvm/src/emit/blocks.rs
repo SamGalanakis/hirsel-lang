@@ -9,10 +9,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         if self.fuel_points.get(b.index()).copied().unwrap_or(false) {
             self.charge_fuel()?;
         }
+        self.emit_block_suffix(b,0,false)
+    }
+
+    pub(super) fn emit_block_suffix(&mut self,b:BlockId,start:usize,resuming:bool)->Emitted {
+        let unit=self.unit;
         for (i, inst) in self
             .pool(unit.blocks[b.index()].instructions, &unit.instructions)?
             .iter()
-            .enumerate()
+            .enumerate().skip(start)
         {
             self.at = (b, i);
             self.profile_location(
@@ -32,7 +37,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             {
                 self.ahead_barrier()?;
             }
-            self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::Before)?;
+            if !(resuming && i==start) {
+                self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::Before)?;
+            }
+            self.resume_cleanup_bind(b,i)?;
             self.instruction(inst)?;
             self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::After)?;
         }
