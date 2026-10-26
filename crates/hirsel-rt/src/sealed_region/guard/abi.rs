@@ -96,12 +96,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_bits(
         crate::fault("null demanded arena context");
     }
     let layout = unsafe { &*(*ctx).descriptor(index) };
-    if layout.finalizer.is_some()
-        || layout.step_count != 0
-        || layout.scan_words != 0
-        || layout.flags != 0
-        || !layout.logical_count.is_null()
-    {
+    if !unsafe { super::bits::pointer_free_descriptor(layout) } {
         crate::fault("receipt bits require a certified pointer-free descriptor");
     }
     let size = usize::try_from(layout.size)

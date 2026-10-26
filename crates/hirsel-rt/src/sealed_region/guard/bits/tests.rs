@@ -207,3 +207,162 @@ fn sealed_bits_plan_33_refuses_mismatched_images_and_uncertified_layout_before_t
         });
     }
 }
+
+#[test]
+fn sealed_bits_plan_33_accepts_real_compiler_value_only_descriptors() {
+    use hirsel_lir::layout_types::*;
+    for (kind, size, align) in [
+        (LayoutKind::Unit, 0, 1),
+        (LayoutKind::Scalar(ScalarKind::U64), 8, 8),
+        (LayoutKind::Scalar(ScalarKind::Bool), 1, 1),
+        (LayoutKind::Scalar(ScalarKind::U128), 16, 16),
+    ] {
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let mut table = LayoutTable::new(&target);
+        table.layouts.push(LayoutRecord {
+            key: LayoutIdentity {
+                owner_revision: None,
+                instance: None,
+                target: target.digest(),
+                layout_version: hirsel_lir::LAYOUT_VERSION,
+            },
+            kind,
+            size: SizeSpec::Fixed(size),
+            align,
+            fields: vec![],
+            tag: None,
+            initialized: InitializedBytes::Fields,
+            scan: vec![],
+            drop: vec![],
+            copy: CopyRecipe::Bits,
+            finalizer: None,
+            storage: vec![StorageKind::Heap],
+            abi: AbiInputs {
+                scalars: vec![],
+                unaligned: false,
+            },
+        });
+        let descriptor = hirsel_lir::rt_program::descriptors(&table, &[LayoutId(0)])
+            .unwrap()
+            .remove(0);
+        let words = descriptor.scan.linked(|_| None).unwrap();
+        assert_eq!(words.len(), 8);
+        assert_eq!(descriptor.flags, crate::LAYOUT_NO_EXTENT);
+        assert!(descriptor.steps.is_empty() && descriptor.logical_count.is_none());
+        let physical = Layout {
+            flags: descriptor.flags,
+            logical: descriptor.logical,
+            scan: words.as_ptr(),
+            scan_words: words.len() as u64,
+            ..layout(size, u64::from(align))
+        };
+        context(&[physical], true, |ctx| unsafe {
+            let run = MetadataRun::new();
+            let mut guard = DemandedGuard::from_raw(ctx, run);
+            guard.bound(0).unwrap();
+            let value = 1u128;
+            let bytes = &value.to_ne_bytes()[..size as usize];
+            let metadata = image(run, bytes, align as usize);
+            let owner = guard
+                .seal_bits(2, ptr::from_ref(&value).cast_mut().cast(), &metadata)
+                .expect("the real compiler's value metadata has no owned graph edge");
+            assert_eq!(guard.close(0, 0), STATUS_OK);
+            drop_owner(ctx, owner);
+        });
+    }
+}
+
+#[test]
+fn sealed_bits_plan_33_value_metadata_cannot_hide_holders_or_unknown_structure() {
+    use hirsel_core_contract::handle_scan::*;
+    let good = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
+    let descriptor = Layout {
+        flags: crate::LAYOUT_NO_EXTENT,
+        scan: good.as_ptr(),
+        scan_words: 8,
+        ..layout(8, 8)
+    };
+    assert!(unsafe { pointer_free_descriptor(&descriptor) });
+    for (operand, value) in [
+        (0, HANDLE),
+        (0, TYPE_EDGE),
+        (0, UNKNOWN),
+        (1, VALUE_UNKNOWN),
+        (1, VALUE_HANDLE),
+        (1, VALUE_FIELDS),
+        (1, VALUE_BOOL),
+        (2, 16),
+        (3, 1),
+        (4, 1),
+        (5, 1),
+        (6, 1),
+        (7, 1),
+    ] {
+        let mut words = good;
+        words[operand] = value;
+        assert!(
+            !unsafe {
+                pointer_free_descriptor(&Layout {
+                    scan: words.as_ptr(),
+                    ..descriptor
+                })
+            },
+            "{operand}:{value}"
+        );
+    }
+    for count in [1, 7, 9, u64::MAX] {
+        assert!(!unsafe {
+            pointer_free_descriptor(&Layout {
+                scan_words: count,
+                ..descriptor
+            })
+        });
+    }
+    for bit in [
+        1,
+        2,
+        4,
+        16,
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        u32::MAX,
+    ] {
+        assert!(
+            !unsafe {
+                pointer_free_descriptor(&Layout {
+                    flags: bit,
+                    ..descriptor
+                })
+            },
+            "flags{bit}"
+        );
+    }
+    assert!(!unsafe {
+        pointer_free_descriptor(&Layout {
+            scan: ptr::null(),
+            ..descriptor
+        })
+    });
+    assert!(!unsafe {
+        pointer_free_descriptor(&Layout {
+            step_count: 1,
+            ..descriptor
+        })
+    });
+    assert!(!unsafe {
+        pointer_free_descriptor(&Layout {
+            logical_count: good.as_ptr(),
+            ..descriptor
+        })
+    });
+    assert!(
+        unsafe { pointer_free_descriptor(&layout(16, 16)) },
+        "legacy certified images stay valid"
+    );
+}

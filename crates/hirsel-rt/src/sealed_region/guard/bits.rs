@@ -4,6 +4,43 @@ use super::*;
 use crate::sealed_region::receipt::semantic::Origin;
 use crate::sealed_region::{Charge, Root};
 
+/// Holder-free descriptors may carry the compiler's value-only observation
+/// program. It does not read a pointer or add cleanup. Require its exact closed
+/// encoding; unknown/type edges and arbitrary scan instructions remain refused.
+/// Original source/type authority is still the caller's independent obligation.
+///
+/// # Safety
+/// `layout` is a live checked descriptor; a nonempty scan names readable words.
+pub(super) unsafe fn pointer_free_descriptor(layout: &crate::Layout) -> bool {
+    use hirsel_core_contract::handle_scan::{VALUE, VALUE_BITS, VALUE_BOOL, VALUE_FIELDS, WORDS};
+    if layout.finalizer.is_some()
+        || layout.step_count != 0
+        || layout.flags & !crate::LAYOUT_NO_EXTENT != 0
+        || !layout.logical_count.is_null()
+    {
+        return false;
+    }
+    if layout.scan_words == 0 {
+        return true;
+    }
+    if layout.scan_words != WORDS as u64
+        || layout.scan.is_null()
+        || !layout.scan.addr().is_multiple_of(align_of::<u64>())
+    {
+        return false;
+    }
+    let words = unsafe { std::slice::from_raw_parts(layout.scan, WORDS) };
+    words[0] == VALUE
+        && words[2] == layout.size
+        && words[3..] == [0; 5]
+        && match words[1] {
+            VALUE_BITS => matches!(layout.size, 1 | 2 | 4 | 8 | 16),
+            VALUE_BOOL => layout.size == 1,
+            VALUE_FIELDS => layout.size == 0 && layout.field_count == 0,
+            _ => false,
+        }
+}
+
 impl DemandedGuard<'_> {
     /// Seal a pointer-free root from an empty demanded scope. Both semantic
     /// retained entries and physical backing must be absent; a dead entry or
@@ -53,12 +90,7 @@ pub(super) unsafe fn bits_plan(
         return Err(Error::InventoryRequired);
     }
     let layout = unsafe { &*(*ctx).descriptor(index) };
-    if layout.finalizer.is_some()
-        || layout.step_count != 0
-        || layout.scan_words != 0
-        || layout.flags != 0
-        || !layout.logical_count.is_null()
-    {
+    if !unsafe { pointer_free_descriptor(layout) } {
         return Err(Error::RootLayout);
     }
     let extent = usize::try_from(layout.size).map_err(|_| Error::RootLayout)?;
