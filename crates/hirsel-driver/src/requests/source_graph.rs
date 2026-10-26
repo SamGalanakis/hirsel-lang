@@ -25,6 +25,8 @@ struct CheckedReceipt {
     headers: Arc<hirsel_engine::FrontCheckedSignatures>,
     allowance: Mutex<Option<MemoryReservation>>,
     products: std::sync::OnceLock<Arc<hirsel_engine::CheckedProducts>>,
+    /// The digest-only view, charged once to what the stages left.
+    digest_view: std::sync::OnceLock<Arc<hirsel_engine::CheckedProducts>>,
 }
 impl CheckedReceipt {
     fn products(
@@ -87,7 +89,32 @@ impl CheckedReceipt {
             .checked_products_with_allowances(output, receipt)
             .map_err(refused)?;
         drop(built);
+        *self
+            .allowance
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = Some(pool);
         Ok(self.products.get_or_init(|| products).clone())
+    }
+    fn digest_view(
+        &self,
+        check: &Arc<FrontCheckQueries>,
+        product: ProductRef,
+        entry: &DefPath,
+    ) -> Result<Arc<hirsel_engine::CheckedProducts>, ToolError> {
+        if let Some(view) = self.digest_view.get() {
+            return Ok(view.clone());
+        }
+        let products = self.products(check, product, entry)?;
+        let view = self
+            .allowance
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_mut()
+            .and_then(|pool| products.digest_view(pool))
+            .ok_or_else(|| {
+                ToolError::Runtime("checked product digest view exceeds its admission".into())
+            })?;
+        Ok(self.digest_view.get_or_init(|| view).clone())
     }
 }
 
@@ -304,16 +331,13 @@ impl GraphProducts for SourceProducts {
                             let completed = check.outcome(*product).ok_or_else(|| {
                                 ToolError::Runtime("selected check product is unavailable".into())
                             })?;
-                            let mut products = receipt
-                                .as_ref()
-                                .ok_or_else(uninstalled)?
-                                .products(&check, *product, &entry)?;
+                            let receipt = receipt.as_ref().ok_or_else(uninstalled)?;
                             // The digest commits to the full text either way.
-                            if !*canonical {
-                                let mut digest_only = (*products).clone();
-                                digest_only.canonical = None;
-                                products = Arc::new(digest_only);
-                            }
+                            let products = if *canonical {
+                                receipt.products(&check, *product, &entry)?
+                            } else {
+                                receipt.digest_view(&check, *product, &entry)?
+                            };
                             CompileResult::CheckedProducts {
                                 checked: completed.checked,
                                 products,
@@ -898,6 +922,7 @@ pub(super) fn install(
             headers,
             allowance: Mutex::new(Some(allowance)),
             products: std::sync::OnceLock::new(),
+            digest_view: std::sync::OnceLock::new(),
         }))
     } else {
         None
