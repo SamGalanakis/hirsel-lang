@@ -846,6 +846,14 @@ pub(super) fn install(
         }
         definitions = selected;
     };
+    // The root package is what a session edits; keep its rows over the
+    // packages it imports when one request publishes more than the store holds.
+    let root = definitions
+        .iter()
+        .filter(|path| path.0.package == program.entry.0.package)
+        .cloned()
+        .collect::<Vec<_>>();
+    store.demand(&program.engine.front_store_keys(&root));
     let sources = program.engine.sources.clone();
     let plan = Plan::new(
         limits,

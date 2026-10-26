@@ -1091,6 +1091,17 @@ impl QueryEngine {
         self.verify_store = verify;
         self
     }
+    /// The Signature and Modes rows a front request publishes for
+    /// `definitions`, as its store demand.
+    pub fn front_store_keys(&mut self, definitions: &[DefPath]) -> Vec<EntryKey> {
+        let mut keys = Vec::new();
+        for path in definitions {
+            for kind in [QueryKind::Signature, QueryKind::Modes] {
+                keys.extend(self.store_key(path, kind));
+            }
+        }
+        keys
+    }
     pub(super) fn store_key(&mut self, path: &DefPath, kind: QueryKind) -> Option<EntryKey> {
         // Source-owned generated Lower products bind the accepted text below.
         // Synthetic instance registrations still replay through S1.

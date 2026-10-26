@@ -102,6 +102,9 @@ impl ResultStore for ScratchStore {
     fn put(&self, key: &EntryKey, bytes: &[u8]) {
         self.selected.put(key, bytes);
     }
+    fn demand(&self, keys: &[EntryKey]) {
+        self.selected.demand(keys);
+    }
     fn lookup_product(&self, address: Address) -> Option<Association> {
         self.selected.lookup_product(address)
     }

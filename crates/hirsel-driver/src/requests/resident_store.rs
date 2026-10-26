@@ -8,7 +8,7 @@ use hirsel_engine::{
 };
 use hirsel_syntax::ContentHash;
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
 };
 
@@ -32,16 +32,35 @@ enum Value {
     Bytes(Bytes),
     Row(Reference, MemoryReservation),
 }
+/// What a full store evicts first: entries outside the latest demand, then
+/// the rest, each least recently used first.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Tier {
+    Other,
+    /// A demanded row or content one of its variants names. Each demand
+    /// replaces the last.
+    Demanded,
+    /// Type records, which every payload cites and which stay small.
+    Shared,
+}
 struct Entry {
     value: Value,
     charge: u64,
     stamp: u64,
+    tier: Tier,
+}
+impl Entry {
+    fn rank(&self) -> (bool, u64) {
+        (self.tier != Tier::Other, self.stamp)
+    }
 }
 #[derive(Default)]
 struct State {
     entries: HashMap<Key, Entry>,
-    /// Stamps, least recently used first.
-    order: BTreeMap<u64, Key>,
+    /// Ranks, first evicted first.
+    order: BTreeMap<(bool, u64), Key>,
+    /// Result keys of the latest demand.
+    demanded: HashSet<ContentHash>,
     clock: u64,
     /// Charges of the entries this store still retains.
     used: u64,
@@ -52,8 +71,30 @@ struct State {
 impl State {
     fn remove(&mut self, key: &Key) {
         if let Some(entry) = self.entries.remove(key) {
-            self.order.remove(&entry.stamp);
+            self.order.remove(&entry.rank());
             self.used -= entry.charge;
+        }
+    }
+    fn set_tier(&mut self, key: Key, tier: Tier) {
+        let Some(entry) = self.entries.get_mut(&key) else {
+            return;
+        };
+        self.order.remove(&entry.rank());
+        entry.tier = tier;
+        self.order.insert(entry.rank(), key);
+    }
+    /// Keep a demanded row and the content its variants name.
+    fn keep(&mut self, key: &EntryKey) {
+        let Some(Value::Bytes(row)) = self.entries.get(&Key::Result(key.0)).map(|e| &e.value)
+        else {
+            return;
+        };
+        let cited = hirsel_engine::store::Entry::decode_for(key, row)
+            .map(|row| row.variants)
+            .unwrap_or_default();
+        self.set_tier(Key::Result(key.0), Tier::Demanded);
+        for variant in cited {
+            self.set_tier(Key::Content(variant.output.output.0), Tier::Demanded);
         }
     }
     fn slot_bytes(&self) -> u64 {
@@ -61,9 +102,9 @@ impl State {
     }
 }
 
-/// Least recently used entries within `capacity` bytes, slots included, each
-/// charged to the shared process budget. A put that does not fit or that the
-/// budget refuses is dropped.
+/// Entries within `capacity` bytes, slots included, each charged to the
+/// shared process budget and evicted by tier, then least recently used. A put
+/// that does not fit or that the budget refuses is dropped.
 struct Bounded {
     budget: Arc<ProcessBudget>,
     capacity: u64,
@@ -73,16 +114,17 @@ impl Bounded {
     /// Read one entry and mark it most recently used.
     fn read<T>(&self, key: Key, read: impl FnOnce(&Value) -> Option<T>) -> Option<T> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        let previous = state.entries.get(&key)?.stamp;
+        let previous = state.entries.get(&key)?.rank();
         state.order.remove(&previous);
         state.clock += 1;
         let stamp = state.clock;
-        state.order.insert(stamp, key);
         let entry = state.entries.get_mut(&key)?;
         entry.stamp = stamp;
-        read(&entry.value)
+        let rank = entry.rank();
+        state.order.insert(rank, key);
+        read(&state.entries.get(&key)?.value)
     }
-    fn put(&self, key: Key, value: impl FnOnce(MemoryReservation) -> Value, len: u64) {
+    fn put(&self, key: Key, value: impl FnOnce(MemoryReservation) -> Value, len: u64, tier: Tier) {
         let charge = len + PAYLOAD_CHARGE;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         // An entry that cannot fit even alone never evicts the others.
@@ -121,16 +163,14 @@ impl Bounded {
         };
         state.used += charge;
         state.clock += 1;
-        let stamp = state.clock;
-        state.order.insert(stamp, key);
-        state.entries.insert(
-            key,
-            Entry {
-                value: value(memory),
-                charge,
-                stamp,
-            },
-        );
+        let entry = Entry {
+            value: value(memory),
+            charge,
+            stamp: state.clock,
+            tier,
+        };
+        state.order.insert(entry.rank(), key);
+        state.entries.insert(key, entry);
     }
     fn get_bytes(&self, key: Key) -> Option<Bytes> {
         self.read(key, |value| match value {
@@ -138,11 +178,12 @@ impl Bounded {
             Value::Row(..) => None,
         })
     }
-    fn put_bytes(&self, key: Key, bytes: &[u8]) {
+    fn put_bytes(&self, key: Key, bytes: &[u8], tier: Tier) {
         self.put(
             key,
             |memory| Value::Bytes(Bytes::from(bytes).retain_owner(Arc::new(memory))),
             bytes.len() as u64,
+            tier,
         );
     }
 }
@@ -153,7 +194,7 @@ impl Contents for Bounded {
     }
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let reference = domain.reference(bytes)?;
-        self.put_bytes(Key::VerifierContent(reference.output.0), bytes);
+        self.put_bytes(Key::VerifierContent(reference.output.0), bytes, Tier::Other);
         Some(reference)
     }
 }
@@ -169,6 +210,7 @@ impl hirsel_validate::VerifierRows for Bounded {
             Key::VerifierRow(key),
             |memory| Value::Row(reference, memory),
             std::mem::size_of::<Reference>() as u64,
+            Tier::Other,
         );
     }
 }
@@ -208,7 +250,39 @@ impl ResultStore for ResidentStore {
         self.bounded.get_bytes(Key::Result(key.0))
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
-        self.bounded.put_bytes(Key::Result(key.0), value);
+        self.bounded
+            .put_bytes(Key::Result(key.0), value, Tier::Other);
+        let mut state = self
+            .bounded
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if state.demanded.contains(&key.0) {
+            state.keep(key);
+        }
+    }
+    /// The products a session's next revision is likeliest to adopt survive
+    /// a request that publishes more than this bound holds. Each demand names
+    /// the request's root package rows, which replace the last demand's.
+    fn demand(&self, keys: &[EntryKey]) {
+        let mut state = self
+            .bounded
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let demoted: Vec<Key> = state
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.tier == Tier::Demanded)
+            .map(|(key, _)| *key)
+            .collect();
+        for key in demoted {
+            state.set_tier(key, Tier::Other);
+        }
+        state.demanded = keys.iter().map(|key| key.0).collect();
+        for key in keys {
+            state.keep(key);
+        }
     }
     /// Retained best-effort for later revisions, but never claimed: a request
     /// keeps its own transport copy, since this bound may drop or evict
@@ -219,8 +293,13 @@ impl ResultStore for ResidentStore {
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let reference = domain.reference(bytes)?;
         if hirsel_engine::store::is_result_content(domain) {
+            let tier = if domain == hirsel_engine::store::TYPE_RECORDS {
+                Tier::Shared
+            } else {
+                Tier::Other
+            };
             self.bounded
-                .put_bytes(Key::Content(reference.output.0), bytes);
+                .put_bytes(Key::Content(reference.output.0), bytes, tier);
         }
         None
     }
@@ -290,6 +369,45 @@ mod tests {
         assert_eq!(&held[..], &[1; 100]);
         drop(held);
         assert_eq!(budget.reserved(), 0);
+    }
+
+    #[test]
+    fn resident_store_keeps_demanded_rows_and_their_content_until_the_next_demand() {
+        use hirsel_engine::store::{Entry, RequestStore, VariantRef};
+        let budget = ProcessBudget::new(1 << 20);
+        let resident = Arc::new(ResidentStore::new(budget.clone(), 2 * SLOTS + 16 * ENTRY));
+        let request = RequestStore::new(resident.clone(), budget.reserve(1 << 16).unwrap());
+        let demanded = key(0);
+        request.demand(std::slice::from_ref(&demanded));
+        let variant = VariantRef::publish(
+            &request,
+            &demanded,
+            hirsel_engine::Reads::empty(),
+            &[7; 100],
+        )
+        .unwrap();
+        let mut row = Entry::default();
+        row.insert(variant.clone());
+        request.put(&demanded, &row.encode_for(&demanded));
+        let flood = |store: &ResidentStore| {
+            for byte in 1..=64 {
+                store.put(&key(byte), &[byte; 100]);
+            }
+        };
+        flood(&resident);
+        assert!(resident.get(&key(1)).is_none(), "others are evicted");
+        assert!(resident.get(&demanded).is_some());
+        assert_eq!(
+            &resident.get_content(variant.output).unwrap()[..],
+            &[7; 100]
+        );
+        resident.demand(&[]);
+        flood(&resident);
+        assert!(
+            resident.get(&demanded).is_none(),
+            "a later demand releases it"
+        );
+        assert!(resident.get_content(variant.output).is_none());
     }
 
     #[test]

@@ -128,6 +128,9 @@ impl ResultStore for RequestStore {
     fn put(&self, key: &EntryKey, value: &[u8]) {
         self.backend.put(key, value)
     }
+    fn demand(&self, keys: &[EntryKey]) {
+        self.backend.demand(keys)
+    }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
         if let Some((actual, bytes)) = self
             .state

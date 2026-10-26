@@ -78,6 +78,10 @@ pub trait ResultStore: Send + Sync {
     }
     fn get(&self, key: &EntryKey) -> Option<Bytes>;
     fn put(&self, key: &EntryKey, value: &[u8]);
+    /// The rows a request expects later revisions to adopt first, replacing
+    /// any earlier demand. A bounded provider evicts others before them;
+    /// this changes retention only, never what a lookup returns.
+    fn demand(&self, _keys: &[EntryKey]) {}
     /// Generic product associations share this provider with front queries.
     /// Their registered domains are independent of front QueryKind tags. An
     /// association supplies integrity only, never verifier/native authority.
@@ -390,13 +394,16 @@ impl Entry {
     pub fn load(store: &dyn ResultStore, key: &EntryKey) -> Entry {
         store
             .get(key)
-            .and_then(|bytes| {
-                let payload = unframe(&bytes)?.strip_prefix(b"HRE5")?;
-                let payload = payload.strip_prefix(key.0.0.as_slice())?;
-                let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
-                Entry::decode_bytes(bytes.range(offset as u64, payload.len() as u64, 1)?)
-            })
+            .and_then(|bytes| Self::decode_for(key, &bytes))
             .unwrap_or_default()
+    }
+    /// Decodes bytes `encode_for(key)` wrote; damaged or another key's bytes
+    /// are None.
+    pub fn decode_for(key: &EntryKey, bytes: &Bytes) -> Option<Entry> {
+        let payload = unframe(bytes)?.strip_prefix(b"HRE5")?;
+        let payload = payload.strip_prefix(key.0.0.as_slice())?;
+        let offset = payload.as_ptr() as usize - bytes.as_ptr() as usize;
+        Entry::decode_bytes(bytes.range(offset as u64, payload.len() as u64, 1)?)
     }
     pub(crate) fn action(&self, key: &EntryKey) -> Action {
         let actions: Vec<_> = self.variants.iter().map(|v| v.action(key)).collect();
