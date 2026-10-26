@@ -1027,9 +1027,15 @@ def first_party(meta: dict) -> str:
                             data=["tools/land", "tools/tests/land.py", "//tools/buck2:generated.py",
                                   "//tools/buck2:merging.py", "//tools/buck2:clippy.py", "//tools/buck2:fmt.py",
                                   "//tools/buck2:event_logs.py", "//tools/buck2:rust_environment.py"]))
+    out.append("\n" + call("hirsel_test", name="test-report-fixture", crate="test_report_fixture",
+                            crate_root="tools/tests/fixtures/test_report.rs",
+                            srcs=["tools/tests/fixtures/test_report.rs"], features=[], deps=[],
+                            manifest_dir=".", package_name="test-report-fixture", version="0.0.0", edition="2024"))
     out.append("\n" + call("hirsel_script_test", name="test-buck2-launcher", script="tools/tests/buck2_launcher.py", full=False,
                             data=["tools/tests/buck2_launcher.py"],
                             files_env={"HIRSEL_TEST_LAUNCHER": "//tools/buck2:test_launcher.sh",
+                                       "HIRSEL_TEST_REPORTER": "//tools/buck2:test_report.py",
+                                       "HIRSEL_TEST_REPORT_FIXTURE": "//:test-report-fixture-harness",
                                        "HIRSEL_TEST_NATIVE_ENVIRONMENT": "//tools/buck2/native-toolchain:environment.tsv",
                                        "HIRSEL_TEST_PRIVATE_NATIVE_INPUTS": "//tools/buck2:private_native_inputs.py",
                                        **{f"HIRSEL_TEST_{name.upper()}": f"//tools/buck2:{name}.bzl"

@@ -13,6 +13,9 @@
 # argument other than `--skip`, every shard but the first runs nothing, and
 # the first runs the whole selection.
 set -eu
+if [ -n "${HIRSEL_TEST_REPORTER:-}" ] && [ -z "${HIRSEL_TEST_REPORT_ACTIVE:-}" ]; then
+  exec python3 "$HIRSEL_TEST_REPORTER" sh "$0" "$@"
+fi
 root="$(pwd)"
 # Keep SDK copies on the executor's original scratch filesystem, before the
 # recording tests select their ancestry-safe /dev/shm TMPDIR.
@@ -258,6 +261,36 @@ if [ -n "${HIRSEL_TEST_BIN_EXES:-}" ]; then
   done
 fi
 cd "$HIRSEL_TEST_CWD"
+# Only Rust harness runs use the libtest event protocol. Discovery and help
+# retain their own formats, and scripts keep their original argument surface.
+run_harness() (
+  if [ -n "$test_binary" ] && [ -n "${HIRSEL_TEST_REPORT_ACTIVE:-}" ]; then
+    for argument in "$@"; do
+      case "$argument" in --list | --help | -h) "$harness" "$@"; exit $? ;; esac
+    done
+    remaining=$#
+    literal=false
+    set -- "$@" -Zunstable-options --format=json
+    while [ "$remaining" -gt 0 ]; do
+      argument=$1; shift; remaining=$((remaining - 1))
+      if "$literal"; then set -- "$@" "$argument"; continue; fi
+      case "$argument" in
+        --) literal=true; set -- "$@" -- ;;
+        --format=* | --quiet | -q) ;;
+        --format)
+          [ "$remaining" -gt 0 ] || { echo "$argument requires a value" >&2; exit 2; }
+          shift; remaining=$((remaining - 1)) ;;
+        *)
+          set -- "$@" "$argument"
+          if takes_value "$argument" && [ "$remaining" -gt 0 ]; then
+            value=$1; shift; remaining=$((remaining - 1)); set -- "$@" "$value"
+          fi ;;
+      esac
+    done
+    export RUSTC_BOOTSTRAP=1
+  fi
+  "$harness" "$@"
+)
 shard=""
 if [ -n "${TEST_TOTAL_SHARDS:-}" ]; then shard="$((TEST_SHARD_INDEX + 1))/$TEST_TOTAL_SHARDS"; fi
 costs="${HIRSEL_TEST_COSTS:-}"
@@ -283,7 +316,7 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard" ] && ! "$inventory"; then materialize_native_inputs "$@"; "$harness" "$@"; exit $?; fi
+if [ -z "$shard" ] && ! "$inventory"; then materialize_native_inputs "$@"; run_harness "$@"; exit $?; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 list_cases() (
   remaining=$#
@@ -378,4 +411,4 @@ while [ "$remaining" -gt 0 ]; do
   esac
 done
 [ -z "$cases" ] || materialize_native_inputs "$@"
-"$harness" "$@"
+run_harness "$@"

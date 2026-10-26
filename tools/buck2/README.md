@@ -236,6 +236,18 @@ partitions. Target names come from Cargo; `-unittest` and `-test-it` run unit
 and integration tests, and the library target runs declared doctests. For a
 sharded binary, select every `-shard-<i>` target.
 
+Pool test actions reserve 5% of the unchanged 600-second RE limit for reporting.
+At the 570-second inner deadline, `test_report.py` prints
+`HIRSEL_TEST_INNER_DEADLINE`, every completed body's result, and each
+`HIRSEL_TEST_RUNNING` name with its elapsed time, then terminates its own test
+process group and exits 124. This returns an ordinary failed action with its
+output before RE's `DeadlineExceeded` discards that output. Rust bodies are
+tracked through libtest's JSON start/result events; ordinary result lines,
+summaries and per-case timings remain available to count and cost tools.
+Python unittest scripts retain their verbose output, including the active
+method. A deadline during setup, discovery or teardown is labeled separately.
+The action's CPU and memory grants and outer RE timeout remain unchanged.
+
 Heavy Buck2 commands run from this host and execute on the pool when one is
 configured. Native changes use a filtered campaign:
 

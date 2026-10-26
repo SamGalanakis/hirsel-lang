@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import sys
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -112,7 +113,7 @@ class LauncherFixture(unittest.TestCase):
             HIRSEL_TEST_TMPDIR=str(self.root / 'tmp'), HIRSEL_TEST_CWD=str(self.root),
             LLVM_SYS_231_PREFIX=str(self.root / 'llvm'), CASES=json.dumps(CASES),
             OBSERVED=str(self.observed), HIRSEL_TEST_BINARY='fixture-test-it')
-        for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'HIRSEL_TEST_EXACT_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY'):
+        for key in ('HIRSEL_TEST_POOL', 'HIRSEL_TEST_CPUS', 'HIRSEL_TEST_EXACT_CPUS', 'TEST_SHARD_INDEX', 'TEST_TOTAL_SHARDS', 'HIRSEL_TEST_HOST_ONLY', 'HIRSEL_TEST_REPORT_ACTIVE', 'HIRSEL_TEST_REPORTER'):
             self.env.pop(key, None)
 
 
@@ -189,6 +190,110 @@ class PrivateNativeInputs(LauncherFixture):
         result = subprocess.run(['sh', str(LAUNCHER), 'harness', '--list'], cwd=self.root, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('pool::smoke: test', result.stdout)
+
+
+class LauncherReporting(LauncherFixture):
+    def reporter(self):
+        return Path(os.environ.get('HIRSEL_TEST_REPORTER', ROOT / 'tools/buck2/test_report.py')).resolve()
+
+    def run_report(self, args=(), deadline=0.5):
+        # The injected short deadline is confined to this regression process;
+        # production has no timeout environment variable or command-line knob.
+        code = ("import runpy,sys; m=runpy.run_path(sys.argv[1]); "
+                f"sys.exit(m['supervise'](sys.argv[2:], deadline={deadline}))")
+        env = self.env | {'HIRSEL_TEST_REPORT_ACTIVE': '1',
+                          'HIRSEL_TEST_REPORTER': str(self.reporter())}
+        return subprocess.run([sys.executable, '-c', code, str(self.reporter()),
+                               'sh', str(LAUNCHER), 'harness', *args],
+                              cwd=self.root, env=env, capture_output=True, text=True, timeout=10)
+
+    def fixture(self):
+        # Same started/result JSON events emitted by pinned libtest. The Rust
+        # fixture below additionally exercises the real formatter remotely.
+        (self.root / 'harness').write_text(r'''#!/usr/bin/env python3
+import json, os, signal, sys
+if '--list' in sys.argv:
+    print('finished: test\nforever: test\nqueued: test'); sys.exit(0)
+assert '--format=json' in sys.argv, sys.argv
+for event in [dict(type='suite',event='started',test_count=3),
+              dict(type='test',event='started',name='finished'),
+              dict(type='test',event='ok',name='finished',exec_time=0.01),
+              dict(type='test',event='started',name='forever')]:
+    print(json.dumps(event), flush=True)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+while True: signal.pause()
+''')
+
+    def test_hanging_body_is_named_and_finished_body_keeps_its_result(self):
+        self.fixture()
+        for shard in ({}, dict(TEST_TOTAL_SHARDS='1', TEST_SHARD_INDEX='0')):
+            self.env.update(shard)
+            result = self.run_report()
+            self.assertEqual(result.returncode, 124, result.stderr)
+            self.assertIn('test finished ... ok <0.010000s>', result.stdout)
+            self.assertIn('HIRSEL_TEST_FINISHED ok finished', result.stderr)
+            self.assertIn('HIRSEL_TEST_RUNNING forever elapsed=', result.stderr)
+            self.assertNotIn('HIRSEL_TEST_RUNNING finished', result.stderr)
+            self.assertNotIn('HIRSEL_TEST_RUNNING queued', result.stderr)
+            self.assertIn('HIRSEL_TEST_INNER_DEADLINE', result.stderr)
+
+    def test_real_libtest_results_and_inner_deadline(self):
+        fixture = os.environ.get('HIRSEL_TEST_REPORT_FIXTURE')
+        if not fixture:
+            self.skipTest('real libtest fixture supplied by Buck2')
+        import shutil
+        shutil.copy2(Path(fixture).resolve(), self.root / 'harness')
+        result = self.run_report(('--include-ignored',), deadline=10)
+        self.assertEqual(result.returncode, 101, result.stderr)
+        self.assertIn('test a_pass ... ok', result.stdout)
+        self.assertIn('test b_fail ... FAILED', result.stdout)
+        self.assertIn('fixture failure output', result.stdout)
+        self.assertIn('test result: FAILED. 2 passed; 1 failed; 0 ignored;', result.stdout)
+        self.env['HIRSEL_REPORT_FIXTURE_HANG'] = '1'
+        result = self.run_report(('--test-threads=1',), deadline=1)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn('HIRSEL_TEST_RUNNING c_hangs', result.stderr)
+        self.assertIn('HIRSEL_TEST_FINISHED ok a_pass', result.stderr)
+        self.assertIn('HIRSEL_TEST_FINISHED ignored b_fail', result.stderr)
+
+    def test_unittest_partial_start_names_the_hanging_method(self):
+        (self.root / 'harness').write_text(r'''#!/usr/bin/env python3
+import signal, unittest
+class Fixture(unittest.TestCase):
+    def test_a_pass(self): pass
+    def test_b_hangs(self):
+        while True: signal.pause()
+unittest.main(verbosity=2)
+''')
+        self.env.pop('HIRSEL_TEST_BINARY', None)
+        result = self.run_report()
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn('HIRSEL_TEST_FINISHED ok __main__.Fixture.test_a_pass', result.stderr)
+        self.assertIn('HIRSEL_TEST_RUNNING __main__.Fixture.test_b_hangs', result.stderr)
+
+    def test_sigterm_flushes_running_names(self):
+        self.fixture()
+        import selectors
+        import signal
+        env = self.env | {'HIRSEL_TEST_REPORTER': str(self.reporter())}
+        with subprocess.Popen(['sh', str(LAUNCHER), 'harness'], cwd=self.root, env=env,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as run:
+            try:
+                with selectors.DefaultSelector() as ready:
+                    ready.register(run.stdout, selectors.EVENT_READ)
+                    self.assertTrue(ready.select(5), 'no started event')
+                # Read one character at a time: TextIO's read-ahead would hide
+                # later lines from select while waiting for the hanging name.
+                output = ''
+                while 'HIRSEL_TEST_STARTED forever\n' not in output:
+                    output += run.stdout.read(1)
+                run.send_signal(signal.SIGTERM)
+                _, stderr = run.communicate(timeout=5)
+                self.assertEqual(run.returncode, 143, stderr)
+                self.assertIn('HIRSEL_TEST_RUNNING forever', stderr)
+            finally:
+                if run.poll() is None:
+                    run.kill()
 
 
 class LauncherSelection(LauncherFixture):

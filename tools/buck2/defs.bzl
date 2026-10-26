@@ -276,7 +276,7 @@ def _rust_test_impl(ctx):
     binaries = dict(ctx.attrs.bin_exes)
     binaries.update(ctx.attrs.release_bin_exes)
     exes = {bin: dep[DefaultInfo].default_outputs[0] for bin, dep in binaries.items()}
-    inputs = ctx.attrs.data + [exe for _, exe in sorted(exes.items())] + [llvm]
+    inputs = ctx.attrs.data + [exe for _, exe in sorted(exes.items())] + [llvm, ctx.attrs._test_reporter]
     inputs += ctx.attrs._llvm_libraries[DefaultInfo].default_outputs
     tools = {name: dep[DefaultInfo].default_outputs[0] for name, dep in ctx.attrs.native_tools.items()}
     inputs += list(tools.values())
@@ -323,6 +323,7 @@ def _rust_test_impl(ctx):
         env[name] = cmd_args(file)
     if ctx.attrs.pool:
         env["HIRSEL_TEST_POOL"] = "1"
+        env["HIRSEL_TEST_REPORTER"] = cmd_args(ctx.attrs._test_reporter)
     if ctx.attrs.relocate:
         env["HIRSEL_TEST_RELOCATE"] = "1"
     if ctx.attrs.seed:
@@ -395,6 +396,7 @@ _rust_test = rule(
         "shards": attrs.int(default = 0),
         "test_binary": attrs.string(default = ""),
         "_launcher": attrs.source(default = "root//tools/buck2:test_launcher.sh"),
+        "_test_reporter": attrs.source(default = "root//tools/buck2:test_report.py"),
         "_private_native_inputs": attrs.source(default = "root//tools/buck2:private_native_inputs.py"),
         "_llvm_libraries": attrs.dep(default = "toolchains//:llvm-libraries"),
         "_native_environment": attrs.source(default = "root//tools/buck2/native-toolchain:environment.tsv"),
