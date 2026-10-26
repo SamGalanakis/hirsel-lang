@@ -2035,7 +2035,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.define(result, value)
             }
             Inst::BorrowSealedRoot { result, owner, .. } => self.borrow_sealed_root(result, owner),
-            Inst::PayloadReceipt { .. } | Inst::SealArena { .. } | Inst::ArenaInventory { .. } => {
+            Inst::SealArena {
+                result,
+                grant,
+                root,
+                shape,
+                failure,
+                origin,
+            } => self.seal_arena(result, grant, root, shape, failure, origin),
+            Inst::PayloadReceipt { .. } | Inst::ArenaInventory { .. } => {
                 self.unsupported("sealed storage emission is not linked")
             }
             Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {

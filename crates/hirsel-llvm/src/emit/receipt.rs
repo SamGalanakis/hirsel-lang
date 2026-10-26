@@ -164,3 +164,6 @@ mod sealed_tests;
 
 #[cfg(test)]
 mod sealed_drop_tests;
+
+#[cfg(test)]
+mod seal_bits_tests;

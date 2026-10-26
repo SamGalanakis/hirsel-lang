@@ -14,7 +14,11 @@ use std::collections::BTreeSet;
 
 // Private physical-emission probes bypass C admission. They test byte loads
 // and the approved helper boundary; they do not qualify public sealed APIs.
-fn fixture(target: &TargetSpec, kind: u8, malformed: bool) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
+pub(super) fn fixture(
+    target: &TargetSpec,
+    kind: u8,
+    malformed: bool,
+) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
     let (mut table, mut unit, mut abi) = super::tests::fixture(target);
     unit.tables.receipt_entry = None;
     unit.slots.clear();

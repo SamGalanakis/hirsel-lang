@@ -30,6 +30,51 @@ pub struct SealDescriptor {
 }
 
 impl SealDescriptor {
+    /// Select the original pointer-free values whose complete semantics are
+    /// their inline bytes. This is a code-generation restriction, not source
+    /// authority: C still independently reconstructs this descriptor. In
+    /// particular a pointer-sized scalar or empty scan is insufficient.
+    pub fn bits_root(&self, table: &LayoutTable) -> Result<LayoutId, String> {
+        use crate::layout_types::{CopyRecipe, ScalarKind as S, SizeSpec};
+        use crate::operation::Primitive as P;
+        self.check(table)?;
+        let expected = match &self.root_type {
+            NativeType::Tuple(fields) if fields.is_empty() => None,
+            NativeType::Primitive(p) => Some(match p {
+                P::Bool => S::Bool,
+                P::U8 => S::U8,
+                P::U16 => S::U16,
+                P::U32 | P::Char => S::U32,
+                P::U64 => S::U64,
+                P::U128 => S::U128,
+                P::I8 => S::I8,
+                P::I16 => S::I16,
+                P::I32 => S::I32,
+                P::I64 => S::I64,
+                P::I128 => S::I128,
+                P::F32 => S::F32,
+                P::F64 => S::F64,
+                _ => return Err("seal root requires original payload receipt transport".into()),
+            }),
+            _ => return Err("seal root requires original payload receipt transport".into()),
+        };
+        let row = &table.layouts[self.root_layout.0 as usize];
+        let kind = expected.map_or(LayoutKind::Unit, LayoutKind::Scalar);
+        if row.kind != kind
+            || row.copy != CopyRecipe::Bits
+            || row.finalizer.is_some()
+            || !row.scan.is_empty()
+            || !row.drop.is_empty()
+            || !row.fields.is_empty()
+            || row.tag.is_some()
+            || !matches!(row.size, SizeSpec::Fixed(_))
+            || row.abi.unaligned
+        {
+            return Err("seal bits root has physical storage or cleanup obligations".into());
+        }
+        Ok(self.root_layout)
+    }
+
     /// Physical consistency only. The public validator must also reconstruct
     /// the logical graph and bindings from independent type declarations.
     pub fn check(&self, table: &LayoutTable) -> Result<(), String> {

@@ -160,3 +160,6 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod sealed_tests;
+
+#[cfg(test)]
+mod seal_bits_tests;
