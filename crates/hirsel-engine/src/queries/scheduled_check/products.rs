@@ -176,8 +176,25 @@ impl FrontCheckScope {
             return Err(QueryError::NotImplemented);
         }
         let lower = &self.owner().plan.lower;
+        // A GEN-6 specialization is a header only where a receipt body names
+        // it, as checking that body registers it. Others were registered for
+        // bodies this receipt does not cover.
+        let named: BTreeSet<DefId> = self
+            .reads()
+            .values()
+            .flat_map(|reads| reads.iter())
+            .filter_map(|(read, _)| match read {
+                ReadKey::Signature(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
         let mut signatures = BTreeMap::new();
         for (path, _) in headers.signatures() {
+            if hirsel_types::specialization_parts(path).is_some()
+                && !named.contains(&DefId::intern(path))
+            {
+                continue;
+            }
             signatures.insert(
                 path.clone(),
                 headers.section(path).ok_or(QueryError::NotImplemented)?,
