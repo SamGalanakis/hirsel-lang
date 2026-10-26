@@ -29,7 +29,7 @@ use crate::alloc::{
 use crate::context::TaskCtx;
 use crate::count::{COUNT_IMMORTAL, check_live_block};
 use crate::finalize::{Cleanup, DropThunk, run_close, run_finalizer};
-use crate::{STATUS_OK, fault};
+use crate::{STATUS_FAILURE, STATUS_OK, fault};
 
 /// `Layout::magic`: "HRL1".
 pub const LAYOUT_MAGIC: u32 = 0x484e_4c31;
@@ -877,35 +877,129 @@ pub(crate) unsafe fn drain(
 ) -> Drained {
     #[cfg(test)]
     crate::header_tests::count_drain();
-    // SAFETY: caller contract.
-    unsafe {
-        if mask.is_null() && !keep_root {
-            drain_items::<false>(ctx, base, root, mask, keep_root, anchor, operation_site)
-        } else {
-            drain_items::<true>(ctx, base, root, mask, keep_root, anchor, operation_site)
+    let mut cursor = Cursor::new(base, root, mask, keep_root, anchor, operation_site);
+    loop {
+        match unsafe { cursor.poll(ctx) } {
+            ReleasePoll::Complete(result) => return result,
+            ReleasePoll::Close(handle) => {
+                let status = unsafe { run_close(ctx, handle, anchor, operation_site) };
+                cursor.closed(status);
+            }
         }
     }
+}
+
+/// All traversal locals that survive a built-in close. A pending cursor is
+/// kept at a stable address with its entire work/cursor ancestry; constructing
+/// this record alone never authorizes physical stack release.
+pub(crate) struct Cursor {
+    base: *mut Header,
+    root: *mut Header,
+    item: *mut Header,
+    parent: *mut Header,
+    fresh: bool,
+    mask: *const u64,
+    keep_root: bool,
+    anchor: u64,
+    operation_site: u64,
+    status: u8,
+    kept_root: bool,
+    close: Option<u64>,
+    complete: bool,
+}
+
+pub(crate) enum ReleasePoll {
+    Close(u64),
+    Complete(Drained),
+}
+
+impl Cursor {
+    /// # Safety
+    /// The caller already owns root's consumed credit/inline Cleanup and the
+    /// original work watermark. Mask/value/ancestors outlive this cursor.
+    pub(crate) fn new(
+        base: *mut Header,
+        root: *mut Header,
+        mask: *const u64,
+        keep_root: bool,
+        anchor: u64,
+        operation_site: u64,
+    ) -> Self {
+        Self {
+            base,
+            root,
+            item: root,
+            parent: ptr::null_mut(),
+            fresh: true,
+            mask,
+            keep_root,
+            anchor,
+            operation_site,
+            status: STATUS_OK,
+            kept_root: false,
+            close: None,
+            complete: false,
+        }
+    }
+
+    /// Poll the traversal only; an unfinished close is returned at its saved
+    /// PC until its own driver supplies a completed 0/1 status. The close's
+    /// consumed credit, loop position and pointer-reversal ancestors persist.
+    /// # Safety
+    /// As for new. No ordinary finalizer called by this walk can compact its
+    /// synchronous Rust caller; only the returned close may leave this stack.
+    pub(crate) unsafe fn poll(&mut self, ctx: &mut TaskCtx) -> ReleasePoll {
+        assert!(!self.complete, "release cursor polled after completion");
+        if let Some(handle) = self.close {
+            return ReleasePoll::Close(handle);
+        }
+        unsafe {
+            if self.mask.is_null() && !self.keep_root {
+                poll_items::<false>(ctx, self)
+            } else {
+                poll_items::<true>(ctx, self)
+            }
+        }
+    }
+
+    pub(crate) fn closed(&mut self, status: u8) {
+        assert!(
+            self.close.take().is_some(),
+            "close completion without a release step"
+        );
+        assert!(
+            status == STATUS_OK || status == STATUS_FAILURE,
+            "pending is not a release failure bit"
+        );
+        self.status |= status;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Walk {
+    Child(*mut Header, u64),
+    Close(u64, u64),
+    Complete,
 }
 
 /// [`drain`]. `ROOTED` is false when the root has neither a live mask nor `keep_root`, so every
 /// item runs alike: an ordinary release.
 #[inline(always)]
-unsafe fn drain_items<const ROOTED: bool>(
-    ctx: &mut TaskCtx,
-    base: *mut Header,
-    root: *mut Header,
-    mask: *const u64,
-    keep_root: bool,
-    anchor: u64,
-    operation_site: u64,
-) -> Drained {
-    let mut status = STATUS_OK;
-    let mut kept_root = false;
-    // The root stops being one once a tail release frees it.
-    let mut root = root;
-    let mut item = root;
-    let mut parent: *mut Header = ptr::null_mut();
-    let mut fresh = true;
+unsafe fn poll_items<const ROOTED: bool>(ctx: &mut TaskCtx, state: &mut Cursor) -> ReleasePoll {
+    let Cursor {
+        base,
+        mut root,
+        mut item,
+        mut parent,
+        mut fresh,
+        mask,
+        keep_root,
+        anchor,
+        operation_site,
+        mut status,
+        mut kept_root,
+        ..
+    } = *state;
     while !item.is_null() {
         unsafe {
             let layout = ctx.descriptor(index_of(item));
@@ -938,7 +1032,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                 // Resume inside loops: rebuild the frame of the step that killed the child.
                 let nest = (cursor >> STEP_CURSOR_BITS) - 1;
                 let frame = locate(steps, end, value, pc - 1, nest);
-                (child, resume) = walk_frames(
+                let walked = walk_frames(
                     ctx,
                     item,
                     steps,
@@ -950,6 +1044,21 @@ unsafe fn drain_items<const ROOTED: bool>(
                     operation_site,
                     &mut status,
                 );
+                match walked {
+                    Walk::Child(c, r) => (child, resume) = (c, r),
+                    Walk::Complete => {}
+                    Walk::Close(handle, next) => {
+                        save_cursor(item, next, layout);
+                        state.root = root;
+                        state.item = item;
+                        state.parent = parent;
+                        state.fresh = fresh;
+                        state.status = status;
+                        state.kept_root = kept_root;
+                        state.close = Some(handle);
+                        return ReleasePoll::Close(handle);
+                    }
+                }
             } else {
                 // Releases and tags outside every loop, the steps of ordinary data, run here
                 // without calls; the first other step continues in `walk_frames`.
@@ -991,7 +1100,7 @@ unsafe fn drain_items<const ROOTED: bool>(
                         }
                     } else {
                         let frame = Frame::root(value, end);
-                        (child, resume) = walk_frames(
+                        let walked = walk_frames(
                             ctx,
                             item,
                             steps,
@@ -1003,6 +1112,21 @@ unsafe fn drain_items<const ROOTED: bool>(
                             operation_site,
                             &mut status,
                         );
+                        match walked {
+                            Walk::Child(c, r) => (child, resume) = (c, r),
+                            Walk::Complete => {}
+                            Walk::Close(handle, next) => {
+                                save_cursor(item, next, layout);
+                                state.root = root;
+                                state.item = item;
+                                state.parent = parent;
+                                state.fresh = fresh;
+                                state.status = status;
+                                state.kept_root = kept_root;
+                                state.close = Some(handle);
+                                return ReleasePoll::Close(handle);
+                            }
+                        }
                         break;
                     }
                 }
@@ -1052,10 +1176,10 @@ unsafe fn drain_items<const ROOTED: bool>(
                 && !is_cleanup(item)
                 && !(ROOTED && item == root)
             {
-                finish(ctx, item);
                 if item == root {
                     root = ptr::null_mut();
                 }
+                finish(ctx, item);
                 item = child;
                 let child_layout = ctx.descriptor((*child).index());
                 ctx.heap().set_state(child, STATE_FINALIZE_PENDING);
@@ -1089,7 +1213,13 @@ unsafe fn drain_items<const ROOTED: bool>(
             fresh = true;
         }
     }
-    Drained { status, kept_root }
+    state.root = ptr::null_mut();
+    state.item = ptr::null_mut();
+    state.parent = ptr::null_mut();
+    state.status = status;
+    state.kept_root = kept_root;
+    state.complete = true;
+    ReleasePoll::Complete(Drained { status, kept_root })
 }
 
 /// Run one step that opens no frame on its field at `at`, advancing `pc` past a skipped tag
@@ -1178,7 +1308,7 @@ unsafe fn walk_frames(
     anchor: u64,
     operation_site: u64,
     status: &mut u8,
-) -> (*mut Header, u64) {
+) -> Walk {
     // SAFETY: as `drain`; `frame` is a frame of this item's program.
     unsafe {
         let value = value_of(item);
@@ -1186,7 +1316,7 @@ unsafe fn walk_frames(
         loop {
             if pc == frame.end {
                 if frame.depth == 0 {
-                    return (ptr::null_mut(), 0);
+                    return Walk::Complete;
                 }
                 let op = &*steps.add(frame.op);
                 if op.kind == STEP_LOOP && frame.index > 0 {
@@ -1263,9 +1393,13 @@ unsafe fn walk_frames(
                 }
                 _ => {
                     let at = step_at(step, frame.base, frame.index);
+                    if step.kind == STEP_CLOSE_HANDLE {
+                        let handle = at.cast::<u64>().read_unaligned();
+                        return Walk::Close(handle, suspended(pc, &frame, nest));
+                    }
                     let child = run_step(ctx, step, at, &mut pc, anchor, operation_site, status);
                     if !child.is_null() {
-                        return (child, suspended(pc, &frame, nest));
+                        return Walk::Child(child, suspended(pc, &frame, nest));
                     }
                 }
             }
@@ -1585,3 +1719,6 @@ pub unsafe extern "C" fn hirsel_rt_v2_reset(
         drained.status
     }
 }
+
+#[cfg(test)]
+mod cursor_tests;
