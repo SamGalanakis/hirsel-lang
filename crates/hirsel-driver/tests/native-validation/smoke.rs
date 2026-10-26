@@ -105,20 +105,31 @@ fn judge<S: Stage>(
     context: &ValidationContext<'_>,
     finish: impl Fn(LirUnit<S>) -> Result<LirUnit<hirsel_lir::stage::Ready>, hirsel_rc::PassError>,
     counts: &mut BTreeMap<(StageKind, Fault), [usize; 3]>,
+    coverage: bool,
 ) {
-    let control = context.check(unit, inputs);
-    assert!(
-        control.is_empty(),
-        "{:?} {} control: {control:?}",
-        S::KIND,
-        unit.header.definition
-    );
+    // Coverage only asks whether the ladder rejects each class somewhere; the
+    // campaign slices judge every control and mutant.
+    if !coverage {
+        let control = context.check(unit, inputs);
+        assert!(
+            control.is_empty(),
+            "{:?} {} control: {control:?}",
+            S::KIND,
+            unit.header.definition
+        );
+    }
     for (fault, mutant) in mutants(unit, inputs, context) {
+        if coverage && counts.contains_key(&(S::KIND, fault)) {
+            continue;
+        }
         let ladder = context.check(&mutant, inputs);
         if ladder.is_empty() {
             continue;
         }
         let count = counts.entry((S::KIND, fault)).or_default();
+        if coverage {
+            continue;
+        }
         match finish(mutant) {
             Err(_) => count[0] += 1,
             Ok(ready) => {
@@ -148,19 +159,124 @@ fn judge<S: Stage>(
     }
 }
 
+/// The smoke selection, one program per line.
+fn smoke_programs() -> Vec<String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    std::fs::read_to_string(root.join("native-tests/regressions/smoke.txt"))
+        .unwrap()
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Each campaign test judges this many consecutive smoke programs, so one
+/// test stays within its action's time cap.
+const PER_SLICE: usize = 5;
+const SLICES: usize = 22;
+
 #[test]
-fn ready_only_rejects_smoke_pass_faults() {
+fn smoke_campaign_slices_cover_the_whole_selection() {
+    let programs = smoke_programs().len();
+    assert!(
+        programs > 100,
+        "smoke selection unexpectedly shrank: {programs}"
+    );
+    assert!(
+        programs <= SLICES * PER_SLICE,
+        "{programs} smoke programs exceed the {SLICES} campaign slices"
+    );
+}
+
+macro_rules! smoke_campaign_slices {
+    ($($name:ident = $slice:expr,)*) => {$(
+        #[test]
+        fn $name() {
+            let list = smoke_programs();
+            let mut counts = BTreeMap::new();
+            let slice = list.iter().skip($slice * PER_SLICE).take(PER_SLICE);
+            let programs = campaign(slice, &mut counts, false);
+            eprintln!(
+                "{programs} smoke programs; mutants [pass rejected, Ready rejected, identical live-unit normalization]: {counts:?}"
+            );
+        }
+    )*};
+}
+smoke_campaign_slices! {
+    ready_only_rejects_smoke_pass_faults_00 = 0,
+    ready_only_rejects_smoke_pass_faults_01 = 1,
+    ready_only_rejects_smoke_pass_faults_02 = 2,
+    ready_only_rejects_smoke_pass_faults_03 = 3,
+    ready_only_rejects_smoke_pass_faults_04 = 4,
+    ready_only_rejects_smoke_pass_faults_05 = 5,
+    ready_only_rejects_smoke_pass_faults_06 = 6,
+    ready_only_rejects_smoke_pass_faults_07 = 7,
+    ready_only_rejects_smoke_pass_faults_08 = 8,
+    ready_only_rejects_smoke_pass_faults_09 = 9,
+    ready_only_rejects_smoke_pass_faults_10 = 10,
+    ready_only_rejects_smoke_pass_faults_11 = 11,
+    ready_only_rejects_smoke_pass_faults_12 = 12,
+    ready_only_rejects_smoke_pass_faults_13 = 13,
+    ready_only_rejects_smoke_pass_faults_14 = 14,
+    ready_only_rejects_smoke_pass_faults_15 = 15,
+    ready_only_rejects_smoke_pass_faults_16 = 16,
+    ready_only_rejects_smoke_pass_faults_17 = 17,
+    ready_only_rejects_smoke_pass_faults_18 = 18,
+    ready_only_rejects_smoke_pass_faults_19 = 19,
+    ready_only_rejects_smoke_pass_faults_20 = 20,
+    ready_only_rejects_smoke_pass_faults_21 = 21,
+}
+
+/// Across the whole selection the stage ladder rejects some fault at every
+/// stage and every fault class at some stage. The walk stops once both hold.
+#[test]
+fn smoke_ladder_rejects_every_stage_and_fault_class() {
+    let complete = |counts: &BTreeMap<(StageKind, Fault), [usize; 3]>| {
+        StageKind::ALL
+            .into_iter()
+            .all(|stage| counts.keys().any(|(s, _)| *s == stage))
+            && FAULTS
+                .into_iter()
+                .all(|fault| counts.keys().any(|(_, f)| *f == fault))
+    };
+    let mut counts = BTreeMap::new();
+    for path in &smoke_programs() {
+        campaign([path], &mut counts, true);
+        if complete(&counts) {
+            return;
+        }
+    }
+    for stage in StageKind::ALL {
+        assert!(
+            counts.keys().any(|(s, _)| *s == stage),
+            "no faults at {stage:?}"
+        );
+    }
+    for fault in FAULTS {
+        assert!(
+            counts.keys().any(|(_, f)| *f == fault),
+            "no {fault:?} controls"
+        );
+    }
+}
+
+const FAULTS: [Fault; 3] = [
+    Fault::MissingParameter,
+    Fault::MissingIncrement,
+    Fault::MissingDecrement,
+];
+
+/// Judges each program's units at every stage; returns the programs judged.
+fn campaign<'a>(
+    paths: impl IntoIterator<Item = &'a String> + Send,
+    counts: &mut BTreeMap<(StageKind, Fault), [usize; 3]>,
+    coverage: bool,
+) -> usize {
     hirsel_engine::with_compiler_stack(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let list =
-            std::fs::read_to_string(root.join("native-tests/regressions/smoke.txt")).unwrap();
-        let mut counts = BTreeMap::new();
         let mut programs = 0;
-        for path in list
-            .lines()
-            .map(str::trim)
-            .filter(|s| !s.is_empty() && !s.starts_with('#'))
-        {
+        for path in paths {
             eprintln!("fault campaign: {path}");
             let mut loaded = crate::load_program(&root.join(path)).unwrap();
             loaded.check_for_execution().unwrap();
@@ -170,7 +286,7 @@ fn ready_only_rejects_smoke_pass_faults() {
             let target = TargetSpec::x86_64_unknown_linux_gnu();
             let lowered = hirsel_rc::import::lower(&program, &target).unwrap();
             let manifest = super::manifest(validated.snapshot()).unwrap();
-            let operations = program.operation_registry();
+            let operations = lowered.operation_registry(&program);
             let table = &lowered.table;
             let inputs = Inputs {
                 memo: Default::default(),
@@ -211,7 +327,8 @@ fn ready_only_rejects_smoke_pass_faults() {
                                 .map_err(|e| hirsel_rc::PassError::Malformed(e.to_string()))?,
                         )?)
                     },
-                    &mut counts,
+                    counts,
+                    coverage,
                 );
                 let placed = hirsel_rc::placement::place(value, table, &placement).unwrap();
                 judge(
@@ -219,45 +336,25 @@ fn ready_only_rejects_smoke_pass_faults() {
                     &inputs,
                     &context,
                     |p| to_ready(to_rc(p)?),
-                    &mut counts,
+                    counts,
+                    coverage,
                 );
                 let rc = to_rc(placed).unwrap();
-                judge(&rc, &inputs, &context, to_ready, &mut counts);
+                judge(&rc, &inputs, &context, to_ready, counts, coverage);
                 let reused = hirsel_rc::reuse::reuse(rc, table, &reuse).unwrap();
                 judge(
                     &reused,
                     &inputs,
                     &context,
                     |u| hirsel_rc::ready::ready(u, table, &finalizers),
-                    &mut counts,
+                    counts,
+                    coverage,
                 );
                 let ready = hirsel_rc::ready::ready(reused, table, &finalizers).unwrap();
-                judge(&ready, &inputs, &context, Ok, &mut counts);
+                judge(&ready, &inputs, &context, Ok, counts, coverage);
             }
             programs += 1;
         }
-        assert!(
-            programs > 100,
-            "smoke selection unexpectedly shrank: {programs}"
-        );
-        for stage in StageKind::ALL {
-            assert!(
-                counts.keys().any(|(s, _)| *s == stage),
-                "no faults at {stage:?}"
-            );
-        }
-        for fault in [
-            Fault::MissingParameter,
-            Fault::MissingIncrement,
-            Fault::MissingDecrement,
-        ] {
-            assert!(
-                counts.keys().any(|(_, f)| *f == fault),
-                "no {fault:?} controls"
-            );
-        }
-        eprintln!(
-            "{programs} smoke programs; mutants [pass rejected, Ready rejected, identical live-unit normalization]: {counts:?}"
-        );
-    });
+        programs
+    })
 }

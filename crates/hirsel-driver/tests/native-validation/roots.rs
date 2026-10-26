@@ -5,6 +5,7 @@
 //! into a move across the thaw that observes the holders.
 
 use super::*;
+use hirsel_layout::operation::OperationRegistry;
 use hirsel_lir::ir::{AddressBase, BlockKind, Inst, LirUnit, ReadMode};
 use hirsel_lir::layout_types::LayoutTable;
 use hirsel_lir::stage::{Rc, Stage};
@@ -51,10 +52,12 @@ fn probe() -> bool {
 }
 "#;
 
-/// `probe` through placement with regions, insertion and elision.
-fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>) {
+/// `probe` through placement with regions, insertion and elision, with the
+/// operations its lowering binds: each source unit's independent body selection.
+fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>, OperationRegistry) {
     let (program, lowered) = lower_valid(source);
     let table = lowered.table.clone();
+    let operations = lowered.operation_registry(&program);
     let (i, unit) = lowered
         .units
         .iter()
@@ -71,11 +74,12 @@ fn rc_probe(source: &str) -> (Program, LayoutTable, LirUnit<Rc>) {
     let proofs = Proofs::for_instance(&lowered.instances, id);
     let rc = hirsel_rc::insert::insert(placed, &table, &proofs).expect("insertion");
     let rc = hirsel_rc::elide::elide(rc, &table).expect("elision");
-    (program, table, rc)
+    (program, table, rc, operations)
 }
 
 fn check<S: Stage>(
     program: &Program,
+    operations: &OperationRegistry,
     table: &LayoutTable,
     unit: &LirUnit<S>,
 ) -> Vec<ViolationKind> {
@@ -84,7 +88,7 @@ fn check<S: Stage>(
     let inputs = Inputs {
         memo: Default::default(),
         discharge: None,
-        operations: &program.operation_registry(),
+        operations,
         target: &target,
         layouts: table,
         manifest: &manifest,
@@ -128,7 +132,7 @@ fn ready_only_rejects_existing_rc_root_faults() {
     use hirsel_lir::stage::Ready;
     let mut missed = vec![];
     for fault in 0..3 {
-        let (program, table, rc) = rc_probe(COPY_THEN_THAW);
+        let (program, table, rc, operations) = rc_probe(COPY_THEN_THAW);
         let finalizers = hirsel_rc::cleanup::Finalizers::planned(
             &lower_valid(COPY_THEN_THAW).1.instances,
             &table,
@@ -157,13 +161,12 @@ fn ready_only_rejects_existing_rc_root_faults() {
             ed.code[c].remove(j);
         }
         let mutant = ed.finish();
-        let ladder = check(&program, &table, &mutant);
+        let ladder = check(&program, &operations, &table, &mutant);
         let reused =
             hirsel_rc::reuse::reuse(mutant, &table, &hirsel_rc::reuse::Options::default()).unwrap();
         let ready: LirUnit<Ready> = hirsel_rc::ready::ready(reused, &table, &finalizers).unwrap();
         let manifest = manifest(&program);
         let target = target();
-        let operations = program.operation_registry();
         let errors = hirsel_lir::validate::check(
             &ready,
             &Inputs {
@@ -206,11 +209,11 @@ fn dynamic_resource_list_replacement_still_rejects_early_owner_release() {
 
 fn rejects_early_resource_release(source: &str) {
     use hirsel_lir::ir::{Holding, MaskRef};
-    let (program, table, rc) = rc_probe(source);
+    let (program, table, rc, operations) = rc_probe(source);
     let instances = lower_valid(source).1.instances;
     let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
     let control = hirsel_rc::ready::ready(rc.clone(), &table, &finalizers).unwrap();
-    let errors = check(&program, &table, &control);
+    let errors = check(&program, &operations, &table, &control);
     assert!(errors.is_empty(), "valid resource cleanup: {errors:?}");
     let mut ed = Editor::new(rc);
     let (b, i) = ed
@@ -294,7 +297,7 @@ fn rejects_early_resource_release(source: &str) {
         .unwrap();
     ed.code[body].splice(stored + 1..stored + 1, released);
     let mutant = ed.finish();
-    let ladder = check(&program, &table, &mutant);
+    let ladder = check(&program, &operations, &table, &mutant);
     assert!(
         ladder.contains(&ViolationKind::ResourceOutsideAnchor(value)),
         "{ladder:?}"
@@ -309,7 +312,7 @@ fn rejects_early_resource_release(source: &str) {
             target: &target,
             layouts: &table,
             manifest: &rows,
-            operations: &program.operation_registry(),
+            operations: &operations,
             discharge: None,
         },
     );
@@ -327,12 +330,12 @@ fn dynamic_resource_list_replacement_keeps_its_cleanup_anchors() {
         let source = format!(
             "resource type R {{}}\ndrop(x) {{}}\nfn probe() {{\n  let mut xs: List[R] = [R()]\n  let i: u64 = {index}\n  xs[i] = R()\n}}\n"
         );
-        let (program, table, rc) = rc_probe(&source);
-        assert!(check(&program, &table, &rc).is_empty());
+        let (program, table, rc, operations) = rc_probe(&source);
+        assert!(check(&program, &operations, &table, &rc).is_empty());
         let instances = lower_valid(&source).1.instances;
         let finalizers = hirsel_rc::cleanup::Finalizers::planned(&instances, &table);
         let ready = hirsel_rc::ready::ready(rc, &table, &finalizers).unwrap();
-        let errors = check(&program, &table, &ready);
+        let errors = check(&program, &operations, &table, &ready);
         assert!(errors.is_empty(), "index {index}: {errors:?}");
     }
 }
