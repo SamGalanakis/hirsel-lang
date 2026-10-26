@@ -196,17 +196,21 @@ pub(crate) fn payload_reads_hash(reads: &Reads) -> ContentHash {
     // Reads' in-memory ordering is by interned identity. Persisted witnesses
     // sort the canonical key bytes, so another process/salt verifies the same
     // complete set without depending on its DefId assignment order.
-    let mut rows: Vec<Vec<u8>> = reads
-        .iter()
-        .map(|(key, value)| {
-            let mut bytes = Vec::new();
-            key.encode(&mut bytes);
-            bytes.extend(value.0);
-            bytes
-        })
-        .collect();
-    rows.sort();
-    ContentHash::of_parts("hirsel.result.reads.v1", rows.iter().map(Vec::as_slice))
+    // One contiguous arena retains row boundaries for the original length-
+    // framed digest. Sorting offsets avoids one growable allocation per read.
+    let mut bytes = Vec::new();
+    let mut rows = Vec::with_capacity(reads.len());
+    for (key, value) in reads.iter() {
+        let start = bytes.len();
+        key.encode(&mut bytes);
+        bytes.extend(value.0);
+        rows.push(start..bytes.len());
+    }
+    rows.sort_unstable_by(|a, b| bytes[a.clone()].cmp(&bytes[b.clone()]));
+    ContentHash::of_parts(
+        "hirsel.result.reads.v1",
+        rows.iter().map(|row| &bytes[row.clone()]),
+    )
 }
 
 /// The complete ordinary-query action, shared by S0 variants and already
@@ -272,6 +276,11 @@ impl VariantRef {
         if !self.valid(key) {
             return None;
         }
+        self.resolve_bound(store)
+    }
+    // Only callers in this module that checked valid(key) can resolve here.
+    // Provider content integrity and domain checks still run at get_content.
+    fn resolve_bound(&self, store: &dyn ResultStore) -> Option<Variant> {
         Some(Variant {
             inputs: self.inputs,
             reads: self.reads.clone(),
@@ -292,6 +301,25 @@ impl Entry {
             .iter()
             .find(|v| v.reads.first_changed(&mut current).is_none())
     }
+    /// Check each candidate's binding once before observing any of its reads.
+    /// Fetch content only for the first bound candidate whose reads are current.
+    pub(crate) fn resolve_current(
+        &self,
+        store: &dyn ResultStore,
+        key: &EntryKey,
+        mut current: impl FnMut(&ReadKey) -> Option<ContentHash>,
+    ) -> Option<Variant> {
+        for variant in &self.variants {
+            if variant.inputs == key.1
+                && variant.valid(key)
+                && variant.reads.first_changed(&mut current).is_none()
+            {
+                return variant.resolve_bound(store);
+            }
+        }
+        None
+    }
+
     /// Adds a variant first, replacing one with the same inputs/reads and dropping
     /// the least recently written past `VARIANTS`.
     pub fn insert(&mut self, variant: VariantRef) {

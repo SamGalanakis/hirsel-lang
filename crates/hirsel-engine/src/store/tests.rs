@@ -44,6 +44,92 @@ fn scratch(name: &str) -> PathBuf {
 use std::path::PathBuf;
 
 #[test]
+fn read_binding_digest_keeps_canonical_rows_with_bounded_scratch_allocations() {
+    fn original(reads: &Reads) -> ContentHash {
+        let mut rows: Vec<Vec<u8>> = reads
+            .iter()
+            .map(|(key, value)| {
+                let mut bytes = Vec::new();
+                key.encode(&mut bytes);
+                bytes.extend(value.0);
+                bytes
+            })
+            .collect();
+        rows.sort();
+        ContentHash::of_parts("hirsel.result.reads.v1", rows.iter().map(Vec::as_slice))
+    }
+    for count in [0, 1, 16, 64] {
+        let reads = Reads::from_vec(
+            (0..count)
+                .rev()
+                .map(|at| {
+                    (
+                        ReadKey::Signature(DefId::intern(&path(&format!(
+                            "varied_{at:03}_longer_name"
+                        )))),
+                        h(&at.to_string()),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let expected = original(&reads);
+        let (actual, allocations) = crate::test_alloc::measured(|| payload_reads_hash(&reads));
+        assert_eq!(actual, expected, "count={count}");
+        assert!(
+            allocations.allocations <= 20,
+            "count={count}: {} scratch allocations",
+            allocations.allocations
+        );
+    }
+}
+
+#[test]
+fn current_variants_validate_bindings_before_observation_and_keep_first_hit() {
+    let store = MemStore::default();
+    let key = key("bound");
+    let observed = ReadKey::Signature(DefId::intern(&path("observed")));
+    let forbidden = ReadKey::Signature(DefId::intern(&path("forbidden")));
+    let reads = Reads::from_vec(vec![(observed, h("current"))]).unwrap();
+    let good = VariantRef::publish(&store, &key, reads, b"first bound payload").unwrap();
+    let mut corrupt = good.clone();
+    corrupt.reads = Reads::from_vec(vec![(forbidden, h("current"))]).unwrap();
+    let mut stale = good.clone();
+    stale.inputs = h("other inputs");
+    stale.witness = stale.binding(&key);
+    let mut entry = Entry {
+        variants: vec![corrupt, stale, good.clone()],
+    };
+    let mut visits = vec![];
+    let hit = entry
+        .resolve_current(&store, &key, |read| {
+            visits.push(*read);
+            assert_eq!(
+                *read, observed,
+                "unbound or wrong-input reads are never observed"
+            );
+            Some(h("current"))
+        })
+        .unwrap();
+    assert_eq!(visits, [observed]);
+    assert_eq!(&*hit.payload, b"first bound payload");
+    assert!(
+        entry
+            .resolve_current(&store, &key, |_| Some(h("changed")))
+            .is_none()
+    );
+    entry.variants = vec![good.clone(), good];
+    entry.variants[0].output.len += 1;
+    entry.variants[0].witness = entry.variants[0].binding(&key);
+    assert!(
+        entry
+            .resolve_current(&store, &key, |_| Some(h("current")))
+            .is_none(),
+        "missing content for the first current candidate does not select a later variant"
+    );
+}
+
+#[test]
 fn entry_keys_separate_every_component() {
     let base = key("a");
     assert_eq!(base, key("a"));

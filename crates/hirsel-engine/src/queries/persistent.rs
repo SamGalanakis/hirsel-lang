@@ -1272,43 +1272,38 @@ impl QueryEngine {
     fn stored_variant_at(&mut self, owner: &DefPath, key: &EntryKey) -> Option<Variant> {
         let _time = timings::phase(Phase::StoreLookup);
         let store = self.result_store.clone()?;
-        let mut entry = StoredEntry::load(&*store, key);
-        entry
-            .variants
-            .retain(|variant| variant.inputs == key.1 && variant.valid(key));
-        let hit = entry
-            .hit(|read| {
-                if matches!(
-                    key.2,
-                    QueryKind::Evaluate
-                        | QueryKind::Lower
-                        | QueryKind::Generate
-                        | QueryKind::SourceAudit
-                        | QueryKind::SemanticBody
-                ) && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
-                    && id.path().0.name.starts_with("$comptime:")
-                    && !self.staged_constants.contains_key(id.path())
-                {
-                    let declaration_owner = self.staged_declaration_owner(id.path())?;
-                    self.load_registrations(&declaration_owner)?;
-                    self.staged_constants.get(id.path())?;
-                }
-                if matches!(
-                    key.2,
-                    QueryKind::Evaluate
-                        | QueryKind::Lower
-                        | QueryKind::Generate
-                        | QueryKind::SourceAudit
-                        | QueryKind::SemanticBody
-                ) && let Some(id) = read.definition()
-                    && id.path().0.name.contains("$instance$")
-                    && !self.items.contains_key(id.path())
-                {
-                    self.load_generated_registration(id.path())?;
-                }
-                self.observe(owner, read)
-            })
-            .and_then(|variant| variant.resolve(&*store, key));
+        let entry = StoredEntry::load(&*store, key);
+        let hit = entry.resolve_current(&*store, key, |read| {
+            if matches!(
+                key.2,
+                QueryKind::Evaluate
+                    | QueryKind::Lower
+                    | QueryKind::Generate
+                    | QueryKind::SourceAudit
+                    | QueryKind::SemanticBody
+            ) && let ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) = read
+                && id.path().0.name.starts_with("$comptime:")
+                && !self.staged_constants.contains_key(id.path())
+            {
+                let declaration_owner = self.staged_declaration_owner(id.path())?;
+                self.load_registrations(&declaration_owner)?;
+                self.staged_constants.get(id.path())?;
+            }
+            if matches!(
+                key.2,
+                QueryKind::Evaluate
+                    | QueryKind::Lower
+                    | QueryKind::Generate
+                    | QueryKind::SourceAudit
+                    | QueryKind::SemanticBody
+            ) && let Some(id) = read.definition()
+                && id.path().0.name.contains("$instance$")
+                && !self.items.contains_key(id.path())
+            {
+                self.load_generated_registration(id.path())?;
+            }
+            self.observe(owner, read)
+        });
         if hit.is_none() {
             timings::count(Count::StoreMisses);
             match key.2 {
