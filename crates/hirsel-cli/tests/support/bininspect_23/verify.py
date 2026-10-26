@@ -86,6 +86,8 @@ def wire(value, fmt, deterministic=False):
 
 def verify(hirsel, root, output):
     output.mkdir(parents=True, exist_ok=False)
+    products = output / 'products'
+    assert not products.exists(), 'each test starts with an empty private store'
     data = output / 'input'
     data.mkdir()
     grants = output / 'grants.json'
@@ -99,7 +101,7 @@ def verify(hirsel, root, output):
     def run(label, argv, runtime=False):
         argv = list(map(str, argv))
         stdout, stderr = (output / (label + suffix) for suffix in ('.stdout', '.stderr'))
-        env = os.environ | dict(HIRSEL_DAEMON='off', HIRSEL_RESULTS='none@1',
+        env = os.environ | dict(HIRSEL_DAEMON='off', HIRSEL_RESULTS='dir@1', HIRSEL_RESULTS_DIR=str(products),
                                 HIRSEL_MEMORY_LIMIT='2G', HIRSEL_JOBS='1')
         if runtime:
             wrapper = ('import subprocess,sys; '

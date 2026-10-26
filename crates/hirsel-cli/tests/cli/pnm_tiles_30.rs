@@ -272,6 +272,13 @@ fn pnm_tiles_30_native_record_replay() {
             root
         };
         let manifest = root.join("hirsel.json");
+        let compiler = hirsel_driver::COMPILER
+            .clone()
+            .with_config(hirsel_engine::CompileConfig {
+                store: hirsel_engine::store::store_by_name("dir@1", Some(root.join("products")))
+                    .unwrap(),
+                ..hirsel_driver::COMPILER.configuration()
+            });
         let record_path = std::env::var_os("PNM_TILES_30_RECORDS")
             .map(PathBuf::from)
             .unwrap_or_else(|| root.join("tapes.json"));
@@ -326,11 +333,13 @@ fn pnm_tiles_30_native_record_replay() {
                     fs::write(receipt_path, serde_json::to_vec_pretty(&receipts).unwrap()).unwrap();
                     continue;
                 }
-                let replayed = if checked {
-                    hirsel_driver::replay_observations_checked(&manifest, &tape, Some(bound))
-                } else {
-                    hirsel_driver::replay_observations(&manifest, &tape, Some(bound))
-                };
+                let mut program = compiler.load_program(&manifest).unwrap();
+                let replayed = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &tape,
+                    Some(bound),
+                    checked,
+                );
                 let observed = replayed.unwrap();
                 assert_eq!(observed.exit_code, row["exit"].as_i64().map(|n| n as i32));
                 assert_eq!(observed.output, bytes(&row["stdout"]));

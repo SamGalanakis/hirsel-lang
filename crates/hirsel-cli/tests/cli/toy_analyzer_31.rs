@@ -370,7 +370,19 @@ fn scripted_native(group: u8) {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = scratch();
         let path = package(scratch.path());
-        let mut loaded = hirsel_driver::load_program(&path).unwrap();
+        // Every test owns an initially empty ordinary store. Each replay still
+        // opens a fresh compiler, using the same policy as repeated CLI runs.
+        let compiler = hirsel_driver::COMPILER
+            .clone()
+            .with_config(hirsel_engine::CompileConfig {
+                store: hirsel_engine::store::store_by_name(
+                    "dir@1",
+                    Some(scratch.path().join("products")),
+                )
+                .unwrap(),
+                ..hirsel_driver::COMPILER.configuration()
+            });
+        let mut loaded = compiler.load_program(&path).unwrap();
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -623,18 +635,24 @@ fn scripted_native(group: u8) {
                     .unwrap();
                     assert_eq!(observe(&replay, &ready, &sites).unwrap(), expected);
                 }
-                for replay in [
-                    hirsel_driver::replay_observations,
-                    hirsel_driver::replay_observations_checked,
-                ] {
-                    let observed = replay(&path, &tape, Some(steps)).unwrap();
+                for checked in [false, true] {
+                    let replay = |tape: &Path| {
+                        let mut program = compiler.load_program(&path)?;
+                        hirsel_driver::replay_loaded_observations(
+                            &mut program,
+                            tape,
+                            Some(steps),
+                            checked,
+                        )
+                    };
+                    let observed = replay(&tape).unwrap();
                     assert_eq!(Observation::of_reference(&observed), expected);
                     let mut changed = record.clone();
                     changed.events.push(record.events[0].clone());
                     let bad = dir.join("extra.tape");
                     fs::write(&bad, hirsel_rt::launch::render_recording(&changed).unwrap())
                         .unwrap();
-                    assert!(replay(&path, &bad, Some(steps)).is_err());
+                    assert!(replay(&bad).is_err());
                 }
                 assert_eq!(fs::read(&tape).unwrap(), bytes);
                 eprintln!("TOY_PASS {id} {} and four replays", dir.display());

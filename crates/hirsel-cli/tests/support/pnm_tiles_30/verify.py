@@ -19,8 +19,10 @@ def main(args):
     data = json.loads((root/'cases.json').read_bytes())
     evidence = root/'native'
     evidence.mkdir()
+    products = root/'products'
+    assert not products.exists(), 'each test starts with an empty private store'
     env = {k:v for k,v in os.environ.items() if not k.startswith('HIRSEL_RT_')}
-    env.update(HIRSEL_DAEMON='off', HIRSEL_RESULTS='none@1', HIRSEL_JOBS='4', HIRSEL_MEMORY_LIMIT='2G', HIRSEL_TIMING='off')
+    env.update(HIRSEL_DAEMON='off', HIRSEL_RESULTS='dir@1', HIRSEL_RESULTS_DIR=str(products), HIRSEL_JOBS='4', HIRSEL_MEMORY_LIMIT='2G', HIRSEL_TIMING='off')
     tools={}
     for name in ['HIRSEL_PRODUCTS','HIRSEL_RUNTIME_ARCHIVES','HIRSEL_LINK_KIT','LLVM_SYS_231_PREFIX']:
         value=env.get(name)
