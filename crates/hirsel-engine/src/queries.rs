@@ -42,7 +42,10 @@ pub use scheduled_check::{
 };
 pub use scheduled_stage::{FRONT_STAGE_KIND, FrontStageOutput, FrontStageQueries};
 mod scheduled_growth;
-pub use generation::{AcceptedFrontRegistration, FrontRegistrationFailure};
+pub use generation::{
+    AcceptedFrontRegistration, FrontRegistrationBootstrap, FrontRegistrationBootstrapAdmission,
+    FrontRegistrationBootstrapError, FrontRegistrationFailure,
+};
 pub use parallel::{
     FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCarry,
     FrontCheckedOutput, FrontInputFootprint, FrontStorageOutput, FrontStorageQueries, ModeResult,

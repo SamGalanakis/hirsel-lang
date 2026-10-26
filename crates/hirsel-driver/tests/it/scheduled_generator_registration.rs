@@ -854,3 +854,321 @@ fn accepted_generator_view_releases_unused_syntax_grant_and_keeps_clone_owned_by
         }
     });
 }
+
+#[test]
+fn generator_bootstrap_finishes_before_final_admitted_check_and_preserves_its_scalar_result() {
+    use hirsel_engine::{runtime::*, store::MemStore, *};
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"), ACCEPTED_SOURCE).unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap_front","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        for jobs in [1, 2] {
+            let compiler = COMPILER
+                .with_config(CompileConfig {
+                    store: Arc::new(MemStore::default()),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    hold_bytes: 0,
+                    ..Default::default()
+                })
+                .with_owned_engines();
+            let expected = compiler
+                .load_program(&manifest)
+                .unwrap()
+                .check(LoweringPolicy::Comptime)
+                .unwrap();
+            let mut program = compiler.load_program(&manifest).unwrap();
+            let definitions = program.engine.front_source_roots();
+            let generators = program.engine.front_generator_roots(&definitions).unwrap();
+            assert_eq!(generators, vec![program.entry.clone()]);
+            let budget = ProcessBudget::new(1 << 30);
+            let errors = crate::scheduled_front::errors();
+            let weight = MemoryWeight {
+                retained: 2 << 20,
+                scratch: 8 << 20,
+                stack: 0,
+            };
+            let required =
+                FrontRegistrationBootstrap::input_bytes(&definitions, generators.len()).unwrap();
+            let admission = |metadata| FrontRegistrationBootstrapAdmission {
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                weight,
+                max_reads: 64,
+                runtime: budget.reserve(512 << 20).unwrap(),
+                front: budget.reserve(16 << 20).unwrap(),
+                lower: budget.reserve(16 << 20).unwrap(),
+                text: budget.reserve(16 << 20).unwrap(),
+                syntax: vec![budget.reserve(16 << 20).unwrap()],
+                metadata: budget.reserve(metadata).unwrap(),
+            };
+            let before = program.engine.work_stats();
+            assert!(
+                program
+                    .engine
+                    .bootstrap_front_registrations(
+                        &definitions,
+                        &generators,
+                        admission(required - 1),
+                        errors
+                    )
+                    .is_err()
+            );
+            assert_eq!(program.engine.work_stats(), before);
+            assert_eq!(budget.reserved(), 0);
+            let bootstrap = program
+                .engine
+                .bootstrap_front_registrations(
+                    &definitions,
+                    &generators,
+                    admission(required),
+                    errors,
+                )
+                .unwrap();
+            assert_eq!(bootstrap.stats().active, 0);
+            assert_eq!(bootstrap.registrations().len(), 1);
+            assert_eq!(
+                bootstrap.query_capacity(),
+                FrontRegistrationBootstrap::required_queries(
+                    definitions.len() - generators.len(),
+                    generators.len()
+                )
+                .unwrap()
+            );
+            assert!(
+                budget.reserved() < 512 << 20,
+                "bootstrap runtime grant releases before final construction"
+            );
+            let front = program
+                .engine
+                .front_body_queries_with_registrations(
+                    &definitions,
+                    bootstrap.registrations(),
+                    weight,
+                    budget.reserve(16 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let lower = program
+                .engine
+                .front_lower_queries(
+                    &definitions,
+                    front.clone(),
+                    weight,
+                    64,
+                    budget.reserve(16 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let growth = program
+                .engine
+                .front_growth_queries(
+                    &program.entry,
+                    front.clone(),
+                    weight,
+                    budget.reserve(16 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let check = program
+                .engine
+                .front_check_queries(
+                    FrontCheckPlan {
+                        files: program
+                            .files
+                            .iter()
+                            .map(|(file, context)| {
+                                (*file, context.clone(), LoweringPolicy::Comptime)
+                            })
+                            .collect(),
+                        front: front.clone(),
+                        lower: lower.clone(),
+                        growth: growth.clone(),
+                        unsafe_ffi: program.unsafe_ffi.clone(),
+                        lint_package: None,
+                    },
+                    weight,
+                    budget.reserve(16 << 20).unwrap(),
+                    errors,
+                )
+                .unwrap();
+            let capacity = definitions.len() * 4 + 8;
+            let mut runtime = AdmittedRuntime::with_query_capacity(
+                hirsel_intern::jobs::Jobs::new(jobs),
+                budget.reserve(512 << 20).unwrap(),
+                errors,
+                capacity,
+            )
+            .unwrap();
+            runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+            runtime
+                .register_local(FRONT_LOWER_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register_local(FRONT_EVALUATE_KIND, lower.factory())
+                .unwrap();
+            runtime
+                .register(FRONT_GROWTH_KIND, growth.factory())
+                .unwrap();
+            runtime.register(FRONT_CHECK_KIND, check.factory()).unwrap();
+            let request = runtime.request(&[check.query()]);
+            let complete = runtime
+                .wait(request)
+                .unwrap_or_else(|reference| panic!("final check {:?}", check.failure(reference)));
+            let output = check.outcome(complete[0]).unwrap();
+            assert_eq!(output.checked.completion, expected.completion);
+            assert_eq!(output.checked.diagnostics, expected.diagnostics);
+            runtime.shutdown();
+            drop(runtime);
+            drop(output);
+            drop(check);
+            drop(growth);
+            drop(lower);
+            drop(front);
+            drop(bootstrap);
+            drop(program);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
+
+#[test]
+fn generator_bootstrap_preserves_typed_failure_and_only_the_accepted_source_prefix() {
+    bootstrap_refusal_control(false, false);
+}
+
+#[test]
+fn generator_bootstrap_zero_depth_refuses_before_any_source_publication() {
+    bootstrap_refusal_control(true, false);
+}
+
+#[test]
+fn generator_bootstrap_counts_spare_syntax_grants_before_engine_work() {
+    bootstrap_refusal_control(false, true);
+}
+
+fn bootstrap_refusal_control(zero_depth: bool, spare_grants: bool) {
+    use hirsel_engine::{runtime::*, store::MemStore, *};
+    use std::sync::Arc;
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"),
+            "fn good()->Result[Body[fn()->u8 uses {}],String]{Ok(codegen.body(\"fn()->u8 uses {} {7u8}\"))}\nfn fail()->Result[Body[fn()->u8 uses {}],String]{Error(\"bootstrap stop\")}\nfn later()->Result[Body[fn()->u8 uses {}],String]{Error(\"must stay idle\")}\npub fn a_ok()->u8 uses {} = comptime good()\npub fn b_fail()->u8 uses {} = comptime fail()\npub fn c_later()->u8 uses {} = comptime later()\n").unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"bootstrap_refusal","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"a_ok"}}"#).unwrap();
+        for jobs in [1, 2] {
+            let compiler = COMPILER
+                .with_config(CompileConfig {
+                    store: Arc::new(MemStore::default()),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    hold_bytes: 0,
+                    ..Default::default()
+                })
+                .with_comptime_limits(ComptimeLimits {
+                    call_depth: if zero_depth { 0 } else { usize::MAX },
+                    ..Default::default()
+                })
+                .with_owned_engines();
+            let mut program = compiler.load_program(&manifest).unwrap();
+            let definitions = program.engine.front_source_roots();
+            let mut generators = program.engine.front_generator_roots(&definitions).unwrap();
+            generators.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+            assert_eq!(
+                generators
+                    .iter()
+                    .map(|p| p.0.name.as_str())
+                    .collect::<Vec<_>>(),
+                ["a_ok", "b_fail", "c_later"]
+            );
+            let budget = ProcessBudget::new(1 << 30);
+            let metadata =
+                FrontRegistrationBootstrap::input_bytes(&definitions, generators.len()).unwrap();
+            let mut syntax = Vec::with_capacity(if spare_grants { 32 } else { generators.len() });
+            syntax.extend(generators.iter().map(|_| budget.reserve(16 << 20).unwrap()));
+            let before = program.engine.work_stats();
+            let failure = program
+                .engine
+                .bootstrap_front_registrations(
+                    &definitions,
+                    &generators,
+                    FrontRegistrationBootstrapAdmission {
+                        jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                        weight: MemoryWeight {
+                            retained: 2 << 20,
+                            scratch: 8 << 20,
+                            stack: 0,
+                        },
+                        max_reads: 64,
+                        runtime: budget.reserve(512 << 20).unwrap(),
+                        front: budget.reserve(16 << 20).unwrap(),
+                        lower: budget.reserve(16 << 20).unwrap(),
+                        text: budget.reserve(16 << 20).unwrap(),
+                        syntax,
+                        metadata: budget.reserve(metadata).unwrap(),
+                    },
+                    crate::scheduled_front::errors(),
+                )
+                .err()
+                .expect("bootstrap refusal");
+            if spare_grants {
+                assert!(
+                    matches!(&failure, FrontRegistrationBootstrapError::Admission(QueryError::Operational(error)) if error.operation == "generator bootstrap admission")
+                );
+                assert_eq!(program.engine.work_stats(), before);
+                assert_eq!(budget.reserved(), 0);
+            } else {
+                let FrontRegistrationBootstrapError::Runtime {
+                    reference,
+                    error: Some(error),
+                    owner,
+                    sources,
+                } = &failure
+                else {
+                    panic!("{failure:?}")
+                };
+                let output = owner
+                    .failed(*reference)
+                    .expect("typed failure product survives runtime shutdown");
+                assert_eq!(
+                    output.definition(),
+                    &generators[if zero_depth { 0 } else { 1 }]
+                );
+                assert!(!output.has_execution_acceptance());
+                match error {
+                    QueryError::Operational(error) if zero_depth => {
+                        assert_eq!(error.operation, "compile-time tooling limit");
+                        assert!(error.message.contains("CallDepth"));
+                    }
+                    QueryError::Diagnostics(diagnostics) if !zero_depth => {
+                        assert_eq!(diagnostics.len(), 1);
+                        assert_eq!(diagnostics[0].rule.as_str(), "CT-1");
+                        assert!(
+                            diagnostics[0]
+                                .notes
+                                .iter()
+                                .any(|note| note == "bootstrap stop")
+                        );
+                        assert!(sources.slice(diagnostics[0].primary).is_some());
+                    }
+                    error => panic!("unexpected bootstrap failure: {error:?}"),
+                }
+                assert!(
+                    budget.reserved() < 512 << 20,
+                    "failed bootstrap releases its runtime partition too"
+                );
+            }
+            assert_eq!(
+                program.engine.generated_source(&generators[0]).is_some(),
+                !zero_depth && !spare_grants
+            );
+            assert!(program.engine.generated_source(&generators[1]).is_none());
+            assert!(program.engine.generated_source(&generators[2]).is_none());
+            drop(program);
+            if !spare_grants {
+                assert!(budget.reserved() > 0, "detached failure owns evidence");
+            }
+            drop(failure);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
