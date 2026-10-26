@@ -366,7 +366,12 @@ impl LeafObjects {
                 if let Some(fields) = &marker.cleanup {
                     w.flat_vec(fields);
                 }
-                w.map(&marker.cleanup_paths, |w, _, path| w.flat_vec(path));
+                // These immutable maps are built once from the checked plan.
+                // An empty map has never allocated a node; unlike a mutable
+                // tree, it cannot retain a formerly populated empty root.
+                if !marker.cleanup_paths.is_empty() {
+                    w.map(&marker.cleanup_paths, |w, _, path| w.flat_vec(path));
+                }
                 w.vec(&marker.additional_drops, |w, member| {
                     w.add(member.value_type.capacity());
                     if let Some(path) = &member.path {
