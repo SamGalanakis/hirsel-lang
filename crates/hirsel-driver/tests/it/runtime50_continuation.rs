@@ -368,7 +368,14 @@ fn runtime50_resume_import_mutations_refused() {
                     0 => bad.ahead_symbol = bad.ordinary_symbol.clone(),
                     1 => bad.ordinary_symbol.push('x'),
                     2 => bad.final_frames.nodes[0].1 += 16,
-                    3 => bad.final_frames.nodes[0].2.clear(),
+                    3 => bad
+                        .final_frames
+                        .nodes
+                        .iter_mut()
+                        .find(|(_, _, calls)| !calls.is_empty())
+                        .expect("the scalar root has a nested work call")
+                        .2
+                        .clear(),
                     4 => bad.max_stack_bytes -= 8,
                     5 => bad.caller.spines = Some(ContentHash::of_bytes(b"caller")),
                     _ => bad.result.reads.push((
