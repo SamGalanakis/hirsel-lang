@@ -153,7 +153,6 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) ->
                             for (child, targets) in &op.cancellations {
                                 s.cancel_prepared(*child, CANCEL_PARENT, targets);
                             }
-                            op.cancellations.clear();
                             op.phase = Phase::Settle;
                         })
                     })
@@ -161,6 +160,8 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx, key: Key, out: Option<*mut u8>) ->
             }
             Phase::Settle => {
                 let wait = inspect(ctx, key, |s, op| {
+                    // Release prepared cancellation vectors outside the recorder section.
+                    op.cancellations.clear();
                     let children = s.scope(op.scope.slot).children.clone();
                     if !children.iter().all(|&child| {
                         readiness::saved(s, child)
@@ -568,15 +569,7 @@ mod failure_tests {
         });
         if mode == 3 {
             drop(events);
-            unsafe {
-                (*ctx)
-                    .run_ref()
-                    .control
-                    .request(crate::stop::Stop::Requested)
-            };
-            let mut canceled = 0;
-            unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) };
-            panic!("stop ran a language suffix");
+            unsafe { crate::stop::raise(ctx, crate::stop::Stop::Requested) };
         }
         if mode == 2 {
             unsafe { (*ctx).failure.record(failure(10 + id)) };
