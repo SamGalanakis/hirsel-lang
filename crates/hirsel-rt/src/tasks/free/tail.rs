@@ -174,7 +174,7 @@ fn status_is_terminal(status: u8) {
 #[derive(Default)]
 pub(crate) struct Records {
     next: u64,
-    bindings: Vec<Binding>,
+    entered: Vec<(crate::continuation::binding::BoundSite, Ticket)>,
     // Boxes retain every ancestor's address across growth and child retirement.
     #[allow(clippy::vec_box)]
     stack: Vec<Box<Record>>,
@@ -226,153 +226,6 @@ impl Records {
     }
 }
 
-/// Identity of one checked entered invocation, stable across rebinds and
-/// never reused when a loop reaches the same compiled state again.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BoundSite {
-    pub(crate) task: TaskKey,
-    pub(crate) invocation: u64,
-    pub(crate) frame: usize,
-    pub(crate) state: u32,
-    pub(crate) kind: u32,
-    pub(crate) bytes: u32,
-    pub(crate) anchor: u64,
-    pub(crate) operation_site: u64,
-}
-
-struct Binding {
-    site: BoundSite,
-    armed: bool,
-    ticket: Option<Ticket>,
-}
-
-/// Bind only a site for which the independent continuation checker proved
-/// the whole native callchain. This carries no scheduling permission.
-/// Kinds 0..=2 are mutex put/kill/cause; scope operations use 16 and above.
-/// # Safety
-/// The Active dispatcher owns frame, with exactly this checked state/layout.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn hirsel_rt_v2_resume_tail(
-    ctx: *mut crate::TaskCtx,
-    frame: *mut u8,
-    state: u32,
-    kind: u32,
-    bytes: u32,
-    anchor: u64,
-    operation_site: u64,
-) {
-    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if !super::enabled(ctx) {
-        return;
-    }
-    assert_eq!(unsafe { frame.cast::<u32>().read() }, state);
-    assert!(kind <= 2 || kind >= 16, "unknown entered-tail kind");
-    let task = crate::tasks::role::with_role(ctx, |s| {
-        let me = s.current;
-        let key = s.key(me);
-        let contained = s.task(me).compact_frame.is_some_and(|(base, extent)| {
-            let start = frame as usize;
-            start >= base
-                && start
-                    .checked_add(bytes as usize)
-                    .is_some_and(|end| end <= base + extent)
-        });
-        assert!(
-            contained,
-            "an entered tail outside the active compact frame"
-        );
-        key
-    });
-    let records = unsafe { &mut (*ctx).free_ops.tails };
-    if let Some(binding) = records
-        .bindings
-        .last_mut()
-        .filter(|b| b.site.frame == frame as usize && b.site.state == state)
-    {
-        let old = binding.site;
-        assert_eq!(
-            (
-                old.task,
-                old.frame,
-                old.state,
-                old.kind,
-                old.bytes,
-                old.anchor,
-                old.operation_site
-            ),
-            (
-                task,
-                frame as usize,
-                state,
-                kind,
-                bytes,
-                anchor,
-                operation_site
-            ),
-            "a different entered-tail invocation"
-        );
-        assert!(
-            !binding.armed,
-            "an entered tail rebound before its intrinsic"
-        );
-        binding.armed = true;
-    } else {
-        records.next = records
-            .next
-            .checked_add(1)
-            .expect("Free tail identity overflow");
-        assert!(
-            records.bindings.last().is_none_or(|b| !b.armed),
-            "nested tail before intrinsic entry"
-        );
-        records.bindings.push(Binding {
-            site: BoundSite {
-                task,
-                invocation: records.next,
-                frame: frame as usize,
-                state,
-                kind,
-                bytes,
-                anchor,
-                operation_site,
-            },
-            armed: true,
-            ticket: None,
-        });
-    }
-}
-
-/// Disarm before entering the intrinsic. Nested synchronous callbacks cannot
-/// inherit this call site's permission, even for the same operation kind.
-/// # Safety
-/// The running task owns the context; the entry uses exactly `kind`'s ABI.
-pub(crate) unsafe fn take_bound(ctx: *mut crate::TaskCtx, kind: u32) -> Option<BoundSite> {
-    let binding = unsafe { (*ctx).free_ops.tails.bindings.last_mut() }?;
-    if !binding.armed {
-        return None;
-    }
-    assert_eq!(
-        binding.site.kind, kind,
-        "a bound tail reached a different intrinsic"
-    );
-    binding.armed = false;
-    Some(binding.site)
-}
-
-/// Retire after the exact completed suffix. A pending rebind retains its key;
-/// the next completed loop invocation gets a new serial instead.
-/// # Safety
-/// The Active task completed this site's original operation and its suffix.
-pub(crate) unsafe fn complete_bound(ctx: *mut crate::TaskCtx, site: BoundSite) {
-    let binding =
-        unsafe { (*ctx).free_ops.tails.bindings.pop() }.expect("an unbound tail completion");
-    assert_eq!(binding.site, site, "a stale bound tail completion");
-    assert!(
-        !binding.armed,
-        "a tail completed before entering its intrinsic"
-    );
-}
-
 /// An ordinary intrinsic consults only an explicitly bound entered site.
 /// Every other caller, including synchronous destructor glue, stays stackful.
 /// # Safety
@@ -389,8 +242,16 @@ pub(crate) unsafe fn invoke_mutex(
         Kind::Cause => 2,
         _ => unreachable!(),
     };
-    let site = unsafe { take_bound(ctx, tag) }?;
-    let existing = unsafe { (*ctx).free_ops.tails.bindings.last().unwrap().ticket };
+    let site = unsafe { crate::continuation::binding::take_bound(ctx, tag) }?;
+    let existing = unsafe {
+        (*ctx)
+            .free_ops
+            .tails
+            .entered
+            .last()
+            .filter(|(at, _)| *at == site)
+            .map(|(_, ticket)| *ticket)
+    };
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     let ticket = match existing {
         Some(ticket) => ticket,
@@ -407,18 +268,27 @@ pub(crate) unsafe fn invoke_mutex(
                     payload,
                 )
             };
-            unsafe { (*ctx).free_ops.tails.bindings.last_mut().unwrap().ticket = Some(ticket) };
+            unsafe { (*ctx).free_ops.tails.entered.push((site, ticket)) };
             ticket
         }
     };
     loop {
         match unsafe { crate::stop::check(ctx, poll_mutex(ctx, ticket)) } {
             Poll::Ready(status) => {
-                unsafe { complete_bound(ctx, site) };
+                unsafe {
+                    let retired = (*ctx)
+                        .free_ops
+                        .tails
+                        .entered
+                        .pop()
+                        .expect("an entered mutex tail");
+                    assert_eq!(retired, (site, ticket));
+                    crate::continuation::binding::complete_bound(ctx, site);
+                };
                 return Some(status);
             }
             Poll::Pending => {
-                if unsafe { crate::tasks::compact::can_tail(ctx) } {
+                if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
                     unsafe {
                         crate::stop::check(
                             ctx,

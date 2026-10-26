@@ -191,14 +191,6 @@ pub(crate) unsafe fn can_wait(ctx: *mut TaskCtx) -> bool {
     bound && unsafe { (*ctx).point_ops == 1 && movable(ctx) }
 }
 
-/// A checked entered-tail frame has independent operation custody. Its
-/// admission never uses point_ops or widens whole-call retry hints.
-/// # Safety
-/// The caller just polled a ticket of its explicitly bound entered site.
-pub(crate) unsafe fn can_tail(ctx: *mut TaskCtx) -> bool {
-    unsafe { movable(ctx) }
-}
-
 /// Record that the running op left its stack in its replay wait.
 pub(crate) fn wait(ctx: *mut TaskCtx) {
     // SAFETY: the running task owns its context.
