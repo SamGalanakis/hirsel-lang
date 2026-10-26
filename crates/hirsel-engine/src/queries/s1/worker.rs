@@ -53,6 +53,7 @@ pub(crate) struct TaskBody {
     pub(crate) analyzed: Arc<QueryOutput<AnalyzedBody>>,
     pub(crate) reads: Reads,
     pub(crate) dependencies: Vec<SignatureDependency>,
+    pub(crate) detail: DependencyReads,
 }
 
 /// A current retained source result, including V's local weak capability.
@@ -101,6 +102,16 @@ pub(crate) trait TirSource: Sync {
     }
     fn cached_lowering(&self, _: &DefPath) -> Option<CachedLowering> {
         None
+    }
+    fn completed_lower(
+        &self,
+        _: &QueryOutput<DefinitionRef>,
+        _: &DependencyReads,
+        _: &Reads,
+        _: &DepthEvidence<Span>,
+        _: &[crate::comptime::Selection],
+        _: Option<hirsel_validate::ExecutionReceipt>,
+    ) {
     }
     fn constant_instance(
         &self,
@@ -1178,6 +1189,7 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
         self.stack.begin_requests();
         let selection_start = self.selections.len();
         let registration_start = self.registrations.len();
+        self.acceptance.push(Some(vec![]));
         let product = self.capture(|worker| {
             let body = worker.body(path)?;
             let signature = worker.signature(path)?;
@@ -1235,11 +1247,30 @@ impl<'a, S: TirSource + ?Sized> TaskWorker<'a, S> {
                 dependencies,
                 acceptance,
                 verification,
+                body.detail.clone(),
             ))
         });
         let depth = self.stack.finish_requests(self.depth_limit());
+        let execution =
+            self.finish_execution_acceptance(product.result.as_ref().ok().map(|_| &product.reads));
         self.merge(&product.reads);
-        let (definition, diagnostics, dependencies, acceptance, verification) = product.result?;
+        let (definition, diagnostics, dependencies, acceptance, verification, mut detail) =
+            product.result?;
+        if self.pending.is_empty() {
+            detail.signatures = dependencies.clone();
+            self.source.completed_lower(
+                &QueryOutput {
+                    value: definition.clone(),
+                    diagnostics: diagnostics.clone(),
+                    dependencies: dependencies.clone(),
+                },
+                &detail,
+                &product.reads,
+                &depth,
+                &self.execution_selections_since(selection_start),
+                execution,
+            );
+        }
         let held = Arc::new(Lowered {
             definition: definition.clone(),
             verification: verification.clone(),
@@ -1608,6 +1639,7 @@ mod tests {
                     })),
                     reads,
                     dependencies: vec![],
+                    detail: DependencyReads::default(),
                 }),
             );
         }

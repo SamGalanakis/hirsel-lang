@@ -455,6 +455,48 @@ struct LowerRecord {
     output: QueryOutput<hirsel_tir::DefinitionRef>,
     detail: DependencyReads,
 }
+/// Unassociated canonical bytes from a worker. Only serial prefix admission
+/// may publish the ordinary query association and its local V completion.
+pub(super) struct CapturedLower {
+    payload: crate::store::Reference,
+    reads: Reads,
+    acceptance: Option<hirsel_validate::ExecutionReceipt>,
+}
+#[allow(clippy::too_many_arguments)]
+pub(super) fn capture_lower(
+    records: &TypeRecords,
+    owner: impl Fn(Anchor) -> Option<(DefPath, u32)>,
+    store: &dyn crate::store::ResultStore,
+    output: &QueryOutput<hirsel_tir::DefinitionRef>,
+    detail: &DependencyReads,
+    reads: &Reads,
+    depth: &crate::memo::DepthEvidence<Span>,
+    selections: &[crate::comptime::Selection],
+    acceptance: Option<hirsel_validate::ExecutionReceipt>,
+) -> Option<CapturedLower> {
+    let payload = records.encode_record(
+        &LowerRecord {
+            output: output.clone(),
+            detail: canonical_detail(detail.clone()),
+            depth: depth.clone(),
+            selections: selections.to_vec(),
+        },
+        owner,
+    )?;
+    let payload = store.put_content(
+        crate::store::Domain {
+            kind: 0x4c4f_5752,
+            schema: 1,
+        },
+        &payload,
+    )?;
+    Some(CapturedLower {
+        payload,
+        reads: reads.clone(),
+        acceptance,
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 struct LowerIdentityMetadata {
     depth: crate::memo::DepthEvidence<Span>,
@@ -2806,6 +2848,53 @@ impl QueryEngine {
         self.replay_selections(&metadata.selections)?;
         Some((output, metadata.depth))
     }
+    pub(super) fn publish_captured_lower(
+        &mut self,
+        path: &DefPath,
+        captured: CapturedLower,
+    ) -> Result<(), QueryError> {
+        if !self.execution_valid(path, &captured.reads) {
+            return Ok(());
+        }
+        let Some(bytes) = self
+            .result_store
+            .as_ref()
+            .and_then(|store| store.get_content(captured.payload))
+        else {
+            return Ok(());
+        };
+        let Some(record): Option<LowerRecord> = self.decode_record(&bytes) else {
+            return Ok(());
+        };
+        if record.output.value.path.path() != path
+            || !self.portable_lower_reads(path, &captured.reads, &record.selections)
+            || !self.lower_acceptance_holds(captured.acceptance.as_ref())
+        {
+            return Ok(());
+        }
+        let verification = self.ensure_lowered_verdict(&record.output.value)?;
+        let mut entry = self.adopted(
+            path,
+            QueryKind::Lower,
+            Variant {
+                inputs: ContentHash::default(),
+                reads: captured.reads,
+                payload: bytes,
+            },
+            Ok(record.output),
+            record.detail,
+        );
+        let unpublished = Arc::get_mut(&mut entry).expect("unpublished worker Lower");
+        unpublished.depth = Some(record.depth);
+        unpublished.selections = record.selections;
+        unpublished.acceptance = captured.acceptance;
+        unpublished.verification = std::sync::Mutex::new(verification);
+        self.store_lower(path, &entry)?;
+        self.lowered.insert(DefId::intern(path), entry);
+        self.retain_lowering(DefId::intern(path));
+        Ok(())
+    }
+
     pub(super) fn store_lower(
         &mut self,
         path: &DefPath,

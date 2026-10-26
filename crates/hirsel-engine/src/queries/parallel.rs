@@ -101,7 +101,7 @@ impl<T> Product<T> {
         }
     }
 
-    fn detail(&self) -> &DependencyReads {
+    pub(super) fn detail(&self) -> &DependencyReads {
         match self {
             Self::Hit(entry) => &entry.detail,
             Self::Computed(stage) => &stage.detail,

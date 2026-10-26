@@ -126,6 +126,9 @@ pub(crate) struct FrozenSource<'a> {
     pub(crate) checker: Option<&'a dyn CheckerPhase>,
     pub(crate) mode_phase: Option<&'a dyn ModesPhase>,
     pub(crate) completed: Mutex<Vec<(parallel::CompactCompleted, ContentHash, Reads)>>,
+    records: Option<Arc<persistent::TypeRecords>>,
+    store: Option<Arc<dyn crate::store::ResultStore>>,
+    lower_products: Mutex<BTreeMap<DefPath, persistent::CapturedLower>>,
 }
 /// Mirror the live generation recorder's adapter detail, including repeated
 /// signature requests in order. Canonical Reads alone cannot reconstruct the
@@ -406,6 +409,7 @@ impl TirSource for FrozenSource<'_> {
                         analyzed: output.clone(),
                         reads: entry.reads().clone(),
                         dependencies: output.dependencies.clone(),
+                        detail: entry.detail.clone(),
                     })
                 }),
                 reads: entry.reads().clone(),
@@ -531,6 +535,11 @@ impl TirSource for FrozenSource<'_> {
             }
         };
         let text = done.text;
+        let detail = done
+            .modes
+            .as_ref()
+            .map(|mode| mode.detail().clone())
+            .unwrap_or_default();
         let done = parallel::CompactCompleted::capture(
             done,
             &context,
@@ -553,9 +562,38 @@ impl TirSource for FrozenSource<'_> {
                     analyzed: output.clone(),
                     reads: reads.clone(),
                     dependencies: output.dependencies.clone(),
+                    detail,
                 })
             }),
             reads,
+        }
+    }
+    fn completed_lower(
+        &self,
+        output: &QueryOutput<DefinitionRef>,
+        detail: &DependencyReads,
+        reads: &Reads,
+        depth: &DepthEvidence<Span>,
+        selections: &[crate::comptime::Selection],
+        acceptance: Option<hirsel_validate::ExecutionReceipt>,
+    ) {
+        let Some(records) = &self.records else { return };
+        let Some(store) = &self.store else { return };
+        if let Some(captured) = persistent::capture_lower(
+            records,
+            |anchor| self.anchor_owner(anchor),
+            store.as_ref(),
+            output,
+            detail,
+            reads,
+            depth,
+            selections,
+            acceptance,
+        ) {
+            self.lower_products
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(output.value.path.path().clone(), captured);
         }
     }
     fn dictionary_constant(
@@ -775,6 +813,9 @@ impl QueryEngine {
             checker: self.adapters.checker.as_deref(),
             mode_phase: self.adapters.modes.as_deref(),
             completed: Mutex::new(vec![]),
+            records: self.type_records(),
+            store: self.result_store.clone(),
+            lower_products: Mutex::new(BTreeMap::new()),
         })
     }
 }
@@ -1129,6 +1170,10 @@ impl QueryEngine {
             },
         );
         // End the frozen source borrow before updating engine-owned counters.
+        let lower_products = source
+            .lower_products
+            .into_inner()
+            .unwrap_or_else(|e| e.into_inner());
         let bodies = source
             .completed
             .into_inner()
@@ -1362,6 +1407,7 @@ impl QueryEngine {
                 },
             )
             .collect();
+        let mut lower_products = lower_products;
         for (index, path) in definitions[..end].iter().enumerate() {
             let Some((_, product, limit, phase, mut registrations, pending, selected)) =
                 completed.remove(&index)
@@ -1381,6 +1427,13 @@ impl QueryEngine {
                     self.install_staged(registration);
                 }
                 self.last_comptime_limit = limit;
+                let mut product = product;
+                if product.result.is_ok()
+                    && let Some(captured) = lower_products.remove(path)
+                    && let Err(error) = self.publish_captured_lower(path, captured)
+                {
+                    product.result = Err(error);
+                }
                 results[index] = Some(RootOutcome {
                     definition: path.clone(),
                     result: product.result,
