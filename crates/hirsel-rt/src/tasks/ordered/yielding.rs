@@ -5,6 +5,12 @@ use crate::TaskCtx;
 use crate::ordered::{Next, Progress};
 use crate::stop::Stopped;
 
+/// The fallback adapter retains its ordinary native stack. Compact callers
+/// instead return Pending through their checked dispatcher chain.
+pub(crate) fn wait(ctx: *mut TaskCtx) {
+    engine::suspend(ctx, engine::current(ctx), true);
+}
+
 #[derive(Debug, Default)]
 pub(crate) enum Yield {
     #[default]

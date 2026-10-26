@@ -33,6 +33,7 @@ struct Invocation {
     parent: Option<u64>,
     mark: usize,
     caught: Option<Vec<Chained>>,
+    entered: Option<entered::Pending>,
 }
 
 impl Invocations {
@@ -46,6 +47,7 @@ impl Invocations {
             parent: self.scopes.last().map(|scope| scope.generation),
             mark,
             caught: None,
+            entered: None,
         });
     }
 
@@ -268,6 +270,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
 ) -> u8 {
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    // A checked entered site resumes the same owned invocation. An ordinary
+    // caller keeps the established stackful begin ABI and scheduling point.
+    if let Some(site) = unsafe { crate::continuation::binding::take_bound(ctx, entered::KIND) } {
+        return unsafe { crate::stop::check(ctx, entered::begin(ctx, out, site)) };
+    }
     // SAFETY: caller contract.
     unsafe {
         let mark = (*ctx).failure.count();
