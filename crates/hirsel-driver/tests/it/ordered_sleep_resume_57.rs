@@ -33,7 +33,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
 
 // Clock reads have their own, currently stackful classification. Evaluate the
 // deadline in the parent; the admitted child contains only the certified wait.
-const CERTIFIED_SOURCE: &str = r#"
+pub(super) const CERTIFIED_SOURCE: &str = r#"
 pub fn main(rt:Io)->Result[(),GrantError] {
   let tasks=io.tasks(rt)?
   let c=io.monotonic_clock(rt)?

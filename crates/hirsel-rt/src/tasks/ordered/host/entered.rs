@@ -124,6 +124,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_ordered_sleep_until(
         match unsafe { crate::stop::check(ctx, outcome) } {
             Drive::Pending { head_only } => {
                 if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
+                    #[cfg(feature = "diagnostic")]
+                    crate::compact_trace::runtime_wait(
+                        site.task.slot,
+                        site.state,
+                        site.kind,
+                        "host",
+                        site.invocation,
+                    );
                     unsafe { (*ctx).ordered_inop_leave = Some(head_only) };
                     return crate::STATUS_SUSPENDED;
                 }
