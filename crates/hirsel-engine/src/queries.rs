@@ -56,7 +56,7 @@ pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQuer
 pub use scheduled_lower::{
     DefinitionDecodeLayout, FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FRONT_REGISTRATION_KIND,
     FrontLowerOutput, FrontLowerQueries, FrontLowerWork, FrontRegistrationOutput,
-    FrontRegistrationQueries,
+    FrontRegistrationQueries, LowerCarry,
 };
 /// Engine-owned complete canonical input. Only admitted source wrappers
 /// implement this lifetime/size seam; it supplies no validation authority.

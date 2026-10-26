@@ -736,6 +736,11 @@ impl Plan {
     }
 }
 
+/// One selector's carries across its source revisions' fresh graphs.
+pub(super) struct Carry {
+    pub front: Arc<hirsel_engine::FrontCarry>,
+    pub lower: Arc<hirsel_engine::LowerCarry>,
+}
 pub(super) fn install(
     compiler: &Compiler,
     config: &CompileConfig,
@@ -743,7 +748,7 @@ pub(super) fn install(
     budget: &GraphBudget,
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
-    carry: Option<&Arc<hirsel_engine::FrontCarry>>,
+    carry: Option<&Carry>,
     scratch_parent: &std::path::Path,
     toolchain: Option<&Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -906,7 +911,7 @@ pub(super) fn install(
     // front facts only where their text and reads still validate.
     if let Some(carry) = carry {
         front
-            .install_carry(carry.clone())
+            .install_carry(carry.front.clone())
             .map_err(|_| uninstalled())?;
     }
     let lower = program
@@ -924,6 +929,11 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
+    if let Some(carry) = carry {
+        lower
+            .install_carry(carry.lower.clone())
+            .map_err(|_| uninstalled())?;
+    }
     let growth = program
         .engine
         .front_growth_queries(&program.entry, front.clone(), plan.root, growth, errors)

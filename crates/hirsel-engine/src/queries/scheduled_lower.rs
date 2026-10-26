@@ -2,6 +2,7 @@
 //! preparation and interpreter state on the admitted home worker. Publication
 //! into a source namespace remains a separate ordered transaction.
 use super::*;
+mod carry;
 mod dependencies;
 mod evidence;
 mod registration;
@@ -9,6 +10,7 @@ use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
 use crate::store::{Domain, EntryKey, Reference, ResultStore};
+pub use carry::LowerCarry;
 use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
@@ -230,6 +232,7 @@ pub struct FrontLowerQueries {
     records: crate::NativeRecords,
     store: Arc<dyn ResultStore>,
     outcomes: Mutex<BTreeMap<(u32, ContentHash), (Reference, Outcome, u64)>>,
+    carry: Mutex<Option<Arc<LowerCarry>>>,
     work: Mutex<BTreeMap<DefPath, FrontLowerWork>>,
     weight: MemoryWeight,
     max_reads: usize,
@@ -637,6 +640,15 @@ impl FrontLowerQueries {
         path: DefPath,
         reads: QueryReads,
     ) -> Result<ProductRef, Reference> {
+        let input = &self.inputs[&path];
+        let key = if id.kind == FRONT_LOWER_KIND {
+            &input.lower
+        } else {
+            &input.evaluate
+        };
+        if let Some(product) = self.load_carry(id, &path, key) {
+            return product;
+        }
         // The live future and working bodies use this task's runtime weight.
         // Only actual settled descriptor/receipt ownership is retained below;
         // provider archives and unused maximum task weights are not ownership.
@@ -689,12 +701,6 @@ impl FrontLowerQueries {
             .as_ref()
             .ok()
             .and_then(|_| source.evidence.borrow().finish(&observed));
-        let input = &self.inputs[&path];
-        let key = if id.kind == FRONT_LOWER_KIND {
-            &input.lower
-        } else {
-            &input.evaluate
-        };
         let bytes = match &result {
             Ok(Value::Lower(lower)) => self.records.encode(
                 &self.anchors,
@@ -732,35 +738,49 @@ impl FrontLowerQueries {
         } else {
             CONSTANT_DESCRIPTOR
         };
-        let record = self
-            .store
-            .put_content(domain, &bytes)
-            .ok_or(self.errors.resource)?;
-        let action = hirsel_artifact_store::Action(ContentHash::of_parts(
-            "hirsel.front.scheduled-action.v1",
-            [
-                key.0.0.as_slice(),
-                key.1.0.as_slice(),
-                crate::store::payload_reads_hash(&observed).0.as_slice(),
-                domain.kind.to_le_bytes().as_slice(),
-                domain.schema.to_le_bytes().as_slice(),
-            ],
-        ));
-        let execution_subject = persistent::evaluation_subject(key, &bytes);
-        if let Some(receipt) = &execution
-            && let Some(cache) = self.store.verifier()
-        {
-            cache.publish_execution(execution_subject, receipt);
-        }
-        let failed = result.is_err();
         let outcome = Outcome {
             result,
             reads: observed,
             depth,
             executed,
             execution,
-            execution_subject,
+            execution_subject: persistent::evaluation_subject(key, &bytes),
         };
+        self.remember_carry(id, key, &bytes, &outcome);
+        self.publish(id, key, domain, &bytes, outcome)
+    }
+    /// Settle one descriptor: store it, admit its outcome under this producer's
+    /// retention and associate a successful product.
+    fn publish(
+        &self,
+        id: QueryId,
+        key: &EntryKey,
+        domain: Domain,
+        bytes: &[u8],
+        outcome: Outcome,
+    ) -> Result<ProductRef, Reference> {
+        let record = self
+            .store
+            .put_content(domain, bytes)
+            .ok_or(self.errors.resource)?;
+        let action = hirsel_artifact_store::Action(ContentHash::of_parts(
+            "hirsel.front.scheduled-action.v1",
+            [
+                key.0.0.as_slice(),
+                key.1.0.as_slice(),
+                crate::store::payload_reads_hash(&outcome.reads)
+                    .0
+                    .as_slice(),
+                domain.kind.to_le_bytes().as_slice(),
+                domain.schema.to_le_bytes().as_slice(),
+            ],
+        ));
+        if let Some(receipt) = &outcome.execution
+            && let Some(cache) = self.store.verifier()
+        {
+            cache.publish_execution(outcome.execution_subject, receipt);
+        }
+        let failed = outcome.result.is_err();
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;
         let mut retention = self.retention.lock().unwrap_or_else(|e| e.into_inner());
         let mut outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
@@ -1509,6 +1529,7 @@ impl QueryEngine {
             records: crate::NativeRecords::new(self.types.clone(), store.clone()),
             store,
             outcomes: Mutex::new(BTreeMap::new()),
+            carry: Mutex::new(None),
             work: Mutex::new(BTreeMap::new()),
             weight,
             max_reads,
