@@ -29,12 +29,26 @@ enum Mutant {
     DoubleEnd,
     InfallibleRelease,
     FallibleRelease,
+    InfallibleDrop,
+    FallibleDrop,
+    ErasedDrop,
+    IteratorDrop,
+    CapturedResourceDrop,
 }
 
 /// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
 /// and its cleanup catches the failures since that count and returns.
 fn isolated(m: Mutant) -> Vec<K> {
-    if matches!(m, Mutant::InfallibleRelease | Mutant::FallibleRelease) {
+    if matches!(
+        m,
+        Mutant::InfallibleRelease
+            | Mutant::FallibleRelease
+            | Mutant::InfallibleDrop
+            | Mutant::FallibleDrop
+            | Mutant::ErasedDrop
+            | Mutant::IteratorDrop
+            | Mutant::CapturedResourceDrop
+    ) {
         isolated_stage::<Rc>(m)
     } else {
         isolated_stage::<Value>(m)
@@ -43,13 +57,23 @@ fn isolated(m: Mutant) -> Vec<K> {
 
 fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
     let released = match m {
-        Mutant::InfallibleRelease => Some(l::BLK),
-        Mutant::FallibleRelease => Some(l::RESBLK),
+        Mutant::InfallibleRelease | Mutant::InfallibleDrop => Some(l::BLK),
+        Mutant::FallibleRelease | Mutant::FallibleDrop => Some(l::RESBLK),
+        Mutant::ErasedDrop => Some(l::ERASED_ONCE),
+        Mutant::IteratorDrop => Some(l::ITER),
+        Mutant::CapturedResourceDrop => Some(l::CLOSURE),
         _ => None,
     };
     let mut parameters = vec![(Passing::Borrow, l::U64)];
     parameters.extend(released.map(|layout| (Passing::Take, layout)));
     let mut t = Lir::<S>::new(&parameters, None);
+    if m == Mutant::CapturedResourceDrop {
+        use hirsel_lir::layout_types::{DropStep, ScanStep};
+        let environment = &mut t.table.layouts[l::ENV.0 as usize];
+        environment.fields[0].layout = l::RESBLK;
+        environment.scan = vec![ScanStep::Counted { offset: 0 }];
+        environment.drop = vec![DropStep::Release { offset: 0 }];
+    }
     if m != Mutant::Source {
         t.builder.unit.header.origin = UnitOrigin::Library;
     }
@@ -65,6 +89,22 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
     let begin_failed = match owner {
         Some(owner) => t.releasing(&[owner]),
         None => propagate,
+    };
+    let dropped = if matches!(
+        m,
+        Mutant::InfallibleDrop
+            | Mutant::FallibleDrop
+            | Mutant::ErasedDrop
+            | Mutant::IteratorDrop
+            | Mutant::CapturedResourceDrop
+    ) {
+        let layout = released.unwrap();
+        let slot = t.slot(layout, SlotKind::Local, ROOT);
+        t.builder.push(ENTRY, Inst::StorageLive { slot });
+        let address = t.at(ENTRY, slot, &[], &[Undo::Release(owner.unwrap())]);
+        Some((slot, address))
+    } else {
+        None
     };
     let params = [(Passing::Borrow, l::U64)];
     let abi = t.abi(&params, Some(l::U64));
@@ -107,7 +147,28 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
         // Only the release's failure bypasses End. Its normal path still
         // reaches the ordinary catch and retires the invocation exactly once.
         let failure = t.failure(propagate);
-        t.release_with(after, owner, failure);
+        if let Some((slot, address)) = dropped {
+            t.store(after, address, owner, slot);
+            let anchor = t.cleanup_anchor();
+            t.builder.push(
+                after,
+                Inst::Drop {
+                    address,
+                    if_live: false,
+                    anchor,
+                    failure,
+                },
+            );
+            t.builder.push(
+                after,
+                Inst::StorageDead {
+                    slot,
+                    if_live: false,
+                },
+            );
+        } else {
+            t.release_with(after, owner, failure);
+        }
     }
     let start = if m == Mutant::Start {
         t.int(after)
@@ -219,6 +280,34 @@ fn only_descriptor_proved_infallible_release_edges_may_skip_end() {
         },
         |k| *k == K::Placement("isolation terminal path without End"),
     );
+}
+
+#[test]
+fn only_descriptor_proved_infallible_drop_edges_may_skip_end() {
+    pair(
+        |m| {
+            isolated(if m {
+                Mutant::FallibleDrop
+            } else {
+                Mutant::InfallibleDrop
+            })
+        },
+        |k| *k == K::Placement("isolation terminal path without End"),
+    );
+}
+
+#[test]
+fn callable_and_iterator_drops_keep_their_possible_failure_edges() {
+    for mutant in [
+        Mutant::ErasedDrop,
+        Mutant::IteratorDrop,
+        Mutant::CapturedResourceDrop,
+    ] {
+        pair(
+            |m| isolated(if m { mutant } else { Mutant::InfallibleDrop }),
+            |k| *k == K::Placement("isolation terminal path without End"),
+        );
+    }
 }
 
 #[test]

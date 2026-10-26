@@ -3333,11 +3333,17 @@ impl<S: Stage> Checker<'_, '_, S> {
                 .get(&unit.instructions)
                 .unwrap_or(&[])
             {
-                // RC gives early releases a syntactic cleanup edge, but a
-                // release with no reachable finalizer/close cannot take it.
+                // RC gives drops and early releases syntactic cleanup edges,
+                // but neither can fail without a reachable finalizer/close.
                 // Derive that independently from C's layouts, not RC hints.
-                let infallible = matches!(inst, Inst::Release { layout, .. }
-                    if !self.cx.layouts.destructible(*layout));
+                let infallible = match inst {
+                    Inst::Release { layout, .. } => !self.cx.layouts.destructible(*layout),
+                    Inst::Drop { address, .. } => {
+                        let ty = unit.addresses[address.index()].ty;
+                        !self.cx.layouts.destructible(unit.types[ty.index()].layout)
+                    }
+                    _ => false,
+                };
                 if let Some(failure) = inst.failure()
                     && !infallible
                 {

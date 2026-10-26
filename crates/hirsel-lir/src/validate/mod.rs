@@ -1151,11 +1151,21 @@ impl<'a> Layouts<'a> {
         }
         // A block reference's own drop program releases the reference; what
         // that runs is its payload's destruction.
-        if let LayoutKind::Block { payload }
-        | LayoutKind::Box { payload }
-        | LayoutKind::Shared { payload } = layout.kind
-        {
-            return self.destructible_in(payload, seen);
+        match layout.kind {
+            LayoutKind::Block { payload }
+            | LayoutKind::Box { payload }
+            | LayoutKind::Shared { payload } => return self.destructible_in(payload, seen),
+            // Callable storage contains a pointer, not the environment's type.
+            // A visible environment supplies its actual descriptor; an erased
+            // environment or iterator can run arbitrary language destruction.
+            LayoutKind::Callable {
+                environment: Some(environment),
+            } => {
+                return self.destructible_in(environment, seen);
+            }
+            LayoutKind::Callable { environment: None } => return !layout.drop.is_empty(),
+            LayoutKind::Iterator { .. } => return true,
+            _ => {}
         }
         self.steps_destructible(layout, &layout.drop, seen)
     }
