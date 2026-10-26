@@ -98,6 +98,14 @@ impl LoadingAdmission {
     pub fn take_transport(&mut self) -> MemoryReservation {
         self.transport.split(self.transport.bytes()).unwrap()
     }
+    /// Lend the whole runtime and snapshot charge to work that finishes and
+    /// releases it before any final producer takes a partition.
+    pub fn lend(&mut self) -> (MemoryReservation, MemoryReservation) {
+        (
+            self.runtime.split(self.runtime.bytes()).unwrap(),
+            self.snapshot.split(self.snapshot.bytes()).unwrap(),
+        )
+    }
     pub fn finish(mut self, plan: SnapshotPlan) -> Result<GraphAdmission, ToolError> {
         let bytes = [
             plan.source,
@@ -230,6 +238,31 @@ impl GraphBudget {
             hot.remove(previous);
         }
         hot.push(graph);
+    }
+    /// Charge a loading admission again after lent work released its part.
+    pub fn readmit(
+        &self,
+        loading: &mut LoadingAdmission,
+        runtime: u64,
+        snapshot: u64,
+    ) -> Result<(), ToolError> {
+        let reserve = || -> std::io::Result<_> {
+            Ok((
+                self.budget.reserve(runtime)?,
+                self.budget.reserve(snapshot)?,
+            ))
+        };
+        let (runtime, snapshot) = match reserve() {
+            Ok(reserved) => reserved,
+            Err(_) => {
+                self.release_idle();
+                reserve().map_err(ToolError::Io)?
+            }
+        };
+        // Both come from this budget, as the loading charge does.
+        let _ = loading.runtime.join(runtime);
+        let _ = loading.snapshot.join(snapshot);
+        Ok(())
     }
     fn release_idle(&self) {
         let discarded = {

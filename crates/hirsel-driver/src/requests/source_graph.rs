@@ -9,8 +9,9 @@ use super::{
 };
 use hirsel_engine::{
     CompileConfig, Compiler, FrontBodyQueries, FrontCheckPlan, FrontCheckQueries,
-    FrontGrowthQueries, FrontInputFootprint, FrontLowerQueries, FrontRunQueries, LoweringPolicy,
-    QueryKind, ToolError,
+    FrontGrowthQueries, FrontInputFootprint, FrontLowerQueries, FrontRegistrationBootstrap,
+    FrontRegistrationBootstrapAdmission, FrontRegistrationBootstrapError, FrontRunQueries,
+    LoadedProgram, LoweringPolicy, QueryError, QueryKind, ToolError,
     loader_inputs::FrozenInputs,
     runtime::*,
     store::{Domain, RequestStore, ResultStore},
@@ -857,33 +858,107 @@ pub(super) fn install(
         .collect::<Vec<_>>();
     store.demand(&program.engine.front_store_keys(&root));
     let sources = program.engine.sources.clone();
-    let plan = Plan::new(
-        limits,
-        config,
-        &request.inputs,
-        &definitions,
-        program.files.len(),
-        needs_run,
-        matches!(
-            request.operation,
-            CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
-        ),
-        matches!(
-            &request.operation,
-            CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native)
-                if native.evidence.is_some()
-        ),
-        matches!(request.operation, CompileOperation::NativeOwnership(_)),
-        matches!(request.operation, CompileOperation::SafeCheck),
-        matches!(request.operation, CompileOperation::CheckedProducts { .. }),
-        footprint,
-        run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
-        native_catalogue
-            .as_ref()
-            .map_or(0, |inputs| inputs.input_bytes()),
+    let inspection_bytes =
         GraphMeter::input_bytes(&definitions, program.engine.memo_snapshot().len())
-            .ok_or_else(uninstalled)?,
-    )?;
+            .ok_or_else(uninstalled)?;
+    let plan_within = |limits| {
+        Plan::new(
+            limits,
+            config,
+            &request.inputs,
+            &definitions,
+            program.files.len(),
+            needs_run,
+            matches!(
+                request.operation,
+                CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
+            ),
+            matches!(
+                &request.operation,
+                CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native)
+                    if native.evidence.is_some()
+            ),
+            matches!(request.operation, CompileOperation::NativeOwnership(_)),
+            matches!(request.operation, CompileOperation::SafeCheck),
+            matches!(request.operation, CompileOperation::CheckedProducts { .. }),
+            footprint,
+            run_inputs.as_ref().map_or(0, |inputs| inputs.input_bytes()),
+            native_catalogue
+                .as_ref()
+                .map_or(0, |inputs| inputs.input_bytes()),
+            inspection_bytes,
+        )
+    };
+    let mut plan = plan_within(limits)?;
+    // Written generators are accepted before the final front captures its
+    // inputs. Their bootstrap borrows this graph's whole runtime and snapshot
+    // charge, sized like the final front and Lower, and shuts down before the
+    // charge it released is admitted again. Accepted views keep their own
+    // retained bytes, which the final partitions no longer count.
+    let generators = match program.engine.front_generator_roots(&definitions) {
+        Ok(generators) => generators,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
+    let bootstrap = if generators.is_empty() {
+        None
+    } else {
+        let metadata = FrontRegistrationBootstrap::input_bytes(&definitions, generators.len())
+            .ok_or_else(uninstalled)?;
+        let (runtime, mut snapshot) = loading.lend();
+        let lent = (runtime.bytes(), snapshot.bytes());
+        let mut split = |bytes| snapshot.split(bytes).ok_or_else(uninstalled);
+        let reserved = split(metadata)?;
+        let front = split(plan.snapshots.front)?;
+        let lower = split(plan.snapshots.lower)?;
+        let rest = [metadata, plan.snapshots.front, plan.snapshots.lower]
+            .into_iter()
+            .try_fold(lent.1, u64::checked_sub)
+            .ok_or_else(uninstalled)?;
+        let text = split(rest / 2)?;
+        let each = rest / 2 / generators.len() as u64;
+        // Bootstrap charges spare vector capacity to metadata; keep none.
+        let mut syntax = Vec::with_capacity(generators.len());
+        for _ in &generators {
+            syntax.push(split(each)?);
+        }
+        let admission = FrontRegistrationBootstrapAdmission {
+            jobs: config.jobs,
+            weight: plan.body,
+            max_reads: lower_reads(&definitions)?,
+            runtime,
+            front,
+            lower,
+            text,
+            syntax,
+            metadata: reserved,
+        };
+        drop(snapshot);
+        let errors = runtime_errors(store.as_ref())?;
+        let bootstrap = match program.engine.bootstrap_front_registrations(
+            &definitions,
+            &generators,
+            admission,
+            errors,
+        ) {
+            Ok(bootstrap) => bootstrap,
+            Err(error) => return Err(loading.failed(bootstrap_error(&program, error))),
+        };
+        let held = bootstrap
+            .registrations()
+            .iter()
+            .map(|accepted| accepted.retained_bytes())
+            .try_fold(metadata, u64::checked_add)
+            .ok_or_else(uninstalled)?;
+        let snapshot_bytes = lent.1.checked_sub(held).ok_or_else(uninstalled)?;
+        if let Err(error) = budget.readmit(&mut loading, lent.0, snapshot_bytes) {
+            return Err(loading.failed(error));
+        }
+        plan = plan_within(RequestLimits {
+            snapshot_bytes,
+            ..limits
+        })?;
+        Some(bootstrap)
+    };
     let GraphAdmission {
         runtime,
         source,
@@ -905,7 +980,15 @@ pub(super) fn install(
     let errors = runtime_errors(store.as_ref())?;
     let front = program
         .engine
-        .front_body_queries(&definitions, plan.body, front, errors)
+        .front_body_queries_with_registrations(
+            &definitions,
+            bootstrap
+                .as_ref()
+                .map_or(&[][..], |bootstrap| bootstrap.registrations()),
+            plan.body,
+            front,
+            errors,
+        )
         .map_err(&query_error)?;
     // Before any task: this fresh graph adopts the selector's earlier accepted
     // front facts only where their text and reads still validate.
@@ -920,11 +1003,7 @@ pub(super) fn install(
             &definitions,
             front.clone(),
             plan.body,
-            definitions
-                .len()
-                .checked_mul(3)
-                .ok_or_else(uninstalled)?
-                .min(4096),
+            lower_reads(&definitions)?,
             lower,
             errors,
         )
@@ -1265,6 +1344,34 @@ pub(super) fn install(
         runtime: Arc::new(Mutex::new(runtime)),
         products,
     }))
+}
+/// The read bound of one Lower body, shared by bootstrap and the final graph.
+fn lower_reads(definitions: &[DefPath]) -> Result<usize, ToolError> {
+    Ok(definitions
+        .len()
+        .checked_mul(3)
+        .ok_or_else(uninstalled)?
+        .min(4096))
+}
+fn bootstrap_error(program: &LoadedProgram, error: FrontRegistrationBootstrapError) -> ToolError {
+    match error {
+        FrontRegistrationBootstrapError::Admission(error) => program.error(error),
+        FrontRegistrationBootstrapError::Runtime { error, sources, .. } => ToolError::Query {
+            error: error.unwrap_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "generator bootstrap".into(),
+                    message: "a generator task failed without a diagnostic".into(),
+                })
+            }),
+            phase: None,
+            sources,
+        },
+        FrontRegistrationBootstrapError::Acceptance(failure) => ToolError::Query {
+            error: failure.error,
+            phase: None,
+            sources: failure.sources,
+        },
+    }
 }
 fn registration(error: &'static str) -> ToolError {
     ToolError::Runtime(error.into())

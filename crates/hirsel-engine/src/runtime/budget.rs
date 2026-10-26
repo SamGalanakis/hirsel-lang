@@ -52,6 +52,15 @@ impl MemoryReservation {
             bytes,
         })
     }
+    /// Take over another owner's charge on the same process budget; a charge
+    /// from another budget is handed back unchanged.
+    pub fn join(&mut self, mut other: Self) -> Result<(), Self> {
+        if !Arc::ptr_eq(&self.budget, &other.budget) {
+            return Err(other);
+        }
+        self.bytes += std::mem::take(&mut other.bytes);
+        Ok(())
+    }
     pub fn bytes(&self) -> u64 {
         self.bytes
     }
