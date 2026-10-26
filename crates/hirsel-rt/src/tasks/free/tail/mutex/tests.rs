@@ -84,8 +84,14 @@ unsafe extern "C" fn dispatch(
             }
         }
         let ticket = shared.ticket.lock().unwrap().unwrap();
-        if shared.force_yield && shared.go.load(Ordering::Acquire)
-            && !(*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).suffix_done {
+        if shared.force_yield
+            && shared.go.load(Ordering::Acquire)
+            && !(*ctx)
+                .free_ops
+                .tails
+                .active(crate::tasks::running_key(ctx), ticket)
+                .suffix_done
+        {
             crate::pool::free::renew(ctx);
             for _ in 1..hirsel_free::schedule::OP_BUDGET {
                 assert!(crate::pool::free::proceed(ctx));
@@ -101,7 +107,12 @@ unsafe extern "C" fn dispatch(
         })
         .unwrap();
         if result.is_pending() {
-            if (*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).yielded {
+            if (*ctx)
+                .free_ops
+                .tails
+                .active(crate::tasks::running_key(ctx), ticket)
+                .yielded
+            {
                 shared.yields.fetch_add(1, Ordering::Relaxed);
                 return crate::STATUS_SUSPENDED;
             }
@@ -145,21 +156,23 @@ fn owned_completed_put_and_kill_resume_the_final_yield_without_reapplying_the_ef
     controls(true);
 }
 
-fn controls(force_yield:bool) {
+fn controls(force_yield: bool) {
     use crate::tasks::free::objects::tests::{
         Layouts, isolated_at, mutex as make_mutex, plain, wait_until, wrapper,
     };
-    let name=if force_yield {
+    let name = if force_yield {
         "tasks::free::tail::mutex::tests::owned_completed_put_and_kill_resume_the_final_yield_without_reapplying_the_effect"
     } else {
         "tasks::free::tail::mutex::tests::owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stacks"
     };
-    if !isolated_at(name,"HIRSEL_OWNED_MUTEX_TAILS") {
+    if !isolated_at(name, "HIRSEL_OWNED_MUTEX_TAILS") {
         return;
     }
     let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
     for kind in [Kind::Put, Kind::Kill, Kind::Cause] {
-        if force_yield && kind==Kind::Cause {continue;}
+        if force_yield && kind == Kind::Cause {
+            continue;
+        }
         for durable in [false, true] {
             let recording = record::Recording::new(b"owned mutex tail controls", durable);
             let install = recording.clone();
@@ -267,8 +280,11 @@ fn controls(force_yield:bool) {
                         16,
                     );
                     assert_eq!(value, [1, 108]);
-                    assert_eq!(shared.yields.load(Ordering::Relaxed), u32::from(force_yield),
-                        "the completed effect leaves exactly once for its final yield");
+                    assert_eq!(
+                        shared.yields.load(Ordering::Relaxed),
+                        u32::from(force_yield),
+                        "the completed effect leaves exactly once for its final yield"
+                    );
                     hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
                     if kind == Kind::Put {
                         let mut status = 99;

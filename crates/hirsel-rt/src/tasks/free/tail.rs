@@ -18,9 +18,9 @@ use crate::tasks::registry::TaskKey;
 use crate::{STATUS_FAILURE, STATUS_OK};
 use std::sync::Arc;
 
-mod mutex;
 mod close;
-pub(crate) use close::{invoke_root_drop, invoke_release, invoke_finalize};
+mod mutex;
+pub(crate) use close::{invoke_finalize, invoke_release, invoke_root_drop};
 #[cfg(test)]
 mod tests;
 #[allow(unused_imports)]
@@ -195,7 +195,7 @@ fn status_is_terminal(status: u8) {
 pub(crate) struct Records {
     next: u64,
     drivers: Vec<Box<close::Driver>>,
-    cleanup_sites: Vec<(crate::continuation::binding::BoundSite,usize)>,
+    cleanup_sites: Vec<(crate::continuation::binding::BoundSite, usize)>,
     entered: Vec<(crate::continuation::binding::BoundSite, Ticket)>,
     // Boxes retain every ancestor's address across growth and child retirement.
     #[allow(clippy::vec_box)]
@@ -307,8 +307,12 @@ pub(crate) unsafe fn invoke_mutex(
         let leave = unsafe { crate::continuation::binding::can_leave(ctx, site) };
         let result = unsafe { poll_mutex(ctx, ticket, leave) };
         if let Err(ref stop) = result
-            && leave && super::replay::cut_rejection(ctx, stop) {
-            unsafe { crate::stop::check(ctx, crate::tasks::park_left(ctx, crate::tasks::Wait::Final)) };
+            && leave
+            && super::replay::cut_rejection(ctx, stop)
+        {
+            unsafe {
+                crate::stop::check(ctx, crate::tasks::park_left(ctx, crate::tasks::Wait::Final))
+            };
             crate::tasks::compact::wait(ctx);
             return Some(crate::STATUS_SUSPENDED);
         }
@@ -330,7 +334,10 @@ pub(crate) unsafe fn invoke_mutex(
                 if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
                     // A committed yield schedules this saved continuation itself.
                     // An object dependency wait is awakened by its own token.
-                    if unsafe { let record = (*ctx).free_ops.tails.active(site.task, ticket); record.yielded || record.rest } {
+                    if unsafe {
+                        let record = (*ctx).free_ops.tails.active(site.task, ticket);
+                        record.yielded || record.rest
+                    } {
                         return Some(crate::STATUS_SUSPENDED);
                     }
                     unsafe {

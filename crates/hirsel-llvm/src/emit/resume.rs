@@ -8,8 +8,8 @@
 //! suspension.
 use super::*;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeAction,
-    ResumeState, CleanupResumeState, LiveOwnedSlot, resume_name, resume_site_hint,
+    CleanupResumeState, ContinuationPlan, ContinuationPlans, ExclusiveSlot, LiveOwnedSlot,
+    NestedFrame, Representation, ResumeAction, ResumeState, resume_name, resume_site_hint,
 };
 use hirsel_lir::runtime_abi::STATUS_SUSPENDED;
 
@@ -139,8 +139,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.store(shape, value, place);
             }
             // A value the state reloads is defined by its reload.
-            let reloaded = plan.states.iter().any(|s|s.target.state==state && s.live.iter().any(|l|l.value==record.value))
-                || plan.cleanups.iter().any(|s|s.state==state && s.live.iter().any(|l|l.value==record.value));
+            let reloaded =
+                plan.states.iter().any(|s| {
+                    s.target.state == state && s.live.iter().any(|l| l.value == record.value)
+                }) || plan
+                    .cleanups
+                    .iter()
+                    .any(|s| s.state == state && s.live.iter().any(|l| l.value == record.value));
             match record.slot {
                 Some(slot) => self.slots[slot.index()] = Some(place),
                 None if reloaded => {}
@@ -156,9 +161,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// Store a state's live values and number before its boundary call.
     fn materialize(&mut self, state: &ResumeState) -> Emitted {
-        self.materialize_live(&state.live,state.target.state)
+        self.materialize_live(&state.live, state.target.state)
     }
-    fn materialize_live(&mut self,live:&[LiveOwnedSlot],number:u32)->Emitted {
+    fn materialize_live(&mut self, live: &[LiveOwnedSlot], number: u32) -> Emitted {
         for live in live {
             if self.versions.contains(&live.value) {
                 continue;
@@ -181,7 +186,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
     fn reload(&mut self, state: &ResumeState) -> Emitted {
         self.reload_live(&state.live)
     }
-    fn reload_live(&mut self,live:&[LiveOwnedSlot])->Emitted {
+    fn reload_live(&mut self, live: &[LiveOwnedSlot]) -> Emitted {
         for live in live {
             if self.versions.contains(&live.value) {
                 continue;
@@ -324,20 +329,51 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         Ok(None)
     }
 
-    pub(super) fn resume_cleanup_bind(&mut self,block:BlockId,instruction:usize)->Emitted {
-        let Some(resume)=self.resume.as_ref() else {return Ok(())};
-        let Some(state)=resume.plan.cleanups.iter().find(|s|s.block==block&&s.instruction==instruction as u32) else {return Ok(())};
-        let (state,bytes,frame)=(state.clone(),resume.plan.cost.frame_bytes,resume.frame);
-        self.materialize_live(&state.live,state.state)?;
-        let entry=self.runtime(RuntimeEntry::ResumeTail)?;
-        let number=self.module.const_int(self.module.int_type(32),state.state.into());
-        let tag = if matches!(self.unit.types[self.unit.values[state.value.index()].ty.index()].repr, ValueRepr::Block) {
-            if matches!(self.layout(self.unit.types[self.unit.values[state.value.index()].ty.index()].layout)?.kind, hirsel_lir::layout_types::LayoutKind::Shared { .. }) { 48 } else { 49 }
-        } else { 50 };
-        let kind=self.module.const_int(self.module.int_type(32),tag);
-        let bytes=self.module.const_int(self.module.int_type(32),bytes.into());
-        let (anchor,site)=self.failure_sites(self.cleanup_code(state.anchor)?);
-        self.builder.call(entry,&[self.context,frame,number,kind,bytes,anchor,site]);
+    pub(super) fn resume_cleanup_bind(&mut self, block: BlockId, instruction: usize) -> Emitted {
+        let Some(resume) = self.resume.as_ref() else {
+            return Ok(());
+        };
+        let Some(state) = resume
+            .plan
+            .cleanups
+            .iter()
+            .find(|s| s.block == block && s.instruction == instruction as u32)
+        else {
+            return Ok(());
+        };
+        let (state, bytes, frame) = (state.clone(), resume.plan.cost.frame_bytes, resume.frame);
+        self.materialize_live(&state.live, state.state)?;
+        let entry = self.runtime(RuntimeEntry::ResumeTail)?;
+        let number = self
+            .module
+            .const_int(self.module.int_type(32), state.state.into());
+        let tag = if matches!(
+            self.unit.types[self.unit.values[state.value.index()].ty.index()].repr,
+            ValueRepr::Block
+        ) {
+            if matches!(
+                self.layout(
+                    self.unit.types[self.unit.values[state.value.index()].ty.index()].layout
+                )?
+                .kind,
+                hirsel_lir::layout_types::LayoutKind::Shared { .. }
+            ) {
+                48
+            } else {
+                49
+            }
+        } else {
+            50
+        };
+        let kind = self.module.const_int(self.module.int_type(32), tag);
+        let bytes = self
+            .module
+            .const_int(self.module.int_type(32), bytes.into());
+        let (anchor, site) = self.failure_sites(self.cleanup_code(state.anchor)?);
+        self.builder.call(
+            entry,
+            &[self.context, frame, number, kind, bytes, anchor, site],
+        );
         Ok(())
     }
 
@@ -515,12 +551,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             0 => self.unit.entry,
             k => match plan.states.get(k as usize - 1) {
                 Some(s) => s.boundary.block,
-                None => match plan.cleanups.iter().find(|s|s.state==k) {
-                    Some(s)=>s.block,None=>return self.invalid("a resume state outside its plan"),
+                None => match plan.cleanups.iter().find(|s| s.state == k) {
+                    Some(s) => s.block,
+                    None => return self.invalid("a resume state outside its plan"),
                 },
             },
         };
-        let cleanup=plan.cleanups.iter().find(|s|s.state==state);
+        let cleanup = plan.cleanups.iter().find(|s| s.state == state);
         let count = self.unit.blocks.len();
         let mut adjacent: Vec<Vec<usize>> = (0..count)
             .map(|b| self.successors(b))
@@ -532,22 +569,34 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 .map(|b| b.index())
                 .collect();
         }
-        if let Some(s)=cleanup {
-            adjacent[s.block.index()]=hirsel_lir::continuation::cleanup_successors(self.unit,s.block,s.instruction as usize).iter().map(|b|b.index()).collect();
+        if let Some(s) = cleanup {
+            adjacent[s.block.index()] = hirsel_lir::continuation::cleanup_successors(
+                self.unit,
+                s.block,
+                s.instruction as usize,
+            )
+            .iter()
+            .map(|b| b.index())
+            .collect();
         }
         let order = hirsel_graph::reverse_postorder(&adjacent, first.index());
         if state == 0 {
             self.builder.br(self.blocks[self.unit.entry.index()]);
-        } else if let Some(s)=cleanup {
-            let mut skipped=vec![true;count];
-            for &b in &order {skipped[b]=b==first.index();}
+        } else if let Some(s) = cleanup {
+            let mut skipped = vec![true; count];
+            for &b in &order {
+                skipped[b] = b == first.index();
+            }
             self.reload_live(&s.live)?;
-            let unit=self.unit;
-            for (block,i) in hirsel_lir::continuation::resume_preparations(unit,plan,state,&skipped) {
-                let inst=&self.pool(unit.blocks[block.index()].instructions,&unit.instructions)?[i];
+            let unit = self.unit;
+            for (block, i) in
+                hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped)
+            {
+                let inst =
+                    &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
                 self.instruction(inst)?;
             }
-            self.emit_block_suffix(s.block,s.instruction as usize,true)?;
+            self.emit_block_suffix(s.block, s.instruction as usize, true)?;
         } else {
             let s = &plan.states[state as usize - 1];
             let mut skipped = vec![true; count];
@@ -688,7 +737,9 @@ pub(super) fn declare<'m, 'a>(
             continue;
         }
         let mut declared = Vec::new();
-        for state in std::iter::once(None).chain((0..=(plan.states.len()+plan.cleanups.len()) as u32).map(Some)) {
+        for state in std::iter::once(None)
+            .chain((0..=(plan.states.len() + plan.cleanups.len()) as u32).map(Some))
+        {
             let name = resume_name(&header.definition, header.instance, state);
             if module.defines(&name) {
                 return Err(CodegenError::DuplicateSymbol { name });

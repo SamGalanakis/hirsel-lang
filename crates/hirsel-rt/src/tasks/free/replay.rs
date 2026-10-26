@@ -516,11 +516,17 @@ pub(super) fn poll_object_entered(
     entered: &mut bool,
     rest: &std::cell::Cell<bool>,
 ) -> Stopped<bool> {
-    if !on(ctx) { return Ok(true); }
+    if !on(ctx) {
+        return Ok(true);
+    }
     loop {
         let object = object(ctx, handle).expect("admitted object replay");
         if !*entered && unsafe { (*ctx).roots.has_pending() } {
-            if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+            if object
+                .token
+                .poll_publish(ctx, Phase::Entered, || ())?
+                .is_none()
+            {
                 rest.set(true);
                 return Ok(false);
             }
@@ -528,7 +534,11 @@ pub(super) fn poll_object_entered(
         }
         if !object.token.admits(Phase::Done) {
             if !*entered {
-                if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+                if object
+                    .token
+                    .poll_publish(ctx, Phase::Entered, || ())?
+                    .is_none()
+                {
                     rest.set(true);
                     return Ok(false);
                 }
@@ -537,17 +547,26 @@ pub(super) fn poll_object_entered(
             return Err(Stop::Requested);
         }
         let id = object.id()?;
-        let Some(dependency) = object.token.diverged(|task| task.cursor.admission(task.op, 0, &id).map(pending))? else {
+        let Some(dependency) = object
+            .token
+            .diverged(|task| task.cursor.admission(task.op, 0, &id).map(pending))?
+        else {
             return Ok(true);
         };
         if !*entered {
-            if object.token.poll_publish(ctx, Phase::Entered, || ())?.is_none() {
+            if object
+                .token
+                .poll_publish(ctx, Phase::Entered, || ())?
+                .is_none()
+            {
                 rest.set(true);
                 return Ok(false);
             }
             *entered = true;
         }
-        if !dependency.subscribe(subscriber(ctx)) { return Ok(false); }
+        if !dependency.subscribe(subscriber(ctx)) {
+            return Ok(false);
+        }
     }
 }
 

@@ -1635,7 +1635,10 @@ pub unsafe extern "C" fn hirsel_rt_v2_release(
     // SAFETY: this semantic entry owns its task until it suspends or returns.
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
     if let Some(status) = unsafe { crate::tasks::free::tail::invoke_release(ctx, block) } {
-        assert!(live_mask.is_null(), "a bound release has an unproved live mask");
+        assert!(
+            live_mask.is_null(),
+            "a bound release has an unproved live mask"
+        );
         return status;
     }
     // SAFETY: caller contract.

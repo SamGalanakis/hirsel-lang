@@ -381,7 +381,16 @@ unsafe fn close_inner(
     let (channel, sender) = role::with_role(ctx, |s| s.channels.endpoint_of(word));
     unsafe { super::replay::wait_object(ctx, (crate::free::CHANNEL, u64::from(channel))) }?;
     let (left, inert) = unsafe { close_action(ctx, word, channel, sender) }?;
-    Ok(unsafe { destroy(ctx, left, inert, anchor, operation_site, super::replay::start) })
+    Ok(unsafe {
+        destroy(
+            ctx,
+            left,
+            inert,
+            anchor,
+            operation_site,
+            super::replay::start,
+        )
+    })
 }
 
 /// The original admitted close action; detached storage is returned before any
@@ -389,13 +398,21 @@ unsafe fn close_inner(
 /// # Safety
 /// The role is held and this ordinal has passed its channel admission.
 pub(super) unsafe fn close_action(
-    ctx: *mut TaskCtx, word: u64, channel: u32, sender: bool,
+    ctx: *mut TaskCtx,
+    word: u64,
+    channel: u32,
+    sender: bool,
 ) -> Stopped<(Option<(crate::channels::Ring, u32)>, bool)> {
-    unsafe { close_action_entered(ctx, word, channel, sender, false) }.map(|v| v.expect("blocking phase"))
+    unsafe { close_action_entered(ctx, word, channel, sender, false) }
+        .map(|v| v.expect("blocking phase"))
 }
 
 pub(super) unsafe fn close_action_entered(
-    ctx: *mut TaskCtx, word: u64, channel: u32, sender: bool, polling: bool,
+    ctx: *mut TaskCtx,
+    word: u64,
+    channel: u32,
+    sender: bool,
+    polling: bool,
 ) -> Stopped<Option<(Option<(crate::channels::Ring, u32)>, bool)>> {
     let replay = super::replay::object(ctx, (crate::free::CHANNEL, u64::from(channel)));
     let cell = unsafe {
@@ -448,7 +465,9 @@ pub(super) unsafe fn close_action_entered(
         unsafe { crate::pool::free::notify((*ctx).run_ptr(), token) };
     }
     drop(tokens);
-    let Some(left) = publication?.transpose()? else { return Ok(None) };
+    let Some(left) = publication?.transpose()? else {
+        return Ok(None);
+    };
     let left = left.into_left();
     // Close is Keep: it still publishes runnable receivers before returning
     // to a segment that may never yield. No stop-aware ctx accessor can

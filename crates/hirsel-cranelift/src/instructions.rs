@@ -625,7 +625,9 @@ impl FnEmitter<'_, '_, '_> {
                     RuntimeEntry::RootDrop,
                     &[self.context, block, anchor, operation_site],
                 )?;
-                if self.resume.is_some() {self.resume_propagate(status)?;}
+                if self.resume.is_some() {
+                    self.resume_propagate(status)?;
+                }
                 self.status_guard(status, failure)
             }
             Inst::Reset { value, .. } if self.is_root_value(value)? => {
@@ -705,8 +707,17 @@ impl FnEmitter<'_, '_, '_> {
                 failure,
             } => {
                 let block = self.get1(value)?;
-                let certified=self.resume.as_ref().is_some_and(|r|r.plan.cleanups.iter().any(|s|s.value==value&&s.anchor==anchor));
-                let descriptor=if certified { self.descriptor_value(layout)? } else { self.block_descriptor(block) };
+                let certified = self.resume.as_ref().is_some_and(|r| {
+                    r.plan
+                        .cleanups
+                        .iter()
+                        .any(|s| s.value == value && s.anchor == anchor)
+                });
+                let descriptor = if certified {
+                    self.descriptor_value(layout)?
+                } else {
+                    self.block_descriptor(block)
+                };
                 let mask = self.live_mask(live)?;
                 let anchor = self.cleanup_code(anchor)?;
                 let (anchor, operation_site) = self.failure_sites(anchor);
@@ -715,7 +726,9 @@ impl FnEmitter<'_, '_, '_> {
                     RuntimeEntry::Release,
                     &[context, block, descriptor, mask, anchor, operation_site],
                 )?;
-                if self.resume.is_some() { self.resume_propagate(status)?; }
+                if self.resume.is_some() {
+                    self.resume_propagate(status)?;
+                }
                 self.status_guard(status, failure)
             }
             Inst::Reset {

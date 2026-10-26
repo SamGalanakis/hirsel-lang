@@ -148,6 +148,12 @@ pub(crate) unsafe fn can_leave(ctx: *mut crate::TaskCtx, site: BoundSite) -> boo
         site.task,
         "a stale entered-site task generation"
     );
+    // Optional cleanup tracing retains a native scope pointer until its
+    // synchronous cleanup returns. It cannot follow a discarded native stack.
+    #[cfg(feature = "ownership-trace")]
+    if !unsafe { (*ctx).ownership_cleanup.is_null() } {
+        return false;
+    }
     let inside = crate::tasks::compact::contains_frame(ctx, site.frame, site.bytes as usize);
     inside && unsafe { crate::tasks::compact::movable(ctx) }
 }

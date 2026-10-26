@@ -597,8 +597,11 @@ pub(super) fn publish_entered<T>(
     polling: bool,
     action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
 ) -> Stopped<Option<T>> {
-    if polling { poll_publish_with_replay(ctx, phase, replay, action) }
-    else { publish_with_replay(ctx, phase, replay, action).map(Some) }
+    if polling {
+        poll_publish_with_replay(ctx, phase, replay, action)
+    } else {
+        publish_with_replay(ctx, phase, replay, action).map(Some)
+    }
 }
 
 fn poll_phase<T>(

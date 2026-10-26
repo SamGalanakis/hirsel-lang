@@ -73,11 +73,20 @@ pub fn resume_preparations(
     state: u32,
     skipped: &[bool],
 ) -> Vec<(BlockId, usize)> {
-    let (boundary_block, live, instruction) = if let Some(resume) = state.checked_sub(1).and_then(|i| plan.states.get(i as usize)) {
+    let (boundary_block, live, instruction) = if let Some(resume) = state
+        .checked_sub(1)
+        .and_then(|i| plan.states.get(i as usize))
+    {
         (resume.boundary.block, resume.live.as_slice(), None)
-    } else if let Some(cleanup) = plan.cleanups.iter().find(|s|s.state==state) {
-        (cleanup.block, cleanup.live.as_slice(), Some(cleanup.instruction as usize))
-    } else { return Vec::new(); };
+    } else if let Some(cleanup) = plan.cleanups.iter().find(|s| s.state == state) {
+        (
+            cleanup.block,
+            cleanup.live.as_slice(),
+            Some(cleanup.instruction as usize),
+        )
+    } else {
+        return Vec::new();
+    };
     let mut at = BTreeMap::new();
     for (b, block) in u.blocks.iter().enumerate() {
         if !skipped.get(b).copied().unwrap_or(false) {
@@ -90,7 +99,9 @@ pub fn resume_preparations(
             .iter()
             .enumerate()
         {
-            if instruction.is_some_and(|before| b==boundary_block.index() && i>=before) {continue;}
+            if instruction.is_some_and(|before| b == boundary_block.index() && i >= before) {
+                continue;
+            }
             if let Inst::Address { address, .. } = *inst {
                 at.insert(address, (BlockId(b as u32), i));
             }
@@ -532,7 +543,7 @@ pub(crate) fn callee_symbol(u: &LirUnit<Ready>, call: &CallSite) -> Option<Symbo
 /// Which known bodies may reach a boundary, to a fixpoint over the call graph.
 fn suspending(
     units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
-    table:&LayoutTable,
+    table: &LayoutTable,
     classify: &dyn Fn(&DefPath) -> Option<CalleeClass>,
 ) -> BTreeSet<ContentHash> {
     let mut out = BTreeSet::new();
@@ -543,14 +554,15 @@ fn suspending(
             if out.contains(id) {
                 continue;
             }
-            let suspends = !cleanup::sites(u,table).is_empty() || u.tables.calls.iter().any(|call| {
-                match call_effect(u, call, units, &out, classify) {
-                    CallEffect::Local => false,
-                    CallEffect::Boundary(_) | CallEffect::Nested(_) | CallEffect::Unknown(_) => {
-                        true
+            let suspends = !cleanup::sites(u, table).is_empty()
+                || u.tables.calls.iter().any(|call| {
+                    match call_effect(u, call, units, &out, classify) {
+                        CallEffect::Local => false,
+                        CallEffect::Boundary(_)
+                        | CallEffect::Nested(_)
+                        | CallEffect::Unknown(_) => true,
                     }
-                }
-            });
+                });
             if suspends {
                 out.insert(*id);
                 changed = true;
@@ -595,7 +607,8 @@ pub(crate) fn call_effect(
         return CallEffect::Nested(id);
     }
     // Keep does not exclude an entered replay wait in this retained wrapper.
-    if tail::known_wrapper(u) && core_name(&definition).as_deref()==Some("$intrinsic.MutexCause") {
+    if tail::known_wrapper(u) && core_name(&definition).as_deref() == Some("$intrinsic.MutexCause")
+    {
         return CallEffect::Boundary(definition);
     }
     match (classify(&definition), body) {
@@ -622,7 +635,11 @@ fn fixed(table: &LayoutTable, id: LayoutId) -> Option<(u64, u64)> {
 fn storage_at(u: &LirUnit<Ready>, at: BlockId) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
     storage_before(u, at, usize::MAX)
 }
-fn storage_before(u: &LirUnit<Ready>, at: BlockId, before:usize) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
+fn storage_before(
+    u: &LirUnit<Ready>,
+    at: BlockId,
+    before: usize,
+) -> (BTreeSet<SlotId>, BTreeSet<LoanId>) {
     let n = u.blocks.len();
     let mut slots_in: Vec<BTreeSet<SlotId>> = vec![BTreeSet::new(); n];
     let mut loans_in: Vec<BTreeSet<LoanId>> = vec![BTreeSet::new(); n];
@@ -648,7 +665,9 @@ fn storage_before(u: &LirUnit<Ready>, at: BlockId, before:usize) -> (BTreeSet<Sl
         for (i, inst) in u.blocks[b.index()]
             .instructions
             .get(&u.instructions)
-            .unwrap_or(&[]).iter().enumerate()
+            .unwrap_or(&[])
+            .iter()
+            .enumerate()
         {
             if b == at && i == before {
                 result.0.extend(slots.iter().copied());
@@ -831,10 +850,18 @@ pub fn resumed_successors(u: &LirUnit<Ready>, block: BlockId) -> Vec<BlockId> {
 
 /// Successors of a cleanup instruction's suffix; earlier failing checks
 /// already completed and cannot become new edges after a physical save.
-pub fn cleanup_successors(u:&LirUnit<Ready>,block:BlockId,before:usize)->Vec<BlockId> {
-    let mut out=resumed_successors(u,block);
-    for inst in u.blocks[block.index()].instructions.get(&u.instructions).unwrap_or(&[]).iter().skip(before) {
-        if let Some(f)=inst.failure() {out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);}
+pub fn cleanup_successors(u: &LirUnit<Ready>, block: BlockId, before: usize) -> Vec<BlockId> {
+    let mut out = resumed_successors(u, block);
+    for inst in u.blocks[block.index()]
+        .instructions
+        .get(&u.instructions)
+        .unwrap_or(&[])
+        .iter()
+        .skip(before)
+    {
+        if let Some(f) = inst.failure() {
+            out.push(u.tables.edges[u.tables.failures[f.index()].cleanup.index()].target);
+        }
     }
     out
 }
@@ -873,10 +900,14 @@ pub(crate) fn carried(
     u: &LirUnit<Ready>,
     block: BlockId,
 ) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
-    carried_from(u,block,None)
+    carried_from(u, block, None)
 }
 
-pub(crate) fn carried_from(u:&LirUnit<Ready>,block:BlockId,before:Option<usize>) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
+pub(crate) fn carried_from(
+    u: &LirUnit<Ready>,
+    block: BlockId,
+    before: Option<usize>,
+) -> (BTreeSet<AddressId>, BTreeSet<ValueId>) {
     let mut used = Vec::new();
     let mut prepared = BTreeSet::new();
     let mut call_uses = |term: &Terminator, used: &mut Vec<AddressId>| {
@@ -893,7 +924,9 @@ pub(crate) fn carried_from(u:&LirUnit<Ready>,block:BlockId,before:Option<usize>)
         }
     };
     let mut seen = BTreeSet::new();
-    let mut pending = if before.is_some() { vec![block] } else {
+    let mut pending = if before.is_some() {
+        vec![block]
+    } else {
         call_uses(&u.terminators[block.index()], &mut used);
         resumed_successors(u, block)
     };
@@ -904,7 +937,9 @@ pub(crate) fn carried_from(u:&LirUnit<Ready>,block:BlockId,before:Option<usize>)
         for inst in u.blocks[b.index()]
             .instructions
             .get(&u.instructions)
-            .unwrap_or(&[]).iter().skip(if b==block {before.unwrap_or(0)} else {0})
+            .unwrap_or(&[])
+            .iter()
+            .skip(if b == block { before.unwrap_or(0) } else { 0 })
         {
             if let Inst::Address { address, .. } = *inst {
                 prepared.insert(address);
@@ -915,7 +950,13 @@ pub(crate) fn carried_from(u:&LirUnit<Ready>,block:BlockId,before:Option<usize>)
             used.extend(accessed(inst));
         }
         call_uses(&u.terminators[b.index()], &mut used);
-        pending.extend(if b==block { before.map(|i|cleanup_successors(u,b,i)).unwrap_or_else(||successors_of(u,b)) } else {successors_of(u,b)});
+        pending.extend(if b == block {
+            before
+                .map(|i| cleanup_successors(u, b, i))
+                .unwrap_or_else(|| successors_of(u, b))
+        } else {
+            successors_of(u, b)
+        });
     }
     let mut addresses = BTreeSet::new();
     let mut values = BTreeSet::new();
@@ -1215,7 +1256,7 @@ fn states(
     table: &LayoutTable,
     sites: &[Site],
     base: u64,
-) -> Result<(Vec<LiveStorage>, Vec<ResumeState>,Vec<CleanupResumeState>), String> {
+) -> Result<(Vec<LiveStorage>, Vec<ResumeState>, Vec<CleanupResumeState>), String> {
     let live = crate::liveness::liveness(u);
     let mut at_sites = Vec::new();
     let mut union = BTreeSet::new();
@@ -1234,8 +1275,13 @@ fn states(
         union.extend(slots.iter().copied().filter(|s| !parameter_slot(u, *s)));
         at_sites.push((slots, loans));
     }
-    for (block,i) in cleanup::sites(u,table) {
-        union.extend(storage_before(u,block,i).0.into_iter().filter(|s|!parameter_slot(u,*s)));
+    for (block, i) in cleanup::sites(u, table) {
+        union.extend(
+            storage_before(u, block, i)
+                .0
+                .into_iter()
+                .filter(|s| !parameter_slot(u, *s)),
+        );
     }
     let slots: Vec<_> = union.into_iter().collect();
     let (offsets, base) = place(
@@ -1359,7 +1405,7 @@ fn states(
             bytes,
         });
     }
-    let cleanups=cleanup::root_states(u,table,&storage,base, out.len() as u32+1)?;
+    let cleanups = cleanup::root_states(u, table, &storage, base, out.len() as u32 + 1)?;
     Ok((storage, out, cleanups))
 }
 
@@ -1394,8 +1440,9 @@ pub(crate) fn certify(
         bytes.extend_from_slice(&(text.len() as u64).to_le_bytes());
         bytes.extend_from_slice(text.as_bytes());
     }
-    let tail =
-        format!("{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{cleanups:?}{captures:?}");
+    let tail = format!(
+        "{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{cleanups:?}{captures:?}"
+    );
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
     ValidatedContinuation {
@@ -1471,8 +1518,8 @@ fn plan_unit(
         .copied()
         .flatten();
     let built = sites(u, inputs.table, &effects, done).and_then(|sites| {
-        if sites.is_empty() && cleanup::sites(u,inputs.table).is_empty() {
-            return Ok((Fixed::default(), Vec::new(), Vec::new(),Vec::new()));
+        if sites.is_empty() && cleanup::sites(u, inputs.table).is_empty() {
+            return Ok((Fixed::default(), Vec::new(), Vec::new(), Vec::new()));
         }
         let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
         let (storage, mut states, cleanups) = states(u, inputs.table, &sites, base)?;
@@ -1484,21 +1531,42 @@ fn plan_unit(
         }
         Ok(((parameters, records), storage, states, cleanups))
     });
-    let none = || (Fixed::default(), Vec::new(), Vec::new(),Vec::new());
-    let (representation, (fixed, storage, states,cleanups)) = match built {
+    let none = || (Fixed::default(), Vec::new(), Vec::new(), Vec::new());
+    let (representation, (fixed, storage, states, cleanups)) = match built {
         Err(why) => (Representation::Stackful(why), none()),
-        Ok((_, _, states,cleanups)) if states.is_empty() && cleanups.is_empty() => (Representation::Direct, none()),
-        Ok((_, _, states,cleanups)) if states.iter().map(|s|s.bytes).chain(cleanups.iter().map(|s|s.bytes)).any(|bytes| bytes > MAX_FRAME_BYTES) => (
-            Representation::Stackful("oversize live image".into()),none(),
-        ),
+        Ok((_, _, states, cleanups)) if states.is_empty() && cleanups.is_empty() => {
+            (Representation::Direct, none())
+        }
+        Ok((_, _, states, cleanups))
+            if states
+                .iter()
+                .map(|s| s.bytes)
+                .chain(cleanups.iter().map(|s| s.bytes))
+                .any(|bytes| bytes > MAX_FRAME_BYTES) =>
+        {
+            (
+                Representation::Stackful("oversize live image".into()),
+                none(),
+            )
+        }
         Ok(built) => (Representation::Resumable, built),
     };
     let cost = PlacementCost {
         instructions: (u.instructions.len() + u.terminators.len()) as u32,
-        boundaries: (states.len()+cleanups.len()) as u32,
-        frame_bytes: states.iter().map(|s| s.bytes).chain(cleanups.iter().map(|s|s.bytes)).max().unwrap_or(0),
-        owned: states.iter().map(|s|&s.live).chain(cleanups.iter().map(|s|&s.live))
-            .map(|live|live.iter().filter(|l|l.holding==Holding::Owned).count() as u32).max().unwrap_or(0),
+        boundaries: (states.len() + cleanups.len()) as u32,
+        frame_bytes: states
+            .iter()
+            .map(|s| s.bytes)
+            .chain(cleanups.iter().map(|s| s.bytes))
+            .max()
+            .unwrap_or(0),
+        owned: states
+            .iter()
+            .map(|s| &s.live)
+            .chain(cleanups.iter().map(|s| &s.live))
+            .map(|live| live.iter().filter(|l| l.holding == Holding::Owned).count() as u32)
+            .max()
+            .unwrap_or(0),
     };
     let certificate = certify(
         u,

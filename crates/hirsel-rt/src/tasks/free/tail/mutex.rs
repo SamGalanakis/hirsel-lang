@@ -72,7 +72,13 @@ pub(in crate::tasks::free) unsafe fn poll_mutex(
         })
     };
     if matches!(result, Ok(Poll::Pending)) && rest.get() {
-        unsafe { (*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).rest = true };
+        unsafe {
+            (*ctx)
+                .free_ops
+                .tails
+                .active(crate::tasks::running_key(ctx), ticket)
+                .rest = true
+        };
     }
     result
 }
@@ -91,7 +97,9 @@ unsafe fn poll_mutex_with(
     assert!(matches!(site.kind, Kind::Put | Kind::Kill | Kind::Cause));
     let result = unsafe { &mut *record }.poll_entered(
         || {
-            if !record::begin_entered(ctx) { return Err(crate::stop::Stop::Requested); }
+            if !record::begin_entered(ctx) {
+                return Err(crate::stop::Stop::Requested);
+            }
             Ok(record::on(ctx).then(|| record::position(ctx).1.op))
         },
         |entered| ready(site, entered),
@@ -99,18 +107,31 @@ unsafe fn poll_mutex_with(
             match site.kind {
                 Kind::Put => {
                     let image = owners.image.as_ref().expect("an owned put image");
-                    let Some(next) = (unsafe { mutex::put_action_entered(ctx, site.object.1, image.at(0), true) })? else { return Ok(None) };
+                    let Some(next) = (unsafe {
+                        mutex::put_action_entered(ctx, site.object.1, image.at(0), true)
+                    })?
+                    else {
+                        return Ok(None);
+                    };
                     owners.wakes.extend(next);
                     // cell.put installed its exact None; all language credits
                     // belong to the cell now, so this only reclaims image bytes.
                     owners.image.take();
                 }
                 Kind::Kill => {
-                    let Some(wakes) = (unsafe { mutex::kill_action_entered(ctx, site.object.1, true) })? else { return Ok(None) };
+                    let Some(wakes) =
+                        (unsafe { mutex::kill_action_entered(ctx, site.object.1, true) })?
+                    else {
+                        return Ok(None);
+                    };
                     owners.wakes = wakes;
                 }
                 Kind::Cause => {
-                    let Some(chain) = (unsafe { mutex::cause_action_entered(ctx, site.object.1, true) })? else { return Ok(None) };
+                    let Some(chain) =
+                        (unsafe { mutex::cause_action_entered(ctx, site.object.1, true) })?
+                    else {
+                        return Ok(None);
+                    };
                     owners.chain = Some(chain);
                 }
                 _ => unreachable!("a non-mutex tail"),
@@ -124,28 +145,30 @@ unsafe fn poll_mutex_with(
     // No child op starts in this bounded suffix, and no saved pointer names
     // a Rust wake list. Role::with_held never observes a stop partway through.
     unsafe {
-      if !(*record).suffix_done {
-        role::with_held(ctx, |s| {
-            while let Some(task) = (*record).owners.wakes.pop_front() {
-                s.task(task).retried = true;
-                s.wake(task);
+        if !(*record).suffix_done {
+            role::with_held(ctx, |s| {
+                while let Some(task) = (*record).owners.wakes.pop_front() {
+                    s.task(task).retried = true;
+                    s.wake(task);
+                }
+            });
+            if let Some(chain) = (*record).owners.chain.take() {
+                (*ctx).failure.append_chain(chain.as_ref().clone());
             }
-        });
-        if let Some(chain) = (*record).owners.chain.take() {
-            (*ctx).failure.append_chain(chain.as_ref().clone());
+            (*record).suffix_done = true;
         }
-        (*record).suffix_done = true;
-      }
-      if !(*record).yielded {
-        (*record).yielded = true;
-        if site.kind == Kind::Cause {
-            if replay::at_cut(ctx) { return Err(crate::stop::Stop::Requested); }
-        } else if crate::tasks::free::try_yield_entered(&mut *ctx, leave)? {
-            return Ok(Poll::Pending);
+        if !(*record).yielded {
+            (*record).yielded = true;
+            if site.kind == Kind::Cause {
+                if replay::at_cut(ctx) {
+                    return Err(crate::stop::Stop::Requested);
+                }
+            } else if crate::tasks::free::try_yield_entered(&mut *ctx, leave)? {
+                return Ok(Poll::Pending);
+            }
         }
-      }
-      (*record).finish();
-      (*ctx).free_ops.tails.retire(task, ticket);
+        (*record).finish();
+        (*ctx).free_ops.tails.retire(task, ticket);
     }
     Ok(Poll::Ready(status))
 }

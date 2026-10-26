@@ -32,7 +32,8 @@ pub(super) fn touched(
     replay: Option<&super::replay::Object>,
     action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
 ) -> Stopped<()> {
-    touched_entered(ctx, phase, cell, state, replay, false, action).map(|v| v.expect("blocking phase"))
+    touched_entered(ctx, phase, cell, state, replay, false, action)
+        .map(|v| v.expect("blocking phase"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -46,20 +47,27 @@ fn touched_entered(
     action: impl FnOnce(&mut crate::sync::MutexImage) -> &'static str,
 ) -> Stopped<Option<()>> {
     super::record::track(ctx, cell.object.get());
-    super::record::publish_entered(ctx, phase, replay.map(|object| object.token()), polling, |writer| {
-        let outcome = action(state);
-        if let Some(writer) = writer {
-            writer.touch(
-                cell.object.get().expect("a recorded mutex identity"),
-                state.permit.version(),
-                0,
-                outcome,
-            );
-        } else if let Some(replay) = replay {
-            replay.touch(outcome)?;
-        }
-        Ok(())
-    })?.transpose()
+    super::record::publish_entered(
+        ctx,
+        phase,
+        replay.map(|object| object.token()),
+        polling,
+        |writer| {
+            let outcome = action(state);
+            if let Some(writer) = writer {
+                writer.touch(
+                    cell.object.get().expect("a recorded mutex identity"),
+                    state.permit.version(),
+                    0,
+                    outcome,
+                );
+            } else if let Some(replay) = replay {
+                replay.touch(outcome)?;
+            }
+            Ok(())
+        },
+    )?
+    .transpose()
 }
 
 /// # Safety
@@ -319,13 +327,13 @@ pub(super) unsafe fn kill_action(
     ctx: *mut TaskCtx,
     word: u64,
 ) -> Stopped<std::collections::VecDeque<u32>> {
-    unsafe { kill_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+    unsafe { kill_action_entered(ctx, word, false) }.map(|v| v.expect("blocking phase"))
 }
 
 pub(super) unsafe fn kill_action_entered(
     ctx: *mut TaskCtx,
     word: u64,
-    
+
     polling: bool,
 ) -> Stopped<Option<std::collections::VecDeque<u32>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
@@ -397,14 +405,17 @@ unsafe fn close_inner(
 /// The original admitted close action, shared by blocking and owned drivers.
 /// # Safety
 /// The role is held and the current ordinal has passed its object admission.
-pub(super) unsafe fn close_action(ctx: *mut TaskCtx, word: u64) -> Stopped<crate::sync::ClosedMutex> {
-    unsafe { close_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+pub(super) unsafe fn close_action(
+    ctx: *mut TaskCtx,
+    word: u64,
+) -> Stopped<crate::sync::ClosedMutex> {
+    unsafe { close_action_entered(ctx, word, false) }.map(|v| v.expect("blocking phase"))
 }
 
 pub(super) unsafe fn close_action_entered(
     ctx: *mut TaskCtx,
     word: u64,
-    
+
     polling: bool,
 ) -> Stopped<Option<crate::sync::ClosedMutex>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
@@ -493,13 +504,13 @@ pub(super) unsafe fn cause_action(
     ctx: *mut TaskCtx,
     word: u64,
 ) -> Stopped<std::sync::Arc<Vec<crate::failure::Chained>>> {
-    unsafe { cause_action_entered(ctx, word,  false) }.map(|v| v.expect("blocking phase"))
+    unsafe { cause_action_entered(ctx, word, false) }.map(|v| v.expect("blocking phase"))
 }
 
 pub(super) unsafe fn cause_action_entered(
     ctx: *mut TaskCtx,
     word: u64,
-    
+
     polling: bool,
 ) -> Stopped<Option<std::sync::Arc<Vec<crate::failure::Chained>>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));

@@ -261,7 +261,9 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let ownership_cleanup = self.ownership_cleanup_begin(value)?;
         let status = self.finalize_inline(place, live, anchor)?;
         self.ownership_cleanup_end(ownership_cleanup)?;
-        if self.resume.is_some() { self.resume_propagate(status)?; }
+        if self.resume.is_some() {
+            self.resume_propagate(status)?;
+        }
         self.status_guard(status, failure)
     }
 

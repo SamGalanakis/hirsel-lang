@@ -1005,12 +1005,13 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             0 => self.unit.entry,
             k => match plan.states.get(k as usize - 1) {
                 Some(s) => s.boundary.block,
-                None => match plan.cleanups.iter().find(|s|s.state==k) {
-                    Some(s)=>s.block,None=>return self.invalid("a resume state outside its plan"),
+                None => match plan.cleanups.iter().find(|s| s.state == k) {
+                    Some(s) => s.block,
+                    None => return self.invalid("a resume state outside its plan"),
                 },
             },
         };
-        let cleanup=plan.cleanups.iter().find(|s|s.state==state);
+        let cleanup = plan.cleanups.iter().find(|s| s.state == state);
         let count = self.unit.blocks.len();
         let mut adjacent: Vec<Vec<usize>> = (0..count)
             .map(|b| self.successors(b))
@@ -1022,23 +1023,35 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 .map(|b| b.index())
                 .collect();
         }
-        if let Some(s)=cleanup {
-            adjacent[s.block.index()]=hirsel_lir::continuation::cleanup_successors(self.unit,s.block,s.instruction as usize).iter().map(|b|b.index()).collect();
+        if let Some(s) = cleanup {
+            adjacent[s.block.index()] = hirsel_lir::continuation::cleanup_successors(
+                self.unit,
+                s.block,
+                s.instruction as usize,
+            )
+            .iter()
+            .map(|b| b.index())
+            .collect();
         }
         let order = hirsel_graph::reverse_postorder(&adjacent, start.index());
         if state == 0 {
             let entry = self.blocks[self.unit.entry.index()];
             self.b.ins().jump(entry, &[]);
-        } else if let Some(s)=cleanup {
-            let mut skipped=vec![true;count];
-            for &b in &order {skipped[b]=b==start.index();}
+        } else if let Some(s) = cleanup {
+            let mut skipped = vec![true; count];
+            for &b in &order {
+                skipped[b] = b == start.index();
+            }
             self.reload_live(&s.live)?;
-            let unit=self.unit;
-            for (block,i) in hirsel_lir::continuation::resume_preparations(unit,plan,state,&skipped) {
-                let inst=&self.pool(unit.blocks[block.index()].instructions,&unit.instructions)?[i];
+            let unit = self.unit;
+            for (block, i) in
+                hirsel_lir::continuation::resume_preparations(unit, plan, state, &skipped)
+            {
+                let inst =
+                    &self.pool(unit.blocks[block.index()].instructions, &unit.instructions)?[i];
                 self.instruction(inst)?;
             }
-            self.emit_block_suffix(s.block,s.instruction as usize,true)?;
+            self.emit_block_suffix(s.block, s.instruction as usize, true)?;
         } else {
             let s = &plan.states[state as usize - 1];
             let mut skipped = vec![true; count];
@@ -1338,24 +1351,25 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         if self.fuel_points.get(b.index()).copied().unwrap_or(false) {
             self.charge_fuel()?;
         }
-        self.emit_block_suffix(b,0,false)
+        self.emit_block_suffix(b, 0, false)
     }
-    fn emit_block_suffix(&mut self,b:BlockId,start:usize,resuming:bool)->Emitted {
-        let unit=self.unit;
+    fn emit_block_suffix(&mut self, b: BlockId, start: usize, resuming: bool) -> Emitted {
+        let unit = self.unit;
         for (i, inst) in self
             .pool(unit.blocks[b.index()].instructions, &unit.instructions)?
             .iter()
-            .enumerate().skip(start)
+            .enumerate()
+            .skip(start)
         {
             self.instruction_index = unit.blocks[b.index()].instructions.start as usize + i;
             self.profile_location(
                 hirsel_lir::profile::instruction_site(unit, b, inst),
                 inst.opcode(),
             )?;
-            if !(resuming && i==start) {
+            if !(resuming && i == start) {
                 self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::Before)?;
             }
-            self.resume_cleanup_bind(b,i)?;
+            self.resume_cleanup_bind(b, i)?;
             self.instruction(inst)?;
             self.ownership_events(b, i as u32, hirsel_lir::ownership_trace::Moment::After)?;
         }
