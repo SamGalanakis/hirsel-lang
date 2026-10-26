@@ -454,8 +454,13 @@ fn contended_gate(one_permit: bool) {
                     if one_permit {
                         hirsel_rt_v2_callback_leave(ctx);
                     }
-                    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                    loop {
+                    // This is a host-side observation wait. At a one-CPU
+                    // grant the root must lend its permit so the child can
+                    // reach its save, while retaining ownership of the gate.
+                    if !one_permit {
+                        crate::pool::release_permit(ctx);
+                    }
+                    let saved = loop {
                         let saved = {
                             let _role = role::Guard::new(ctx);
                             let s = scheduler(ctx);
@@ -463,13 +468,13 @@ fn contended_gate(one_permit: bool) {
                                 && readiness::saved(s, child as u32)
                         };
                         if saved {
-                            break;
+                            break saved;
                         }
-                        assert!(
-                            std::time::Instant::now() < until,
-                            "gate waiter saves its frame"
-                        );
                         std::thread::yield_now();
+                    };
+                    assert!(saved, "gate waiter saves its frame");
+                    if !one_permit {
+                        assert!(crate::pool::acquire_permit(ctx));
                     }
                     let cut = inspect.recorder.flush().unwrap().unwrap();
                     assert_eq!(cut.progress[&vec![0]], Progress::new(1, Phase::Entered));
@@ -482,13 +487,16 @@ fn contended_gate(one_permit: bool) {
                     }
                     // The releasing task can remain in a pure segment forever.
                     // Gate leave must publish runnable work before returning.
-                    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-                    while !one_permit && !flag.load(std::sync::atomic::Ordering::Acquire) {
+                    if !one_permit {
+                        crate::pool::release_permit(ctx);
+                        while !flag.load(std::sync::atomic::Ordering::Acquire) {
+                            std::thread::yield_now();
+                        }
                         assert!(
-                            std::time::Instant::now() < until,
+                            flag.load(std::sync::atomic::Ordering::Acquire),
                             "gate release publishes its parked waiter"
                         );
-                        std::thread::yield_now();
+                        assert!(crate::pool::acquire_permit(ctx));
                     }
                     let mut image = [0u64; 2];
                     hirsel_rt_v2_task_join(
