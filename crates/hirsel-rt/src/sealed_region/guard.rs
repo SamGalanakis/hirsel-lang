@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::ptr::{self, NonNull};
 
 pub mod abi;
-mod bits;
+pub(super) mod bits;
 
 /// Exact demand-only extension, with the ordinary base fields/offsets intact.
 /// The trailing owner word records consumption ONLY. It may be dangling after

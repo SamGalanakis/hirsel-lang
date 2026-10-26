@@ -64,6 +64,33 @@ pub(crate) struct Segment {
     home: *const LentList,
 }
 
+/// Read-only containment for typed sealing. This establishes physical custody,
+/// never semantic heap/arena provenance or a language charge.
+pub(crate) unsafe fn contains_storage(
+    region: *const Region,
+    block: *const Header,
+    extent: usize,
+) -> bool {
+    unsafe {
+        let mut segment = (*region).segment.cast::<Segment>();
+        while !segment.is_null() {
+            let start = segment.addr() + SEGMENT_HEADER;
+            let end = segment.addr() + (*segment).size as usize;
+            if block.addr() >= start
+                && block
+                    .addr()
+                    .checked_add(size_of::<Header>())
+                    .and_then(|n| n.checked_add(extent))
+                    .is_some_and(|n| n <= end)
+            {
+                return true;
+            }
+            segment = (*segment).prev;
+        }
+        false
+    }
+}
+
 impl crate::remote::Link for Segment {
     unsafe fn set_next(node: *mut Segment, next: *mut Segment) {
         unsafe { (*node).return_next = next }

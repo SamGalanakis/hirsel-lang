@@ -11,7 +11,7 @@ use crate::sealed_region::{Charge, Root};
 ///
 /// # Safety
 /// `layout` is a live checked descriptor; a nonempty scan names readable words.
-pub(super) unsafe fn pointer_free_descriptor(layout: &crate::Layout) -> bool {
+pub(in crate::sealed_region) unsafe fn pointer_free_descriptor(layout: &crate::Layout) -> bool {
     use hirsel_core_contract::handle_scan::{VALUE, VALUE_BITS, VALUE_BOOL, VALUE_FIELDS, WORDS};
     if layout.finalizer.is_some()
         || layout.step_count != 0

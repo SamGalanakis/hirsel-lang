@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 pub mod guard;
 mod owners;
+// Private producer seam; Region33 connects receipt transport and admission.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod planner;
 pub mod receipt;
 mod transaction;
 pub(crate) use owners::Owners;
