@@ -13,6 +13,9 @@ pub(crate) struct LoweringUse {
     referenced: Vec<DefId>,
 }
 impl LoweringUse {
+    pub(super) fn retained(&self, weight: &mut crate::memo::retained::Weight) {
+        weight.flat_vec(&self.referenced);
+    }
     pub(crate) fn capture(typed: &TypedBody) -> Self {
         let tree = &typed.syntax.tree;
         Self {

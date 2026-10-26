@@ -10,7 +10,9 @@ use std::sync::{
     atomic::{AtomicU64, Ordering::Relaxed},
 };
 
+mod carry;
 mod retained;
+pub use carry::FrontCarry;
 mod source;
 mod storage;
 pub use source::FrontInputFootprint;
@@ -178,6 +180,7 @@ pub struct FrontBodyQueries {
     memo_operations: AtomicU64,
     verify_store: crate::store::VerifyStore,
     outcomes: Mutex<BTreeMap<Key, FrontOutcome>>,
+    carry: Mutex<Option<Arc<FrontCarry>>>,
     errors: RuntimeErrors,
     retention: Mutex<u64>,
     // Own immutable snapshot and output metadata admission until every task and
@@ -822,6 +825,9 @@ impl BodyTask {
             );
         queries.store_adoptions.fetch_add(1, Relaxed);
         timings::count(Count::StoreHits);
+        if !failed {
+            self.remember_carry(variant.output);
+        }
         if failed {
             return Some(Err(variant.output));
         }
@@ -842,6 +848,9 @@ impl BodyTask {
             return product;
         }
         if !self.materialize && self.queries.verify_store == crate::store::VerifyStore::Off {
+            if let Some(hit) = self.load_carry() {
+                return hit;
+            }
             if let Some(hit) = self.load() {
                 return hit;
             }
@@ -1081,6 +1090,9 @@ impl BodyTask {
                 self.input,
                 FrontOutcome::capture(record, outcome, checked, dead_arms),
             );
+        if !failed {
+            self.remember_carry(record);
+        }
         if failed {
             return Err(record);
         }
@@ -1301,6 +1313,7 @@ impl QueryEngine {
             anchors,
             store,
             outcomes: Mutex::new(BTreeMap::new()),
+            carry: Mutex::new(None),
             work: Mutex::new(BTreeMap::new()),
             table_keys: Mutex::new(BTreeMap::new()),
             memos: Mutex::new(BTreeMap::new()),
