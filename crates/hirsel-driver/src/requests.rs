@@ -56,6 +56,8 @@ pub enum CompileOperation {
         lowering: LoweringPolicy,
     },
     SafeCheck,
+    /// Canonical TIR text from the accepted immutable Run closure.
+    ExportTir,
     /// Explicit evidence collection; normal Check does not construct receipts.
     CheckedProducts {
         lowering: LoweringPolicy,

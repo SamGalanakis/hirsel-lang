@@ -158,7 +158,9 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
             CompileOperation::Tir { .. } => self.run.is_some(),
             CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
-            CompileOperation::Artifacts { native: false } => self.export.is_some(),
+            CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
+                self.export.is_some()
+            }
             CompileOperation::NativeOwnership(request) => self
                 .ownership
                 .as_ref()
@@ -183,7 +185,9 @@ impl GraphProducts for SourceProducts {
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
                 vec![self.native.as_ref().ok_or_else(uninstalled)?.query()]
             }
-            CompileOperation::SafeCheck | CompileOperation::Artifacts { native: false } => {
+            CompileOperation::SafeCheck
+            | CompileOperation::Artifacts { native: false }
+            | CompileOperation::ExportTir => {
                 vec![self.safe.as_ref().ok_or_else(uninstalled)?.query()]
             }
             CompileOperation::Check { lowering }
@@ -315,7 +319,8 @@ impl GraphProducts for SourceProducts {
                                 safe.as_ref().ok_or_else(uninstalled)?.outcome(*product)?;
                             CompileResult::SafeCheck { checked, reach }
                         }
-                        CompileOperation::Artifacts { native: false } => {
+                        CompileOperation::Artifacts { native: false }
+                        | CompileOperation::ExportTir => {
                             let [product] = products else {
                                 return Err(uninstalled());
                             };
@@ -351,9 +356,34 @@ impl GraphProducts for SourceProducts {
                                 }
                                 None => Err("check was not accepted".into()),
                             };
-                            CompileResult::Artifacts(super::host_selector::completed_artifacts(
-                                &checked, tir, None,
-                            ))
+                            if matches!(operation, CompileOperation::ExportTir) {
+                                if checked.diagnostics.iter().any(|diagnostic| {
+                                    diagnostic.severity == hirsel_diag::Severity::Error
+                                }) {
+                                    return Err(ToolError::Query {
+                                        error: QueryError::Diagnostics(checked.diagnostics),
+                                        phase: None,
+                                        sources: checked.sources,
+                                    });
+                                }
+                                if let hirsel_engine::CheckCompletion::Incomplete { phase } =
+                                    checked.completion
+                                {
+                                    return Err(ToolError::Query {
+                                        error: QueryError::NotImplemented,
+                                        phase: Some(phase),
+                                        sources: checked.sources,
+                                    });
+                                }
+                                CompileResult::ExportTir(
+                                    String::from_utf8(tir.map_err(ToolError::Runtime)?)
+                                        .map_err(|error| ToolError::Runtime(error.to_string()))?,
+                                )
+                            } else {
+                                CompileResult::Artifacts(super::host_selector::completed_artifacts(
+                                    &checked, tir, None,
+                                ))
+                            }
                         }
                         CompileOperation::Check { .. } => {
                             let [product] = products else {
@@ -824,13 +854,18 @@ pub(super) fn install(
         }
         CompileOperation::SafeCheck => (config.lowering, true),
         // The oracle export reads the check and TIR of every reachable body.
-        CompileOperation::Artifacts { native: false } => (LoweringPolicy::Reachable, true),
+        CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
+            (LoweringPolicy::Reachable, true)
+        }
         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
             (LoweringPolicy::Reachable, true)
         }
         _ => return Err(uninstalled()),
     };
-    let artifacts = matches!(request.operation, CompileOperation::Artifacts { .. });
+    let artifacts = matches!(
+        request.operation,
+        CompileOperation::Artifacts { .. } | CompileOperation::ExportTir
+    );
     // The loader reads exactly the supplied immutable observations. Declaration
     // indexing/signature metadata is S0; no P body or Lower task runs here.
     let mut loading = budget.begin(limits, may_wait)?;
@@ -967,7 +1002,9 @@ pub(super) fn install(
             matches!(request.operation, CompileOperation::NativeOwnership(_)),
             matches!(
                 request.operation,
-                CompileOperation::SafeCheck | CompileOperation::Artifacts { .. }
+                CompileOperation::SafeCheck
+                    | CompileOperation::Artifacts { .. }
+                    | CompileOperation::ExportTir
             ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             footprint,
@@ -1218,7 +1255,9 @@ pub(super) fn install(
         .map_err(&query_error)?;
     let safe_allowance = if matches!(
         request.operation,
-        CompileOperation::SafeCheck | CompileOperation::Artifacts { .. }
+        CompileOperation::SafeCheck
+            | CompileOperation::Artifacts { .. }
+            | CompileOperation::ExportTir
     ) {
         Some(
             run.split(super::safe_check::BYTES)

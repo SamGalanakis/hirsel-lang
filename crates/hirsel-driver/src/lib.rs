@@ -204,15 +204,17 @@ fn run_simulation(
 /// `hirsel export --tir <source|manifest.json>`: the proof-seam TIR export
 ///  of the checked program's entry closure.
 pub fn export_tir_path(path: &Path) -> Result<String, ToolError> {
-    hirsel_engine::with_compiler_stack(|| {
-        let mut program = load_program(path)?;
-        program.check_for_execution()?;
-        let entry = program.entry.clone();
-        program
-            .engine
-            .export_tir(&entry)
-            .map_err(|error| program.error(error))
-    })
+    let output = session::request(
+        path,
+        hirsel_engine::Verify::On,
+        requests::CompileOperation::ExportTir,
+    )?;
+    match &output.result {
+        requests::CompileResult::ExportTir(text) => Ok(text.clone()),
+        _ => Err(ToolError::Runtime(
+            "TIR export request returned another operation".into(),
+        )),
+    }
 }
 /// `hirsel hash <source|manifest.json>`: one `<hash> <definition path>` line
 /// per source definition of the checked program's package, sorted by path

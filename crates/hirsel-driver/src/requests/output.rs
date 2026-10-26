@@ -112,6 +112,7 @@ impl CompileOutput {
 pub enum CompileResult {
     Inspect(Arc<CompileInspection>),
     Artifacts(std::collections::BTreeMap<String, Vec<u8>>),
+    ExportTir(String),
     /// Native pipeline failures retain their existing inner error category.
     NativeError(crate::native::NativeError),
     Check(CheckOutput),
