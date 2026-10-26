@@ -79,6 +79,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
   let _=out.print(output,value)
   Ok(())
 }
+
 "#,
         ] {
             let program = super::runtime50_continuation::ready(source);
@@ -161,5 +162,73 @@ pub fn main(rt:Io)->Result[(),GrantError] {
             }
             assert!(proved > 0, "no reviewed await result image proved");
         }
+    });
+}
+
+#[test]
+fn ordered_await_protocol_covers_both_loan_ends_and_owning_failure_cleanup() {
+    with_compiler_stack(|| {
+        let program = super::runtime50_continuation::ready(
+            r#"
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let value=task.scope(tasks,fn(s:Scope)->String {
+    let child=task.async(s,fn()->String {"held"})
+    task.await(s,take child)
+  })
+  let _=out.print(output,value)
+  Ok(())
+}
+"#,
+        );
+        let plans = hirsel_driver::native::continuation::plans(&program);
+        let mut proved = 0;
+        for unit in &program.units {
+            let u = unit.unit();
+            if !u.header.definition.is_core("task.await") {
+                continue;
+            }
+            let p = plans.get(u.header.instance).unwrap();
+            for state in &p.states {
+                let Some(proof) = hirsel_lir::continuation::OrderedAwaitProtocol::derive(
+                    unit,
+                    &program.table,
+                    state.boundary.block,
+                    &p.storage,
+                ) else {
+                    continue;
+                };
+                assert!(proof.validate(unit, &program.table, &p.storage));
+                assert!(
+                    !proof.cleanup.is_empty(),
+                    "owning Some needs failure cleanup"
+                );
+                assert!(
+                    proof.cleanup.iter().any(|c| c.released.is_some()),
+                    "missing RC lowered release"
+                );
+                let mut wrong_release = proof.clone();
+                wrong_release.cleanup[0].released = Some(hirsel_lir::ir::ValueId(u32::MAX));
+                assert!(!wrong_release.validate(unit, &program.table, &p.storage));
+                let mut missing = proof.clone();
+                missing.cleanup.clear();
+                assert!(!missing.validate(unit, &program.table, &p.storage));
+                let mut missing = proof.clone();
+                missing.failure_suffix.clear();
+                assert!(!missing.validate(unit, &program.table, &p.storage));
+                let mut wrong = proof.clone();
+                wrong.normal = hirsel_lir::ir::EdgeId(u32::MAX);
+                assert!(!wrong.validate(unit, &program.table, &p.storage));
+                let mut wrong = proof.clone();
+                wrong.result.offset += wrong.result.align;
+                assert!(!wrong.validate(unit, &program.table, &p.storage));
+                let mut wrong = proof.clone();
+                wrong.cleanup[0].instruction = u32::MAX;
+                assert!(!wrong.validate(unit, &program.table, &p.storage));
+                proved += 1;
+            }
+        }
+        assert!(proved > 0, "no complete await protocol");
     });
 }
