@@ -83,3 +83,65 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     b.ret(result);
     Ok(b.finish())
 }
+
+/// The entered seal body consumes its two declared Take parameters. This is
+/// unregistered until semantic inventory transport and both emitters are linked.
+pub static SEAL: LibraryBody = LibraryBody {
+    path: || hirsel_syntax::DefPath::core("arena.seal"),
+    build: seal,
+};
+
+fn seal(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
+    let root = cx.type_actual(0)?;
+    let native =
+        hirsel_layout::operation::collect_arguments(cx.types, &[GenericArgument::Type(root)])
+            .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
+    let [OperationArgument::Type(native)] = native.as_slice() else {
+        return Err(PassError::Malformed("arena.seal root actual".into()));
+    };
+    let descriptor = cx
+        .layouts
+        .seal_descriptor(&cx.program.operation_registry(), native)
+        .map_err(|e| PassError::Layout(cx.path.clone(), e))?;
+    if !matches!(
+        cx.record(descriptor.root_layout).kind,
+        LayoutKind::Unit | LayoutKind::Scalar(_)
+    ) {
+        return cx.unsupported("sealed payload needs complete original-source receipt transport");
+    }
+    let owner_layout = cx
+        .fn_abi()
+        .result
+        .ok_or_else(|| PassError::Malformed("arena.seal returns an owner".into()))?
+        .layout;
+    let mut b = Body::new(cx)?;
+    let [grant, root] = b.parameters[..] else {
+        return Err(PassError::Malformed("arena.seal parameters".into()));
+    };
+    if grant.passing != Passing::Take
+        || root.passing != Passing::Take
+        || b.record(grant.layout).kind != LayoutKind::Arena
+        || root.layout != descriptor.root_layout
+        || !matches!(b.record(owner_layout).kind,
+            LayoutKind::SealedRegion { root } if root == descriptor.root_layout)
+    {
+        return Err(PassError::Malformed(
+            "arena.seal take parameters or owner layout".into(),
+        ));
+    }
+    b.ed.unit.tables.seal_descriptors.push(descriptor);
+    let grant = b.take(grant.address)?;
+    let root = b.take(root.address)?;
+    let result = b.fresh(owner_layout);
+    let failure = b.failure(None);
+    b.push(Inst::SealArena {
+        result,
+        grant,
+        root,
+        shape: SealDescriptorId(0),
+        failure,
+        origin: b.anchor,
+    });
+    b.ret(Some(result));
+    Ok(b.finish())
+}

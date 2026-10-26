@@ -161,3 +161,101 @@ fn unqualified_callback_parameter_is_not_a_storage_proof() {
         "{rejected}"
     );
 }
+
+fn check_seal_body(source: &str, root_kind: TypeKind, root_type: NativeType) {
+    let program = compile(source);
+    let root = program.types.intern(Type::with_kind(root_kind));
+    let path = DefPath::core("arena.seal");
+    assert!(hirsel_rc::library::body_index(&path).is_none());
+    let target = target();
+    let registry = program.operation_registry();
+    let mut layouts = LayoutBuilder::new(&target, &registry.owners);
+    let mut instances = Instances::new(program.types.clone(), program.memo.clone());
+    let request = Request::operation(
+        &program,
+        usize::MAX,
+        &path,
+        vec![GenericArgument::Type(root)],
+    )
+    .unwrap();
+    let id = hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
+    let unit = (hirsel_rc::library::sealed_region::SEAL.build)(&mut Cx::new(
+        &program,
+        &mut layouts,
+        &mut instances,
+        id,
+    ))
+    .unwrap();
+    let mut table = layouts.finish();
+    let declarations = ReadDeclarations {
+        registry,
+        definition: path,
+        instance: instances.view(id).key.digest(),
+        expected: vec![SourceEvent {
+            anchor: hirsel_lir::ir::SourceAnchor {
+                body: 0,
+                block: 0,
+                statement: 0,
+                site: hirsel_lir::ir::SiteRange {
+                    source: 0,
+                    start: 0,
+                    end: 0,
+                },
+            },
+            kind: SourceEventKind::Seal,
+            root_type,
+        }],
+    };
+    let manifest = manifest(&program);
+    {
+        let inputs = hirsel_lir::validate::Inputs {
+            target: &target,
+            layouts: &table,
+            operations: &declarations,
+            manifest: &manifest,
+            discharge: None,
+            memo: Default::default(),
+        };
+        let strict = hirsel_lir::validate::check_scoped_transport(&unit, &inputs);
+        assert!(strict.is_empty(), "{strict:?}");
+        hirsel_lir::validate::ScopedQualification::new(&target, &manifest, &declarations, None)
+            .qualify(std::slice::from_ref(&unit), &table)
+            .unwrap();
+        assert!(hirsel_lir::validate::validate(unit.clone(), &inputs).is_ok());
+    }
+    // Re-annotating the same body as a borrowed entry must not grant consumption.
+    table.fn_abis[unit.header.abi.0 as usize].parameters[0].convention =
+        hirsel_core_contract::Passing::Borrow;
+    let inputs = hirsel_lir::validate::Inputs {
+        target: &target,
+        layouts: &table,
+        operations: &declarations,
+        manifest: &manifest,
+        discharge: None,
+        memo: Default::default(),
+    };
+    let rejected = hirsel_lir::validate::validate(unit, &inputs)
+        .err()
+        .expect("borrowed grant entry is not consumable");
+    assert!(rejected.violations.iter().any(|v| matches!(&v.kind,
+        hirsel_lir::validate::ViolationKind::Sealed(reason) if reason.contains("borrow-only arena"))),
+        "{:?}", rejected.violations);
+}
+
+#[test]
+fn unregistered_arena_seal_unit_body_preserves_consumable_grant_entry() {
+    check_seal_body(
+        include_str!("../../../../conformance/MEM/MEM-4-sealed-empty-unit-run.hir"),
+        TypeKind::Tuple(vec![].into()),
+        NativeType::Tuple(vec![]),
+    );
+}
+
+#[test]
+fn unregistered_arena_seal_scalar_body_preserves_consumable_grant_entry() {
+    check_seal_body(
+        include_str!("../../../../conformance/MEM/MEM-4-sealed-scalar-zero-run.hir"),
+        TypeKind::Primitive(hirsel_types::Primitive::U64),
+        NativeType::Primitive(hirsel_lir::operation::Primitive::U64),
+    );
+}
