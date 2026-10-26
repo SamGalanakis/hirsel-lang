@@ -32,6 +32,7 @@ use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpe
 use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
+pub mod isolate;
 mod runtime;
 mod scope;
 mod validate;
