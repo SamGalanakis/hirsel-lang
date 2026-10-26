@@ -157,3 +157,6 @@ impl FnEmitter<'_, '_, '_> {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod sealed_tests;

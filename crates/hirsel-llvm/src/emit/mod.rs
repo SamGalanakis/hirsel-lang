@@ -71,6 +71,7 @@ mod pair;
 mod places;
 mod program;
 mod receipt;
+mod sealed;
 mod resume;
 pub use program::emit_glue;
 mod sequence_state;

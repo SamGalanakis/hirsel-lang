@@ -35,6 +35,7 @@ mod program;
 mod receipt;
 mod resume;
 mod scalar;
+mod sealed;
 mod soa;
 mod structural;
 

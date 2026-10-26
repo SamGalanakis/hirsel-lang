@@ -158,3 +158,6 @@ mod tests;
 
 #[cfg(test)]
 mod call_tests;
+
+#[cfg(test)]
+mod sealed_tests;
