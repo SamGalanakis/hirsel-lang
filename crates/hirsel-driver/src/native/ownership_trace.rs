@@ -47,14 +47,9 @@ pub fn emit_leaf(
     fn failed(message: impl Into<String>) -> NativeError {
         NativeError::new(StageName::Emission, message)
     }
-    if program.units.len() != program.summaries.len() || program.unit_objects.is_some() {
+    if program.units.len() != program.summaries.len() {
         return Err(failed(
             "ownership emission requires all checked Ready bodies",
-        ));
-    }
-    if !program.ahead_units.is_empty() {
-        return Err(failed(
-            "ownership emission does not yet cover alternate task bodies",
         ));
     }
     let selected: Vec<_> = program.units.iter().collect();
@@ -108,7 +103,7 @@ pub(crate) fn emit_relocated(
     let prepared = hirsel_lir::ownership_trace::native::Request::Relocated(plans)
         .prepare(selected, inputs.layouts)
         .map_err(failed)?;
-    if selected.len() != program.summaries.len() || !program.ahead_units.is_empty() {
+    if selected.len() != program.summaries.len() {
         return Err(failed(
             "ownership emission requires the complete checked closure",
         ));

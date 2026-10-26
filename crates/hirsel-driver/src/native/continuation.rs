@@ -76,15 +76,7 @@ pub fn classify(definition: &DefPath) -> Option<CalleeClass> {
 fn units(
     program: &ReadyProgram,
 ) -> Vec<&hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>> {
-    if program.unit_objects.is_some() {
-        program
-            .ahead_units
-            .iter()
-            .map(std::sync::Arc::as_ref)
-            .collect()
-    } else {
-        program.units.iter().collect()
-    }
+    program.units.iter().collect()
 }
 
 /// Every resumable plan's state alternates and dispatcher, in one object.

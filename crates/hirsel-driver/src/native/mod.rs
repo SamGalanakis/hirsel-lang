@@ -5,7 +5,6 @@
 //!
 //! A native failure is a tool outcome (`NativeError`), never a source verdict.
 mod adapt;
-mod admission;
 mod ahead;
 mod c_abi;
 pub use ahead::{check_objects as check_ahead_objects, plan as ahead_plan};
@@ -24,7 +23,6 @@ pub mod object_queries;
 mod observe;
 pub mod ownership_trace;
 mod pairwise;
-mod plan;
 mod proofs;
 pub mod queries;
 pub mod receipt_source;
@@ -40,9 +38,7 @@ mod testing;
 mod timeout;
 mod tool;
 mod unit_bodies;
-mod units;
 pub use testing::{bench_path, test_path};
-pub use units::UnitObjects;
 
 pub use adapt::{input_identity, manifest, manifest_for_operations, program};
 pub use coverage::backend_features;

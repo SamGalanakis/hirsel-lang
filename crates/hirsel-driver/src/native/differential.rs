@@ -145,7 +145,6 @@ fn options(target: &TargetSpec, regions: bool, elide: bool, reuse: bool) -> Opti
         flat_walk: true,
         scoped_specialization: true,
         discharge: Default::default(),
-        objects: None,
     }
 }
 

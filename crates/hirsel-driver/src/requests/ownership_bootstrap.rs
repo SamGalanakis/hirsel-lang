@@ -121,7 +121,7 @@ impl OwnershipBootstrap {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<Self>, String> {
-        if plan.options.objects.is_some() || !plan.options.discharge.0.is_empty() {
+        if !plan.options.discharge.0.is_empty() {
             return Err("ownership root cannot use cached ordinary objects".into());
         }
         let bytes = serde_json::to_vec(&(

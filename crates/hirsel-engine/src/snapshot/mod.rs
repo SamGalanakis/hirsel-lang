@@ -827,7 +827,7 @@ mod tests {
         }
         let mut adapters = crate::phases::engine_only_adapters();
         adapters.signature = Some(Arc::new(Header));
-        let mut engine = QueryEngine::new(default_environment(), adapters.clone());
+        let mut engine = QueryEngine::new(default_environment(), adapters);
         let context = default_context();
         let file = engine
             .sources
@@ -858,6 +858,8 @@ mod tests {
         let state = engine
             .into_source_index(budget.reserve(bytes).unwrap())
             .unwrap();
+        let mut adapters = crate::phases::engine_only_adapters();
+        adapters.signature = Some(Arc::new(Header));
         let mut engine = QueryEngine::new(default_environment(), adapters);
         assert!(state.restore(&mut engine).is_ok());
         let before = engine.memo_stats().touched;

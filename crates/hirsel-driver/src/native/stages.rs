@@ -48,9 +48,6 @@ pub struct Options {
     pub scoped_specialization: bool,
     /// PS-13 checks accepted evidence licenses removing (`--proofs`).
     pub discharge: Discharge,
-    /// Emit each unit's object during the build through an object store
-    /// (`super::units`), instead of leaving every Ready unit to the link.
-    pub objects: Option<super::units::UnitObjects>,
 }
 
 impl Options {
@@ -66,7 +63,6 @@ impl Options {
             flat_walk: true,
             scoped_specialization: true,
             discharge: Discharge::default(),
-            objects: None,
         }
     }
 }
@@ -163,7 +159,6 @@ pub struct ReadyProgram {
     pub(super) semantic_owners: BTreeMap<DefPath, Option<DefPath>>,
     /// The exact planned unit identities checked when binding the semantic input.
     pub(super) semantic_units: Option<BTreeSet<(DefPath, ContentHash)>>,
-    pub(super) production: Option<super::plan::Production>,
     /// Validation policy retained for subsequent inspection and emission.
     pub validation: Validation,
     pub operations: hirsel_layout::operation::OperationRegistry,
@@ -175,16 +170,11 @@ pub struct ReadyProgram {
     /// the glue symbols units import.
     pub keys: hirsel_lir::LayoutKeys,
     pub manifest: Manifest,
-    /// Every Ready unit; empty when the build emitted its units itself
-    /// (`Options::objects`), whose objects are `unit_objects`.
+    /// Every independently validated Ready unit selected for inspection.
     pub units: Vec<ValidatedUnit<Ready>>,
-    pub ahead_units: Vec<std::sync::Arc<ValidatedUnit<Ready>>>,
     pub ahead_environments: BTreeMap<ContentHash, Option<LayoutId>>,
     /// What program assembly reads from each unit (`hirsel_lir::fragment`), in unit order.
     pub summaries: Vec<hirsel_lir::fragment::UnitSummary>,
-    /// The units' objects when the build emitted them, with the backend and optimization
-    /// level they were emitted for.
-    pub unit_objects: Option<UnitObjectArtifacts>,
     /// Callable-target specializations and their known bodies, available in
     /// each calling partition without changing their source failure anchors.
     pub inline_instances: std::collections::BTreeSet<ContentHash>,
@@ -224,20 +214,6 @@ pub struct ReadyProgram {
     /// The failure table a program that isolates registers at launch (FAIL-2), bound with
     /// the revisions.
     pub(crate) failure_table: Option<super::observe::FailureTable>,
-}
-
-/// The objects a build emitted for its units (`Options::objects`).
-#[derive(Clone, Debug)]
-pub struct UnitObjectArtifacts {
-    pub backend: super::Backend,
-    pub opt: hirsel_lir::emission::OptLevel,
-    /// The objects record debug intervals.
-    pub debug: bool,
-    pub objects: Vec<hirsel_lir::stage::ObjectArtifact>,
-    /// How many of them the object store held.
-    pub hits: usize,
-    /// Units instantiated with type or size arguments, including generated helpers.
-    pub generic_units: usize,
 }
 
 impl ReadyProgram {
@@ -654,13 +630,6 @@ pub fn build(
     validated: &ValidatedNativeInput,
     options: &Options,
 ) -> Result<ReadyProgram, NativeError> {
-    super::plan::prepare(validated, options).map(|prepared| prepared.ready)
-}
-
-pub(super) fn build_full(
-    validated: &ValidatedNativeInput,
-    options: &Options,
-) -> Result<ReadyProgram, NativeError> {
     let plan = (
         timings::interval(Interval::Plan),
         timings::phase(Phase::Plan),
@@ -731,20 +700,6 @@ pub(super) fn build_program_roots(
     };
     let instances = &lowered.instances;
     let statics = std::mem::take(&mut lowered.statics);
-    if let Some(objects) = &options.objects {
-        return build_units(
-            program,
-            &manifest,
-            options,
-            objects,
-            &operations,
-            &lowered,
-            value_units,
-            statics,
-            discharged,
-        )
-        .map(|built| built.finish(program, manifest, operations, options, lowered));
-    }
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     preflight(&validation)?;
     let finalizers = Finalizers::planned(instances, table);
@@ -805,7 +760,6 @@ pub(super) fn build_program_roots(
     Ok(ReadyProgram {
         semantic_owners: lowered.semantic_owners.clone(),
         semantic_units: None,
-        production: None,
         validation: options.validation,
         callbacks,
         entries,
@@ -833,10 +787,8 @@ pub(super) fn build_program_roots(
         table: lowered.table,
         manifest,
         units,
-        ahead_units: Vec::new(),
         ahead_environments,
         summaries,
-        unit_objects: None,
         inline_instances: lowered.inline_instances,
         statics,
         discharged,
@@ -848,212 +800,6 @@ pub(super) fn build_program_roots(
         fuel: false,
         failure_table: None,
     })
-}
-
-/// A program whose units the per-unit pipeline lowered or loaded (`Options::objects`),
-/// before it owns the lowering's tables.
-struct BuiltUnits {
-    ahead_units: Vec<std::sync::Arc<ValidatedUnit<Ready>>>,
-    ahead_environments: BTreeMap<ContentHash, Option<LayoutId>>,
-    records: Vec<super::plan::Record>,
-    summaries: Vec<hirsel_lir::fragment::UnitSummary>,
-    objects: UnitObjectArtifacts,
-    keys: hirsel_lir::LayoutKeys,
-    callbacks: BTreeSet<DefPath>,
-    statics: Vec<hirsel_lir::statics::StaticData>,
-    discharged: Discharge,
-}
-
-/// The per-unit pipeline (`super::units`) over a lowered program's Value units.
-#[allow(clippy::too_many_arguments)]
-fn build_units(
-    program: &Program,
-    manifest: &Manifest,
-    options: &Options,
-    objects: &super::units::UnitObjects,
-    operations: &hirsel_layout::operation::OperationRegistry,
-    lowered: &hirsel_rc::import::Lowered,
-    units: Vec<LirUnit<hirsel_lir::stage::Value>>,
-    statics: Vec<hirsel_lir::statics::StaticData>,
-    discharged: Discharge,
-) -> Result<BuiltUnits, NativeError> {
-    let table = &lowered.table;
-    let keys = hirsel_lir::LayoutKeys::new(table);
-    let finalizers = Finalizers::planned(&lowered.instances, table);
-    let callbacks: BTreeSet<DefPath> = units.iter().flat_map(callbacks).collect();
-    let tracking = units.iter().any(|u| {
-        u.terminators
-            .iter()
-            .any(|t| matches!(t, hirsel_lir::ir::Terminator::Recover { .. }))
-    });
-    let empty = BTreeSet::new();
-    let inputs = Inputs {
-        memo: Default::default(),
-        discharge: Some(&lowered.native_discharge),
-        operations,
-        target: &options.target,
-        layouts: table,
-        manifest,
-    };
-    let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
-    preflight(&validation)?;
-    let emit = hirsel_lir::emission::EmitInputs {
-        ahead: None,
-        continuation: None,
-        alternate: false,
-        verify_backend: options.validation == Validation::EveryStage,
-        index: Some(validation.index()),
-        input: &program.input,
-        target: &options.target,
-        layouts: table,
-        keys: &keys,
-        manifest,
-        statics: &statics,
-        inline_instances: &lowered.inline_instances,
-        available_externally: &empty,
-        callbacks: !callbacks.is_empty(),
-        foreign: &hirsel_lir::emission::NO_FOREIGN,
-        tracking,
-        opt: objects.opt,
-        measurement: false,
-        fuel: objects.fuel,
-    };
-    let lowered_units = super::units::lower(
-        &super::units::Program {
-            capture_plan: super::plan::recording(),
-            options,
-            objects,
-            table,
-            keys: &keys,
-            operations,
-            discharge: Some(&lowered.native_discharge),
-            validation: &validation,
-            emit: &emit,
-            instances: &lowered.instances,
-            finalizers: &finalizers,
-            origins: &lowered.unit_origins,
-        },
-        units,
-    )?;
-    let ahead_units = lowered_units.ahead;
-    let ahead_environments = lowered_units.environments;
-    let lowered_units = lowered_units.units;
-    let mut summaries = Vec::with_capacity(lowered_units.len());
-    let mut records = Vec::with_capacity(lowered_units.len());
-    let mut artifacts = Vec::with_capacity(lowered_units.len());
-    let mut hits = 0;
-    for unit in lowered_units {
-        let fragment = unit.fragment;
-        hits += usize::from(unit.hit);
-        if super::plan::recording() {
-            records.push(super::plan::Record {
-                key: unit.key,
-                calls: unit.calls,
-                digest: super::plan::fragment_digest(
-                    &fragment
-                        .encode(table, &keys)
-                        .map_err(|e| NativeError::new(StageName::Emission, e))?,
-                ),
-            });
-        }
-        summaries.push(fragment.summary);
-        artifacts.push(fragment.object);
-    }
-    Ok(BuiltUnits {
-        ahead_units,
-        ahead_environments,
-        records,
-        summaries,
-        objects: UnitObjectArtifacts {
-            backend: objects.backend,
-            opt: objects.opt,
-            debug: objects.debug,
-            objects: artifacts,
-            hits,
-            generic_units: lowered
-                .unit_origins
-                .iter()
-                .filter(|id| {
-                    let actuals = &lowered.instances.actuals[id.index()];
-                    !actuals.arguments.is_empty() || !actuals.outer.is_empty()
-                })
-                .count(),
-        },
-        keys,
-        callbacks,
-        statics,
-        discharged,
-    })
-}
-
-impl BuiltUnits {
-    fn finish(
-        self,
-        program: &Program,
-        manifest: Manifest,
-        operations: hirsel_layout::operation::OperationRegistry,
-        options: &Options,
-        lowered: hirsel_rc::import::Lowered,
-    ) -> ReadyProgram {
-        let instances = &lowered.instances;
-        let finalizers = Finalizers::planned(instances, &lowered.table);
-        let functions = instances
-            .ids()
-            .filter(|id| instances.roles[id.index()] == InstanceRole::Function)
-            .map(|id| {
-                let view = instances.view(id);
-                (view.key.definition().clone(), view.key.digest())
-            })
-            .collect();
-        ReadyProgram {
-            entries: summary_entries(&self.summaries),
-            callee_facts: None,
-            foreign_dispatch: BTreeMap::new(),
-            semantic_owners: lowered.semantic_owners.clone(),
-            semantic_units: None,
-            production: Some(super::plan::Production {
-                records: self.records,
-            }),
-            validation: options.validation,
-            callbacks: self.callbacks,
-            operations,
-            launch: options.launch.clone(),
-            revisions: BTreeMap::new(),
-            exit_reports: BTreeMap::new(),
-            launches: program
-                .signatures
-                .iter()
-                .filter_map(|(p, s)| {
-                    super::link::launch_kind(&program.types, s).map(|k| (p.clone(), k))
-                })
-                .collect(),
-            input: program.input.clone(),
-            target: options.target.clone(),
-            finalizers: finalizers
-                .0
-                .iter()
-                .map(|(layout, f)| (*layout, f.instance))
-                .collect(),
-            functions,
-            keys: self.keys,
-            table: lowered.table,
-            manifest,
-            units: Vec::new(),
-            ahead_units: self.ahead_units,
-            ahead_environments: self.ahead_environments,
-            summaries: self.summaries,
-            unit_objects: Some(self.objects),
-            inline_instances: lowered.inline_instances,
-            statics: self.statics,
-            discharged: self.discharged,
-            foreign_links: Vec::new(),
-            data_abi: None,
-            foreign_unreplayable: false,
-            escaping: BTreeSet::new(),
-            fuel: options.objects.as_ref().is_some_and(|o| o.fuel),
-            failure_table: None,
-        }
-    }
 }
 
 /// PS-13: every discharged unit removed exactly its planned sites, and every
@@ -1441,6 +1187,71 @@ fn main() -> u64 {
                 "salt changed complete units or receipts"
             );
         }
+    }
+    #[test]
+    fn http_reject_lowering_has_valid_projections() {
+        hirsel_engine::with_compiler_stack(|| {
+            use hirsel_engine::DefinitionQueries;
+            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../stdlib/std@1/hirsel.json");
+            let mut package = crate::COMPILER
+                .load_package_declarations(&manifest)
+                .unwrap();
+            let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: package.package.clone(),
+                modules: vec!["http".into()],
+                name: "http_server_reject".into(),
+            });
+            // This private root is absent from ordinary program reachability.
+            // Keep its independent V projection regression covered.
+            package.engine.lower_to_tir(&root).unwrap();
+        });
+    }
+
+    // A contract helper's closure is addressed and called in the same singleton
+    // object. An untyped LLVM address declaration conflicts with the bound call.
+    #[test]
+    fn ordinary_store_delete_has_one_consistent_entry_abi() {
+        hirsel_engine::with_compiler_stack(|| {
+            use hirsel_engine::DefinitionQueries;
+            let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../stdlib/std@1/hirsel.json");
+            let mut package = crate::COMPILER
+                .load_package_declarations(&manifest)
+                .unwrap();
+            let root = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+                package: package.package.clone(),
+                modules: vec!["store".into()],
+                name: "tx_delete".into(),
+            });
+            let input = package.engine.native_input_for(&[root]).unwrap();
+            for backend in [
+                super::super::Backend::Cranelift,
+                super::super::Backend::Llvm,
+            ] {
+                for opt in [
+                    hirsel_lir::emission::OptLevel::None,
+                    hirsel_lir::emission::OptLevel::Default,
+                    hirsel_lir::emission::OptLevel::Speed,
+                ] {
+                    let options = super::super::Options::new(
+                        hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu(),
+                    );
+                    let ready = super::build(&input, &options)
+                        .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+                    let sources = super::super::profile_sources(input.snapshot());
+                    super::super::emit_backend_objects(
+                        &ready,
+                        backend,
+                        opt,
+                        super::super::Partition::Singleton,
+                        false,
+                        (opt == hirsel_lir::emission::OptLevel::None).then_some(&sources),
+                    )
+                    .unwrap_or_else(|e| panic!("{backend:?} {opt:?}: {e}"));
+                }
+            }
+        });
     }
 }
 

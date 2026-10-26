@@ -927,33 +927,6 @@ pub fn partition_backend_objects_with_jobs(
     jobs: hirsel_intern::jobs::Jobs,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     use hirsel_lir::ir::{Callee, Inst, UnitOrigin};
-    // A build that emitted its units itself has one object per unit already.
-    if let Some(built) = &program.unit_objects {
-        if built.backend != backend || built.opt != opt || sources.is_some() != built.debug {
-            return Err(NativeError::new(
-                StageName::Emission,
-                format!(
-                    "the build emitted its units for {} at {:?}, not {} at {opt:?}",
-                    built.backend.name(),
-                    built.opt,
-                    backend.name()
-                ),
-            ));
-        }
-        let mut objects = built.objects.clone();
-        objects.extend(super::ahead::objects(program, backend, opt, registry)?);
-        objects.extend(super::continuation::objects(
-            program,
-            backend,
-            opt,
-            measurement,
-        )?);
-        objects.push(super::emit::emit_glue(program, backend, registry)?);
-        if let Some(sources) = sources {
-            objects.push(debug_artifact(program, &objects, sources)?);
-        }
-        return Ok(objects);
-    }
     let _timing = hirsel_intern::timings::phase(hirsel_intern::timings::Phase::Codegen);
     let assignment = partition.assign(program.units.len());
     let mut groups: Vec<usize> = assignment.clone();

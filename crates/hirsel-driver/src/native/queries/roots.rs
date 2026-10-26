@@ -884,7 +884,6 @@ pub(super) fn with_link_assembly<R>(
     let mut program = crate::native::ReadyProgram {
         semantic_owners,
         semantic_units: None,
-        production: None,
         validation: snapshot.options.validation,
         operations,
         launch: snapshot.options.launch.clone(),
@@ -894,10 +893,8 @@ pub(super) fn with_link_assembly<R>(
         keys,
         manifest: snapshot.manifest.clone(),
         units: vec![],
-        ahead_units: vec![],
         ahead_environments: BTreeMap::new(),
         summaries,
-        unit_objects: None,
         inline_instances: BTreeSet::new(),
         callbacks,
         entries,

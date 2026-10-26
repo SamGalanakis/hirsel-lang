@@ -21,15 +21,7 @@ pub(super) fn helper_identity() -> ContentHash {
     )
 }
 pub fn plan(program: &ReadyProgram) -> AheadPlan {
-    let units: Vec<_> = if program.unit_objects.is_some() {
-        program
-            .ahead_units
-            .iter()
-            .map(std::sync::Arc::as_ref)
-            .collect()
-    } else {
-        program.units.iter().collect()
-    };
+    let units: Vec<_> = program.units.iter().collect();
     AheadPlan::build(
         &units,
         &program.table,
@@ -53,15 +45,7 @@ pub(super) fn objects(
     if plan.roots.is_empty() {
         return Ok(Vec::new());
     }
-    let all: Vec<_> = if program.unit_objects.is_some() {
-        program
-            .ahead_units
-            .iter()
-            .map(std::sync::Arc::as_ref)
-            .collect()
-    } else {
-        program.units.iter().collect()
-    };
+    let all: Vec<_> = program.units.iter().collect();
     let units: Vec<_> = all
         .into_iter()
         .filter(|u| plan.bodies.contains_key(&u.unit().header.instance))
@@ -194,15 +178,7 @@ fn unknown_machine_calls(
                 .iter()
                 .map(|e| e.declaration().symbol.to_owned()),
         );
-        let all: Vec<_> = if program.unit_objects.is_some() {
-            program
-                .ahead_units
-                .iter()
-                .map(std::sync::Arc::as_ref)
-                .collect()
-        } else {
-            program.units.iter().collect()
-        };
+        let all: Vec<_> = program.units.iter().collect();
         for unit in all {
             let u = unit.unit();
             let Some(spine) = plan.host_spine(u.header.instance) else {
