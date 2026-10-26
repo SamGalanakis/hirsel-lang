@@ -549,6 +549,7 @@ const BODY_CONTINUATIONS: u64 = 32;
 struct Plan {
     snapshots: SnapshotPlan,
     query_capacity: usize,
+    source_index_bytes: u64,
     body: MemoryWeight,
     root: MemoryWeight,
     run: MemoryWeight,
@@ -573,6 +574,7 @@ impl Plan {
         run_input_bytes: u64,
         native_catalogue_bytes: u64,
         inspection_bytes: u64,
+        source_index_bytes: u64,
     ) -> Result<Self, ToolError> {
         let source = u64::try_from(inputs.retained_bytes())
             .ok()
@@ -620,6 +622,17 @@ impl Plan {
                 "compiler immutable input inventory exceeds snapshot admission".into(),
             )
         })?;
+        // Source indexing is an optional reuse cache. Never let it reject an
+        // otherwise admissible graph or consume the producers' main grants.
+        let source_index_bytes = if source_index_bytes <= slack / 32 {
+            source_index_bytes
+        } else {
+            0
+        };
+        let source = source
+            .checked_add(source_index_bytes)
+            .ok_or_else(uninstalled)?;
+        let slack = slack - source_index_bytes;
         let native_slack = if needs_native {
             slack / 2
         } else if needs_ownership {
@@ -788,6 +801,7 @@ impl Plan {
             ));
         }
         Ok(Self {
+            source_index_bytes,
             snapshots: SnapshotPlan {
                 source,
                 front,
@@ -984,9 +998,6 @@ pub(super) fn install(
             GraphMeter::input_bytes(definitions, program.engine.memo_snapshot().len())
                 .ok_or_else(uninstalled)?;
         let source_index_bytes = program.engine.source_index_bytes().unwrap_or(0);
-        let inspection_bytes = inspection_bytes
-            .checked_add(source_index_bytes)
-            .ok_or_else(uninstalled)?;
         Plan::new(
             limits,
             config,
@@ -1011,6 +1022,7 @@ pub(super) fn install(
             run_input_bytes,
             native_catalogue_bytes,
             inspection_bytes,
+            source_index_bytes,
         )
     };
     let mut plan = plan_within(
@@ -1140,7 +1152,6 @@ pub(super) fn install(
             .map_or(0, |inputs| inputs.input_bytes()),
     )?;
     let sources = program.engine.sources.clone();
-    let source_index_bytes = program.engine.source_index_bytes().unwrap_or(0);
     let GraphAdmission {
         runtime,
         source,
@@ -1153,7 +1164,9 @@ pub(super) fn install(
     } = loading.finish(plan.snapshots)?;
     let mut check = check;
     let mut source = source;
-    let source_index_allowance = source.split(source_index_bytes).ok_or_else(uninstalled)?;
+    let source_index_allowance = source
+        .split(plan.source_index_bytes)
+        .ok_or_else(uninstalled)?;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
         error,
@@ -1556,7 +1569,7 @@ pub(super) fn install(
         .map_err(registration)?;
     // Move only source/header state. Scalar bodies, S1 and every controller
     // are dropped before the immutable graph becomes visible.
-    if source_index_bytes != 0 {
+    if plan.source_index_bytes != 0 {
         let state = program
             .engine
             .into_source_index(source_index_allowance)
