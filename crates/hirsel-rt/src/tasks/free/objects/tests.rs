@@ -514,7 +514,11 @@ unsafe fn waiting(ctx: *mut TaskCtx, word: u64) -> usize {
 
 /// Hold the mutex, register `count` waiters in spawn order, put while the
 /// first waiter's save hook is held, then retake through the role path.
-unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32, u64)> {
+unsafe fn contend(
+    ctx: *mut TaskCtx,
+    shared: &Contended,
+    count: u32,
+) -> (Vec<(u32, u64)>, Vec<crate::tasks::registry::TaskLease>) {
     let handle = shared.mutex.load(Ordering::Acquire);
     let word = unsafe { mutex_word(&handle) };
     let mut payload = [0u64; 2];
@@ -546,6 +550,16 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
     wait_until("the first waiter reaches its save", || {
         shared.saving.load(Ordering::Acquire)
     });
+    let leases = {
+        let _role = unsafe { role::Guard::new(ctx) };
+        role::with_role(ctx, |s| {
+            let children = s.scope(scope as u32).children.clone();
+            children
+                .into_iter()
+                .map(|child| s.lease(child))
+                .collect::<Vec<_>>()
+        })
+    };
     let value = payload[1];
     unsafe { hirsel_rt_v2_mutex_put(ctx, &handle, payload.as_mut_ptr().cast()) };
     shared.put.store(true, Ordering::Release);
@@ -566,7 +580,7 @@ unsafe fn contend(ctx: *mut TaskCtx, shared: &Contended, count: u32) -> Vec<(u32
         vec![0; count as usize],
         "every waiter's put woke its reserved successor without the role"
     );
-    order
+    (order, leases)
 }
 
 /// Tokio's `tests/sync_mutex.rs` vectors on the Free mutex ABI:
@@ -938,10 +952,38 @@ fn runtime50_object_custody_race_matrix() {
                         hook.saving.store(false, Ordering::Release);
                     }
                 });
-                let first = contend(ctx, shared, 3);
-                // Reuse: the vacated rows serve a second generation of waiters.
+                let (first, leases) = contend(ctx, shared, 3);
+                {
+                    let _role = role::Guard::new(ctx);
+                    role::with_held(ctx, |s| {
+                        s.task_slots.reclaim_all();
+                        let retained = s.task_slots.retained();
+                        assert!(
+                            leases
+                                .iter()
+                                .all(|lease| retained.contains(&lease.key().slot)),
+                            "retired waiter slots remain unavailable while leases are held"
+                        );
+                    });
+                }
+                drop(leases);
+                // ebc6caa7 / cb21891a: logical scope completion can precede
+                // physical save acknowledgement and the final dispatch lease.
+                // Exercise reuse only after all first-generation rows can be
+                // reused; keep the exact row-set assertion below.
+                wait_until(
+                    "the first waiter generation is physically reclaimable",
+                    || {
+                        let _role = role::Guard::new(ctx);
+                        role::with_held(ctx, |s| {
+                            s.task_slots.reclaim_all();
+                            s.task_slots.retained().is_empty()
+                        })
+                    },
+                );
                 shared.saves.lock().unwrap().clear();
-                let second = contend(ctx, shared, 3);
+                let (second, leases) = contend(ctx, shared, 3);
+                drop(leases);
                 let ids = |order: &[(u32, u64)]| {
                     let mut ids = order.iter().map(|&(id, _)| id).collect::<Vec<_>>();
                     ids.sort_unstable();
