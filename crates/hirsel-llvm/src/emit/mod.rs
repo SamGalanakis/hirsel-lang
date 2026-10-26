@@ -797,7 +797,7 @@ fn lower<T>(
             // live. Its saved admission needs the runtime's retained token.
             if !inputs.alternate {
                 emitter.counters =
-                    hirsel_lir::invocations::room::RoomChecks::of(unit, &counter_units);
+                    hirsel_lir::invocations::room::RoomChecks::counters_of(unit, &counter_units);
             }
             emitter.ownership = ownership_plans
                 .as_ref()

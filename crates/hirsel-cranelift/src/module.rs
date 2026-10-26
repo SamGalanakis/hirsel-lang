@@ -471,7 +471,7 @@ pub(crate) fn emit(
             // Resumable alternates retain the runtime admission's mode token.
             if !inputs.alternate {
                 function.counters =
-                    hirsel_lir::invocations::room::RoomChecks::of(unit, &counter_units);
+                    hirsel_lir::invocations::room::RoomChecks::counters_of(unit, &counter_units);
             }
             function.ownership = ownership_plans
                 .as_ref()

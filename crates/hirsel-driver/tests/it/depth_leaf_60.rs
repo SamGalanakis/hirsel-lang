@@ -68,3 +68,64 @@ fn fixed_construction_proof_excludes_box_allocation() {
         }
     });
 }
+
+#[test]
+fn fixed_inline_constructor_keeps_the_exact_last_admissible_depth() {
+    use hirsel_driver::native::{self, Observation, Outcome};
+    use hirsel_engine::{RunConfiguration, SimulationConfig, entry_path, run_observed_snapshot};
+    with_compiler_stack(|| {
+        for (n, succeeds) in [(1021, true), (1022, false)] {
+            let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+            let source = format!(
+                "fn pair(x:u64,y:u64)->(u64,u64) {{(x,y)}}\nfn descend(n:u64)->u64 {{if n==0u64 {{let (x,y)=pair(1u64,2u64);x+y}} else {{1u64+descend(n-1u64)}}}}\npub fn main()->Result[(),()] {{let _=descend({n}u64);Ok(())}}\n"
+            );
+            let file = engine.sources.add("limit.hir", source.into()).unwrap();
+            let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            let entry = entry_path(&default_context());
+            let execution = run_observed_snapshot(
+                &mut engine,
+                &RunConfiguration {
+                    entry: entry.clone(),
+                    hash_seed: 0,
+                    inputs: vec![],
+                },
+                SimulationConfig::default(),
+            )
+            .unwrap();
+            let expected = Observation::of_reference(execution.observation.as_ref().unwrap());
+            if succeeds {
+                assert_eq!(expected.exit_code, Some(0), "{expected:?}");
+                assert!(expected.failures.is_empty(), "{expected:?}");
+            } else {
+                assert_eq!(expected.failures.len(), 1, "{expected:?}");
+                assert_eq!(expected.failures[0].rule, "LANG-10");
+                assert_eq!(expected.failures[0].definition.0.name, "descend");
+            }
+            let input = engine.export_native_input().unwrap();
+            let validated = engine.import_native_input(input).unwrap();
+            let mut matrix = native::trace_roots_matrix();
+            matrix.push(native::Configuration {
+                options: Options::new(TargetSpec::x86_64_unknown_linux_gnu()),
+                engine: native::Engine::Heap { campaign: false },
+            });
+            let scratch = tempfile::tempdir().unwrap();
+            let tools =
+                native::Toolchain::for_matrix(&scratch.path().join("runtime"), &matrix).unwrap();
+            for (configuration, outcome) in native::differential(
+                &validated,
+                &entry,
+                &expected,
+                &matrix,
+                &tools,
+                scratch.path(),
+            ) {
+                assert_eq!(
+                    outcome,
+                    Outcome::Agree,
+                    "n={n}, {configuration}: {outcome:?}"
+                );
+            }
+        }
+    });
+}

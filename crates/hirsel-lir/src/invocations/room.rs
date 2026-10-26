@@ -119,6 +119,10 @@ fn in_place(inst: &Inst) -> bool {
             | Inst::Store { .. }
             | Inst::CopyValue { .. }
             | Inst::Copy { .. }
+            | Inst::FlatView { .. }
+            | Inst::SliceView { .. }
+            | Inst::FlatLength { .. }
+            | Inst::FlatNext { .. }
             | Inst::SeqLen { .. }
             | Inst::SeqCapacity { .. }
             | Inst::BeginLoan { .. }
@@ -152,15 +156,26 @@ impl RoomChecks {
     /// Follow each admission along the validated CFG, as `invocations::check`
     /// does. An unexpected shape selects nothing: full admission stays sound.
     pub fn of<S: Stage>(unit: &LirUnit<S>, leaf: &BTreeSet<UnitKey>) -> RoomChecks {
-        Self::find(unit, leaf).unwrap_or_default()
+        Self::find(unit, leaf, false).unwrap_or_default()
     }
 
-    fn find<S: Stage>(unit: &LirUnit<S>, leaf: &BTreeSet<UnitKey>) -> Option<RoomChecks> {
-        if leaf.is_empty()
-            || unit
-                .instructions
-                .iter()
-                .any(|inst| matches!(inst, Inst::FinalizeBegin { .. } | Inst::FinalizeEnd { .. }))
+    /// Counter scopes retain their semantic activation while constructing or
+    /// releasing values. Such work may observe the count, so it cannot use a
+    /// read-only room check, but it does not need an invocation-site entry.
+    /// Decode is different: its runtime-only checked callback inherits that site.
+    pub fn counters_of<S: Stage>(unit: &LirUnit<S>, known: &BTreeSet<UnitKey>) -> RoomChecks {
+        Self::find(unit, known, true).unwrap_or_default()
+    }
+
+    fn find<S: Stage>(
+        unit: &LirUnit<S>,
+        leaf: &BTreeSet<UnitKey>,
+        counters: bool,
+    ) -> Option<RoomChecks> {
+        if unit
+            .instructions
+            .iter()
+            .any(|inst| matches!(inst, Inst::FinalizeBegin { .. } | Inst::FinalizeEnd { .. }))
         {
             return None;
         }
@@ -191,7 +206,7 @@ impl RoomChecks {
                     Inst::FrameLeave => {
                         admissions.get_mut(&active.take()?)?.2.push(start + offset);
                     }
-                    _ if in_place(inst) => (),
+                    _ if in_place(inst) || (counters && !matches!(inst, Inst::Decode { .. })) => (),
                     _ => {
                         if let Some(enter) = active {
                             admissions.get_mut(&enter)?.0 = false;
@@ -200,6 +215,13 @@ impl RoomChecks {
                 }
             }
             let terminator = unit.terminators.get(block.index())?;
+            if matches!(
+                terminator,
+                Terminator::Recover { .. } | Terminator::Isolate { .. }
+            ) && let Some(enter) = active
+            {
+                admissions.get_mut(&enter)?.0 = false;
+            }
             if let (Terminator::Call { call, .. }, Some(enter)) = (terminator, active) {
                 let call = unit.tables.calls.get(call.index())?;
                 let covered = match call.callee {
@@ -207,6 +229,10 @@ impl RoomChecks {
                         let symbol = unit.tables.symbols.get(symbol.index())?;
                         leaf.contains(&(symbol.definition.clone(), symbol.instance))
                     }
+                    // Runtime primitives cannot call a checked opaque or C
+                    // callback without a separate Decode/foreign boundary.
+                    // Compiler-generated callback calls have their own scopes.
+                    Callee::Operation(_) => counters,
                     _ => false,
                 };
                 let admission = admissions.get_mut(&enter)?;
@@ -237,7 +263,10 @@ impl RoomChecks {
         }
         let mut checks = RoomChecks::default();
         for (enter, (covered, called, leaves)) in admissions {
-            if covered && called {
+            // A primitive lowered entirely to in-place instructions has no
+            // remaining call. Its validated admission still needs the same
+            // room test, but nothing inside can observe the activation.
+            if covered && (called || !counters) {
                 checks.enters.insert(enter);
                 checks.leaves.extend(leaves);
             }
