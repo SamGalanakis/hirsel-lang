@@ -1482,3 +1482,23 @@ pub fn main() -> Result[(), ()] {
         hirsel_run_schema::exit::FAILED,
     );
 }
+
+#[test]
+#[ignore = "native: executes original nested Resource field lifetimes on both backends"]
+fn ownership_native_nested_aggregate_keeps_original_field_resources_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+type Pair { left: Token, right: Token }
+pub fn main() -> Result[(), ()] {
+    let first = Token(value: 7u64)
+    let second = Token(value: 7u64)
+    let pair = Pair(left: take first, right: take second)
+    let moved = take pair
+    Ok(())
+}
+"#,
+        2,
+    );
+}
