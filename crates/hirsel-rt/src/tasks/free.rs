@@ -142,6 +142,11 @@ pub(super) unsafe fn try_yield_entered(ctx: &mut TaskCtx, leave: bool) -> Stoppe
 
 unsafe fn boundary_entered(ctx: &mut TaskCtx, proceed: bool, leave: bool) -> Stopped<bool> {
     if replay::at_cut(ctx) {
+        if leave {
+            unsafe { park_left(ctx, Wait::Final) }?;
+            compact::wait(ctx);
+            return Ok(true);
+        }
         park_final(ctx);
     }
     // Runtime polling performs no adapter effects. Home observes readiness
