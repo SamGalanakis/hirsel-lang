@@ -350,10 +350,12 @@ fn good_real_recorder_keeps_one_ordinal_and_cause_snapshot_across_pending_polls(
                             |owners| {
                                 record::publish(ctx, Phase::Done, |_| {
                                     observed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                    let chain = owners.chain.take().unwrap();
-                                    (*ctx).failure.append_chain(chain.as_ref().clone());
-                                    assert_eq!(owners.descriptor, Some(17));
                                 })?;
+                                // Cause append is a post-publication suffix;
+                                // its failure-vector allocation is outside the section.
+                                let chain = owners.chain.take().unwrap();
+                                (*ctx).failure.append_chain(chain.as_ref().clone());
+                                assert_eq!(owners.descriptor, Some(17));
                                 Ok(STATUS_OK)
                             },
                         )
