@@ -53,6 +53,12 @@ pub trait Layouts {
         captures: Vec<hirsel_lir::abi_types::ParameterPath>,
     ) -> Result<FnAbiId, LayoutError>;
     fn table(&self) -> &LayoutTable;
+    /// Reconstruct a sealed root against these exact physical layouts and target.
+    fn seal_descriptor(
+        &self,
+        declarations: &hirsel_layout::operation::OperationRegistry,
+        root: &hirsel_lir::operation::NativeType,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError>;
     fn owners(&self) -> &Owners;
     /// The cursor's opaque source (`OwnerRepresentation::Cursor`).
     fn cursor_source(&mut self) -> LayoutId;
@@ -96,6 +102,13 @@ impl Layouts for LayoutBuilder<'_> {
     }
     fn owners(&self) -> &Owners {
         LayoutBuilder::owners(self)
+    }
+    fn seal_descriptor(
+        &self,
+        declarations: &hirsel_layout::operation::OperationRegistry,
+        root: &hirsel_lir::operation::NativeType,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError> {
+        hirsel_layout::sealed::derive(declarations, root, self.table(), self.target())
     }
     fn cursor_source(&mut self) -> LayoutId {
         LayoutBuilder::cursor_source(self)
