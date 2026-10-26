@@ -33,9 +33,11 @@ use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
 pub mod isolate;
+mod ordered;
 mod runtime;
 mod scope;
 mod validate;
+pub use ordered::{check_ordered_host_result, ordered_host_result};
 pub use runtime::{RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot, RuntimeResultSource};
 pub use scope::ScopeOpPlan;
 pub use validate::{
