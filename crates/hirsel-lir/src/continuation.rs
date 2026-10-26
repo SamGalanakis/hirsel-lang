@@ -346,6 +346,21 @@ pub struct NestedFrame {
     pub bytes: u64,
 }
 
+/// Logical continuation custody. Physical resumption may retry only a call
+/// that has not entered; a completed operation and an active cleanup have
+/// different continuations even when they originated at the same CallId.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum ResumeAction {
+    RetryUnenteredCall(CallId),
+    ResumeNested(CallId, NestedFrame),
+    AfterEnteredCall(CallId, EdgeId),
+    ResumeCleanup {
+        block: BlockId,
+        instruction: u32,
+        anchor: CleanupAnchorId,
+    },
+}
+
 /// Call-edge evidence that a nested callee's exclusive parameter borrows one
 /// whole slot of this frame directly: the slot is frame storage live at the
 /// boundary, aligned for its non-owning scalar layout, and the call's one
@@ -376,6 +391,7 @@ pub struct ExclusiveSlot {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ResumeState {
     pub boundary: ExistingBoundary,
+    pub action: ResumeAction,
     /// Set when the boundary is a call of a resumable body.
     pub callee: Option<NestedFrame>,
     /// Set when that callee takes an exclusive parameter.
@@ -1185,6 +1201,10 @@ fn states(
                 call: site.call,
                 operation: site.operation.clone(),
             },
+            action: match callee {
+                Some(frame) => ResumeAction::ResumeNested(site.call, frame),
+                None => ResumeAction::RetryUnenteredCall(site.call),
+            },
             callee,
             exclusive,
             live: values
@@ -1270,7 +1290,7 @@ pub(crate) fn certify(
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
     ValidatedContinuation {
-        identity: ContentHash::of_parts("hirsel.continuation.plan.v3", [bytes.as_slice()]),
+        identity: ContentHash::of_parts("hirsel.continuation.plan.v4", [bytes.as_slice()]),
     }
 }
 

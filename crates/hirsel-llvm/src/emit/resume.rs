@@ -8,8 +8,8 @@
 //! suspension.
 use super::*;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeState,
-    resume_hint, resume_name,
+    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeAction,
+    ResumeState, resume_hint, resume_name,
 };
 use hirsel_lir::runtime_abi::STATUS_SUSPENDED;
 
@@ -258,7 +258,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             resume.resuming = None;
         }
         let frame = resume.frame;
-        if let Some(callee) = state.callee {
+        let callee = match state.action {
+            ResumeAction::ResumeNested(at, frame) if at == call && state.callee == Some(frame) => {
+                Some(frame)
+            }
+            ResumeAction::RetryUnenteredCall(at) if at == call && state.callee.is_none() => None,
+            _ => return self.invalid("unsupported or inconsistent resume action"),
+        };
+        if let Some(callee) = callee {
             let nested = self.builder.offset(frame, self.const_u64(callee.offset));
             if !resuming {
                 self.materialize(state)?;

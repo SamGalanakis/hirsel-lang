@@ -558,7 +558,12 @@ fn check_state(
     {
         return Err(ContinuationError::CleanupAnchor(id, n));
     }
-    if state.target.state != n
+    let action = match state.callee {
+        Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
+        None => ResumeAction::RetryUnenteredCall(expected.call),
+    };
+    if state.action != action
+        || state.target.state != n
         || state.target.edge != normal
         || state.target.block != u.tables.edges[normal.index()].target
     {

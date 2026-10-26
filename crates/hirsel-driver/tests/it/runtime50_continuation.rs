@@ -3,7 +3,7 @@ use hirsel_driver::native;
 use hirsel_engine::{QueryEngine, check_progress, default_context, with_compiler_stack};
 use hirsel_lir::continuation::{
     ContinuationError, ContinuationPlan, ContinuationPlans, RegionKind, RegionTokenLayout,
-    Representation,
+    Representation, ResumeAction,
 };
 use hirsel_lir::emission::OptLevel;
 use hirsel_lir::ir::{BlockId, Holding};
@@ -230,6 +230,34 @@ fn runtime50_resume_import_mutations_refused() {
                 "resume label",
                 refused(&program, &plans, id, |p| {
                     p.states[0].target.block = p.states[1].target.block
+                }),
+                |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
+            ),
+            (
+                "action retries another call",
+                refused(&program, &plans, id, |p| {
+                    p.states[0].action = ResumeAction::RetryUnenteredCall(p.states[1].boundary.call)
+                }),
+                |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
+            ),
+            (
+                "completed call claimed without initialized entered state",
+                refused(&program, &plans, id, |p| {
+                    p.states[0].action = ResumeAction::AfterEnteredCall(
+                        p.states[0].boundary.call,
+                        p.states[0].target.edge,
+                    )
+                }),
+                |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
+            ),
+            (
+                "unproved cleanup action",
+                refused(&program, &plans, id, |p| {
+                    p.states[0].action = ResumeAction::ResumeCleanup {
+                        block: p.states[0].cleanup.entry,
+                        instruction: 0,
+                        anchor: p.states[0].cleanup.anchors[0],
+                    }
                 }),
                 |e| matches!(e, ContinuationError::ResumeLabel(_, 1)),
             ),

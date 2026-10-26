@@ -18,8 +18,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
-    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeState,
-    resume_hint, resume_name,
+    ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeAction,
+    ResumeState, resume_hint, resume_name,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
@@ -284,7 +284,14 @@ impl FnEmitter<'_, '_, '_> {
             resume.resuming = None;
         }
         let frame = self.frame();
-        if let Some(callee) = state.callee {
+        let callee = match state.action {
+            ResumeAction::ResumeNested(at, frame) if at == call && state.callee == Some(frame) => {
+                Some(frame)
+            }
+            ResumeAction::RetryUnenteredCall(at) if at == call && state.callee.is_none() => None,
+            _ => return self.invalid("unsupported or inconsistent resume action"),
+        };
+        if let Some(callee) = callee {
             let nested = self.offset(frame, callee.offset);
             if !resuming {
                 self.materialize(state)?;
