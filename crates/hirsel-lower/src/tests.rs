@@ -679,3 +679,66 @@ fn propagation_role_orders_lower_once_26() {
         }
     }
 }
+
+#[test]
+fn direct_literal_uses_the_checked_call_parameter_multiplicity() {
+    for once in [false, true] {
+        let mut f = Fixture::new(P::U8);
+        let body = f.integer(9, 1);
+        let many = f.type_(TypeKind::Function(function(vec![], f.scalar)));
+        let mut expected = session().get(many).unwrap().clone();
+        if once {
+            expected.modes.multiplicity = hirsel_types::Multiplicity::Once;
+        }
+        let expected = session().intern(expected);
+        let literal = f.expr(
+            ExprKind::Closure {
+                signature: FunctionSyntax::default(),
+                body,
+            },
+            many,
+            U::Take,
+            3,
+        );
+        f.closure(
+            hirsel_types::ClosureInfo {
+                context: hirsel_types::CaptureContext::Scoped,
+                result_evidence: None,
+                expression: literal,
+                ty: many,
+                captures: vec![],
+            },
+            f.scalar,
+            f.owner,
+        );
+        let invoke = f.named_call(
+            "invoke",
+            vec![literal],
+            vec![(expected, U::Borrow)],
+            f.scalar,
+            4,
+        );
+        let lowered = f.lower(invoke, "main", f.scalar).unwrap();
+        let parent = &lowered.bodies[0];
+        let callable = parent
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instructions)
+            .find_map(|inst| {
+                let InstructionKind::Assign { destination, value } = inst.kind else {
+                    return None;
+                };
+                matches!(parent.rvalues[value.0 as usize], Rvalue::Closure { .. })
+                    .then(|| parent.places[destination.0 as usize].ty)
+            })
+            .expect("the call supplies its original literal");
+        assert_eq!(
+            session().get(callable).unwrap().modes.multiplicity,
+            if once {
+                hirsel_types::Multiplicity::Once
+            } else {
+                hirsel_types::Multiplicity::Many
+            }
+        );
+    }
+}

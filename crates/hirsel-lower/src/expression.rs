@@ -1793,7 +1793,7 @@ impl Builder<'_, '_> {
         bodies: &mut Vec<Option<Body>>,
     ) -> Result<Value> {
         let span = self.span(id)?;
-        let Some(info) = self
+        let Some(mut info) = self
             .decisions
             .closures
             .get(&id)
@@ -1804,6 +1804,30 @@ impl Builder<'_, '_> {
         else {
             return self.error(span, "missing checked capture table");
         };
+        // A directly supplied literal can implement its checked Once call
+        // parameter at construction. Use that declared entry convention for
+        // both the code identity and its capture cleanup; ordinary Many values
+        // keep their original entry and aliases.
+        if owner == NameSite::Expression(id)
+            && self
+                .input
+                .checked
+                .calls
+                .iter()
+                .flat_map(|call| &call.arguments)
+                .filter(|argument| argument.expression == id)
+                .filter_map(|argument| argument.parameter.as_ref())
+                .any(|(_, parameter)| {
+                    self.types.get(parameter.ty).is_some_and(|row| {
+                        matches!(row.kind, TypeKind::Function(_))
+                            && row.modes.multiplicity == hirsel_types::Multiplicity::Once
+                    })
+                })
+        {
+            let mut callable = self.types.get(info.ty).unwrap().clone();
+            callable.modes.multiplicity = hirsel_types::Multiplicity::Once;
+            info.ty = self.types.intern(callable);
+        }
         let TypeKind::Function(_) = &self.types.get(info.ty).unwrap().kind else {
             return self.error(span, "closure does not have function type");
         };
