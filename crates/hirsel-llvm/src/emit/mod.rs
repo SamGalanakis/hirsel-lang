@@ -676,6 +676,7 @@ fn lower<T>(
             // inlinable body. Calls the optimizer keeps stay imports of that export.
             if copy && !template {
                 module.make_available_externally(function);
+                module.add_attribute(function, AttributeSlot::Function, Attribute::InlineHint);
                 functions.push((unit, function, signature));
                 continue;
             }

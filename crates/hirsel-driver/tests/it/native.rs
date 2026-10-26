@@ -2265,3 +2265,27 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         }
     });
 }
+
+#[test]
+fn copied_source_aggregate_calls_preserve_overflow_and_shared_inputs() {
+    let source = r#"
+type P { text: String, x: u64, y: u64 }
+fn point(take text: String, x: u64) -> P { P(text: take text, x: x, y: x + 1u64) }
+fn total(p: P) -> u64 { p.x + p.y }
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let original = point("retained", 2u64)
+  let saved = copy original
+  let mut changed = copy original
+  changed.text = "changed"
+  failure.check(saved.text == "retained" && changed.text == "changed", TextInvariant())
+  let _ = out.print(io.stdout(rt)?, if total(original) == 5u64 { "before\n" } else { "wrong\n" })
+  let _ = point("overflow", 18446744073709551615u64)
+  Ok(())
+}
+"#;
+    let observation = agree("copied-aggregate-source", source, &topology_matrix(0));
+    assert_eq!(observation.output, b"before\n");
+    assert_eq!(observation.failures.len(), 1);
+    assert_eq!(observation.failures[0].rule, "SEM-1");
+    assert_eq!(observation.failures[0].line, 3);
+}
