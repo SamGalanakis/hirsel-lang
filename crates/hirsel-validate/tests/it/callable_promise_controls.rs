@@ -360,10 +360,25 @@ fn nested_header_uniqueness_stays_exact() {
 #[test]
 fn unpublished_private_uniqueness_evidence_is_not_verifier_authority() {
     for summary in [
-        UniqueSummary { preserves_unique: vec![ParamId(0)], results: vec![] },
-        UniqueSummary { preserves_unique: vec![], results: vec![UniqueResultRow::Root] },
-        UniqueSummary { preserves_unique: vec![], results: vec![UniqueResultRow::Tuple(0)] },
-        UniqueSummary { preserves_unique: vec![], results: vec![UniqueResultRow::Payload { variant: 0, field: 0 }] },
+        UniqueSummary {
+            preserves_unique: vec![ParamId(0)],
+            results: vec![],
+        },
+        UniqueSummary {
+            preserves_unique: vec![],
+            results: vec![UniqueResultRow::Root],
+        },
+        UniqueSummary {
+            preserves_unique: vec![],
+            results: vec![UniqueResultRow::Tuple(0)],
+        },
+        UniqueSummary {
+            preserves_unique: vec![],
+            results: vec![UniqueResultRow::Payload {
+                variant: 0,
+                field: 0,
+            }],
+        },
     ] {
         let mut fixture = Fixture::unit();
         fixture.valid();
