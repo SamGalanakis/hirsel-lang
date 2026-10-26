@@ -259,7 +259,7 @@ impl OwnershipBootstrap {
         let declarations = NativeDeclarations::from_settled(
             &facts.signatures,
             facts.roots.clone(),
-            facts.catalogue.clone(),
+            facts.catalogue.iter().map(|p| (**p).clone()),
             facts.statics.clone(),
             facts.extra.clone(),
         )
@@ -267,7 +267,10 @@ impl OwnershipBootstrap {
         let input = declarations.program.input.clone();
         let reader = facts
             .original_context
-            .reader(facts.originals.clone(), self.source.store.clone())
+            .reader(
+                facts.originals.iter().map(|p| (**p).clone()),
+                self.source.store.clone(),
+            )
             .map_err(|e| format!("ownership original products: {e:?}"))?;
         let entries = declarations
             .context

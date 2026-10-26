@@ -199,14 +199,17 @@ pub fn main()->Result[(),()] {let n=bump([1u32,2u32],1u64,3u32);Ok(())}
         let declarations = native::queries::declarations::NativeDeclarations::from_settled(
             &actual.signatures,
             actual.roots.clone(),
-            actual.catalogue.clone(),
+            actual.catalogue.iter().map(|p| (**p).clone()),
             actual.statics.clone(),
             actual.extra.clone(),
         )
         .unwrap();
         let original = actual
             .original_context
-            .reader(actual.originals.clone(), store.clone())
+            .reader(
+                actual.originals.iter().map(|p| (**p).clone()),
+                store.clone(),
+            )
             .unwrap();
         let inputs = native::queries::source_inputs::NativeInstanceInputs::from_products(
             declarations,

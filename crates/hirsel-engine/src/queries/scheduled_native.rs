@@ -44,14 +44,16 @@ impl FrontNativeDefinitionInputs {
     }
 }
 struct Data {
-    product: crate::NativeDiscoveryProduct,
+    product: Arc<crate::NativeDiscoveryProduct>,
     reads: Arc<Reads>,
-    original: Option<crate::NativeOriginalProduct>,
+    original: Option<Arc<crate::NativeOriginalProduct>>,
 }
+/// Shares the settled product its owner charged to the output budget, so a
+/// reader holds handles rather than another decoded copy.
 pub struct FrontNativeDefinitionOutput {
-    pub product: crate::NativeDiscoveryProduct,
+    pub product: Arc<crate::NativeDiscoveryProduct>,
     pub reads: Arc<Reads>,
-    pub original: Option<crate::NativeOriginalProduct>,
+    pub original: Option<Arc<crate::NativeOriginalProduct>>,
     _owner: Arc<FrontNativeDefinitionQueries>,
 }
 pub struct FrontNativeDefinitionQueries {
@@ -425,14 +427,14 @@ impl Task {
                     (
                         product,
                         Arc::new(Data {
-                            product: crate::NativeDiscoveryProduct {
+                            product: Arc::new(crate::NativeDiscoveryProduct {
                                 product: Some(product),
                                 source,
                                 contracts,
                                 requirements,
-                            },
+                            }),
                             reads,
-                            original: ordinary,
+                            original: ordinary.map(Arc::new),
                         }),
                     ),
                 );

@@ -28,9 +28,9 @@ pub struct FrontNativePlan {
 pub struct FrontNativeProducts {
     pub roots: crate::NativeSourceRoots,
     pub statics: crate::NativeStaticInputs,
-    pub catalogue: Vec<crate::NativeDiscoveryProduct>,
+    pub catalogue: Vec<Arc<crate::NativeDiscoveryProduct>>,
     pub extra: InstanceGraph,
-    pub originals: Vec<crate::NativeOriginalProduct>,
+    pub originals: Vec<Arc<crate::NativeOriginalProduct>>,
     pub original_context: Arc<crate::NativeOriginalContext>,
     pub signatures: Arc<SignatureSnapshot>,
     pub run: Arc<FrontRunOutput>,
@@ -321,14 +321,12 @@ impl Task {
             let Some(output) = owner.definitions.outcome(product) else {
                 return Poll::Ready(Err(owner.errors.protocol));
             };
-            // Canonical source metadata bounds these cloned handoff rows. The
-            // actual source body/receipt owners remain admitted independently.
+            // Each handoff row is a handle to a product its definition owner
+            // has already charged to that owner's output budget, so the root
+            // holds only the row and its vector slot.
             let Some(used) = self
                 .used
-                .checked_add(product.record.len.saturating_mul(2))
-                .and_then(|bytes| {
-                    bytes.checked_add(2 * std::mem::size_of::<FrontNativeDefinitionOutput>() as u64)
-                })
+                .checked_add(2 * std::mem::size_of::<FrontNativeDefinitionOutput>() as u64)
             else {
                 return Poll::Ready(Err(owner.errors.resource));
             };

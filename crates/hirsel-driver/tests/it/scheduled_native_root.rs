@@ -205,7 +205,10 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                 );
                 let reader = actual
                     .original_context
-                    .reader(actual.originals.clone(), store.clone())
+                    .reader(
+                        actual.originals.iter().map(|p| (**p).clone()),
+                        store.clone(),
+                    )
                     .unwrap();
                 assert!(reader.read(&entry).is_some());
                 drop(reader);

@@ -113,7 +113,9 @@ fn admitted_native_definition_products_match_independent_scalar_products() {
             let reader = native
                 .original_context()
                 .reader(
-                    outputs.iter().filter_map(|output| output.original.clone()),
+                    outputs
+                        .iter()
+                        .filter_map(|output| output.original.as_deref().cloned()),
                     store.clone(),
                 )
                 .unwrap();

@@ -233,7 +233,10 @@ impl Proofs {
         let original = source
             .products
             .original_context
-            .reader(source.products.originals.clone(), store)
+            .reader(
+                source.products.originals.iter().map(|p| (**p).clone()),
+                store,
+            )
             .map_err(|e| {
                 error(format!(
                     "proofs: original Lower selection unavailable: {e:?}"
