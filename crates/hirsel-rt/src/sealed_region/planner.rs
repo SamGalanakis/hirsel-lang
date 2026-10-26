@@ -4,7 +4,8 @@
 //! compiler's linked descriptor programs. Value metadata establishes typed
 //! coverage independently of cleanup (arena-local edges can have no release).
 //! Semantic receipts retain occurrence multiplicity; only physical copies are
-//! deduplicated. This Rust seam does not extend native seal admission.
+//! deduplicated. The native entry and direct Rust callers share this walker;
+//! original source correspondence remains a separate compiler obligation.
 use super::guard::DemandedGuard;
 use super::receipt::semantic::{AllocationId, Origin, Record};
 use super::receipt::{Receipt, View};

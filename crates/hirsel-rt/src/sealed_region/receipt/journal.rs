@@ -7,9 +7,9 @@
 //! the ordinary release and Shared-root deferral policy. No new release engine
 //! or count interpretation is introduced.
 //!
-//! This Rust-only component is not a complete typed Plan producer or a native
-//! ABI. A caller must still prove complete source-event
-//! correspondence, pairing/lifetimes and exclusive ownership independently.
+//! The native seal entry builds its plan from the typed bindings held here.
+//! A caller must still prove complete source-event correspondence, pairing,
+//! lifetimes and exclusive ownership independently.
 use super::semantic::{self, AllocationId, GrantId, Inventory, Record};
 use super::{MetadataRun, Receipt};
 use crate::alloc::Header;
