@@ -177,3 +177,107 @@ fn readonly_comptime_products_reuse_only_the_consumers_local_verifier() {
         );
     });
 }
+
+#[test]
+fn precomputed_family_member_products_reopen_without_check_or_modes_work() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let library = root.join("library.json");
+        std::fs::write(root.join("library.hir"),
+            "pub signature Values { type State: plain }\npub implementation hash: Values { type State = u64 }\npub fn value()->u64 {7u64}\n").unwrap();
+        std::fs::write(
+            &library,
+            serde_json::json!({
+                "schema":1,"package":{"name":"library","version":"1"},
+                "sources":[{"path":"library.hir","module":[]}],"dependencies":[]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let manifest = root.join("hirsel.json");
+        std::fs::write(
+            root.join("client.hir"),
+            "pub fn main()->u64 {lib.value()}\n",
+        )
+        .unwrap();
+        std::fs::write(&manifest, serde_json::json!({
+            "schema":1,"package":{"name":"client","version":"1"},
+            "sources":[{"path":"client.hir","module":[]}],
+            "dependencies":[{"manifest":"library.json","package":{"name":"library","version":"1"},"expose":[{"head":"lib","module":[]}]}],
+            "entry":{"module":[],"name":"main"}
+        }).to_string()).unwrap();
+        let products = root.join("products");
+        COMPILER.precompute_package(&library, &products).unwrap();
+        let package = PackageId {
+            name: "library".into(),
+            version: "1".into(),
+        };
+        for jobs in [1, 2] {
+            let compiler = COMPILER.with_config(CompileConfig {
+                store: Arc::new(
+                    store::DirStore::new(root.join(format!("reader-{jobs}")))
+                        .with_read_only_root(products.clone()),
+                ),
+                jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                hold_bytes: 0,
+                ..CompileConfig::for_memory_cap(None)
+            });
+            let mut cached = compiler.load_program(&manifest).unwrap();
+            let definitions: Vec<_> = cached
+                .engine
+                .indexed_definitions()
+                .into_iter()
+                .filter(|p| p.0.package == package)
+                .collect();
+            assert!(definitions.iter().any(|p| p.0.name == "hash$member$State"));
+            let member = definitions
+                .iter()
+                .find(|p| p.0.name == "hash$member$State")
+                .unwrap();
+            let keys = cached.engine.front_store_keys(&[member.clone()]);
+            let product_reader = store::DirStore::new(products.clone());
+            let modes = keys
+                .iter()
+                .find(|key| key.2 == QueryKind::Modes)
+                .expect("ordinary member Modes key");
+            assert!(
+                store::ResultStore::get(&product_reader, modes).is_some(),
+                "precompute publishes a member Modes product before a reader can recompute it"
+            );
+            let mut fresh = COMPILER
+                .with_config(CompileConfig {
+                    store: Arc::new(store::NoneStore),
+                    ..CompileConfig::for_memory_cap(None)
+                })
+                .load_program(&manifest)
+                .unwrap();
+            assert_eq!(
+                cached
+                    .engine
+                    .package_definition_hashes(&package)
+                    .unwrap()
+                    .hashes,
+                fresh
+                    .engine
+                    .package_definition_hashes(&package)
+                    .unwrap()
+                    .hashes
+            );
+            let checked = cached.check(LoweringPolicy::Reachable).unwrap();
+            let expected = fresh.check(LoweringPolicy::Reachable).unwrap();
+            assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            assert_eq!(checked.completion, expected.completion);
+            assert_eq!(checked.diagnostics, expected.diagnostics);
+            for path in definitions {
+                for phase in [QueryKind::Check, QueryKind::Modes] {
+                    assert_eq!(
+                        cached.engine.recompute_count(&path, phase),
+                        0,
+                        "{path}: {phase:?}, jobs={jobs}"
+                    );
+                }
+            }
+        }
+    });
+}
