@@ -516,7 +516,9 @@ impl QueryEngine {
             // Reuse this snapshot's own immutable row only when its exact
             // producer is still current and unmarked. A replacement, missing
             // entry, transient failure or changed input follows normal demand.
-            let retained = self.retained_snapshot_signature(d);
+            let retained = self
+                .retained_snapshot_signature(d)
+                .or_else(|| self.unmarked_signature(d));
             let signature = retained.unwrap_or_else(|| self.signature(d));
             if let Some(entry) = self.signature_memo_source(d) {
                 row_sources.insert(d, Arc::downgrade(entry));
@@ -610,6 +612,21 @@ impl QueryEngine {
             .1
             .signature(d)
             .map(|row| row.cloned().map_err(Clone::clone))
+    }
+
+    fn unmarked_signature(&self, d: DefId) -> Option<Result<SignatureRef, QueryError>> {
+        let current = self.signature_memo_source(d)?;
+        if !current.consistent
+            || self.graph.is_dirty(&current.memo.key)
+            || !self.graph.memos_of(d).any(|key| *key == current.memo.key)
+        {
+            return None;
+        }
+        // A source-index carry owns the current header memo and its reverse
+        // reads even when it did not retain a frozen signature universe. The
+        // unmarked producer is authoritative; rebuilding a view need not query
+        // or stamp every unchanged header again.
+        Some(current.result().map(|output| output.value.clone()))
     }
 
     /// The inputs a snapshot built now would be built from.
@@ -810,7 +827,7 @@ mod tests {
         }
         let mut adapters = crate::phases::engine_only_adapters();
         adapters.signature = Some(Arc::new(Header));
-        let mut engine = QueryEngine::new(default_environment(), adapters);
+        let mut engine = QueryEngine::new(default_environment(), adapters.clone());
         let context = default_context();
         let file = engine
             .sources
@@ -836,6 +853,33 @@ mod tests {
             before,
             "settled observation reads the snapshot, not phase memos"
         );
+        let budget = crate::runtime::ProcessBudget::new(64 << 20);
+        let bytes = engine.source_index_bytes().unwrap();
+        let state = engine
+            .into_source_index(budget.reserve(bytes).unwrap())
+            .unwrap();
+        let mut engine = QueryEngine::new(default_environment(), adapters);
+        assert!(state.restore(&mut engine).is_ok());
+        let before = engine.memo_stats().touched;
+        let rebuilt = engine.signature_snapshot();
+        assert_eq!(
+            rebuilt
+                .signature(DefId::intern(&owner))
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+            snapshot
+                .signature(DefId::intern(&owner))
+                .unwrap()
+                .unwrap()
+                .fingerprint,
+        );
+        assert_eq!(
+            engine.memo_stats().touched,
+            before,
+            "source-only carry rebuilds the universe without touching unchanged headers"
+        );
+
         let file = engine
             .sources
             .add("snapshot.hir", "extern \"second\" fn probe()".into())
