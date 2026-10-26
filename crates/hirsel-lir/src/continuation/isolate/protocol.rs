@@ -4,7 +4,7 @@
 use super::*;
 use crate::stage::ValidatedUnit;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CallPoint {
     pub block: BlockId,
     pub call: CallId,
@@ -12,27 +12,27 @@ pub struct CallPoint {
     pub failure: FailureId,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct InstructionPoint {
     pub block: BlockId,
     pub instruction: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CleanupPoint {
     pub at: InstructionPoint,
     pub anchor: CleanupAnchorId,
     pub failure: FailureId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct HeldResult {
     pub value: ValueId,
     pub slot: SlotId,
     pub layout: LayoutId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IsolateProtocol {
     pub identity: IsolateCallback,
     pub begin: CallPoint,

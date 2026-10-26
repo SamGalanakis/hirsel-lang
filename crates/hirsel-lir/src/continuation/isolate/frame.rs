@@ -68,6 +68,7 @@ impl IsolateProtocol {
             &suspends,
             &digests,
             &ordinary.plans,
+            Ok(None),
         );
         if frame.representation != Representation::Resumable || !frame.cleanups.is_empty() {
             return Err(format!(
@@ -108,6 +109,7 @@ impl IsolateProtocol {
             &frame.states,
             &frame.cleanups,
             frame.captures,
+            frame.isolate.as_ref(),
         );
         Ok(IsolatePlan {
             protocol: self.clone(),
@@ -120,6 +122,22 @@ impl IsolateProtocol {
         &self,
         units: &[&'a ValidatedUnit<Ready>],
         inputs: &PlanInputs<'_>,
+    ) -> Result<&'a ValidatedUnit<Ready>, String> {
+        let callback_id = self
+            .identity
+            .target
+            .instance
+            .ok_or("unknown isolate callback")?;
+        if inputs.environments.get(&callback_id).copied().flatten() != self.identity.environment {
+            return Err("isolate callback environment mismatch".into());
+        }
+        self.checked_sources(units, inputs.table)
+    }
+
+    pub(super) fn checked_sources<'a>(
+        &self,
+        units: &[&'a ValidatedUnit<Ready>],
+        table: &LayoutTable,
     ) -> Result<&'a ValidatedUnit<Ready>, String> {
         let wrapper = units
             .iter()
@@ -136,9 +154,6 @@ impl IsolateProtocol {
             .copied()
             .find(|u| u.unit().header.instance == callback_id)
             .ok_or("missing isolate callback")?;
-        if inputs.environments.get(&callback_id).copied().flatten() != self.identity.environment {
-            return Err("isolate callback environment mismatch".into());
-        }
         let mut found = false;
         for caller in units {
             // A function-valued use could hide an incoming caller from this
@@ -177,7 +192,7 @@ impl IsolateProtocol {
                     wrapper.unit(),
                     callback.unit(),
                     self.identity.environment,
-                    inputs.table,
+                    table,
                 )
                 .ok_or("unproved incoming isolate caller")?;
                 let mut expected = self.identity.clone();
@@ -186,7 +201,7 @@ impl IsolateProtocol {
                     return Err("different incoming isolate callback".into());
                 }
                 if at == self.identity.invocation {
-                    self.validate(caller, wrapper, callback, inputs.table)
+                    self.validate(caller, wrapper, callback, table)
                         .map_err(str::to_owned)?;
                     found = true;
                 }

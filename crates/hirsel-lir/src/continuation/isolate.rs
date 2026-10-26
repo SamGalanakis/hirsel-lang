@@ -11,6 +11,9 @@ use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::Ready;
 
+mod admission;
+pub use admission::{CallbackBody, IsolateEvidence};
+pub(crate) use admission::{candidate, evidence, intrinsic};
 mod begin;
 mod cleanup;
 mod frame;
@@ -19,7 +22,7 @@ pub use frame::IsolatePlan;
 mod protocol;
 pub use protocol::{CallPoint, CleanupPoint, HeldResult, InstructionPoint, IsolateProtocol};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IsolateCallback {
     pub wrapper: hirsel_syntax::ContentHash,
     pub wrapper_digest: hirsel_syntax::ContentHash,
@@ -33,7 +36,7 @@ pub struct IsolateCallback {
     pub loan: LoanId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct Target {
     symbol: Symbol,
     abi: FnAbiId,

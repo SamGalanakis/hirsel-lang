@@ -19,10 +19,19 @@ impl IsolateProtocol {
         layouts: &LayoutTable,
         after: u64,
     ) -> Option<RuntimeOpPlan> {
+        self.begin_operation_raw(wrapper.unit(), layouts, after)
+    }
+
+    pub(crate) fn begin_operation_raw(
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        after: u64,
+    ) -> Option<RuntimeOpPlan> {
         Some(RuntimeOpPlan {
             kind: RuntimeOpKind::IsolateBegin,
             helper: "hirsel_rt_v2_isolate_begin".into(),
-            results: vec![self.begin_result(wrapper, layouts, after)?],
+            results: vec![self.begin_result_raw(unit, layouts, after)?],
             scope: None,
         })
     }
@@ -54,7 +63,15 @@ impl IsolateProtocol {
         layouts: &LayoutTable,
         after: u64,
     ) -> Option<RuntimeResultSlot> {
-        let unit = wrapper.unit();
+        self.begin_result_raw(wrapper.unit(), layouts, after)
+    }
+
+    fn begin_result_raw(
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        after: u64,
+    ) -> Option<RuntimeResultSlot> {
         let call = unit.tables.calls.get(self.begin.call.index())?;
         let Callee::Operation(op) = call.callee else {
             return None;

@@ -1062,6 +1062,20 @@ pub fn validate(
         let cleanup_sites = root_instruction_sites(u, inputs.table);
         match &plan.representation {
             Representation::Resumable => {
+                if super::isolate::candidate(u) {
+                    let evidence = plan
+                        .isolate
+                        .as_ref()
+                        .ok_or(ContinuationError::Representation(*id))?;
+                    if evidence.protocol.identity.wrapper != *id {
+                        return Err(ContinuationError::Body(*id));
+                    }
+                    evidence
+                        .check(units, inputs.table)
+                        .map_err(|_| ContinuationError::Representation(*id))?;
+                } else if plan.isolate.is_some() {
+                    return Err(ContinuationError::Representation(*id));
+                }
                 let Ok(sites) = sites else {
                     return Err(ContinuationError::Representation(*id));
                 };
@@ -1143,7 +1157,18 @@ pub fn validate(
                         site.exclusive.as_ref(),
                         &plan.storage,
                         base,
-                        None,
+                        plan.isolate
+                            .as_ref()
+                            .filter(|e| e.protocol.begin.call == site.call)
+                            .map(|e| {
+                                (
+                                    &e.protocol,
+                                    *units
+                                        .iter()
+                                        .find(|u| u.unit().header.instance == *id)
+                                        .unwrap(),
+                                )
+                            }),
                     )?;
                 }
                 for (i, (state, &(block, instruction))) in
@@ -1164,7 +1189,8 @@ pub fn validate(
             }
             // A refused compact form is always safe.
             Representation::Stackful(_) => {
-                if !plan.states.is_empty()
+                if plan.isolate.is_some()
+                    || !plan.states.is_empty()
                     || !plan.cleanups.is_empty()
                     || !plan.storage.is_empty()
                     || !plan.parameters.is_empty()
@@ -1174,7 +1200,8 @@ pub fn validate(
                 }
             }
             Representation::Direct => {
-                if !matches!(sites, Ok(ref s) if s.is_empty())
+                if plan.isolate.is_some()
+                    || !matches!(sites, Ok(ref s) if s.is_empty())
                     || !cleanup_sites.is_empty()
                     || !plan.cleanups.is_empty()
                     || !plan.states.is_empty()
@@ -1210,6 +1237,7 @@ pub fn validate(
             &plan.states,
             &plan.cleanups,
             plan.captures,
+            plan.isolate.as_ref(),
         );
         if certificate != plan.certificate {
             return Err(ContinuationError::Certificate(*id));
@@ -1425,7 +1453,22 @@ pub fn validate_runtime_operations(
         .map(|u| (u.unit().header.instance, u.unit()))
         .collect();
     for (id, plan) in &plans.plans {
-        if !plan.states.iter().any(|s| s.runtime.is_some()) {
+        if let Some(u) = index.get(id)
+            && super::isolate::candidate(u)
+            && plan.representation == Representation::Resumable
+            && plan.isolate.is_none()
+        {
+            return Err(ContinuationError::Representation(*id));
+        }
+        if let Some(evidence) = &plan.isolate {
+            if evidence.protocol.identity.wrapper != *id {
+                return Err(ContinuationError::Body(*id));
+            }
+            evidence
+                .check(units, table)
+                .map_err(|_| ContinuationError::Representation(*id))?;
+        }
+        if !plan.states.iter().any(|s| s.runtime.is_some()) && plan.isolate.is_none() {
             continue;
         }
         let u = index.get(id).ok_or(ContinuationError::Body(*id))?;
@@ -1467,12 +1510,78 @@ pub fn validate_runtime_operations(
                 .ok_or(ContinuationError::Frame(*id))?;
         }
         let base = end.next_multiple_of(8);
+        if let Some(evidence) = &plan.isolate {
+            if plan.representation != Representation::Resumable
+                || !plan.cleanups.is_empty()
+                || plan.captures.is_some()
+            {
+                return Err(ContinuationError::Representation(*id));
+            }
+            let callback = evidence
+                .protocol
+                .identity
+                .target
+                .instance
+                .ok_or(ContinuationError::Body(*id))?;
+            let cb = index
+                .get(&callback)
+                .ok_or(ContinuationError::Body(callback))?;
+            let nested = match plans.get(callback) {
+                Some(p) if p.representation == Representation::Resumable => true,
+                Some(_) => return Err(ContinuationError::Representation(callback)),
+                None if cb.tables.calls.is_empty() => false,
+                None => return Err(ContinuationError::Representation(callback)),
+            };
+            // Every boundary of this reviewed wrapper is either its original
+            // entered begin or that one independently proved callback.
+            let mut actual = Vec::new();
+            for (b, term) in u.terminators.iter().enumerate() {
+                if let Terminator::Call { call, .. } = *term {
+                    if call == evidence.protocol.begin.call
+                        || (nested && call == evidence.protocol.callback.call)
+                    {
+                        actual.push((BlockId(b as u32), call));
+                    } else if call != evidence.protocol.callback.call {
+                        let Callee::Operation(op) = u.tables.calls[call.index()].callee else {
+                            return Err(ContinuationError::Representation(*id));
+                        };
+                        if !matches!(
+                            super::isolate::intrinsic(&u.tables.operations[op.index()].definition),
+                            Some(CalleeClass::Local)
+                        ) {
+                            return Err(ContinuationError::Representation(*id));
+                        }
+                    }
+                }
+            }
+            if plan
+                .states
+                .iter()
+                .map(|s| (s.boundary.block, s.boundary.call))
+                .collect::<Vec<_>>()
+                != actual
+                || plan.cost.frame_bytes != plan.states.iter().map(|s| s.bytes).max().unwrap_or(0)
+                || plan.cost.boundaries as usize != actual.len()
+            {
+                return Err(ContinuationError::States(*id));
+            }
+            let expected: BTreeSet<_> = actual
+                .iter()
+                .flat_map(|(b, _)| storage(u, *b).0)
+                .filter(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)))
+                .collect();
+            if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
+                != expected.into_iter().collect::<Vec<_>>()
+            {
+                return Err(ContinuationError::Storage(*id, 0));
+            }
+        }
         let live = Live::compute(u);
         for (ordinal, state) in plan
             .states
             .iter()
             .enumerate()
-            .filter(|(_, s)| s.runtime.is_some())
+            .filter(|(_, s)| s.runtime.is_some() || plan.isolate.is_some())
         {
             let Some(Terminator::Call { call, .. }) =
                 u.terminators.get(state.boundary.block.index())
@@ -1481,13 +1590,29 @@ pub fn validate_runtime_operations(
             };
             let call = *call;
             let site = &u.tables.calls[call.index()];
-            let Callee::Operation(op) = site.callee else {
-                return Err(ContinuationError::RuntimeOperation(*id, ordinal as u32 + 1));
+            let (operation, nested) = match site.callee {
+                Callee::Operation(op) => (u.tables.operations[op.index()].definition.clone(), None),
+                Callee::Bound { .. }
+                    if plan
+                        .isolate
+                        .as_ref()
+                        .is_some_and(|e| e.protocol.callback.call == call) =>
+                {
+                    let symbol = callee_symbol(u, site)
+                        .ok_or(ContinuationError::Boundary(*id, ordinal as u32 + 1))?;
+                    let body = symbol.instance.ok_or(ContinuationError::Body(*id))?;
+                    let callee = plans
+                        .get(body)
+                        .filter(|p| p.representation == Representation::Resumable)
+                        .ok_or(ContinuationError::Representation(body))?;
+                    (symbol.definition, Some((body, callee.cost.frame_bytes)))
+                }
+                _ => return Err(ContinuationError::RuntimeOperation(*id, ordinal as u32 + 1)),
             };
             let expected = ExistingBoundary {
                 block: state.boundary.block,
                 call,
-                operation: u.tables.operations[op.index()].definition.clone(),
+                operation,
             };
             check_state(
                 u,
@@ -1497,11 +1622,22 @@ pub fn validate_runtime_operations(
                 ordinal as u32,
                 state,
                 &expected,
-                None,
+                nested,
                 None,
                 &plan.storage,
                 base,
-                None,
+                plan.isolate
+                    .as_ref()
+                    .filter(|e| e.protocol.begin.call == call)
+                    .map(|e| {
+                        (
+                            &e.protocol,
+                            *units
+                                .iter()
+                                .find(|u| u.unit().header.instance == *id)
+                                .unwrap(),
+                        )
+                    }),
             )?;
         }
     }
@@ -1811,6 +1947,7 @@ mod region_width_tests {
             states: vec![],
             cleanups: vec![],
             captures: None,
+            isolate: None,
             cost: PlacementCost::default(),
             certificate: ValidatedContinuation { identity: digest },
         };
@@ -2024,6 +2161,7 @@ pub(super) fn isolate_frame(
         &plan.states,
         &plan.cleanups,
         plan.captures,
+        plan.isolate.as_ref(),
     );
     if plan.certificate != certificate {
         return Err(ContinuationError::Certificate(id));

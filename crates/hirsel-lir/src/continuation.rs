@@ -509,6 +509,9 @@ pub struct ContinuationPlan {
     pub states: Vec<ResumeState>,
     pub cleanups: Vec<CleanupResumeState>,
     pub captures: Option<LayoutId>,
+    /// Source custody for an admitted specialized isolate, checked separately
+    /// from operation classification and the ordinary frame certificate.
+    pub isolate: Option<isolate::IsolateEvidence>,
     pub cost: PlacementCost,
     pub certificate: ValidatedContinuation,
 }
@@ -587,6 +590,21 @@ pub(crate) fn call_effect(
             (symbol.definition, body)
         }
     };
+    // A known isolate candidate may nest only after its own complete source
+    // and cleanup evidence is checked during planning/import. A failed proof
+    // leaves its callee plan stackful and therefore refuses every ancestor.
+    if let Some(id) = body.filter(|id| isolate::candidate(units[id])) {
+        return CallEffect::Nested(id);
+    }
+    if isolate::candidate(u)
+        && let Some(class) = isolate::intrinsic(&definition)
+    {
+        return match class {
+            CalleeClass::Local => CallEffect::Local,
+            CalleeClass::Boundary => CallEffect::Boundary(definition),
+            CalleeClass::Unknown => CallEffect::Unknown("unsupported isolate intrinsic".into()),
+        };
+    }
     // A specialized reviewed scope exposes its nested callback and entered
     // intrinsics. Classification grants no custody: plan_unit and import
     // validation reconstruct its callable and scope-flow evidence first.
@@ -1422,6 +1440,7 @@ pub(crate) fn certify(
     states: &[ResumeState],
     cleanups: &[CleanupResumeState],
     captures: Option<LayoutId>,
+    isolate: Option<&isolate::IsolateEvidence>,
 ) -> ValidatedContinuation {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&u.header.instance.0);
@@ -1442,7 +1461,7 @@ pub(crate) fn certify(
         bytes.extend_from_slice(text.as_bytes());
     }
     let tail = format!(
-        "{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{cleanups:?}{captures:?}"
+        "{representation:?}{parameters:?}{records:?}{storage:?}{states:?}{cleanups:?}{captures:?}{isolate:?}"
     );
     bytes.extend_from_slice(&(tail.len() as u64).to_le_bytes());
     bytes.extend_from_slice(tail.as_bytes());
@@ -1506,6 +1525,7 @@ fn plan_unit(
     suspends: &BTreeSet<ContentHash>,
     digests: &BTreeMap<ContentHash, ContentHash>,
     done: &BTreeMap<ContentHash, ContinuationPlan>,
+    admission: Result<Option<isolate::IsolateEvidence>, String>,
 ) -> ContinuationPlan {
     let effects: Vec<_> = u
         .tables
@@ -1518,7 +1538,9 @@ fn plan_unit(
         .get(&u.header.instance)
         .copied()
         .flatten();
+    let mut isolate = None;
     let built = sites(u, inputs.table, &effects, done).and_then(|sites| {
+        isolate = admission?;
         if sites.is_empty() && cleanup::sites(u, inputs.table).is_empty() {
             return Ok((Fixed::default(), Vec::new(), Vec::new(), Vec::new()));
         }
@@ -1537,6 +1559,31 @@ fn plan_unit(
         }
         for state in &mut states {
             ordered::plan(u, inputs.table, state)?;
+        }
+        if let Some(evidence) = &isolate {
+            let callback = evidence
+                .protocol
+                .identity
+                .target
+                .instance
+                .ok_or("unknown isolate callback")?;
+            if !done.contains_key(&callback) && !units[&callback].tables.calls.is_empty() {
+                return Err("direct isolate callback requires complete local-call proof".into());
+            }
+            let begin = states
+                .iter_mut()
+                .find(|s| s.boundary.call == evidence.protocol.begin.call)
+                .ok_or("missing retained isolate begin")?;
+            let runtime = evidence
+                .protocol
+                .begin_operation_raw(u, inputs.table, begin.bytes)
+                .ok_or("isolate begin result outside retained frame")?;
+            begin.bytes = runtime.results[0].offset + runtime.results[0].bytes;
+            begin.action = ResumeAction::ResumeRuntime(begin.boundary.call);
+            begin.runtime = Some(runtime);
+            if !cleanups.is_empty() {
+                return Err("uncertified isolate instruction cleanup".into());
+            }
         }
         Ok(((parameters, records), storage, states, cleanups))
     });
@@ -1560,6 +1607,9 @@ fn plan_unit(
         }
         Ok(built) => (Representation::Resumable, built),
     };
+    if representation != Representation::Resumable {
+        isolate = None;
+    }
     let cost = PlacementCost {
         instructions: (u.instructions.len() + u.terminators.len()) as u32,
         boundaries: (states.len() + cleanups.len()) as u32,
@@ -1588,6 +1638,7 @@ fn plan_unit(
         &states,
         &cleanups,
         captures,
+        isolate.as_ref(),
     );
     ContinuationPlan {
         body: u.header.instance,
@@ -1599,6 +1650,7 @@ fn plan_unit(
         states,
         cleanups,
         captures,
+        isolate,
         cost,
         certificate,
     }
@@ -1606,6 +1658,7 @@ fn plan_unit(
 
 /// Callees first, so a caller sees each nested callee's final plan. A body
 /// reached again while being planned is recursive and keeps its stack.
+#[allow(clippy::too_many_arguments)]
 fn plan_in_order(
     id: ContentHash,
     inputs: &PlanInputs<'_>,
@@ -1614,6 +1667,7 @@ fn plan_in_order(
     digests: &BTreeMap<ContentHash, ContentHash>,
     active: &mut BTreeSet<ContentHash>,
     done: &mut BTreeMap<ContentHash, ContinuationPlan>,
+    checked: &[&ValidatedUnit<Ready>],
 ) {
     if done.contains_key(&id) || !active.insert(id) {
         return;
@@ -1621,10 +1675,17 @@ fn plan_in_order(
     let u = units[&id];
     for call in &u.tables.calls {
         if let CallEffect::Nested(callee) = call_effect(u, call, units, suspends, inputs.classify) {
-            plan_in_order(callee, inputs, units, suspends, digests, active, done);
+            plan_in_order(
+                callee, inputs, units, suspends, digests, active, done, checked,
+            );
         }
     }
-    let plan = plan_unit(u, inputs, units, suspends, digests, done);
+    let admission = if isolate::candidate(u) {
+        isolate::evidence(checked, inputs, id).map(Some)
+    } else {
+        Ok(None)
+    };
+    let plan = plan_unit(u, inputs, units, suspends, digests, done, admission);
     active.remove(&id);
     done.insert(id, plan);
 }
@@ -1649,6 +1710,7 @@ impl ContinuationPlans {
                 &digests,
                 &mut BTreeSet::new(),
                 &mut plans,
+                units,
             );
         }
         let identity = Self::identity_of(&plans, inputs);

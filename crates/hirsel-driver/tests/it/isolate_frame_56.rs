@@ -72,9 +72,9 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
                             .get(protocol.identity.wrapper)
                             .unwrap()
                             .representation,
-                        Representation::Stackful(_)
+                        Representation::Resumable
                     ),
-                    "ordinary admission stays disabled"
+                    "only independently checked source custody enables admission"
                 );
                 let begin = plan
                     .frame

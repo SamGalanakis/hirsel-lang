@@ -4,13 +4,13 @@
 use super::*;
 use crate::stage::ValidatedUnit;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum CleanupOwner {
     Place(AddressId),
     Value(ValueId),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SynchronousCleanup {
     pub at: InstructionPoint,
     pub anchor: CleanupAnchorId,
@@ -22,7 +22,7 @@ pub struct SynchronousCleanup {
     pub environment: Option<LayoutId>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct SynchronousCleanupPlan {
     pub body: hirsel_syntax::ContentHash,
     pub digest: hirsel_syntax::ContentHash,
