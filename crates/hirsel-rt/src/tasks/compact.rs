@@ -38,7 +38,7 @@ pub(super) struct ContextHome(std::cell::UnsafeCell<std::mem::MaybeUninit<TaskCt
 ///
 /// # Safety
 /// The running task is at a resume point of the body its task entry called.
-unsafe fn movable(ctx: *mut TaskCtx) -> bool {
+pub(crate) unsafe fn movable(ctx: *mut TaskCtx) -> bool {
     // SAFETY: caller contract.
     unsafe {
         // An ahead body saves only as an admitted v4 resumable body, whose
@@ -66,6 +66,20 @@ unsafe fn movable(ctx: *mut TaskCtx) -> bool {
                 Logical::Free(_) => !ordered,
                 Logical::Cooperative => false,
             }
+    })
+}
+
+/// Whether this stable extent belongs to the running continuation's root
+/// allocation, including a nested callee frame. No pointer is retained here.
+pub(crate) fn contains_frame(ctx: *mut TaskCtx, start: usize, bytes: usize) -> bool {
+    role::with_role(ctx, |s| {
+        let me = s.current;
+        s.task(me).compact_frame.is_some_and(|(base, extent)| {
+            start >= base
+                && start
+                    .checked_add(bytes)
+                    .is_some_and(|end| end <= base + extent)
+        })
     })
 }
 

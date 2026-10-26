@@ -24,6 +24,7 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use crate::{RESUME_EARLY, RESUME_LEAVES, RESUME_LOGGED};
+pub(crate) mod binding;
 
 /// The resume point of a stackful frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

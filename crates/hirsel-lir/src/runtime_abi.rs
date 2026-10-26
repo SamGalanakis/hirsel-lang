@@ -592,6 +592,8 @@ pub enum RuntimeEntry {
     /// A resumable task body: run its dispatcher over an owned compact frame, saving and
     /// resuming the frame at each `STATUS_SUSPENDED`, until it returns.
     ResumeRun,
+    /// Bind a validated entered-tail site and retained nested frame.
+    ResumeTail,
     /// A constructor-tail block's payload is filled: its header takes the box's layout in
     /// place of the open stand-in (LANG-10, LIR schema revision 59, runtime ABI 70).
     HoleClose,
@@ -666,7 +668,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 98] = [
+    pub const ALL: [RuntimeEntry; 99] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -760,6 +762,7 @@ impl RuntimeEntry {
         Self::HostDefer,
         Self::ResumePoint,
         Self::ResumeRun,
+        Self::ResumeTail,
         Self::ReceiptRetain,
         Self::ReceiptRelease,
         Self::SealedRoot,
@@ -1372,6 +1375,21 @@ impl RuntimeEntry {
                 U8,
                 const { &[CTX, p("frame", ptr(N::U8, 1)), p("state", U32)] },
             ),
+            Self::ResumeTail => (
+                "hirsel_rt_v2_resume_tail",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("frame", ptr(N::U8, 1)),
+                        p("state", U32),
+                        p("kind", U32),
+                        p("bytes", U32),
+                        p("anchor", U64),
+                        OPERATION_SITE,
+                    ]
+                },
+            ),
             Self::ResumeRun => (
                 "hirsel_rt_v2_resume_run",
                 U8,
@@ -1541,5 +1559,6 @@ snapshot_enum!(RuntimeEntry {
     SealedRelease,
     ResumePoint,
     ResumeRun,
+    ResumeTail,
     HoleClose,
 });

@@ -845,6 +845,7 @@ uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);
 void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, hirsel_rt_v2_header *block, uint64_t fuel);
 /* A resumable frame at a boundary: 0 proceeds with the boundary call, 1 suspends. */
 uint8_t hirsel_rt_v2_resume_point(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state);
+void hirsel_rt_v2_resume_tail(hirsel_rt_v2_ctx *ctx, uint8_t *frame, uint32_t state, uint32_t kind, uint32_t bytes, uint64_t anchor, uint64_t operation_site);
 /* A resumable task body: its dispatcher runs over an owned compact frame, saved at each suspension. */
 uint8_t hirsel_rt_v2_resume_run(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *environment, uint64_t caller_site, uint64_t operation_site, void *dispatcher, uint32_t bytes);
 
