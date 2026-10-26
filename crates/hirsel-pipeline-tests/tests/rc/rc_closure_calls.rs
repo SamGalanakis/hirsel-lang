@@ -363,3 +363,128 @@ fn nonadjacent_result_spawn_preserves_code_identity_without_a_fast_hint() {
         "the original erased adapter must remain available"
     );
 }
+
+#[test]
+fn known_scope_callbacks_specialize_without_erasing_the_owned_environment() {
+    for (name, parameters, arguments) in [
+        ("task.scope", "tasks:Tasks", "tasks"),
+        (
+            "task.scope_until",
+            "tasks:Tasks, until:Deadline",
+            "tasks,until",
+        ),
+    ] {
+        let source = format!(
+            "fn main({parameters}) {{ let captured:List[u64]=[41u64,42u64]; let rows={name}({arguments},fn(s:Scope)->List[u64] {{let kept=take captured;kept}}); }}"
+        );
+        let (_, lowered) = lower_valid(&source);
+        let main = lowered
+            .units
+            .iter()
+            .find(|u| u.header.definition.0.name == "main")
+            .unwrap();
+        let called = main
+            .tables
+            .calls
+            .iter()
+            .find_map(|call| match call.callee {
+                Callee::Direct(symbol)
+                    if main.tables.symbols[symbol.index()].definition.is_core(name) =>
+                {
+                    main.tables.symbols[symbol.index()].instance
+                }
+                _ => None,
+            })
+            .expect("selected scope instance");
+        let wrapper = lowered
+            .units
+            .iter()
+            .find(|u| u.header.instance == called)
+            .unwrap();
+        assert_eq!(wrapper.header.origin, hirsel_lir::ir::UnitOrigin::Library);
+        assert!(
+            wrapper
+                .tables
+                .calls
+                .iter()
+                .all(|call| !matches!(call.callee, Callee::Indirect(_)))
+        );
+        let (code, closure) = wrapper
+            .tables
+            .calls
+            .iter()
+            .find_map(|call| match call.callee {
+                Callee::Bound { code, closure } => Some((code, closure)),
+                _ => None,
+            })
+            .expect("known callback with its environment");
+        let callback = lowered
+            .units
+            .iter()
+            .find(|u| Some(u.header.instance) == wrapper.tables.symbols[code.index()].instance)
+            .unwrap();
+        assert!(
+            !callback.captures.is_empty(),
+            "specialization preserves captures"
+        );
+        assert!(
+            wrapper.values[closure.index()].holding != hirsel_lir::ir::Holding::Plain,
+            "callback environment stays loaned/owned"
+        );
+        assert!(
+            wrapper
+                .tables
+                .calls
+                .iter()
+                .filter_map(|call| match call.callee {
+                    Callee::Operation(op) =>
+                        Some(&wrapper.tables.operations[op.index()].definition),
+                    _ => None,
+                })
+                .any(|definition| definition.is_core(if name == "task.scope" {
+                    "$intrinsic.TaskScopeExit"
+                } else {
+                    "$intrinsic.TaskScopeExitUntil"
+                }))
+        );
+    }
+}
+
+#[test]
+fn scope_callbacks_with_different_phi_targets_keep_the_general_instance() {
+    let (_, lowered) = lower_valid(
+        "fn main(tasks:Tasks,flag:bool)->List[u64] {let f=if flag {fn(s:Scope)->List[u64]{[41u64]}}else{fn(s:Scope)->List[u64]{[42u64]}};task.scope(tasks,f)}",
+    );
+    let main = lowered
+        .units
+        .iter()
+        .find(|u| u.header.definition.0.name == "main")
+        .unwrap();
+    let called = main
+        .tables
+        .calls
+        .iter()
+        .find_map(|call| match call.callee {
+            Callee::Direct(symbol)
+                if main.tables.symbols[symbol.index()]
+                    .definition
+                    .is_core("task.scope") =>
+            {
+                main.tables.symbols[symbol.index()].instance
+            }
+            _ => None,
+        })
+        .unwrap();
+    let wrapper = lowered
+        .units
+        .iter()
+        .find(|u| u.header.instance == called)
+        .unwrap();
+    assert!(
+        wrapper
+            .tables
+            .calls
+            .iter()
+            .any(|call| matches!(call.callee, Callee::Indirect(_)))
+    );
+}

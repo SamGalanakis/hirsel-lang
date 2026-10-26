@@ -16,7 +16,12 @@ pub const MAX_PER_FUNCTION: usize = 16;
 pub const MAX_SPECIALIZATIONS: usize = 256;
 /// Core library bodies that take a callback and call it once with arguments
 /// they own, so a known callback specializes them as an ordinary instance.
-pub const HIGHER_ORDER: &[&str] = &["arena.with", "arena.bounded"];
+pub const HIGHER_ORDER: &[&str] = &[
+    "arena.with",
+    "arena.bounded",
+    "task.scope",
+    "task.scope_until",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallableTarget {
