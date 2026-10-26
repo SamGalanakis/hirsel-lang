@@ -97,3 +97,11 @@ fn runtime57_bad_owned_mutex_tail_import_rejects_reissue_skipped_effect_and_forg
         }
     });
 }
+
+#[test]
+fn runtime57_owned_mutex_plans_preserve_ordered_policy_effects() {
+    with_compiler_stack(|| {
+        let runs=compact_runs_with(PUT,"owned mutex Ordered policy",true,"tasks.cooperative@1");
+        assert_eq!(runs.len(),4);
+    });
+}

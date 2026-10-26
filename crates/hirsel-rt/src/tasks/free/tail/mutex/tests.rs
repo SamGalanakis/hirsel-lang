@@ -13,6 +13,8 @@ struct Shared {
     polls: AtomicU32,
     go: AtomicBool,
     saved: AtomicBool,
+    force_yield: bool,
+    yields: AtomicU32,
     ticket: Mutex<Option<Ticket>>,
 }
 
@@ -82,7 +84,14 @@ unsafe extern "C" fn dispatch(
             }
         }
         let ticket = shared.ticket.lock().unwrap().unwrap();
-        let result = poll_mutex_with(ctx, ticket, false, |_, entered| {
+        if shared.force_yield && shared.go.load(Ordering::Acquire)
+            && !(*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).suffix_done {
+            crate::pool::free::renew(ctx);
+            for _ in 1..hirsel_free::schedule::OP_BUDGET {
+                assert!(crate::pool::free::proceed(ctx));
+            }
+        }
+        let result = poll_mutex_with(ctx, ticket, shared.force_yield, |_, entered| {
             shared.polls.fetch_add(1, Ordering::Release);
             if !*entered {
                 record::publish(ctx, Phase::Entered, |_| ())?;
@@ -92,6 +101,10 @@ unsafe extern "C" fn dispatch(
         })
         .unwrap();
         if result.is_pending() {
+            if (*ctx).free_ops.tails.active(crate::tasks::running_key(ctx), ticket).yielded {
+                shared.yields.fetch_add(1, Ordering::Relaxed);
+                return crate::STATUS_SUSPENDED;
+            }
             crate::tasks::park_left(ctx, Wait::Retry { cancelable: false }).unwrap();
             crate::tasks::compact::wait(ctx);
             return crate::STATUS_SUSPENDED;
@@ -124,17 +137,29 @@ unsafe extern "C" fn child(ctx: *mut TaskCtx, env: *mut Header, caller: u64, sit
 
 #[test]
 fn owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stacks() {
+    controls(false);
+}
+
+#[test]
+fn owned_completed_put_and_kill_resume_the_final_yield_without_reapplying_the_effect() {
+    controls(true);
+}
+
+fn controls(force_yield:bool) {
     use crate::tasks::free::objects::tests::{
         Layouts, isolated_at, mutex as make_mutex, plain, wait_until, wrapper,
     };
-    if !isolated_at(
-        "tasks::free::tail::mutex::tests::owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stacks",
-        "HIRSEL_OWNED_MUTEX_TAILS",
-    ) {
+    let name=if force_yield {
+        "tasks::free::tail::mutex::tests::owned_completed_put_and_kill_resume_the_final_yield_without_reapplying_the_effect"
+    } else {
+        "tasks::free::tail::mutex::tests::owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stacks"
+    };
+    if !isolated_at(name,"HIRSEL_OWNED_MUTEX_TAILS") {
         return;
     }
     let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
     for kind in [Kind::Put, Kind::Kill, Kind::Cause] {
+        if force_yield && kind==Kind::Cause {continue;}
         for durable in [false, true] {
             let recording = record::Recording::new(b"owned mutex tail controls", durable);
             let install = recording.clone();
@@ -171,6 +196,8 @@ fn owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stac
                         polls: AtomicU32::new(0),
                         go: AtomicBool::new(false),
                         saved: AtomicBool::new(false),
+                        force_yield,
+                        yields: AtomicU32::new(0),
                         ticket: Mutex::default(),
                     });
                     let hook = shared.clone();
@@ -240,6 +267,8 @@ fn owned_put_kill_cause_keep_original_effect_and_failure_order_off_released_stac
                         16,
                     );
                     assert_eq!(value, [1, 108]);
+                    assert_eq!(shared.yields.load(Ordering::Relaxed), u32::from(force_yield),
+                        "the completed effect leaves exactly once for its final yield");
                     hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0);
                     if kind == Kind::Put {
                         let mut status = 99;
