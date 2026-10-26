@@ -86,3 +86,4 @@ mod rc_in_place_lend_52;
 mod sealed_region_import_33;
 mod sealed_region_body_33;
 mod rc_ctor_tail;
+mod wildcard_tag;

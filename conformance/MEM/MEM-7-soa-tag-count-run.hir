@@ -1,0 +1,49 @@
+// rule: MEM-7
+// expect: run
+@soa
+type Ev = Move(u64) | Pair(u64, u64) | Tick
+
+type Row = RMove(u64) | RPair(u64, u64) | RTick
+
+fn soa(xs: List[Ev], initial: u64) -> u64 {
+  let mut n = initial
+  for e in xs {
+    match e {
+      Pair(_, _) => {
+        n += 1
+      },
+      _ => {},
+    }
+  }
+  n
+}
+
+fn row(xs: List[Row], initial: u64) -> u64 {
+  let mut n = initial
+  for e in xs {
+    match e {
+      RPair(_, _) => {
+        n += 1
+      },
+      _ => {},
+    }
+  }
+  n
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let xs = [Move(5), Pair(7, 9), Tick, Pair(11, 13)]
+  let ys = [RMove(5), RPair(7, 9), RTick, RPair(11, 13)]
+  test.check(t, soa([], 0) == 0)
+  test.check(t, row([], 0) == 0)
+  test.check(t, soa(xs, 0) == 2)
+  test.check(t, row(ys, 0) == 2)
+  test.check(t, soa(xs, 18446744073709551613) == 18446744073709551615)
+  test.check(t, row(ys, 18446744073709551613) == 18446744073709551615)
+  let mut count = 0u64
+  for _ in 0u64..7u64 {
+    count = soa(xs, count)
+  }
+  test.check(t, count == 14)
+  Ok(())
+}

@@ -3002,6 +3002,7 @@ conformance/MEM/MEM-7-soa-reserve-scalars-run.hir
 conformance/MEM/MEM-7-soa-resource-bad.hir
 conformance/MEM/MEM-7-soa-resource-field-bad.hir
 conformance/MEM/MEM-7-soa-resource-field-ok.hir
+conformance/MEM/MEM-7-soa-tag-count-run.hir
 conformance/MEM/MEM-7-soa-variant-nested-run.hir
 conformance/MEM/MEM-7-soa-variant-run.hir
 conformance/MEM/MEM-7-soa-variant-serializable-bad.hir
@@ -5277,6 +5278,7 @@ conformance/SEM/SEM-1-signed-subtract-max-ok.hir
 conformance/SEM/SEM-1-signed-subtract-ok.hir
 conformance/SEM/SEM-1-simd-integer-domain-bad.hir
 conformance/SEM/SEM-1-simd-integer-domain-ok.hir
+conformance/SEM/SEM-1-soa-tag-count-overflow-fail.hir
 conformance/SEM/SEM-1-sse-stream-run.hir
 conformance/SEM/SEM-1-std-integer-add-policies-run.hir
 conformance/SEM/SEM-1-std-integer-i8-policy-edges-0-run.hir

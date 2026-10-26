@@ -322,3 +322,4 @@ rc_spare_push::unproven_pushes_keep_their_capacity_check	1.322
 rc_statics::a_constant_reaches_its_list_and_byte_blocks_through_reference_cells	0.039
 rc_statics::a_dynamic_flat_constant_is_one_pointer_free_extent	0.098
 rc_statics::a_scalar_constant_is_one_block_of_its_bytes	0.025
+wildcard_tag::only_a_source_catch_all_receives_the_default_tag_edge	0.040

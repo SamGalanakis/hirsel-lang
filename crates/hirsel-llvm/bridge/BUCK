@@ -1,6 +1,6 @@
 cxx_library(
     name = "bridge",
-    srcs = ["stack_size.cpp"],
+    srcs = ["stack_size.cpp", "count_loops.cpp"],
     compiler_flags = [
         "-std=c++17", "-fno-exceptions", "-fno-rtti", "-nostdinc++",
         "--sysroot=tools/buck2/toolchains/llvm-files/sysroot",
@@ -10,5 +10,6 @@ cxx_library(
         "-isystem", "tools/buck2/toolchains/llvm-files/sysroot/usr/include/x86_64-linux-gnu",
     ],
     deps = ["toolchains//:libllvm"],
+    exported_linker_flags = ["-l:libstdc++.so.6"],
     visibility = ["PUBLIC"],
 )

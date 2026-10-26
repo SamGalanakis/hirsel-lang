@@ -57,7 +57,26 @@ impl Importer<'_> {
                     narrow(&mut after, p.slot, &p.projection, version, &others);
                 }
             }
-            self.pattern(m, arm.pattern, next)?;
+            // A source catch-all already supplies defined code for every other
+            // tag. Keep that destination as the switch default instead of
+            // enumerating all the variants just to reach the same next arm.
+            // H independently rejects corrupt tags before selecting an edge.
+            let pattern = &m.patterns[arm.pattern.0 as usize];
+            if tested.len() == 1
+                && last.guard.is_none()
+                && matches!(
+                    m.patterns[last.pattern.0 as usize].kind,
+                    tir::MatchPatternKind::Wildcard | tir::MatchPatternKind::Binding { .. }
+                )
+                && let tir::MatchPatternKind::Variant {
+                    variant, fields, ..
+                } = &pattern.kind
+                && fields.iter().all(|(_, sub)| irrefutable(m, *sub))
+            {
+                self.tag_with_fallback(pattern.place, *variant, next, true)?;
+            } else {
+                self.pattern(m, arm.pattern, next)?;
+            }
             let e = self.enter(arm.guard.unwrap_or(arm.target));
             self.terminate(Terminator::Jump(e));
             self.current = next;
@@ -341,6 +360,16 @@ impl Importer<'_> {
     /// the others fail), so the otherwise edge is unreachable. A counted
     /// variant is read through a synthetic loan ended on every arm.
     pub(super) fn tag(&mut self, place: tir::PlaceId, variant: u32, fail: BlockId) -> R<()> {
+        self.tag_with_fallback(place, variant, fail, false)
+    }
+
+    fn tag_with_fallback(
+        &mut self,
+        place: tir::PlaceId,
+        variant: u32,
+        fail: BlockId,
+        catch_all: bool,
+    ) -> R<()> {
         let p = self.place(place)?;
         // Earlier arms may already have proved this tag at the current
         // version. Retesting it would introduce infeasible variant edges.
@@ -374,6 +403,7 @@ impl Importer<'_> {
         let cont = self.block(BlockKind::Body);
         let switch = self.current;
         let mut arms = Vec::new();
+        let mut fallback = None;
         for v in variants {
             let target = if v == variant { cont } else { fail };
             let edge = match loan {
@@ -392,20 +422,29 @@ impl Importer<'_> {
                     e
                 }
             };
+            if v != variant && fallback.is_none() {
+                fallback = Some(edge);
+            }
             arms.push(SwitchArm { value: v, edge });
         }
-        let unreachable = match self.unreachable {
-            Some(b) => b,
-            None => {
-                let b = self.block(BlockKind::Body);
-                self.current = b;
-                self.terminate(Terminator::Unreachable);
-                self.current = switch;
-                self.unreachable = Some(b);
-                b
-            }
+        let otherwise = if catch_all && let Some(fallback) = fallback {
+            // Every syntactic branch owns its EdgeId, even when two branches
+            // share a target (Ready validation checks edge use exactly once).
+            self.edge(self.out.edges[fallback.index()].target, Vec::new())
+        } else {
+            let unreachable = match self.unreachable {
+                Some(b) => b,
+                None => {
+                    let b = self.block(BlockKind::Body);
+                    self.current = b;
+                    self.terminate(Terminator::Unreachable);
+                    self.current = switch;
+                    self.unreachable = Some(b);
+                    b
+                }
+            };
+            self.edge(unreachable, Vec::new())
         };
-        let otherwise = self.edge(unreachable, Vec::new());
         let arms = PoolRange::push(&mut self.out.pools.switch_arms, arms);
         self.terminate(Terminator::Switch {
             value,

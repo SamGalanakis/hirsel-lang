@@ -591,6 +591,19 @@ copy only bytes. The construction drop-elision flag suppresses regional child
 cleanup only when C proves the fields and lifetime; other region payloads keep
 their scheduled cleanup.
 
+Conditional u64 count reductions use a loop-entry headroom check: initial
+count plus the maximum trip count must fit u64. The proof recognizes only
+acyclic per-iteration paths whose accumulator feedback is the old count or
+its single checked +1. LLVM clones the original checked fallback, preserving
+failure state and all exits, then vectorizes the proved path. Unproved trip
+counts, other updates, effectful calls and writes retain their checks. The pass
+runs at LLVM's VectorizerStart hook, before partial unrolling. The loop cloning
+follows LLVM 23.1.4 `LoopVersioning.cpp:88-115`; exit PHI repair
+covers all exits, including overflow. No source check or LIR validator changes.
+A source wildcard is an ordinary native switch default; exhaustive source
+matches retain their invalid-tag trap. Checked H rejects invalid tags when
+materializing the aggregate before either kind of switch.
+
 `OptLevel::Default` selects LLVM O2 for ordinary standalone builds; `None`
 selects O0 and `Speed` selects O3. All profiles run the same IR validators.
 

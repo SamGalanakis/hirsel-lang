@@ -258,7 +258,9 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             }
             Terminator::Unreachable => {
                 // Proved unreachable by the validator; still a trap rather than an
-                // optimizer assumption.
+                // optimizer assumption. Source matches with a catch-all instead
+                // retain that arm as a defined default in LIR (both native
+                // backends); checked H validates the ordinal before dispatch.
                 let trap = match self.module.intrinsic("llvm.trap", &[]) {
                     Ok(trap) => trap,
                     Err(what) => return self.invalid(what),

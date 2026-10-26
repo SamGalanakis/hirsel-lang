@@ -43,6 +43,8 @@ use hirsel_lir::layout_types::TargetSpec;
 
 use crate::LlvmVersion;
 
+#[cfg(test)]
+mod count_tests;
 mod masks;
 
 /// The version of the libLLVM the loader resolved for this process.
@@ -414,6 +416,25 @@ impl<'context> Module<'context> {
 
     /// Runs a new-pass-manager pipeline such as `default<O3>`.
     pub(crate) fn run_passes(&self, pipeline: &str, machine: &TargetMachine) -> Result<(), String> {
+        if matches!(pipeline, "default<O2>" | "default<O3>") {
+            unsafe extern "C" {
+                fn hirsel_llvm_count_pipeline(
+                    module: *mut std::ffi::c_void,
+                    machine: *mut std::ffi::c_void,
+                    level: u32,
+                );
+            }
+            // SAFETY: both handles are live. The bridge constructs LLVM's
+            // standard pipeline with a guarded-count pass at VectorizerStart.
+            unsafe {
+                hirsel_llvm_count_pipeline(
+                    self.raw.cast(),
+                    machine.raw.cast(),
+                    if pipeline == "default<O3>" { 3 } else { 2 },
+                );
+            }
+            return Ok(());
+        }
         let pipeline = c_string(pipeline);
         // SAFETY: the module and machine are live; the options are created and disposed of
         // here, and a returned error is consumed by LLVMGetErrorMessage.

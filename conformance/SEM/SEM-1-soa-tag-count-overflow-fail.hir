@@ -1,0 +1,18 @@
+// rule: SEM-1
+// expect: fail SEM-1 at line 12
+@soa
+type Ev = Move(u64) | Pair(u64, u64) | Tick
+
+pub fn main() -> Result[(), ()] {
+  let xs = [Move(5), Pair(7, 9), Tick, Pair(11, 13)]
+  let mut count = 18446744073709551614u64
+  for e in xs {
+    match e {
+      Pair(_, _) => {
+        count += 1
+      },
+      _ => {},
+    }
+  }
+  Ok(())
+}
