@@ -931,7 +931,7 @@ fn check_fixed(
         {
             return Err(ContinuationError::RegionRecord(id, r as u32));
         }
-        end = record.offset + REGION_RECORD_BYTES;
+        end = record.offset + u.tables.regions[r].record_bytes();
     }
     Ok(end)
 }
@@ -1718,4 +1718,88 @@ fn instruction_reaches_close(table: &LayoutTable, layout: LayoutId) -> bool {
         );
     }
     false
+}
+
+#[cfg(test)]
+mod region_width_tests {
+    use super::*;
+    use crate::abi_types::{CallMultiplicity, CallableShape, FnAbi, FnAbiId, FnAbiKey};
+    use crate::objects::UnitKey;
+    use crate::stage::StageKind;
+
+    #[test]
+    fn demanded_region_frame_widths_keep_mixed_records_disjoint_and_refuse_overlap() {
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let digest = ContentHash([1; 32]);
+        let mut table = LayoutTable::new(&target);
+        table.fn_abis.push(FnAbi {
+            key: FnAbiKey {
+                callable: digest,
+                abi_version: crate::ABI_VERSION,
+                receipt_contract: None,
+            },
+            shape: CallableShape::Definition,
+            multiplicity: CallMultiplicity::Many,
+            context: true,
+            environment: false,
+            caller_site: false,
+            destination: false,
+            result: None,
+            diverges: false,
+            result_arena: None,
+            parameters: vec![],
+            version: crate::ABI_VERSION,
+            nonretaining: vec![],
+            nonretaining_captures: vec![],
+            scoped_contract: crate::abi::scoped_contract_digest(&[], &[]),
+            scoped_entries: vec![],
+            receipts: None,
+        });
+        let mut unit = LirUnit::<Ready>::new(UnitHeader {
+            source_count: 0,
+            key: UnitKey(digest),
+            track_caller: false,
+            stage: StageKind::Ready,
+            lir_version: crate::LIR_VERSION,
+            origin: UnitOrigin::Source,
+            definition: DefPath::core("mixed_region_width"),
+            implementation_revision: digest,
+            instance: digest,
+            target: table.target,
+            abi: FnAbiId(0),
+        });
+        unit.tables.regions = [true, false, true]
+            .into_iter()
+            .map(|seal_demand| RegionInstance {
+                scope: ScopeId(0),
+                anchor: SourceAnchorId(0),
+                seal_demand,
+            })
+            .collect();
+        let (parameters, records, end) = super::super::fixed_area(&unit, &table, &target).unwrap();
+        assert_eq!(
+            records.iter().map(|r| r.offset).collect::<Vec<_>>(),
+            [8, 88, 152]
+        );
+        assert_eq!(end, 232);
+        let mut plan = ContinuationPlan {
+            body: digest,
+            digest,
+            representation: Representation::Resumable,
+            parameters,
+            records,
+            storage: vec![],
+            states: vec![],
+            cleanups: vec![],
+            captures: None,
+            cost: PlacementCost::default(),
+            certificate: ValidatedContinuation { identity: digest },
+        };
+        assert_eq!(check_fixed(&unit, &table, &target, &plan).unwrap(), 232);
+        plan.records[1].offset = 72;
+        assert!(matches!(
+            check_fixed(&unit, &table, &target, &plan),
+            Err(ContinuationError::RegionRecord(_, 1))
+        ));
+    }
 }

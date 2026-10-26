@@ -238,8 +238,16 @@ fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) 
     hirsel_lir::validate::ScopedQualification::new(&target, &manifest, &declarations, None)
         .qualify(&lowered.units, &lowered.table)
         .unwrap();
+    let entry = lowered
+        .units
+        .iter()
+        .position(|unit| unit.header.definition == path("main"))
+        .unwrap();
+    let demand = hirsel_rc::seal_demand::Demand::analyze(&lowered.units, &[entry]).unwrap();
     let mut counted = vec![];
-    for (unit, origin) in lowered.units.iter().zip(&lowered.unit_origins) {
+    let mut guards = 0;
+    for (unit_index, (unit, origin)) in lowered.units.iter().zip(&lowered.unit_origins).enumerate()
+    {
         let rejected = hirsel_lir::validate::check_scoped_transport(unit, &inputs);
         assert!(
             rejected.is_empty(),
@@ -247,12 +255,19 @@ fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) 
             unit.header.definition,
             dump(unit)
         );
-        let placed = hirsel_rc::placement::place(
+        let mut placed = hirsel_rc::placement::place(
             unit.clone(),
             &lowered.table,
             &hirsel_rc::placement::Options::for_instance(true, &lowered.instances, *origin),
         )
         .unwrap();
+        demand.apply(unit_index, &mut placed).unwrap();
+        guards += placed
+            .tables
+            .regions
+            .iter()
+            .filter(|r| r.seal_demand)
+            .count();
         let rc = hirsel_rc::insert::insert(
             placed,
             &lowered.table,
@@ -268,6 +283,10 @@ fn execute_original(source: &str, root_kind: TypeKind, root_native: NativeType) 
         );
         counted.push(rc);
     }
+    assert_eq!(
+        guards, 1,
+        "only the source arena supplying the seal gets an extension"
+    );
     let h = hirsel_heapcheck::Program {
         target,
         layouts: lowered.table,

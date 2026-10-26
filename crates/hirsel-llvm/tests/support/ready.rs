@@ -204,6 +204,7 @@ impl Unit<'_> {
         self.builder.unit.tables.regions.push(RegionInstance {
             scope: ScopeId(0),
             anchor,
+            seal_demand: false,
         });
         let i64_l = self.table.scalar(ScalarKind::I64);
         let ty = self.ty(ValueRepr::RegionMark, i64_l);

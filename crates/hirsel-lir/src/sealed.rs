@@ -217,3 +217,28 @@ snapshot_enum!(SealedState {
     Dropping,
     Dead
 });
+
+#[cfg(test)]
+mod guard_hint_tests {
+    use crate::ir::{RegionInstance, ScopeId, SourceAnchorId};
+    #[test]
+    fn demanded_guard_hint_preserves_ordinary_bytes_and_only_extends_physical_storage() {
+        let mut region = RegionInstance {
+            scope: ScopeId(2),
+            anchor: SourceAnchorId(3),
+            seal_demand: false,
+        };
+        assert_eq!(hirsel_codec::to_text(&region), "(RegionInstance 2 3)");
+        assert_eq!(region.record_bytes(), 64);
+        assert_eq!(
+            hirsel_codec::from_text::<RegionInstance>("(RegionInstance 2 3)").unwrap(),
+            region
+        );
+        region.seal_demand = true;
+        assert_eq!(region.record_bytes(), 80);
+        assert_eq!(
+            hirsel_codec::from_text::<RegionInstance>(&hirsel_codec::to_text(&region)).unwrap(),
+            region
+        );
+    }
+}

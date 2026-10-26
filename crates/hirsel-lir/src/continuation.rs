@@ -29,7 +29,6 @@ use hirsel_syntax::{ContentHash, DefPath};
 use crate::abi_types::ParameterPassing;
 use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable, ScalarKind, SizeSpec, TargetSpec};
-use crate::runtime_abi::REGION_RECORD_BYTES;
 use crate::stage::{Ready, ValidatedUnit};
 
 pub mod isolate;
@@ -1141,7 +1140,7 @@ fn fixed_area(
             offset: at,
         });
         at = at
-            .checked_add(REGION_RECORD_BYTES)
+            .checked_add(u.tables.regions[r].record_bytes())
             .ok_or("oversize live image")?;
     }
     Ok((parameters, records, at))

@@ -166,4 +166,7 @@ mod sealed_tests;
 mod sealed_drop_tests;
 
 #[cfg(test)]
-mod seal_bits_tests;
+pub(crate) mod seal_bits_tests;
+
+#[cfg(test)]
+mod guard_tests;

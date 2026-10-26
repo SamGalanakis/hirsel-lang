@@ -815,6 +815,7 @@ fn unit_region(unit: &mut LirUnit<Placed>) -> RegionInstanceId {
     unit.tables.regions.push(RegionInstance {
         scope: root_scope,
         anchor: entry_anchor,
+        seal_demand: false,
     });
     region
 }

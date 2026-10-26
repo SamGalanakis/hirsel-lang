@@ -1634,6 +1634,20 @@ pub struct RegionInstance {
     /// The TIR scope whose exit ends the region.
     pub scope: ScopeId,
     pub anchor: SourceAnchorId,
+    /// Untrusted physical hint: reserve the demanded guard extension. Neither
+    /// value grants source permission; false at a sealing scope fails closed
+    /// at the runtime's ordinary-guard refusal.
+    pub seal_demand: bool,
+}
+
+impl RegionInstance {
+    pub fn record_bytes(&self) -> u64 {
+        if self.seal_demand {
+            crate::runtime_abi::RECEIPT_REGION_RECORD_BYTES
+        } else {
+            crate::runtime_abi::REGION_RECORD_BYTES
+        }
+    }
 }
 
 /// An M2 arena or Shared instance: the slot holding its handle.
@@ -3700,7 +3714,32 @@ snapshot_struct!(CleanupAnchor {
     site
 });
 snapshot_struct!(FieldMask { fields, words });
-snapshot_struct!(RegionInstance { scope, anchor });
+// Omit false so ordinary region rows keep their exact previous encoding.
+impl hirsel_codec::Snapshot for RegionInstance {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        use hirsel_codec::Snapshot;
+        w.open("RegionInstance");
+        self.scope.write(w);
+        self.anchor.write(w);
+        if self.seal_demand {
+            true.write(w);
+        }
+        w.close();
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        use hirsel_codec::Snapshot;
+        r.open("RegionInstance")?;
+        let scope = ScopeId::read(r)?;
+        let anchor = SourceAnchorId::read(r)?;
+        let seal_demand = if r.at_close() { false } else { bool::read(r)? };
+        r.close()?;
+        Ok(Self {
+            scope,
+            anchor,
+            seal_demand,
+        })
+    }
+}
 snapshot_struct!(ExternalInstance { slot });
 snapshot_struct!(InitFlag {
     value,

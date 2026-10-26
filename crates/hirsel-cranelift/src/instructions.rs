@@ -786,7 +786,10 @@ impl FnEmitter<'_, '_, '_> {
                     self.unit.instructions.iter().any(
                         |inst| matches!(*inst, Inst::ArenaToken { mark, .. } if mark == result),
                     );
-                let entry = if arena {
+                let demanded = self.unit.tables.regions[region.index()].seal_demand;
+                let entry = if demanded {
+                    RuntimeEntry::ReceiptRegionEnter
+                } else if arena {
                     RuntimeEntry::ArenaEnter
                 } else {
                     RuntimeEntry::RegionEnter
@@ -838,10 +841,12 @@ impl FnEmitter<'_, '_, '_> {
                 let mark = self.get1(mark)?;
                 let (anchor, operation_site) = self.failure_sites(anchor);
                 let context = self.context;
-                let status = self.rt1(
-                    RuntimeEntry::RegionExit,
-                    &[context, mark, anchor, operation_site],
-                )?;
+                let entry = if instance.seal_demand {
+                    RuntimeEntry::ReceiptRegionExit
+                } else {
+                    RuntimeEntry::RegionExit
+                };
+                let status = self.rt1(entry, &[context, mark, anchor, operation_site])?;
                 self.status_guard(status, failure)
             }
             Inst::FinalizeBegin { anchor, .. } => {

@@ -1008,7 +1008,6 @@ fn fn_abi<'a>(
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record (`HIRSEL_RT_V2_ASSERT_SIZE` in the header).
-const REGION_RECORD_BYTES: u64 = hirsel_lir::runtime_abi::REGION_RECORD_BYTES;
 
 /// The name suffix of a library body's private root-value entry. It changes with that
 /// entry's signature, so a `linkonce_odr` body of an older signature never merges

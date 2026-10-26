@@ -17,7 +17,11 @@ use hirsel_lir::operation::{NativeType, Primitive};
 use hirsel_lir::sealed::{SealDescriptor, StorageAccess};
 use hirsel_lir::structural::{Shape as LogicalShape, ShapeGraph};
 
-fn fixture(target: &TargetSpec, kind: u8, malformed: u8) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
+pub(crate) fn fixture(
+    target: &TargetSpec,
+    kind: u8,
+    malformed: u8,
+) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
     let (mut table, mut unit, mut abi) = super::sealed_tests::fixture(target, kind.min(2), false);
     let (native, shape) = match kind {
         0 => (NativeType::Tuple(vec![]), LogicalShape::Fields(vec![])),

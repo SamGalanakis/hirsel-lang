@@ -536,6 +536,7 @@ fn fixture_unit<S: Stage>(table: &LayoutTable) -> LirUnit<S> {
     t.regions = vec![RegionInstance {
         scope: ScopeId(1),
         anchor: SourceAnchorId(0),
+        seal_demand: false,
     }];
     t.arenas = vec![ExternalInstance { slot: SlotId(1) }];
     t.shared = vec![ExternalInstance { slot: SlotId(2) }];

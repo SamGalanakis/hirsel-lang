@@ -1945,7 +1945,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.unit.instructions.iter().any(
                         |inst| matches!(*inst, Inst::ArenaToken { mark, .. } if mark == result),
                     );
-                let enter = self.runtime(if arena {
+                let demanded = self.unit.tables.regions[region.index()].seal_demand;
+                let enter = self.runtime(if demanded {
+                    RuntimeEntry::ReceiptRegionEnter
+                } else if arena {
                     RuntimeEntry::ArenaEnter
                 } else {
                     RuntimeEntry::RegionEnter
@@ -1996,7 +1999,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 };
                 let (anchor, operation_site) =
                     self.failure_sites(self.anchor_code(instance.anchor)?);
-                let exit = self.runtime(RuntimeEntry::RegionExit)?;
+                let exit = self.runtime(if instance.seal_demand {
+                    RuntimeEntry::ReceiptRegionExit
+                } else {
+                    RuntimeEntry::RegionExit
+                })?;
                 let status = self.builder.call(
                     exit,
                     &[self.context, self.get(mark)?, anchor, operation_site],

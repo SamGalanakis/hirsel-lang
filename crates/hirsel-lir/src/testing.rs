@@ -248,6 +248,7 @@ impl<S: Stage> UnitBuilder<S> {
         self.unit.tables.regions.push(RegionInstance {
             scope: ScopeId(0),
             anchor: SourceAnchorId(0),
+            seal_demand: false,
         });
         RegionInstanceId(self.unit.tables.regions.len() as u32 - 1)
     }

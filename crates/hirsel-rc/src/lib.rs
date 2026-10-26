@@ -25,6 +25,7 @@ mod receipt_transport_tests;
 pub mod reuse;
 pub mod reuse_stores;
 mod scoped_consumer_9;
+pub mod seal_demand;
 pub mod sealed_source;
 pub mod spare_push;
 mod spawn;

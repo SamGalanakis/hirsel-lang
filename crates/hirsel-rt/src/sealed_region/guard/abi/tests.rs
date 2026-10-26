@@ -272,3 +272,39 @@ fn native_guard_entry_33_invalid_source_contracts_refuse_before_publication() {
         );
     }
 }
+
+#[test]
+fn native_guard_entry_33_forged_false_hint_refuses_the_entered_ordinary_record() {
+    const CHILD: &str = "HIRSEL_NATIVE_GUARD_33_FORGED_FALSE";
+    if std::env::var_os(CHILD).is_some() {
+        context(true, |ctx| unsafe {
+            let value = 7u64;
+            let source = ptr::from_ref(&value).cast();
+            let receipt = hirsel_rt_v2_receipt_bits(ctx, 3, source);
+            // Exactly what a forged false hint emits: a valid, entered ordinary
+            // 64-byte record, with no journal extension or registry entry.
+            let mut ordinary = MaybeUninit::<Region>::uninit();
+            region::hirsel_rt_v2_region_enter(ctx, ordinary.as_mut_ptr());
+            let mut owner = ptr::null_mut();
+            hirsel_rt_v2_seal_prepare_commit(
+                ctx,
+                ordinary.as_mut_ptr().cast(),
+                source,
+                3,
+                receipt,
+                0,
+                &mut owner,
+            );
+            panic!("forged false hint published an owner");
+        });
+        return;
+    }
+    let output=std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "sealed_region::guard::abi::tests::native_guard_entry_33_forged_false_hint_refuses_the_entered_ordinary_record", "--nocapture"])
+        .env(CHILD,"1").output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("foreign or closed demanded arena guard"),
+        "{output:?}"
+    );
+}

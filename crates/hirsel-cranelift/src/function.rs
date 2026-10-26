@@ -165,7 +165,6 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
-const REGION_RECORD_BYTES: u64 = hirsel_lir::runtime_abi::REGION_RECORD_BYTES;
 
 pub(crate) fn low_bit(n: u64) -> u32 {
     if n == 0 {
@@ -977,8 +976,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 None => self.stack(layout)?,
             });
         }
-        for _ in &unit.tables.regions {
-            let (record, _) = self.stack_bytes(REGION_RECORD_BYTES, 8);
+        for region in &unit.tables.regions {
+            let (record, _) = self.stack_bytes(region.record_bytes(), 8);
             self.regions.push(record);
         }
         self.resume_storage()
@@ -2518,3 +2517,6 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
 
 #[cfg(test)]
 mod receipt_call_tests;
+
+#[cfg(test)]
+mod guard_tests;

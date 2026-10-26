@@ -276,10 +276,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 None => self.stack(layout)?,
             });
         }
-        let record = self
-            .module
-            .array_type(self.module.int_type(8), REGION_RECORD_BYTES);
-        for _ in &unit.tables.regions {
+        for region in &unit.tables.regions {
+            let record = self
+                .module
+                .array_type(self.module.int_type(8), region.record_bytes());
             self.regions.push(self.prologue.alloca(record, 8));
         }
         self.resume_storage()

@@ -98,6 +98,7 @@ fn placed(source: bool) -> Vec<K> {
     t.builder.unit.tables.regions.push(RegionInstance {
         scope: ROOT,
         anchor: SourceAnchorId(0),
+        seal_demand: false,
     });
     let region = RegionInstanceId(0);
     let mark = t.owned(l::PTR);

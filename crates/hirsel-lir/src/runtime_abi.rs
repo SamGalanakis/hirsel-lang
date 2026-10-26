@@ -218,6 +218,9 @@ pub const REGION_END_OFFSET: u64 = 16;
 pub const REGION_REMAINING_OFFSET: u64 = 48;
 /// Bytes of `hirsel_rt_v2_region`.
 pub const REGION_RECORD_BYTES: u64 = 64;
+/// Ordinary region prefix plus inventory and sealed-owner words. This reserves
+/// storage only; the checked receipt entry must initialize its private journal.
+pub const RECEIPT_REGION_RECORD_BYTES: u64 = 80;
 
 /// Layout descriptor constants (`hirsel_rt_v2_layout`, `hirsel_rt_v2_step`);
 /// `rt_program` lowers layout drop programs to these steps.
