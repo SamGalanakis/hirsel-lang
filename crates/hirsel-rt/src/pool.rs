@@ -26,6 +26,8 @@
 //!   and takes one before it resumes a task into Hirsel code and at a callback's entry. A
 //!   blocking call holds none while it is in C; at width > 1 the home thread holds none
 //!   except for a home callback's Hirsel code.
+//!   An assigned scoped reservation keeps its process credit across idle transitions;
+//!   its native worker's exit returns that credit, independently of task fibers.
 //! - **Lifetime.** Compute workers start with the run; pool threads on first use. Both stop
 //!   when the run ends ([`shutdown`]), after the run's last task stopped; their heaps stay in
 //!   the run's registry. A run that stopped while a worker still runs its code (a pure loop
@@ -47,6 +49,12 @@ use crate::{environmental, fault};
 
 pub(crate) mod free;
 pub(crate) mod ordered_commit;
+// The reservation owner is staged before the scoped callback entry is enabled.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "scoped CPU callback admission is not enabled yet")
+)]
+mod cpu_scoped;
 
 /// The most blocking-pool threads one run starts.
 pub(crate) const POOL_THREADS: usize = 64;
@@ -126,6 +134,8 @@ pub(crate) struct Exec {
     deferred: Cell<Option<(*const Exec, Post)>>,
     worker: Cell<*mut Worker>,
     held: AtomicBool,
+    /// A scoped domain owns this worker's compute credit even while it is idle.
+    reserved: AtomicBool,
     exited: AtomicBool,
     lost: AtomicBool,
     ready: Cell<Option<hirsel_free::work::Worker<free::Saved>>>,
@@ -166,6 +176,7 @@ impl Exec {
             deferred: Cell::new(None),
             worker: Cell::new(worker),
             held: AtomicBool::new(held),
+            reserved: AtomicBool::new(false),
             exited: AtomicBool::new(false),
             lost: AtomicBool::new(false),
             ready: Cell::new(None),
@@ -318,6 +329,13 @@ impl Permits {
         if exec.held.load(Ordering::Relaxed) {
             return Ok(false);
         }
+        if exec.reserved.load(Ordering::Acquire) {
+            if let Some(stop) = control.and_then(|c| c.stopped()) {
+                return Err(stop);
+            }
+            exec.held.store(true, Ordering::Release);
+            return Ok(true);
+        }
         let started = metrics.map(|_| Instant::now());
         let mut state = self.state.lock().unwrap();
         let mut waited = false;
@@ -353,7 +371,9 @@ impl Permits {
             return;
         }
         let mut state = self.state.lock().unwrap();
-        state.held -= 1;
+        if !exec.reserved.load(Ordering::Acquire) {
+            state.held -= 1;
+        }
         if exec.lost.swap(false, Ordering::AcqRel) {
             state.lost -= 1;
         }
