@@ -148,6 +148,14 @@ impl DirStore {
             .map(|root| (true, root))
             .chain(self.read_only.iter().map(|root| (false, root)))
     }
+    fn publication_store(&self) -> Option<&hirsel_artifact_store::Store> {
+        let store = self.physical.as_ref()?;
+        // A batch can retain unpublished bytes before its eventual disk flush.
+        // An impossible directory (notably ENOTDIR) must remain a cache miss,
+        // rather than serving those buffered writes as successful local hits.
+        fs::create_dir_all(&self.root).ok()?;
+        Some(store)
+    }
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -169,7 +177,7 @@ impl DirStore {
     }
     fn publish(&self, key: &EntryKey, action: super::Action, value: &[u8]) {
         use hirsel_artifact_store::{Address, Domain};
-        let Some(store) = &self.physical else {
+        let Some(store) = self.publication_store() else {
             return;
         };
         let _batch = store.batch();
@@ -211,7 +219,7 @@ impl ResultStore for DirStore {
         action: super::Action,
         reference: super::Reference,
     ) {
-        let Some(store) = &self.physical else {
+        let Some(store) = self.publication_store() else {
             return;
         };
         // Shared immutable roots may supply ordinary content, but local writes
@@ -238,7 +246,7 @@ impl ResultStore for DirStore {
         None
     }
     fn put_content(&self, domain: super::Domain, bytes: &[u8]) -> Option<super::Reference> {
-        let reference = self.physical.as_ref()?.put(domain, bytes).ok()?;
+        let reference = self.publication_store()?.put(domain, bytes).ok()?;
         Some(reference)
     }
     fn get(&self, key: &EntryKey) -> Option<super::Bytes> {
