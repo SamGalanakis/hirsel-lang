@@ -1107,3 +1107,38 @@ fn assignment_planner_34_ordered_capacity() {
         }
     }
 }
+
+#[test]
+fn input_cap_retains_two_million_steps_of_work() {
+    hirsel_engine::with_compiler_stack(|| {
+        let root = scratch("input-cap-work-");
+        let path = package(&root);
+        let mut loaded = hirsel_driver::load_program(&path).unwrap();
+        loaded.check_for_execution().unwrap();
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let row = cases()
+            .into_iter()
+            .find(|r| r["id"] == "input-cap")
+            .unwrap();
+        assert_eq!(row["input"].as_str().unwrap().len(), 32768);
+        let world = fixture(&row, 4);
+        for checked in [false, true] {
+            let execute = if checked {
+                hirsel_engine::run_observed_checked_bounded
+            } else {
+                hirsel_engine::run_observed_snapshot_bounded
+            };
+            let execution = execute(&mut loaded.engine, &run, (&world).into(), 2_000_000).unwrap();
+            assert!(execution.observation.is_none());
+            assert!(matches!(execution.outcome,
+                Ok(hirsel_engine::RunOutcome::ToolingLimit(ref limit))
+                if limit.kind == "Steps" && limit.limit == 2_000_000));
+            assert_eq!(execution.step_usage.unwrap().consumed, 2_000_000);
+            eprintln!("input-cap checked={checked} work exceeds 2000000 steps");
+        }
+    });
+}

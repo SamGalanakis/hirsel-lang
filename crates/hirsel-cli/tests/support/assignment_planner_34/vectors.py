@@ -57,7 +57,13 @@ b=batch([chain]);b['version']=2;add('version',b,'version')
 b=batch([chain]);b['manifests'].append(m);add('invalid-reload',b,'identifier')
 for id,text,error in [('json','{','json'),('shape','{}','shape')]:rows.append(dict(id=id,input=text,error=error))
 text=json.dumps(batch([empty]),separators=(',',':'))
-rows.append(dict(id='input-cap',input=text+' '*(32768-len(text)),optima=[0]))
+# Keep the original 32 KiB admission boundary, but require decoded JSON work:
+# bulk whitespace scanning made the former all-space padding only 22,632 TIR
+# steps. 8,192 escaped newlines keep more than twice the 1M-step allowance in
+# both reference modes; the unknown field changes no assignment observation.
+cap_text=text[:-1]+',"padding":'+json.dumps('\n'*8192)+'}'
+assert len(cap_text)<32768
+rows.append(dict(id='input-cap',input=cap_text+' '*(32768-len(cap_text)),optima=[0]))
 rows.append(dict(id='input-over',input=text+' '*(32769-len(text)),error='input_limit'))
 add('denial',[chain],'denied',access='read');add('pending-cancel',[chain],'canceled',pending=True)
 add('jobs-zero',[chain],'jobs',cli_jobs=0);add('cli-jobs-over',[chain],'jobs',cli_jobs=5)
