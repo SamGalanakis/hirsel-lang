@@ -63,9 +63,10 @@ pub(in crate::tasks::free) unsafe fn prepare_mutex(
 pub(in crate::tasks::free) unsafe fn poll_mutex(
     ctx: *mut TaskCtx,
     ticket: Ticket,
+    leave: bool,
 ) -> Stopped<Poll<u8>> {
     unsafe {
-        poll_mutex_with(ctx, ticket, |site, entered| {
+        poll_mutex_with(ctx, ticket, leave, |site, entered| {
             replay::poll_object(ctx, site.object, entered)
         })
     }
@@ -74,6 +75,7 @@ pub(in crate::tasks::free) unsafe fn poll_mutex(
 unsafe fn poll_mutex_with(
     ctx: *mut TaskCtx,
     ticket: Ticket,
+    leave: bool,
     ready: impl FnOnce(Site, &mut bool) -> Stopped<bool>,
 ) -> Stopped<Poll<u8>> {
     let task = role::with_role(ctx, |s| s.key(s.current));
@@ -113,6 +115,7 @@ unsafe fn poll_mutex_with(
     // No child op starts in this bounded suffix, and no saved pointer names
     // a Rust wake list. Role::with_held never observes a stop partway through.
     unsafe {
+      if !(*record).suffix_done {
         role::with_held(ctx, |s| {
             while let Some(task) = (*record).owners.wakes.pop_front() {
                 s.task(task).retried = true;
@@ -122,13 +125,18 @@ unsafe fn poll_mutex_with(
         if let Some(chain) = (*record).owners.chain.take() {
             (*ctx).failure.append_chain(chain.as_ref().clone());
         }
-        (*record).finish();
-        (*ctx).free_ops.tails.retire(task, ticket);
-    }
-    if site.kind == Kind::Cause {
-        replay::start(ctx);
-    } else {
-        unsafe { crate::tasks::free::try_yield(&mut *ctx) }?;
+        (*record).suffix_done = true;
+      }
+      if !(*record).yielded {
+        (*record).yielded = true;
+        if site.kind == Kind::Cause {
+            replay::start(ctx);
+        } else if crate::tasks::free::try_yield_entered(&mut *ctx, leave)? {
+            return Ok(Poll::Pending);
+        }
+      }
+      (*record).finish();
+      (*ctx).free_ops.tails.retire(task, ticket);
     }
     Ok(Poll::Ready(status))
 }

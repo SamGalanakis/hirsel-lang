@@ -82,7 +82,7 @@ unsafe extern "C" fn dispatch(
             }
         }
         let ticket = shared.ticket.lock().unwrap().unwrap();
-        let result = poll_mutex_with(ctx, ticket, |_, entered| {
+        let result = poll_mutex_with(ctx, ticket, false, |_, entered| {
             shared.polls.fetch_add(1, Ordering::Release);
             if !*entered {
                 record::publish(ctx, Phase::Entered, |_| ())?;

@@ -80,6 +80,8 @@ pub(super) struct Record {
     pub(super) site: Site,
     stage: Stage,
     ordinal: Option<u64>,
+    suffix_done: bool,
+    yielded: bool,
     pub(super) owners: Owners,
 }
 
@@ -206,6 +208,8 @@ impl Records {
             site,
             stage: Stage::Prepared,
             ordinal: None,
+            suffix_done: false,
+            yielded: false,
             owners,
         }));
         ticket
@@ -283,7 +287,7 @@ pub(crate) unsafe fn invoke_mutex(
         }
     };
     loop {
-        match unsafe { crate::stop::check(ctx, poll_mutex(ctx, ticket)) } {
+        match unsafe { crate::stop::check(ctx, poll_mutex(ctx, ticket, crate::continuation::binding::can_leave(ctx, site))) } {
             Poll::Ready(status) => {
                 unsafe {
                     let retired = (*ctx)
@@ -299,6 +303,11 @@ pub(crate) unsafe fn invoke_mutex(
             }
             Poll::Pending => {
                 if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
+                    // A committed yield schedules this saved continuation itself.
+                    // An object dependency wait is awakened by its own token.
+                    if unsafe { (*ctx).free_ops.tails.active(site.task, ticket).yielded } {
+                        return Some(crate::STATUS_SUSPENDED);
+                    }
                     unsafe {
                         crate::stop::check(
                             ctx,
