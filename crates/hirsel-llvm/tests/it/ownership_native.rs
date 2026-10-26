@@ -144,6 +144,9 @@ fn metadata(program: &support::programs::Program) -> Units {
                             action: marker.kind,
                             callee: None,
                             cleanup: None,
+                            additional_drops: Vec::new(),
+                            token_path: None,
+                            owner_path: None,
                             token: location(marker.token),
                             owner: location(marker.owner),
                             site: site_code(

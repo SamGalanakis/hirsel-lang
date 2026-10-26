@@ -22,6 +22,9 @@ fn fixture() -> (Log, Units) {
             action,
             callee: None,
             cleanup: None,
+            additional_drops: Vec::new(),
+            token_path: None,
+            owner_path: None,
             token,
             owner,
             site: 42,
@@ -383,6 +386,9 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
             action,
             callee: None,
             cleanup: None,
+            additional_drops: Vec::new(),
+            token_path: None,
+            owner_path: None,
             token,
             owner,
             site: 42,
@@ -489,6 +495,9 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
                 action,
                 callee: None,
                 cleanup: None,
+                additional_drops: Vec::new(),
+                token_path: None,
+                owner_path: None,
                 token,
                 owner,
                 site,
@@ -766,6 +775,9 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
                 action,
                 callee: None,
                 cleanup: None,
+                additional_drops: Vec::new(),
+                token_path: None,
+                owner_path: None,
                 token,
                 owner,
                 site: 42,
@@ -841,4 +853,181 @@ fn native_capture_cleanup_rejects_swapped_retirement_of_equal_resource_captures(
         decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap_err(),
         Error::InvalidMarker(5)
     );
+}
+
+#[test]
+fn native_projected_fields_require_independent_complete_static_paths() {
+    let (mut log, mut units) = fixture();
+    let slot = 1u64 << 32;
+    let projected = (7u64 << 32) | 11;
+    let path = LocationPath {
+        root: slot,
+        fields: vec![0, 1],
+    };
+    for row in &mut log.rows {
+        if let Row::Event { token, owner, .. } = row {
+            if *token == slot {
+                *token = projected;
+            }
+            if *owner == slot {
+                *owner = projected;
+            }
+        }
+    }
+    for marker in units.get_mut(&[7; 32]).unwrap().values_mut() {
+        if marker.token == slot {
+            marker.token = projected;
+            marker.token_path = Some(path.clone());
+        }
+        if marker.owner == slot {
+            marker.owner = projected;
+            marker.owner_path = Some(path.clone());
+        }
+    }
+    let calls = BTreeMap::from([([7; 32], Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    assert!(trace.events.iter().any(|event| event.action.owner().path
+        == vec![
+            hirsel_run_schema::ownership_trace::Projection::Field { field: 0 },
+            hirsel_run_schema::ownership_trace::Projection::Field { field: 1 },
+        ]));
+    for changed in 0..4 {
+        let mut forged = units.clone();
+        let drop = forged.get_mut(&[7; 32]).unwrap().get_mut(&2).unwrap();
+        match changed {
+            0 => drop.token_path = None,
+            1 => drop.token_path.as_mut().unwrap().fields.clear(),
+            2 => drop.token_path.as_mut().unwrap().root = projected,
+            _ => drop.token_path.as_mut().unwrap().fields[1] = 0,
+        }
+        assert!(decode_local_calls(&log, [49; 32], &forged, &calls, 100).is_err());
+    }
+    let mut stale = log;
+    stale.version = VERSION - 1;
+    assert_eq!(
+        decode_local_calls(&stale, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::Binding
+    );
+}
+
+#[test]
+fn native_compound_drop_members_keep_original_marker_and_exact_field_lifetimes() {
+    let (mut log, mut units) = fixture();
+    let first = (7u64 << 32) | 11;
+    let second = (7u64 << 32) | 12;
+    let paths = [
+        LocationPath {
+            root: 1u64 << 32,
+            fields: vec![0],
+        },
+        LocationPath {
+            root: 1u64 << 32,
+            fields: vec![1],
+        },
+    ];
+    let records = units.get_mut(&[7; 32]).unwrap();
+    for (id, location, path) in [
+        (1, first, &paths[0]),
+        (2, first, &paths[0]),
+        (4, second, &paths[1]),
+        (5, second, &paths[1]),
+    ] {
+        let metadata = records.get_mut(&id).unwrap();
+        metadata.owner = location;
+        metadata.owner_path = Some(path.clone());
+        if metadata.action == 2 {
+            metadata.token = location;
+            metadata.token_path = Some(path.clone());
+        }
+    }
+    let child = records.remove(&5).unwrap();
+    records
+        .get_mut(&2)
+        .unwrap()
+        .additional_drops
+        .push(DropMember {
+            location: child.token,
+            path: child.token_path,
+            layout: child.layout,
+            value_type: child.value_type,
+        });
+    // Both equal-valued resources are live in distinct fields before cleanup.
+    log.rows = [0, 1, 2, 4, 5, 3, 6, 7]
+        .into_iter()
+        .map(|index| log.rows[index])
+        .collect();
+    for row in &mut log.rows {
+        if let Row::Event {
+            marker,
+            token,
+            owner,
+            ..
+        } = row
+        {
+            match *marker {
+                1 => *owner = first,
+                2 => {
+                    *token = first;
+                    *owner = first;
+                }
+                4 => *owner = second,
+                5 => {
+                    *marker = 2;
+                    *token = second;
+                    *owner = second;
+                }
+                _ => (),
+            }
+        }
+    }
+    let calls = BTreeMap::from([([7; 32], Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let drops = trace
+        .events
+        .iter()
+        .filter_map(|event| match &event.action {
+            Action::Drop { token, owner } => Some((token.clone(), owner.path.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(drops[0].0, drops[1].0);
+    assert_eq!(
+        drops[0].1,
+        vec![hirsel_run_schema::ownership_trace::Projection::Field { field: 0 }]
+    );
+    assert_eq!(
+        drops[1].1,
+        vec![hirsel_run_schema::ownership_trace::Projection::Field { field: 1 }]
+    );
+    let mut missing = log.clone();
+    missing.rows.remove(6);
+    missing.row_count -= 1;
+    let trace = decode_local_calls(&missing, [49; 32], &units, &calls, 100).unwrap();
+    assert_eq!(trace.analyze([49; 32], 100).unwrap().live.len(), 1);
+    let mut forged = log.clone();
+    if let Row::Event { token, owner, .. } = &mut forged.rows[6] {
+        *token = second + 1;
+        *owner = second + 1;
+    }
+    assert!(decode_local_calls(&forged, [49; 32], &units, &calls, 100).is_err());
+    let mut duplicate = log.clone();
+    duplicate.rows.insert(6, duplicate.rows[5]);
+    duplicate.row_count += 1;
+    assert!(decode_local_calls(&duplicate, [49; 32], &units, &calls, 100).is_err());
+    let mut ambiguous = units.clone();
+    let metadata = ambiguous.get_mut(&[7; 32]).unwrap().get_mut(&2).unwrap();
+    metadata
+        .additional_drops
+        .push(metadata.additional_drops[0].clone());
+    assert!(decode_local_calls(&log, [49; 32], &ambiguous, &calls, 100).is_err());
 }

@@ -1,8 +1,8 @@
 //! Native emission of leaf ownership transitions. This staged adapter accepts
-//! whole local storage, owned calls, checked once captures and disjoint join transfers
-//! within a closed call graph; nested
-//! ownership and compound operations fail closed. It supplies Ready-local
-//! coverage, not the still-required earlier compiler-pass transport proof.
+//! static field storage, aggregate child custody, checked finalizer groups,
+//! owned calls, once captures and disjoint joins within a closed call graph.
+//! Unsupported dynamic/nonlocal ownership fails closed. Ready coverage is
+//! checked independently against the transported original Value plan.
 use super::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::{Ready, ValidatedUnit};
@@ -19,7 +19,8 @@ const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NativeLocation {
     /// 0 = SSA, 1 = slot, 2/3 = outgoing/incoming argument,
-    /// 4/5 = outgoing/incoming result. Relations name logical call frames.
+    /// 4/5 = outgoing/incoming result, 6 = capture slot, 7 = checked static
+    /// address path, 8+field = constructed SSA field. Relations name logical frames.
     pub kind: u32,
     pub index: u32,
 }
@@ -41,8 +42,8 @@ pub struct NativeMarker {
 #[derive(Clone, Debug)]
 pub struct LeafPlan {
     plan: Plan,
-    markers: BTreeMap<MarkerId, NativeMarker>,
-    commits: Vec<(Point, MarkerId)>,
+    markers: BTreeMap<MarkerId, Vec<NativeMarker>>,
+    commits: Vec<(Point, NativeMarker)>,
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
@@ -100,11 +101,15 @@ impl LeafPlan {
                 && layouts
                     .layout(layout)
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
+            let aggregate_move = kind == Kind::Move
+                && layouts
+                    .layout(layout)
+                    .is_some_and(|record| matches!(record.kind, LayoutKind::Aggregate));
             let source_aggregate = source_only
                 && layouts.layout(layout).is_some_and(|record| {
                     matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource)
                 });
-            if !leaf(layouts, layout) && !carrier_move && !source_aggregate {
+            if !leaf(layouts, layout) && !carrier_move && !source_aggregate && !aggregate_move {
                 return Err(format!(
                     "native ownership tracing: nested ownership at {point:?}"
                 ));
@@ -136,7 +141,7 @@ impl LeafPlan {
             if !source_only {
                 markers.insert(
                     id,
-                    NativeMarker {
+                    vec![NativeMarker {
                         id,
                         kind: match kind {
                             Kind::Create => 0,
@@ -149,7 +154,7 @@ impl LeafPlan {
                         owner: location(unit, to, point)?,
                         site,
                         layout,
-                    },
+                    }],
                 );
             }
             observations.push(observation);
@@ -223,9 +228,6 @@ impl LeafPlan {
                             .get(&unit.pools.fields)
                             .ok_or("ownership construction has no checked fields")?;
                         let nested = fields.iter().any(|field| owned(field.value));
-                        if nested && !source_only {
-                            return Err("native ownership tracing: owned construction fields are not implemented".into());
-                        }
                         // An aggregate carries existing child lineage without a new
                         // identity. A Resource constructor also creates its own token.
                         let aggregate = nested
@@ -241,19 +243,17 @@ impl LeafPlan {
                                 layout(result),
                             )?;
                         }
-                        if source_only {
-                            for field in fields.iter().filter(|field| owned(field.value)) {
-                                push(
-                                    after,
-                                    Kind::Move,
-                                    Location::Value(field.value),
-                                    Location::Field {
-                                        aggregate: result,
-                                        field: field.field,
-                                    },
-                                    layout(field.value),
-                                )?;
-                            }
+                        for field in fields.iter().filter(|field| owned(field.value)) {
+                            push(
+                                after,
+                                Kind::Move,
+                                Location::Value(field.value),
+                                Location::Field {
+                                    aggregate: result,
+                                    field: field.field,
+                                },
+                                layout(field.value),
+                            )?;
                         }
                     }
                     Inst::Closure {
@@ -543,11 +543,14 @@ impl LeafPlan {
         }
         let plan = Plan::new(unit, observations);
         check(unit, &plan).map_err(|error| error.to_string())?;
-        let commits = plan
-            .observations
-            .iter()
-            .map(|o| (o.point, o.marker.id))
-            .collect();
+        let commits = if source_only {
+            Vec::new()
+        } else {
+            plan.observations
+                .iter()
+                .map(|o| (o.point, markers[&o.marker.id][0]))
+                .collect()
+        };
         Ok(Self {
             plan,
             markers,
@@ -605,6 +608,33 @@ impl LeafPlan {
                     Location::Value(result),
                     Some(marker.site),
                 ));
+            } else if matches!(observation.point, Point::CompoundDrop { .. }) {
+                // CheckedPlan proves the complete aggregate cut. Each physical
+                // completion retires only its exact child, retaining the source id.
+                for &point in &points {
+                    let Point::Instruction {
+                        block,
+                        index,
+                        moment: Moment::After,
+                    } = point
+                    else {
+                        return Err("compound ownership completion is not finalizer exit".into());
+                    };
+                    let code = body.blocks[block.index()]
+                        .instructions
+                        .get(&body.instructions)
+                        .ok_or("compound ownership completion has no code")?;
+                    let Inst::FinalizeEnd { address, .. } = code[index as usize] else {
+                        return Err("compound ownership completion has no finalizer end".into());
+                    };
+                    obligations.push((
+                        point,
+                        Kind::Drop,
+                        Location::Address(address),
+                        Location::Address(address),
+                        Some(marker.site),
+                    ));
+                }
             } else {
                 obligations.extend(points.iter().map(|&point| {
                     (
@@ -617,6 +647,8 @@ impl LeafPlan {
                 }));
             }
             let mut layout = None;
+            let compound = matches!(observation.point, Point::CompoundDrop { .. });
+            let mut physical = Vec::new();
             for (point, kind, token, owner, site) in obligations {
                 let expected_observation = expected
                     .plan
@@ -638,36 +670,55 @@ impl LeafPlan {
                 if !covered.insert(expected_observation.marker.id) {
                     return Err("ownership plans cover a Ready transition twice".into());
                 }
-                let at = expected.markers[&expected_observation.marker.id].layout;
-                if layout.replace(at).is_some_and(|old| old != at) {
+                let at = expected.markers[&expected_observation.marker.id][0].layout;
+                if layout.replace(at).is_some_and(|old| old != at) && !compound {
                     return Err("ownership transport changes layout between commits".into());
                 }
+                if compound {
+                    let native = NativeMarker {
+                        id: marker.id,
+                        kind: 2,
+                        token: location(body, token, point)?,
+                        owner: location(body, owner, point)?,
+                        site: marker.site,
+                        layout: at,
+                    };
+                    if !physical.contains(&native) {
+                        physical.push(native);
+                    }
+                    commits.push((point, native));
+                }
+            }
+            if compound {
+                if physical.is_empty() {
+                    return Err("compound ownership has no completion".into());
+                }
+                markers.insert(marker.id, physical);
+                continue;
             }
             let layout = layout.ok_or("ownership marker has no committed transition")?;
-            markers.insert(
-                marker.id,
-                NativeMarker {
-                    id: marker.id,
-                    kind: match marker.kind {
-                        Kind::Create => 0,
-                        Kind::Move => 1,
-                        Kind::Drop
-                            if layouts.layout(layout).is_some_and(|record| {
-                                matches!(record.kind, LayoutKind::Callable { .. })
-                            }) =>
-                        {
-                            4
-                        }
-                        Kind::Drop => 2,
-                        Kind::Alias => 3,
-                    },
-                    token: location(body, marker.token, observation.point)?,
-                    owner: location(body, marker.owner, observation.point)?,
-                    site: marker.site,
-                    layout,
+            let native = NativeMarker {
+                id: marker.id,
+                kind: match marker.kind {
+                    Kind::Create => 0,
+                    Kind::Move => 1,
+                    Kind::Drop
+                        if layouts.layout(layout).is_some_and(|record| {
+                            matches!(record.kind, LayoutKind::Callable { .. })
+                        }) =>
+                    {
+                        4
+                    }
+                    Kind::Drop => 2,
+                    Kind::Alias => 3,
                 },
-            );
-            commits.extend(points.into_iter().map(|point| (point, marker.id)));
+                token: location(body, marker.token, observation.point)?,
+                owner: location(body, marker.owner, observation.point)?,
+                site: marker.site,
+                layout,
+            };
+            markers.insert(marker.id, vec![native]);
+            commits.extend(points.into_iter().map(|point| (point, native)));
         }
         if covered.len() != expected.plan.observations.len() {
             return Err("ownership plan omits a Ready transition".into());
@@ -743,13 +794,13 @@ impl LeafPlan {
     }
 
     pub fn markers(&self) -> impl Iterator<Item = NativeMarker> + '_ {
-        self.markers.values().copied()
+        self.markers.values().flatten().copied()
     }
     pub fn at_point(&self, point: Point) -> impl Iterator<Item = NativeMarker> + '_ {
         self.commits
             .iter()
             .filter(move |(at, _)| *at == point)
-            .map(|(_, id)| self.markers[id])
+            .map(|(_, marker)| *marker)
     }
     pub fn at_call(
         &self,
@@ -907,32 +958,22 @@ fn location<S>(
             kind: 0,
             index: value.0,
         }),
-        Location::Address(mut address) => {
-            for _ in 0..unit.addresses.len() {
-                let info = &unit.addresses[address.index()];
-                if info.projection.len != 0 {
-                    break;
-                }
-                match info.base {
-                    AddressBase::Slot(slot) => {
-                        return Ok(match unit.slots[slot.index()].kind {
-                            SlotKind::Capture(capture) => NativeLocation {
-                                kind: 6,
-                                index: capture,
-                            },
-                            _ => NativeLocation {
-                                kind: 1,
-                                index: slot.0,
-                            },
-                        });
-                    }
-                    AddressBase::Address(parent) => address = parent,
-                    _ => break,
-                }
+        Location::Address(address) => {
+            let path = address_path(unit, address)?;
+            if path.fields.is_empty() {
+                Ok(path.root)
+            } else {
+                Ok(NativeLocation {
+                    kind: 7,
+                    index: address.0,
+                })
             }
-            Err("native ownership tracing: projected or nonlocal storage is not implemented".into())
         }
-        Location::Capture { closure, capture } => Ok(NativeLocation {
+        Location::Field {
+            aggregate: closure,
+            field: capture,
+        }
+        | Location::Capture { closure, capture } => Ok(NativeLocation {
             kind: capture
                 .checked_add(8)
                 .ok_or("capture ordinal exceeds native diagnostic encoding")?,
@@ -1101,7 +1142,7 @@ impl LeafPlan {
     ) -> Result<(ValueId, Vec<CleanupCapture>), String> {
         let mut released = None;
         for &(point, marker) in &self.commits {
-            if marker != id {
+            if marker.id != id {
                 continue;
             }
             let Point::Instruction {
@@ -1162,4 +1203,77 @@ impl LeafPlan {
         }
         Ok((value, captures))
     }
+}
+
+/// Static declaration path for a projected slot; runtime addresses and byte
+/// offsets never identify the resource. Dynamic and nonlocal projections refuse.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativePath {
+    pub root: NativeLocation,
+    pub fields: Vec<u32>,
+}
+fn address_path<S>(unit: &LirUnit<S>, mut address: AddressId) -> Result<NativePath, String> {
+    let mut parts = Vec::new();
+    for _ in 0..unit.addresses.len() {
+        let info = unit
+            .addresses
+            .get(address.index())
+            .ok_or("ownership address is absent")?;
+        let steps = info
+            .projection
+            .get(&unit.pools.projections)
+            .ok_or("ownership projection is absent")?;
+        let fields = steps
+            .iter()
+            .map(|step| match *step {
+                ProjectionStep::Field(field) => Ok(field),
+                _ => Err(
+                    "native ownership tracing: dynamic or non-field storage is not implemented"
+                        .to_string(),
+                ),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        parts.push(fields);
+        match info.base {
+            AddressBase::Slot(slot) => {
+                let root = match unit
+                    .slots
+                    .get(slot.index())
+                    .ok_or("ownership slot is absent")?
+                    .kind
+                {
+                    SlotKind::Capture(capture) => NativeLocation {
+                        kind: 6,
+                        index: capture,
+                    },
+                    _ => NativeLocation {
+                        kind: 1,
+                        index: slot.0,
+                    },
+                };
+                return Ok(NativePath {
+                    root,
+                    fields: parts.into_iter().rev().flatten().collect(),
+                });
+            }
+            AddressBase::Address(parent) => address = parent,
+            _ => break,
+        }
+    }
+    Err("native ownership tracing: nonlocal storage is not implemented".into())
+}
+/// Resolve only the reserved projected-address location class, against the
+/// same checked unit used for emission. Plain locations have no extra path.
+pub fn projected_location<S>(
+    unit: &LirUnit<S>,
+    location: NativeLocation,
+) -> Result<Option<NativePath>, String> {
+    if location.kind != 7 {
+        return Ok(None);
+    }
+    let path = address_path(unit, AddressId(location.index))?;
+    if path.fields.is_empty() {
+        return Err("ownership projected location has no fields".into());
+    }
+    Ok(Some(path))
 }

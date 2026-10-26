@@ -3254,10 +3254,28 @@ fn ownership_trace_nested_source_construction_transfers_fields_without_a_shell_t
             .collect::<Vec<_>>()
     );
     let ready = checked_native_fixture(output.unit, &table);
-    assert!(
-        native::LeafPlan::from_relocated(&ready, &table, &output.plan).is_err(),
-        "Ready refuses until nested physical retirements can be observed"
-    );
+    let native = native::LeafPlan::from_relocated(&ready, &table, &output.plan).unwrap();
+    for row in output
+        .plan
+        .observations
+        .iter()
+        .filter(|row| matches!(row.marker.owner, Location::Field { .. }))
+    {
+        let marker = native
+            .markers()
+            .find(|marker| marker.id == row.marker.id)
+            .unwrap();
+        let Location::Field { aggregate, field } = row.marker.owner else {
+            unreachable!()
+        };
+        assert_eq!(
+            marker.owner,
+            native::NativeLocation {
+                kind: field + 8,
+                index: aggregate.0
+            }
+        );
+    }
 }
 
 fn compound_drop_fixture(
@@ -3267,6 +3285,7 @@ fn compound_drop_fixture(
     Plan,
     Plan,
     CleanupAnchorId,
+    hirsel_lir::layout_types::LayoutTable,
 ) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
@@ -3368,12 +3387,12 @@ fn compound_drop_fixture(
     )
     .unwrap();
     let after = checked_native_fixture(after, &table);
-    (after, output, plan, anchor)
+    (after, output, plan, anchor, table)
 }
 
 #[test]
 fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_finalizers() {
-    let (after, output, plan, anchor) = compound_drop_fixture(false);
+    let (after, output, plan, anchor, _) = compound_drop_fixture(false);
     assert_eq!(output.observations.len(), 1);
     assert_eq!(output.observations[0].marker, plan.observations[0].marker);
     assert!(matches!(
@@ -3450,7 +3469,7 @@ fn ownership_trace_compound_drop_preserves_one_marker_for_all_actual_child_final
 
 #[test]
 fn ownership_trace_compound_drop_keeps_same_anchor_alternatives_separate() {
-    let (after, output, input, _) = compound_drop_fixture(true);
+    let (after, output, input, _, _) = compound_drop_fixture(true);
     assert_eq!(output.observations.len(), 2);
     let checked = check(after.unit(), &output).unwrap();
     let mut entries = Vec::new();
@@ -3476,4 +3495,106 @@ fn ownership_trace_compound_drop_keeps_same_anchor_alternatives_separate() {
         *cut = index + 1;
     }
     assert!(check(after.unit(), &truncated).is_err());
+}
+
+#[test]
+fn ownership_trace_native_static_field_locations_keep_declaration_paths_and_refuse_absent_addresses()
+ {
+    let mut t = Lir::<hirsel_lir::stage::Ready>::new(&[(Passing::Borrow, l::PAIR)], None);
+    let slot = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(ENTRY, slot, &[ProjectionStep::Field(1)], &[]);
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    assert_eq!(
+        native::projected_location(
+            unit.unit(),
+            native::NativeLocation {
+                kind: 7,
+                index: address.0
+            }
+        )
+        .unwrap(),
+        Some(native::NativePath {
+            root: native::NativeLocation {
+                kind: 1,
+                index: slot.0
+            },
+            fields: vec![1]
+        })
+    );
+    assert!(
+        native::projected_location(
+            unit.unit(),
+            native::NativeLocation {
+                kind: 7,
+                index: u32::MAX
+            }
+        )
+        .is_err()
+    );
+    assert!(
+        native::projected_location(
+            unit.unit(),
+            native::NativeLocation {
+                kind: 1,
+                index: slot.0
+            }
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn ownership_trace_native_compound_completions_keep_original_marker_and_exact_children() {
+    let (after, output, _, _, table) = compound_drop_fixture(true);
+    let checked = check(after.unit(), &output).unwrap();
+    let points: Vec<_> = output
+        .observations
+        .iter()
+        .flat_map(|row| checked.commits(after.unit(), row.marker.id).unwrap())
+        .collect();
+    let ready = native::LeafPlan::prepare(&after, &table).unwrap();
+    let mut rows = output.observations.clone();
+    for row in &ready.plan().observations {
+        if points.contains(&row.point) {
+            continue;
+        }
+        let mut row = row.clone();
+        row.marker.id = MarkerId(rows.len() as u32);
+        rows.push(row);
+    }
+    let plan = Plan::new(after.unit(), rows);
+    let native = native::LeafPlan::from_relocated(&after, &table, &plan).unwrap();
+    for row in &output.observations {
+        let members = native
+            .markers()
+            .filter(|m| m.id == row.marker.id)
+            .collect::<Vec<_>>();
+        assert_eq!(members.len(), 2);
+        let mut paths = std::collections::BTreeSet::new();
+        for point in checked.commits(after.unit(), row.marker.id).unwrap() {
+            let markers = native.at_point(point).collect::<Vec<_>>();
+            assert_eq!(markers.len(), 1);
+            let marker = markers[0];
+            assert_eq!(marker.id, row.marker.id);
+            assert_eq!(marker.kind, 2);
+            assert_eq!(marker.site, row.marker.site);
+            assert_eq!(marker.token, marker.owner);
+            let path = native::projected_location(after.unit(), marker.token)
+                .unwrap()
+                .unwrap();
+            paths.insert(path.fields);
+        }
+        assert_eq!(paths, std::collections::BTreeSet::from([vec![0], vec![1]]));
+    }
+    let mut missing = plan.clone();
+    missing.observations.remove(0);
+    assert!(native::LeafPlan::from_relocated(&after, &table, &missing).is_err());
+    let mut forged = plan.clone();
+    forged.observations[0].marker.owner = Location::Value(ValueId(0));
+    assert!(native::LeafPlan::from_relocated(&after, &table, &forged).is_err());
 }

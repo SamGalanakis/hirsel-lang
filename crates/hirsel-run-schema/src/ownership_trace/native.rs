@@ -6,7 +6,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -80,11 +80,30 @@ pub struct Metadata {
     pub callee: Option<[u8; 32]>,
     /// Declaration ordinals and unit-local layouts in actual descriptor drop order.
     pub cleanup: Option<Vec<(u32, u32)>>,
+    /// Other checked child completions of this same original compound Drop.
+    /// Every row still names its exact physical child and original source id.
+    pub additional_drops: Vec<DropMember>,
     pub token: u64,
     pub owner: u64,
+    pub token_path: Option<LocationPath>,
+    pub owner_path: Option<LocationPath>,
     pub site: u64,
     pub layout: u32,
     pub source: Site,
+    pub value_type: String,
+}
+/// Static checked declaration ordinals for a projected slot location.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocationPath {
+    pub root: u64,
+    pub fields: Vec<u32>,
+}
+/// A physical child Drop bound independently to its checked declaration path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DropMember {
+    pub location: u64,
+    pub path: Option<LocationPath>,
+    pub layout: u32,
     pub value_type: String,
 }
 pub type Units = BTreeMap<[u8; 32], BTreeMap<u32, Metadata>>;
@@ -112,6 +131,32 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+
+fn projected_owner(
+    frame: u64,
+    parent: Option<u64>,
+    environment: Option<&Owner>,
+    location: u64,
+    path: Option<&LocationPath>,
+) -> Result<Owner, Error> {
+    if location >> 32 != 7 {
+        if path.is_some() {
+            return Err(Error::InvalidLocation(location));
+        }
+        return owner(frame, parent, environment, location);
+    }
+    let path = path.ok_or(Error::InvalidLocation(location))?;
+    if path.fields.is_empty() || !matches!(path.root >> 32, 1 | 6) {
+        return Err(Error::InvalidLocation(location));
+    }
+    let mut at = owner(frame, parent, environment, path.root)?;
+    at.path.extend(
+        path.fields
+            .iter()
+            .map(|&field| super::Projection::Field { field }),
+    );
+    Ok(at)
+}
 
 fn owner(
     frame: u64,
@@ -206,6 +251,27 @@ fn decode(
     if !log.complete || log.row_count != log.rows.len() as u64 || log.rows.len() > limit {
         return Err(Error::Incomplete);
     }
+    for markers in units.values() {
+        for (&id, metadata) in markers {
+            if metadata.additional_drops.is_empty() {
+                continue;
+            }
+            if metadata.action != 2
+                || metadata.token != metadata.owner
+                || metadata.token_path != metadata.owner_path
+                || metadata.callee.is_some()
+                || metadata.cleanup.is_some()
+            {
+                return Err(Error::InvalidMarker(id));
+            }
+            let mut seen = BTreeSet::from([(metadata.token, metadata.layout)]);
+            for member in &metadata.additional_drops {
+                if !seen.insert((member.location, member.layout)) {
+                    return Err(Error::InvalidMarker(id));
+                }
+            }
+        }
+    }
     struct Frame {
         id: u64,
         unit: [u8; 32],
@@ -296,7 +362,13 @@ fn decode(
                     .as_ref()
                     .ok_or(Error::InvalidMarker(marker))?;
                 let parent = None; // cleanup holders are local SSA/slots or checked captures
-                let root = owner(frame, parent, current.environment.as_ref(), metadata.token)?;
+                let root = projected_owner(
+                    frame,
+                    parent,
+                    current.environment.as_ref(),
+                    metadata.token,
+                    metadata.token_path.as_ref(),
+                )?;
                 let live = fields
                     .iter()
                     .copied()
@@ -394,7 +466,13 @@ fn decode(
                     return Err(Error::InvalidMarker(marker));
                 }
                 current.pending = Some((
-                    owner(frame, parent, current.environment.as_ref(), target)?,
+                    projected_owner(
+                        frame,
+                        parent,
+                        current.environment.as_ref(),
+                        target,
+                        expected.owner_path.as_ref(),
+                    )?,
                     expected_callee,
                 ));
             }
@@ -417,23 +495,62 @@ fn decode(
                 let expected = units[&current.unit]
                     .get(&marker)
                     .ok_or(Error::InvalidMarker(marker))?;
-                if (action, token, recipient, site, layout)
-                    != (
-                        expected.action,
-                        expected.token,
-                        expected.owner,
-                        expected.site,
-                        expected.layout,
-                    )
-                {
-                    return Err(Error::InvalidMarker(marker));
-                }
+                let (token_path, owner_path, value_type) =
+                    if (action, token, recipient, site, layout)
+                        == (
+                            expected.action,
+                            expected.token,
+                            expected.owner,
+                            expected.site,
+                            expected.layout,
+                        )
+                    {
+                        (
+                            expected.token_path.as_ref(),
+                            expected.owner_path.as_ref(),
+                            expected.value_type.as_str(),
+                        )
+                    } else {
+                        if expected.action != 2
+                            || expected.token != expected.owner
+                            || action != 2
+                            || token != recipient
+                            || site != expected.site
+                        {
+                            return Err(Error::InvalidMarker(marker));
+                        }
+                        let mut members = expected
+                            .additional_drops
+                            .iter()
+                            .filter(|member| member.location == token && member.layout == layout);
+                        let member = members.next().ok_or(Error::InvalidMarker(marker))?;
+                        if members.next().is_some() {
+                            return Err(Error::InvalidMarker(marker));
+                        }
+                        (
+                            member.path.as_ref(),
+                            member.path.as_ref(),
+                            member.value_type.as_str(),
+                        )
+                    };
                 let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
                 if calls.is_none() && (token >> 32 > 1 || recipient >> 32 > 1) {
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
-                let from = owner(frame, parent, current.environment.as_ref(), token)?;
-                let to = owner(frame, parent, current.environment.as_ref(), recipient)?;
+                let from = projected_owner(
+                    frame,
+                    parent,
+                    current.environment.as_ref(),
+                    token,
+                    token_path,
+                )?;
+                let to = projected_owner(
+                    frame,
+                    parent,
+                    current.environment.as_ref(),
+                    recipient,
+                    owner_path,
+                )?;
                 let context = Context {
                     task: TaskPath::default(),
                     operation: 0,
@@ -442,7 +559,7 @@ fn decode(
                 match action {
                     0 if from == to => {
                         tracker
-                            .create(&context, to, expected.value_type.clone())
+                            .create(&context, to, value_type.to_owned())
                             .map_err(Error::Consistency)?;
                     }
                     1 => {

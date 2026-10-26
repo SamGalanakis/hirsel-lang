@@ -6,7 +6,7 @@ use hirsel_lir::emission::{EmitInputs, site_code};
 use hirsel_lir::ir::{ConstructorKind, Inst};
 use hirsel_lir::ownership_trace::native::LeafPlan;
 use hirsel_lir::stage::ObjectArtifact;
-use hirsel_run_schema::ownership_trace::native::{LocalCalls, Metadata, Units};
+use hirsel_run_schema::ownership_trace::native::{DropMember, LocalCalls, Metadata, Units};
 use hirsel_syntax::DefPath;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -158,7 +158,7 @@ pub(crate) fn emit_relocated(
                 }
             }
         }
-        let mut markers = BTreeMap::new();
+        let mut markers: BTreeMap<u32, Metadata> = BTreeMap::new();
         for marker in plan.markers() {
             let definition = program
                 .semantic_owners
@@ -181,56 +181,88 @@ pub(crate) fn emit_relocated(
             let location = |at: hirsel_lir::ownership_trace::native::NativeLocation| {
                 (u64::from(at.kind) << 32) | u64::from(at.index)
             };
-            markers.insert(
-                marker.id.0,
-                Metadata {
-                    action: marker.kind,
-                    callee: if marker.kind == 3 {
-                        let row = original
-                            .observations
-                            .iter()
-                            .find(|row| row.marker.id == marker.id)
-                            .ok_or_else(|| failed("Alias lost original call binding"))?;
-                        let hirsel_lir::ownership_trace::Point::CallEntered(block) = row.point
-                        else {
-                            return Err(failed("Alias is not an entered call"));
-                        };
-                        Some(
-                            *call_sites
-                                .get(&body.digest().0)
-                                .and_then(|sites| sites.get(&block))
-                                .ok_or_else(|| failed("Alias has no exact checked callee"))?,
-                        )
-                    } else {
-                        None
-                    },
-                    cleanup: if marker.kind == 4 {
-                        Some(
-                            plan.cleanup_captures(body, inputs.layouts, marker.id)
-                                .map_err(failed)?
-                                .1
-                                .into_iter()
-                                .map(|capture| (capture.field, capture.layout.0))
-                                .collect(),
-                        )
-                    } else {
-                        None
-                    },
-                    token: location(marker.token),
-                    owner: location(marker.owner),
-                    site: site_code(
-                        &body.header.definition,
-                        &body.header.implementation_revision,
-                        marker.site,
-                    ),
-                    layout: marker.layout.0,
-                    source,
-                    value_type: types
-                        .get(&marker.layout)
-                        .cloned()
-                        .unwrap_or_else(|| format!("layout#{}", marker.layout.0)),
+            let projected = |at| -> Result<_, NativeError> {
+                Ok(
+                    hirsel_lir::ownership_trace::native::projected_location(body, at)
+                        .map_err(failed)?
+                        .map(
+                            |path| hirsel_run_schema::ownership_trace::native::LocationPath {
+                                root: location(path.root),
+                                fields: path.fields,
+                            },
+                        ),
+                )
+            };
+            let metadata = Metadata {
+                action: marker.kind,
+                callee: if marker.kind == 3 {
+                    let row = original
+                        .observations
+                        .iter()
+                        .find(|row| row.marker.id == marker.id)
+                        .ok_or_else(|| failed("Alias lost original call binding"))?;
+                    let hirsel_lir::ownership_trace::Point::CallEntered(block) = row.point else {
+                        return Err(failed("Alias is not an entered call"));
+                    };
+                    Some(
+                        *call_sites
+                            .get(&body.digest().0)
+                            .and_then(|sites| sites.get(&block))
+                            .ok_or_else(|| failed("Alias has no exact checked callee"))?,
+                    )
+                } else {
+                    None
                 },
-            );
+                cleanup: if marker.kind == 4 {
+                    Some(
+                        plan.cleanup_captures(body, inputs.layouts, marker.id)
+                            .map_err(failed)?
+                            .1
+                            .into_iter()
+                            .map(|capture| (capture.field, capture.layout.0))
+                            .collect(),
+                    )
+                } else {
+                    None
+                },
+                additional_drops: Vec::new(),
+                token: location(marker.token),
+                owner: location(marker.owner),
+                token_path: projected(marker.token)?,
+                owner_path: projected(marker.owner)?,
+                site: site_code(
+                    &body.header.definition,
+                    &body.header.implementation_revision,
+                    marker.site,
+                ),
+                layout: marker.layout.0,
+                source,
+                value_type: types
+                    .get(&marker.layout)
+                    .cloned()
+                    .unwrap_or_else(|| format!("layout#{}", marker.layout.0)),
+            };
+            if let Some(prior) = markers.get_mut(&marker.id.0) {
+                if prior.action != 2
+                    || metadata.action != 2
+                    || prior.token != prior.owner
+                    || metadata.token != metadata.owner
+                    || prior.token_path != prior.owner_path
+                    || metadata.token_path != metadata.owner_path
+                    || prior.site != metadata.site
+                    || prior.source != metadata.source
+                {
+                    return Err(failed("ownership marker has inconsistent compound members"));
+                }
+                prior.additional_drops.push(DropMember {
+                    location: metadata.token,
+                    path: metadata.token_path,
+                    layout: metadata.layout,
+                    value_type: metadata.value_type,
+                });
+            } else {
+                markers.insert(marker.id.0, metadata);
+            }
         }
         if units.insert(plan.plan().unit.0, markers).is_some() {
             return Err(failed(
@@ -315,6 +347,21 @@ impl LeafObjects {
                 w.add(marker.value_type.capacity());
                 w.add(marker.source.definition.capacity());
                 w.add(marker.source.file.capacity());
+                for path in [&marker.token_path, &marker.owner_path]
+                    .into_iter()
+                    .flatten()
+                {
+                    w.flat_vec(&path.fields);
+                }
+                if let Some(fields) = &marker.cleanup {
+                    w.flat_vec(fields);
+                }
+                w.vec(&marker.additional_drops, |w, member| {
+                    w.add(member.value_type.capacity());
+                    if let Some(path) = &member.path {
+                        w.flat_vec(&path.fields);
+                    }
+                });
             })
         });
         w.map(&self.calls, |w, _, targets| {
