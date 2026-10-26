@@ -310,11 +310,22 @@ fn snapshot_file_waits_live_and_native_replay() {
                         hirsel_rt::io::Completion::Blocked { committed: false }
                     )
                 )));
-                let plain =
-                    hirsel_driver::replay_observations(&source, tape, Some(1_000_000)).unwrap();
-                let checked =
-                    hirsel_driver::replay_observations_checked(&source, tape, Some(1_000_000))
-                        .unwrap();
+                // Tape and provider state are fresh on each replay; the source
+                // graph was already checked for the simulation and native runs.
+                let plain = hirsel_driver::replay_loaded_observations(
+                    &mut loaded,
+                    tape,
+                    Some(1_000_000),
+                    false,
+                )
+                .unwrap();
+                let checked = hirsel_driver::replay_loaded_observations(
+                    &mut loaded,
+                    tape,
+                    Some(1_000_000),
+                    true,
+                )
+                .unwrap();
                 assert!(plain.equivalent(&checked));
                 assert_eq!(plain.blocked.is_some(), mode == "put_new");
                 assert_eq!(plain.exit_code, (mode != "put_new").then_some(0));
