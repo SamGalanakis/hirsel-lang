@@ -31,6 +31,7 @@ mod compare;
 mod flat;
 mod primitive_work;
 mod projection;
+mod sealed_drop;
 mod sealed_read;
 mod structural;
 mod structural_values;
@@ -244,6 +245,11 @@ enum Work {
         layout: LayoutId,
         dead: Vec<Vec<ProjectionStep<u64>>>,
         child_mask: Option<Vec<bool>>,
+    },
+    SealedStorageDeath(AllocId),
+    SealedOwnerDone {
+        owner: crate::ledger::sealed::SealedId,
+        control: Ptr,
     },
     Finalized(ResourceId),
     RetireCleanupInvocation(u32),
@@ -9951,6 +9957,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 DropStep::Child { offset: at, layout } => offset == at && id == layout,
                 DropStep::Release { offset: at }
                 | DropStep::ReleaseRoot { offset: at }
+                | DropStep::ReleaseSealed { offset: at }
                 | DropStep::Environment { offset: at }
                 | DropStep::CloseHandle { offset: at } => self.record(*id).ok().is_some_and(|r| {
                     r.drop.iter().any(|candidate| match (step, candidate) {
@@ -9958,6 +9965,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                         | (
                             DropStep::ReleaseRoot { .. },
                             DropStep::ReleaseRoot { offset: relative },
+                        )
+                        | (
+                            DropStep::ReleaseSealed { .. },
+                            DropStep::ReleaseSealed { offset: relative },
                         )
                         | (
                             DropStep::Environment { .. },
@@ -10107,8 +10118,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 let logical_path = self.ledger.path(logical_base);
                 let gated = |_: u64| dead.iter().any(|path| logical_path.starts_with(path));
                 match step {
-                    DropStep::ReleaseSealed { .. } => {
-                        return fail(V::Unsupported, "sealed storage H drop is not linked");
+                    DropStep::ReleaseSealed { offset } => {
+                        if !gated(offset) {
+                            self.release_sealed(base.at(offset), owner_layout, &mut d.work)?;
+                        }
                     }
                     DropStep::ReleaseReceipt { .. } => {
                         return fail(
@@ -10460,6 +10473,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                         }
                     }
                 }
+            }
+            Work::SealedStorageDeath(alloc) => {
+                if self.ledger.get(alloc).state != AllocState::Live {
+                    return fail(V::UseAfterFree, "sealed storage was drained more than once");
+                }
+                self.ledger.free(alloc)?;
+            }
+            Work::SealedOwnerDone { owner, control } => {
+                self.ledger.free(control.alloc)?;
+                self.ledger.finish_sealed_drop(owner)?;
             }
             Work::RetireCleanupInvocation(task) => {
                 if self.invocation_events.get_mut(&task).and_then(Vec::pop) != Some(true) {
@@ -10893,3 +10916,6 @@ mod sealed_tests;
 
 #[cfg(test)]
 mod sealed_read_tests;
+
+#[cfg(test)]
+mod sealed_drop_tests;

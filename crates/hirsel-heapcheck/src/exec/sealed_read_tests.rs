@@ -12,7 +12,7 @@ use hirsel_lir::stage::Rc;
 use hirsel_lir::structural::{Shape, ShapeGraph};
 use hirsel_lir::structural_access::AccessPlan;
 
-fn program(scalar: bool) -> Program<Rc> {
+pub(super) fn program(scalar: bool) -> Program<Rc> {
     let mut layouts = Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
     let root = if scalar {
         layouts.scalar(ScalarKind::U64)
@@ -109,7 +109,7 @@ fn program(scalar: bool) -> Program<Rc> {
     }
 }
 
-fn prepared(
+pub(super) fn prepared(
     m: &mut Machine<'_, Rc>,
     scalar: bool,
 ) -> (Frame, Ptr, crate::ledger::sealed::SealedId) {
