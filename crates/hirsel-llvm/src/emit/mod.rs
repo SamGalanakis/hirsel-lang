@@ -784,11 +784,19 @@ fn lower<T>(
         }
         let depth_leaf =
             hirsel_lir::invocations::room::depth_leaf_units(units.iter().map(|u| u.unit()));
+        let counter_units =
+            hirsel_lir::invocations::room::counter_units(units.iter().map(|u| u.unit()));
         for (unit, function, signature) in functions {
             let rooted = !signature.roots.is_empty();
             let mut emitter =
                 FnEmitter::new(&module, inputs, unit, function, signature, &mut manifested);
             emitter.room = hirsel_lir::invocations::room::RoomChecks::of(unit, &depth_leaf);
+            // A continuation re-enters with its callee's cleanup mode still
+            // live. Its saved admission needs the runtime's retained token.
+            if !inputs.alternate {
+                emitter.counters =
+                    hirsel_lir::invocations::room::RoomChecks::of(unit, &counter_units);
+            }
             emitter.ownership = ownership_plans
                 .as_ref()
                 .and_then(|plans| plans.get(&unit.header.instance));
@@ -1239,6 +1247,8 @@ struct FnEmitter<'m, 'a> {
     room: hirsel_lir::invocations::room::RoomChecks,
     /// The prologue's room test, built at the first room check (`no_room`).
     no_room: Option<Value<'m>>,
+    counters: hirsel_lir::invocations::room::RoomChecks,
+    counter_cell: Option<(Value<'m>, Value<'m>)>,
 }
 
 type Emitted<T = ()> = Result<T, CodegenError>;

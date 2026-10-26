@@ -438,6 +438,8 @@ pub(crate) fn emit(
     }
     let depth_leaf =
         hirsel_lir::invocations::room::depth_leaf_units(units.iter().map(|u| u.unit()));
+    let counter_units =
+        hirsel_lir::invocations::room::counter_units(units.iter().map(|u| u.unit()));
     let mut frames = BTreeMap::new();
     let mut context = Context::new();
     let mut builder_context = FunctionBuilderContext::new();
@@ -452,6 +454,11 @@ pub(crate) fn emit(
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
             let mut function = crate::function::FnEmitter::new(&mut emitter, unit, builder, sig);
             function.room = hirsel_lir::invocations::room::RoomChecks::of(unit, &depth_leaf);
+            // Resumable alternates retain the runtime admission's mode token.
+            if !inputs.alternate {
+                function.counters =
+                    hirsel_lir::invocations::room::RoomChecks::of(unit, &counter_units);
+            }
             function.ownership = ownership_plans
                 .as_ref()
                 .and_then(|plans| plans.get(&unit.header.instance));
@@ -484,6 +491,7 @@ pub(crate) fn emit(
             let builder = FunctionBuilder::new(&mut context.func, &mut builder_context);
             let mut function = crate::function::FnEmitter::new(&mut emitter, unit, builder, sig);
             function.room = hirsel_lir::invocations::room::RoomChecks::of(unit, &depth_leaf);
+
             function.resume = Some(crate::resume::Resume {
                 plan,
                 state: 0,

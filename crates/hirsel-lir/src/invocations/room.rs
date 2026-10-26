@@ -217,3 +217,26 @@ pub fn depth_leaf_units<'a, S: Stage + 'a>(
         .map(|unit| (unit.header.definition.clone(), Some(unit.header.instance)))
         .collect()
 }
+
+/// Direct compiled callees need only the logical counter, unless their own
+/// body invokes runtime-only checked callbacks. Such a callback inherits the
+/// immediately invoking decode/extern scope's full site entry. Calls made by a
+/// counter-only callee establish their own scopes in the ordinary way.
+///
+/// Unknown/imported/foreign and indirect targets are absent from this set and
+/// keep full entries. The same independently validated single-call scope walk
+/// as RoomChecks proves each selected retirement matches exactly one admission.
+pub fn counter_units<'a, S: Stage + 'a>(
+    units: impl IntoIterator<Item = &'a LirUnit<S>>,
+) -> BTreeSet<UnitKey> {
+    units
+        .into_iter()
+        .filter(|unit| {
+            !unit
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, Inst::Decode { .. }))
+        })
+        .map(|unit| (unit.header.definition.clone(), Some(unit.header.instance)))
+        .collect()
+}

@@ -167,8 +167,9 @@ pub const CTX_HEAP_ID_OFFSET: u64 = CTX_FUEL_OFFSET + 8;
 /// counts, then the `u32` finalizer nesting. An admission in cleanup mode (nesting or
 /// cleanup count nonzero) has room while the cleanup count is below
 /// `depth::CLEANUP_LIMIT`, otherwise while the foreground count is below
-/// `depth::FOREGROUND_LIMIT`. Only the runtime writes them; compiled code reads them
-/// for a depth-leaf callee's room check (`invocations::room`).
+/// `depth::FOREGROUND_LIMIT`. Validated native single-call scopes update their
+/// selected counter directly; depth-leaf callees need only a read-only room
+/// check (`invocations::room`). Runtime callback scopes retain their sites.
 pub const CTX_FOREGROUND_COUNT_OFFSET: u64 = CTX_HEAP_ID_OFFSET + 24;
 pub const CTX_CLEANUP_COUNT_OFFSET: u64 = CTX_FOREGROUND_COUNT_OFFSET + 2;
 pub const CTX_CLEANUP_MODE_OFFSET: u64 = CTX_FOREGROUND_COUNT_OFFSET + 4;

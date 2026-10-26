@@ -457,3 +457,61 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         ))
     }
 }
+
+impl<'m, 'a> FnEmitter<'m, 'a> {
+    /// This frame's allowance cannot change outside its own admissions: the
+    /// selector refuses FinalizeBegin/End and every callee retires its counters.
+    fn counter_cell(&mut self) -> (Value<'m>, Value<'m>) {
+        if let Some(cell) = self.counter_cell {
+            return cell;
+        }
+        use crate::context::{Access, BinOp, Cast, IntPredicate};
+        use hirsel_core_contract::depth::{CLEANUP_LIMIT, FOREGROUND_LIMIT};
+        use hirsel_lir::runtime_abi::{
+            CTX_CLEANUP_COUNT_OFFSET, CTX_CLEANUP_MODE_OFFSET, CTX_FOREGROUND_COUNT_OFFSET,
+        };
+        let b = &self.prologue;
+        let i16_ty = self.module.int_type(16);
+        let i32_ty = self.module.int_type(32);
+        let offset = |n| b.offset(self.context, self.const_u64(n));
+        let foreground_at = offset(CTX_FOREGROUND_COUNT_OFFSET);
+        let cleanup_at = offset(CTX_CLEANUP_COUNT_OFFSET);
+        let cleanup = b.load_access(i16_ty, cleanup_at, 2, Access::Depth);
+        let mode = b.load_access(i32_ty, offset(CTX_CLEANUP_MODE_OFFSET), 4, Access::Depth);
+        let either = b.binary(BinOp::Or, mode, b.cast(Cast::ZExt, cleanup, i32_ty));
+        let cleaning = b.icmp(IntPredicate::Ne, either, self.module.const_zero(i32_ty));
+        let cell = (
+            b.select(cleaning, cleanup_at, foreground_at),
+            b.select(
+                cleaning,
+                self.module.const_int(i16_ty, CLEANUP_LIMIT.into()),
+                self.module.const_int(i16_ty, FOREGROUND_LIMIT.into()),
+            ),
+        );
+        self.counter_cell = Some(cell);
+        cell
+    }
+    pub(super) fn counter_enter(&mut self, failure: FailureId) -> Emitted {
+        use crate::context::{Access, BinOp, IntPredicate};
+        let (at, limit) = self.counter_cell();
+        let ty = self.module.int_type(16);
+        let count = self.builder.load_access(ty, at, 2, Access::Depth);
+        let full = self.builder.icmp(IntPredicate::Uge, count, limit);
+        self.guard(full, failure)?;
+        let next = self
+            .builder
+            .binary(BinOp::Add, count, self.module.const_int(ty, 1));
+        self.builder.store_access(next, at, 2, Access::Depth);
+        Ok(())
+    }
+    pub(super) fn counter_leave(&mut self) {
+        use crate::context::{Access, BinOp};
+        let (at, _) = self.counter_cell();
+        let ty = self.module.int_type(16);
+        let count = self.builder.load_access(ty, at, 2, Access::Depth);
+        let next = self
+            .builder
+            .binary(BinOp::Sub, count, self.module.const_int(ty, 1));
+        self.builder.store_access(next, at, 2, Access::Depth);
+    }
+}

@@ -447,6 +447,15 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.guard(failed, failure)
             }
             Inst::FrameLeave if self.room.leaves.contains(&self.instruction_index()) => Ok(()),
+            Inst::FrameEnter { failure }
+                if self.counters.enters.contains(&self.instruction_index()) =>
+            {
+                self.counter_enter(failure)
+            }
+            Inst::FrameLeave if self.counters.leaves.contains(&self.instruction_index()) => {
+                self.counter_leave();
+                Ok(())
+            }
             Inst::FrameEnter { failure } => {
                 let anchor = self.unit.tables.failures[failure.index()].anchor;
                 let (caller, operation) = self.failure_sites(self.anchor_code(anchor)?);

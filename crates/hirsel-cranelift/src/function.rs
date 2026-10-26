@@ -162,6 +162,8 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) resume: Option<crate::resume::Resume<'a>>,
     /// Admissions of depth-leaf callees, lowered to room checks with no retirement.
     pub(crate) room: hirsel_lir::invocations::room::RoomChecks,
+    pub(crate) counters: hirsel_lir::invocations::room::RoomChecks,
+    counter_cell: Option<(Value, Value)>,
 }
 
 /// Bytes of a `hirsel_rt_v2_region` record.
@@ -250,6 +252,8 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             ownership_cleanup: None,
             resume: None,
             room: Default::default(),
+            counters: Default::default(),
+            counter_cell: None,
         }
     }
 
@@ -716,6 +720,9 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
     // The function.
 
     pub(crate) fn emit(mut self) -> Emitted {
+        if !self.counters.enters.is_empty() {
+            self.counter_cell = Some(self.make_counter_cell());
+        }
         if self.resume.is_some() {
             return self.emit_resume();
         }
@@ -2535,3 +2542,53 @@ mod receipt_call_tests;
 
 #[cfg(test)]
 mod guard_tests;
+
+impl FnEmitter<'_, '_, '_> {
+    fn make_counter_cell(&mut self) -> (Value, Value) {
+        use hirsel_core_contract::depth::{CLEANUP_LIMIT, FOREGROUND_LIMIT};
+        use hirsel_lir::runtime_abi::{
+            CTX_CLEANUP_COUNT_OFFSET, CTX_CLEANUP_MODE_OFFSET, CTX_FOREGROUND_COUNT_OFFSET,
+        };
+        let cleanup = self.load_ty(types::I16, self.context, CTX_CLEANUP_COUNT_OFFSET);
+        let mode = self.load_ty(types::I32, self.context, CTX_CLEANUP_MODE_OFFSET);
+        let wide = self.b.ins().uextend(types::I32, cleanup);
+        let either = self.b.ins().bor(mode, wide);
+        let cleaning = self.b.ins().icmp_imm(IntCC::NotEqual, either, 0);
+        let fg_at = self
+            .b
+            .ins()
+            .iadd_imm(self.context, CTX_FOREGROUND_COUNT_OFFSET as i64);
+        let cl_at = self
+            .b
+            .ins()
+            .iadd_imm(self.context, CTX_CLEANUP_COUNT_OFFSET as i64);
+        let fg_limit = self.b.ins().iconst(types::I16, i64::from(FOREGROUND_LIMIT));
+        let cl_limit = self.b.ins().iconst(types::I16, i64::from(CLEANUP_LIMIT));
+        (
+            self.b.ins().select(cleaning, cl_at, fg_at),
+            self.b.ins().select(cleaning, cl_limit, fg_limit),
+        )
+    }
+    pub(crate) fn counter_enter(&mut self, failure: FailureId) -> Emitted {
+        let (at, limit) = self
+            .counter_cell
+            .expect("counter scopes initialize their allowance in the prologue");
+        let count = self.b.ins().load(types::I16, flags(), at, 0);
+        let full = self
+            .b
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, count, limit);
+        self.guard(full, failure)?;
+        let next = self.b.ins().iadd_imm(count, 1);
+        self.b.ins().store(flags(), next, at, 0);
+        Ok(())
+    }
+    pub(crate) fn counter_leave(&mut self) {
+        let (at, _) = self
+            .counter_cell
+            .expect("counter scopes initialize their allowance in the prologue");
+        let count = self.b.ins().load(types::I16, flags(), at, 0);
+        let next = self.b.ins().iadd_imm(count, -1);
+        self.b.ins().store(flags(), next, at, 0);
+    }
+}

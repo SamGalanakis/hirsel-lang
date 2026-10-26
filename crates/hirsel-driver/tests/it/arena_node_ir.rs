@@ -94,20 +94,23 @@ fn arena_node_is_one_bump_without_extent() {
 
 /// Allocation cannot fail (runtime ABI 3), so `tree`'s only failure paths are its two
 /// recursive calls' LANG-10 guards: real non-tail recursion keeps one admission per
-/// recursive call, which fails at 1,024 frames. Each admission's status is one
-/// `icmp eq i8`, and so is each call's (a deeper frame's LANG-10 failure arrives
-/// through it), reanchored at its site. A failure after the left child is built
-/// releases it. Nothing else fails or releases.
+/// recursive call, which fails at 1,024 frames. Each admission compares the
+/// selected 16-bit counter to its allowance; the two successful entries and
+/// their four normal/failure retirements store that counter. Each call status
+/// remains an `icmp eq i8`, reanchored at its site. A failure after the left
+/// child is built releases it. Nothing else fails or releases.
 #[test]
 fn tree_has_no_failure_path() {
     for ir in function_ir("4tree") {
         let count = |needle: &str| ir.matches(needle).count();
-        assert_eq!(count("@hirsel_rt_v2_depth_enter_at_site("), 2, "{ir}");
-        assert_eq!(count("@hirsel_rt_v2_depth_leave("), 4, "{ir}");
+        assert_eq!(count("@hirsel_rt_v2_depth_enter_at_site("), 0, "{ir}");
+        assert_eq!(count("icmp ult i16"), 2, "{ir}");
+        assert_eq!(count("store i16"), 6, "{ir}");
+        assert_eq!(count("@hirsel_rt_v2_depth_leave("), 0, "{ir}");
         assert_eq!(count("call i8 @hirsel_rt_v2_failure_begin("), 2, "{ir}");
         assert_eq!(count("@hirsel_rt_v2_failure_reanchor("), 2, "{ir}");
         assert_eq!(count("@hirsel_rt_v2_failure_"), 4, "{ir}");
-        assert_eq!(count("icmp eq i8"), 4, "{ir}");
+        assert_eq!(count("icmp eq i8"), 2, "{ir}");
         assert_eq!(count("@hirsel.release"), 2, "{ir}");
         assert!(ir.contains("call ptr @hirsel_rt_v2_arena_alloc("), "{ir}");
     }
