@@ -3333,7 +3333,14 @@ impl<S: Stage> Checker<'_, '_, S> {
                 .get(&unit.instructions)
                 .unwrap_or(&[])
             {
-                if let Some(failure) = inst.failure() {
+                // RC gives early releases a syntactic cleanup edge, but a
+                // release with no reachable finalizer/close cannot take it.
+                // Derive that independently from C's layouts, not RC hints.
+                let infallible = matches!(inst, Inst::Release { layout, .. }
+                    if !self.cx.layouts.destructible(*layout));
+                if let Some(failure) = inst.failure()
+                    && !infallible
+                {
                     pending.push((
                         target(unit.tables.failures[failure.index()].cleanup),
                         State {
