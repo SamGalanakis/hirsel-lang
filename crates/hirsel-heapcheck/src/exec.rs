@@ -31,6 +31,7 @@ mod compare;
 mod flat;
 mod primitive_work;
 mod projection;
+mod sealed_read;
 mod structural;
 mod structural_values;
 pub use flat::{FlatStorage, run_with_flat_storage_observer};
@@ -194,6 +195,12 @@ pub(crate) struct Frame {
     /// Read-only inline SSA snapshots, one frame spill per static address.
     spills: Snapshot<Option<Ptr>>,
     loans: Snapshot<Option<Ptr>>,
+    sealed_loans: Snapshot<
+        Option<(
+            crate::ledger::sealed::SealedId,
+            crate::ledger::sealed::SealedLoan,
+        )>,
+    >,
     failing: bool,
     admitted: u32,
     invocation_sites: Vec<(Option<CallerSite>, Option<CallerSite>)>,
@@ -539,6 +546,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             prepared: (0..u.addresses.len()).map(|_| None).collect(),
             spills: (0..u.addresses.len()).map(|_| None).collect(),
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
+            sealed_loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
             invocation_sites: Vec::new(),
@@ -2379,6 +2387,29 @@ impl<'p, S: Stage> Machine<'p, S> {
                     ),
                 }
             }
+            ValueRepr::Handle
+                if matches!(self.record(layout)?.kind, LayoutKind::SealedRegion { .. }) =>
+            {
+                if size != self.word || !e.all_init(0, self.word) {
+                    return Err(uninit());
+                }
+                let Some(Cell::Data {
+                    ptr,
+                    counted,
+                    borrow,
+                }) = e.cells.get(&0)
+                else {
+                    return fail(
+                        V::ForgedPointer,
+                        "sealed owner bytes are not a checked control pointer",
+                    );
+                };
+                self.ledger.sealed_control(*ptr)?;
+                if self.ledger.check(*ptr)?.layout != Some(layout) {
+                    return fail(V::TypeConfusion, "sealed control has another owner layout");
+                }
+                Ok((Val::Ptr(*ptr), *borrow, *counted))
+            }
             ValueRepr::Handle => {
                 if size != 8 || !e.all_init(0, 8) {
                     return Err(uninit());
@@ -2468,6 +2499,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                 borrow: if persistent && !view { None } else { borrow },
             })
         };
+        if matches!(record.kind, LayoutKind::SealedRegion { .. }) {
+            let Val::Ptr(control) = &m.val else {
+                return fail(
+                    V::ForgedPointer,
+                    "sealed owner store requires a checked control pointer",
+                );
+            };
+            self.ledger.sealed_control(*control)?;
+            if self.ledger.check(*control)?.layout != Some(layout) {
+                return fail(
+                    V::TypeConfusion,
+                    "sealed owner store has another control layout",
+                );
+            }
+        }
         match m.val {
             Val::Unit => {}
             Val::Bits { scalar, bits } => {
@@ -2497,6 +2543,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         | LayoutKind::Slice { .. }
                         | LayoutKind::Opaque { .. }
                         | LayoutKind::Iterator { .. }
+                        | LayoutKind::SealedRegion { .. }
                 ) {
                     return fail(
                         V::TypeConfusion,
@@ -3601,11 +3648,16 @@ impl<'p, S: Stage> Machine<'p, S> {
         let unit = f.unit;
         let u = self.unit(unit);
         match *inst {
-            Inst::PayloadReceipt { .. }
-            | Inst::SealArena { .. }
-            | Inst::BorrowSealedRoot { .. }
-            | Inst::ArenaInventory { .. } => {
+            Inst::PayloadReceipt { .. } | Inst::SealArena { .. } | Inst::ArenaInventory { .. } => {
                 return fail(V::Unsupported, "sealed storage H adapter is not linked");
+            }
+            Inst::BorrowSealedRoot {
+                result,
+                owner,
+                loan,
+                shape,
+            } => {
+                self.read_sealed_root(f, result, owner, loan, shape)?;
             }
             Inst::Const { result, constant } => {
                 let data = u
@@ -5447,6 +5499,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                     .ok_or_else(|| err(V::Malformed, format!("unknown loan {loan:?}")))?;
                 if slot.take().is_none() && !if_active {
                     return fail(V::Malformed, format!("{loan:?} ended while inactive"));
+                }
+                if let Some((owner, pinned)) = f.sealed_loans[loan.index()].take() {
+                    self.ledger.end_sealed_loan(owner, pinned)?;
                 }
             }
             Inst::Drop {
@@ -10835,3 +10890,6 @@ fn soa_tag_width(scalar: ScalarKind) -> u64 {
 
 #[cfg(test)]
 mod sealed_tests;
+
+#[cfg(test)]
+mod sealed_read_tests;

@@ -352,4 +352,4 @@ mod tests {
 }
 
 mod ownership;
-pub(crate) use ownership::{SealedOwner, StorageCustody};
+pub(crate) use ownership::{SealedId, SealedLoan, SealedOwner, StorageCustody};

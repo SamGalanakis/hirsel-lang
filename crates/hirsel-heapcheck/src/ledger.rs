@@ -683,6 +683,7 @@ pub(crate) struct Ledger {
     pub tokens: Snapshot<Token>,
     pub regions: Snapshot<Region>,
     sealed_owners: Snapshot<sealed::SealedOwner>,
+    sealed_controls: Map<Ptr, sealed::SealedId>,
     pub handles: Handles,
     pub exemptions: History<Exemption>,
     pub counters: Counters,

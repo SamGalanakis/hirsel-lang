@@ -39,6 +39,7 @@ pub(crate) struct SealedOwner {
     loans: BTreeSet<u64>,
     next_loan: u64,
     root: Option<BitRoot>,
+    control: Option<Ptr>,
 }
 
 // These entry methods are independently tested before the instruction adapter
@@ -83,6 +84,7 @@ impl Ledger {
             loans: BTreeSet::new(),
             next_loan: 0,
             root: None,
+            control: None,
         });
         self.regions[region].storage = StorageCustody::Sealed(id);
         Ok(id)
@@ -147,6 +149,49 @@ impl Ledger {
             return fail(V::TypeConfusion, "sealed root layout differs from its read");
         }
         Ok(&root.value)
+    }
+
+    /// Associate a private, affine checked allocation with an actual H owner.
+    /// Integer handle bits and ordinary run-context handles supply no binding.
+    pub(crate) fn bind_sealed_control(&mut self, control: Ptr, id: SealedId) -> Checked<()> {
+        let allocation = self.check(control)?;
+        if control.offset != 0
+            || allocation.owner != Owner::Heap
+            || allocation.count != Some(Count::Finite(1))
+            || self.sealed_controls.get(&control).is_some()
+        {
+            return fail(
+                V::TypeConfusion,
+                "sealed control is not a fresh affine allocation",
+            );
+        }
+        let owner = self
+            .sealed_owners
+            .get_mut(id.0 as usize)
+            .ok_or_else(|| err(V::ForgedPointer, "sealed control names an unknown owner"))?;
+        if owner.phase != Phase::Live || owner.control.is_some() || owner.root.is_none() {
+            return fail(V::CreditUnderflow, "sealed owner has no unbound typed root");
+        }
+        owner.control = Some(control);
+        self.sealed_controls.insert(control, id);
+        Ok(())
+    }
+
+    pub(crate) fn sealed_control(&self, control: Ptr) -> Checked<SealedId> {
+        let allocation = self.check(control)?;
+        if allocation.owner != Owner::Heap || allocation.count != Some(Count::Finite(1)) {
+            return fail(V::CreditUnderflow, "sealed control lost its affine credit");
+        }
+        let id = self
+            .sealed_controls
+            .get(&control)
+            .copied()
+            .ok_or_else(|| err(V::ForgedPointer, "pointer has no sealed owner binding"))?;
+        let owner = &self.sealed_owners[id.0 as usize];
+        if owner.phase != Phase::Live || owner.control != Some(control) {
+            return fail(V::BorrowExpired, "sealed control owner is not live");
+        }
+        Ok(id)
     }
 
     pub(crate) fn begin_sealed_loan(&mut self, id: SealedId) -> Checked<SealedLoan> {
@@ -249,6 +294,29 @@ impl Ledger {
                 .ok_or_else(|| err(V::Malformed, "sealed owner lost its source scope"))?;
             if scope.storage != StorageCustody::Sealed(SealedId(index as u32)) {
                 return fail(V::RegionEscape, "scope and sealed storage custody disagree");
+            }
+            if let Some(control) = owner.control {
+                let allocation = self
+                    .lookup(control.alloc)
+                    .ok_or_else(|| err(V::ForgedPointer, "sealed control storage is missing"))?;
+                if allocation.generation != control.generation {
+                    return fail(V::StaleGeneration, "sealed control storage was reused");
+                }
+                if owner.phase == Phase::Live
+                    && (allocation.state != AllocState::Live
+                        || allocation.count != Some(Count::Finite(1)))
+                {
+                    return fail(
+                        V::CreditUnderflow,
+                        "live sealed control lost its affine holder",
+                    );
+                }
+                if owner.phase == Phase::Dead && allocation.state != AllocState::Dead {
+                    return fail(
+                        V::UnexplainedAllocation,
+                        "dead sealed owner retained its control",
+                    );
+                }
             }
             for ptr in &owner.allocations {
                 if !members.insert(ptr.alloc) {
