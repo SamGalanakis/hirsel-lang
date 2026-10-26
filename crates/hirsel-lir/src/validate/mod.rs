@@ -1295,10 +1295,6 @@ impl<'a> Layouts<'a> {
             }
         })
     }
-    /// The layout of the field (of any variant, at any inline depth) stored at `offset`.
-    fn field_at(&self, layout: &LayoutRecord, offset: u64) -> Option<LayoutId> {
-        self.0.field_at(layout, offset)
-    }
 }
 
 /// Violations collected by every phase.
