@@ -586,13 +586,14 @@ fn accepted_generator_view_refuses_short_grants_without_publishing_sources_and_k
                     .unwrap();
                 assert!(accepted.retained_bytes() > 0);
                 assert!(accepted.retained_bytes() <= 16 << 20);
+                let retained = accepted.retained_bytes();
                 let detached = program.engine.sources.clone();
                 drop(accepted);
                 drop(output);
                 assert!(budget.reserved() > 0);
                 // The engine and this detached source both retain the new source grant.
                 drop(detached);
-                assert_eq!(budget.reserved(), 16 << 20);
+                assert_eq!(budget.reserved(), retained);
             });
         }
     });
@@ -803,6 +804,52 @@ fn rejected_generator_header_retains_diagnostic_sources_without_namespace_public
                     drop(detached);
                     assert_eq!(budget.reserved(), 0);
                 },
+            );
+        }
+    });
+}
+
+#[test]
+fn accepted_generator_view_releases_unused_syntax_grant_and_keeps_clone_owned_bytes() {
+    use hirsel_engine::{runtime::*, *};
+    with_compiler_stack(|| {
+        for jobs in [1, 2] {
+            let mut retained_budget = None;
+            accepted_output_control(jobs, |program, budget, output| {
+                let before = budget.reserved();
+                let accepted = program
+                    .engine
+                    .accept_front_registration(output, budget.reserve(16 << 20).unwrap())
+                    .unwrap();
+                let retained = accepted.retained_bytes();
+                assert!(retained > 0 && retained < 16 << 20);
+                assert_eq!(
+                    budget.reserved(),
+                    before + retained,
+                    "acceptance releases every unused syntax byte immediately"
+                );
+                let cloned = accepted.clone();
+                let source = program.engine.sources.clone();
+                drop(accepted);
+                assert_eq!(budget.reserved(), before + retained);
+                drop(cloned);
+                assert_eq!(
+                    budget.reserved(),
+                    retained,
+                    "only detached source ownership survives producer destruction"
+                );
+                drop(source);
+                assert_eq!(
+                    budget.reserved(),
+                    retained,
+                    "engine source still owns accepted bytes"
+                );
+                retained_budget = Some(budget.clone());
+            });
+            assert_eq!(
+                retained_budget.unwrap().reserved(),
+                0,
+                "last engine source releases exact retained grant"
             );
         }
     });
