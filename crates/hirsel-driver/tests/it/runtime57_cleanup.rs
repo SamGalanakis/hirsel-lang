@@ -125,3 +125,62 @@ fn runtime57_cleanup_sender_payload_runs_nested_close_on_both_backends() {
         );
     });
 }
+
+/// Counted containers and direct endpoint values select distinct owned adapters.
+#[test]
+fn runtime57_cleanup_counted_endpoint_container_and_inline_endpoint_keep_exact_sites() {
+    const CONTAINER: &str = r#"
+pub fn main(rt:Io)->Result[(),GrantError] {
+  let tasks=io.tasks(rt)?
+  let output=io.stdout(rt)?
+  let answer=task.scope(tasks,fn(s:Scope)->u64 {
+    let child=task.async(s,fn()->u64 {
+      let (tx,rx):(Sender[u64],Receiver[u64])=channel.open(tasks)
+      let held:List[Sender[u64]]=[sender.dup(tasks,tx),sender.dup(tasks,tx)]
+      41u64
+    })
+    task.await(s,take child)
+  })
+  let _=out.print(output,f"{answer}\n")
+  Ok(())
+}
+"#;
+    with_compiler_stack(|| {
+        use hirsel_lir::{ir::ValueRepr, layout_types::LayoutKind};
+        let program = ready(CONTAINER);
+        let plans = native::continuation::plans(&program);
+        native::continuation::validate(&program, &plans).unwrap();
+        let mut counted = 0;
+        let mut inline = 0;
+        for unit in &program.units {
+            let unit = unit.unit();
+            let Some(plan) = plans.get(unit.header.instance) else {
+                continue;
+            };
+            for state in &plan.cleanups {
+                let ty = &unit.types[unit.values[state.value.index()].ty.index()];
+                if ty.repr == ValueRepr::Block
+                    && program.table.layout(ty.layout).is_some_and(|r| {
+                        matches!(r.kind, LayoutKind::Block { .. } | LayoutKind::Box { .. })
+                    })
+                {
+                    counted += 1;
+                } else if ty.repr != ValueRepr::Block {
+                    inline += 1;
+                }
+            }
+        }
+        assert!(counted > 0, "missing counted cleanup adapter");
+        assert!(inline > 0, "missing inline cleanup adapter");
+        assert_eq!(
+            compact_runs_with(
+                CONTAINER,
+                "counted and inline endpoint cleanup",
+                true,
+                "tasks.free@1"
+            )
+            .len(),
+            4
+        );
+    });
+}
