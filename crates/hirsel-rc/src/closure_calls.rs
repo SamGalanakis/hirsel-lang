@@ -21,6 +21,7 @@ pub const HIGHER_ORDER: &[&str] = &[
     "arena.bounded",
     "task.scope",
     "task.scope_until",
+    "task.isolate",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

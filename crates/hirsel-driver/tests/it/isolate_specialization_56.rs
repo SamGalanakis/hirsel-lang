@@ -1,4 +1,4 @@
-//! Independently check proposed isolate callback bindings without enabling them.
+//! Independently check actual specialized isolate callback bindings.
 //! Until completed-begin and cleanup stages are certified, its caller retains
 //! the existing opaque boundary. A dynamic phi never creates a known target.
 use hirsel_driver::native;
@@ -30,6 +30,19 @@ fn check(callback: &str, known: bool) {
             .filter(|u| u.header.definition.is_core("task.isolate"))
             .collect();
         assert!(!wrappers.is_empty());
+        let specialized = wrappers.iter().any(|wrapper| {
+            wrapper.tables.calls.iter().any(|call| {
+                let Callee::Bound { code, .. } = call.callee else {
+                    return false;
+                };
+                !wrapper.tables.symbols[code.index()]
+                    .definition
+                    .0
+                    .package
+                    .package_is("core", "1")
+            })
+        });
+        assert_eq!(specialized, known);
         let mut proved = 0;
         for caller in program.units.iter().map(|u| u.unit()) {
             for (at, call) in caller.tables.calls.iter().enumerate() {
@@ -43,9 +56,8 @@ fn check(callback: &str, known: bool) {
                 else {
                     continue;
                 };
-                // Assemble the proposed binding from a real closure construction.
-                // The production producer remains disabled in this slice; the
-                // proof must derive whether this proposal matches actual SSA.
+                // The proof derives whether each proposed binding matches
+                // actual SSA independently of specialization discovery.
                 for construction in &caller.tables.closures {
                     let Some(code) = construction.code else {
                         continue;
@@ -62,19 +74,23 @@ fn check(callback: &str, known: bool) {
                     let mut wrapper = (**wrapper).clone();
                     let Some((index, closure)) = wrapper.tables.calls.iter().enumerate().find_map(
                         |(index, call)| match call.callee {
-                            Callee::Indirect(closure) => Some((index, closure)),
+                            Callee::Indirect(closure) | Callee::Bound { closure, .. } => {
+                                Some((index, closure))
+                            }
                             _ => None,
                         },
                     ) else {
                         continue;
                     };
-                    let symbol = hirsel_lir::ir::SymbolId(wrapper.tables.symbols.len() as u32);
-                    wrapper.tables.symbols.push(target.clone());
-                    wrapper.tables.calls[index].callee = Callee::Bound {
-                        code: symbol,
-                        closure,
-                    };
-                    wrapper.tables.calls[index].abi = callback.header.abi;
+                    if matches!(wrapper.tables.calls[index].callee, Callee::Indirect(_)) {
+                        let symbol = hirsel_lir::ir::SymbolId(wrapper.tables.symbols.len() as u32);
+                        wrapper.tables.symbols.push(target.clone());
+                        wrapper.tables.calls[index].callee = Callee::Bound {
+                            code: symbol,
+                            closure,
+                        };
+                        wrapper.tables.calls[index].abi = callback.header.abi;
+                    }
                     assert_eq!(wrapper.header.origin, UnitOrigin::Library);
                     let environment = program.ahead_environments[&callback.header.instance];
                     let proof = hirsel_lir::continuation::isolate::IsolateCallback::prove(
