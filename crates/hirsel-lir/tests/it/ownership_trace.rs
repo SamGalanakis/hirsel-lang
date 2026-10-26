@@ -3821,3 +3821,113 @@ fn ownership_trace_arena_control_relocates_original_unique_lifetimes() {
     forged.observations.push(extra);
     assert!(check(after.unit(), &forged).is_err());
 }
+
+#[test]
+fn ownership_trace_nested_arena_entries_keep_original_lifetimes_through_ready() {
+    let (before, _, table, finalizers) = finalizer_transport_fixture();
+    let mut before = before.into_stage::<hirsel_lir::stage::Value>();
+    before.header.origin = UnitOrigin::Library;
+    for construct in &mut before.tables.constructs {
+        construct.placement = None;
+    }
+    let arena_type = before.types.iter().position(|ty| ty.layout == l::ARENA);
+    let arena_type = arena_type
+        .map(|index| LirTypeId(index as u32))
+        .unwrap_or_else(|| {
+            let index = LirTypeId(before.types.len() as u32);
+            before.types.push(LirType {
+                repr: ValueRepr::Arena,
+                layout: l::ARENA,
+            });
+            index
+        });
+    for _ in 0..2 {
+        let token = ValueId(before.values.len() as u32);
+        before.values.push(ValueInfo {
+            ty: arena_type,
+            holding: Holding::Plain,
+        });
+        let at = before.blocks[before.entry.index()].instructions.start as usize;
+        before.instructions.insert(
+            at,
+            Inst::ArenaOpen {
+                result: token,
+                budget: None,
+            },
+        );
+        for (index, block) in before.blocks.iter_mut().enumerate() {
+            if index == before.entry.index() {
+                block.instructions.len += 1;
+            } else if block.instructions.start as usize >= at {
+                block.instructions.start += 1;
+            }
+        }
+    }
+    let before = checked_nested_arena_fixture(before, &table);
+    let input = native::LeafPlan::prepare_value(&before, &table).unwrap();
+    assert_eq!(input.observations.len(), 3);
+    let index = hirsel_lir::LayoutIndex::new(&table);
+    let lowered = hirsel_rc::observed::lower(
+        before.unit().clone(),
+        &input,
+        &index,
+        &hirsel_rc::observed::Options {
+            placement: &hirsel_rc::placement::Options::default(),
+            proofs: &hirsel_rc::insert::Proofs::default(),
+            elide: true,
+            reuse: &hirsel_rc::reuse::Options::default(),
+            finalizers: &finalizers,
+        },
+    )
+    .unwrap();
+    assert_eq!(lowered.recipes.len(), 10);
+    assert_eq!(lowered.recipes[0].before, input.unit);
+    assert_eq!(lowered.recipes.last().unwrap().after, lowered.plan.unit);
+    assert_eq!(
+        lowered
+            .plan
+            .observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>(),
+        input
+            .observations
+            .iter()
+            .map(|row| &row.marker)
+            .collect::<Vec<_>>()
+    );
+    let ready = checked_nested_arena_fixture(lowered.unit, &table);
+    native::LeafPlan::from_relocated(&ready, &table, &lowered.plan).unwrap();
+}
+
+fn checked_nested_arena_fixture<S: hirsel_lir::stage::Stage>(
+    unit: LirUnit<S>,
+    table: &hirsel_lir::layout_types::LayoutTable,
+) -> hirsel_lir::stage::ValidatedUnit<S> {
+    // The independently declared finalizer is body 1 of Res, as in the
+    // fixture layout; a Library caller must carry that invocation reference.
+    let mut operations = support::registry();
+    operations
+        .invocation_bodies
+        .push(hirsel_lir::invocations::ReferenceBody {
+            definition: support::path("Res"),
+            instance: support::hash("Res.drop"),
+            body: 1,
+        });
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
+        "hirsel_rt_op".into(),
+    ));
+    hirsel_lir::validate::validate(
+        unit,
+        &hirsel_lir::validate::Inputs {
+            memo: Default::default(),
+            discharge: None,
+            operations: &operations,
+            target: &target,
+            layouts: table,
+            manifest: &manifest,
+        },
+    )
+    .unwrap()
+}

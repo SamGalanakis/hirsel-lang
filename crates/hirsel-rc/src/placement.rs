@@ -985,20 +985,57 @@ fn exit_everywhere<const TRACK: bool>(
 ) -> Result<(), PlaceError> {
     origins.complete(ed);
     let n = ed.unit.blocks.len();
-    // Propagations: the exit's own failure propagates too.
-    for b in 0..n {
-        if ed.unit.terminators[b] == Terminator::Propagate {
-            let anchor = ed.unit.blocks[b].anchor;
-            let tail = ed.block(BlockKind::FailureCleanup, &[], anchor);
-            ed.unit.terminators[tail.index()] = Terminator::Propagate;
-            let e = ed.edge(tail, &[]);
-            let failure = ed.failure(e, anchor);
-            ed.code[b].push(Inst::RegionExit {
-                mark,
-                region,
-                failure,
+    // A previous inner exit can already have released this outer region on
+    // its failure path. Replay the actual outgoing ownership state before
+    // adding an exit to a propagation; never consume the same mark twice.
+    let propagations = {
+        let flow = crate::insert::Flow {
+            unit: &ed.unit,
+            code: &ed.code,
+            lay,
+            facts,
+        };
+        let states = flow.solve();
+        let mut blocks = Vec::new();
+        for b in 0..n {
+            if ed.unit.terminators[b] != Terminator::Propagate {
+                continue;
+            }
+            let Some(state) = states[b].clone() else {
+                continue;
+            };
+            let mut active = None;
+            flow.block_after(BlockId(b as u32), state, |index, state| {
+                if index == ed.code[b].len() {
+                    active = Some((
+                        state.regions[region.index()],
+                        state.credits.get(&mark).copied(),
+                    ));
+                }
             });
+            match active {
+                Some((crate::insert::Tri::Yes, Some(1))) => blocks.push(b),
+                Some((crate::insert::Tri::No, None)) => (),
+                _ => {
+                    return Err(PlaceError::Unsupported(
+                        "ambiguous arena exit ownership".into(),
+                    ));
+                }
+            }
         }
+        blocks
+    };
+    for b in propagations {
+        let anchor = ed.unit.blocks[b].anchor;
+        let tail = ed.block(BlockKind::FailureCleanup, &[], anchor);
+        ed.unit.terminators[tail.index()] = Terminator::Propagate;
+        let e = ed.edge(tail, &[]);
+        let failure = ed.failure(e, anchor);
+        ed.code[b].push(Inst::RegionExit {
+            mark,
+            region,
+            failure,
+        });
     }
     // A result already in whole-slot storage needs only its final, infallible
     // take after the exit. A pending owned result gets equivalent staging in
