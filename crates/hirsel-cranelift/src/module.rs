@@ -448,8 +448,10 @@ pub(crate) fn emit(
             resumed.push((unit, plan, name, id, sig));
         }
     }
-    let depth_leaf =
-        hirsel_lir::invocations::room::depth_leaf_units(units.iter().map(|u| u.unit()));
+    let depth_leaf = hirsel_lir::invocations::room::depth_leaf_units(
+        units.iter().map(|u| u.unit()),
+        inputs.layouts,
+    );
     let counter_units =
         hirsel_lir::invocations::room::counter_units(units.iter().map(|u| u.unit()));
     let mut frames = BTreeMap::new();

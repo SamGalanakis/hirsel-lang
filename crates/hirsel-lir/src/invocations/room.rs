@@ -10,6 +10,7 @@
 //! record and site are the admission's own, so overflow fails at exactly the
 //! same frame and call site.
 use crate::ir::*;
+use crate::layout_types::{LayoutKind, LayoutTable, SizeSpec};
 use crate::stage::Stage;
 use hirsel_core_contract::depth::adds_activation;
 use hirsel_syntax::{ContentHash, DefPath};
@@ -21,8 +22,11 @@ pub type UnitKey = (DefPath, Option<ContentHash>);
 /// Whether `unit` is depth-leaf. Conservative: only in-place instructions and only
 /// calls of leaf operations; anything that releases, finalizes, switches regions or
 /// catches failure is refused.
-pub fn depth_leaf<S: Stage>(unit: &LirUnit<S>) -> bool {
-    let instructions = unit.instructions.iter().all(in_place);
+pub fn depth_leaf<S: Stage>(unit: &LirUnit<S>, layouts: &LayoutTable) -> bool {
+    let instructions = unit
+        .instructions
+        .iter()
+        .all(|inst| in_place(inst) || inline_construct(unit, layouts, inst));
     instructions
         && unit.terminators.iter().all(|terminator| match terminator {
             Terminator::Jump(_)
@@ -55,6 +59,41 @@ pub fn depth_leaf<S: Stage>(unit: &LirUnit<S>) -> bool {
             | Terminator::Recover { .. }
             | Terminator::Isolate { .. } => false,
         })
+}
+
+/// Match the fixed inline branch of native construction. A representation alone
+/// is insufficient: block references and dynamically encoded values also have
+/// aggregate carriers. These layouts only copy field bytes and write a tag;
+/// allocation, child-credit walks and destruction stay outside the proof.
+fn inline_construct<S: Stage>(unit: &LirUnit<S>, layouts: &LayoutTable, inst: &Inst) -> bool {
+    let Inst::Construct {
+        result, construct, ..
+    } = inst
+    else {
+        return false;
+    };
+    let Some(site) = unit.tables.constructs.get(construct.index()) else {
+        return false;
+    };
+    let Some(value) = unit.values.get(result.index()) else {
+        return false;
+    };
+    let Some(layout) = layouts.layout(site.layout) else {
+        return false;
+    };
+    let Some(ty) = unit.types.get(value.ty.index()) else {
+        return false;
+    };
+    ty.layout == site.layout
+        && matches!(
+            site.constructor,
+            ConstructorKind::Tuple | ConstructorKind::Record(_) | ConstructorKind::Variant { .. }
+        )
+        && matches!(
+            layout.kind,
+            LayoutKind::Unit | LayoutKind::Aggregate | LayoutKind::Variant
+        )
+        && matches!(layout.size, SizeSpec::Fixed(_))
 }
 
 /// An instruction that touches memory or scalars in place: it reads no LANG-10
@@ -210,10 +249,11 @@ impl RoomChecks {
 /// The depth-leaf units among `units`, keyed as direct symbols name them.
 pub fn depth_leaf_units<'a, S: Stage + 'a>(
     units: impl IntoIterator<Item = &'a LirUnit<S>>,
+    layouts: &LayoutTable,
 ) -> BTreeSet<UnitKey> {
     units
         .into_iter()
-        .filter(|unit| depth_leaf(unit))
+        .filter(|unit| depth_leaf(unit, layouts))
         .map(|unit| (unit.header.definition.clone(), Some(unit.header.instance)))
         .collect()
 }
