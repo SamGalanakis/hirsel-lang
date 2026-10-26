@@ -1157,11 +1157,11 @@ impl Snapshot<Cx> for Definition {
         r.open("Definition")?;
         read_table(r)?;
         let mut value = Definition {
+            inferred_unique: Snapshot::read(r)?,
             caller_bodies: Snapshot::read(r)?,
             protocol_associations: Snapshot::read(r)?,
             types: Arc::from([]),
             path: Snapshot::read(r)?,
-            inferred_unique: Snapshot::read(r)?,
             signature_hash: Snapshot::read(r)?,
             bodies: Snapshot::read(r)?,
             entry: Snapshot::read(r)?,
@@ -1265,5 +1265,44 @@ mod tests {
         };
         assert!(runs.iter().all(|run| *run == runs[0]), "{runs:#?}");
         assert_eq!(runs[0], tables(), "salted runs agree with the unsalted one");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn definition_header_summary_round_trips_in_written_field_order() {
+    let types = TypeInterner::new(None);
+    let locator: Locator = Rc::new(|_| Location::unknown());
+    for inferred_unique in [
+        UniqueSummary::default(),
+        UniqueSummary {
+            preserves_unique: vec![hirsel_types::ParamId(2)],
+            results: vec![
+                UniqueResultRow::Root,
+                UniqueResultRow::Payload {
+                    variant: 1,
+                    field: 0,
+                },
+            ],
+        },
+    ] {
+        let definition = Definition {
+            inferred_unique,
+            caller_bodies: vec![],
+            protocol_associations: vec![],
+            types: Arc::from([]),
+            path: hirsel_syntax::DefId::intern(&DefPath::core("round_trip")),
+            signature_hash: ContentHash::default(),
+            bodies: vec![],
+            entry: BodyId(0),
+            contracts: vec![],
+        };
+        let mut writer = Writer::with_context(Cx::new(locator.clone(), types.clone()));
+        definition.write(&mut writer);
+        let (text, _) = writer.finish();
+        let mut reader = Reader::with_context(&text, Cx::new(locator.clone(), types.clone()));
+        let decoded = Definition::read(&mut reader).unwrap();
+        reader.finish().unwrap();
+        assert_eq!(decoded, definition);
     }
 }
