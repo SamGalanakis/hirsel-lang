@@ -14,9 +14,11 @@
 //! (fdbrpc/sim2.cpp:1588-1616); MadSim checks a repeated seed's RNG
 //! transcript (madsim/src/sim/runtime/mod.rs:178-200); Shuttle replays the
 //! recorded schedule and fails at the first decision that differs
-//! (shuttle-schedulers/src/uncontrolled_nondeterminism.rs:61-97). The
-//! transcript here holds every RNG draw, every runnable set with its selected
-//! member, and every yield site. This proves neither weak memory
+//! (shuttle-schedulers/src/uncontrolled_nondeterminism.rs:39-58,61-100).
+//! Like Shuttle, checked completion also requires consuming the whole expected
+//! transcript. Unlike its next-execution panic, finish reports divergence here.
+//! The transcript here holds every RNG draw, every runnable set with its
+//! selected member, and every yield site. This proves neither weak memory
 //! (proofs/free, `models`) nor the native switch ABI (`progress`).
 use super::super::dispatch_tests::{Topology, topology};
 use super::super::*;
@@ -74,8 +76,10 @@ pub(super) enum Entry {
 #[derive(Debug)]
 pub(super) struct Divergence {
     pub(super) index: usize,
+    /// None means the expected transcript ended at this index.
     pub(super) expected: Option<Entry>,
-    pub(super) actual: Entry,
+    /// None means the actual transcript ended at this index, without an event.
+    pub(super) actual: Option<Entry>,
 }
 
 /// Where choices come from: the seed's generator, or an explicit schedule.
@@ -103,7 +107,8 @@ pub(super) struct Mutation {
 }
 
 /// Seeded choices and their checked transcript. With `expected`, the first
-/// entry that differs is retained and the run ends there.
+/// entry that differs is retained and the run ends there. Finish also checks
+/// that no expected suffix remains.
 pub(super) struct Controller {
     source: Source,
     transcript: Vec<Entry>,
@@ -200,10 +205,25 @@ impl Controller {
             self.divergence = Some(Divergence {
                 index: self.transcript.len(),
                 expected: expected.get(self.transcript.len()).cloned(),
-                actual: entry.clone(),
+                actual: Some(entry.clone()),
             });
         }
         self.transcript.push(entry);
+    }
+
+    /// Check end-of-transcript without adding an event. An already halted run
+    /// keeps its first mismatch or invalid choice rather than blaming its tail.
+    fn finish(&mut self) {
+        if !self.halted()
+            && let Some(expected) = &self.expected
+            && let Some(entry) = expected.get(self.transcript.len())
+        {
+            self.divergence = Some(Divergence {
+                index: self.transcript.len(),
+                expected: Some(entry.clone()),
+                actual: None,
+            });
+        }
     }
 
     /// The run ends: a checked entry differed or a scheduled choice was invalid.
@@ -2092,6 +2112,7 @@ impl World {
     }
 
     fn finish(mut self) -> Outcome {
+        self.c.finish();
         let divergence = self.c.divergence.take();
         let complete = divergence.is_none() && self.c.invalid.is_none();
         if complete {
@@ -2267,6 +2288,141 @@ pub(super) fn replay(
     })
 }
 
+/// Shuttle's early-completion vector, with an exact recorded schedule.
+#[test]
+fn runtime50_checked_rejects_unconsumed_suffix() {
+    let config = Config::of(0);
+    let first = run(config, None, None);
+    let choices = reduce::choices(&first.transcript);
+    let mut expected = first.transcript.clone();
+    let suffix = Entry::Handoff {
+        site: "expected suffix",
+        owner: None,
+    };
+    expected.push(suffix.clone());
+    // Both seeded and explicit-choice checked replay must reject the suffix.
+    for checked in [
+        run(config, Some(expected.clone()), None),
+        replay(config, &choices, Some(expected), None),
+    ] {
+        assert_eq!(checked.transcript, first.transcript);
+        assert_eq!(checked.projection, first.projection);
+        assert_eq!(checked.invalid, None);
+        let d = checked.divergence.expect("unconsumed expected suffix");
+        assert_eq!(d.index, first.transcript.len());
+        assert_eq!(d.expected, Some(suffix.clone()));
+        assert_eq!(d.actual, None, "actual end is not a synthetic event");
+    }
+}
+
+/// Shuttle's early/late completion and runnable-mismatch vectors, including
+/// empty transcripts at the controller seam where no driver event is required.
+#[test]
+fn runtime50_checked_transcript_boundaries() {
+    let entry = Entry::Decision {
+        site: "event",
+        runnable: vec![1, 2],
+        selected: Some(1),
+    };
+    let different = Entry::Decision {
+        site: "event",
+        runnable: vec![1, 3],
+        selected: Some(1),
+    };
+    let vectors = [
+        (
+            vec![],
+            vec![entry.clone()],
+            Some((0, Some(entry.clone()), None)),
+        ),
+        (
+            vec![entry.clone(), different.clone()],
+            vec![entry.clone()],
+            Some((1, None, Some(different.clone()))),
+        ),
+        (vec![entry.clone()], vec![entry.clone()], None),
+        (vec![], vec![], None),
+        // The first runnable mismatch survives an unconsumed suffix.
+        (
+            vec![different.clone()],
+            vec![entry.clone(), entry.clone()],
+            Some((0, Some(entry.clone()), Some(different.clone()))),
+        ),
+    ];
+    for (actual, expected, divergence) in vectors {
+        let mut c = Controller::schedule(&[], Some(expected), None);
+        for entry in &actual {
+            c.push(entry.clone());
+        }
+        c.finish();
+        assert_eq!(c.transcript, actual);
+        assert_eq!(
+            c.divergence
+                .as_ref()
+                .map(|d| (d.index, d.expected.clone(), d.actual.clone())),
+            divergence,
+        );
+    }
+    // Unchecked completion, including the empty transcript, is unchanged.
+    for actual in [vec![], vec![entry]] {
+        let mut c = Controller::schedule(&[], None, None);
+        for entry in &actual {
+            c.push(entry.clone());
+        }
+        c.finish();
+        assert!(!c.halted());
+        assert_eq!(c.transcript, actual);
+    }
+}
+
+#[test]
+fn runtime50_checked_invalid_choice_keeps_its_classification() {
+    let entry = Entry::Random {
+        site: "choice",
+        bound: 2,
+        value: 0,
+    };
+    let suffix = Entry::Handoff {
+        site: "suffix",
+        owner: None,
+    };
+    // Invalid with matching entries and an expected suffix must remain invalid.
+    // A simultaneous mismatch is retained for diagnostics, as before.
+    for value in [0, 1] {
+        let mut c = Controller::schedule(
+            &[2],
+            Some(vec![
+                Entry::Random {
+                    site: "choice",
+                    bound: 2,
+                    value,
+                },
+                suffix.clone(),
+            ]),
+            None,
+        );
+        c.random("choice", 2);
+        c.finish();
+        assert_eq!(c.invalid, Some(0));
+        assert_eq!(c.transcript, vec![entry.clone()]);
+        assert_eq!(c.divergence.is_some(), value == 1);
+        if let Some(d) = c.divergence {
+            assert_eq!(d.index, 0);
+            assert_eq!(d.actual, Some(entry.clone()));
+        }
+    }
+    // A mismatch before an invalid choice still wins over both later causes.
+    let mut c = Controller::schedule(&[2], Some(vec![suffix.clone(), entry.clone()]), None);
+    c.push(entry.clone());
+    c.random("choice", 2);
+    c.finish();
+    assert_eq!(c.invalid, Some(1));
+    let d = c.divergence.unwrap();
+    assert_eq!(d.index, 0);
+    assert_eq!(d.expected, Some(suffix));
+    assert_eq!(d.actual, Some(entry));
+}
+
 const SEEDS: u64 = 96;
 
 #[test]
@@ -2341,7 +2497,7 @@ fn runtime50_composed_seed_transcript() {
         assert_eq!(again.transcript[..at], first.transcript[..at]);
         assert!(matches!(
             divergence.actual,
-            Entry::Decision { site: "event", .. }
+            Some(Entry::Decision { site: "event", .. })
         ));
         if smallest
             .as_ref()

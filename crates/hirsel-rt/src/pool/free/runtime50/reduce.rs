@@ -329,6 +329,8 @@ pub(super) enum Differs {
     Entry,
     /// The expected transcript had ended.
     Extra,
+    /// The actual transcript ended before the next expected entry.
+    Missing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -374,7 +376,14 @@ fn site(entry: &Entry) -> &'static str {
 }
 
 fn divergence(d: &Divergence) -> Failure {
-    let competing = match &d.actual {
+    // At actual end, the first missing entry names the failure site and the
+    // competing kinds. No successful event is added to the transcript.
+    let entry = d
+        .actual
+        .as_ref()
+        .or(d.expected.as_ref())
+        .expect("a divergent entry");
+    let competing = match entry {
         Entry::Decision {
             site: "event",
             runnable,
@@ -383,6 +392,7 @@ fn divergence(d: &Divergence) -> Failure {
         _ => 0,
     };
     let differs = match (&d.expected, &d.actual) {
+        (_, None) => Differs::Missing,
         (None, _) => Differs::Extra,
         (
             Some(Entry::Decision {
@@ -390,7 +400,7 @@ fn divergence(d: &Divergence) -> Failure {
                 runnable: expected,
                 ..
             }),
-            Entry::Decision { site, runnable, .. },
+            Some(Entry::Decision { site, runnable, .. }),
         ) if was == site => {
             let sorted = |r: &Vec<u32>| {
                 let mut r = r.clone();
@@ -405,13 +415,15 @@ fn divergence(d: &Divergence) -> Failure {
                 Differs::Members
             }
         }
-        (Some(Entry::Random { site: was, .. }), Entry::Random { site, .. }) if was == site => {
+        (Some(Entry::Random { site: was, .. }), Some(Entry::Random { site, .. }))
+            if was == site =>
+        {
             Differs::Value
         }
         _ => Differs::Entry,
     };
     Failure::Divergence {
-        site: site(&d.actual),
+        site: site(entry),
         differs,
         competing,
     }
@@ -445,6 +457,10 @@ pub(super) fn trial(target: &Target, choices: &[u64]) -> Trial {
         Ok(outcome) => outcome,
         Err(failure) => return Trial::Fail(failure),
     };
+    classify(checked)
+}
+
+fn classify(checked: Outcome) -> Trial {
     match (&checked.divergence, checked.invalid) {
         (_, Some(at)) if checked.divergence.as_ref().is_none_or(|d| at <= d.index) => {
             Trial::Invalid(at)
@@ -668,6 +684,79 @@ fn runtime50_schedule_replays_seeded_runs() {
         mutation: None,
     };
     assert_eq!(trial(&target, &[u64::MAX]), Trial::Invalid(0));
+}
+
+#[test]
+fn runtime50_reduce_keeps_actual_end_divergence() {
+    let config = Config::of(0);
+    let first = run(config, None, None);
+    let original = choices(&first.transcript);
+    let at = first.transcript.len();
+    let mut expected = first.transcript.clone();
+    let suffix = Entry::Decision {
+        site: "event",
+        runnable: vec![0, 7 << 24],
+        selected: Some(0),
+    };
+    expected.push(suffix.clone());
+    let failure = Failure::Divergence {
+        site: "event",
+        differs: Differs::Missing,
+        competing: 1 | (1 << 7),
+    };
+    let reproduce = |schedule: &[u64]| replay(config, schedule, Some(expected.clone()), None);
+    for _ in 0..2 {
+        let checked = reproduce(&original);
+        let d = checked.divergence.as_ref().expect("actual end diverges");
+        assert_eq!(d.index, at);
+        assert_eq!(d.expected, Some(suffix.clone()));
+        assert_eq!(d.actual, None);
+        assert_eq!(checked.transcript, first.transcript);
+        assert_eq!(classify(checked), Trial::Fail(failure.clone()));
+    }
+    // Use the same classification and failure predicate as shrink. Earlier
+    // event mismatches are a different class, not a match for actual end.
+    let mut test = |indices: &[usize]| {
+        let schedule: Vec<u64> = indices.iter().map(|&i| original[i]).collect();
+        verdict(&failure, &classify(reproduce(&schedule)))
+    };
+    let reduced = ddmin(
+        &mut test,
+        (0..original.len()).collect(),
+        Options::default(),
+        Limit {
+            deadline: None,
+            max_tests: Some(8),
+        },
+    );
+    assert!(reduced.tests > 0);
+    let schedule: Vec<u64> = reduced.config.iter().map(|&i| original[i]).collect();
+    assert_eq!(classify(reproduce(&schedule)), Trial::Fail(failure.clone()));
+    let exact = classify(replay(
+        config,
+        &original,
+        Some(first.transcript.clone()),
+        None,
+    ));
+    assert_eq!(exact, Trial::Pass);
+    assert_eq!(verdict(&failure, &exact), Verdict::Pass);
+    let extra = classify(replay(config, &original, Some(vec![]), None));
+    assert!(matches!(
+        extra,
+        Trial::Fail(Failure::Divergence {
+            differs: Differs::Extra,
+            ..
+        })
+    ));
+    assert_eq!(verdict(&failure, &extra), Verdict::Pass);
+
+    // Invalid choices, including a simultaneous entry mismatch, retain the
+    // existing Invalid precedence over the unconsumed suffix.
+    for expected in [expected, vec![]] {
+        let checked = replay(config, &[u64::MAX], Some(expected), None);
+        assert_eq!(checked.invalid, Some(0));
+        assert_eq!(classify(checked), Trial::Invalid(0));
+    }
 }
 
 fn report(name: &str, original: &[u64], shrunk: &Shrunk) {
