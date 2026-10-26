@@ -1165,7 +1165,14 @@ impl QueryEngine {
             // Reconstruct and accept the current generated source before an old
             // payload can resolve its content-bound anchors. This is ordinary
             // generation replay, never authority supplied by the Lower bytes.
-            self.check_query(path).ok()?;
+            // Anchor preparation is not another execution demand. The checked
+            // generation retains its own transitive selection log; a Lower hit
+            // replays its stored log, and a miss records the ordinary request.
+            // Keep this preparation out of every enclosing selection frame.
+            let selections = std::mem::take(&mut self.evaluation_selections);
+            let prepared = self.check_query(path);
+            self.evaluation_selections = selections;
+            prepared.ok()?;
         }
         Some(())
     }
