@@ -1195,9 +1195,12 @@ impl<'a> Layouts<'a> {
             DropStep::ActiveVariant { variants, .. } => variants
                 .iter()
                 .any(|(_, steps)| self.steps_destructible(layout, steps, seen)),
-            DropStep::Environment { offset } => {
-                // A lifted environment word may lie inside a callable field.
-                // Follow its containing descriptor, not the raw pointer word.
+            DropStep::Environment { offset }
+            | DropStep::Release { offset }
+            | DropStep::ReleaseRoot { offset } => {
+                // Lifted steps may lie inside callable or aggregate fields.
+                // Check every covering variant field: equal physical offsets
+                // do not prove equal destruction behavior.
                 let variants = layout.tag.iter().flat_map(|t| &t.variants);
                 let mut covering = layout
                     .fields
@@ -1211,13 +1214,6 @@ impl<'a> Layouts<'a> {
                     })
                     .peekable();
                 covering.peek().is_none() || covering.any(|f| self.destructible_in(f.layout, seen))
-            }
-            DropStep::Release { offset } | DropStep::ReleaseRoot { offset } => {
-                match self.field_at(layout, *offset) {
-                    Some(child) => self.destructible_in(child, seen),
-                    // An environment or child we cannot see may finalize.
-                    None => true,
-                }
             }
         })
     }

@@ -35,6 +35,8 @@ enum Mutant {
     IteratorDrop,
     CapturedResourceDrop,
     CapturedErasedDrop,
+    InfallibleVariantDrop,
+    FallibleVariantDrop,
 }
 
 /// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
@@ -50,6 +52,8 @@ fn isolated(m: Mutant) -> Vec<K> {
             | Mutant::IteratorDrop
             | Mutant::CapturedResourceDrop
             | Mutant::CapturedErasedDrop
+            | Mutant::InfallibleVariantDrop
+            | Mutant::FallibleVariantDrop
     ) {
         isolated_stage::<Rc>(m)
     } else {
@@ -64,6 +68,7 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
         Mutant::ErasedDrop => Some(l::ERASED_ONCE),
         Mutant::IteratorDrop => Some(l::ITER),
         Mutant::CapturedResourceDrop | Mutant::CapturedErasedDrop => Some(l::CLOSURE),
+        Mutant::InfallibleVariantDrop | Mutant::FallibleVariantDrop => Some(l::OPT),
         _ => None,
     };
     let mut parameters = vec![(Passing::Borrow, l::U64)];
@@ -84,6 +89,43 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
             environment.scan = vec![ScanStep::Environment { offset: 8 }];
             environment.drop = vec![DropStep::Environment { offset: 8 }];
         }
+    }
+    if matches!(
+        m,
+        Mutant::InfallibleVariantDrop | Mutant::FallibleVariantDrop
+    ) {
+        use hirsel_lir::layout_types::*;
+        let variant = &mut t.table.layouts[l::OPT.0 as usize];
+        let tag = variant.tag.as_mut().unwrap();
+        for (i, arm) in tag.variants.iter_mut().enumerate() {
+            arm.fields = vec![FieldLayout {
+                ordinal: 0,
+                offset: 8,
+                unaligned: false,
+                layout: if i == 1 && m == Mutant::FallibleVariantDrop {
+                    l::RESBLK
+                } else {
+                    l::BLK
+                },
+            }];
+        }
+        variant.copy = CopyRecipe::Fields;
+        variant.scan = vec![ScanStep::ActiveVariant {
+            tag_offset: tag.offset,
+            form: tag.form,
+            variants: vec![
+                (0, vec![ScanStep::Counted { offset: 8 }]),
+                (1, vec![ScanStep::Counted { offset: 8 }]),
+            ],
+        }];
+        variant.drop = vec![DropStep::ActiveVariant {
+            tag_offset: tag.offset,
+            form: tag.form,
+            variants: vec![
+                (0, vec![DropStep::Release { offset: 8 }]),
+                (1, vec![DropStep::Release { offset: 8 }]),
+            ],
+        }];
     }
     if m != Mutant::Source {
         t.builder.unit.header.origin = UnitOrigin::Library;
@@ -109,6 +151,8 @@ fn isolated_stage<S: Stage>(m: Mutant) -> Vec<K> {
             | Mutant::IteratorDrop
             | Mutant::CapturedResourceDrop
             | Mutant::CapturedErasedDrop
+            | Mutant::InfallibleVariantDrop
+            | Mutant::FallibleVariantDrop
     ) {
         let layout = released.unwrap();
         let slot = t.slot(layout, SlotKind::Local, ROOT);
@@ -321,6 +365,20 @@ fn callable_and_iterator_drops_keep_their_possible_failure_edges() {
             |k| *k == K::Placement("isolation terminal path without End"),
         );
     }
+}
+
+#[test]
+fn a_shared_variant_offset_does_not_hide_a_fallible_drop() {
+    pair(
+        |m| {
+            isolated(if m {
+                Mutant::FallibleVariantDrop
+            } else {
+                Mutant::InfallibleVariantDrop
+            })
+        },
+        |k| *k == K::Placement("isolation terminal path without End"),
+    );
 }
 
 #[test]
