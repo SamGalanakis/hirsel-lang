@@ -1502,3 +1502,52 @@ pub fn main() -> Result[(), ()] {
         2,
     );
 }
+
+#[test]
+#[ignore = "native: executes aggregate parameter cleanup on both backends"]
+fn ownership_native_compound_parameter_keeps_original_children_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+type Pair { left: Token, right: Token }
+fn discard(take pair: Pair) {}
+pub fn main() -> Result[(), ()] {
+    let first = Token(value: 7u64)
+    let second = Token(value: 7u64)
+    let pair = Pair(left: take first, right: take second)
+    discard(take pair)
+    Ok(())
+}
+"#,
+        2,
+    );
+}
+
+#[test]
+#[ignore = "native: observes aggregate parameter child failure and continuation on both backends"]
+fn ownership_native_compound_parameter_failure_retires_each_actual_child_on_four_engines() {
+    super::ownership_owned_call_49::source_calls_exit(
+        r#"
+resource type Audit { value: u64 }
+drop(x) {}
+resource type Token { bad: bool }
+drop(x) {
+    let audit = Audit(value: 7u64)
+    if x.bad { let zero: u8 = 0u8
+        let _ = 1u8 / zero }
+}
+type Pair { left: Token, right: Token }
+fn discard(take pair: Pair) {}
+pub fn main() -> Result[(), ()] {
+    let first = Token(bad: false)
+    let second = Token(bad: true)
+    let pair = Pair(left: take first, right: take second)
+    discard(take pair)
+    Ok(())
+}
+"#,
+        4,
+        hirsel_run_schema::exit::FAILED,
+    );
+}
