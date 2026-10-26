@@ -3180,6 +3180,11 @@ impl<S: Stage> Checker<'_, '_, S> {
                     self.library_only(site, Opcode::Isolate);
                     if self.scalar(start) != Some(ScalarKind::U64) {
                         self.add(site, K::Type("isolation start"));
+                    } else if !self.isolate_begin(facts, start) {
+                        self.add(
+                            site,
+                            K::Placement("isolation mark is not an IsolateBegin result"),
+                        );
                     }
                 }
                 Terminator::Switch { value, arms, .. } => {
@@ -3259,6 +3264,36 @@ impl<S: Stage> Checker<'_, '_, S> {
                 }
             }
         }
+    }
+
+    /// A numeric count alone cannot authorize a catch. The immutable SSA mark
+    /// must be the normal result of this unit's actual intrinsic begin call;
+    /// ordinary SSA availability separately proves that edge dominates the use.
+    fn isolate_begin(&self, facts: &Facts, start: ValueId) -> bool {
+        let Def::Edge(edge) = facts.defs[start.index()] else {
+            return false;
+        };
+        let Some((block, Origin::Terminator)) = facts.cfg.source[edge.index()] else {
+            return false;
+        };
+        let unit = self.cx.unit;
+        let Terminator::Call {
+            call,
+            normal: Some(normal),
+            ..
+        } = unit.terminators[block.index()]
+        else {
+            return false;
+        };
+        let call = &unit.tables.calls[call.index()];
+        let Callee::Operation(operation) = call.callee else {
+            return false;
+        };
+        normal == edge
+            && call.result == Some(start)
+            && unit.tables.operations[operation.index()]
+                .definition
+                .is_core("$intrinsic.IsolateBegin")
     }
 
     fn tag_variants(&self, value: ValueId) -> Option<BTreeSet<u32>> {

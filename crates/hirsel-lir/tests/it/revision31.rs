@@ -20,9 +20,14 @@ enum Mutant {
     Unresumed,
     /// A catch in a source unit.
     Source,
+    Parameter,
+    Constant,
+    WrongBegin,
+    DirectImpostor,
+    Forwarded,
 }
 
-/// `task.isolate`'s shape: the record count arrives as a u64, the body fails,
+/// `task.isolate`'s shape: IsolateBegin returns its mark, the body fails,
 /// and its cleanup catches the failures since that count and returns.
 fn isolated(m: Mutant) -> Vec<K> {
     let mut t = Lir::<Value>::new(&[(Passing::Borrow, l::U64)], None);
@@ -31,10 +36,68 @@ fn isolated(m: Mutant) -> Vec<K> {
     }
     let count = t.plain(l::U64);
     t.param(count);
-    let start = if m == Mutant::Start {
-        t.int(ENTRY)
+    let after = t.builder.block(BlockKind::Body, &[]);
+    let propagate = t.builder.propagate();
+    let params = [(Passing::Borrow, l::U64)];
+    let abi = t.abi(&params, Some(l::U64));
+    let name = if m == Mutant::WrongBegin {
+        "$intrinsic.IsolateCount"
     } else {
+        "$intrinsic.IsolateBegin"
+    };
+    let signature = super::operation_abi::scalar_signature(
+        name,
+        &[(
+            hirsel_syntax::PassingMode::Borrow,
+            hirsel_types::Primitive::U64,
+        )],
+        Some(hirsel_types::Primitive::U64),
+    );
+    t.declare_operation(signature, Default::default(), abi);
+    let callee = if m == Mutant::DirectImpostor {
+        let symbol = t.symbol(SymbolKind::Function);
+        t.builder.unit.tables.symbols[symbol.index()].definition =
+            hirsel_syntax::DefPath::core(name);
+        Callee::Direct(symbol)
+    } else {
+        Callee::Operation(OperationRef(0))
+    };
+    let begin_normal = EdgeId(t.builder.unit.tables.edges.len() as u32);
+    let mark = t
+        .call_to(
+            ENTRY,
+            callee,
+            abi,
+            &params,
+            Some(l::U64),
+            &[ArgumentValue::Value(count)],
+            (after, &[]),
+            propagate,
+        )
+        .unwrap();
+    let start = if m == Mutant::Start {
+        t.int(after)
+    } else if m == Mutant::Parameter {
         count
+    } else if m == Mutant::Constant {
+        let result = t.plain(l::U64);
+        let ty = t.builder.unit.values[result.index()].ty;
+        let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+        t.builder.unit.tables.constants.push(ConstantData {
+            ty,
+            value: ConstantValue::Integer(0),
+        });
+        t.builder.push(after, Inst::Const { result, constant });
+        result
+    } else if m == Mutant::Forwarded {
+        let result = t.plain(l::U64);
+        t.builder.unit.blocks[after.index()].parameters =
+            PoolRange::push(&mut t.builder.unit.pools.values, [result]);
+        t.builder.unit.tables.edges[begin_normal.index()].arguments =
+            PoolRange::push(&mut t.builder.unit.pools.values, [mark]);
+        result
+    } else {
+        mark
     };
     let caught = if m == Mutant::Unresumed {
         t.builder.propagate()
@@ -52,13 +115,29 @@ fn isolated(m: Mutant) -> Vec<K> {
     let caught = t.builder.edge(caught, &[]);
     t.builder.term(catch, Terminator::Isolate { start, caught });
     if m == Mutant::Ordinary {
-        t.builder.jump(ENTRY, catch, &[]);
+        t.builder.jump(after, catch, &[]);
     } else {
         let raise = t.failure(catch);
         t.builder.unit.tables.failures[raise.index()].rule = Some("SEM-1".into());
-        t.builder.term(ENTRY, Terminator::Raise(raise));
+        t.builder.term(after, Terminator::Raise(raise));
     }
     t.check()
+}
+
+#[test]
+fn an_isolation_mark_is_the_exact_intrinsic_begin_result() {
+    for mutant in [
+        Mutant::Parameter,
+        Mutant::Constant,
+        Mutant::WrongBegin,
+        Mutant::DirectImpostor,
+        Mutant::Forwarded,
+    ] {
+        pair(
+            |m| isolated(if m { mutant } else { Mutant::None }),
+            |k| *k == K::Placement("isolation mark is not an IsolateBegin result"),
+        );
+    }
 }
 
 #[test]
