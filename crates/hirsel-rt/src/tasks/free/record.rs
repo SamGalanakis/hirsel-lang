@@ -534,6 +534,79 @@ fn publish_phase<T>(
     result.map_err(|_| Stop::Requested)
 }
 
+/// Begin a certified entered operation. A replay cut rejects before flushing a
+/// deferred child or advancing the ordinal; the invocation retains Begin.
+pub(super) fn begin_entered(ctx: *mut TaskCtx) -> bool {
+    if super::replay::at_cut(ctx) {
+        return false;
+    }
+    // Entry's deferred-child flush cannot leave this native callchain. Live
+    // frozen-root traversal likewise has no language callbacks or suspension.
+    unsafe { (*ctx).point_ops = (*ctx).point_ops.saturating_add(1) };
+    entry(ctx);
+    super::replay::begin(ctx);
+    if let Some(task) = unsafe { (*ctx).recording.as_mut() } {
+        task.ordinal = task
+            .ordinal
+            .checked_add(1)
+            .expect("native op ordinal overflow");
+    }
+    true
+}
+
+/// One admission attempt for a task-owned phase. None has no prefix effects:
+/// the same typed phase can recreate its bounded action on another worker.
+/// No FnOnce, executor checkout, section or recorder borrow survives return.
+pub(super) fn poll_publish<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<Option<T>> {
+    if !on(ctx) {
+        return match super::replay::token(ctx) {
+            Some(replay) => replay.poll_publish(ctx, phase, || action(None)),
+            None => Ok(Some(action(None))),
+        };
+    }
+    if phase == Phase::Done
+        && unsafe { (*ctx).roots.has_pending() }
+        && poll_phase(ctx, Phase::Entered, |_| ())?.is_none()
+    {
+        return Ok(None);
+    }
+    poll_phase(ctx, phase, action)
+}
+
+fn poll_phase<T>(
+    ctx: *mut TaskCtx,
+    phase: Phase,
+    action: impl FnOnce(Option<&mut Writer<'_, '_>>) -> T,
+) -> Stopped<Option<T>> {
+    // Preparation reserves storage only. A rejected prefix has not taken or
+    // decremented pending roots; a successful prefix and action publish once.
+    let mut roots = crate::roots::PhaseRoots::prepare(ctx);
+    let mut task = unsafe { (*ctx).recording.take() }.expect("an admitted native recorder");
+    let shared = task.shared.clone();
+    let mut worker = checkout(&shared);
+    let progress = Progress::new(task.ordinal, phase);
+    let result = shared.recorder.try_phase_if(
+        &mut worker.slot,
+        &mut task.log,
+        progress,
+        PHASE,
+        || roots.apply(ctx),
+        |writer| action(Some(writer)),
+    );
+    checkin(&shared, worker);
+    if matches!(result, Ok(Some(_))) {
+        // Frozen graph tails cannot run language code or suspend. Finish the
+        // admitted tail synchronously; never repeat apply or finish on rebind.
+        roots.finish(ctx);
+    }
+    unsafe { (*ctx).recording = Some(task) };
+    result.map_err(|_| Stop::Requested)
+}
+
 /// Track an object the next phase names (touches, creates or receives from), before its
 /// section: the section then inserts no entry.
 pub(super) fn track(ctx: *mut TaskCtx, object: Option<&hirsel_free::record::ObjectId>) {

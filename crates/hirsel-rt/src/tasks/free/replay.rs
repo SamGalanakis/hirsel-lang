@@ -692,6 +692,54 @@ impl Token {
             .map_err(|error| crate::stop::Stop::Diverged(error.0))
     }
 
+    /// Typed entered phases do one nonblocking root-admission attempt. The
+    /// ordinal and progress stay task-owned; rejected actions never execute.
+    pub(super) fn poll_publish<T>(
+        &self,
+        ctx: *mut TaskCtx,
+        phase: Phase,
+        action: impl FnOnce() -> T,
+    ) -> Stopped<Option<T>> {
+        if phase == Phase::Done
+            && unsafe { (*ctx).roots.has_pending() }
+            && self.poll_phase(ctx, Phase::Entered, || ())?.is_none()
+        {
+            return Ok(None);
+        }
+        self.poll_phase(ctx, phase, action)
+    }
+
+    fn poll_phase<T>(
+        &self,
+        ctx: *mut TaskCtx,
+        phase: Phase,
+        action: impl FnOnce() -> T,
+    ) -> Stopped<Option<T>> {
+        if !self.admits(phase) {
+            return Err(Stop::Requested);
+        }
+        let mut roots = crate::roots::PhaseRoots::prepare(ctx);
+        if !roots.apply(ctx) {
+            return Ok(None);
+        }
+        let result = action();
+        let (publication, mut wakes) = self.with(|task| {
+            let progress = task.at(phase);
+            let publication = task
+                .cursor
+                .publish(progress)
+                .map(|()| task.progress = progress);
+            (publication, task.cursor.take_wakes())
+        });
+        roots.finish(ctx);
+        let sole = std::mem::take(unsafe { &mut (*ctx).roots.sole });
+        self.shared.thawed(sole, &mut wakes);
+        wakes.into_iter().for_each(std::task::Waker::wake);
+        publication
+            .map(|()| Some(result))
+            .map_err(|error| Stop::Diverged(error.0))
+    }
+
     pub(super) fn host_result(
         &self,
         request: &crate::io::Request,
