@@ -248,3 +248,4 @@ mod charge_placement_56;
 mod warm_products;
 mod isolate_specialization_56;
 mod ordered_inop_result_57;
+mod runtime57_scoped_resume;
