@@ -11,6 +11,9 @@ use crate::ir::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::Ready;
 
+mod protocol;
+pub use protocol::{CallPoint, CleanupPoint, HeldResult, InstructionPoint, IsolateProtocol};
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IsolateCallback {
     pub wrapper: hirsel_syntax::ContentHash,

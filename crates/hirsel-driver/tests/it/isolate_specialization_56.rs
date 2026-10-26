@@ -189,3 +189,98 @@ fn dynamic_isolate_callback_stays_opaque() {
         false,
     );
 }
+
+#[test]
+fn isolated_protocol_anchors_reject_missing_cleanup_and_end() {
+    with_compiler_stack(|| {
+        let source = r#"
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let output = io.stdout(rt)?
+  let value: Result[String, Failure] = task.isolate(tasks, fn() -> String { "held" })
+  match value {
+    Ok(text) => { let _ = out.print(output, text) },
+    Error(_) => failure.check(false, Arithmetic()),
+  }
+  Ok(())
+}
+"#;
+        let program = super::runtime50_continuation::ready(source);
+        let mut checked = 0;
+        for caller in &program.units {
+            for (at, call) in caller.unit().tables.calls.iter().enumerate() {
+                let Callee::Direct(symbol) = call.callee else {
+                    continue;
+                };
+                let symbol = &caller.unit().tables.symbols[symbol.index()];
+                if !symbol.definition.is_core("task.isolate") {
+                    continue;
+                }
+                let wrapper = program
+                    .units
+                    .iter()
+                    .find(|unit| Some(unit.unit().header.instance) == symbol.instance)
+                    .unwrap();
+                let Some((code, _)) = wrapper.unit().tables.calls.iter().find_map(|call| {
+                    if let Callee::Bound { code, closure } = call.callee {
+                        Some((code, closure))
+                    } else {
+                        None
+                    }
+                }) else {
+                    continue;
+                };
+                let symbol = &wrapper.unit().tables.symbols[code.index()];
+                let callback = program
+                    .units
+                    .iter()
+                    .find(|unit| Some(unit.unit().header.instance) == symbol.instance)
+                    .unwrap();
+                let protocol = hirsel_lir::continuation::isolate::IsolateProtocol::derive(
+                    caller,
+                    hirsel_lir::ir::CallId(at as u32),
+                    wrapper,
+                    callback,
+                    program.ahead_environments[&callback.unit().header.instance],
+                    &program.table,
+                )
+                .expect("actual validated isolate protocol");
+                protocol
+                    .validate(caller, wrapper, callback, &program.table)
+                    .unwrap();
+                assert!(protocol.result.is_some());
+                assert!(!protocol.cleanup.is_empty());
+                assert!(!protocol.ends.is_empty());
+                assert!(!protocol.terminals.is_empty());
+                let reject = |forged: &hirsel_lir::continuation::isolate::IsolateProtocol| {
+                    assert!(
+                        forged
+                            .validate(caller, wrapper, callback, &program.table)
+                            .is_err()
+                    );
+                };
+                let mut forged = protocol.clone();
+                forged.cleanup.pop();
+                reject(&forged);
+                let mut forged = protocol.clone();
+                forged.ends.pop();
+                reject(&forged);
+                let mut forged = protocol.clone();
+                forged.terminals.pop();
+                reject(&forged);
+                let mut forged = protocol.clone();
+                forged.admission.instruction += 1;
+                reject(&forged);
+                let mut forged = protocol.clone();
+                forged.callback.normal = None;
+                reject(&forged);
+                let mut forged = protocol.clone();
+                forged.result.as_mut().unwrap().layout =
+                    hirsel_lir::layout_types::LayoutId(u32::MAX);
+                reject(&forged);
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+    });
+}
