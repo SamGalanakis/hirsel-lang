@@ -18,7 +18,10 @@ impl ProcessBudget {
     pub fn reserve(self: &Arc<Self>, bytes: u64) -> std::io::Result<MemoryReservation> {
         let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
         if bytes > self.limit.saturating_sub(*reserved) {
-            return Err(std::io::Error::other("process query allowance exhausted"));
+            return Err(std::io::Error::other(format!(
+                "process query allowance exhausted: {bytes} bytes requested with {} of {} reserved",
+                *reserved, self.limit
+            )));
         }
         *reserved += bytes;
         Ok(MemoryReservation {
