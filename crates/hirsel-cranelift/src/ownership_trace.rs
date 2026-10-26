@@ -162,12 +162,10 @@ impl FnEmitter<'_, '_, '_> {
         let Some(marker) = self.ownership_cleanup.take() else {
             return Ok(None);
         };
-        let plan = self
-            .ownership
-            .ok_or_else(|| crate::CodegenError::Invalid {
-                definition: self.definition().clone(),
-                what: "ownership cleanup has no plan".into(),
-            })?;
+        let plan = self.ownership.ok_or_else(|| crate::CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "ownership cleanup has no plan".into(),
+        })?;
         let (released, fields) = plan
             .cleanup_captures(self.unit, self.em.inputs.layouts, marker.id)
             .or_else(|error| self.invalid(error))?;
