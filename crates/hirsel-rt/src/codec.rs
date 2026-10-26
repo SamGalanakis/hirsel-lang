@@ -8,6 +8,7 @@
 //! exists. Error classes and their order are the reference codec's (`hirsel_types::wire`).
 //! The reference's operational budgets (bytes, visited values) terminate environmentally.
 pub mod access;
+mod borrowed;
 pub(crate) mod structural;
 pub(crate) mod value_access;
 

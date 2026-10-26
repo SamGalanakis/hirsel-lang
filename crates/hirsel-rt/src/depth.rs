@@ -194,6 +194,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn structural_calls_borrow_program_words_without_allocating() {
+        use crate::io_real::borrowed_net_tests::allocation_calls;
+        let words = [
+            crate::codec::CODEC_VERSION,
+            1,
+            0,
+            0,
+            0,
+            0,
+            u64::MAX,
+            8,
+            crate::codec::NODE_SCALAR,
+            4,
+        ];
+        let value = 17u64;
+        let before = allocation_calls();
+        // SAFETY: one initialized scalar and its exact static program; no
+        // operation uses task state or changes the borrowed value.
+        unsafe {
+            for _ in 0..16 {
+                assert!(crate::codec::structural::preflight(
+                    &words,
+                    &[0],
+                    std::ptr::from_ref(&value).cast()
+                ));
+                assert_eq!(
+                    crate::codec::value_access::compare(
+                        &words,
+                        std::ptr::null_mut(),
+                        std::ptr::from_ref(&value).cast(),
+                        std::ptr::from_ref(&value).cast()
+                    ),
+                    0
+                );
+                let _ = crate::codec::value_access::hash(
+                    &words,
+                    std::ptr::null_mut(),
+                    std::ptr::from_ref(&value).cast(),
+                    3,
+                );
+            }
+        }
+        assert_eq!(
+            allocation_calls(),
+            before,
+            "structural calls allocate runtime metadata or scratch"
+        );
+    }
+
+    #[test]
     fn fixed_storage_preserves_both_allowances_tokens_and_sites_at_the_bound() {
         use hirsel_core_contract::depth::{CLEANUP_LIMIT, FOREGROUND_LIMIT};
         let config = crate::Config::new();

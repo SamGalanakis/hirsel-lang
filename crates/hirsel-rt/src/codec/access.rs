@@ -1,6 +1,6 @@
 //! Borrow-only cursors over the existing validated physical access program.
 //!
-//! Reuses Program::parse_access and value_access's actual projections, including
+//! Reuses Program::parse_access and the owning cursor's actual projections, including
 //! virtual SoA rows and live keyed slots. It adds no graph/encoding, wire schema,
 //! serialization checks, invocation, Depth policy, budget debit or source Take.
 //! Box/framing/checked wrappers remain explicit steps instead of disappearing
@@ -9,10 +9,11 @@
 //! These observations are not holder, placement or source-receipt authority.
 //! A plan producer must separately prove original source correspondence,
 //! complete owned scan/descriptor coverage and live journal/value custody.
-use super::value_access::{self, Location, Projection, View};
+mod view;
 use super::{Node, Program, Scalar, pointer};
 use crate::{alloc::payload, fault};
 use std::marker::PhantomData;
+use view::{Location, Projection, View};
 
 /// Parsed existing program. Node ordinals are local to these exact words,
 /// never durable identities or a source type/profile proof.
@@ -141,7 +142,7 @@ impl<'program, 'value> Cursor<'program, 'value> {
             if let Some(child) = wrapper {
                 return self.children(None, None, false, vec![child]);
             }
-            match value_access::view(self.program, self.projection) {
+            match view::view(self.program, self.projection) {
                 View::Scalar { kind, code, at } => {
                     let width = match kind {
                         Scalar::Bool => 1,
