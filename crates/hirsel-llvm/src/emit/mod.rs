@@ -1217,6 +1217,7 @@ struct FnEmitter<'m, 'a> {
     ahead_counter: Option<Value<'m>>,
     ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
     ownership_frame: Option<Value<'m>>,
+    ownership_cleanup: Option<hirsel_lir::ownership_trace::native::NativeMarker>,
     /// A resumable state alternate (`resume`).
     resume: Option<resume::Resume<'a, 'm>>,
     /// Admissions of depth-leaf callees, lowered to room checks with no retirement.

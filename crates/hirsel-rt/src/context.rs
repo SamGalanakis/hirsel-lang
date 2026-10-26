@@ -219,6 +219,8 @@ pub struct TaskCtx {
     pub(crate) compact: Option<Box<crate::continuation::Compact>>,
     /// LIFO catches owned by their invocation, including stackful wrappers.
     pub(crate) isolations: crate::isolate::Invocations,
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership_cleanup: *mut crate::ownership_trace::CleanupScope,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -505,6 +507,8 @@ impl TaskCtx {
             cleanup_rejections: 0,
             free_ops: Default::default(),
             compact: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_cleanup: std::ptr::null_mut(),
             invocation_sites,
             invocation_depth: 0,
             invocation_tokens,

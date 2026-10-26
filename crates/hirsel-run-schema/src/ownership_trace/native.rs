@@ -6,7 +6,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -38,6 +38,23 @@ pub enum Row {
         site: u64,
         layout: u32,
     },
+    CleanupBegin {
+        task: u32,
+        frame: u64,
+        marker: u32,
+    },
+    CleanupDrop {
+        task: u32,
+        frame: u64,
+        marker: u32,
+        field: u32,
+        layout: u32,
+    },
+    CleanupEnd {
+        task: u32,
+        frame: u64,
+        marker: u32,
+    },
     Leave {
         task: u32,
         frame: u64,
@@ -61,6 +78,8 @@ pub struct Metadata {
     pub action: u32,
     /// Independently checked exact call-site target, present only for Alias.
     pub callee: Option<[u8; 32]>,
+    /// Declaration ordinals and unit-local layouts in actual descriptor drop order.
+    pub cleanup: Option<Vec<(u32, u32)>>,
     pub token: u64,
     pub owner: u64,
     pub site: u64,
@@ -192,6 +211,7 @@ fn decode(
         unit: [u8; 32],
         environment: Option<Owner>,
         pending: Option<(Owner, [u8; 32])>,
+        cleanup: Option<(u32, Owner, Vec<(u32, u32)>)>,
     }
     let mut frames: Vec<Frame> = Vec::new();
     let mut entered = BTreeSet::new();
@@ -201,6 +221,9 @@ fn decode(
             Row::Enter { task, .. }
             | Row::Event { task, .. }
             | Row::Alias { task, .. }
+            | Row::CleanupBegin { task, .. }
+            | Row::CleanupDrop { task, .. }
+            | Row::CleanupEnd { task, .. }
             | Row::Leave { task, .. } => task,
         };
         if task != 0 {
@@ -247,14 +270,89 @@ fn decode(
                     unit,
                     environment,
                     pending: None,
+                    cleanup: None,
                 });
             }
             Row::Leave { frame, .. } => {
-                if frames
-                    .pop()
-                    .is_none_or(|current| current.id != frame || current.pending.is_some())
-                {
+                if frames.pop().is_none_or(|current| {
+                    current.id != frame || current.pending.is_some() || current.cleanup.is_some()
+                }) {
                     return Err(Error::InvalidFrame(frame));
+                }
+            }
+            Row::CleanupBegin { frame, marker, .. } => {
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame || current.cleanup.is_some() {
+                    return Err(Error::InvalidFrame(frame));
+                }
+                let metadata = units[&current.unit]
+                    .get(&marker)
+                    .ok_or(Error::InvalidMarker(marker))?;
+                if metadata.action != 4 || metadata.token != metadata.owner {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                let fields = metadata
+                    .cleanup
+                    .as_ref()
+                    .ok_or(Error::InvalidMarker(marker))?;
+                let parent = None; // cleanup holders are local SSA/slots or checked captures
+                let root = owner(frame, parent, current.environment.as_ref(), metadata.token)?;
+                let live = fields
+                    .iter()
+                    .copied()
+                    .filter(|&(field, _)| {
+                        let mut at = root.clone();
+                        at.path.push(super::Projection::Field { field });
+                        tracker.inventory().owners.contains_key(&at)
+                    })
+                    .collect();
+                current.cleanup = Some((marker, root, live));
+            }
+            Row::CleanupDrop {
+                frame,
+                marker,
+                field,
+                layout,
+                ..
+            } => {
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame { return Err(Error::InvalidFrame(frame)); }
+                let Some((expected, root, fields)) = &mut current.cleanup else {
+                    return Err(Error::InvalidMarker(marker));
+                };
+                if *expected != marker || fields.first() != Some(&(field, layout)) {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                fields.remove(0);
+                let mut at = root.clone();
+                at.path.push(super::Projection::Field { field });
+                let source = &units[&current.unit][&marker].source;
+                let context = Context {
+                    task: TaskPath::default(),
+                    operation: 0,
+                    site: source.clone(),
+                };
+                tracker
+                    .drop_value(&context, &at)
+                    .map_err(Error::Consistency)?;
+            }
+            Row::CleanupEnd { frame, marker, .. } => {
+                let current = frames.last_mut().ok_or(Error::InvalidFrame(frame))?;
+                if current.id != frame {
+                    return Err(Error::InvalidFrame(frame));
+                }
+                let Some((expected, root, fields)) = current.cleanup.take() else {
+                    return Err(Error::InvalidMarker(marker));
+                };
+                if expected != marker
+                    || !fields.is_empty()
+                    || tracker.inventory().owners.keys().any(|at| {
+                        at.task == root.task
+                            && at.storage == root.storage
+                            && at.path.starts_with(&root.path)
+                    })
+                {
+                    return Err(Error::RetainedEnvironment(marker));
                 }
             }
             Row::Alias {

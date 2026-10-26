@@ -1280,6 +1280,8 @@ unsafe fn run_step(
                         .unwrap_or_else(|| fault("finalizer retirement without admission"));
                     ctx.activations.retire(activation);
                 }
+                #[cfg(feature = "ownership-trace")]
+                crate::ownership_trace::retired(ctx, step.layout, at);
             }
             // The last root died: the value is ordinary again before its steps release it.
             STEP_THAW => crate::shared::thaw_value(ctx, step.layout, at),

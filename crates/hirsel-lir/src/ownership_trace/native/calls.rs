@@ -9,6 +9,7 @@ use std::collections::{BTreeSet, VecDeque};
 pub(super) struct Target {
     pub symbol: Symbol,
     pub abi: Option<crate::abi_types::FnAbiId>,
+    pub environment: Option<LayoutId>,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum Code {
@@ -110,6 +111,7 @@ pub(super) fn discover<S>(u: &LirUnit<S>) -> Vec<Code> {
                         constants[result.index()] = Code::Known(Target {
                             symbol: u.tables.symbols[code.symbol.index()].clone(),
                             abi: Some(code.abi),
+                            environment: Some(u.tables.closures[closure.index()].environment),
                         });
                     }
                 }
@@ -117,6 +119,7 @@ pub(super) fn discover<S>(u: &LirUnit<S>) -> Vec<Code> {
                     constants[result.index()] = Code::Known(Target {
                         symbol: u.tables.symbols[symbol.index()].clone(),
                         abi: None,
+                        environment: None,
                     });
                 }
                 _ => (),

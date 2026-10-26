@@ -1431,3 +1431,54 @@ pub fn main() -> Result[(), ()] {
         2,
     );
 }
+
+#[test]
+#[ignore = "native: executes partially consumed capture cleanup on both backends"]
+fn ownership_native_called_once_environment_drops_only_retained_capture_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn select(take first: Token, take second: Token) -> Token {
+    let captured: once fn() -> Token = fn() -> Token {
+        let seen = second.value
+        take first
+    }
+    captured()
+}
+pub fn main() -> Result[(), ()] {
+    let result = select(Token(value: 7u64), Token(value: 7u64))
+    Ok(())
+}
+"#,
+        2,
+    );
+}
+
+#[test]
+#[ignore = "native: observes actual failing capture finalizer and its locals on both backends"]
+fn ownership_native_failed_capture_cleanup_retires_actual_resources_after_finalizer_locals_on_four_engines()
+ {
+    super::ownership_owned_call_49::source_calls_exit(
+        r#"
+resource type Audit { value: u64 }
+drop(x) {}
+resource type Token { bad: bool }
+drop(x) {
+    let audit = Audit(value: 7u64)
+    if x.bad { let zero: u8 = 0u8
+        let _ = 1u8 / zero }
+}
+fn discard(take token: Token) {
+    let captured: once fn() -> Token = fn() -> Token { take token }
+}
+pub fn main() -> Result[(), ()] {
+    let outer = Token(bad: false)
+    discard(Token(bad: true))
+    Ok(())
+}
+"#,
+        4,
+        hirsel_run_schema::exit::FAILED,
+    );
+}

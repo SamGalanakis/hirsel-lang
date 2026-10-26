@@ -204,6 +204,18 @@ pub(crate) fn emit_relocated(
                     } else {
                         None
                     },
+                    cleanup: if marker.kind == 4 {
+                        Some(
+                            plan.cleanup_captures(body, inputs.layouts, marker.id)
+                                .map_err(failed)?
+                                .1
+                                .into_iter()
+                                .map(|capture| (capture.field, capture.layout.0))
+                                .collect(),
+                        )
+                    } else {
+                        None
+                    },
                     token: location(marker.token),
                     owner: location(marker.owner),
                     site: site_code(

@@ -222,3 +222,101 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_leave(ctx: *mut TaskCtx, frame: 
         });
     }
 }
+
+/// Borrowed native stack record. Addresses locate physical cells only during
+/// the synchronous release; they are never written to the trace or used as ids.
+#[repr(C)]
+pub struct CleanupScope {
+    previous: *mut CleanupScope,
+    frame: u64,
+    marker: u64,
+    base: *mut u8,
+    bindings: *const u64,
+    count: u64,
+}
+/// # Safety
+/// Current task; scope and four-word binding rows remain live until cleanup_end.
+/// Each row is (offset, linked descriptor index, capture ordinal, local layout).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_begin(
+    ctx: *mut TaskCtx,
+    scope: *mut CleanupScope,
+    frame: u64,
+    marker: u32,
+    environment: *mut crate::alloc::Header,
+    bindings: *const u64,
+    count: u64,
+) {
+    unsafe {
+        scope.write(CleanupScope {
+            previous: (*ctx).ownership_cleanup,
+            frame,
+            marker: u64::from(marker),
+            base: if environment.is_null() {
+                std::ptr::null_mut()
+            } else {
+                crate::alloc::payload(environment)
+            },
+            bindings,
+            count,
+        });
+        (*ctx).ownership_cleanup = scope;
+        if let Some(observer) = observer(ctx) {
+            (*observer).record(Row::CleanupBegin {
+                task: (*ctx).task_id,
+                frame,
+                marker,
+            });
+        }
+    }
+}
+/// # Safety
+/// scope is the current live cleanup record on this task's native stack.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_end(
+    ctx: *mut TaskCtx,
+    scope: *mut CleanupScope,
+) {
+    unsafe {
+        if (*ctx).ownership_cleanup != scope {
+            if let Some(observer) = observer(ctx) { (*observer).failed.store(true, Ordering::Relaxed); }
+            return;
+        }
+        (*ctx).ownership_cleanup = (*scope).previous;
+        if let Some(observer) = observer(ctx) {
+            (*observer).record(Row::CleanupEnd {
+                task: (*ctx).task_id,
+                frame: (*scope).frame,
+                marker: (*scope).marker as u32,
+            });
+        }
+    }
+}
+/// Called only after the actual finalizer and field continuation retire.
+/// # Safety
+/// layout/value come from the checked descriptor program's completed end step.
+pub(crate) unsafe fn retired(ctx: &TaskCtx, layout: *const crate::release::Layout, value: *mut u8) {
+    unsafe {
+        let mut scope = ctx.ownership_cleanup;
+        while !scope.is_null() {
+            for index in 0..(*scope).count {
+                let row = std::slice::from_raw_parts((*scope).bindings.add(index as usize * 4), 4);
+                if !(*scope).base.is_null()
+                    && (*scope).base.wrapping_add(row[0] as usize) == value
+                    && ctx.descriptor(row[1] as u32) == layout
+                {
+                    if let Some(observer) = observer(std::ptr::from_ref(ctx).cast_mut()) {
+                        (*observer).record(Row::CleanupDrop {
+                            task: ctx.task_id,
+                            frame: (*scope).frame,
+                            marker: (*scope).marker as u32,
+                            field: row[2] as u32,
+                            layout: row[3] as u32,
+                        });
+                    }
+                }
+            }
+            scope = (*scope).previous;
+        }
+    }
+}

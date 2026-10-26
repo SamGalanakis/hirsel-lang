@@ -60,6 +60,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             ahead_counter: None,
             ownership: None,
             ownership_frame: None,
+            ownership_cleanup: None,
             resume: None,
             room: Default::default(),
             no_room: None,

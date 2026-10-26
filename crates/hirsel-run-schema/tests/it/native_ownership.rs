@@ -21,6 +21,7 @@ fn fixture() -> (Log, Units) {
         let metadata = Metadata {
             action,
             callee: None,
+            cleanup: None,
             token,
             owner,
             site: 42,
@@ -303,9 +304,12 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
                 *frame = 2;
                 *unit = [8; 32];
             }
-            Row::Event { frame, .. } | Row::Alias { frame, .. } | Row::Leave { frame, .. } => {
-                *frame = 2
-            }
+            Row::Event { frame, .. }
+            | Row::Alias { frame, .. }
+            | Row::Leave { frame, .. }
+            | Row::CleanupBegin { frame, .. }
+            | Row::CleanupDrop { frame, .. }
+            | Row::CleanupEnd { frame, .. } => *frame = 2,
         }
     }
     log.rows.splice(2..2, child);
@@ -378,6 +382,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
         let metadata = Metadata {
             action,
             callee: None,
+            cleanup: None,
             token,
             owner,
             site: 42,
@@ -483,6 +488,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
             Metadata {
                 action,
                 callee: None,
+                cleanup: None,
                 token,
                 owner,
                 site,
@@ -633,4 +639,106 @@ fn native_empty_carrier_retirement_never_invents_resource_drops() {
         decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
         Error::RetainedEnvironment(20)
     );
+}
+
+#[test]
+fn native_capture_cleanup_requires_actual_typed_retirements_before_scope_end() {
+    let (mut log, mut units) = fixture();
+    let calls = LocalCalls::from([([7; 32], Default::default())]);
+    // Original token moves into capture 0 of callable SSA 1, then to slot 0.
+    let field = 8u64 << 32 | 1;
+    let slot = 1u64 << 32;
+    let rows = units.get_mut(&[7; 32]).unwrap();
+    rows.get_mut(&1).unwrap().owner = field;
+    let mut move_carrier = rows[&1].clone();
+    move_carrier.token = 1;
+    move_carrier.owner = slot;
+    rows.insert(30, move_carrier);
+    let mut drop_carrier = rows[&2].clone();
+    drop_carrier.action = 4;
+    drop_carrier.cleanup = Some(vec![(0, 7)]);
+    rows.insert(31, drop_carrier);
+    if let Row::Event { owner, .. } = &mut log.rows[2] {
+        *owner = field;
+    }
+    log.rows.splice(
+        3..4,
+        [
+            Row::Event {
+                task: 0,
+                frame: 1,
+                marker: 30,
+                action: 1,
+                token: 1,
+                owner: slot,
+                site: 42,
+                layout: 7,
+            },
+            Row::CleanupBegin {
+                task: 0,
+                frame: 1,
+                marker: 31,
+            },
+            Row::CleanupDrop {
+                task: 0,
+                frame: 1,
+                marker: 31,
+                field: 0,
+                layout: 7,
+            },
+            Row::CleanupEnd {
+                task: 0,
+                frame: 1,
+                marker: 31,
+            },
+        ],
+    );
+    log.row_count = log.rows.len() as u64;
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (2, 2, 0)
+    );
+    let mut missing = log.clone();
+    missing.rows.remove(5);
+    missing.row_count -= 1;
+    assert_eq!(
+        decode_local_calls(&missing, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::RetainedEnvironment(31)
+    );
+    for (field, layout) in [(1, 7), (0, 8)] {
+        let mut forged = log.clone();
+        forged.rows[5] = Row::CleanupDrop {
+            task: 0,
+            frame: 1,
+            marker: 31,
+            field,
+            layout,
+        };
+        assert_eq!(
+            decode_local_calls(&forged, [49; 32], &units, &calls, 100).unwrap_err(),
+            Error::InvalidMarker(31)
+        );
+    }
+    let mut duplicate = log.clone();
+    duplicate.rows.insert(6, duplicate.rows[5]);
+    duplicate.row_count += 1;
+    assert_eq!(
+        decode_local_calls(&duplicate, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::InvalidMarker(31)
+    );
+    let mut early = log.clone();
+    early.rows.swap(5, 6);
+    assert_eq!(
+        decode_local_calls(&early, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::RetainedEnvironment(31)
+    );
+    let mut unfinished = log.clone();
+    unfinished.rows.remove(6);
+    unfinished.row_count -= 1;
+    assert!(matches!(
+        decode_local_calls(&unfinished, [49; 32], &units, &calls, 100),
+        Err(Error::InvalidFrame(1))
+    ));
 }

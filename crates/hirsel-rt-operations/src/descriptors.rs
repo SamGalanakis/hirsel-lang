@@ -844,6 +844,8 @@ pub const ENTRIES: &[Entry] = &[
     // ownership_trace.rs: optional diagnostics, without semantic authority.
     entry("hirsel_rt_v2_ownership_enter", Concurrent),
     entry("hirsel_rt_v2_ownership_event", Concurrent),
+    entry("hirsel_rt_v2_ownership_cleanup_begin", Concurrent),
+    entry("hirsel_rt_v2_ownership_cleanup_end", Concurrent),
     entry("hirsel_rt_v2_ownership_alias", Concurrent),
     entry("hirsel_rt_v2_ownership_leave", Concurrent),
     // net_abi.rs

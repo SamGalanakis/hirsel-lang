@@ -105,6 +105,12 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         )?;
         let location = |at: NativeLocation| (u64::from(at.kind) << 32) | u64::from(at.index);
         for marker in markers {
+            if marker.kind == 4 {
+                if self.ownership_cleanup.replace(marker).is_some() {
+                    return self.invalid("overlapping ownership cleanup markers");
+                }
+                continue;
+            }
             let site = site_code(
                 self.definition(),
                 &self.unit.header.implementation_revision,
@@ -143,6 +149,83 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     self.module.const_int(i32, u128::from(marker.layout.0)),
                 ],
             );
+        }
+        Ok(())
+    }
+
+    pub(super) fn ownership_cleanup_begin(&mut self, value: ValueId) -> Emitted<Option<Value<'m>>> {
+        let Some(marker) = self.ownership_cleanup.take() else {
+            return Ok(None);
+        };
+        let plan = self.ownership.ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "ownership cleanup has no plan".into(),
+        })?;
+        let (released, fields) = plan
+            .cleanup_captures(self.unit, self.inputs.layouts, marker.id)
+            .or_else(|error| self.invalid(error))?;
+        if released != value {
+            return self.invalid("ownership cleanup names another physical release");
+        }
+        let (_, environment) = self.callable_parts(value)?;
+        let i64 = self.module.int_type(64);
+        let scope = self.prologue.alloca(self.module.array_type(i64, 6), 8);
+        let bindings = self.prologue.alloca(
+            self.module.array_type(i64, fields.len().max(1) as u64 * 4),
+            8,
+        );
+        for (i, field) in fields.iter().enumerate() {
+            let descriptor = self.descriptor(field.layout)?;
+            let descriptor = self.builder.cast(Cast::ZExt, descriptor, i64);
+            let words = [
+                self.const_u64(field.offset),
+                descriptor,
+                self.const_u64(u64::from(field.field)),
+                self.const_u64(u64::from(field.layout.0)),
+            ];
+            for (j, word) in words.into_iter().enumerate() {
+                self.builder.store(
+                    word,
+                    self.builder
+                        .offset(bindings, self.const_u64((i * 4 + j) as u64 * 8)),
+                    8,
+                );
+            }
+        }
+        let ptr = self.module.ptr_type();
+        let begin = self.ownership_function(
+            "hirsel_rt_v2_ownership_cleanup_begin",
+            self.module.void_type(),
+            &[ptr, ptr, i64, self.module.int_type(32), ptr, ptr, i64],
+        )?;
+        let frame = self.ownership_frame.ok_or_else(|| CodegenError::Invalid {
+            definition: self.definition().clone(),
+            what: "ownership cleanup has no frame".into(),
+        })?;
+        self.builder.call(
+            begin,
+            &[
+                self.context,
+                scope,
+                frame,
+                self.module
+                    .const_int(self.module.int_type(32), u128::from(marker.id.0)),
+                environment,
+                bindings,
+                self.const_u64(fields.len() as u64),
+            ],
+        );
+        Ok(Some(scope))
+    }
+    pub(super) fn ownership_cleanup_end(&mut self, scope: Option<Value<'m>>) -> Emitted {
+        if let Some(scope) = scope {
+            let ptr = self.module.ptr_type();
+            let end = self.ownership_function(
+                "hirsel_rt_v2_ownership_cleanup_end",
+                self.module.void_type(),
+                &[ptr, ptr],
+            )?;
+            self.builder.call(end, &[self.context, scope]);
         }
         Ok(())
     }

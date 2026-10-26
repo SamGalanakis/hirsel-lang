@@ -109,6 +109,12 @@ impl FnEmitter<'_, '_, '_> {
         let location =
             |at: NativeLocation| ((u64::from(at.kind) << 32) | u64::from(at.index)) as i64;
         for marker in markers {
+            if marker.kind == 4 {
+                if self.ownership_cleanup.replace(marker).is_some() {
+                    return self.invalid("overlapping ownership cleanup markers");
+                }
+                continue;
+            }
             let site = site_code(
                 self.definition(),
                 &self.unit.header.implementation_revision,
@@ -145,6 +151,76 @@ impl FnEmitter<'_, '_, '_> {
                     &[self.context, frame, id, kind, source, owner, site, layout],
                 );
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn ownership_cleanup_begin(
+        &mut self,
+        value: hirsel_lir::ir::ValueId,
+    ) -> Emitted<Option<cranelift_codegen::ir::Value>> {
+        let Some(marker) = self.ownership_cleanup.take() else {
+            return Ok(None);
+        };
+        let plan = self
+            .ownership
+            .ok_or_else(|| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "ownership cleanup has no plan".into(),
+            })?;
+        let (released, fields) = plan
+            .cleanup_captures(self.unit, self.em.inputs.layouts, marker.id)
+            .or_else(|error| self.invalid(error))?;
+        if released != value {
+            return self.invalid("ownership cleanup names another physical release");
+        }
+        let crate::function::V::Pair(_, environment) = self.get(value)? else {
+            return self.invalid("ownership cleanup has no callable pair");
+        };
+        let (scope, _) = self.stack_bytes(48, 8);
+        let (bindings, _) = self.stack_bytes(fields.len().max(1) as u64 * 32, 8);
+        for (i, field) in fields.iter().enumerate() {
+            let descriptor = self.descriptor_value(field.layout)?;
+            let descriptor = self.b.ins().uextend(types::I64, descriptor);
+            let offset = self.u64c(field.offset);
+            let ordinal = self.u64c(u64::from(field.field));
+            let layout = self.u64c(u64::from(field.layout.0));
+            for (j, word) in [offset, descriptor, ordinal, layout]
+                .into_iter()
+                .enumerate()
+            {
+                self.store_at(word, bindings, (i * 4 + j) as u64 * 8);
+            }
+        }
+        let begin = self.ownership_function(
+            "hirsel_rt_v2_ownership_cleanup_begin",
+            None,
+            &[PTR, PTR, types::I64, types::I32, PTR, PTR, types::I64],
+        )?;
+        let begin = self.func_ref(begin);
+        let frame = self
+            .ownership_frame
+            .ok_or_else(|| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "ownership cleanup has no frame".into(),
+            })?;
+        let id = self.b.ins().iconst(types::I32, i64::from(marker.id.0));
+        let count = self.u64c(fields.len() as u64);
+        self.b.ins().call(
+            begin,
+            &[self.context, scope, frame, id, environment, bindings, count],
+        );
+        Ok(Some(scope))
+    }
+    pub(crate) fn ownership_cleanup_end(
+        &mut self,
+        scope: Option<cranelift_codegen::ir::Value>,
+    ) -> Emitted {
+        if let Some(scope) = scope {
+            let end =
+                self.ownership_function("hirsel_rt_v2_ownership_cleanup_end", None, &[PTR, PTR])?;
+            let end = self.func_ref(end);
+            self.b.ins().call(end, &[self.context, scope]);
         }
         Ok(())
     }

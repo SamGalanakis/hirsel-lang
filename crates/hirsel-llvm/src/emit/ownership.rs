@@ -128,7 +128,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         }
         let place = self.stack(layout)?;
         self.store(self.value_shape(value)?, self.get(value)?, place);
-        if live == MaskRef::All && glue::covered(self.inputs.layouts, layout) {
+        let ownership_cleanup = self.ownership_cleanup_begin(value)?;
+        if ownership_cleanup.is_none()
+            && live == MaskRef::All
+            && glue::covered(self.inputs.layouts, layout)
+        {
             // Plain inline values need no finalization frame. In particular, erased
             // slice owners decrement shared counts before their last-credit fallback.
             // Programs with finalizers or partial masks still use the runtime below.
@@ -160,6 +164,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 operation_site,
             ],
         );
+        self.ownership_cleanup_end(ownership_cleanup)?;
         self.status_guard(status, failure)
     }
 

@@ -21,6 +21,12 @@ void hirsel_rt_v2_ownership_event(hirsel_rt_v2_ctx *ctx, uint64_t frame,
 void hirsel_rt_v2_ownership_alias(hirsel_rt_v2_ctx *ctx, uint64_t frame,
                                 uint32_t marker, uint64_t view, uint64_t owner,
                                 uint64_t site, uint32_t layout);
+/* Stack-borrowed synchronous cleanup scope; six u64 words, aligned to 8.
+ * bindings holds count rows: offset, descriptor index, capture ordinal, layout. */
+void hirsel_rt_v2_ownership_cleanup_begin(hirsel_rt_v2_ctx *ctx, void *scope,
+    uint64_t frame, uint32_t marker, void *environment, const uint64_t *bindings,
+    uint64_t count);
+void hirsel_rt_v2_ownership_cleanup_end(hirsel_rt_v2_ctx *ctx, void *scope);
 void hirsel_rt_v2_ownership_leave(hirsel_rt_v2_ctx *ctx, uint64_t frame);
 #ifdef __cplusplus
 }

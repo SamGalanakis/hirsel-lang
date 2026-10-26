@@ -258,7 +258,9 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         let shape = self.value_shape(value)?;
         let v = self.get(value)?;
         self.store(shape, v, place)?;
+        let ownership_cleanup = self.ownership_cleanup_begin(value)?;
         let status = self.finalize_inline(place, live, anchor)?;
+        self.ownership_cleanup_end(ownership_cleanup)?;
         self.status_guard(status, failure)
     }
 

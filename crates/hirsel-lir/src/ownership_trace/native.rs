@@ -1058,3 +1058,85 @@ pub fn rebind_plan(
     LeafPlan::from_relocated(after, after_inputs.layouts, &rebound)?;
     Ok(rebound)
 }
+
+/// A physical capture cell is a lookup key during synchronous cleanup only.
+/// Its declaration ordinal selects the original logical custody path.
+#[derive(Clone, Debug)]
+pub struct CleanupCapture {
+    pub field: u32,
+    pub offset: u64,
+    pub layout: LayoutId,
+}
+impl LeafPlan {
+    /// Exact leaf Resource cells of the callable released by this marker.
+    /// Unknown code/environment identities and ambiguous cells fail closed.
+    pub fn cleanup_captures(
+        &self,
+        unit: &LirUnit<Ready>,
+        layouts: &LayoutTable,
+        id: MarkerId,
+    ) -> Result<(ValueId, Vec<CleanupCapture>), String> {
+        let mut released = None;
+        for &(point, marker) in &self.commits {
+            if marker != id {
+                continue;
+            }
+            let Point::Instruction {
+                block,
+                index,
+                moment: Moment::Before,
+            } = point
+            else {
+                return Err("ownership cleanup is not a committed release".into());
+            };
+            let code = unit.blocks[block.index()]
+                .instructions
+                .get(&unit.instructions)
+                .ok_or("ownership cleanup has no block")?;
+            let Inst::Release { value, .. } = code[index as usize] else {
+                return Err("ownership cleanup has no physical release".into());
+            };
+            if released.replace(value).is_some_and(|old| old != value) {
+                return Err("ownership cleanup has ambiguous physical holders".into());
+            }
+        }
+        let value = released.ok_or("ownership cleanup has no release")?;
+        let codes = calls::discover(unit);
+        let calls::Code::Known(target) = &codes[value.index()] else {
+            return Err("ownership cleanup has unresolved callable identity".into());
+        };
+        let environment = target
+            .environment
+            .ok_or("ownership cleanup has no environment")?;
+        let record = layouts
+            .layout(environment)
+            .ok_or("ownership cleanup environment is absent")?;
+        let mut captures = Vec::new();
+        for field in record.fields.iter().rev() {
+            let layout = layouts
+                .layout(field.layout)
+                .ok_or("ownership cleanup field is absent")?;
+            if layout.drop.is_empty() && layout.finalizer.is_none() {
+                continue;
+            }
+            if !matches!(layout.kind, LayoutKind::Resource)
+                || layout.finalizer.is_none()
+                || !leaf(layouts, field.layout)
+            {
+                return Err("ownership cleanup requires leaf Resource captures".into());
+            }
+            if captures
+                .iter()
+                .any(|prior: &CleanupCapture| prior.offset == field.offset)
+            {
+                return Err("ownership cleanup has ambiguous capture cells".into());
+            }
+            captures.push(CleanupCapture {
+                field: field.ordinal,
+                offset: field.offset,
+                layout: field.layout,
+            });
+        }
+        Ok((value, captures))
+    }
+}

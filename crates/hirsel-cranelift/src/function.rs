@@ -157,6 +157,7 @@ pub(crate) struct FnEmitter<'e, 'a, 'f> {
     pub(crate) ahead_counter: Option<cranelift_frontend::Variable>,
     pub(crate) ownership: Option<&'a hirsel_lir::ownership_trace::native::LeafPlan>,
     pub(crate) ownership_frame: Option<Value>,
+    pub(crate) ownership_cleanup: Option<hirsel_lir::ownership_trace::native::NativeMarker>,
     /// Set while emitting one state of a resumable continuation alternate.
     pub(crate) resume: Option<crate::resume::Resume<'a>>,
     /// Admissions of depth-leaf callees, lowered to room checks with no retirement.
@@ -247,6 +248,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             ahead_counter: None,
             ownership: None,
             ownership_frame: None,
+            ownership_cleanup: None,
             resume: None,
             room: Default::default(),
         }
