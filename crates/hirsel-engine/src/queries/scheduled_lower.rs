@@ -4,6 +4,7 @@
 use super::*;
 mod dependencies;
 mod evidence;
+mod registration;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
@@ -11,6 +12,9 @@ use crate::store::{Domain, EntryKey, Reference, ResultStore};
 use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
+pub use registration::{
+    FRONT_REGISTRATION_KIND, FrontRegistrationOutput, FrontRegistrationQueries,
+};
 use std::{
     cell::{Cell, RefCell},
     future::{Future, poll_fn},

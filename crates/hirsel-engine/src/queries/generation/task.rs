@@ -240,3 +240,143 @@ pub(crate) struct PreparedGenerator {
     pub(crate) detail: DependencyReads,
     pub(crate) products: Arc<PhaseProducts>,
 }
+
+/// Mirror the live generation recorder's adapter detail, including repeated
+/// signature requests in order. Canonical Reads alone cannot reconstruct the
+/// QueryOutput dependency list after private generator checking.
+struct GeneratorRecorder<'a> {
+    provider: FrozenProvider<'a>,
+    snapshot: &'a SignatureSnapshot,
+    detail: &'a mut DependencyReads,
+}
+impl SignatureProvider for GeneratorRecorder<'_> {
+    fn signature(&mut self, definition: DefId) -> Result<hirsel_types::SignatureRef, QueryError> {
+        let result = self.provider.signature(definition);
+        if let Err(QueryError::Operational(error)) = &result {
+            self.detail.operational_failure = Some(error.clone());
+        }
+        match self.snapshot.signature(definition) {
+            Some(Ok(signature)) => self.detail.signatures.push(SignatureDependency {
+                definition,
+                fingerprint: signature.fingerprint,
+            }),
+            _ => {
+                self.detail
+                    .failed_signatures
+                    .push(definition.path().clone());
+                self.detail.failed_signature_keys.push((
+                    definition.path().clone(),
+                    self.snapshot.failed_signature_key(definition),
+                ));
+            }
+        }
+        result
+    }
+    fn lookup(
+        &mut self,
+        context: &FileContext,
+        path: &hirsel_syntax::Path,
+    ) -> hirsel_types::LookupOutput {
+        let output = self.provider.lookup(context, path);
+        self.detail
+            .manifest_lookups
+            .push(hirsel_types::DependencyRead::ProviderLookup {
+                context: context.clone(),
+                package: path.package.clone(),
+                segments: path
+                    .segments
+                    .iter()
+                    .map(|s| s.as_str().to_owned())
+                    .collect(),
+                output: output.clone(),
+            });
+        if let Err(QueryError::Operational(error)) = &output.result {
+            self.detail.operational_failure = Some(error.clone());
+        }
+        if let Some(path) = lookup_path(context, path) {
+            self.detail.lookups.push((path, output.result.is_ok()));
+        }
+        output
+    }
+    fn cite_name(&mut self, definition: &DefPath) -> Option<Span> {
+        let cited = self.provider.cite_name(definition);
+        self.detail.citations.push((definition.clone(), cited));
+        cited
+    }
+}
+
+/// The same private helper preparation for serial and admitted workers.
+/// Only immutable phase/source handles and the caller's read recorder cross it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare(
+    path: &DefPath,
+    syntax: Arc<ItemSyntax>,
+    types: &hirsel_types::TypeInterner,
+    memo: &hirsel_types::TypeMemo,
+    snapshot: &SignatureSnapshot,
+    declarations: &Declarations,
+    citations: &dyn crate::snapshot::CitationSource,
+    environment: ContentHash,
+    phases: &GeneratorPhases<'_>,
+) -> s1::DependencyProduct<PreparedGenerator> {
+    let mut observed = ReadsBuilder::new();
+    let mut products = PhaseProducts::default();
+    let mut detail = DependencyReads::default();
+    let mut result = (|| {
+        let body = generator(&syntax).ok_or(QueryError::NotImplemented)?;
+        let input = GeneratorInput::new(path, &syntax, body)?;
+        let checked = input.check(
+            types,
+            memo,
+            declarations,
+            phases,
+            &mut products,
+            &mut GeneratorRecorder {
+                provider: FrozenProvider::for_definition(
+                    snapshot,
+                    DefId::intern(path),
+                    citations,
+                    &mut observed,
+                ),
+                snapshot: snapshot,
+                detail: &mut detail,
+            },
+        );
+        Ok(PreparedGenerator {
+            syntax,
+            body,
+            input,
+            checked,
+            detail: detail.clone(),
+            products: Arc::new(products.clone()),
+        })
+    })();
+    if let Some(resolution) = &products.resolution {
+        detail.resolver = resolution.reads.clone();
+        if let Ok(prepared) = &mut result {
+            prepared.detail.resolver = resolution.reads.clone();
+        }
+    }
+    let mut source = parallel::FrozenReadSource {
+        declarations: declarations,
+        citations: citations,
+        candidates: snapshot.declaration_candidates(DefId::intern(path)),
+        environment: environment,
+    };
+    match memos::complete_reads(
+        path,
+        &detail,
+        &Observed {
+            products: Arc::new(products),
+            merged: observed,
+            ..Default::default()
+        },
+        &mut source,
+    ) {
+        Ok(reads) => s1::DependencyProduct { result, reads },
+        Err(_) => s1::DependencyProduct {
+            result: Err(QueryError::NotImplemented),
+            reads: Reads::empty(),
+        },
+    }
+}

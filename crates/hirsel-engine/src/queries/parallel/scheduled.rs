@@ -208,6 +208,39 @@ const SOURCE_INPUT: Domain = Domain {
     schema: 1,
 };
 impl FrontBodyQueries {
+    pub(crate) fn prepare_generator(
+        &self,
+        syntax: Arc<ItemSyntax>,
+        signer: &dyn SignaturePhase,
+    ) -> s1::DependencyProduct<generation::task::PreparedGenerator> {
+        let (Some(resolver), Some(checker), Some(modes)) = (
+            self.resolver.as_deref(),
+            self.checker.as_deref(),
+            self.modes.as_deref(),
+        ) else {
+            return s1::DependencyProduct {
+                result: Err(QueryError::NotImplemented),
+                reads: Reads::empty(),
+            };
+        };
+        let path = syntax.item.definition.clone();
+        generation::task::prepare(
+            &path,
+            syntax,
+            &self.types,
+            &self.memo,
+            &self.snapshot,
+            &self.declarations,
+            &self.citations,
+            self.environment,
+            &generation::task::GeneratorPhases {
+                signature: signer,
+                resolver,
+                checker,
+                modes,
+            },
+        )
+    }
     pub(crate) fn stage_source(&self) -> crate::queries::scheduled_stage::StageSource {
         crate::queries::scheduled_stage::StageSource {
             snapshot: self.snapshot.clone(),

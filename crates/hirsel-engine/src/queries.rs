@@ -50,8 +50,9 @@ pub use parallel::{
 pub use s1::{LoweringResult, S1LowerWork};
 pub use scheduled_growth::{FRONT_GROWTH_KIND, FrontGrowthOutput, FrontGrowthQueries};
 pub use scheduled_lower::{
-    DefinitionDecodeLayout, FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FrontLowerOutput,
-    FrontLowerQueries, FrontLowerWork,
+    DefinitionDecodeLayout, FRONT_EVALUATE_KIND, FRONT_LOWER_KIND, FRONT_REGISTRATION_KIND,
+    FrontLowerOutput, FrontLowerQueries, FrontLowerWork, FrontRegistrationOutput,
+    FrontRegistrationQueries,
 };
 /// Engine-owned complete canonical input. Only admitted source wrappers
 /// implement this lifetime/size seam; it supplies no validation authority.
