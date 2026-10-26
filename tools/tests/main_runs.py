@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """tools/main-runs names each red's likely culprit and lane from the commits
-since the last run of the red's stage, tells each lane its new reds once, and
-sends a red with no known lane to the orchestrator; a fast tier runs only the
-quick stages."""
+since the last run of the red's stage and reports owners of new code reds;
+a fast tier runs only the quick stages."""
 import json
 import contextlib
 import io
@@ -79,7 +78,7 @@ class ExceptionTables(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             with patch.dict(self.tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
-                            run_stages=unusable_table(self.tool), route=lambda *args: None,
+                            run_stages=unusable_table(self.tool), attribute=lambda *args: [],
                             rows=lambda: [], push_to_main=lambda *args: self.fail('must not publish')):
                 self.assertEqual(self.tool['run']('abc', 'fast'), 1)
             history = json.loads((root / 'runs.jsonl').read_text())
@@ -246,7 +245,7 @@ class Lifecycle(unittest.TestCase):
             root = Path(temporary)
             with patch.dict(self.tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
                             run_stages=lambda *args: ({}, ['workspace tests'], [], None, status),
-                            route=lambda *args: None, rows=lambda: [], push_to_main=lambda *args: None):
+                            attribute=lambda *args: [], rows=lambda: [], push_to_main=lambda *args: None):
                 self.tool['run']('abc', 'fast')
             history = json.loads((root / 'runs.jsonl').read_text())
             self.assertEqual(history['exception_status'], status)
@@ -269,7 +268,7 @@ class NativeCollection(unittest.TestCase):
         self.assertIn('//:gate-native-full-shard-1', native)
 
 
-class Route(unittest.TestCase):
+class Attribution(unittest.TestCase):
     def setUp(self):
         self.repo = Path(tempfile.mkdtemp(prefix='main-runs-test-'))
         self.addCleanup(shutil.rmtree, self.repo)
@@ -293,19 +292,15 @@ class Route(unittest.TestCase):
                 landings.append(f'{{"landed": "{self.commits[name]}", "branch": "{lane}"}}\n')
         (self.repo / 'crates/hirsel-foo-macros').mkdir()
         (self.repo / '.git/hirsel-landings.jsonl').write_text(''.join(landings))
-        self.said = self.repo / 'said.txt'
-        sluice = self.repo / 'sluice'
-        sluice.write_text(f'#!/bin/sh\n[ "$6" = lane-gone ] && exit 1\n'
-                          f'{{ echo "TO $6"; cat "$8"; }} >> {self.said}\n')
-        sluice.chmod(0o755)
-        self.route = runpy.run_path(str(ROOT / 'tools/main-runs'))['route']
-        self.route.__globals__.update(TREE=self.repo, SLUICE=str(sluice))
+        self.tool = runpy.run_path(str(ROOT / 'tools/main-runs'))
+        self.attribute = self.tool['attribute']
+        self.attribute.__globals__.update(TREE=self.repo)
 
     def git(self, *arguments):
         return subprocess.run(['git', *arguments], cwd=self.repo, env=self.env, check=True, capture_output=True,
                               text=True).stdout.strip()
 
-    def test_each_red_goes_to_the_lane_whose_commits_match_it(self):
+    def test_report_names_new_owners_and_keeps_existing_attribution(self):
         reds = {
             'workspace tests: hirsel-foo-test-it-shard-2': dict(stage='workspace tests', target='hirsel-foo-test-it-shard-2',
                                                                 ids=['hirsel-foo-test-it::walk']),
@@ -319,7 +314,18 @@ class Route(unittest.TestCase):
         history = [dict(sha=self.commits['base'], reds={'workspace tests: hirsel-bar-unittest': old_red}),
                    dict(sha=self.commits['foo-2'], tier='fast', stages=['workspace tests'],
                         reds={'workspace tests: hirsel-bar-unittest': old_red})]
-        self.route(self.commits['bar'], reds, history, '/report.md')
+        with patch.dict(self.attribute.__globals__, RUNS=self.repo, ROWS=self.repo / 'runs.jsonl',
+                        run_stages=lambda *args: (reds, ['workspace tests'], [], None, empty_status()),
+                        rows=lambda: history, push_to_main=lambda *args: None):
+            self.tool['run'](self.commits['bar'], 'fast')
+        report = (self.repo / 'latest.md').read_text()
+        owners = report.split('## Owners\n\n', 1)[1].split('\n\n', 1)[0]
+        self.assertEqual(owners,
+                         '- conformance validation and ratchet: gate-conformance-shard-3 -> lane-b '
+                         f'({self.commits["bar"]})\n'
+                         '- stage: native and Lean checks -> unowned\n'
+                         '- workspace tests: hirsel-foo-test-it-shard-2 -> lane-b '
+                         f'({self.commits["bar"]})')
         foo, corpus, stage, old = reds.values()
         # A red in a stage the fast run ran is new since that run, so only bar can be its culprit;
         # the corpus red's stage last ran in the full run, so its culprit is among all three commits.
@@ -327,72 +333,46 @@ class Route(unittest.TestCase):
         self.assertEqual((corpus['culprit'], corpus['lane']), (self.commits['bar'], 'lane-b'))
         self.assertEqual((stage['culprit'], stage['lane']), (None, None))
         self.assertEqual((old['culprit'], old['lane'], old['since']), ('c0ffee', 'lane-z', '5eed'))
-        said = self.said.read_text()
-        self.assertEqual(said.count('TO '), 2)
-        for lane, key in (('lane-b', 'hirsel-foo-test-it-shard-2'), ('lane-b', 'gate-conformance-shard-3'),
-                          ('@agentlang-24', 'native and Lean checks')):
-            message = said.split(f'TO {lane}\n')[1].split('TO ')[0]
-            self.assertIn(key, message)
-        self.assertNotIn('hirsel-bar-unittest', said)
 
-    def test_exit_71_stage_is_not_routed_to_a_lane(self):
+    def test_exit_71_stage_has_no_owner(self):
         # Only lane-b landed since the preceding run: a generic stage failure
-        # would be blamed on it. Exercise stage execution through notification.
-        namespace = self.route.__globals__
+        # would be blamed on it. Exercise stage execution through attribution.
+        namespace = self.attribute.__globals__
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             with patch.dict(namespace, stage_plan=lambda tier: {}, exception_tables=lambda: ({}, {}, {}), stages=lambda stage, tier: stage(
                     'memory guard', [namespace['PY'], '-c', 'raise SystemExit(71)'])):
                 with (directory / 'run.log').open('w+') as log:
                     reds, *_ = namespace['run_stages'](directory, log, 'fast')
-            self.route(self.commits['bar'], reds,
-                       [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
-        said = self.said.read_text()
-        self.assertNotIn('TO lane-b', said)
-        self.assertIn('TO @agentlang-24', said)
+            self.assertEqual(self.attribute(self.commits['bar'], reds,
+                             [dict(sha=self.commits['foo-2'], reds={})]), [])
         self.assertIsNone(reds['stage: memory guard']['culprit'])
         self.assertIsNone(reds['stage: memory guard']['lane'])
 
-    def test_infra_is_batched_without_reusing_old_lane_blame(self):
+    def test_infra_has_no_owner_and_does_not_reuse_old_lane_blame(self):
         reds = {f'workspace tests: {name}': dict(stage='workspace tests', target=name, ids=[],
                                                kind='infra', reason=reason)
                 for name, reason in (('oom', 'memory limit'), ('slow', 'timeout'))}
         history = [dict(sha=self.commits['foo-2'], reds={
             key: dict(culprit='c0ffee', lane='lane-a', since='5eed') for key in reds})]
-        self.route(self.commits['bar'], reds, history, '/report.md')
-        said = self.said.read_text()
-        self.assertEqual(said.count('TO '), 1)
-        self.assertIn('TO @agentlang-24', said)
-        self.assertIn('memory limit', said)
-        self.assertIn('timeout', said)
-        self.assertNotIn('lane-a', said)
-        self.assertEqual(sum(line.startswith('- ') for line in said.splitlines()), 2)
+        self.assertEqual(self.attribute(self.commits['bar'], reds, history), [])
         for red in reds.values():
             self.assertIsNone(red['culprit'])
             self.assertIsNone(red['lane'])
-        # Infra is batched each run; a code failure replacing infra is new.
-        self.said.unlink()
-        self.route(self.commits['bar'], reds, [dict(sha=self.commits['bar'], reds={})], '/report.md')
-        self.assertEqual(self.said.read_text().count('TO @agentlang-24'), 1)
+        # Infra stays out of lane-blame history; a code failure replacing it is new.
+        self.assertEqual(self.attribute(self.commits['bar'], reds,
+                         [dict(sha=self.commits['bar'], reds={})]), [])
         code = {'workspace tests: oom': dict(stage='workspace tests', target='oom', ids=[], kind='code')}
-        self.route(self.commits['bar'], code, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
-        self.assertIn('TO lane-b', self.said.read_text())
+        self.assertEqual(self.attribute(self.commits['bar'], code,
+                         [dict(sha=self.commits['foo-2'], reds={})]),
+                         [f'- workspace tests: oom -> lane-b ({self.commits["bar"]})'])
 
     def test_configuration_error_has_no_lane_blame(self):
         reds = {'configuration: tables': dict(stage='configuration', target=None, ids=[],
                                              kind='configuration', reason='known.tsv:2: duplicate identity')}
-        self.route(self.commits['bar'], reds, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
-        self.assertIn('TO @agentlang-24', self.said.read_text())
-        self.assertNotIn('lane-b', self.said.read_text())
+        self.assertEqual(self.attribute(self.commits['bar'], reds,
+                         [dict(sha=self.commits['foo-2'], reds={})]), [])
         self.assertIsNone(reds['configuration: tables']['culprit'])
-
-    def test_a_lane_that_cannot_be_told_falls_back_to_the_orchestrator(self):
-        landings = self.repo / '.git/hirsel-landings.jsonl'
-        landings.write_text(landings.read_text().replace('lane-b', 'lane-gone'))
-        reds = {'x: hirsel-bar-unittest': dict(stage='x', target='hirsel-bar-unittest', ids=[])}
-        self.route(self.commits['bar'], reds, [dict(sha=self.commits['foo-2'], reds={})], '/report.md')
-        self.assertEqual(reds['x: hirsel-bar-unittest']['lane'], 'lane-gone')
-        self.assertIn('TO @agentlang-24\n', self.said.read_text())
 
 
 class Tiers(unittest.TestCase):
@@ -484,7 +464,7 @@ class PerfChecks(unittest.TestCase):
                 output = io.StringIO()
                 with patch.dict(tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
                                 run_stages=lambda *args: ({}, ['instruction count budgets'], [], measured, empty_status()),
-                                route=lambda *args: None, rows=lambda: [], push_to_main=push), \
+                                attribute=lambda *args: [], rows=lambda: [], push_to_main=push), \
                         contextlib.redirect_stdout(output):
                     tool['run']('0123456789abcdef', 'full')
                 actual = counts['read_table'](table)
@@ -579,7 +559,7 @@ class Reds(unittest.TestCase):
             root = Path(temporary)
             with patch.dict(tool['run'].__globals__, RUNS=root, ROWS=root / 'runs.jsonl',
                             run_stages=lambda *args: (reds, ['x'], [], None, empty_status()),
-                            route=lambda *args: None, rows=lambda: [], push_to_main=lambda *args: None):
+                            attribute=lambda *args: [], rows=lambda: [], push_to_main=lambda *args: None):
                 tool['run']('abc', 'fast')
             history = json.loads((root / 'runs.jsonl').read_text())
             self.assertEqual(history['reds'], {'stage: code': red})

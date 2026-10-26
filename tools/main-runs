@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Main's test runs on origin/main, each red reported and routed to its likely lane.
+"""Main's test runs on origin/main, each red reported with its likely owner.
 
     tools/main-runs --tick [--tier fast|full] [--dry-run]
 
@@ -17,9 +17,10 @@ none, that tools/known-failures.tsv does not explain. The report
 ($HIRSEL_MAIN_RUNS/reports/, latest.md) names each red's likely culprit: of
 the commits since the last run of its stage, the one that changed most under the red's
 crate or its failing corpus cases, with its lane from hirsel-landings.jsonl.
-New code reds go to that lane (`sluice tool say`), else to the orchestrator.
+New code reds appear in the report's Owners section with their lane and culprit,
+or as unowned when no lane is known.
 Infrastructure reds have no culprit or lane; each run reports them separately
-and batches them to the orchestrator. Only code reds enter lane-blame history. Then
+for the orchestrator. Only code reds enter lane-blame history. Then
 docs/api.md is regenerated and, after a full run, the instruction budgets
 ratchet down to what gate-perf-counts measured, each pushed straight to main
 when it changed. Both exception tables require four nonempty fields, unique
@@ -40,7 +41,6 @@ import re
 import runpy
 import subprocess
 import sys
-import tempfile
 import time
 
 TREE = Path(__file__).resolve().parents[1]
@@ -53,8 +53,6 @@ PY = sys.executable
 RUNS = Path(os.environ.get('HIRSEL_MAIN_RUNS') or Path.home() / '.local/state/hirsel/main-runs')
 RUN_TREE, PUSH_TREE = RUNS / 'worktrees/main-runs', RUNS / 'worktrees/main-push'
 ROWS = RUNS / 'runs.jsonl'
-ORCHESTRATOR = '@agentlang-24'
-SLUICE = os.environ.get('HIRSEL_SLUICE', 'sluice')
 PASSED = (event_logs.PASS, event_logs.SKIP, event_logs.OMITTED)
 PERF_MARKER = 'PERF_COUNTS_RECORD '
 # The run's own settings, which the tool tests never inherit.
@@ -428,16 +426,6 @@ def culprit(red, commits, changed):
     return best if best and score[best] else (commits[-1] if len(commits) == 1 else None)
 
 
-def tell(to, body):
-    with tempfile.NamedTemporaryFile('w', suffix='.md') as message:
-        message.write(body + '\n')
-        message.flush()
-        sent = subprocess.run([SLUICE, 'tool', 'say', '--project', 'hirsel-lang', '--to', to, '--body-file',
-                               message.name], capture_output=True, text=True, env=os.environ | {'SLUICE_ME': '@main-runs'})
-    say(f'told {to}' + ('' if sent.returncode == 0 else f' (failed: {sent.stderr.strip()[-300:]})'))
-    return sent.returncode == 0
-
-
 def describe(key, red):
     if red.get('kind') in ('infra', 'configuration'):
         label = 'infrastructure' if red['kind'] == 'infra' else 'configuration'
@@ -446,19 +434,18 @@ def describe(key, red):
             + f', red since {red["since"][:12]}' + (f'; failing {", ".join(red["ids"][:5])}' if red['ids'] else ''))
 
 
-def route(sha, reds, history, report):
-    """Route code reds to likely lanes and batch infrastructure reds to the orchestrator.
+def attribute(sha, reds, history):
+    """Attribute reds and return report lines naming each new code red's owner.
 
     A red is compared with the last run that ran its stage (a row without a
     stage list ran them all): a code red it had keeps its culprit, a new one's
     culprit is among the commits since it. Infra never carries lane blame."""
-    messages = {}
+    owners = []
     for key, red in sorted(reds.items()):
         previous = next((r for r in reversed(history) if red['stage'] in r.get('stages', [red['stage']])), None)
         kind = red.get('kind', 'code')
         if kind in ('infra', 'configuration'):
             red.update(culprit=None, lane=None, since=sha)
-            messages.setdefault((ORCHESTRATOR, kind), []).append(describe(key, red))
             continue
         if old := (previous or {}).get('reds', {}).get(key):
             red.update(culprit=old.get('culprit'), lane=old.get('lane'), since=old.get('since', previous['sha']))
@@ -467,12 +454,8 @@ def route(sha, reds, history, report):
         changed = {c: git('diff-tree', '--no-commit-id', '--name-only', '-r', c).split() for c in commits}
         found = culprit(red, commits, changed)
         red.update(culprit=found, lane=lanes(commits).get(found), since=sha)
-        messages.setdefault((red['lane'] or ORCHESTRATOR, kind), []).append(describe(key, red))
-    for (to, kind), lines in messages.items():
-        action = 'Fix forward, or add a row to tools/known-failures.tsv. ' if kind == 'code' else ''
-        body = f'main-runs: new {kind} reds on origin/main {sha[:12]}. {action}Report: {report}\n' + '\n'.join(lines)
-        if not tell(to, body) and to != ORCHESTRATOR:
-            tell(ORCHESTRATOR, body)
+        owners.append(f'- {key} -> {red["lane"] or "unowned"}' + (f' ({found})' if found else ''))
+    return owners
 
 
 def push_to_main(message, update):
@@ -528,7 +511,7 @@ def run(sha, tier):
             ran, skipped, perf = [], [], None
             status = dict(version=1, configuration_error=configuration_error, known=[], observations=[], selections=[], tables={})
     report = RUNS / 'reports' / f'{directory.name}.md'
-    route(sha, reds, rows(), report)
+    owners = attribute(sha, reds, rows())
     pushed, perf_checks = [], []
     ratchet_checks = []
     for name, update in (('Regenerate the API index.', api_index),
@@ -548,6 +531,7 @@ def run(sha, tier):
     lines = [f'# {tier} main run {sha[:12]}: {len(reds) - infra - configurations} code reds, {infra} infra reds, {configurations} configuration errors', '',
              f'{time.strftime("%Y-%m-%d %H:%M", time.gmtime(start))}Z, {minutes:.0f} min; log {directory / "run.log"}', '']
     lines += [f'Configuration: {configuration_error or "valid"}; exception status v1; SHA {sha}; tier {tier}', '']
+    lines += ['## Owners', ''] + owners + ['']
     for kind, title in (('code', 'Code reds'), ('infra', 'Infrastructure reds'), ('configuration', 'Configuration errors')):
         lines += [f'## {title}', ''] + [describe(key, red) for key, red in sorted(reds.items())
                                          if red.get('kind', 'code') == kind] + ['']
