@@ -284,3 +284,120 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
         assert!(checked > 0);
     });
 }
+
+#[test]
+fn entered_isolate_mark_storage_rejects_forged_cells_without_admitting_callback() {
+    with_compiler_stack(|| {
+        use hirsel_lir::continuation::isolate::IsolateProtocol;
+        use hirsel_lir::continuation::{MAX_FRAME_BYTES, RuntimeResultSource};
+        use hirsel_lir::ir::{CallId, ValueId};
+        let source = PROGRAM.replace("CALLBACK", "fn() -> u64 { first() }");
+        let program = super::runtime50_continuation::ready(&source);
+        let mut checked = 0;
+        for caller in &program.units {
+            for (at, call) in caller.unit().tables.calls.iter().enumerate() {
+                let Callee::Direct(symbol) = call.callee else {
+                    continue;
+                };
+                let symbol = &caller.unit().tables.symbols[symbol.index()];
+                if !symbol.definition.is_core("task.isolate") {
+                    continue;
+                }
+                let wrapper = program
+                    .units
+                    .iter()
+                    .find(|u| Some(u.unit().header.instance) == symbol.instance)
+                    .unwrap();
+                let Some(code) = wrapper.unit().tables.calls.iter().find_map(|call| {
+                    if let Callee::Bound { code, .. } = call.callee {
+                        Some(code)
+                    } else {
+                        None
+                    }
+                }) else {
+                    continue;
+                };
+                let target = &wrapper.unit().tables.symbols[code.index()];
+                let callback = program
+                    .units
+                    .iter()
+                    .find(|u| Some(u.unit().header.instance) == target.instance)
+                    .unwrap();
+                let proof = IsolateProtocol::derive(
+                    caller,
+                    CallId(at as u32),
+                    wrapper,
+                    callback,
+                    program.ahead_environments[&callback.unit().header.instance],
+                    &program.table,
+                )
+                .unwrap();
+                proof
+                    .validate(caller, wrapper, callback, &program.table)
+                    .unwrap();
+                let cell = proof.begin_result(wrapper, &program.table, 17).unwrap();
+                assert_eq!(cell.offset, 24);
+                assert!(proof.check_begin_result(wrapper, &program.table, 17, &cell));
+                assert!(
+                    !proof.check_begin_result(wrapper, &program.table, 25, &cell),
+                    "overlap with a larger live area"
+                );
+                let reject = |claimed: &hirsel_lir::continuation::RuntimeResultSlot| {
+                    assert!(!proof.check_begin_result(wrapper, &program.table, 17, claimed));
+                };
+                let mut bad = cell.clone();
+                bad.offset += 1;
+                reject(&bad);
+                let mut bad = cell.clone();
+                bad.offset -= 8;
+                reject(&bad);
+                let mut bad = cell.clone();
+                bad.bytes = 16;
+                reject(&bad);
+                let mut bad = cell.clone();
+                bad.align = 4;
+                reject(&bad);
+                let mut bad = cell.clone();
+                bad.layout = hirsel_lir::layout_types::LayoutId(u32::MAX);
+                reject(&bad);
+                let mut bad = cell.clone();
+                bad.source = RuntimeResultSource::CallResult(ValueId(u32::MAX));
+                reject(&bad);
+                let mut forged = proof.clone();
+                forged.mark = ValueId(u32::MAX);
+                assert!(forged.begin_result(wrapper, &program.table, 17).is_none());
+                assert!(!forged.check_begin_result(wrapper, &program.table, 17, &cell));
+                let mut forged = proof.clone();
+                forged.begin.call = proof.callback.call;
+                assert!(forged.begin_result(wrapper, &program.table, 17).is_none());
+                assert!(!forged.check_begin_result(wrapper, &program.table, 17, &cell));
+                for after in [0, MAX_FRAME_BYTES, u64::MAX] {
+                    assert!(proof.begin_result(wrapper, &program.table, after).is_none());
+                    assert!(!proof.check_begin_result(wrapper, &program.table, after, &cell));
+                }
+                let last = proof
+                    .begin_result(wrapper, &program.table, MAX_FRAME_BYTES - 8)
+                    .unwrap();
+                assert!(proof.check_begin_result(
+                    wrapper,
+                    &program.table,
+                    MAX_FRAME_BYTES - 8,
+                    &last
+                ));
+                checked += 1;
+            }
+        }
+        assert!(checked > 0);
+        let plans = native::continuation::plans(&program);
+        native::continuation::validate(&program, &plans).unwrap();
+        assert!(
+            plans
+                .plans
+                .values()
+                .flat_map(|p| &p.states)
+                .filter(|s| s.boundary.operation.is_core("task.isolate"))
+                .all(|s| s.callee.is_none()),
+            "storage evidence must not enable nesting"
+        );
+    });
+}
