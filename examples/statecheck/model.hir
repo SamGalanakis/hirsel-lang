@@ -30,19 +30,19 @@ pub type Batch {
   models: List[Graph],
 }
 
-fn state_fields_from_json(value: json.Value) -> Result[unique State, String] uses {} = comptime derive.from_json(
+fn state_fields_from_json(value: json.Value) -> Result[State, String] uses {} = comptime derive.from_json(
   shape(State)
 )
 
-fn edge_fields_from_json(value: json.Value) -> Result[unique Edge, String] uses {} = comptime derive.from_json(
+fn edge_fields_from_json(value: json.Value) -> Result[Edge, String] uses {} = comptime derive.from_json(
   shape(Edge)
 )
 
-fn graph_fields_from_json(value: json.Value) -> Result[unique Graph, String] uses {} = comptime derive.from_json(
+fn graph_fields_from_json(value: json.Value) -> Result[Graph, String] uses {} = comptime derive.from_json(
   shape(Graph)
 )
 
-fn batch_fields_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+fn batch_fields_from_json(value: json.Value) -> Result[Batch, String] uses {} = comptime derive.from_json(
   shape(Batch)
 )
 
@@ -178,28 +178,28 @@ pub fn jobs(text: String) -> Result[u64, Problem] uses {} {
   Ok(n)
 }
 
-fn state_from_json(value: json.Value) -> Result[unique State, String] uses {} {
+fn state_from_json(value: json.Value) -> Result[State, String] uses {} {
   if !closed(value, 1) {
     return Error("schema")
   }
   state_fields_from_json(value)
 }
 
-fn edge_from_json(value: json.Value) -> Result[unique Edge, String] uses {} {
+fn edge_from_json(value: json.Value) -> Result[Edge, String] uses {} {
   if !closed(value, 3) {
     return Error("schema")
   }
   edge_fields_from_json(value)
 }
 
-fn graph_from_json(value: json.Value) -> Result[unique Graph, String] uses {} {
+fn graph_from_json(value: json.Value) -> Result[Graph, String] uses {} {
   if !closed(value, 6) {
     return Error("schema")
   }
   graph_fields_from_json(value)
 }
 
-fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} {
+fn batch_from_json(value: json.Value) -> Result[Batch, String] uses {} {
   if !closed(value, 2) {
     return Error("schema")
   }

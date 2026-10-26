@@ -66,7 +66,7 @@ fn parse_command(take argv: List[String], flags: List[cli.Flag]) -> Result[
   Ok(take parsed)
 }
 
-fn read(d: Dir, name: String) -> Result[unique Bytes, AppError] {
+fn read(d: Dir, name: String) -> Result[Bytes, AppError] {
   let mut f = match file.open(d, path.of(name)) {
     Ok(f) => take f,
     Error(_) => {

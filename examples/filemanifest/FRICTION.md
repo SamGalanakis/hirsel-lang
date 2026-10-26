@@ -81,10 +81,7 @@ fn make() -> model.Entry {
 // list.sort(mut entries, model.entry_order) // requires deep uniqueness
 ```
 
-Repair: declare `Result[unique model.Entry, model.InvalidInput]` on the
-helper. The bounded helper now promises what its owned construction establishes.
-The MODE-2 guidance pointed to the push input. Original diagnostics are in
-`attempt-01/check.log`; this is signature-driven checking, not a defect.
+Fixed by private summaries (b552ff23d839 / f71ba1242e00): the private helper body proves its fresh Result payload without a result annotation. The original MODE-2 guidance pointed to the push input; its diagnostics remain in `attempt-01/check.log`.
 
 ## A duplicate-path set shares the decoded name (about 8 minutes; intentional rule)
 

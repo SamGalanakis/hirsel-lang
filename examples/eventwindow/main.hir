@@ -1,4 +1,4 @@
-fn argument(args: Args, at: u64) -> Result[unique String, model.Problem] uses {args} {
+fn argument(args: Args, at: u64) -> Result[String, model.Problem] uses {args} {
   let Ok(value) = arg.text(args, at) else {
     return Error(Invalid(Usage()))
   }

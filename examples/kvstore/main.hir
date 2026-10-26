@@ -31,7 +31,7 @@ const STATE: String = "kv.json"
 const MAX_VALUE: u64 = 65536
 
 // ---- JSON ----
-fn entries_json(entries: Map[String, String]) -> unique String uses {} {
+fn entries_json(entries: Map[String, String]) -> String uses {} {
   let mut fields: Map[String, json.Value] = map.empty()
   for (key, value) in entries {
     map.insert(mut fields, unique key, Text(unique value))
@@ -100,12 +100,12 @@ fn write_loop(tasks: Tasks, dir: Dir, take receiver: Receiver[SaveJob]) -> () {
 }
 
 // ---- routing ----
-fn plain(status: u16, body: String) -> unique Reply uses {} {
+fn plain(status: u16, body: String) -> Reply uses {} {
   Reply(status: status, body: unique body, json: false, allow: "", save: None())
 }
 
 // The caller has already bumped the version; the snapshot goes to the writer task.
-fn changed(st: Store, status: u16) -> unique Reply uses {} {
+fn changed(st: Store, status: u16) -> Reply uses {} {
   Reply(
     status: status,
     body: "",
@@ -308,13 +308,13 @@ fn port_arg(args: Args) -> Result[u16, ServerError] {
 // Arguments: [port], default 8080; port 0 picks a free port. Prints the bound address.
 pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
   let port = port_arg(args)?
-  let n = io.net(rt) ?
-  let tasks = io.tasks(rt) ?
-  let dir = io.dir(rt, path.of("data")) ?
+  let n = io.net(rt)?
+  let tasks = io.tasks(rt)?
+  let dir = io.dir(rt, path.of("data"))?
   let store: unique Store = unique load(dir)?
-  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ?
-  let bound = net.local_addr(n, listener) ?
-  let output = io.stdout(rt) ?
+  let listener = net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port))?
+  let bound = net.local_addr(n, listener)?
+  let output = io.stdout(rt)?
   let _ = out.print(output, f"listening on 127.0.0.1:{bound.port}\n")
   task.scope(
     tasks,
@@ -330,7 +330,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), ServerError] {
       task.detach(s, take writer)
       let mut accepting = take listener
       while true {
-        let (stream, _) = net.accept(n, mut accepting) ?
+        let (stream, _) = net.accept(n, mut accepting)?
         let jobs_tx = sender.dup(tasks, saves)
         let child = task.async(
           s,

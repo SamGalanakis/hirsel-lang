@@ -52,7 +52,7 @@ fn rows(
   offset: i64,
   watermark: Option[i64],
   emitted: bool
-) -> Result[unique Decoded, model.Problem] uses {} {
+) -> Result[Decoded, model.Problem] uses {} {
   let items = array(value)?
   let cap = if emitted {
     model.EMITTED

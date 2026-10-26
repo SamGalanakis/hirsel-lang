@@ -13,7 +13,7 @@ type Layer {
   shortest: u64,
 }
 
-fn empty(jobs: u64, resources: u64) -> unique Maps uses {} {
+fn empty(jobs: u64, resources: u64) -> Maps uses {} {
   let mut left: unique List[Option[u64]] = unique []
   let mut right: unique List[Option[u64]] = unique []
   for i in 0u64..jobs {
@@ -27,7 +27,7 @@ fn empty(jobs: u64, resources: u64) -> unique Maps uses {} {
 
 // One bounded BFS queue entry per job. The free-slot sentinel is represented
 // by shortest, so it never becomes an out-of-range matching-array access.
-fn layers(manifest: model.Manifest, maps: Maps) -> unique Layer uses {} {
+fn layers(manifest: model.Manifest, maps: Maps) -> Layer uses {} {
   let n = list.len(manifest.jobs)
   let mut distance: unique List[u64] = unique []
   let mut queue: unique List[u64] = unique []

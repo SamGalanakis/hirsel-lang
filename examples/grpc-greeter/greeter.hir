@@ -12,14 +12,12 @@ pub fn default_HelloRequest() -> HelloRequest uses {} {
   HelloRequest(name: "", count: 0, unknown_fields: b"")
 }
 
-@preserves_unique(out)
 fn writepart_HelloRequest_0(m: HelloRequest, mut out: List[u8]) -> () uses {} {
   if string.byte_len(m.name) != 0 {
     protobuf.put_string(1, m.name, mut out)
   }
 }
 
-@preserves_unique(out)
 fn writepart_HelloRequest_1(m: HelloRequest, mut out: List[u8]) -> () uses {} {
   if m.count != 0 {
     protobuf.put_int32(2, m.count, mut out)
@@ -271,7 +269,6 @@ pub fn default_HelloReply() -> HelloReply uses {} {
   HelloReply(message: "", unknown_fields: b"")
 }
 
-@preserves_unique(out)
 fn writepart_HelloReply_0(m: HelloReply, mut out: List[u8]) -> () uses {} {
   if string.byte_len(m.message) != 0 {
     protobuf.put_string(1, m.message, mut out)

@@ -32,19 +32,19 @@ pub type Check {
   reason: String,
 }
 
-fn artifact_from_json(value: json.Value) -> Result[unique Artifact, String] uses {} = comptime derive.from_json(
+fn artifact_from_json(value: json.Value) -> Result[Artifact, String] uses {} = comptime derive.from_json(
   shape(Artifact)
 )
 
-fn record_from_json(value: json.Value) -> Result[unique Record, String] uses {} = comptime derive.from_json(
+fn record_from_json(value: json.Value) -> Result[Record, String] uses {} = comptime derive.from_json(
   shape(Record)
 )
 
-fn saved_from_json(value: json.Value) -> Result[unique Saved, String] uses {} = comptime derive.from_json(
+fn saved_from_json(value: json.Value) -> Result[Saved, String] uses {} = comptime derive.from_json(
   shape(Saved)
 )
 
-fn state_from_json(value: json.Value) -> Result[unique State, String] uses {} = comptime derive.from_json(
+fn state_from_json(value: json.Value) -> Result[State, String] uses {} = comptime derive.from_json(
   shape(State)
 )
 

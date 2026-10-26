@@ -9,7 +9,7 @@ pub type Imported {
   id: object.Id[Bytes],
 }
 
-fn one(source: Dir, objects: Dir, row: Row) -> Result[unique Imported, object.Problem] {
+fn one(source: Dir, objects: Dir, row: Row) -> Result[Imported, object.Problem] {
   let data = store.read(source, row.path, row.size)?
   if bytes.len(data) != row.size {
     return Error(object.issue("input_changed", row.path))

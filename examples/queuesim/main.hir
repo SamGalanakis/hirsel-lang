@@ -93,7 +93,7 @@ fn race_interrupt(d: Dir, tasks: Tasks, signals: Signals, options: Options) -> R
   )
 }
 
-fn run(rt: Io, args: Args) -> Result[unique Bytes, model.Problem] {
+fn run(rt: Io, args: Args) -> Result[Bytes, model.Problem] {
   let options = arguments(args)?
   let Ok(d) = io.dir(rt, path.of("input")) else {
     return Error(Resource("input_grant"))

@@ -174,7 +174,7 @@ pub fn frame(payload: Bytes) -> unique Bytes uses {} {
   bytes.from_list(take out)
 }
 
-fn field(value: json.Value, key: String) -> Result[unique String, Error] uses {} {
+fn field(value: json.Value, key: String) -> Result[String, Error] uses {} {
   let Some(member) = json_access.member(value, key) else {
     return Error(Input("shape"))
   }

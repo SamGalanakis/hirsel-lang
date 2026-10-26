@@ -47,7 +47,6 @@ pub fn diagnostic(problem: Problem) -> unique Bytes uses {} {
   bytes.from_list(take out)
 }
 
-@preserves_unique(out)
 fn number(value: f64, mut out: List[u8]) -> () uses {} {
   // A value rounding to zero is printed positively, including IEEE -0.
   let normalized: f64 = if f64.abs(value) <= 0.0000005 {
@@ -58,7 +57,6 @@ fn number(value: f64, mut out: List[u8]) -> () uses {} {
   f64.format_into_spec(normalized, ' ', 0, 0, 6, 8, 0, mut out)
 }
 
-@preserves_unique(out)
 fn complex(value: samples.Complex, mut out: List[u8]) -> () uses {} {
   bytes.append(mut out, b"{\"real\":")
   number(value.real, mut out)
@@ -67,7 +65,6 @@ fn complex(value: samples.Complex, mut out: List[u8]) -> () uses {} {
   list.push(mut out, b'}')
 }
 
-@preserves_unique(out)
 fn channel(value: analysis.Audit, mut out: List[u8]) -> () uses {} {
   bytes.append(mut out, b"{\"ordinal\":")
   u64.format_into(value.ordinal, mut out)

@@ -37,11 +37,11 @@ pub type Report {
   blocked: List[String],
 }
 
-fn node_from_json(value: json.Value) -> Result[unique Node, String] uses {} = comptime derive.from_json(
+fn node_from_json(value: json.Value) -> Result[Node, String] uses {} = comptime derive.from_json(
   shape(Node)
 )
 
-fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+fn manifest_from_json(value: json.Value) -> Result[Manifest, String] uses {} = comptime derive.from_json(
   shape(Manifest)
 )
 

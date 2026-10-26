@@ -1,7 +1,7 @@
 // Bounded batches: error cancels/joins siblings; successes move in path order.
 // The TaskSet's nested unique payload contracts follow the parhash recipe.
 fn read_one(d: Dir, take entry: unique manifest.Entry) -> Result[
-  unique manifest.Member,
+  manifest.Member,
   manifest.Problem
 ] {
   catalog.inspect(d, entry)?

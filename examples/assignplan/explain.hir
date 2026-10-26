@@ -22,7 +22,7 @@ fn has(items: List[u64], ordinal: u64) -> bool uses {} {
   false
 }
 
-fn ordinals(flags: List[bool], wanted: bool) -> unique List[u64] uses {} {
+fn ordinals(flags: List[bool], wanted: bool) -> List[u64] uses {} {
   let mut out: List[u64] = []
   for i in 0u64..list.len(flags) {
     if flags[i] == wanted {

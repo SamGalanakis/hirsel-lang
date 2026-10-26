@@ -36,7 +36,7 @@ type Report {
 pub type AppError = Grant(GrantError) | Output(OutputError) | InvalidInput(String) | Mismatch
 
 // Reject alternate lexical spellings. Directories may retain one final '/'.
-fn path_key(name: String, directory: bool) -> Result[unique String, String] {
+fn path_key(name: String, directory: bool) -> Result[String, String] {
   if name == "" || string.starts_with(name, "/") {
     return Error("invalid_path")
   }
@@ -78,7 +78,7 @@ fn path_key(name: String, directory: bool) -> Result[unique String, String] {
   Ok(take key_text)
 }
 
-fn read_local(d: Dir, name: String, limit: u64) -> Result[unique Bytes, String] {
+fn read_local(d: Dir, name: String, limit: u64) -> Result[Bytes, String] {
   let _ = path_key(name, false)?
   let mut Ok(f) = file.open(d, path.of(name)) else {
     return Error("file_open")
@@ -145,7 +145,7 @@ fn admit(name: String, directory: bool, size: u64, mut seen: Set[String], total:
   Ok(())
 }
 
-fn scan_tar(take data: Bytes) -> Result[unique List[Entry], String] {
+fn scan_tar(take data: Bytes) -> Result[List[Entry], String] {
   let mut source = Source(data: take data, at: 0)
   let mut reader = bufio.new(CHUNK)
   let mut archive = tar.reader(None())
@@ -209,7 +209,7 @@ fn scan_tar(take data: Bytes) -> Result[unique List[Entry], String] {
   Ok(take entries)
 }
 
-fn scan_zip(data: Bytes) -> Result[unique List[Entry], String] {
+fn scan_zip(data: Bytes) -> Result[List[Entry], String] {
   let Ok(members) = zip.entries(data) else {
     return Error("zip_malformed")
   }
@@ -276,7 +276,7 @@ fn entry_order(a: Entry, b: Entry) -> i32 {
   string.compare(a.path, b.path)
 }
 
-fn scan(data: Bytes, name: String) -> Result[unique List[Entry], String] {
+fn scan(data: Bytes, name: String) -> Result[List[Entry], String] {
   // Select explicitly by suffix: no corrupt-ZIP-to-TAR fallback.
   let mut entries = if string.ends_with(name, ".zip") {
     scan_zip(data)?
@@ -289,17 +289,14 @@ fn scan(data: Bytes, name: String) -> Result[unique List[Entry], String] {
   Ok(take entries)
 }
 
-fn field_text(fields: Map[String, json.Value], key: String) -> Result[
-  unique String,
-  String
-] {
+fn field_text(fields: Map[String, json.Value], key: String) -> Result[String, String] {
   match map.get(fields, key) {
     Some(Text(value)) => Ok(unique value),
     _ => Error("manifest_field"),
   }
 }
 
-fn decode(take data: Bytes) -> Result[unique List[Entry], String] {
+fn decode(take data: Bytes) -> Result[List[Entry], String] {
   let Ok(text) = string.from_bytes(take data) else {
     return Error("manifest_utf8")
   }

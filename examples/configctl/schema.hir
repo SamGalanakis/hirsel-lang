@@ -58,7 +58,7 @@ fn integer(value: toml.Value, name: String) -> Result[i64, Problem] uses {} {
   Ok(n)
 }
 
-fn text_field(value: toml.Value, name: String) -> Result[unique String, Problem] uses {} {
+fn text_field(value: toml.Value, name: String) -> Result[String, Problem] uses {} {
   let Some(Text(s)) = field(value, name) else {
     return Error(Shape())
   }
@@ -106,7 +106,7 @@ fn timeouts(root: toml.Value) -> Result[Timeouts, Problem] uses {} {
   Ok(take decoded)
 }
 
-fn nested_endpoint(root: toml.Value) -> Result[unique String, Problem] uses {} {
+fn nested_endpoint(root: toml.Value) -> Result[String, Problem] uses {} {
   let Some(service) = field(root, "service") else {
     return Error(Shape())
   }

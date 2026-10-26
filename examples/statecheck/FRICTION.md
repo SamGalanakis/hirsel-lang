@@ -25,7 +25,7 @@ Result[Option[Lasso], Problem]` did not promise a unique returned payload, so
 MODE-2 correctly refused storing its lasso in `unique Verdict`. Strengthened the
 producer result to `Result[unique Option[Lasso], Problem]`, moving fresh traces
 without copying. Original generation-03 and exact check-01.log retained. Owner:
-application; fixed, no source/V disagreement or language-rule repair.
+application. Private helper case fixed by private summaries (b552ff23d839 / f71ba1242e00); current exported witness retains its declared result contract.
 
 Application schema adaptation (4 active minutes): original derived Batch
 decoder accepted `{"version":1,"models":[],"extra":0}` then returned `models`,

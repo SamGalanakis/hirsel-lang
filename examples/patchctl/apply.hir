@@ -8,9 +8,7 @@ pub type Row {
   outcome: manifest.Outcome[Option[Bytes]],
 }
 
-fn changed(source: Bytes, change: manifest.Change) -> unique manifest.Outcome[
-  Option[Bytes]
-] uses {} {
+fn changed(source: Bytes, change: manifest.Change) -> manifest.Outcome[Option[Bytes]] uses {} {
   let Ok(text) = string.from_bytes(unique source) else {
     return Conflict(manifest.problem("utf8"))
   }

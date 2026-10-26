@@ -4,7 +4,7 @@ type InputError = Config(model.ConfigError) | Usage | Arguments | DirectoryGrant
 
 const HELP: String = "Usage: configcheck <toml|yaml> FILE\n       configcheck --help\n\nValidate one service; print normalized JSON. FILE is relative to the input grant.\nExit: 0 success/help, 2 invalid input/usage/grant, 3 stdout unavailable.\n"
 
-fn read(d: Dir, name: String) -> Result[unique Bytes, InputError] {
+fn read(d: Dir, name: String) -> Result[Bytes, InputError] {
   let Ok(opened) = file.open(d, path.of(name)) else {
     return Error(Read())
   }

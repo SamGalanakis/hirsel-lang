@@ -357,7 +357,7 @@ fn events_reply(take events: String) -> httpd.Reply uses {} {
   )
 }
 
-fn error_signal(message: String) -> unique String uses {} {
+fn error_signal(message: String) -> String uses {} {
   let mut fields: Map[String, json.Value] = map.empty()
   map.insert(mut fields, "error", Text(unique message))
   match datastar.patch_signals_value_event(
@@ -558,7 +558,7 @@ pub fn load_assets(dir: Dir) -> Result[unique Map[String, Asset], FileError] {
   Ok(take files)
 }
 
-fn etag_of(body: Bytes) -> unique String uses {} {
+fn etag_of(body: Bytes) -> String uses {} {
   let digest = match u64.format_radix(fnv.digest(body), 16) {
     Ok(hex) => take hex,
     Error(_) => "0",
@@ -567,7 +567,7 @@ fn etag_of(body: Bytes) -> unique String uses {} {
 }
 
 // ---- the event stream ----
-fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> unique view.Screen {
+fn screen_of(request: http.ServerRequest, wall: Option[WallClock]) -> view.Screen {
   match datastar.read_signals(request, screen_signals_from_json) {
     Ok(signals) => view.Screen(
       query: unique signals.filter,

@@ -143,7 +143,7 @@ pub fn text_field(entries: Map[String, json.Value], key: String) -> Result[
   id(field(entries, key)?)
 }
 
-fn role_rows(items: List[json.Value]) -> Result[unique List[String], Problem] uses {} {
+fn role_rows(items: List[json.Value]) -> Result[List[String], Problem] uses {} {
   let mut output: List[String] = []
   for item in items {
     list.push(mut output, id(item)?)
@@ -151,7 +151,7 @@ fn role_rows(items: List[json.Value]) -> Result[unique List[String], Problem] us
   Ok(take output)
 }
 
-fn edge_rows(items: List[json.Value]) -> Result[unique List[Edge], Problem] uses {} {
+fn edge_rows(items: List[json.Value]) -> Result[List[Edge], Problem] uses {} {
   let mut output: List[Edge] = []
   for item in items {
     let row = object(unique item, ["role", "parent"])?
@@ -163,7 +163,7 @@ fn edge_rows(items: List[json.Value]) -> Result[unique List[Edge], Problem] uses
   Ok(take output)
 }
 
-fn principal_rows(items: List[json.Value]) -> Result[unique List[Principal], Problem] uses {} {
+fn principal_rows(items: List[json.Value]) -> Result[List[Principal], Problem] uses {} {
   let mut output: List[Principal] = []
   for item in items {
     let row = object(unique item, ["id", "roles"])?
@@ -174,7 +174,7 @@ fn principal_rows(items: List[json.Value]) -> Result[unique List[Principal], Pro
   Ok(take output)
 }
 
-fn rule_rows(items: List[json.Value]) -> Result[unique List[Rule], Problem] uses {} {
+fn rule_rows(items: List[json.Value]) -> Result[List[Rule], Problem] uses {} {
   let mut output: List[Rule] = []
   for item in items {
     let row = object(unique item, ["id", "effect", "role", "action", "path", "owner"])?

@@ -26,7 +26,7 @@ fn state_error(errors: Stderr, e: state.Fault) -> Result[std@1/process.ExitCode,
   }
 }
 
-fn load_config(rt: Io, name: String) -> Result[unique plan.Config, plan.Error] {
+fn load_config(rt: Io, name: String) -> Result[plan.Config, plan.Error] {
   if string.byte_len(name) > 256 || name == "" || string.starts_with(name, "/") || string.contains(
     name,
     ".."

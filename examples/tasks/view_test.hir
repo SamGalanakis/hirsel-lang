@@ -7,7 +7,7 @@ fn parsed_day(t: Test, spelling: String) -> time.Date {
 
 // Built directly rather than validated, as a snapshot on disk might hold it: the
 // view escapes whatever a task holds, not only what validation lets through.
-fn hostile_board() -> unique model.Board uses {} {
+fn hostile_board() -> model.Board uses {} {
   let mut board = model.empty_board()
   let item = model.Item(
     id: 0,

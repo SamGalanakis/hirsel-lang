@@ -14,10 +14,7 @@ type Step {
   pointers: List[(json_pointer.Pointer, json.Value)],
 }
 
-fn field_text(fields: Map[String, json.Value], key: String) -> Result[
-  unique String,
-  AppError
-] uses {} {
+fn field_text(fields: Map[String, json.Value], key: String) -> Result[String, AppError] uses {} {
   let Some(field) = map.get(fields, key) else {
     return Error(Scenario())
   }
@@ -68,7 +65,7 @@ fn method(name: String) -> Result[http.Method, AppError] uses {} {
   }
 }
 
-fn decode(raw: String) -> Result[unique List[Step], AppError] uses {} {
+fn decode(raw: String) -> Result[List[Step], AppError] uses {} {
   if string.byte_len(raw) > 65536 {
     return Error(Scenario())
   }
@@ -258,10 +255,7 @@ fn exchange(n: Net, tasks: Tasks, clock: MonotonicClock, step: Step) -> Result[
   }
 }
 
-fn assertions(step: Step, response: http.Response) -> Result[
-  unique List[String],
-  AppError
-] uses {} {
+fn assertions(step: Step, response: http.Response) -> Result[List[String], AppError] uses {} {
   let mut failures: List[String] = []
   if response.status != step.status {
     list.push(mut failures, "status")

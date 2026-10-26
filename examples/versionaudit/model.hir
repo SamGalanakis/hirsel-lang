@@ -19,7 +19,7 @@ pub type Report {
   mismatches: List[Row],
 }
 
-fn row(mut cursor: json.Reader, index: u64) -> Result[unique Row, InputError] uses {} {
+fn row(mut cursor: json.Reader, index: u64) -> Result[Row, InputError] uses {} {
   json.begin_object(mut cursor)?
   let mut first = true
   let mut keys: Set[String] = set.empty()

@@ -33,11 +33,11 @@ pub fn problem_json(value: Problem) -> json.Value uses {} = comptime derive.json
   shape(Problem)
 )
 
-fn node_from_json(value: json.Value) -> Result[unique Node, String] uses {} = comptime derive.from_json(
+fn node_from_json(value: json.Value) -> Result[Node, String] uses {} = comptime derive.from_json(
   shape(Node)
 )
 
-fn dag_from_json(value: json.Value) -> Result[unique Dag, String] uses {} = comptime derive.from_json(
+fn dag_from_json(value: json.Value) -> Result[Dag, String] uses {} = comptime derive.from_json(
   shape(Dag)
 )
 

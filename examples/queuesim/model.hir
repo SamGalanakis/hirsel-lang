@@ -34,19 +34,19 @@ pub type Scenario {
   horizons: List[u64],
 }
 
-fn station_from_json(value: json.Value) -> Result[unique Station, String] uses {} = comptime derive.from_json(
+fn station_from_json(value: json.Value) -> Result[Station, String] uses {} = comptime derive.from_json(
   shape(Station)
 )
 
-fn step_from_json(value: json.Value) -> Result[unique Step, String] uses {} = comptime derive.from_json(
+fn step_from_json(value: json.Value) -> Result[Step, String] uses {} = comptime derive.from_json(
   shape(Step)
 )
 
-fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+fn job_from_json(value: json.Value) -> Result[Job, String] uses {} = comptime derive.from_json(
   shape(Job)
 )
 
-fn scenario_from_json(value: json.Value) -> Result[unique Scenario, String] uses {} = comptime derive.from_json(
+fn scenario_from_json(value: json.Value) -> Result[Scenario, String] uses {} = comptime derive.from_json(
   shape(Scenario)
 )
 

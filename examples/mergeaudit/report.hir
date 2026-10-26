@@ -24,7 +24,7 @@ pub fn bind_inputs(manifest: model.Manifest, sources: List[model.Triple]) -> Res
   Ok(sha256.digest_hex(string.as_bytes(text)))
 }
 
-fn span(part: edits.Span) -> unique json.Value uses {} {
+fn span(part: edits.Span) -> json.Value uses {} {
   Array([Number(f"{part.start}"), Number(f"{part.length}")])
 }
 

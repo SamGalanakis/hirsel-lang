@@ -8,7 +8,7 @@ type Status {
   state: String,
 }
 
-fn fetch_one(n: Net, tasks: Tasks, c: MonotonicClock, take url: unique String) -> unique Status {
+fn fetch_one(n: Net, tasks: Tasks, c: MonotonicClock, take url: unique String) -> Status {
   let deadline = match time.deadline(c, duration.from_parts(2, 0)) {
     Ok(at) => Deadline(clock: c, at: at),
     Error(_) => return Status(url: take url, code: 0, state: "clock-error"),

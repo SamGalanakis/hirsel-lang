@@ -6,7 +6,7 @@ pub type AppError = Usage | Arguments(ArgError) | Grant(GrantError) | Http(
 
 const HELP: String = "Usage: httpaggregate URL...\n\nFetch 1–16 JSON item collections and sum values by name.\n\nOptions:\n  -h, --help  Print help\n"
 
-fn fetch(n: Net, url: String) -> Result[unique List[model.Item], AppError] {
+fn fetch(n: Net, url: String) -> Result[List[model.Item], AppError] {
   let mut config = http.default_config()
   config.max_redirects = 0
   config.max_body_bytes = 65536

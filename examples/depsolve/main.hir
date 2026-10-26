@@ -8,7 +8,7 @@ pub type Command {
   jobs: u64,
 }
 
-fn command(args: Args) -> Result[unique Command, explain.Fault] {
+fn command(args: Args) -> Result[Command, explain.Fault] {
   let count = arg.len(args)
   if count < 3 || count > model.MAX_FILES + 4 {
     return Error(Usage())
@@ -75,7 +75,7 @@ fn command(args: Args) -> Result[unique Command, explain.Fault] {
   )
 }
 
-fn run(rt: Io, cmd: Command) -> Result[unique String, explain.Report] {
+fn run(rt: Io, cmd: Command) -> Result[String, explain.Report] {
   let Ok(directory) = io.dir(rt, path.of("input")) else {
     return Error(
       explain.report(

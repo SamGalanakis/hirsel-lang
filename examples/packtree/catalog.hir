@@ -90,7 +90,7 @@ pub fn admit(
 }
 
 fn field(fields: Map[String, json.Value], name: String) -> Result[
-  unique String,
+  String,
   manifest.Problem
 ] {
   match map.get(fields, name) {

@@ -1,6 +1,6 @@
 pub type AppError = Output(OutputError)
 
-fn argument(args: Args, index: u64) -> Result[unique String, manifest.Problem] {
+fn argument(args: Args, index: u64) -> Result[String, manifest.Problem] {
   let Ok(value) = arg.text(args, index) else {
     return Error(manifest.issue("arguments", ""))
   }

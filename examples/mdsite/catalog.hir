@@ -103,7 +103,7 @@ pub fn scan(d: Dir, config: model.Config) -> Result[List[model.Input], model.Pro
   if !config.legacy {
     discover(d, config.assets, false, mut inputs, mut total)?
   }
-  let mut sorted = unique inputs
+  let mut sorted = take inputs
   list.sort(mut sorted, compare)
   let mut names: Map[String, bool] = map.empty()
   map.insert(mut names, "index.html", true)

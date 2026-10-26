@@ -1,6 +1,6 @@
 const HELP: String = "groupmap FILE\nGroup explicitly aliased inventory records; labels follow declaration order.\nReads FILE beneath the read-only input directory grant.\nLimits: 65536 bytes, 64 records, 64 aliases, 128 bytes per name.\nExit: 0 grouped/help, 2 invalid input or I/O.\n"
 
-fn read_local(rt: Io, name: String) -> Result[unique Bytes, model.Invalid] {
+fn read_local(rt: Io, name: String) -> Result[Bytes, model.Invalid] {
   let Ok(dir) = io.dir(rt, path.of("input")) else {
     return Error(Input("directory_grant"))
   }

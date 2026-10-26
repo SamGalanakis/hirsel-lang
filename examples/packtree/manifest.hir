@@ -81,7 +81,6 @@ pub fn total(members: List[Member]) -> u64 {
   count
 }
 
-@preserves_unique(out)
 fn append(mut out: List[u8], value: String) {
   bytes.append(mut out, string.as_bytes(value))
 }

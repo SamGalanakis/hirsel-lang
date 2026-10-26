@@ -4,7 +4,7 @@ pub type AppError = Grant(GrantError) | Arguments(ArgError) | Files(FileError) |
 
 const HELP: String = "patchctl diff OLD NEW\npatchctl apply SOURCE PATCH\nRead UTF-8 leaf filenames in the fixtures grant; write result to stdout.\nMyers, context=3; rejected hunk indexes are zero-based.\nLimits: 65536 bytes/input, 64 text lines, 256 patch lines.\nExit: 0 success/help, 1 rejected hunks, 2 invalid input/grant/I/O.\n"
 
-fn read_text(d: Dir, name: String) -> Result[unique String, AppError] {
+fn read_text(d: Dir, name: String) -> Result[String, AppError] {
   model.filename(name)?
   let mut f = file.open(d, path.of(name))?
   let data = match file.read_all_bounded(d, mut f, model.INPUT_BYTES) {

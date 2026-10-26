@@ -16,7 +16,7 @@ fn document_to_json(value: Document) -> json.Value uses {} = comptime derive.jso
   shape(Document)
 )
 
-fn document_from_json(value: json.Value) -> Result[unique Document, String] uses {} = comptime derive.from_json(
+fn document_from_json(value: json.Value) -> Result[Document, String] uses {} = comptime derive.from_json(
   shape(Document)
 )
 

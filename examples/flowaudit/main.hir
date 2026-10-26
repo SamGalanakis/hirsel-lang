@@ -59,7 +59,7 @@ fn arguments(args: Args) -> Result[Options, report.Problem] {
 }
 
 fn read(d: Dir, input: Path, limit: u64, problem: report.Problem) -> Result[
-  unique Bytes,
+  Bytes,
   report.Problem
 ] {
   let mut handle = match file.open(d, input) {

@@ -8,7 +8,6 @@ pub fn put(mut out: List[u8], text: String) -> Result[(), model.Problem] uses {}
   Ok(())
 }
 
-@preserves_unique(out)
 fn quoted(mut out: List[u8], text: String) -> Result[(), model.Problem] uses {} {
   let mut escaped: List[u8] = []
   json.write_text_into(text, mut escaped)
@@ -18,7 +17,6 @@ fn quoted(mut out: List[u8], text: String) -> Result[(), model.Problem] uses {} 
   put(mut out, value)
 }
 
-@preserves_unique(out)
 fn rows(
   mut out: List[u8],
   totals: List[model.Cell[model.CountSum]],

@@ -116,7 +116,7 @@ pub fn depth(name: String) -> u64 {
   }
 }
 
-fn directories(rows: List[ingest.Row]) -> Result[unique List[Directory], object.Problem] {
+fn directories(rows: List[ingest.Row]) -> Result[List[Directory], object.Problem] {
   let mut nodes: List[Directory] = [Directory(path: "", id: "")]
   let mut state_bytes = 0u64
   for row in rows {

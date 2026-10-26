@@ -36,7 +36,7 @@ pub fn unlock(d: Dir) -> Result[(), Fault] {
   Ok(())
 }
 
-fn row_from_json(value: json.Value) -> Result[unique Row, String] uses {} = comptime derive.from_json(
+fn row_from_json(value: json.Value) -> Result[Row, String] uses {} = comptime derive.from_json(
   shape(Row)
 )
 
@@ -44,7 +44,7 @@ fn row_to_json(value: Row) -> json.Value uses {} = comptime derive.json_value(
   shape(Row)
 )
 
-fn from_json(value: json.Value) -> Result[unique Book, String] uses {} = comptime derive.from_json(
+fn from_json(value: json.Value) -> Result[Book, String] uses {} = comptime derive.from_json(
   shape(Book)
 )
 

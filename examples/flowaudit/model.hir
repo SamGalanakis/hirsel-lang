@@ -48,19 +48,19 @@ pub type Topology {
   arcs: List[Edge],
 }
 
-fn arc_from_json(value: json.Value) -> Result[unique Arc, String] uses {} = comptime derive.from_json(
+fn arc_from_json(value: json.Value) -> Result[Arc, String] uses {} = comptime derive.from_json(
   shape(Arc)
 )
 
-fn override_from_json(value: json.Value) -> Result[unique Override, String] uses {} = comptime derive.from_json(
+fn override_from_json(value: json.Value) -> Result[Override, String] uses {} = comptime derive.from_json(
   shape(Override)
 )
 
-fn scenario_from_json(value: json.Value) -> Result[unique Scenario, String] uses {} = comptime derive.from_json(
+fn scenario_from_json(value: json.Value) -> Result[Scenario, String] uses {} = comptime derive.from_json(
   shape(Scenario)
 )
 
-fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+fn manifest_from_json(value: json.Value) -> Result[Manifest, String] uses {} = comptime derive.from_json(
   shape(Manifest)
 )
 
@@ -191,7 +191,10 @@ pub fn ordinal(names: List[String], value: String) -> Result[u64, report.Problem
   Error(Endpoint())
 }
 
-fn indexed_ordinal(names: Map[String, u64], value: String) -> Result[u64, report.Problem] uses {} {
+fn indexed_ordinal(names: Map[String, u64], value: String) -> Result[
+  u64,
+  report.Problem
+] uses {} {
   match map.get(names, value) {
     Some(index) => Ok(index),
     None() => Error(Endpoint()),

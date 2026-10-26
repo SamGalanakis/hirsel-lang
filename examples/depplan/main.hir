@@ -1,6 +1,6 @@
 const HELP: String = "depplan FILE\nDry-run dependency planner; never executes nodes.\nReads FILE beneath the read-only input directory grant.\nLimits: 65536 bytes, 64 nodes, 128 raw prerequisites, 64 per node, 128 bytes per name.\nExit: 0 ordered/help, 1 blocked (includes downstream), 2 invalid input or I/O.\n"
 
-fn read_local(rt: Io, name: String) -> Result[unique Bytes, model.Invalid] {
+fn read_local(rt: Io, name: String) -> Result[Bytes, model.Invalid] {
   let Ok(dir) = io.dir(rt, path.of("input")) else {
     return Error(Input("directory_grant"))
   }

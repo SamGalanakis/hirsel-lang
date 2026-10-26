@@ -8,7 +8,7 @@ pub type Prepared {
 // Borrowed pull-reader tokens avoid building an unbounded command DOM. A JSON
 // escaped token may use std scratch of at most six times its decoded byte cap.
 fn field(mut cursor: json.Reader, limit: u64, cap: record.Cap) -> Result[
-  unique String,
+  String,
   record.Error
 ] uses {} {
   if json.peek(mut cursor) != 34u8 {
@@ -50,7 +50,7 @@ fn required(mut cursor: json.Reader, mut first: bool) -> Result[(), record.Error
   Ok(())
 }
 
-fn command(mut cursor: json.Reader) -> Result[unique record.Mutation, record.Error] uses {} {
+fn command(mut cursor: json.Reader) -> Result[record.Mutation, record.Error] uses {} {
   json.begin_array(mut cursor)?
   let mut first = true
   required(mut cursor, mut first)?

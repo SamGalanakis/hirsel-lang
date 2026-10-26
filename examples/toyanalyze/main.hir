@@ -1,7 +1,7 @@
 const HELP: String = "toyanalyze [--ready] check MANIFEST JOBS [CACHE]\ntoyanalyze [--ready] session MANIFEST JOBS SESSION [CACHE]\nInput paths are relative to input; optional cache is relative to output.\nExit 0 clean, 1 toy diagnostics, 2 refusal/I/O, 3 stdout unavailable.\n"
 
 // Read at most cap+1, preserving source size refusal under changing host files.
-fn read(d: Dir, name: String, cap: u64) -> Result[unique Bytes, u64] {
+fn read(d: Dir, name: String, cap: u64) -> Result[Bytes, u64] {
   let Ok(size) = file.size(d, path.of(name)) else {
     return Error(1)
   }

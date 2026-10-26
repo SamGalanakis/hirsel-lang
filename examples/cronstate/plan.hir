@@ -30,7 +30,7 @@ pub type Due {
   through: i64,
 }
 
-fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+fn job_from_json(value: json.Value) -> Result[Job, String] uses {} = comptime derive.from_json(
   shape(Job)
 )
 
@@ -38,7 +38,7 @@ fn job_to_json(value: Job) -> json.Value uses {} = comptime derive.json_value(
   shape(Job)
 )
 
-fn from_json(value: json.Value) -> Result[unique Config, String] uses {} = comptime derive.from_json(
+fn from_json(value: json.Value) -> Result[Config, String] uses {} = comptime derive.from_json(
   shape(Config)
 )
 

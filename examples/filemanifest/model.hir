@@ -70,10 +70,7 @@ pub fn entry_order(a: Entry, b: Entry) -> i32 uses {} {
   string.compare(a.path, b.path)
 }
 
-fn field(fields: Map[String, json.Value], key: String) -> Result[
-  unique String,
-  InvalidInput
-] uses {} {
+fn field(fields: Map[String, json.Value], key: String) -> Result[String, InvalidInput] uses {} {
   match map.get(fields, key) {
     Some(Text(value)) => Ok(unique value),
     _ => Error(invalid("manifest_field", key)),

@@ -50,7 +50,7 @@ pub fn validate(request: Request) -> Result[(), schema.Problem] uses {} {
   Ok(())
 }
 
-fn read(d: Dir, name: String, size: u64) -> Result[unique String, schema.Problem] {
+fn read(d: Dir, name: String, size: u64) -> Result[String, schema.Problem] {
   let mut handle = match file.open(d, path.of(name)) {
     Ok(f) => take f,
     Error(Canceled(_)) => return Error(Canceled()),

@@ -13,7 +13,7 @@ fn excluded(closed: List[u64], extra: Option[u64], ordinal: u64) -> bool uses {}
 }
 
 fn search_one(graph: network.Snapshot, request: network.Request, extra: Option[u64]) -> Result[
-  unique routes.Outcome,
+  routes.Outcome,
   report.Problem
 ] uses {} {
   search.shortest(

@@ -2,7 +2,7 @@ pub type AppError = Grant(GrantError) | Output(OutputError) | Json(json.JsonErro
 
 const HELP: String = "Usage: argvplan [--comments] FILE\n       argvplan --help\n\nRead FILE from the read-only fixtures grant and print a JSON argv plan.\nNo expansion or command execution. --comments enables unquoted # comments.\nLimits: 65536 input bytes, 64 lines, 4096 bytes/line, 64 args/line, 512 args total.\n"
 
-fn read_plan(rt: Io, args: Args) -> Result[unique model.Plan, model.InvalidInput] {
+fn read_plan(rt: Io, args: Args) -> Result[model.Plan, model.InvalidInput] {
   let count = arg.len(args)
   if count < 1 || count > 2 {
     return Error(model.invalid("usage", 0, 0))

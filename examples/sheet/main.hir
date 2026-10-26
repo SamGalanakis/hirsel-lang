@@ -6,7 +6,7 @@ type Settings {
   input: String,
 }
 
-fn settings(args: Args) -> Result[unique Settings, store.Problem] uses {args} {
+fn settings(args: Args) -> Result[Settings, store.Problem] uses {args} {
   let mut jobs = 1u64
   let mut interruptible = false
   let mut input = "-"

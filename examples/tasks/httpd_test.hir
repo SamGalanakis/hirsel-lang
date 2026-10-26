@@ -23,7 +23,7 @@ fn rejected(raw: String) -> Option[u16] uses {} {
   }
 }
 
-fn with_headers(count: u64) -> unique String uses {} {
+fn with_headers(count: u64) -> String uses {} {
   let mut out: List[u8] = []
   text.append(mut out, "GET / HTTP/1.1\r\n")
   for i in 0u64..count {

@@ -1,6 +1,6 @@
 pub type AppError = Output(OutputError)
 
-fn argument(args: Args, index: u64) -> Result[unique String, object.Problem] {
+fn argument(args: Args, index: u64) -> Result[String, object.Problem] {
   match arg.text(args, index) {
     Ok(value) => {
       if string.byte_len(value) > object.NAME {
@@ -12,7 +12,7 @@ fn argument(args: Args, index: u64) -> Result[unique String, object.Problem] {
   }
 }
 
-fn execute(rt: Io, args: Args) -> Result[unique Bytes, object.Problem] {
+fn execute(rt: Io, args: Args) -> Result[Bytes, object.Problem] {
   let count = arg.len(args)
   if count < 2 || count > 4 {
     return Error(object.issue("usage", ""))

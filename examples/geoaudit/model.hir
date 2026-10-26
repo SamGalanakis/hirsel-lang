@@ -33,19 +33,19 @@ pub type Batch {
   tracks: List[Track],
 }
 
-fn point_from_json(value: json.Value) -> Result[unique Point[i64], String] uses {} = comptime derive.from_json(
+fn point_from_json(value: json.Value) -> Result[Point[i64], String] uses {} = comptime derive.from_json(
   shape(Point[i64])
 )
 
-fn region_from_json(value: json.Value) -> Result[unique Region, String] uses {} = comptime derive.from_json(
+fn region_from_json(value: json.Value) -> Result[Region, String] uses {} = comptime derive.from_json(
   shape(Region)
 )
 
-fn track_from_json(value: json.Value) -> Result[unique Track, String] uses {} = comptime derive.from_json(
+fn track_from_json(value: json.Value) -> Result[Track, String] uses {} = comptime derive.from_json(
   shape(Track)
 )
 
-fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+fn batch_from_json(value: json.Value) -> Result[Batch, String] uses {} = comptime derive.from_json(
   shape(Batch)
 )
 

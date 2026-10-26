@@ -48,18 +48,18 @@ fn serve_connection(n: Net, take stream: Stream of n) -> Result[(), grpc.Status]
 }
 
 fn listen(n: Net, port: u16) -> Result[Listener of n, AppError] {
-  Ok(net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port)) ?)
+  Ok(net.listen(n, SocketAddr(ip: V4([127u8, 0u8, 0u8, 1u8]), port: port))?)
 }
 
 fn server(rt: Io, port: u16) -> Result[(), AppError] {
-  let n = io.net(rt) ?
+  let n = io.net(rt)?
   let listener = listen(n, port)?
   task.scope(
-    io.tasks(rt) ?,
+    io.tasks(rt)?,
     fn(s: Scope) -> Result[(), AppError] {
       let mut accepting = take listener
       while true {
-        let (stream, _) = net.accept(n, mut accepting) ?
+        let (stream, _) = net.accept(n, mut accepting)?
         let child = task.async(
           s,
           fn() -> bool {
@@ -84,18 +84,18 @@ fn greet(stdout: Stdout, mut conn: grpc.ClientConn, name: String) -> Result[
   let mut request = greeter.default_HelloRequest()
   request.name = unique name
   request.count = 3
-  let reply = greeter.Greeter_SayHello(mut conn, request, grpc.call_options()) ?
-  out.print(stdout, f"{reply.message}\n") ?
+  let reply = greeter.Greeter_SayHello(mut conn, request, grpc.call_options())?
+  out.print(stdout, f"{reply.message}\n")?
   let mut call = greeter.Greeter_SayHelloStream_start(
     mut conn,
     request,
     grpc.call_options()
-  ) ?
+  )?
   while true {
-    let Some(next) = greeter.Greeter_SayHelloStream_receive(mut conn, mut call) ? else {
+    let Some(next) = greeter.Greeter_SayHelloStream_receive(mut conn, mut call)? else {
       break
     }
-    out.print(stdout, f"{next.message}\n") ?
+    out.print(stdout, f"{next.message}\n")?
   }
   // An empty name is refused with a status the client sees.
   match greeter.Greeter_SayHello(
@@ -103,20 +103,20 @@ fn greet(stdout: Stdout, mut conn: grpc.ClientConn, name: String) -> Result[
     greeter.default_HelloRequest(),
     grpc.call_options()
   ) {
-    Ok(_) => out.print(stdout, "an empty name was accepted\n") ?,
-    Error(s) => out.print(stdout, f"{grpc.code_name(s.code)}: {s.message}\n") ?,
+    Ok(_) => out.print(stdout, "an empty name was accepted\n")?,
+    Error(s) => out.print(stdout, f"{grpc.code_name(s.code)}: {s.message}\n")?,
   }
   Ok(())
 }
 
 fn client(rt: Io, port: u16, name: String) -> Result[(), AppError] {
-  let n = io.net(rt) ?
-  let stdout = io.stdout(rt) ?
+  let n = io.net(rt)?
+  let stdout = io.stdout(rt)?
   let mut conn = grpc.dial(n, "127.0.0.1", port, None())
   greet(stdout, mut conn, name)
 }
 
-fn describe(e: AppError) -> unique String uses {} {
+fn describe(e: AppError) -> String uses {} {
   match e {
     Rpc(s) => f"{grpc.code_name(s.code)}: {s.message}",
     Usage(u) => unique u,
@@ -126,11 +126,11 @@ fn describe(e: AppError) -> unique String uses {} {
 
 // Calls the server from a task while serving the task's connection.
 fn demo(rt: Io, port: u16) -> Result[(), AppError] {
-  let n = io.net(rt) ?
-  let stdout = io.stdout(rt) ?
+  let n = io.net(rt)?
+  let stdout = io.stdout(rt)?
   let listener = listen(n, port)?
   task.scope(
-    io.tasks(rt) ?,
+    io.tasks(rt)?,
     fn(s: Scope) -> Result[(), AppError] {
       let calls = task.async(
         s,
@@ -146,8 +146,8 @@ fn demo(rt: Io, port: u16) -> Result[(), AppError] {
         }
       )
       let mut accepting = take listener
-      let (stream, _) = net.accept(n, mut accepting) ?
-      serve_connection(n, take stream) ?
+      let (stream, _) = net.accept(n, mut accepting)?
+      serve_connection(n, take stream)?
       if !task.await(s, take calls) {
         return Error(Usage("the demo client failed"))
       }
@@ -157,7 +157,7 @@ fn demo(rt: Io, port: u16) -> Result[(), AppError] {
 }
 
 fn port_arg(args: Args, index: u64) -> Result[u16, AppError] {
-  let text_value = arg.text(args, index) ?
+  let text_value = arg.text(args, index)?
   match u16.parse(text_value) {
     Ok(p) => Ok(p),
     Error(_) => Error(Usage(f"not a port: {text_value}")),
@@ -169,12 +169,12 @@ pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
   if arg.len(args) < 2 {
     return Error(Usage(usage))
   }
-  let mode = arg.text(args, 0) ?
+  let mode = arg.text(args, 0)?
   let port = port_arg(args, 1)?
   if mode == "server" {
     server(rt, port)
   } else if mode == "client" && arg.len(args) == 3 {
-    client(rt, port, arg.text(args, 2) ?)
+    client(rt, port, arg.text(args, 2)?)
   } else if mode == "demo" {
     demo(rt, port)
   } else {

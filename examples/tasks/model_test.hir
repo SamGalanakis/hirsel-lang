@@ -8,7 +8,7 @@ fn make_draft(title: String, priority: String, due: String, tags: String) -> Dra
   )
 }
 
-fn board_of(names: List[String]) -> unique Board uses {} {
+fn board_of(names: List[String]) -> Board uses {} {
   let mut board = empty_board()
   for title in names {
     let Ok(item) = validate(make_draft(title, "", "", "")) else {

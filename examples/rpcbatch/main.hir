@@ -54,7 +54,7 @@ fn bounded_call(
   socket: Path,
   millis: u64,
   job: model.Job
-) -> unique model.Outcome {
+) -> model.Outcome {
   let outcome = match deadline(c, millis) {
     Ok(limit) => match task.scope_until(
       tasks,

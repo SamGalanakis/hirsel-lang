@@ -1,6 +1,6 @@
 pub type AppError = Grant(GrantError) | Output(OutputError) | Json(json.JsonError)
 
-fn read_input(rt: Io, name: String) -> Result[unique String, String] {
+fn read_input(rt: Io, name: String) -> Result[String, String] {
   if name == "" || string.contains(name, "/") || string.contains(name, "\\") || name == "." || name == ".." {
     return Error("filename")
   }

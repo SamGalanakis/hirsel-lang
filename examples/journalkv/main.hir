@@ -1,6 +1,6 @@
 pub type Command = Get(String) | Scan | Apply(Path) | Compact
 
-fn arguments(args: Args) -> Result[unique Command, record.Error] {
+fn arguments(args: Args) -> Result[Command, record.Error] {
   let count = arg.len(args)
   if count < 1 || count > 2 {
     return Error(Usage("get KEY | scan | apply COMMAND_FILE | compact"))

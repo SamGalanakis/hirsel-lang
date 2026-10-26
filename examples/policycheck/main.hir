@@ -37,7 +37,7 @@ fn arguments(args: Args) -> Result[Options, model.Problem] {
   Ok(Options(root: root, file: file, jobs: jobs, interruptible: count == 4))
 }
 
-fn read(directory: Dir, name: Path) -> Result[unique Bytes, model.Problem] {
+fn read(directory: Dir, name: Path) -> Result[Bytes, model.Problem] {
   let mut handle = match file.open(directory, name) {
     Ok(value) => take value,
     Error(_) => return Error(Read()),
@@ -50,7 +50,7 @@ fn read(directory: Dir, name: Path) -> Result[unique Bytes, model.Problem] {
 }
 
 fn execute(directory: Dir, tasks: Tasks, options: Options) -> Result[
-  unique Bytes,
+  Bytes,
   model.Problem
 ] {
   let data = read(directory, options.file)?
@@ -95,7 +95,7 @@ fn interruptible(directory: Dir, tasks: Tasks, signals: Signals, options: Option
   )
 }
 
-fn run(rt: Io, args: Args) -> Result[unique Bytes, model.Problem] {
+fn run(rt: Io, args: Args) -> Result[Bytes, model.Problem] {
   let options = arguments(args)?
   let Ok(directory) = io.dir(rt, options.root) else {
     return Error(Grant())

@@ -34,7 +34,7 @@ fn regular(d: Dir, name: String) -> Result[(), model.InvalidInput] {
 }
 
 fn hash_file(d: Dir, name: String, mut total: u64) -> Result[
-  unique model.Entry,
+  model.Entry,
   model.InvalidInput
 ] {
   regular(d, name)?
@@ -80,7 +80,7 @@ fn hash_file(d: Dir, name: String, mut total: u64) -> Result[
   )
 }
 
-fn scan(d: Dir, pattern: String) -> Result[unique Bytes, model.InvalidInput] {
+fn scan(d: Dir, pattern: String) -> Result[Bytes, model.InvalidInput] {
   if string.byte_len(pattern) > model.PATTERN_BYTES {
     return Error(model.invalid("pattern_bytes_limit", ""))
   }

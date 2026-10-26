@@ -1,6 +1,6 @@
 const HELP: String = "bininspect cbor|msgpack FILE [--encode [--deterministic]]\nDecode one binary value to compact JSON, or encode JSON to raw binary stdout.\nFILE is relative to the read-only input grant.\nLimits: 65536 input bytes, 64 items per array/map, 128 open containers.\nExit: 0 success/help, 2 invalid input, usage or I/O.\n"
 
-fn read_local(rt: Io, name: String) -> Result[unique Bytes, model.Invalid] {
+fn read_local(rt: Io, name: String) -> Result[Bytes, model.Invalid] {
   let Ok(dir) = io.dir(rt, path.of("input")) else {
     return Error(Input("directory_grant"))
   }

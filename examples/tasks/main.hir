@@ -72,7 +72,7 @@ fn setting(
   flag: String,
   key: String,
   fallback: String
-) -> unique String uses {} {
+) -> String uses {} {
   if let Some(values) = map.get(parsed.flags, flag) {
     if list.len(values) > 0 {
       return unique values[list.len(values) - 1]
@@ -140,7 +140,7 @@ fn arguments(args: Args) -> Result[List[String], StartError] {
 }
 
 // Granted environment keys only; a key the run does not grant reads as unset.
-fn environment_of(environment: Env) -> unique Map[String, String] {
+fn environment_of(environment: Env) -> Map[String, String] {
   let mut found: Map[String, String] = map.empty()
   for key in ENV_KEYS {
     if let Ok(Some(value)) = env.get(environment, key) {

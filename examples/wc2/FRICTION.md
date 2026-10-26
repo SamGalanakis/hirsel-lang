@@ -9,7 +9,7 @@ The table preserves the original incidents; the recipes below describe current r
 | Used `distinct` and `result` as ordinary names. | [Exact output](repros/incident-1.txt) | Renamed them `sorted_unique` and `output_lines`; LANG-14. [Minimal program](repros/incident-1.hir). | 1 | language friction |
 | Considered the LANG-14 replacement suggestion. | [Exact output](repros/incident-2.txt) | Historical help suggested reserved `result`. Fixed by [legal, fresh name suggestions](https://github.com/SamGalanakis/hirsel-lang/commit/7874edcd97e00508b3ff84d9abe7d65e7edb9d42); current help uses `value` when available. [Applied-repair controls](../../crates/hirsel-driver/tests/it/error_injection.rs) check the replacement. [Minimal program](repros/incident-2.hir). | 0.5 | bug (fixed) |
 | Inferred a list from its elements or the other `if` arm. | [Exact output](repros/incident-3.txt) | Originally added `List[cli.Flag]` / `List[String]`; LANG-2. The exact String repro now accepts as `List[String]`; only insufficient prefixes still need context (see below). [Minimal program](repros/incident-3.hir). | 0.5 | language friction |
-| Sorted a list after a mutable helper call. | [Exact output](repros/incident-4.txt) | Declared `@preserves_unique(lines)` on the append-only helper; MODE-2/CLO-2. [Minimal program](repros/incident-4.hir). | 1 | language friction |
+| Sorted a list after a mutable helper call. | [Exact output](repros/incident-4.txt) | Fixed by private summaries (b552ff23d839 / f71ba1242e00); direct-call proof is inferred. Native qualification still requires the declared remember/collect promises until duplicate list.push request registration is repaired. [Minimal program](repros/incident-4.hir). | 1 | language friction |
 | Returned `out.print(..)?` from a Result function. | [Exact output](repros/incident-5.txt) | Print with `?`, then return `Ok(())`; LANG-7/LANG-8. [Minimal program](repros/incident-5.hir). | 0.5 | language friction |
 | Read buffered lines inside a collection loop. | [Exact output](repros/incident-6.txt) | Fixed by [natural-loop origin expiration](https://github.com/SamGalanakis/hirsel-lang/commit/8d85aeac8cb3c32b8669cc0550906234c18bf0a0); [application file loop restored](https://github.com/SamGalanakis/hirsel-lang/commit/a19ff14b9727354246a86d29663c28c62c80739a). The unchanged [12-line repro](repros/invalid-origin.hir) and restored app pass H, LLVM and Cranelift in the [exact-source regression](../../crates/hirsel-cli/tests/examples.rs); independent V still rejects forged early expiry. Verified 2026-10-22. | 4 | bug (fixed) |
 | Named a local `counts`, also the name of an @test. | [Exact output](repros/incident-7.txt) | Renamed test `count_words`; LANG-4 applies across the entire module. [Minimal program](repros/incident-7.hir). | 0.5 | language friction |
@@ -70,15 +70,9 @@ pub fn main() -> Result[(), ()] {
 
 ### Mutable helper promises
 
-[The unannotated helper](repros/incident-4.hir) loses the caller's uniqueness
-proof at `need(take xs)` (MODE-2). Native loans do not infer a callee's handback
-contract from its body. Both `remember` and `collect` retain
-`@preserves_unique(lines)`: each promises to return unique storage when it
-receives it. The compiler checks that promise (CLO-2); it is not an unchecked
-optimization. A minimal repair is:
+[The unannotated helper](repros/incident-4.hir) is accepted: fixed by private summaries (b552ff23d839 / f71ba1242e00). Both remember and collect preserve the caller’s unique storage by body proof. Their written promises remain for native qualification because removing them exposed duplicate list.push request registration; the original package consumer also reaches its 570s deadline. H and V independently check the summary at same-module direct calls. The minimal accepted example is:
 
 ```hirsel
-@preserves_unique(xs)
 fn add(mut xs: List[u64]) {
   list.push(mut xs, 1)
 }
@@ -159,8 +153,7 @@ Do not assume ending a counted copy restores the original proof.
 
 Every remaining ownership workaround in the application is intentional:
 
-- `@preserves_unique(lines)` remains on both helpers for checked mutable handback;
-  sorting still needs current unique storage after those calls.
+- Private helper summaries prove mutable handback before sorting; explicit preservation annotations are removed.
 - `string.split(unique line, "\n")` copies the helper's borrowed input into an
   independent owner. `unique parts[0]` deep-copies a borrowed projected split
   part; strengthening the stored row does not permit a partial move.

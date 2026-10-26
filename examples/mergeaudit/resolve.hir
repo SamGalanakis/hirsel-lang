@@ -18,7 +18,7 @@ fn choice(decisions: model.Decisions, name: String, ordinal: u64) -> Result[
 }
 
 fn selected(plan: regions.Plan, piece: regions.Region, decision: model.Choice) -> Result[
-  unique String,
+  String,
   model.Problem
 ] uses {} {
   match decision {
@@ -30,7 +30,7 @@ fn selected(plan: regions.Plan, piece: regions.Region, decision: model.Choice) -
 }
 
 fn one(plan: regions.Plan, decisions: model.Decisions) -> Result[
-  unique model.Selected,
+  model.Selected,
   model.Problem
 ] uses {} {
   let mut chunks: List[String] = []

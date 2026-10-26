@@ -47,15 +47,15 @@ type Member {
   id: u64,
 }
 
-fn record_from_json(value: json.Value) -> Result[unique Record, String] uses {} = comptime derive.from_json(
+fn record_from_json(value: json.Value) -> Result[Record, String] uses {} = comptime derive.from_json(
   shape(Record)
 )
 
-fn alias_from_json(value: json.Value) -> Result[unique Alias, String] uses {} = comptime derive.from_json(
+fn alias_from_json(value: json.Value) -> Result[Alias, String] uses {} = comptime derive.from_json(
   shape(Alias)
 )
 
-fn inventory_from_json(value: json.Value) -> Result[unique Inventory, String] uses {} = comptime derive.from_json(
+fn inventory_from_json(value: json.Value) -> Result[Inventory, String] uses {} = comptime derive.from_json(
   shape(Inventory)
 )
 

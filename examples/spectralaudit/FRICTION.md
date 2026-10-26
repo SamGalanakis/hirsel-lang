@@ -55,9 +55,7 @@ output list, no generalized unique result promise.
 
 Original report.render passed its fresh output to ordinary mut helpers and
 then returned unique Bytes. MODE-2: `bytes.from_list(take out) is not proved
-unique`. Added @preserves_unique(out) to the three byte-only helpers, like std
-format helpers. This is a checked promise; no deep copy or runtime cost. About
-2 active minutes. Both are intended ownership rules, not source/V disagreements.
+unique`. Fixed by private summaries (b552ff23d839 / f71ba1242e00): the three private byte helpers need no preservation annotations or deep copy. The generic callback contract above remains declared. Original adaptation took about 2 active minutes.
 
 ## Rounded negative zero (fixed during review; app owner)
 

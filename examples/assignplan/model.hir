@@ -38,11 +38,11 @@ pub type Batch {
   manifests: List[Manifest],
 }
 
-fn resource_from_json(value: json.Value) -> Result[unique Resource, String] uses {} = comptime derive.from_json(
+fn resource_from_json(value: json.Value) -> Result[Resource, String] uses {} = comptime derive.from_json(
   shape(Resource)
 )
 
-fn job_from_json(value: json.Value) -> Result[unique Job, String] uses {} = comptime derive.from_json(
+fn job_from_json(value: json.Value) -> Result[Job, String] uses {} = comptime derive.from_json(
   shape(Job)
 )
 
@@ -60,15 +60,15 @@ fn ordinal(value: json.Value, key: String) -> Result[u64, String] uses {} {
   Ok(number)
 }
 
-fn pair_from_json(value: json.Value) -> Result[unique Pair, String] uses {} {
+fn pair_from_json(value: json.Value) -> Result[Pair, String] uses {} {
   Ok(unique Pair(slot: ordinal(value, "resource")?, job: ordinal(value, "job")?))
 }
 
-fn manifest_from_json(value: json.Value) -> Result[unique Manifest, String] uses {} = comptime derive.from_json(
+fn manifest_from_json(value: json.Value) -> Result[Manifest, String] uses {} = comptime derive.from_json(
   shape(Manifest)
 )
 
-fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+fn batch_from_json(value: json.Value) -> Result[Batch, String] uses {} = comptime derive.from_json(
   shape(Batch)
 )
 

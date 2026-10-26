@@ -39,15 +39,15 @@ pub type Snapshot {
   edges: List[Edge[u64]],
 }
 
-fn edge_from_json(value: json.Value) -> Result[unique Edge[u64], String] uses {} = comptime derive.from_json(
+fn edge_from_json(value: json.Value) -> Result[Edge[u64], String] uses {} = comptime derive.from_json(
   shape(Edge[u64])
 )
 
-fn request_from_json(value: json.Value) -> Result[unique Request, String] uses {} = comptime derive.from_json(
+fn request_from_json(value: json.Value) -> Result[Request, String] uses {} = comptime derive.from_json(
   shape(Request)
 )
 
-fn batch_from_json(value: json.Value) -> Result[unique Batch, String] uses {} = comptime derive.from_json(
+fn batch_from_json(value: json.Value) -> Result[Batch, String] uses {} = comptime derive.from_json(
   shape(Batch)
 )
 

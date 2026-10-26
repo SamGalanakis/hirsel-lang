@@ -32,7 +32,7 @@ pub fn invalid(kind: String, line: u64, byte: u64) -> InvalidInput uses {} {
 }
 
 fn words(line: String, number: u64, comments: bool) -> Result[
-  unique List[String],
+  List[String],
   InvalidInput
 ] uses {} {
   let parsed = if comments {

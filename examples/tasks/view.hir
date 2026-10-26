@@ -49,7 +49,6 @@ fn overdue(item: model.Item, today: Option[time.Date]) -> bool uses {} {
 // Go html/template/js.go:254-263,336-354 replacement-table structure,
 // combined with json.write_text_into's JSON spellings. Preserve this app's
 // existing JSON-then-HTML bytes (including its narrower < escaping policy).
-@preserves_unique(out)
 fn js_string_into(mut out: List[u8], value: String) -> () uses {} {
   text.append(mut out, "&#34;")
   let data = string.as_bytes(value)
@@ -115,7 +114,6 @@ fn selected_attr(on: bool) -> String uses {} {
 }
 
 // ---- fragments ----
-@preserves_unique(out)
 fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
   for tag in tags {
     text.append(
@@ -129,7 +127,6 @@ fn tags_html(mut out: List[u8], tags: List[String]) -> () uses {} {
   }
 }
 
-@preserves_unique(out)
 fn option_html(mut out: List[u8], value: String, label: String, current: String) -> () uses {} {
   text.append(mut out, "<option value=\"")
   html.escape_into(mut out, value)
@@ -140,7 +137,6 @@ fn option_html(mut out: List[u8], value: String, label: String, current: String)
   text.append(mut out, "</option>")
 }
 
-@preserves_unique(out)
 fn priority_options(mut out: List[u8], current: String) -> () uses {} {
   option_html(mut out, "low", "Low", current)
   option_html(mut out, "medium", "Medium", current)
@@ -148,7 +144,6 @@ fn priority_options(mut out: List[u8], current: String) -> () uses {} {
 }
 
 // The inline edit form of one task, shown while `$editing` names it.
-@preserves_unique(out)
 fn edit_form(mut out: List[u8], item: model.Item) -> () uses {} {
   let id = item.id
   let due = match item.due {
@@ -386,7 +381,7 @@ pub fn live(board: model.Board, screen: Screen) -> unique String uses {} {
 }
 
 // ---- the page ----
-fn signals_json(screen: Screen) -> unique String uses {} {
+fn signals_json(screen: Screen) -> String uses {} {
   let mut filter: Map[String, json.Value] = map.empty()
   map.insert(mut filter, "status", Text(unique screen.query.status))
   map.insert(mut filter, "tag", Text(unique screen.query.tag))

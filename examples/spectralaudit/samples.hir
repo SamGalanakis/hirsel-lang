@@ -94,7 +94,7 @@ fn sample(value: json.Value) -> Result[Complex, report.Problem] uses {} {
 }
 
 fn channel(input_value: json.Value, ordinal: u64, expected: u64) -> Result[
-  unique Channel,
+  Channel,
   report.Problem
 ] uses {} {
   let Object(fields) = input_value else {

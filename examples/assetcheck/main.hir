@@ -115,7 +115,7 @@ fn decode(data: Bytes) -> Result[Manifest, AppError] {
   Ok(take manifest)
 }
 
-fn read_manifest(d: Dir, name: String) -> Result[unique Bytes, AppError] {
+fn read_manifest(d: Dir, name: String) -> Result[Bytes, AppError] {
   if !valid_path(name) {
     return Error(InvalidPath())
   }

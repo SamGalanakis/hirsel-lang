@@ -50,7 +50,7 @@ fn arguments(args: Args) -> Result[Options, report.Problem] {
   )
 }
 
-fn read(d: Dir, input: Path) -> Result[unique Bytes, report.Problem] {
+fn read(d: Dir, input: Path) -> Result[Bytes, report.Problem] {
   let mut handle = match file.open(d, input) {
     Ok(value) => take value,
     Error(error) => return Error(report.file_error(Open(), error)),

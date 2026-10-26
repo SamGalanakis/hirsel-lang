@@ -84,7 +84,7 @@ its declaring module refused LANG-4. The final `model.parts` and
 return explicit unique roots. No counted payload is copied by these receipts.
 A nested tuple receipt through `Result` lost the list uniqueness needed for
 checkpoint adoption (MODE-2). `Result[unique Decoded,Problem]` plus whole-owner
-destructuring retains that receipt, with no payload copy. Explicit receiving
+destructuring retains that receipt, with no payload copy. The private-helper case is fixed by private summaries (b552ff23d839 / f71ba1242e00); the current exported decode contract stays declared. Explicit receiving
 annotations on the constructed Windows roots fix their prefix contract.
 
 The original `step(mut owned.live[i].aggregate,value)?` passes source checking
@@ -127,8 +127,7 @@ fn keep[T: plain](take xs: unique List[T]) -> unique List[T] uses {} {
 String-valued fixed errors caused MODE-1 at related DOM projections and MODE-4
 at the signal task result. A plain Reason enum transports the same fixed codes
 without copying error strings. Output helpers initially lost uniqueness at
-`bytes.from_list(take out)` (MODE-2); body-checked `@preserves_unique(out)` on
-put/quoted/rows preserves it with no final staging copy. Signal racing now ends
+`bytes.from_list(take out)` (MODE-2); fixed by private summaries (b552ff23d839 / f71ba1242e00) for quoted/rows, with no final staging copy. Exported put retains its checked promise. Signal racing now ends
 before publication, so cancellation cannot report a rejected batch after that
 race has committed an output.
 

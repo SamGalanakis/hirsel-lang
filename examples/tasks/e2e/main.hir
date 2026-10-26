@@ -90,12 +90,12 @@ fn timed() -> http.Config uses {} {
   client_config(Some(time.Duration(nanoseconds: TIMEOUT)))
 }
 
-fn url(port: u16, target: String) -> unique String uses {} {
+fn url(port: u16, target: String) -> String uses {} {
   f"http://127.0.0.1:{port}{target}"
 }
 
 // `Name: value` lines, as a request's extra headers are written here.
-fn header_list(lines: String) -> unique List[http.Header] uses {} {
+fn header_list(lines: String) -> List[http.Header] uses {} {
   let mut headers: List[http.Header] = []
   for line in string.split(unique lines, "\r\n") {
     if let Some((name, value)) = string.split_once(line, ": ") {

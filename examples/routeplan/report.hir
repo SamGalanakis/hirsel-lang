@@ -37,7 +37,7 @@ fn document_to_json(value: Document) -> json.Value uses {} = comptime derive.jso
   shape(Document)
 )
 
-fn route(value: routes.Outcome) -> unique Route uses {} {
+fn route(value: routes.Outcome) -> Route uses {} {
   match value {
     Found(route_value) => unique Route(
       status: "found",

@@ -24,37 +24,37 @@ pub type Config = Version1(V1) | Version2(V2)
 pub type ConfigError = TooLarge | InvalidJson | InvalidShape | UnknownVersion | EmptyName | RetryRange | UnsupportedTarget | Encode
 
 fn v1_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique V1,
+  V1,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(V1), schema.strict_policy())
 
 fn v2_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique V2,
+  V2,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(V2), schema.strict_policy())
 
 fn v2_encode(value: V2, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(V2), schema.strict_policy())
 
 fn service_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique Service,
+  Service,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(Service), schema.strict_policy())
 
 fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(Service), schema.strict_policy())
 
 fn retry_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique Retry,
+  Retry,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(Retry), schema.strict_policy())
 
 fn retry_schema_encode(value: Retry, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(Retry), schema.strict_policy())
 

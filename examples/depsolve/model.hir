@@ -34,19 +34,19 @@ pub type Graph {
   nodes: Map[String, Package],
 }
 
-fn requirement_from_json(value: json.Value) -> Result[unique Requirement, String] uses {} = comptime derive.from_json(
+fn requirement_from_json(value: json.Value) -> Result[Requirement, String] uses {} = comptime derive.from_json(
   shape(Requirement)
 )
 
-fn package_from_json(value: json.Value) -> Result[unique Package, String] uses {} = comptime derive.from_json(
+fn package_from_json(value: json.Value) -> Result[Package, String] uses {} = comptime derive.from_json(
   shape(Package)
 )
 
-fn root_from_json(value: json.Value) -> Result[unique Root, String] uses {} = comptime derive.from_json(
+fn root_from_json(value: json.Value) -> Result[Root, String] uses {} = comptime derive.from_json(
   shape(Root)
 )
 
-fn catalog_from_json(value: json.Value) -> Result[unique Catalog, String] uses {} = comptime derive.from_json(
+fn catalog_from_json(value: json.Value) -> Result[Catalog, String] uses {} = comptime derive.from_json(
   shape(Catalog)
 )
 
@@ -168,7 +168,7 @@ pub fn admission(root_value: Root) -> Result[unique Admission, explain.Fault] us
 }
 
 fn inspect(value: json.Value, mut budget: Admission) -> Result[
-  unique Requirement,
+  Requirement,
   explain.Fault
 ] uses {} {
   let Some(name_value) = json_access.member(value, "name") else {
@@ -245,7 +245,6 @@ pub fn catalog(data: Bytes, mut budget: Admission) -> Result[
   Ok(take owned)
 }
 
-@preserves_unique(names)
 fn admit_name(mut names: Set[String], name: String) -> Result[(), explain.Fault] uses {} {
   if !set.contains(names, name) {
     if set.len(names) == MAX_NAMES {

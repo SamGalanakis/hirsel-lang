@@ -5,7 +5,7 @@ pub type State {
   stations: List[resources.StationState],
 }
 
-fn initialize(s: model.Scenario) -> Result[unique State, model.Problem] uses {} {
+fn initialize(s: model.Scenario) -> Result[State, model.Problem] uses {} {
   model.validate(s)?
   let mut state = unique State(now: 0, queue: events.empty(), jobs: [], stations: [])
   for station in s.stations {

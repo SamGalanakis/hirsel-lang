@@ -32,7 +32,7 @@ fn compare(a: Frontier[u64], b: Frontier[u64]) -> i32 uses {} {
   0
 }
 
-fn new_state(nodes: u64, source: u64) -> unique State uses {} {
+fn new_state(nodes: u64, source: u64) -> State uses {} {
   let mut settled: List[bool] = []
   let mut seen: List[Option[u64]] = []
   let mut predecessors: List[Option[u64]] = []

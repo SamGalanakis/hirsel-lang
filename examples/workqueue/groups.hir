@@ -57,7 +57,7 @@ fn empty_delivery() -> Delivery uses {} {
   Delivery(consumer: 0, token: 0, acked: false, active: false, until: 0)
 }
 
-fn empty_group() -> unique Group uses {} {
+fn empty_group() -> Group uses {} {
   Group(present: false, offset: 0, entries: [])
 }
 

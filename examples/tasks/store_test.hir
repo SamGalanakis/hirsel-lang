@@ -1,4 +1,4 @@
-fn board_with(titles: List[String]) -> unique model.Board uses {} {
+fn board_with(titles: List[String]) -> model.Board uses {} {
   let mut board = model.empty_board()
   for title in titles {
     let draft = model.Draft(

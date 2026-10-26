@@ -24,7 +24,7 @@ moved its destructured pixels into `tiles.run` requiring unique input. MODE-2
 reported that the destructured `pixels` was not proved unique. The complete
 producer contract is `Result[unique Raster, Problem]` and construction explicitly
 uses `unique Raster(...)`; attempt05 source-checks. About 2 active minutes,
-owner application, disposition intended/fixed. The constructor already owns all
+private helper case fixed by private summaries (b552ff23d839 / f71ba1242e00); the current cross-module read contract stays declared. The constructor already owns all
 counted input; this boundary requires no additional deep byte copy. Tile outputs
 have payload-qualified `Result[unique Bytes, Problem]` contracts at both producer
 and TaskSet. Shared freezing moves the input buffer; assembly appends every output

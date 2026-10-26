@@ -6,7 +6,7 @@ type Search {
   meeting: Option[u64],
 }
 
-fn bfs(g: model.Topology, r: residual.Residual) -> unique Search uses {} {
+fn bfs(g: model.Topology, r: residual.Residual) -> Search uses {} {
   let mut pred: List[Option[u64]] = std@1/list.filled(g.vertices, None())
   let mut succ: List[Option[u64]] = std@1/list.filled(g.vertices, None())
   pred[g.source] = Some(g.source)
@@ -57,10 +57,7 @@ fn bfs(g: model.Topology, r: residual.Residual) -> unique Search uses {} {
   unique Search(pred: take pred, succ: take succ, meeting: meeting)
 }
 
-fn path(g: model.Topology, s: Search, meeting: u64) -> Result[
-  unique List[u64],
-  report.Problem
-] uses {} {
+fn path(g: model.Topology, s: Search, meeting: u64) -> Result[List[u64], report.Problem] uses {} {
   let mut prefix: List[u64] = []
   let mut seen = std@1/list.filled(g.vertices, false)
   let mut cursor = meeting

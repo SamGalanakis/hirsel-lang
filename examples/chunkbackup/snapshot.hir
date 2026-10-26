@@ -24,7 +24,7 @@ fn one_in_scope(
   objects: Dir,
   lookup: chunk.Tables,
   row: manifest.FileResult[()]
-) -> Result[unique manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
+) -> Result[manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
   let initial = store.inspect(source, row.path)?
   if initial.size != row.size {
     return Error(manifest.issue("input_changed", row.path))
@@ -109,7 +109,7 @@ fn one(
   objects: Dir,
   lookup: chunk.Tables,
   row: manifest.FileResult[()]
-) -> Result[unique manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
+) -> Result[manifest.FileResult[List[chunk.Part[String]]], manifest.Problem] {
   task.scope(
     tasks,
     fn(s: Scope) -> Result[
@@ -281,7 +281,7 @@ pub fn encode(rows: List[manifest.FileResult[List[chunk.Part[String]]]]) -> Resu
 }
 
 fn build(source: Dir, objects: Dir, tasks: Tasks, name: String, jobs: u64) -> Result[
-  unique Bytes,
+  Bytes,
   manifest.Problem
 ] {
   let rows = manifest.input(store.read(source, name, manifest.MANIFEST)?)?

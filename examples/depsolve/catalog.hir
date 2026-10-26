@@ -50,7 +50,7 @@ fn by_name(a: String, b: String) -> i32 uses {} {
 // Preflight reserves the total byte allowance before admitting any catalog read.
 // A file that grows cannot exceed its reservation; bounded reads reject it.
 fn preflight(directory: Dir, files: List[String]) -> Result[
-  unique List[Request],
+  List[Request],
   explain.Problem[String]
 ] {
   if list.len(files) > model.MAX_FILES {

@@ -13,37 +13,37 @@ type Outer {
 }
 
 fn outer_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique Outer,
+  Outer,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(Outer), schema.strict_policy())
 
 fn outer_schema_encode(value: Outer, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(Outer), schema.strict_policy())
 
 fn service_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique Service,
+  Service,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(Service), schema.strict_policy())
 
 fn service_schema_encode(value: Service, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(Service), schema.strict_policy())
 
 fn retry_schema_decode(wire: json.Value, mut check: schema.CheckState) -> Result[
-  unique Retry,
+  Retry,
   schema.SchemaError
 ] uses {} = comptime derive.schema_decode(shape(Retry), schema.strict_policy())
 
 fn retry_schema_encode(value: Retry, mut check: schema.CheckState) -> Result[
-  unique json.Value,
+  json.Value,
   schema.SchemaError
 ] uses {} = comptime derive.schema_encode(shape(Retry), schema.strict_policy())
 
 // Use a fresh state for each complete direction. Nested hooks share that state.
-fn decode(text: String, options: schema.Options) -> Result[unique Outer, String] uses {} {
+fn decode(text: String, options: schema.Options) -> Result[Outer, String] uses {} {
   let Ok(wire) = json.parse(unique text) else {
     return Error("JSON")
   }
@@ -57,7 +57,7 @@ fn decode(text: String, options: schema.Options) -> Result[unique Outer, String]
   }
 }
 
-fn encode(value: Outer) -> Result[unique String, String] uses {} {
+fn encode(value: Outer) -> Result[String, String] uses {} {
   let mut check = match schema.check_state(schema.default_options()) {
     Ok(c) => take c,
     Error(_) => return Error("options"),
@@ -72,7 +72,7 @@ fn encode(value: Outer) -> Result[unique String, String] uses {} {
 }
 
 // This owns its nested String even though the parameter is borrowed.
-fn owned(name: String, attempts: u32) -> unique Outer uses {} {
+fn owned(name: String, attempts: u32) -> Outer uses {} {
   Outer(service: Service(name: unique name), retry: Retry(attempts: attempts))
 }
 
