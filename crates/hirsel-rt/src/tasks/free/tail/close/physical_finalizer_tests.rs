@@ -158,6 +158,21 @@ fn nested_finalizer_returns_its_stack_and_resumes_original_admission_after_reloc
     ) {
         return;
     }
+    run_case(false);
+}
+
+#[test]
+fn a_host_stop_after_finalizer_save_abandons_cursor_without_resuming_language_code() {
+    if !isolated_at(
+        "tasks::free::tail::close::physical_finalizer_tests::a_host_stop_after_finalizer_save_abandons_cursor_without_resuming_language_code",
+        "HIRSEL_ISOLATE_FINALIZER_PHYSICAL_STOP",
+    ) {
+        return;
+    }
+    run_case(true);
+}
+
+fn run_case(host_stop: bool) {
     for width in [1, 4] {
         let resource = crate::tasks::free::finalized(crate::Layout {
             finalizer: Some(ordinary),
@@ -172,16 +187,24 @@ fn nested_finalizer_returns_its_stack_and_resumes_original_admission_after_reloc
         run.config.layouts = layouts.as_ptr();
         run.config.layout_count = 2;
         unsafe { run.use_physical_dispatch() };
+        let control = host_stop.then(|| run.control());
+        let stopping = control.clone();
         let outcome = run.run(
             |ctx| unsafe {
                 crate::tasks::free::enable(ctx);
             },
             move |ctx| unsafe {
                 let hook = seen.clone();
+                let stopping = stopping.clone();
                 crate::pool::free::test_after_compact(ctx, move |task, _, pooled| {
                     if task != 0 {
                         assert!(pooled);
                         hook.leaves.fetch_add(1, Ordering::Relaxed);
+                        if let Some(control) = &stopping {
+                            // Saved ownership has left the native stack. Stop
+                            // while the original finalizer and cursor are live.
+                            control.stop();
+                        }
                     }
                 });
                 let mut scope = 0;
@@ -245,6 +268,32 @@ fn nested_finalizer_returns_its_stack_and_resumes_original_admission_after_reloc
                 STATUS_OK
             },
         );
+        if let Some(control) = control {
+            assert_eq!(outcome.ended, Err(crate::stop::Stop::Requested));
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while control.status().reclamation_pending != 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "stopped finalizer frames reclaim"
+                );
+                std::thread::yield_now();
+            }
+            assert!(control.status().finished);
+            assert_eq!(control.status().lost_permits, 0);
+            assert!(observed.starts.load(Ordering::Acquire) >= 1);
+            assert_eq!(observed.finishes.load(Ordering::Acquire), 0);
+            assert!(observed.leaves.load(Ordering::Acquire) >= 1);
+            assert!(
+                observed
+                    .contexts
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(pc, _)| *pc == 0),
+                "host stop cannot resume finalizer code or run ordinary destruction"
+            );
+            continue;
+        }
         assert_eq!(outcome.ended, Ok(STATUS_OK));
         assert_eq!(outcome.pending, 0);
         assert_eq!(observed.starts.load(Ordering::Acquire), 4);
