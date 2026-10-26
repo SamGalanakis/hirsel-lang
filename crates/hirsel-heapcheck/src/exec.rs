@@ -33,6 +33,7 @@ mod primitive_work;
 mod projection;
 mod sealed_drop;
 mod sealed_read;
+mod sealed_seal;
 mod structural;
 mod structural_values;
 pub use flat::{FlatStorage, run_with_flat_storage_observer};
@@ -196,6 +197,8 @@ pub(crate) struct Frame {
     /// Read-only inline SSA snapshots, one frame spill per static address.
     spills: Snapshot<Option<Ptr>>,
     loans: Snapshot<Option<Ptr>>,
+    /// Actual Take reads of Arena parameter storage, independent of candidate grant uses.
+    seal_grants: Vec<(ValueId, usize)>,
     sealed_loans: Snapshot<
         Option<(
             crate::ledger::sealed::SealedId,
@@ -552,6 +555,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             prepared: (0..u.addresses.len()).map(|_| None).collect(),
             spills: (0..u.addresses.len()).map(|_| None).collect(),
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
+            seal_grants: Vec::new(),
             sealed_loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
@@ -3654,7 +3658,16 @@ impl<'p, S: Stage> Machine<'p, S> {
         let unit = f.unit;
         let u = self.unit(unit);
         match *inst {
-            Inst::PayloadReceipt { .. } | Inst::SealArena { .. } | Inst::ArenaInventory { .. } => {
+            Inst::SealArena {
+                result,
+                grant,
+                root,
+                shape,
+                ..
+            } => {
+                self.seal_bit_root(f, result, grant, root, shape)?;
+            }
+            Inst::PayloadReceipt { .. } | Inst::ArenaInventory { .. } => {
                 return fail(V::Unsupported, "sealed storage H adapter is not linked");
             }
             Inst::BorrowSealedRoot {
@@ -4188,6 +4201,21 @@ impl<'p, S: Stage> Machine<'p, S> {
                         let e = self.read_resolved(&r, ty.layout, true)?;
                         let e = self.widened(e, ty.layout)?;
                         let (val, borrow, credited) = self.val_from(e, ty.repr, ty.layout)?;
+                        f.seal_grants.retain(|(value, _)| *value != result);
+                        if let Val::Arena(Some(region)) = &val
+                            && borrow.is_none()
+                            && let Some(slot) = r.root_slot
+                            && let SlotKind::Parameter(parameter) = u.slots[slot.index()].kind
+                            && self.program.layouts.fn_abis[u.header.abi.0 as usize]
+                                .parameters
+                                .iter()
+                                .any(|p| {
+                                    p.source == parameter
+                                        && p.convention == hirsel_core_contract::Passing::Take
+                                })
+                        {
+                            f.seal_grants.push((result, *region));
+                        }
                         self.bind(
                             f,
                             result,
@@ -6279,8 +6307,20 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "an arena placement whose slot holds no token",
             );
         };
-        if region.is_some_and(|region| !self.ledger.regions[region].live) {
-            return fail(V::UseAfterFree, "an arena placement in a closed arena");
+        if let Some(region) = region {
+            let scope =
+                self.ledger.regions.get(region).ok_or_else(|| {
+                    err(V::ForgedPointer, "arena placement names an unknown scope")
+                })?;
+            if !scope.live {
+                return fail(V::UseAfterFree, "an arena placement in a closed arena");
+            }
+            if scope.storage != crate::ledger::sealed::StorageCustody::Scope {
+                return fail(
+                    V::CreditUnderflow,
+                    "allocation through a consumed arena grant",
+                );
+            }
         }
         Ok(region)
     }
@@ -10919,3 +10959,6 @@ mod sealed_read_tests;
 
 #[cfg(test)]
 mod sealed_drop_tests;
+
+#[cfg(test)]
+mod sealed_seal_tests;
