@@ -126,6 +126,21 @@ pub(super) unsafe fn try_yield(ctx: &mut TaskCtx) -> Stopped<()> {
 /// # Safety
 /// As for try_yield.
 pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
+    unsafe { boundary_entered(ctx, proceed, false) }.map(|_| ())
+}
+
+/// The same once-only quantum/yield decision for an entered operation whose
+/// task-owned record retains its suffix. True asks the caller to return Pending
+/// through its certified frames; no runtime borrow or transient owner survives.
+/// # Safety
+/// `leave` requires the current disarmed BoundSite's full callchain proof and
+/// binding::can_leave. The caller commits its post-yield phase before return.
+pub(super) unsafe fn try_yield_entered(ctx: &mut TaskCtx, leave: bool) -> Stopped<bool> {
+    let proceed = unsafe { crate::pool::free::proceed(ctx) };
+    unsafe { boundary_entered(ctx, proceed, leave) }
+}
+
+unsafe fn boundary_entered(ctx: &mut TaskCtx, proceed: bool, leave: bool) -> Stopped<bool> {
     if replay::at_cut(ctx) {
         park_final(ctx);
     }
@@ -153,10 +168,16 @@ pub(super) unsafe fn boundary(ctx: &mut TaskCtx, proceed: bool) -> Stopped<()> {
             metrics.elision();
         }
         unsafe { migrate(ctx) };
+    } else if leave {
+        if let Some(metrics) = &ctx.run_ref().worker_metrics {
+            metrics.switch();
+        }
+        crate::stop::observe(ctx)?;
+        return Ok(true);
     } else {
         unsafe { suspend(ctx, true) };
     }
-    crate::stop::observe(ctx)
+    crate::stop::observe(ctx).map(|()| false)
 }
 
 /// Whether an immediate op must wake home to recheck saved host waits. Home
