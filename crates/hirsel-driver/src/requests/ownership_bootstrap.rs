@@ -36,6 +36,7 @@ pub(super) const KINDS: &[u32] = &[
     queries::ARENA_CHOSEN_KIND,
     queries::arena_tasks::ARENA_GRAPH_KIND,
     queries::ownership_compilation::OWNERSHIP_COMPILATION_KIND,
+    queries::seal_demand::SEAL_DEMAND_KIND,
     queries::ownership_tasks::OWNERSHIP_READY_KIND,
     queries::ownership_tasks::OWNERSHIP_ROOT_KIND,
 ];

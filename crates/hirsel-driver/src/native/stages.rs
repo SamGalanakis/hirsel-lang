@@ -528,6 +528,7 @@ pub(crate) fn lower_unit(
     let facts = LocalRcFacts {
         placement: hirsel_rc::placement::Options::for_instance(options.regions, instances, id),
         proofs: Proofs::for_instance(instances, id),
+        guard: None,
     };
     lower_local_unit(unit, options, &facts, finalizers, inputs, validation)
 }
@@ -539,6 +540,7 @@ pub(crate) fn lower_unit(
 pub(crate) struct LocalRcFacts {
     pub placement: hirsel_rc::placement::Options,
     pub proofs: Proofs,
+    pub guard: Option<hirsel_rc::seal_demand::UnitDemand>,
 }
 
 impl LocalRcFacts {
@@ -595,10 +597,15 @@ pub(crate) fn lower_local_raw(
         validation,
         options.validation,
     )?;
-    let placed = timed(Phase::Place, || {
+    let mut placed = timed(Phase::Place, || {
         hirsel_rc::placement::place(value, table, &facts.placement)
     })
     .map_err(|e| fail(StageName::Placement, e.to_string()))?;
+    if let Some(guard) = &facts.guard {
+        guard
+            .apply(&mut placed)
+            .map_err(|e| fail(StageName::Placement, e))?;
+    }
     let placed = checkpoint(
         StageName::Placement,
         placed,

@@ -85,6 +85,7 @@ pub struct LocalReadyQueries {
     store: Arc<dyn ResultStore>,
     pub queries: ReadyQueries,
     verify_store: VerifyStore,
+    pub(super) guard: Option<Arc<super::seal_demand::Selection>>,
 }
 impl LocalReadyQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
@@ -92,6 +93,7 @@ impl LocalReadyQueries {
             queries: ReadyQueries::new(store.clone()),
             verify_store: VerifyStore::Off,
             store,
+            guard: None,
         }
     }
     pub(super) fn with_validator(
@@ -102,6 +104,7 @@ impl LocalReadyQueries {
             queries: ReadyQueries::with_validator(store.clone(), native),
             verify_store: VerifyStore::Off,
             store,
+            guard: None,
         }
     }
 
@@ -205,6 +208,15 @@ impl LocalReadyQueries {
             return Err("local Ready request environment differs".into());
         }
         let (owner, _) = instances.admitted(key, environment)?;
+        let guard_output = self.guard.clone();
+        let guard = guard_output
+            .as_ref()
+            .map(|selection| {
+                selection
+                    .unit(&function(key))
+                    .ok_or("Ready guard output has no selected owner")
+            })
+            .transpose()?;
         let context = UnitEmissionContext {
             request: emission_context,
             statics_finalizers: owner.product.statics_finalizers,
@@ -278,7 +290,7 @@ impl LocalReadyQueries {
             .iter()
             .map(|(f, _, abi, claim, summary)| (f, abi, claim, summary))
             .collect::<Vec<_>>();
-        let bytes = serde_json::to_vec(&(
+        let mut bytes = serde_json::to_vec(&(
             key.address(READY_KIND).0,
             crate::COMPILER_IDENTITY.as_slice(),
             (
@@ -298,6 +310,12 @@ impl LocalReadyQueries {
             debug,
         ))
         .map_err(|e| e.to_string())?;
+        if let Some(selection) = &guard_output {
+            bytes.extend(
+                serde_json::to_vec(&(selection.product.record, guard))
+                    .map_err(|e| e.to_string())?,
+            );
+        }
         let action = Action(ContentHash::of_parts(
             "hirsel.native.local-ready-action.v1",
             [bytes.as_slice()],
@@ -417,6 +435,7 @@ impl LocalReadyQueries {
                 value,
                 options,
                 source: &owner.ready_source,
+                guard,
                 finalizers: &finalizers,
                 inputs: &inputs,
                 additional_abis: &additional_abis,

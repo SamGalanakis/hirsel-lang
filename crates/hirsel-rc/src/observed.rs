@@ -30,7 +30,7 @@ pub fn lower(
     index: &hirsel_lir::LayoutIndex<'_>,
     options: &Options<'_>,
 ) -> Result<Lowered, String> {
-    lower_with_checks(unit, input, index, options, None)
+    lower_with_checks(unit, input, index, options, None, None)
 }
 
 /// The diagnostic query path checks ordinary Value and intermediate stages as
@@ -43,7 +43,25 @@ pub fn lower_validated(
     options: &Options<'_>,
 ) -> Result<Lowered, String> {
     let validation = hirsel_lir::validate::ValidationContext::new(inputs);
-    lower_with_checks(unit, input, validation.index(), options, Some(inputs))
+    lower_with_checks(unit, input, validation.index(), options, Some(inputs), None)
+}
+
+pub fn lower_validated_with_guard(
+    unit: LirUnit<Value>,
+    input: &Plan,
+    inputs: &hirsel_lir::validate::Inputs<'_>,
+    options: &Options<'_>,
+    guard: Option<&crate::seal_demand::UnitDemand>,
+) -> Result<Lowered, String> {
+    let validation = hirsel_lir::validate::ValidationContext::new(inputs);
+    lower_with_checks(
+        unit,
+        input,
+        validation.index(),
+        options,
+        Some(inputs),
+        guard,
+    )
 }
 
 fn checked<S: hirsel_lir::stage::Stage>(
@@ -68,10 +86,20 @@ fn lower_with_checks(
     index: &hirsel_lir::LayoutIndex<'_>,
     options: &Options<'_>,
     inputs: Option<&hirsel_lir::validate::Inputs<'_>>,
+    guard: Option<&crate::seal_demand::UnitDemand>,
 ) -> Result<Lowered, String> {
     let unit = checked(unit, inputs)?;
     let table = index.table();
-    let (unit, plan, placement) = placement::place_observed(unit, table, options.placement, input)?;
+    let (unit, plan, placement) = if let Some(guard) = guard {
+        hirsel_lir::ownership_trace::check(&unit, input).map_err(|e| e.to_string())?;
+        let before = unit.clone();
+        let mut after =
+            placement::place(unit, table, options.placement).map_err(|e| e.to_string())?;
+        guard.apply(&mut after)?;
+        crate::observation::identity(&before, input, after)?
+    } else {
+        placement::place_observed(unit, table, options.placement, input)?
+    };
     let unit = checked(unit, inputs)?;
     let mut recipes = vec![placement];
     let (unit, plan, insertion) = insert::insert_observed(unit, table, options.proofs, &plan)?;

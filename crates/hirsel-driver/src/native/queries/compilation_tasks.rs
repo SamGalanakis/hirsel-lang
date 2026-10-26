@@ -216,6 +216,7 @@ impl CompilationTasks {
         }
         for kind in [
             COMPILATION_KIND,
+            super::seal_demand::SEAL_DEMAND_KIND,
             READY_KIND,
             ROOT_KIND,
             CODEGEN_KIND,
@@ -236,6 +237,16 @@ impl CompilationTasks {
             };
         }
         let completed = self.instances.completed_instances(discovery)?;
+        let guard_bytes = if completed
+            .iter()
+            .any(|(_, output)| output.seal_demand.has_seal())
+        {
+            super::seal_demand::Plan::admission_bytes(
+                completed.iter().map(|(_, output)| &output.seal_demand),
+            )
+        } else {
+            0
+        };
         let owners = completed
             .iter()
             .map(|(key, _)| key.clone())
@@ -249,6 +260,7 @@ impl CompilationTasks {
                 .map_err(|error| error.to_string())
         })?;
         let bytes = 16384u64
+            .saturating_add(guard_bytes)
             .saturating_add(template_bytes.saturating_mul(4))
             .saturating_add(
                 owners
@@ -290,6 +302,7 @@ impl CompilationTasks {
         Arc::get_mut(&mut snapshot)
             .ok_or("native snapshot was shared before admission completed")?
             .retained_allowances = retained_allowances;
+        Arc::get_mut(&mut snapshot).unwrap().guard_admitted_bytes = guard_bytes;
         let native = NativeTasks::new(snapshot, self.weight)?;
         let roots = NativeRootTasks::new(
             native.clone(),
@@ -352,7 +365,7 @@ impl CompilationTasks {
             CodegenTasks::with_whole_modules(native.clone(), codegen, whole_codegen, self.weight)?;
         let link = LinkTasks::new(roots.clone(), plans, self.weight)?;
         let leaf: Arc<dyn QueryFactory> = Arc::new(LinkInputFactory::new(link.clone()));
-        let factories: BTreeMap<u32, Arc<dyn QueryFactory>> = BTreeMap::from([
+        let mut factories: BTreeMap<u32, Arc<dyn QueryFactory>> = BTreeMap::from([
             (
                 READY_KIND,
                 Arc::new(NativeTaskFactory::new(native.clone())) as Arc<dyn QueryFactory>,
@@ -372,6 +385,9 @@ impl CompilationTasks {
             (LINK_INPUT_KIND, leaf.clone()),
             (LINK_MANIFEST_KIND, leaf),
         ]);
+        if let Some((key, factory)) = native.guard_factory() {
+            factories.insert(key.kind, factory);
+        }
         self.dispatch
             .set(Dispatch {
                 discovery,

@@ -100,12 +100,28 @@ pub struct NativeSnapshot {
         BTreeMap<super::optimizer::Function, (InstanceAddress, super::optimizer::TemplateFacts)>,
     native: Arc<hirsel_lir::validate::NativeCache>,
     materializations: AtomicU64,
+    pub(super) needs_guard: bool,
+    pub(super) guard_admitted_bytes: u64,
+    pub(super) guard: std::sync::OnceLock<Arc<super::seal_demand::GuardTasks>>,
     // Compilation dispatch and copied instance/arena metadata remain charged
     // through the last snapshot, product scope or linker view. Direct snapshot
     // clients still own admission of their supplied inputs themselves.
     pub(super) retained_allowances: Vec<Arc<hirsel_engine::runtime::MemoryReservation>>,
 }
 impl NativeSnapshot {
+    pub(super) fn guard_selection(
+        &self,
+    ) -> Result<Option<Arc<super::seal_demand::Selection>>, String> {
+        if !self.needs_guard {
+            return Ok(None);
+        }
+        self.guard
+            .get()
+            .and_then(|guard| guard.selection())
+            .map(Some)
+            .ok_or_else(|| "Ready seal-demand dependency has not completed".into())
+    }
+
     pub fn new(
         store: Arc<dyn ResultStore>,
         instances: DemandInstances,
@@ -162,6 +178,10 @@ impl NativeSnapshot {
                 )
             })
             .collect();
+        let needs_guard = instances
+            .completed_inputs()?
+            .iter()
+            .any(|(_, output)| output.seal_demand.has_seal());
         Ok(Arc::new(Self {
             native: super::ready::ReadyQueries::validator(&store),
             store,
@@ -177,6 +197,9 @@ impl NativeSnapshot {
             summaries,
             templates,
             materializations: AtomicU64::new(0),
+            needs_guard,
+            guard_admitted_bytes: 0,
+            guard: Default::default(),
             retained_allowances: Vec::new(),
         }))
     }
@@ -280,6 +303,7 @@ impl DemandProducts {
         &mut self,
         key: &InstanceAddress,
     ) -> Result<super::ready::ObservedReady, String> {
+        self.local.guard = self.snapshot.guard_selection()?;
         self.local.observe(
             &self.snapshot.instances,
             key,
@@ -413,6 +437,7 @@ impl NativeProducts for DemandProducts {
     }
 
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String> {
+        self.local.guard = self.snapshot.guard_selection()?;
         let product = self.local.ready(
             &self.snapshot.instances,
             key,

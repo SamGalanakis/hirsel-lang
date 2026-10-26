@@ -114,6 +114,7 @@ pub struct DemandInstances {
     policy: ContentHash,
     requests: BTreeMap<Vec<u8>, Request>,
     completed: BTreeMap<Vec<u8>, Arc<DiscoveredInstance>>,
+    roots: Vec<InstanceAddress>,
     pub imports: u64,
     pub recipe_decodes: u64,
 }
@@ -143,6 +144,7 @@ impl DemandInstances {
             policy,
             requests: BTreeMap::new(),
             completed: BTreeMap::new(),
+            roots: vec![],
             imports: 0,
             recipe_decodes: 0,
         }
@@ -218,6 +220,22 @@ impl DemandInstances {
                 Ok((self.address(request.key.bind()?), output.clone()))
             })
             .collect()
+    }
+
+    pub(super) fn original_roots(&self) -> &[InstanceAddress] {
+        &self.roots
+    }
+
+    pub(super) fn bind_original_roots(&mut self, roots: &[InstanceAddress]) -> Result<(), String> {
+        if roots.iter().any(|root| {
+            root.target_abi != self.target.digest()
+                || root.policy != self.policy
+                || !self.requests.contains_key(root.instance.encoding())
+        }) {
+            return Err("seal-demand root has no original native request".into());
+        }
+        self.roots = roots.to_vec();
+        Ok(())
     }
     /// Read a completed instance from this request snapshot, retaining C's
     /// independent current environment admission. No recipe or Value decode.
@@ -461,7 +479,12 @@ impl DemandInstances {
             .map(|id| self.request(engine, &instances, id, &table))
             .collect::<Result<Vec<_>, _>>()?;
         requests.sort_by(|a, b| a.key.encoding.cmp(&b.key.encoding));
-        requests.into_iter().map(|r| self.admit(r)).collect()
+        let roots = requests
+            .into_iter()
+            .map(|r| self.admit(r))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.bind_original_roots(&roots)?;
+        Ok(roots)
     }
 
     fn action(

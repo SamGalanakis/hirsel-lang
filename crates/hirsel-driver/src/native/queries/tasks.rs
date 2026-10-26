@@ -42,6 +42,7 @@ struct Request {
     key: QueryId,
     work: Work,
     reads: Vec<(QueryId, hirsel_engine::store::Reference)>,
+    guard: Option<QueryId>,
 }
 
 /// Immutable dispatch/read plans, built during snapshot admission. Factory
@@ -61,6 +62,51 @@ impl NativeTasks {
             .put_content(FAILURE, b"native task resource or protocol failure")
             .ok_or("native task error publication failed")?;
         let inputs = snapshot.instances.completed_inputs()?;
+        let guard = if snapshot.needs_guard {
+            if let Some(guard) = snapshot.guard.get() {
+                Some(guard.clone())
+            } else {
+                let mut locals = inputs
+                    .iter()
+                    .map(|(_, output)| super::seal_demand::Input {
+                        product: output.product.product,
+                        equations: output.seal_demand.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                locals.sort_by(|a, b| a.equations.owner().cmp(b.equations.owner()));
+                let mut roots = snapshot
+                    .instances
+                    .original_roots()
+                    .iter()
+                    .map(owner)
+                    .collect::<Vec<_>>();
+                roots.sort();
+                roots.dedup();
+                if roots.is_empty() {
+                    return Err("sealed guard graph has no original entry selection".into());
+                }
+                let plan = super::seal_demand::Plan::new(
+                    locals,
+                    &roots,
+                    snapshot.options.target.digest(),
+                    inputs[0].0.policy,
+                )?;
+                let guard = super::seal_demand::GuardTasks::new(
+                    snapshot.store.clone(),
+                    plan,
+                    weight,
+                    snapshot.guard_admitted_bytes,
+                    snapshot.retained_allowances.clone(),
+                )?;
+                snapshot
+                    .guard
+                    .set(guard.clone())
+                    .map_err(|_| "seal-demand dispatch installed twice")?;
+                Some(guard)
+            }
+        } else {
+            None
+        };
         let by_owner = inputs
             .iter()
             .map(|(key, output)| (owner(key), (key, output)))
@@ -110,6 +156,7 @@ impl NativeTasks {
                     key: q,
                     work: Work::Instance(key.clone()),
                     reads: vec![],
+                    guard: None,
                 }),
             );
             let mut reads = BTreeMap::new();
@@ -132,6 +179,7 @@ impl NativeTasks {
                     key: q,
                     work: Work::Ready(key.clone()),
                     reads: reads.into_values().collect(),
+                    guard: guard.as_ref().map(|g| g.query_id()),
                 }),
             );
         }
@@ -167,6 +215,7 @@ impl NativeTasks {
                     key: q,
                     work: Work::Arena(key.clone()),
                     reads: reads.into_values().collect(),
+                    guard: None,
                 }),
             );
         }
@@ -196,6 +245,15 @@ impl NativeTasks {
             .get(&id(owner.ready_query_id()))
             .ok_or("ownership diagnostic has no settled Ready dependency plan")?;
         Ok(request.reads.clone())
+    }
+    pub fn guard_factory(&self) -> Option<(QueryId, Arc<dyn QueryFactory>)> {
+        self.snapshot
+            .guard
+            .get()
+            .map(|guard| (guard.query_id(), guard.factory()))
+    }
+    pub(super) fn guard_dependency(&self) -> Option<QueryId> {
+        self.snapshot.guard.get().map(|guard| guard.query_id())
     }
     pub fn failure(&self, message: &str) -> hirsel_engine::store::Reference {
         self.snapshot
@@ -269,6 +327,32 @@ impl QueryTask for NativeTask {
                     let error = self
                         .tasks
                         .failure("native dependency output changed within the immutable snapshot");
+                    self.terminal = Some(Err(error));
+                    return QueryPoll::Failed(error);
+                }
+            }
+        }
+        if let Some(key) = self.request.guard {
+            match cx.read(key) {
+                Poll::Pending => waiting.push(key),
+                Poll::Ready(Err(error)) => {
+                    self.terminal = Some(Err(error));
+                    return QueryPoll::Failed(error);
+                }
+                Poll::Ready(Ok(product))
+                    if self
+                        .tasks
+                        .snapshot
+                        .guard
+                        .get()
+                        .is_some_and(|guard| guard.accepts(product)) =>
+                {
+                    ()
+                }
+                Poll::Ready(Ok(_)) => {
+                    let error = self
+                        .tasks
+                        .failure("Ready seal-demand output differs from its settled dependency");
                     self.terminal = Some(Err(error));
                     return QueryPoll::Failed(error);
                 }

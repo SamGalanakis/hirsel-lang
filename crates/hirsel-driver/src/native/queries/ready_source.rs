@@ -67,6 +67,7 @@ impl ReadySourceFacts {
     }
     pub(super) fn local(&self, regions: bool) -> crate::native::stages::LocalRcFacts {
         crate::native::stages::LocalRcFacts {
+            guard: None,
             placement: hirsel_rc::placement::Options {
                 regions,
                 noalloc: self.noalloc,

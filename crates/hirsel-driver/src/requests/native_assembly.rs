@@ -63,6 +63,7 @@ pub(super) const KINDS: &[u32] = &[
     ARENA_CHOSEN_KIND,
     arena_tasks::ARENA_GRAPH_KIND,
     compilation_tasks::COMPILATION_KIND,
+    crate::native::queries::seal_demand::SEAL_DEMAND_KIND,
     READY_KIND,
     ROOT_KIND,
     object_queries::CODEGEN_KIND,

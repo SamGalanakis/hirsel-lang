@@ -7,6 +7,25 @@ use serde::{Deserialize, Serialize};
 
 pub type Function = (DefPath, ContentHash);
 
+#[derive(Default)]
+pub struct FlowSize {
+    pub values: usize,
+    pub flow: usize,
+    pub closures: usize,
+    pub calls: usize,
+    pub arguments: usize,
+    pub returns: usize,
+    pub captures: usize,
+}
+
+fn path_bytes(path: &DefPath) -> usize {
+    path.0.package.name.capacity()
+        + path.0.package.version.capacity()
+        + path.0.name.capacity()
+        + path.0.modules.capacity() * size_of::<String>()
+        + path.0.modules.iter().map(String::capacity).sum::<usize>()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct Target {
     definition: DefPath,
@@ -52,6 +71,50 @@ impl LocalDemandEquations {
 
     pub fn value_count(&self) -> u32 {
         self.values
+    }
+
+    pub fn has_seal(&self) -> bool {
+        !self.seals.is_empty()
+    }
+
+    /// Owned allocations only, for a prospective clone into query metadata.
+    pub fn retained_bytes(&self) -> u64 {
+        let vec = |capacity: usize, width: usize| capacity.saturating_mul(width);
+        let mut bytes = path_bytes(&self.owner.0)
+            + vec(self.parameters.capacity(), size_of::<u32>())
+            + vec(self.captures.capacity(), size_of::<u32>())
+            + vec(self.flow.capacity(), size_of::<(u32, u32)>())
+            + vec(self.closures.capacity(), size_of::<Closure>())
+            + vec(self.calls.capacity(), size_of::<Call>())
+            + vec(self.returns.capacity(), size_of::<u32>())
+            + vec(self.seals.capacity(), size_of::<u32>());
+        for closure in &self.closures {
+            bytes += vec(closure.captures.capacity(), size_of::<u32>())
+                + closure
+                    .target
+                    .as_ref()
+                    .map_or(0, |target| path_bytes(&target.definition));
+        }
+        for call in &self.calls {
+            bytes += vec(call.arguments.capacity(), size_of::<(u32, u32, bool)>())
+                + call
+                    .target
+                    .as_ref()
+                    .map_or(0, |target| path_bytes(&target.definition));
+        }
+        bytes as u64
+    }
+
+    pub fn flow_size(&self) -> FlowSize {
+        FlowSize {
+            values: self.values as usize,
+            flow: self.flow.len(),
+            closures: self.closures.len(),
+            calls: self.calls.len(),
+            arguments: self.calls.iter().map(|c| c.arguments.len()).sum(),
+            returns: self.returns.len(),
+            captures: self.captures.len(),
+        }
     }
 
     /// Extraction is not admission. The caller still owns independent Value,

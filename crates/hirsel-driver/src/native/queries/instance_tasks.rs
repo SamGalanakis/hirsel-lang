@@ -447,6 +447,7 @@ impl InstanceTasks {
                 .ok_or("native discovery has an unfinished instance")?;
             products.attach_completed(&entry.key, output.clone())?;
         }
+        products.bind_original_roots(&self.roots)?;
         Ok(products)
     }
     pub fn completed_instances(

@@ -58,6 +58,7 @@ pub struct ReadyMiss<'a> {
     pub value: hirsel_lir::LirUnit<Value>,
     pub options: &'a crate::native::Options,
     pub source: &'a ReadySourceFacts,
+    pub guard: Option<&'a hirsel_rc::seal_demand::UnitDemand>,
     pub finalizers: &'a hirsel_rc::cleanup::Finalizers,
     pub inputs: &'a Inputs<'a>,
     pub additional_abis: &'a [hirsel_lir::FnAbiId],
@@ -242,6 +243,14 @@ impl ReadyQueries {
     }
 
     fn check_miss(&self, key: &InstanceAddress, miss: &ReadyMiss<'_>) -> Result<(), String> {
+        if let Some(guard) = miss.guard {
+            guard.validate()?;
+            if guard.owner() != &(key.instance.definition().clone(), key.instance.digest())
+                || guard.original_value_count() as usize != miss.value.values.len()
+            {
+                return Err("Ready guard selection differs from its original Value".into());
+            }
+        }
         if !key.instance.is_same_or_derived_from(miss.source.origin())
             || miss.value.header.definition != *key.instance.definition()
             || miss.value.header.instance != key.instance.digest()
@@ -282,7 +291,7 @@ impl ReadyQueries {
             hirsel_lir::ownership_trace::native::LeafPlan::prepare_value(&value, inputs.layouts)?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
-        let lowered = hirsel_rc::observed::lower_validated(
+        let lowered = hirsel_rc::observed::lower_validated_with_guard(
             value.unit().clone(),
             &initial,
             inputs,
@@ -295,6 +304,7 @@ impl ReadyQueries {
                 },
                 finalizers: miss.finalizers,
             },
+            miss.guard,
         )?;
         self.counts.validations += 1;
         let (unit, output) = self
@@ -350,7 +360,8 @@ impl ReadyQueries {
         let previous = self
             .lookup_inner(key, action, &environment)
             .map(|p| p.product.record);
-        let facts = miss.source.local(miss.options.regions);
+        let mut facts = miss.source.local(miss.options.regions);
+        facts.guard = miss.guard.cloned();
         let context = ValidationContext::new(inputs);
         context
             .preflight()
