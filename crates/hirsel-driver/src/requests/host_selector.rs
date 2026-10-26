@@ -231,7 +231,8 @@ impl GraphBudget {
             if !may_wait || !fits_alone || reserved == 0 || moved.elapsed() >= ADMISSION_STALL {
                 return Err(error);
             }
-            self.budget.wait_for_release(std::time::Duration::from_secs(1));
+            self.budget
+                .wait_for_release(std::time::Duration::from_secs(1));
         }
     }
     pub fn admit(
