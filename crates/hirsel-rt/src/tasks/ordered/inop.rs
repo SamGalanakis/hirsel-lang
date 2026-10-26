@@ -40,7 +40,7 @@ enum HostPhase {
 
 pub(super) struct Host {
     token: u64,
-    yielded: bool,
+    pub(super) yielded: bool,
     phase: HostPhase,
     pub(super) binding: Option<super::host::entered::Binding>,
 }

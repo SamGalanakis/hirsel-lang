@@ -3595,15 +3595,21 @@ pub unsafe extern "C" fn hirsel_rt_v2_watcher_next(
     let Ok(Completion::Watch(result)) = (unsafe { capability_call(ctx, request) }) else {
         return crate::STATUS_FAILURE;
     };
+    unsafe { out.write(watch_result(ctx, &result)) };
+    crate::STATUS_OK
+}
+pub(crate) fn watch_result(
+    ctx: *mut crate::TaskCtx,
+    result: &Result<crate::watch::WatchEvent, IoError>,
+) -> WatchResult {
     let words = match result {
         Ok(event) => {
-            let [tag, first, second] = watch_words(ctx, &event);
+            let [tag, first, second] = watch_words(ctx, event);
             [0, tag, first, second]
         }
-        Err(error) => [1, error_word(error), 0, 0],
+        Err(error) => [1, error_word(error.clone()), 0, 0],
     };
-    unsafe { out.write(WatchResult { words }) };
-    crate::STATUS_OK
+    WatchResult { words }
 }
 /// # Safety
 /// Context bound; Test and directory borrowed, event a readable WatchEvent.
@@ -5437,33 +5443,44 @@ pub unsafe extern "C" fn hirsel_rt_v2_stdin_read(
             let Completion::Input(value) = completion else {
                 crate::fault("stdin read completion mismatch");
             };
-            let result = match value {
-                Ok(bytes) => {
-                    append_byte_list(ctx, buffer, bytes);
-                    HandleResult {
-                        tag: 0,
-                        padding: 0,
-                        value: bytes.len() as u64,
-                    }
-                }
-                Err(error) => {
-                    let (tag, payload) = match error {
-                        InputError::Fault(code) => (0u32, *code),
-                        InputError::Canceled(cause) => (1, *cause),
-                        InputError::InvalidInput => (2, 0),
-                        InputError::InvalidUtf8 => (3, 0),
-                    };
-                    HandleResult {
-                        tag: 1,
-                        padding: 0,
-                        value: u64::from(tag) | u64::from(payload) << 32,
-                    }
-                }
-            };
+            let result = input_result(ctx, buffer, value);
             out.write(result);
         })
     };
     crate::STATUS_OK
+}
+
+/// Convert the retained owned input once, using the existing list growth policy.
+/// # Safety
+/// The buffer slot is an exclusive live List[u8] address for this conversion.
+pub(crate) unsafe fn input_result(
+    ctx: *mut crate::TaskCtx,
+    buffer: *mut *mut crate::Header,
+    value: &Result<Vec<u8>, InputError>,
+) -> HandleResult {
+    match value {
+        Ok(bytes) => {
+            unsafe { append_byte_list(ctx, buffer, bytes) };
+            HandleResult {
+                tag: 0,
+                padding: 0,
+                value: bytes.len() as u64,
+            }
+        }
+        Err(error) => {
+            let (tag, payload) = match error {
+                InputError::Fault(code) => (0u32, *code),
+                InputError::Canceled(cause) => (1, *cause),
+                InputError::InvalidInput => (2, 0),
+                InputError::InvalidUtf8 => (3, 0),
+            };
+            HandleResult {
+                tag: 1,
+                padding: 0,
+                value: u64::from(tag) | u64::from(payload) << 32,
+            }
+        }
+    }
 }
 
 /// Result[Option[String], EnvError]: the tag, then at 8 either the Option, a String

@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 78;
+pub const ABI_VERSION: u32 = 79;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -608,6 +608,8 @@ pub enum RuntimeEntry {
     OrderedJoin,
     OrderedSleepUntil,
     OrderedPrint,
+    OrderedStdinRead,
+    OrderedWatchNext,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -679,7 +681,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 106] = [
+    pub const ALL: [RuntimeEntry; 108] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -786,6 +788,8 @@ impl RuntimeEntry {
         Self::OrderedJoin,
         Self::OrderedSleepUntil,
         Self::OrderedPrint,
+        Self::OrderedStdinRead,
+        Self::OrderedWatchNext,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1454,6 +1458,37 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::OrderedStdinRead => (
+                "hirsel_rt_v2_ordered_stdin_read",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("caller_site", U64),
+                        OPERATION_SITE,
+                        p("destination", ptr(N::U8, 1)),
+                        p("out", ptr(N::U8, 1)),
+                        p("stdin", ptr(N::U64, 1)),
+                        p("buffer", ptr(N::Header, 2)),
+                        p("max", U64),
+                    ]
+                },
+            ),
+            Self::OrderedWatchNext => (
+                "hirsel_rt_v2_ordered_watcher_next",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("caller_site", U64),
+                        OPERATION_SITE,
+                        p("destination", ptr(N::U8, 1)),
+                        p("out", ptr(N::U8, 1)),
+                        p("directory", ptr(N::U64, 1)),
+                        p("watcher", ptr(N::U64, 1)),
+                    ]
+                },
+            ),
             Self::OrderedPrint => (
                 "hirsel_rt_v2_ordered_print",
                 U8,
@@ -1664,4 +1699,6 @@ snapshot_enum!(RuntimeEntry {
     OrderedJoin,
     OrderedSleepUntil,
     OrderedPrint,
+    OrderedStdinRead,
+    OrderedWatchNext,
 });

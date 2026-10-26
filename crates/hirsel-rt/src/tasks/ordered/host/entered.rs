@@ -10,6 +10,7 @@ use crate::io::{AdapterError, Completion, Request, UnitResult};
 pub(in crate::tasks::ordered) struct Binding {
     site: BoundSite,
     offset: usize,
+    buffer: Option<usize>,
 }
 
 fn binding(ctx: *mut TaskCtx) -> Option<Binding> {
@@ -21,7 +22,7 @@ fn binding(ctx: *mut TaskCtx) -> Option<Binding> {
 }
 
 impl Binding {
-    fn result(self, ctx: *mut TaskCtx) -> *mut UnitResult {
+    fn address<T>(self, ctx: *mut TaskCtx, offset: usize) -> *mut T {
         assert_eq!(self.site.task, crate::tasks::running_key(ctx));
         assert!(crate::tasks::compact::contains_frame(
             ctx,
@@ -31,19 +32,19 @@ impl Binding {
         let address = self
             .site
             .frame
-            .checked_add(self.offset)
+            .checked_add(offset)
             .expect("host result address overflow");
         assert_eq!(
             inop::retained_offset(
                 self.site.frame,
                 self.site.bytes as usize,
                 address,
-                std::mem::size_of::<UnitResult>() as u64,
-                std::mem::align_of::<UnitResult>() as u32,
+                std::mem::size_of::<T>() as u64,
+                std::mem::align_of::<T>() as u32,
             ),
-            Some(self.offset)
+            Some(offset)
         );
-        address as *mut UnitResult
+        address as *mut T
     }
 }
 
@@ -84,7 +85,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ordered_sleep_until(
     };
     assert_eq!(site.operation_site, operation_site, "host operation site");
     unsafe {
-        enter(ctx, site, out, || Request::SleepUntil {
+        enter(ctx, site, out, None, || Request::SleepUntil {
             clock: clock.read(),
             deadline: deadline.read(),
         })
@@ -98,22 +99,62 @@ unsafe fn enter(
     ctx: *mut TaskCtx,
     site: BoundSite,
     out: *mut u8,
+    buffer: Option<*mut *mut crate::Header>,
     request: impl FnOnce() -> Request,
 ) -> u8 {
     let retained = if let Some(existing) = binding(ctx) {
         assert_eq!(existing.site, site, "stale entered host identity");
         existing
     } else {
+        let (bytes, align) = match site.kind {
+            33 | 36 => (
+                std::mem::size_of::<UnitResult>(),
+                std::mem::align_of::<UnitResult>(),
+            ),
+            34 => (
+                std::mem::size_of::<crate::io::HandleResult>(),
+                std::mem::align_of::<crate::io::HandleResult>(),
+            ),
+            35 => (
+                std::mem::size_of::<crate::io::WatchResult>(),
+                std::mem::align_of::<crate::io::WatchResult>(),
+            ),
+            _ => crate::fault("unknown entered host result"),
+        };
         let offset = inop::retained_offset(
             site.frame,
             site.bytes as usize,
             out as usize,
-            std::mem::size_of::<UnitResult>() as u64,
-            std::mem::align_of::<UnitResult>() as u32,
+            bytes as u64,
+            align as u32,
         )
         .expect("host result outside retained wrapper");
-        let retained = Binding { site, offset };
-        retained.result(ctx);
+        let buffer = buffer.map(|buffer| {
+            let slot = inop::retained_offset(
+                site.frame,
+                site.bytes as usize,
+                buffer as usize,
+                std::mem::size_of::<*mut crate::Header>() as u64,
+                std::mem::align_of::<*mut crate::Header>() as u32,
+            )
+            .expect("stdin buffer outside retained wrapper");
+            assert!(
+                slot + std::mem::size_of::<*mut crate::Header>() <= offset
+                    || offset + bytes <= slot,
+                "overlapping host output and buffer"
+            );
+            slot
+        });
+        assert_eq!(
+            buffer.is_some(),
+            site.kind == 34,
+            "entered host buffer kind"
+        );
+        let retained = Binding {
+            site,
+            offset,
+            buffer,
+        };
         let request = request();
         if unsafe { (*ctx).run_ref().ordered_io.get().is_some() } {
             unsafe { concurrent::start_entered(ctx, request) };
@@ -153,22 +194,50 @@ unsafe fn enter(
             }
             Drive::Complete(completion) => {
                 inop::finish(ctx);
-                unsafe { (*ctx).pending_ordered_host.take() };
+                // Keep owned completion in TaskCtx even if list allocation stops
+                // and abandons this native activation during conversion.
+                let completion = unsafe {
+                    let pending = (*ctx).pending_ordered_host.as_deref_mut().unwrap();
+                    assert!(pending.result.replace(completion).is_none());
+                    pending.result.as_ref().unwrap() as *const Result<Completion, AdapterError>
+                };
                 unsafe { crate::continuation::binding::complete_bound(ctx, site) };
-                let value = match completion {
-                    Ok(Completion::Wait(value)) if site.kind == 33 => crate::io::wait_result(value),
-                    Ok(Completion::Unit(value)) if site.kind == 36 => UnitResult::of(value),
-                    Err(AdapterError::InvalidHandle(_)) if site.kind == 33 => {
+                // Conversion and initialization happen once, after the original
+                // finish. No host loan or original operand survives Pending.
+                match unsafe { &*completion } {
+                    Ok(Completion::Wait(value)) if site.kind == 33 => unsafe {
+                        retained
+                            .address::<UnitResult>(ctx, retained.offset)
+                            .write(crate::io::wait_result(value.clone()));
+                    },
+                    Ok(Completion::Unit(value)) if site.kind == 36 => unsafe {
+                        retained
+                            .address::<UnitResult>(ctx, retained.offset)
+                            .write(UnitResult::of(value.clone()));
+                    },
+                    Ok(Completion::Input(value)) if site.kind == 34 => unsafe {
+                        let buffer =
+                            retained.address::<*mut crate::Header>(ctx, retained.buffer.unwrap());
+                        let result = crate::io::input_result(ctx, buffer, value);
+                        retained
+                            .address::<crate::io::HandleResult>(ctx, retained.offset)
+                            .write(result);
+                    },
+                    Ok(Completion::Watch(value)) if site.kind == 35 => unsafe {
+                        retained
+                            .address::<crate::io::WatchResult>(ctx, retained.offset)
+                            .write(crate::io::watch_result(ctx, value));
+                    },
+                    Err(AdapterError::InvalidHandle(_)) if site.kind != 36 => {
+                        unsafe { (*ctx).pending_ordered_host.take() };
                         return crate::STATUS_FAILURE;
                     }
                     Err(error) => unsafe {
-                        crate::stop::raise(ctx, crate::stop::Stop::refusal(error))
+                        crate::stop::raise(ctx, crate::stop::Stop::refusal(error.clone()))
                     },
                     _ => crate::fault("Io entered host completion mismatch"),
-                };
-                // Conversion and initialization happen once, after the
-                // original finish; no stop or scheduling point intervenes.
-                unsafe { retained.result(ctx).write(value) };
+                }
+                unsafe { (*ctx).pending_ordered_host.take() };
                 return crate::STATUS_OK;
             }
         }
@@ -217,7 +286,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ordered_print(
     };
     assert_eq!(site.operation_site, operation_site, "print operation site");
     unsafe {
-        enter(ctx, site, out, || {
+        enter(ctx, site, out, None, || {
             let start = usize::try_from(start)
                 .unwrap_or_else(|_| crate::fault("Io start exceeds target usize"));
             let data = crate::alloc::payload(owner)
@@ -234,3 +303,5 @@ pub unsafe extern "C" fn hirsel_rt_v2_ordered_print(
 
 #[cfg(test)]
 mod print_tests;
+
+mod reads;

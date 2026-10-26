@@ -58,6 +58,13 @@ impl Row {
 }
 
 impl Service {
+    #[cfg(test)]
+    pub(in crate::tasks::ordered::host) fn job_probe(
+        &self,
+    ) -> crate::tasks::free::host::jobs::Probe {
+        self.jobs.probe()
+    }
+
     /// Sole-root setup. No role is held while adapter callbacks run.
     pub(crate) unsafe fn install(
         ctx: *mut TaskCtx,

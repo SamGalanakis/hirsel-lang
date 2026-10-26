@@ -793,6 +793,8 @@ pub const ENTRIES: &[Entry] = &[
     ops("hirsel_rt_v2_file_walk_step", HOST),
     ops("hirsel_rt_v2_file_read_dir_step", HOST),
     ops("hirsel_rt_v2_stdin_read", HOST),
+    ops("hirsel_rt_v2_ordered_stdin_read", HOST),
+    ops("hirsel_rt_v2_ordered_watcher_next", HOST),
     ops("hirsel_rt_v2_env_get", HOST),
     ops("hirsel_rt_v2_env_narrow", HOST),
     ops("hirsel_rt_v2_file_set_permissions", HOST),
