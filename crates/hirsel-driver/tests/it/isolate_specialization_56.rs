@@ -1,6 +1,6 @@
 //! Independently check actual specialized isolate callback bindings.
-//! Until completed-begin and cleanup stages are certified, its caller retains
-//! the existing opaque boundary. A dynamic phi never creates a known target.
+//! Completed-begin and complete cleanup evidence enables the known exception;
+//! a dynamic phi retains the existing opaque boundary.
 use hirsel_driver::native;
 use hirsel_engine::with_compiler_stack;
 use hirsel_lir::ir::{Callee, UnitOrigin};
@@ -170,7 +170,17 @@ fn check(callback: &str, known: bool) {
             native::continuation::classify(&hirsel_syntax::DefPath::core("task.isolate")),
             Some(hirsel_lir::continuation::CalleeClass::Boundary)
         );
-        assert!(boundaries.iter().all(|s| s.callee.is_none()));
+        if known {
+            assert!(!boundaries.is_empty());
+            for state in boundaries {
+                let nested = state
+                    .callee
+                    .expect("source-certified known isolate must nest");
+                assert!(plans.get(nested.body).unwrap().isolate.is_some());
+            }
+        } else {
+            assert!(boundaries.iter().all(|s| s.callee.is_none()));
+        }
         assert!(!hirsel_lir::continuation::leaves_at_boundary(
             &hirsel_syntax::DefPath::core("task.isolate")
         ));
@@ -286,7 +296,7 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
 }
 
 #[test]
-fn entered_isolate_mark_storage_rejects_forged_cells_without_admitting_callback() {
+fn entered_isolate_mark_storage_requires_separate_source_admission() {
     with_compiler_stack(|| {
         use hirsel_lir::continuation::isolate::IsolateProtocol;
         use hirsel_lir::continuation::{MAX_FRAME_BYTES, RuntimeResultSource};
@@ -408,14 +418,24 @@ fn entered_isolate_mark_storage_rejects_forged_cells_without_admitting_callback(
         assert!(checked > 0);
         let plans = native::continuation::plans(&program);
         native::continuation::validate(&program, &plans).unwrap();
-        assert!(
-            plans
-                .plans
-                .values()
-                .flat_map(|p| &p.states)
-                .filter(|s| s.boundary.operation.is_core("task.isolate"))
-                .all(|s| s.callee.is_none()),
-            "storage evidence must not enable nesting"
-        );
+        let nested: Vec<_> = plans
+            .plans
+            .values()
+            .flat_map(|p| &p.states)
+            .filter(|s| s.boundary.operation.is_core("task.isolate"))
+            .filter_map(|s| s.callee)
+            .collect();
+        assert!(!nested.is_empty());
+        for frame in nested {
+            let evidence = plans
+                .get(frame.body)
+                .unwrap()
+                .isolate
+                .as_ref()
+                .expect("storage alone cannot grant the specialized exception");
+            evidence
+                .check(&program.units.iter().collect::<Vec<_>>(), &program.table)
+                .unwrap();
+        }
     });
 }

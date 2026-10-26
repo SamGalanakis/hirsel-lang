@@ -169,6 +169,7 @@ impl Live {
                     }
                     Terminator::Branch { condition: v, .. }
                     | Terminator::Switch { value: v, .. }
+                    | Terminator::Isolate { start: v, .. }
                     | Terminator::Return(Some(v)) => {
                         live.insert(v);
                     }

@@ -285,6 +285,7 @@ pub fn terminator_uses<S: Stage>(unit: &LirUnit<S>, term: &Terminator) -> Vec<Va
     match *term {
         Terminator::Branch { condition, .. } => vec![condition],
         Terminator::Switch { value, .. } => vec![value],
+        Terminator::Isolate { start, .. } => vec![start],
         Terminator::Return(v) => v.into_iter().collect(),
         Terminator::Call { call, .. } => {
             let site = &unit.tables.calls[call.index()];
