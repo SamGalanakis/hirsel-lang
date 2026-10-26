@@ -20,25 +20,52 @@ fn package(source: &str) -> tempfile::TempDir {
     dir
 }
 
-#[test]
-fn exit_code_16_codes_errors_and_offline_replay_cross_engines() {
-    for wrapped in [false, true] {
-        for code in [0, 1, 2, 255] {
-            let ty = if wrapped {
-                "Result[std@1/process.ExitCode, String]"
-            } else {
-                "std@1/process.ExitCode"
-            };
-            let value = format!("std@1/process.exit_code({code}u8)");
-            let value = if wrapped {
-                format!("Ok({value})")
-            } else {
-                value
-            };
-            let dir = package(&format!("pub fn main() -> {ty} {{ {value} }}"));
-            verify(dir.path(), code, "");
+fn exit_code(wrapped: bool, code: i32) {
+    let ty = if wrapped {
+        "Result[std@1/process.ExitCode, String]"
+    } else {
+        "std@1/process.ExitCode"
+    };
+    let value = format!("std@1/process.exit_code({code}u8)");
+    let value = if wrapped {
+        format!("Ok({value})")
+    } else {
+        value
+    };
+    let dir = package(&format!("pub fn main() -> {ty} {{ {value} }}"));
+    verify(dir.path(), code, "");
+}
+
+macro_rules! code_cases {
+    ($wrapped:literal) => {
+        #[test]
+        fn zero() {
+            super::exit_code($wrapped, 0);
         }
-    }
+        #[test]
+        fn one() {
+            super::exit_code($wrapped, 1);
+        }
+        #[test]
+        fn two() {
+            super::exit_code($wrapped, 2);
+        }
+        #[test]
+        fn maximum() {
+            super::exit_code($wrapped, 255);
+        }
+    };
+}
+
+mod bare {
+    code_cases!(false);
+}
+mod wrapped {
+    code_cases!(true);
+}
+
+#[test]
+fn error_and_offline_replay_cross_engines() {
     let dir = package(
         r#"pub fn main() -> Result[std@1/process.ExitCode, String] { Error(unique "missing data") }"#,
     );
