@@ -7,9 +7,9 @@ pub(crate) use source_entry::retained_signature_entry_bytes;
 mod syntax;
 #[cfg(test)]
 mod type_storage;
-use super::{DepthEvidence, Reads};
+use super::{DepthEvidence, ReadKey, Reads};
 use crate::comptime::StagedRegistration;
-use hirsel_syntax::DefPath;
+use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::*;
 use hirsel_types::{Destination, Origin, OriginRoot, SharedPath, SharedSlice};
 use std::{alloc::Layout, collections::HashSet};
@@ -201,8 +201,19 @@ pub(crate) struct Weight {
     pub(crate) bytes: u64,
     shared: HashSet<usize>,
     count_shared_repeats: bool,
+    decode_vectors: bool,
 }
 impl Weight {
+    /// Serde recreates every serialized Arc occurrence. Sequence decoding may
+    /// grow from its cautious initial capacity; doubling the producing Vec's
+    /// capacity covers that geometric growth without relying on wire length.
+    pub(crate) fn decoded() -> Self {
+        Self {
+            count_shared_repeats: true,
+            decode_vectors: true,
+            ..Self::default()
+        }
+    }
     fn first(&mut self, identity: usize) -> bool {
         self.count_shared_repeats || self.shared.insert(identity)
     }
@@ -231,6 +242,32 @@ impl Weight {
                 w.allocation(identity, bytes);
             }
         });
+        if self.decode_vectors && !value.is_empty() {
+            // Reads::decode builds a cautious Vec, then Reads::from_vec
+            // deduplicates >=32 rows in a HashMap and collects a second Vec
+            // before moving the result into its final Arc slice. Their
+            // working buffers are distinct from the retained read allocation.
+            let slots = value.len().saturating_mul(2).max(4);
+            self.add(
+                slots
+                    .saturating_mul(2)
+                    .saturating_mul(size_of::<(ReadKey, ContentHash)>()),
+            );
+            if value.len() >= 32 {
+                // hashbrown raw capacity_to_buckets / calculate_layout_for:
+                // 7/8 occupancy, power-of-two buckets, one control byte per
+                // bucket plus a SIMD control group and alignment. Both old
+                // and new tables may coexist while a growing table rehashes.
+                let buckets = value.len().saturating_mul(8).saturating_add(6) / 7;
+                let buckets = buckets.checked_next_power_of_two().unwrap_or(usize::MAX);
+                let rows = Layout::new::<(ReadKey, ContentHash)>();
+                let table = buckets
+                    .saturating_mul(rows.size().saturating_add(1))
+                    .saturating_add(16)
+                    .saturating_add(rows.align());
+                self.add(table.saturating_mul(2));
+            }
+        }
     }
     pub(crate) fn diagnostic(&mut self, diagnostic: &hirsel_diag::Diagnostic) {
         let hirsel_diag::Diagnostic {
@@ -376,7 +413,12 @@ impl Weight {
         self.bytes = self.bytes.saturating_add(bytes as u64);
     }
     pub(crate) fn flat_vec<T>(&mut self, value: &Vec<T>) {
-        self.add(value.capacity().saturating_mul(size_of::<T>()));
+        self.add(
+            value
+                .capacity()
+                .saturating_mul(if self.decode_vectors { 2 } else { 1 })
+                .saturating_mul(size_of::<T>()),
+        );
     }
     pub(crate) fn vec<T>(&mut self, value: &Vec<T>, mut visit: impl FnMut(&mut Self, &T)) {
         self.flat_vec(value);

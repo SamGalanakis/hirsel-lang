@@ -27,7 +27,7 @@ pub(super) fn dead_arms(uses: &mut crate::tools::DeadArmUse) -> u64 {
     weight.bytes()
 }
 
-fn definition(weight: &mut Weight, summary: &DefinitionSummary) {
+pub(super) fn definition(weight: &mut Weight, summary: &DefinitionSummary) {
     weight.add(size_of_val(&*summary.frames));
     for frame in &summary.frames {
         weight.add(size_of_val(&*frame.size_bindings));
@@ -41,7 +41,7 @@ fn definition(weight: &mut Weight, summary: &DefinitionSummary) {
         weight.add(size_of_val(&**parameters));
     }
 }
-fn checked(weight: &mut Weight, summary: &CheckedSummary) {
+pub(super) fn checked(weight: &mut Weight, summary: &CheckedSummary) {
     definition(weight, &summary.summary);
     weight.add(size_of_val(&*summary.growth.edges));
 }

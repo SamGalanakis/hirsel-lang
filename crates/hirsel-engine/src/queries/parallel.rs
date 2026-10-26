@@ -10,8 +10,8 @@ mod scheduled;
 pub(crate) use compact::CompactCompleted;
 use compact::{FrontResult, WorkerCompleted};
 pub use scheduled::{
-    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCheckedOutput,
-    FrontInputFootprint, FrontStorageOutput, FrontStorageQueries,
+    FRONT_BODY_KIND, FRONT_STORAGE_KIND, FrontBodyOutput, FrontBodyQueries, FrontCarry,
+    FrontCheckedOutput, FrontInputFootprint, FrontStorageOutput, FrontStorageQueries,
 };
 
 /// One input's outcome, including the phase that completed or stopped it.
