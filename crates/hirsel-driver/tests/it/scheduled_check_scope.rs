@@ -227,3 +227,77 @@ fn completed_check_scope_guards_failed_lower_and_withheld_suffix() {
         true,
     );
 }
+
+/// Load a one-file package whose front capture starts from every indexed
+/// definition, as the request graph does, after closed `with` registration.
+fn registered_capture(
+    source: &str,
+) -> (
+    Vec<hirsel_syntax::DefPath>,
+    Result<Arc<FrontBodyQueries>, QueryError>,
+) {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = directory.path().join("hirsel.json");
+    std::fs::write(directory.path().join("main.hir"), source).unwrap();
+    std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"scope","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+    let mut program = COMPILER
+        .with_config(CompileConfig {
+            store: Arc::new(MemStore::default()),
+            hold_bytes: 0,
+            ..Default::default()
+        })
+        .with_owned_engines()
+        .load_program(&manifest)
+        .unwrap();
+    let indexed = program.engine.indexed_definitions();
+    program.engine.register_specializations(&indexed);
+    let roots = program.engine.front_source_roots();
+    let budget = ProcessBudget::new(1 << 30);
+    let weight = MemoryWeight {
+        retained: 2 << 20,
+        scratch: 8 << 20,
+        stack: 0,
+    };
+    let front = program.engine.front_body_queries(
+        &roots,
+        weight,
+        budget.reserve(8 << 20).unwrap(),
+        crate::scheduled_front::errors(),
+    );
+    (roots, front)
+}
+
+#[test]
+fn front_capture_registers_nested_closed_specializations_and_refuses_generators() {
+    with_compiler_stack(|| {
+        // `outer with (A = five)` closes in `main`; the specialization's own
+        // `inner with (A = A)` then closes too (GEN-6).
+        let (roots, front) = registered_capture(
+            "signature Source {\n  size width\n}\nimplementation five: Source {\n  size width = 5\n}\n\
+             fn inner[A: implementation Source]() -> u64 uses {} { A.width }\n\
+             fn outer[A: implementation Source]() -> u64 uses {} { inner with (A = A)() + 1u64 }\n\
+             pub fn main() -> u64 { outer with (A = five)() }\n",
+        );
+        for base in ["outer$with$", "inner$with$"] {
+            assert!(
+                roots.iter().any(|root| root.0.name.starts_with(base)),
+                "{base} is a selected root: {roots:?}"
+            );
+        }
+        let front = front.unwrap();
+        for root in &roots {
+            assert!(front.query(root).is_some(), "{root:?} has a producer");
+        }
+        // A CT-5 generator still needs its accepted registration view.
+        let (_, front) = registered_capture(
+            "fn body()->Result[Body[fn(u64)->u64 uses {}],String]{Ok(codegen.body(\"fn(x:u64)->u64 uses {} {x}\"))}\n\
+             fn generated(x:u64)->u64 uses {}=comptime body()\npub fn main()->u64{generated(1u64)}\n",
+        );
+        assert!(
+            matches!(&front, Err(QueryError::Operational(failure))
+                if failure.operation == "front query admission"),
+            "{:?}",
+            front.err()
+        );
+    });
+}

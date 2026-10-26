@@ -801,11 +801,12 @@ pub(super) fn install(
     }
     let launch_entry = program.launch_entry().cloned();
     let foreign_unreplayable = program.engine.foreign_unreplayable;
+    // Closed `with` specializations are ordinary selected roots (GEN-6).
+    let indexed = program.engine.indexed_definitions();
+    program.engine.register_specializations(&indexed);
     let sources = program.engine.sources.clone();
     let required = program.engine.front_source_roots();
-    let definitions = program
-        .engine
-        .indexed_definitions()
+    let definitions = indexed
         .into_iter()
         .chain(required)
         .collect::<std::collections::BTreeSet<_>>()

@@ -964,6 +964,35 @@ impl BodyTask {
     }
 }
 impl QueryEngine {
+    /// The accepted registration view of closed `with` clauses (GEN-6): every
+    /// specialization a selected body names, and those its own body closes,
+    /// is installed before the immutable signature snapshot is captured, and
+    /// each becomes a required source root. Callers register before selecting
+    /// their roots. Only resolution runs here; a body that fails to resolve or names an
+    /// unavailable specialization reports it from its own worker outcome.
+    pub fn register_specializations(&mut self, definitions: &[DefPath]) {
+        let mut pending = definitions.to_vec();
+        let mut seen = std::collections::BTreeSet::new();
+        while let Some(definition) = pending.pop() {
+            if !seen.insert(definition.clone())
+                || !self
+                    .snapshot(&definition)
+                    .is_ok_and(|syntax| crate::families::closes(&syntax))
+            {
+                continue;
+            }
+            let Ok(resolution) = self.resolve_query(&definition) else {
+                continue;
+            };
+            for dependency in &resolution.value.dependencies {
+                if hirsel_types::specialization_parts(dependency).is_some()
+                    && self.materialize(dependency).is_ok()
+                {
+                    pending.push(dependency.clone());
+                }
+            }
+        }
+    }
     /// Capture only demanded body inputs and immutable phase handles. Body
     /// checking starts on the admitted worker, using the same ordinary worker
     /// and codec as scalar queries. Dynamic declarations require their accepted
@@ -997,6 +1026,7 @@ impl QueryEngine {
         for definition in definitions {
             self.materialize(definition)?;
         }
+        self.register_specializations(definitions);
         let anchors = Arc::new(crate::NativeRecordContext::capture(self));
         let input_records = crate::NativeRecords::new(self.types.clone(), store.clone());
         let declarations = self.frozen_declarations();
@@ -1011,7 +1041,7 @@ impl QueryEngine {
             }
             self.materialize(definition)?;
             let syntax = self.snapshot(definition)?;
-            if generation::serial(&syntax) {
+            if generation::generator(&syntax).is_some() {
                 return Err(refusal());
             }
             let text = self.key_text(definition, QueryKind::Modes)?;
