@@ -245,3 +245,52 @@ fn runtime54_a_dup_after_an_effect_keeps_its_stack() {
         }
     });
 }
+
+/// A phi of different closure bodies remains opaque even when both branches
+/// have the same environment layout and agree on these sixteen observations.
+fn unknown_isolate(source: &str, alternate: &str) -> String {
+    let before = "match task.isolate(tasks,fn()->u64 {";
+    let after = "          seed\n        }) {Ok(x)=>Ok(x), Error(_)=>Ok(0u64)}";
+    assert_eq!(source.matches(before).count(), 1);
+    assert_eq!(source.matches(after).count(), 1);
+    source
+        .replace(before, "let callback: once fn() -> u64 = if seed % 2u64 == 0u64 { fn()->u64 {")
+        .replace(after, &format!(
+            "          seed\n        }} }} else {{ fn()->u64 {{\n{alternate}\n        }} }}\n        match task.isolate(tasks,take callback) {{Ok(x)=>Ok(x), Error(_)=>Ok(0u64)}}"
+        ))
+        .replace("CHILDREN", "17u64")
+}
+
+#[test]
+fn runtime56_unknown_isolate_mutex_callbacks_never_restart() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = unknown_isolate(
+            ISOLATED_TAKERS,
+            r#"
+          mutex.with(tasks,m,fn(mut v:unique u64) { v=v+seed })
+          seed + seed / (seed + 1u64)
+"#,
+        );
+        for (leaves, _) in replayed(&source, "unknown isolated takers") {
+            assert_eq!(leaves, 0, "unknown isolate callback restarted its wrapper");
+        }
+    });
+}
+
+#[test]
+fn runtime56_unknown_isolate_sender_callbacks_never_restart() {
+    hirsel_engine::with_compiler_stack(|| {
+        let source = unknown_isolate(
+            ISOLATED_DUPS,
+            r#"
+          let held=take tx
+          let mut extra=sender.dup(tasks,held)
+          let _=channel.send(tasks,mut extra,seed)
+          seed + seed / (seed + 1u64)
+"#,
+        );
+        for (leaves, _) in replayed(&source, "unknown isolated dups") {
+            assert_eq!(leaves, 0, "unknown isolate callback restarted its wrapper");
+        }
+    });
+}
