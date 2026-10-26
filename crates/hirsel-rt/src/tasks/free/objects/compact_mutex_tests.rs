@@ -129,9 +129,20 @@ unsafe extern "C" fn child(ctx: *mut TaskCtx, env: *mut Header, caller: u64, sit
 #[test]
 fn compact_takers_keep_fifo_and_tokens_across_spurious_duplicate_and_early_wakes() {
     let name = "tasks::free::objects::compact_mutex_tests::compact_takers_keep_fifo_and_tokens_across_spurious_duplicate_and_early_wakes";
-    if !isolated_at(name, "HIRSEL_COMPACT_MUTEX_VECTORS") {
-        return;
+    if isolated_at(name, "HIRSEL_COMPACT_MUTEX_VECTORS") {
+        vectors(true);
     }
+}
+
+#[test]
+fn compact_takers_reclaim_internal_stop_after_physical_save() {
+    let name = "tasks::free::objects::compact_mutex_tests::compact_takers_reclaim_internal_stop_after_physical_save";
+    if isolated_at(name, "HIRSEL_COMPACT_MUTEX_INTERNAL_STOP") {
+        vectors(false);
+    }
+}
+
+fn vectors(external_stop: bool) {
     let layouts = Layouts::new(Box::leak(Box::new(plain(16))), wrapper());
     for recorded in [false, true] {
         for end in 0..3 {
@@ -141,9 +152,10 @@ fn compact_takers_keep_fifo_and_tokens_across_spurious_duplicate_and_early_wakes
             let install = recording.clone();
             let flush = recording.clone();
             let mut run = crate::host::BodyRun::new(4, false);
-            let control = run.control();
             let reclaimed = Arc::new(Mutex::new(None::<std::sync::Weak<crate::sync::MutexCell>>));
             let observe_reclaimed = reclaimed.clone();
+            let control = run.control();
+            let monitor = control.clone();
             run.free = true;
             let mut pointers = Vec::new();
             layouts.install(&mut run, &mut pointers);
@@ -288,8 +300,13 @@ fn compact_takers_keep_fifo_and_tokens_across_spurious_duplicate_and_early_wakes
                         drop(token);
                         drop(cell);
                         drop(shared);
-                        control.stop();
-                        crate::tasks::park_final(ctx);
+                        if external_stop {
+                            // Keep the original external-stop-before-park
+                            // ordering: home may return before this root saves.
+                            control.stop();
+                            crate::tasks::park_final(ctx);
+                        }
+                        crate::stop::raise(ctx, crate::stop::Stop::Requested);
                     }
                     if dead {
                         crate::failure::hirsel_rt_v2_failure_begin(ctx, 1, 11, 101, 201);
@@ -356,7 +373,17 @@ fn compact_takers_keep_fifo_and_tokens_across_spurious_duplicate_and_early_wakes
                 },
                 "recorded={recorded} end={end}"
             );
-            assert_eq!(outcome.pending, 0);
+            if stopped && external_stop {
+                // The external stop may return while the stopping root is
+                // still running. It must quiesce and release all takers, with
+                // the same zero outstanding owners as an internal stop.
+                wait_until("external stop reclaims every active owner", || {
+                    monitor.status().reclamation_pending == 0
+                });
+                assert_eq!(monitor.status().reclamation_pending, 0);
+            } else {
+                assert_eq!(outcome.pending, 0);
+            }
             if stopped {
                 wait_until(
                     "stopped take custody releases its cell and queued tokens",
