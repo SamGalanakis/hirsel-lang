@@ -218,7 +218,12 @@ impl<S: Stage> Machine<'_, S> {
                         Some((&self.ledger.path(part.at), &owned)),
                     )
                 };
-                if let SoaPart::Tag(_) = part.part {
+                if let SoaPart::Tag(_) = part.part
+                    && piece.all_init(0, part.size)
+                {
+                    // Widen a written tag only. Initializing high bytes of an
+                    // unwritten spare tag would manufacture a live row during
+                    // SeqSetLen's independent initialization audit.
                     image.write_bytes(part.row_offset, &[0; 4]);
                 }
                 image.place_at(part.row_offset, &[part.step], piece);

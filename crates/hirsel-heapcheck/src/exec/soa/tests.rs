@@ -65,4 +65,20 @@ fn variant_rows_read_their_payload_only_through_the_tagged_arm() {
     // A gathered row widens the u8 tag into its u32 tag word.
     let image = machine.read_resolved(&r, row, false).unwrap();
     assert_eq!(image.active(0, TagForm::Ordinal, 8).unwrap(), 1);
+
+    // A reserve's spare row has no tag or payload. Widening the stored u8
+    // tag must not manufacture initialized high bytes in its u32 image.
+    machine.clear_column_spare(ptr, row).unwrap();
+    let spare = machine.column_resolved(ptr, row, 1).unwrap();
+    let image = machine.read_resolved(&spare, row, false).unwrap();
+    assert_eq!(machine.initialized(&image, 0, row).unwrap(), (false, false));
+    // A real tag in a spare row is still live even without its payload:
+    // SeqSetLen must continue to reject abandoning that partial write.
+    machine
+        .ledger
+        .get_mut(ptr.alloc)
+        .extent
+        .write_bytes(17, &[1]);
+    let image = machine.read_resolved(&spare, row, false).unwrap();
+    assert_eq!(machine.initialized(&image, 0, row).unwrap(), (false, true));
 }

@@ -1418,3 +1418,20 @@ fn a_materialized_static_source_consumes_without_allocation() {
     assert_eq!(run.observation.output, b"ok\n");
     assert_eq!(run.counters.allocations, 0);
 }
+
+#[test]
+fn soa_variant_push_commits_nested_owned_payload_under_fault_injection() {
+    let source = source(
+        r#"type Pair { left: u64, right: String }
+@soa
+type Event = Moved(Pair) | Batch(List[u64]) | Tick
+fn value() -> u64 {
+  let mut events: List[Event] = [Tick, Moved(Pair(left: 9, right: "r"))]
+  list.push(mut events, Batch([1, 2, 3]))
+  list.len(events)
+}
+"#,
+    );
+    let built = build(&source);
+    assert_eq!(heap(&source, &built, true), 3);
+}
