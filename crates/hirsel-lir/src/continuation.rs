@@ -1567,7 +1567,7 @@ fn plan_unit(
                 .target
                 .instance
                 .ok_or("unknown isolate callback")?;
-            if !done.contains_key(&callback) && !units[&callback].tables.calls.is_empty() {
+            if !done.contains_key(&callback) && !evidence.direct_callback(units) {
                 return Err("direct isolate callback requires complete local-call proof".into());
             }
             let begin = states

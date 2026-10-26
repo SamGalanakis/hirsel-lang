@@ -105,6 +105,22 @@ pub(crate) fn evidence(
 }
 
 impl IsolateEvidence {
+    /// With no ordinary callee plan, only a fully source-covered graph with
+    /// no operation calls can be proved direct by this bounded slice.
+    pub(crate) fn direct_callback(
+        &self,
+        units: &std::collections::BTreeMap<ContentHash, &LirUnit<Ready>>,
+    ) -> bool {
+        self.callback_bodies.iter().all(|body| {
+            units.get(&body.body).is_some_and(|u| {
+                u.tables
+                    .calls
+                    .iter()
+                    .all(|call| !matches!(call.callee, Callee::Operation(_)))
+            })
+        })
+    }
+
     /// Recheck all actual incoming SSA values, every cleanup operand and the
     /// complete wrapper CFG. Neither candidate classification nor a frame hash
     /// substitutes for this independent source authority.
@@ -124,6 +140,7 @@ impl IsolateEvidence {
             .map(|u| (u.unit().header.instance, u.unit()))
             .collect();
         let mut reached = BTreeSet::new();
+        let mut edges = Vec::new();
         let mut work = vec![callback.unit().header.instance];
         while let Some(body) = work.pop() {
             if !reached.insert(body) {
@@ -164,11 +181,11 @@ impl IsolateEvidence {
                     Callee::Operation(_) => {}
                     Callee::Indirect(_) => return Err("unknown callback callee".into()),
                     Callee::Direct(_) | Callee::Bound { .. } => {
-                        work.push(
-                            callee_symbol(u, call)
-                                .and_then(|s| s.instance)
-                                .ok_or("unknown callback body identity")?,
-                        );
+                        let target = callee_symbol(u, call)
+                            .and_then(|s| s.instance)
+                            .ok_or("unknown callback body identity")?;
+                        edges.push((body, target));
+                        work.push(target);
                     }
                 }
             }
@@ -178,9 +195,34 @@ impl IsolateEvidence {
             .iter()
             .map(|r| r.body)
             .collect::<Vec<_>>()
-            != reached.into_iter().collect::<Vec<_>>()
+            != reached.iter().copied().collect::<Vec<_>>()
         {
             return Err("callback graph coverage".into());
+        }
+        // Independently reject recursive source graphs, even when a forged
+        // callee table claims that every member has a compact frame.
+        let mut degree: std::collections::BTreeMap<_, usize> =
+            reached.iter().map(|id| (*id, 0)).collect();
+        for (_, to) in &edges {
+            *degree.get_mut(to).ok_or("unknown callback edge")? += 1;
+        }
+        let mut ready: Vec<_> = degree
+            .iter()
+            .filter_map(|(id, n)| (*n == 0).then_some(*id))
+            .collect();
+        let mut retired = 0;
+        while let Some(id) = ready.pop() {
+            retired += 1;
+            for (_, to) in edges.iter().filter(|(from, _)| *from == id) {
+                let n = degree.get_mut(to).unwrap();
+                *n -= 1;
+                if *n == 0 {
+                    ready.push(*to);
+                }
+            }
+        }
+        if retired != reached.len() {
+            return Err("recursive callback source graph".into());
         }
         for caller in units {
             if self

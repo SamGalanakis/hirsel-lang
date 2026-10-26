@@ -1523,13 +1523,13 @@ pub fn validate_runtime_operations(
                 .target
                 .instance
                 .ok_or(ContinuationError::Body(*id))?;
-            let cb = index
+            index
                 .get(&callback)
                 .ok_or(ContinuationError::Body(callback))?;
             let nested = match plans.get(callback) {
                 Some(p) if p.representation == Representation::Resumable => true,
                 Some(_) => return Err(ContinuationError::Representation(callback)),
-                None if cb.tables.calls.is_empty() => false,
+                None if evidence.direct_callback(&index) => false,
                 None => return Err(ContinuationError::Representation(callback)),
             };
             // Every boundary of this reviewed wrapper is either its original
