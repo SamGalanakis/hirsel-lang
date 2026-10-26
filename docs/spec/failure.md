@@ -48,6 +48,11 @@ source site, the path of spawn indices and an optional boxed cause
 ([core library](core-library.md#concurrency)). The site follows the failing operation
 and `@track_caller` attribution above, rather than the isolation boundary.
 
+`task.isolate` consumes its body closure, so destroying that closure and its captured
+resources is part of the isolated body. A failure during that destruction is caught:
+it extends an existing body failure's ordered cause chain, or becomes the `Error` when
+the body returned successfully.
+
 ### FAIL-3: What runs
 
 A failure unwinds: frames are released as at scope exit, counted values are released,

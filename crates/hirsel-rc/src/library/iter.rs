@@ -219,8 +219,22 @@ pub(crate) fn local(
     Ok((slot, address))
 }
 pub(crate) fn drop_local(b: &mut Body<'_, '_>, slot: SlotId, address: AddressId) {
+    drop_local_to(b, slot, address, None);
+}
+
+/// Consume the drop obligation before invoking it. An isolate catches only after
+/// the protected result and every remaining owner have finished cleanup.
+pub(crate) fn drop_local_to(
+    b: &mut Body<'_, '_>,
+    slot: SlotId,
+    address: AddressId,
+    caught: Option<BlockId>,
+) {
     b.emptied(slot);
-    let failure = b.failure(None);
+    let failure = match caught {
+        Some(tail) => b.caught_failure(tail),
+        None => b.failure(None),
+    };
     let anchor = CleanupAnchorId(b.ed.unit.tables.cleanup_anchors.len() as u32);
     b.ed.unit.tables.cleanup_anchors.push(CleanupAnchor {
         body: 0,

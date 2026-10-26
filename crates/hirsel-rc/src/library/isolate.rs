@@ -10,7 +10,7 @@
 use super::LibraryBody;
 use super::arena::{RESULT_ERROR, RESULT_OK, payload, variant};
 use super::builder::{Body, Cx};
-use super::iter::{drop_local, local, option};
+use super::iter::{drop_local_to, local, option};
 use super::slots::{construct, nominal};
 use super::tasks::{Intrinsic, argument, intrinsic, invoke, operation, parameter};
 use crate::PassError;
@@ -96,9 +96,12 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // The callable dies with this frame on both outcomes.
     let f = b.take(body.address)?;
     let (f_slot, f_address) = local(&mut b, f)?;
+    let closure_held = b.held_state();
 
-    // A failed callback has unwound; the catch resumes ordinary code.
+    // The consumed closure's destruction belongs to the isolated body too.
+    // On callback failure, release it before catching the combined chain.
     let normal = b.current();
+    let dropping_failed = b.block(BlockKind::FailureCleanup, &[]);
     let catching = b.block(BlockKind::FailureCleanup, &[]);
     let caught = b.block(BlockKind::Body, &[]);
     b.at(catching);
@@ -107,8 +110,12 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         start,
         caught: resume,
     });
+    b.at(dropping_failed);
+    drop_local_to(&mut b, f_slot, f_address, Some(catching));
+    b.jump(catching, &[]);
     b.at(normal);
-    let unwound = b.failure_to(catching, &[], None);
+    b.restore_held(&closure_held);
+    let unwound = b.failure_to(dropping_failed, &[], None);
     let (callee, loan) = b.borrow(f_address, false)?;
     let value = invoke(
         &mut b,
@@ -122,7 +129,7 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     // Dropping the callback can fail. Keep its owned result in the frame's
     // cleanup until that drop succeeds, then transfer it into Ok.
     let held = value.map(|value| local(&mut b, value)).transpose()?;
-    drop_local(&mut b, f_slot, f_address);
+    drop_local_to(&mut b, f_slot, f_address, Some(catching));
     let ok = match held {
         Some((slot, address)) => {
             let value = b.take(address)?;
@@ -141,7 +148,6 @@ fn isolate(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     b.ret(Some(value));
 
     b.at(caught);
-    drop_local(&mut b, f_slot, f_address);
     let failure = chain(&mut b, &entries, &shape, tasks)?;
     let value = variant(&mut b, returned, "Result", RESULT_ERROR, &[failure]);
     b.ret(Some(value));

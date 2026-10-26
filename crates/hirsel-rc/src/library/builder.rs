@@ -321,7 +321,7 @@ pub struct Body<'c, 'a> {
     /// What is held at entry: the owned `take` parameters.
     entry_held: Vec<(SlotId, AddressId)>,
     /// The failure cleanup of each `held` list already built.
-    cleanups: std::collections::HashMap<Vec<SlotId>, BlockId>,
+    cleanups: std::collections::HashMap<(Vec<SlotId>, Option<BlockId>), BlockId>,
     drop_anchor: Option<CleanupAnchorId>,
 }
 
@@ -589,20 +589,33 @@ impl<'c, 'a> Body<'c, 'a> {
     /// A failure edge into the cleanup that drops every slot the body
     /// still holds (`held`), latest first, then propagates.
     pub fn failure(&mut self, rule: Option<&str>) -> FailureId {
-        let block = self.cleanup(self.held.clone());
+        let block = self.cleanup(self.held.clone(), None);
         self.failure_to(block, &[], rule)
     }
 
-    fn cleanup(&mut self, held: Vec<(SlotId, AddressId)>) -> BlockId {
+    /// Drain remaining owners before entering a library boundary's catch.
+    /// The tail is part of the key: cleanup outside the boundary still propagates.
+    pub fn caught_failure(&mut self, tail: BlockId) -> FailureId {
+        let block = self.cleanup(self.held.clone(), Some(tail));
+        self.failure_to(block, &[], None)
+    }
+
+    fn cleanup(&mut self, held: Vec<(SlotId, AddressId)>, tail: Option<BlockId>) -> BlockId {
         let key: Vec<SlotId> = held.iter().map(|(s, _)| *s).collect();
+        let key = (key, tail);
         if let Some(&b) = self.cleanups.get(&key) {
             return b;
+        }
+        if held.is_empty()
+            && let Some(tail) = tail
+        {
+            return tail;
         }
         let b = self.block(BlockKind::FailureCleanup, &[]);
         match held.split_last() {
             None => self.ed.unit.terminators[b.index()] = Terminator::Propagate,
             Some((&(_, address), rest)) => {
-                let next = self.cleanup(rest.to_vec());
+                let next = self.cleanup(rest.to_vec(), tail);
                 let anchor = self.drop_anchor();
                 let failure = self.failure_to(next, &[], None);
                 self.ed.code[b.index()].push(Inst::Drop {

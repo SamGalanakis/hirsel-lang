@@ -243,3 +243,4 @@ mod runtime55_exclusive_slot;
 mod source_index_loader;
 mod ctor_tail;
 mod ordinary_lower;
+mod isolate_resume_56;
