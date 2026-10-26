@@ -919,6 +919,20 @@ pub const ENTRIES: &[Entry] = &[
     // existing Shared-root release policy for each retained occurrence.
     entry("hirsel_rt_v2_sealed_root", Concurrent),
     ops("hirsel_rt_v2_sealed_release", &["root.release"]),
+    // Demand-only scope state and bit snapshots are task-local construction.
+    // Entered seal retires source credits; exit also closes ordinary cleanup.
+    entry("hirsel_rt_v2_receipt_region_enter", Local),
+    entry("hirsel_rt_v2_receipt_bits", Local),
+    ops("hirsel_rt_v2_seal_prepare_commit", &["root.release"]),
+    ops(
+        "hirsel_rt_v2_receipt_region_exit",
+        &[
+            "drop.trivial",
+            "drop.leftovers",
+            "host.handle_drop",
+            "root.release",
+        ],
+    ),
     // roots.rs: increments commute; releases can free counted frozen storage.
     entry("hirsel_rt_v2_root_dup", Concurrent),
     ops("hirsel_rt_v2_root_release", &["root.release"]),

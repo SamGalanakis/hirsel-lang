@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 74;
+pub const ABI_VERSION: u32 = 75;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -597,6 +597,10 @@ pub enum RuntimeEntry {
     /// A constructor-tail block's payload is filled: its header takes the box's layout in
     /// place of the open stand-in (LANG-10, LIR schema revision 59, runtime ABI 70).
     HoleClose,
+    ReceiptRegionEnter,
+    ReceiptRegionExit,
+    ReceiptBits,
+    SealPrepareCommit,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -668,7 +672,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 99] = [
+    pub const ALL: [RuntimeEntry; 103] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -768,6 +772,10 @@ impl RuntimeEntry {
         Self::SealedRoot,
         Self::SealedRelease,
         Self::HoleClose,
+        Self::ReceiptRegionEnter,
+        Self::ReceiptRegionExit,
+        Self::ReceiptBits,
+        Self::SealPrepareCommit,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -844,6 +852,36 @@ impl RuntimeEntry {
                 "hirsel_rt_v2_sealed_release",
                 VOID,
                 const { &[CTX, p("owner", ptr(N::Void, 1))] },
+            ),
+            Self::ReceiptRegionEnter => (
+                "hirsel_rt_v2_receipt_region_enter",
+                VOID,
+                const { &[CTX, p("guard", ptr(N::Void, 1))] },
+            ),
+            Self::ReceiptRegionExit => (
+                "hirsel_rt_v2_receipt_region_exit",
+                U8,
+                const { &[CTX, p("guard", ptr(N::Void, 1)), ANCHOR, OPERATION_SITE] },
+            ),
+            Self::ReceiptBits => (
+                "hirsel_rt_v2_receipt_bits",
+                ptr(N::Void, 1),
+                const { &[CTX, LAYOUT, p("value", cptr(N::Void))] },
+            ),
+            Self::SealPrepareCommit => (
+                "hirsel_rt_v2_seal_prepare_commit",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("guard", ptr(N::Void, 1)),
+                        p("root", cptr(N::Void)),
+                        LAYOUT,
+                        p("receipt", cptr(N::Void)),
+                        p("site", U64),
+                        p("out_owner", ptr(N::Void, 2)),
+                    ]
+                },
             ),
             Self::AbiVersion => ("hirsel_rt_v2_abi_version", U32, const { &[] }),
             Self::CtxCreate => (
@@ -1561,4 +1599,8 @@ snapshot_enum!(RuntimeEntry {
     ResumeRun,
     ResumeTail,
     HoleClose,
+    ReceiptRegionEnter,
+    ReceiptRegionExit,
+    ReceiptBits,
+    SealPrepareCommit,
 });

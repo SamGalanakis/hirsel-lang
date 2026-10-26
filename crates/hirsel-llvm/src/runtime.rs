@@ -63,9 +63,14 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::RootDup => (MemoryEffects::ReadWrite, false, &[0]),
         // Metadata custody can reclaim a receipt DAG. Keep conservative effects
         // and do not promise termination or pointer capture properties.
-        R::ReceiptRetain | R::ReceiptRelease | R::SealedRoot | R::SealedRelease => {
-            (MemoryEffects::ReadWrite, false, &[])
-        }
+        R::ReceiptRetain
+        | R::ReceiptRelease
+        | R::SealedRoot
+        | R::SealedRelease
+        | R::ReceiptRegionEnter
+        | R::ReceiptRegionExit
+        | R::ReceiptBits
+        | R::SealPrepareCommit => (MemoryEffects::ReadWrite, false, &[]),
         // Failure bookkeeping can allocate/deallocate, hence memory(readwrite)
         // and no willreturn promise; the record's scalar contents are copied.
         R::FailureBegin | R::FailureClear | R::IsolateCatch => {

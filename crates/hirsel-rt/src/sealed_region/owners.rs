@@ -12,8 +12,32 @@ struct Entry {
 pub(crate) struct Owners {
     controls: BTreeMap<usize, Entry>,
     handles: BTreeMap<usize, usize>,
+    metadata_run: Option<super::receipt::MetadataRun>,
+    native_guards: BTreeMap<usize, usize>,
 }
 impl Owners {
+    pub(super) fn metadata_run(&mut self) -> super::receipt::MetadataRun {
+        *self
+            .metadata_run
+            .get_or_insert_with(super::receipt::MetadataRun::new)
+    }
+
+    pub(super) fn enter_guard(&mut self, guard: usize, ctx: usize) {
+        if self.native_guards.contains_key(&guard) {
+            fault("demanded arena guard entered twice");
+        }
+        self.native_guards.insert(guard, ctx);
+    }
+    pub(super) fn check_guard(&self, guard: usize, ctx: usize) {
+        if self.native_guards.get(&guard) != Some(&ctx) {
+            fault("foreign or closed demanded arena guard");
+        }
+    }
+    pub(super) fn exit_guard(&mut self, guard: usize, ctx: usize) {
+        self.check_guard(guard, ctx);
+        self.native_guards.remove(&guard);
+    }
+
     pub(super) fn register(&mut self, address: usize, generation: u64) {
         let handle = usize::try_from(generation)
             .unwrap_or_else(|_| fault("sealed native identity exhausted"));
@@ -78,6 +102,15 @@ impl Owners {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_guard_entry_33_metadata_is_lazy_and_shared_only_by_its_actual_run() {
+        let mut owners = Owners::default();
+        assert!(owners.metadata_run.is_none());
+        assert!(owners.native_guards.is_empty());
+        let run = owners.metadata_run();
+        assert_eq!(owners.metadata_run(), run);
+        assert_ne!(Owners::default().metadata_run(), run);
+    }
     #[test]
     fn native_sealed_access_33_same_address_replacement_cannot_revive_a_stale_identity() {
         let mut owners = Owners::default();

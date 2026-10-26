@@ -1,6 +1,6 @@
 //! Demand-only lexical guard; ordinary region::Region remains its exact64 bytes.
 //! The separately approved80-byte record adds private journal/disarm words.
-//! This Rust support has no C export/ABI version allocation or compiler producer.
+//! Native entry shares these same initialization, publication and cleanup paths.
 //! Source grant, complete typed Plan and invocation entry remain independently
 //! checked caller obligations. No source context is retained by the sealed owner.
 use super::receipt::journal::{self, Journal, Update};
@@ -16,6 +16,7 @@ use std::mem::MaybeUninit;
 use std::pin::Pin;
 use std::ptr::{self, NonNull};
 
+pub mod abi;
 mod bits;
 
 /// Exact demand-only extension, with the ordinary base fields/offsets intact.
@@ -76,10 +77,7 @@ impl<'ctx> DemandedGuard<'ctx> {
         // SAFETY: the boxed record never moves; base enter initializes exactly
         // the unchanged prefix. Every remaining field is initialized below.
         unsafe {
-            region::hirsel_rt_v2_region_enter(ctx.as_ptr(), ptr::addr_of_mut!((*raw).base));
-            let journal = Box::new(Journal::from_raw(ctx.as_ptr(), run));
-            ptr::addr_of_mut!((*raw).inventory).write(Box::into_raw(journal));
-            ptr::addr_of_mut!((*raw).sealed_owner).write(ptr::null_mut());
+            enter_record(ctx.as_ptr(), raw, run);
             Self {
                 record: allocation,
                 ctx,
@@ -184,50 +182,80 @@ impl<'ctx> DemandedGuard<'ctx> {
         root: &Receipt<Record>,
         plan: &Plan,
     ) -> Result<*mut SealedRegion, Error> {
-        let raw = self.raw();
-        // SAFETY: take exactly the owned journal allocation. Its slot stays
-        // allocated, allowing failure restoration without allocating again.
-        let journal = unsafe { ptr::replace(ptr::addr_of_mut!((*raw).inventory), ptr::null_mut()) };
-        if journal.is_null() {
-            return Err(Error::Consumed);
-        }
-        let slot = JournalSlot(journal.cast::<MaybeUninit<Journal<'ctx>>>());
-        let value = unsafe { journal.read() };
-        match unsafe { value.seal(self.base(), root, plan) } {
-            Ok(owner) => {
-                unsafe { (*raw).sealed_owner = owner };
-                // self-drop already consumed private metadata/empty batches.
-                drop(slot);
-                Ok(owner)
-            }
-            Err((error, value)) => {
-                unsafe {
-                    journal.write(value);
-                    (*raw).inventory = journal
-                };
-                // The same Box allocation and original source custody remain.
-                std::mem::forget(slot);
-                Err(Error::Seal(error))
-            }
-        }
+        unsafe { seal_record(self.context(), self.raw(), root, plan) }
     }
     fn close_inner(&mut self, anchor: u64, operation_site: u64) -> u8 {
         if self.closed {
             return STATUS_OK;
         }
-        unsafe {
-            let journal = ptr::replace(ptr::addr_of_mut!((*self.raw()).inventory), ptr::null_mut());
-            if !journal.is_null() {
-                drop(Box::from_raw(journal));
-            }
-            self.closed = true;
-            region::hirsel_rt_v2_region_exit(self.context(), self.base(), anchor, operation_site)
-        }
+        self.closed = true;
+        unsafe { close_record(self.context(), self.raw(), anchor, operation_site) }
     }
     /// Close lexical storage/callback cleanup; a transferred arena has no
     /// storage or source credits here. The affine sealed owner is independent.
     pub fn close(mut self, anchor: u64, operation_site: u64) -> u8 {
         self.close_inner(anchor, operation_site)
+    }
+}
+
+unsafe fn enter_record<'ctx>(
+    ctx: *mut TaskCtx,
+    raw: *mut ReceiptArenaGuard<'ctx>,
+    run: MetadataRun,
+) {
+    unsafe {
+        region::hirsel_rt_v2_region_enter(ctx, ptr::addr_of_mut!((*raw).base));
+        let journal = Box::new(Journal::from_raw(ctx, run));
+        ptr::addr_of_mut!((*raw).inventory).write(Box::into_raw(journal));
+        ptr::addr_of_mut!((*raw).sealed_owner).write(ptr::null_mut());
+    }
+}
+
+unsafe fn close_record(
+    ctx: *mut TaskCtx,
+    raw: *mut ReceiptArenaGuard<'_>,
+    anchor: u64,
+    site: u64,
+) -> u8 {
+    unsafe {
+        let journal = ptr::replace(ptr::addr_of_mut!((*raw).inventory), ptr::null_mut());
+        if !journal.is_null() {
+            drop(Box::from_raw(journal));
+        }
+        region::hirsel_rt_v2_region_exit(ctx, ptr::addr_of_mut!((*raw).base), anchor, site)
+    }
+}
+
+unsafe fn seal_record<'ctx>(
+    _ctx: *mut TaskCtx,
+    raw: *mut ReceiptArenaGuard<'ctx>,
+    root: &Receipt<Record>,
+    plan: &Plan,
+) -> Result<*mut SealedRegion, Error> {
+    // SAFETY: take exactly the owned journal allocation. Its slot stays
+    // allocated, allowing failure restoration without allocating again.
+    let journal = unsafe { ptr::replace(ptr::addr_of_mut!((*raw).inventory), ptr::null_mut()) };
+    if journal.is_null() {
+        return Err(Error::Consumed);
+    }
+    let slot = JournalSlot(journal.cast::<MaybeUninit<Journal<'ctx>>>());
+    let value = unsafe { journal.read() };
+    match unsafe { value.seal(ptr::addr_of_mut!((*raw).base), root, plan) } {
+        Ok(owner) => {
+            unsafe { (*raw).sealed_owner = owner };
+            // self-drop already consumed private metadata/empty batches.
+            drop(slot);
+            Ok(owner)
+        }
+        Err((error, value)) => {
+            unsafe {
+                journal.write(value);
+                (*raw).inventory = journal
+            };
+            // The same Box allocation and original source custody remain.
+            std::mem::forget(slot);
+            Err(Error::Seal(error))
+        }
     }
 }
 impl Drop for DemandedGuard<'_> {

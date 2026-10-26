@@ -27,63 +27,76 @@ impl DemandedGuard<'_> {
         value: *mut u8,
         root: &Receipt<Record>,
     ) -> Result<*mut SealedRegion, Error> {
-        let inventory = self.inventory()?;
-        let charge = inventory
-            .seal_charge(root)
-            .map_err(|error| Error::Seal(journal::SealError::Semantic(error)))?;
-        // Check semantic history independently of physical storage. Empty or
-        // zero-cost retained blocks still require the general graph producer.
-        if inventory.entries().len() != 0
-            || unsafe { !(*self.base()).segment.is_null() || !(*self.base()).cleanup.is_null() }
-        {
-            return Err(Error::InventoryRequired);
-        }
-        let layout = unsafe { &*(*self.context()).descriptor(index) };
-        if layout.finalizer.is_some()
-            || layout.step_count != 0
-            || layout.scan_words != 0
-            || layout.flags != 0
-            || !layout.logical_count.is_null()
-        {
-            return Err(Error::RootLayout);
-        }
-        let extent = usize::try_from(layout.size).map_err(|_| Error::RootLayout)?;
-        let align = usize::try_from(layout.align).map_err(|_| Error::RootLayout)?;
-        if !align.is_power_of_two()
-            || (extent != 0 && (value.is_null() || !value.addr().is_multiple_of(align)))
-        {
-            return Err(Error::RootLayout);
-        }
-        let record = root.record();
-        let Some(image) = root.bytes() else {
-            return Err(Error::RootImage);
-        };
-        if record.origin() != Origin::Inline
-            || record.logical_charge() != Charge::Bytes(0)
-            || record.heap_charge() != Charge::Bytes(0)
-            || record.outgoing_heap_charge() != Charge::Bytes(0)
-            || root.children().len() != 0
-            || image.len() != extent
-            || root.alignment().is_none_or(|alignment| alignment < align)
-            || charge != Charge::Bytes(0)
-            || (extent != 0 && image != unsafe { std::slice::from_raw_parts(value, extent) })
-        {
-            return Err(Error::RootImage);
-        }
-        let plan = Plan {
-            root: Root {
-                descriptor: index,
-                source: value,
-                extent,
-                align,
-                patches: Vec::new(),
-            },
-            blocks: Vec::new(),
-            shared: Vec::new(),
-            charge,
-        };
+        let plan = unsafe { bits_plan(self.context(), self.raw(), index, value, root) }?;
         unsafe { self.seal(root, &plan) }
     }
+}
+
+pub(super) unsafe fn bits_plan(
+    ctx: *mut TaskCtx,
+    raw: *mut ReceiptArenaGuard<'_>,
+    index: u32,
+    value: *mut u8,
+    root: &Receipt<Record>,
+) -> Result<Plan, Error> {
+    let inventory = unsafe { (*raw).inventory.as_ref() }
+        .ok_or(Error::Consumed)?
+        .inventory();
+    let charge = inventory
+        .seal_charge(root)
+        .map_err(|error| Error::Seal(journal::SealError::Semantic(error)))?;
+    // Check semantic history independently of physical storage. Empty or
+    // zero-cost retained blocks still require the general graph producer.
+    if inventory.entries().len() != 0
+        || unsafe { !(*raw).base.segment.is_null() || !(*raw).base.cleanup.is_null() }
+    {
+        return Err(Error::InventoryRequired);
+    }
+    let layout = unsafe { &*(*ctx).descriptor(index) };
+    if layout.finalizer.is_some()
+        || layout.step_count != 0
+        || layout.scan_words != 0
+        || layout.flags != 0
+        || !layout.logical_count.is_null()
+    {
+        return Err(Error::RootLayout);
+    }
+    let extent = usize::try_from(layout.size).map_err(|_| Error::RootLayout)?;
+    let align = usize::try_from(layout.align).map_err(|_| Error::RootLayout)?;
+    if !align.is_power_of_two()
+        || (extent != 0 && (value.is_null() || !value.addr().is_multiple_of(align)))
+    {
+        return Err(Error::RootLayout);
+    }
+    let record = root.record();
+    let Some(image) = root.bytes() else {
+        return Err(Error::RootImage);
+    };
+    if record.origin() != Origin::Inline
+        || record.logical_charge() != Charge::Bytes(0)
+        || record.heap_charge() != Charge::Bytes(0)
+        || record.outgoing_heap_charge() != Charge::Bytes(0)
+        || root.children().len() != 0
+        || image.len() != extent
+        || root.alignment().is_none_or(|alignment| alignment < align)
+        || charge != Charge::Bytes(0)
+        || (extent != 0 && image != unsafe { std::slice::from_raw_parts(value, extent) })
+    {
+        return Err(Error::RootImage);
+    }
+    let plan = Plan {
+        root: Root {
+            descriptor: index,
+            source: value,
+            extent,
+            align,
+            patches: Vec::new(),
+        },
+        blocks: Vec::new(),
+        shared: Vec::new(),
+        charge,
+    };
+    Ok(plan)
 }
 
 #[cfg(all(test, feature = "diagnostic"))]
