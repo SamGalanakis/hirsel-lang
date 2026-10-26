@@ -240,7 +240,8 @@ Pool test actions reserve 5% of the unchanged 600-second RE limit for reporting.
 At the 570-second inner deadline, `test_report.py` prints
 `HIRSEL_TEST_INNER_DEADLINE`, every completed body's result, and each
 `HIRSEL_TEST_RUNNING` name with its elapsed time, then terminates its own test
-process group and exits 124. This returns an ordinary failed action with its
+descendants and exits 124. Descendants keep the executor's process group for
+memory sampling and enforcement. This returns an ordinary failed action with its
 output before RE's `DeadlineExceeded` discards that output. Rust bodies are
 tracked through libtest's JSON start/result events; ordinary result lines,
 summaries and per-case timings remain available to count and cost tools.

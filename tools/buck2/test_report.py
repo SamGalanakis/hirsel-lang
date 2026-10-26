@@ -6,7 +6,9 @@ Libtest events follow rust-lang/rust library/test/src/formatters/json.rs:36,
 The 5% reporting reserve is inside the action cap; it never extends a test.
 """
 import json
+import ctypes
 import os
+from pathlib import Path
 import re
 import selectors
 import signal
@@ -16,6 +18,30 @@ import time
 
 ACTION_TIMEOUT_SECONDS = 600
 INNER_DEADLINE_SECONDS = ACTION_TIMEOUT_SECONDS * 0.95
+
+
+def reap_owned_children(child):
+    # PR_SET_CHILD_SUBREAPER reparents orphaned descendants here (Linux
+    # prctl(2)). Direct children cannot reuse their PID until we reap them.
+    # Kill one generation, reap it, then handle its newly adopted children.
+    # Preserve the inherited PGID: NativeLink samples/enforces that group.
+    child.poll()
+    children_file = Path(f'/proc/self/task/{os.getpid()}/children')
+    while children := children_file.read_text().split():
+        for pid in children:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if child.returncode is None:
+            child.wait()
+        for pid in children:
+            try:
+                # Reap only the children just killed, never a newly adopted
+                # (and not yet signalled) grandchild that could still be live.
+                os.waitpid(int(pid), 0)
+            except ChildProcessError:
+                pass
 
 
 class Progress:
@@ -100,8 +126,14 @@ def supervise(command, *, deadline=INNER_DEADLINE_SECONDS, raw_json=False):
     previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
     end = time.monotonic() + deadline
     child = None
+    # Adopt orphaned descendants so cleanup needs only our direct children,
+    # without a new session/group escaping the executor's resource enforcement.
+    libc = ctypes.CDLL(None, use_errno=True)
+    previous_subreaper = ctypes.c_int()
+    if libc.prctl(37, ctypes.byref(previous_subreaper), 0, 0, 0) != 0 or libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'cannot establish test descendant ownership')
     try:
-        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
             selector.register(child.stderr, selectors.EVENT_READ)
@@ -136,23 +168,15 @@ def supervise(command, *, deadline=INNER_DEADLINE_SECONDS, raw_json=False):
             return status if status >= 0 else 128 - status
     finally:
         if child is not None:
-            # Only this launcher's new session; include descendants retaining
-            # pipes or ignoring TERM. Never signal another action's processes.
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            child.terminate()
             try:
                 child.wait(timeout=0.5)
             except subprocess.TimeoutExpired:
                 pass
-            try:
-                os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            child.wait()
+            reap_owned_children(child)
             child.stdout.close()
             child.stderr.close()
+        libc.prctl(36, previous_subreaper.value, 0, 0, 0)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 

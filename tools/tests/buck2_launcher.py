@@ -279,6 +279,22 @@ unittest.main(verbosity=2)
         self.assertIn('HIRSEL_TEST_FINISHED ok __main__.Fixture.test_a_pass', result.stderr)
         self.assertIn('HIRSEL_TEST_RUNNING __main__.Fixture.test_b_hangs', result.stderr)
 
+    def test_executor_process_group_is_preserved_and_orphans_are_reaped(self):
+        self.env['EXPECTED_PGID'] = str(os.getpgrp())
+        (self.root / 'harness').write_text(r'''#!/usr/bin/env python3
+import json, os, subprocess, sys
+assert os.getpgrp() == int(os.environ['EXPECTED_PGID']), 'escaped executor sampling group'
+print(json.dumps(dict(type='test', event='started', name='orphan')), flush=True)
+child = subprocess.Popen([sys.executable, '-c', 'import signal; signal.pause()'])
+with open('orphan.pid', 'w') as output: output.write(str(child.pid))
+''')
+        result = self.run_report()
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn('HIRSEL_TEST_RUNNING orphan', result.stderr)
+        pid = int((self.root / 'orphan.pid').read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
     def test_sigterm_flushes_running_names(self):
         self.fixture()
         import selectors
