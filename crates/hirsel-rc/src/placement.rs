@@ -88,6 +88,15 @@ pub fn place(
     table: &LayoutTable,
     options: &Options,
 ) -> Result<LirUnit<Placed>, PlaceError> {
+    place_with(unit, table, options, open_arenas)
+}
+
+fn place_with(
+    unit: LirUnit<Value>,
+    table: &LayoutTable,
+    options: &Options,
+    open: impl FnOnce(LirUnit<Placed>, &LayoutTable) -> Result<LirUnit<Placed>, PlaceError>,
+) -> Result<LirUnit<Placed>, PlaceError> {
     let mut unit = unit.into_stage::<Placed>();
     let own_destination = table.fn_abis[unit.header.abi.0 as usize].destination;
     unit.tables.task_domains = unit.tables.task_domains.max(1);
@@ -133,7 +142,7 @@ pub fn place(
     }
     // Arenas first: a compiler-local region entered after them is outer,
     // so its exits follow theirs.
-    unit = open_arenas(unit, table)?;
+    unit = open(unit, table)?;
     if options.regions || options.noalloc {
         unit = localize(unit, table)?;
     }
@@ -168,8 +177,8 @@ pub fn place(
 }
 
 /// Placement with an explicit identity recipe for observations whose exact
-/// coordinates and operands survive. Regional/arena rewrites that move a
-/// tracked point refuse until their own relocation transport is implemented.
+/// coordinates and operands survive. Arena entry/exit insertion carries exact
+/// instruction origins; unsupported regional ownership rewrites still refuse.
 pub fn place_observed(
     unit: LirUnit<Value>,
     table: &LayoutTable,
@@ -185,8 +194,35 @@ pub fn place_observed(
 > {
     hirsel_lir::ownership_trace::check(&unit, input).map_err(|error| error.to_string())?;
     let before = unit.clone();
-    let after = place(unit, table, options).map_err(|error| error.to_string())?;
-    crate::observation::identity(&before, input, after)
+    let mut arena_output = None;
+    let mut arena_error = None;
+    let after = place_with(unit, table, options, |unit, table| {
+        let observed = match open_arenas_edit::<true>(unit, table)? {
+            OpenArenas::Unchanged(unit) => crate::observation::identity(&before, input, unit),
+            OpenArenas::Edited(ed, origins) => {
+                crate::observation::finish(&before, input, ed, &origins.rows)
+            }
+        };
+        match observed {
+            Ok((unit, plan, _)) => {
+                arena_output = Some((unit.clone(), plan));
+                Ok(unit)
+            }
+            Err(error) => {
+                arena_error = Some(error);
+                Err(PlaceError::Unsupported(
+                    "arena observation relocation".into(),
+                ))
+            }
+        }
+    })
+    .map_err(|error| arena_error.unwrap_or_else(|| error.to_string()))?;
+    let (arena, plan) = arena_output.ok_or("missing arena observation relocation")?;
+    let (_, output, mut recipe) = crate::observation::identity(&arena, &plan, after.clone())?;
+    recipe.before = input.unit;
+    hirsel_lir::ownership_trace::check_transform(&before, input, &after, &output, Some(&recipe))
+        .map_err(|error| error.to_string())?;
+    Ok((after, output, recipe))
 }
 
 /// Whether construction `i` builds a counted block (its result is one).
@@ -787,7 +823,14 @@ fn rewrite(
             region,
         },
     );
-    exit_everywhere(&mut ed, lay, &mut facts, region, mark)?;
+    exit_everywhere(
+        &mut ed,
+        lay,
+        &mut facts,
+        region,
+        mark,
+        &mut InstructionOrigins::<false>::default(),
+    )?;
     Ok(ed.finish())
 }
 
@@ -824,7 +867,51 @@ fn unit_region(unit: &mut LirUnit<Placed>) -> RegionInstanceId {
 /// region spanning the unit: its entry at the unit's start, its token in
 /// place of the opening (after the budget it reads), and its exit on every
 /// return and propagation.
+#[derive(Default)]
+struct InstructionOrigins<const TRACK: bool> {
+    rows: Vec<Vec<Option<u32>>>,
+}
+impl<const TRACK: bool> InstructionOrigins<TRACK> {
+    fn new(unit: &LirUnit<Placed>) -> Self {
+        Self {
+            rows: if TRACK {
+                unit.blocks
+                    .iter()
+                    .map(|block| (0..block.instructions.len).map(Some).collect())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+    fn insert(&mut self, block: usize, at: usize, count: usize) {
+        if TRACK {
+            self.rows[block].splice(at..at, std::iter::repeat_n(None, count));
+        }
+    }
+    fn complete(&mut self, ed: &Editor<Placed>) {
+        if TRACK {
+            self.rows.resize_with(ed.code.len(), Vec::new);
+            for (origins, code) in self.rows.iter_mut().zip(&ed.code) {
+                origins.resize(code.len(), None);
+            }
+        }
+    }
+}
+enum OpenArenas<const TRACK: bool> {
+    Unchanged(LirUnit<Placed>),
+    Edited(Editor<Placed>, InstructionOrigins<TRACK>),
+}
 fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Placed>, PlaceError> {
+    Ok(match open_arenas_edit::<false>(unit, table)? {
+        OpenArenas::Unchanged(unit) => unit,
+        OpenArenas::Edited(ed, _) => ed.finish(),
+    })
+}
+fn open_arenas_edit<const TRACK: bool>(
+    unit: LirUnit<Placed>,
+    table: &LayoutTable,
+) -> Result<OpenArenas<TRACK>, PlaceError> {
     let mut unit = unit;
     let entry = unit.entry.index();
     let openings: Vec<(usize, ValueId, Option<ValueId>)> = unit
@@ -840,13 +927,14 @@ fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Pla
         })
         .collect();
     if openings.is_empty() {
-        return Ok(unit);
+        return Ok(OpenArenas::Unchanged(unit));
     }
     if openings.iter().any(|&(b, _, _)| b != entry) {
         return Err(PlaceError::Unsupported(
             "an arena opened outside the entry block".into(),
         ));
     }
+    let mut origins = InstructionOrigins::new(&unit);
     let lay = Lay(table);
     let mark_ty = mark_type(&mut unit, table)?;
     let regions: Vec<RegionInstanceId> = openings.iter().map(|_| unit_region(&mut unit)).collect();
@@ -866,6 +954,7 @@ fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Pla
             budget,
         };
         let enter = marks.len();
+        origins.insert(entry, enter, 1);
         ed.code[entry].insert(
             enter,
             Inst::RegionEnter {
@@ -877,21 +966,24 @@ fn open_arenas(unit: LirUnit<Placed>, table: &LayoutTable) -> Result<LirUnit<Pla
     }
     // Innermost first: the last opened closes first.
     for (&region, &mark) in regions.iter().zip(&marks).rev() {
-        exit_everywhere(&mut ed, lay, &mut facts, region, mark)?;
+        exit_everywhere(&mut ed, lay, &mut facts, region, mark, &mut origins)?;
     }
-    Ok(ed.finish())
+    origins.complete(&ed);
+    Ok(OpenArenas::Edited(ed, origins))
 }
 
 /// Exit the region after return preparation on each returning path. An owned
 /// result stays in storage until the exit succeeds, so an exit failure can
 /// drop it without moving the exit ahead of another failure-capable operation.
-fn exit_everywhere(
+fn exit_everywhere<const TRACK: bool>(
     ed: &mut Editor<Placed>,
     lay: Lay<'_>,
     facts: &mut Facts,
     region: RegionInstanceId,
     mark: ValueId,
+    origins: &mut InstructionOrigins<TRACK>,
 ) -> Result<(), PlaceError> {
+    origins.complete(ed);
     let n = ed.unit.blocks.len();
     // Propagations: the exit's own failure propagates too.
     for b in 0..n {
@@ -945,8 +1037,17 @@ fn exit_everywhere(
                     scope,
                 });
                 let preparations = ed.code[ed.unit.entry.index()].len();
+                let preparation_at = if TRACK {
+                    ed.code[ed.unit.entry.index()]
+                        .iter()
+                        .position(|inst| matches!(inst, Inst::Address { .. }))
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
                 let address = ed.whole(facts, slot);
                 let added = ed.code[ed.unit.entry.index()].len() - preparations;
+                origins.insert(ed.unit.entry.index(), preparation_at, added);
                 for (block, point) in &mut points {
                     if *block == ed.unit.entry {
                         *point += added;
@@ -981,7 +1082,9 @@ fn exit_everywhere(
         points.push((block, at));
     }
     // Each exit's failure cleans what remains owned, including staged results.
+    origins.complete(ed);
     for &(b, i) in &points {
+        origins.insert(b.index(), i, 1);
         ed.code[b.index()].insert(
             i,
             Inst::RegionExit {

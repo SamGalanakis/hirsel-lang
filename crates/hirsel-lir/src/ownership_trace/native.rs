@@ -367,6 +367,15 @@ impl LeafPlan {
                             layout(result),
                         )?;
                     }
+                    Inst::ArenaOpen { result, .. } if source_only && !owned(result) => (),
+                    Inst::RegionEnter { result, .. }
+                        if unit.types[unit.values[result.index()].ty.index()].repr
+                            == ValueRepr::RegionMark =>
+                    {
+                        ()
+                    }
+                    Inst::ArenaToken { result, .. } if !owned(result) => (),
+                    Inst::RegionExit { .. } => (),
                     Inst::StorageLive { .. }
                     | Inst::StorageDead { .. }
                     | Inst::EndScope { .. }
