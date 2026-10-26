@@ -220,3 +220,149 @@ fn ordered_reachable_check_fits_original_lower_metadata_grant() {
         check_case(&path, false, false, 1, LoweringPolicy::Reachable);
     });
 }
+
+#[test]
+fn settled_front_check_does_not_decode_an_evicted_modes_body() {
+    use hirsel_engine::store::{Bytes, EntryKey, Reference, ResultStore};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    #[derive(Default)]
+    struct EvictModes {
+        store: MemStore,
+        evicted: AtomicBool,
+        reads_after_eviction: AtomicUsize,
+    }
+    impl ResultStore for EvictModes {
+        fn get(&self, key: &EntryKey) -> Option<Bytes> {
+            self.store.get(key)
+        }
+        fn put(&self, key: &EntryKey, value: &[u8]) {
+            self.store.put(key, value);
+        }
+        fn get_content(&self, reference: Reference) -> Option<Bytes> {
+            if reference.domain.kind == QueryKind::Modes as u32 + 16
+                && self.evicted.load(Ordering::Relaxed)
+            {
+                self.reads_after_eviction.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            self.store.get_content(reference)
+        }
+        fn name(&self) -> &'static str {
+            "evicted-modes-control"
+        }
+    }
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(&path, "pub fn main()->u8{7u8}\n").unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(
+            &manifest,
+            serde_json::json!({
+                "schema":1,"package":{"name":"compact_front","version":"1"},
+                "sources":[{"path":"main.hir","module":[]}],"dependencies":[],
+                "entry":{"module":[],"name":"main"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let store = Arc::new(EvictModes::default());
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: store.clone(),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_program(&manifest)
+            .unwrap();
+        let definitions = vec![program.entry.clone()];
+        let budget = ProcessBudget::new(1 << 30);
+        let errors = crate::scheduled_front::errors();
+        let weight = MemoryWeight {
+            retained: 2 << 20,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::new(1),
+            budget.reserve(512 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+        let front = program
+            .engine
+            .front_body_queries(
+                &definitions,
+                weight,
+                budget.reserve(16 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let lower = program
+            .engine
+            .front_lower_queries(
+                &definitions,
+                front.clone(),
+                weight,
+                32,
+                budget.reserve(32 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let growth = program
+            .engine
+            .front_growth_queries(
+                &program.entry,
+                front.clone(),
+                weight,
+                budget.reserve(8 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let plan = FrontCheckPlan {
+            files: program
+                .files
+                .iter()
+                .map(|(file, context)| (*file, context.clone(), LoweringPolicy::Comptime))
+                .collect(),
+            front: front.clone(),
+            lower: lower.clone(),
+            growth: growth.clone(),
+            unsafe_ffi: program.unsafe_ffi.clone(),
+            lint_package: None,
+        };
+        let check = program
+            .engine
+            .front_check_queries(plan, weight, budget.reserve(16 << 20).unwrap(), errors)
+            .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        runtime
+            .register_local(FRONT_LOWER_KIND, lower.factory())
+            .unwrap();
+        runtime
+            .register_local(FRONT_EVALUATE_KIND, lower.factory())
+            .unwrap();
+        runtime
+            .register(FRONT_GROWTH_KIND, growth.factory())
+            .unwrap();
+        runtime.register(FRONT_CHECK_KIND, check.factory()).unwrap();
+        let request = runtime.request(&[front.query(&program.entry).unwrap()]);
+        runtime.wait(request).unwrap();
+        assert_eq!(front.live_body_count(), 0, "settled P owns no body");
+        store.evicted.store(true, Ordering::Relaxed);
+        let request = runtime.request(&[check.query()]);
+        let products = runtime
+            .wait(request)
+            .expect("accepted front facts survive body eviction");
+        let output = check.outcome(products[0]).unwrap();
+        assert_eq!(output.checked.completion, CheckCompletion::Complete);
+        assert!(output.checked.diagnostics.is_empty());
+        assert_eq!(store.reads_after_eviction.load(Ordering::Relaxed), 0);
+        for kind in [QueryKind::Resolve, QueryKind::Check, QueryKind::Modes] {
+            assert_eq!(front.recompute_count(&program.entry, kind), 1);
+        }
+        assert_eq!(front.live_body_count(), 0);
+        runtime.shutdown();
+    });
+}

@@ -38,6 +38,25 @@ impl LoweringUse {
                 .collect(),
         }
     }
+    /// Conservative capacity bound of capture's filtered Vec. Its iterator
+    /// grows geometrically from at least four elements; DefIds are interned.
+    pub(crate) fn capture_bytes(typed: &TypedBody) -> usize {
+        let count = typed
+            .checked
+            .resolution
+            .expressions
+            .iter()
+            .filter(|(_, name)| matches!(name, ResolvedName::Definition(_)))
+            .count();
+        if count == 0 {
+            0
+        } else {
+            count
+                .max(4)
+                .saturating_mul(2)
+                .saturating_mul(std::mem::size_of::<DefId>())
+        }
+    }
     fn needed(&self, engine: &QueryEngine) -> bool {
         self.needed_with(|id| engine.source_constant(id.path()))
     }

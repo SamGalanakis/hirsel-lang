@@ -339,25 +339,22 @@ impl Task {
                             Poll::Ready(selected) => selected,
                         };
                         let reference = selected.map(|p| p.record).unwrap_or_else(|r| r);
-                        let Some(body) = self.queries.plan.front.outcome(reference) else {
+                        let Some(facts) = self.queries.plan.front.check_facts(reference) else {
                             return Err(reference);
                         };
-                        self.reads.merge(&body.outcome.reads);
-                        if let Some(summary) = &body.outcome.summary {
-                            file.source_rules |= summary
-                                .summary
-                                .calls
-                                .iter()
-                                .any(|call| call.callee.path().is_core("region.with"));
-                        }
-                        match body.outcome.result {
-                            Ok(output) => {
-                                file.diagnostics.extend(output.diagnostics.iter().cloned());
+                        self.reads.merge(&facts.reads);
+                        file.source_rules |= facts.source_rules;
+                        match facts.result {
+                            Ok(diagnostics) => {
+                                file.diagnostics.extend(diagnostics);
                                 if let Ok(product) = selected {
                                     self.front.push((path.clone(), product));
                                 }
                                 if *executable {
-                                    if lowering::LoweringUse::capture(&output.value.typed)
+                                    if facts
+                                        .lowering
+                                        .as_ref()
+                                        .ok_or(self.queries.errors.protocol)?
                                         .needed_with(|id| self.queries.constants.contains(&id))
                                     {
                                         file.comptime.push(path.clone());
@@ -368,7 +365,7 @@ impl Task {
                             }
                             Err(error) => {
                                 self.failed_front.push((path.clone(), reference));
-                                file.error(error, body.outcome.phase);
+                                file.error(error, facts.phase);
                             }
                         }
                         self.root += 1;
@@ -399,15 +396,11 @@ impl Task {
                             }
                             Err(reference) => {
                                 let (error, phase) = if let Some(output) =
-                                    self.queries.plan.front.outcome(reference)
+                                    self.queries.plan.front.check_facts(reference)
                                 {
                                     (
-                                        output
-                                            .outcome
-                                            .result
-                                            .err()
-                                            .ok_or(self.queries.errors.protocol)?,
-                                        output.outcome.phase,
+                                        output.result.err().ok_or(self.queries.errors.protocol)?,
+                                        output.phase,
                                     )
                                 } else {
                                     (

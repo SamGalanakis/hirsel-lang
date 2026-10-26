@@ -85,6 +85,15 @@ struct FrontOutcome {
     // Only active consumers own a decoded body. The settled query retains its
     // canonical archive and compact source facts, including when hold_bytes=0.
     body: Weak<QueryOutput<AnalyzedBody>>,
+    diagnostics: Vec<Diagnostic>,
+    lowering: Option<lowering::LoweringUse>,
+}
+pub(crate) struct FrontCheckFacts {
+    pub result: Result<Vec<Diagnostic>, QueryError>,
+    pub phase: Option<QueryKind>,
+    pub reads: Arc<Reads>,
+    pub source_rules: bool,
+    pub lowering: Option<lowering::LoweringUse>,
 }
 impl FrontOutcome {
     fn capture(
@@ -102,6 +111,15 @@ impl FrontOutcome {
             diagnostic_phases,
         } = outcome;
         let body = result.as_ref().ok().map(Arc::downgrade).unwrap_or_default();
+        let diagnostics = result
+            .as_ref()
+            .ok()
+            .map(|output| output.diagnostics.clone())
+            .unwrap_or_default();
+        let lowering = result
+            .as_ref()
+            .ok()
+            .map(|output| lowering::LoweringUse::capture(&output.value.typed));
         let summary = summary.map(|summary| FrontSummary::capture(summary, &checked, &reads));
         Self {
             reference,
@@ -114,6 +132,8 @@ impl FrontOutcome {
             checked,
             dead_arms,
             body,
+            diagnostics,
+            lowering,
         }
     }
 }
@@ -487,6 +507,31 @@ impl FrontBodyQueries {
             .values()
             .find(|outcome| outcome.reference == reference)
             .map(|outcome| outcome.reads.clone())
+    }
+    /// Settled Check inputs own no analyzed body and never read its archive.
+    pub(crate) fn check_facts(&self, reference: Reference) -> Option<FrontCheckFacts> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let selected = outcomes
+            .values()
+            .find(|outcome| outcome.reference == reference)?;
+        let source_rules = selected.summary.as_ref().is_some_and(|summary| {
+            let summary = summary.materialize(&selected.checked, &selected.reads);
+            summary
+                .summary
+                .calls
+                .iter()
+                .any(|call| call.callee.path().is_core("region.with"))
+        });
+        Some(FrontCheckFacts {
+            result: selected
+                .status
+                .clone()
+                .map(|()| selected.diagnostics.clone()),
+            phase: selected.phase,
+            reads: selected.reads.clone(),
+            source_rules,
+            lowering: selected.lowering.clone(),
+        })
     }
     /// An immutable outcome, including exact error-phase and read evidence.
     /// This lookup never adopts a product into a mutable source namespace.
