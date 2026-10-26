@@ -4,7 +4,7 @@ Generated from manifest-selected public declarations. Do not edit by hand.
 Signatures retain modes, brands, attributes, relations and `uses` clauses.
 Opaque representations stay hidden; bodies are not checked or evaluated.
 
-2287 exported definitions; 999 variants.
+2288 exported definitions; 999 variants.
 
 ## Types and roots
 
@@ -10577,8 +10577,19 @@ References: [`core@1/List`](#def-core_401_2fList)
 
 <a id="def-std_401_2flist_2ffilled"></a>
 
-- `pub fn list.filled[T: copyable](n: u64, take value: T) -> List[T] uses {value}`
+- `pub fn list.filled[T: plain](n: u64, take value: T) -> unique List[T]`
 
+Reserves for the count, then copies the value into each initialized element.
+Packed elements occupy their active variant's width. Reservation uses the
+smallest width, so larger variants can require amortized backing growth.
+
+References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_2fu64)
+
+<a id="def-std_401_2flist_2ffilled_5fcopyable"></a>
+
+- `pub fn list.filled_copyable[T: copyable](n: u64, take value: T) -> List[T] uses {value}`
+
+Copies of counted seeds share their owners under copy-on-write.
 Reserves for the count, then copies the value into each initialized element.
 Packed elements occupy their active variant's width. Reservation uses the
 smallest width, so larger variants can require amortized backing growth.
