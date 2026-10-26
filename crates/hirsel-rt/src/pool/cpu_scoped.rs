@@ -2,13 +2,16 @@
 //! Like Tokio's batch_semaphore acquire, a reservation owns every requested
 //! credit before handing any to workers. Unlike its wait list, CPU admission
 //! refuses immediately and leaves existing waiters their capacity.
-use super::{Exec, Permits};
+use super::{Exec, Execs, Kind, Owner, Permits, Post, RunPtr, RunShared, TaskCtx, Worker};
 use std::sync::{Arc, atomic::Ordering};
 
 #[derive(Debug, Eq, PartialEq)]
-pub(super) enum Refusal {
+pub(crate) enum Refusal {
     InvalidWidth,
     WidthUnavailable { requested: u32, available: u32 },
+    Busy,
+    WorkerStartFailed,
+    NestedPool,
 }
 
 /// Unassigned credits. Each assigned credit has an independent lifetime, so a
@@ -89,10 +92,346 @@ impl Drop for Assigned {
     }
 }
 
+/// Native handles belong to the run, never to a fiber a stop can abandon.
+/// Scoped frames use addressed Compute owners and the existing dispatcher.
+/// These workers cannot claim ordinary work from its shared ready queue.
+pub(super) struct Workers {
+    execs: Vec<Arc<Exec>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+    cursor: usize,
+    caller: Option<Owner>,
+}
+
+impl Workers {
+    fn request_exit(&self) {
+        for exec in &self.execs {
+            exec.post(Post::Exit, None);
+        }
+    }
+
+    fn join(&mut self) {
+        self.request_exit();
+        for thread in self.threads.drain(..) {
+            thread
+                .join()
+                .unwrap_or_else(|_| crate::fault("a scoped CPU worker panicked"));
+        }
+    }
+}
+
+/// Start exactly the reserved width, acknowledging every worker before return.
+/// As in Rayon's explicit pool startup, a failed prefix is joined before refusal.
+/// # Safety
+/// The caller holds the scheduler role for this live run, before publishing
+/// any scoped frame. No user code runs on these workers until it is addressed.
+pub(super) unsafe fn start(
+    run: *mut RunShared,
+    reservation: Reservation,
+) -> Result<Vec<super::Owner>, Refusal> {
+    unsafe { start_at(run, reservation, None) }
+}
+
+unsafe fn start_at(
+    run: *mut RunShared,
+    mut reservation: Reservation,
+    fail_at: Option<u32>,
+) -> Result<Vec<super::Owner>, Refusal> {
+    let execs = unsafe {
+        (*(*run).execs.get())
+            .as_deref()
+            .expect("scoped run executors")
+    };
+    let mut slot = execs.scoped.lock().unwrap();
+    if slot.is_some() {
+        return Err(Refusal::Busy);
+    }
+    let width = reservation.unassigned;
+    let (ready, acknowledgments) = std::sync::mpsc::sync_channel(width as usize);
+    let mut workers = Workers {
+        execs: Vec::with_capacity(width as usize),
+        threads: Vec::with_capacity(width as usize),
+        cursor: 0,
+        caller: None,
+    };
+    for index in 0..width {
+        // Sequential attachment is role-owned, like grow(). No scoped task
+        // has been published, so the new worker cannot touch this heap yet.
+        let worker = unsafe { Worker::create(run) };
+        let exec = Exec::new(Kind::Scoped(index as u16), worker, false);
+        let assigned = reservation.assign(Arc::clone(&exec)).unwrap();
+        execs
+            .holders
+            .workers
+            .lock()
+            .unwrap()
+            .push(Arc::downgrade(&exec));
+        execs.holders.count.fetch_add(1, Ordering::AcqRel);
+        let thread = if fail_at == Some(index) {
+            drop(assigned);
+            Err(std::io::Error::other("injected CPU worker startup failure"))
+        } else {
+            std::thread::Builder::new()
+                .name(format!("hirsel-cpu-{index}"))
+                .stack_size(2 * 1024 * 1024)
+                .spawn({
+                    let (run, exec, holders, ready) = (
+                        RunPtr(run),
+                        Arc::clone(&exec),
+                        Arc::clone(&execs.holders),
+                        ready.clone(),
+                    );
+                    move || {
+                        super::worker_main_reserved(run, exec, holders, Some(assigned), Some(ready))
+                    }
+                })
+        };
+        let Ok(thread) = thread else {
+            execs.holders.count.fetch_sub(1, Ordering::AcqRel);
+            unsafe { Worker::retire(worker) };
+            workers.join();
+            for exec in &workers.execs {
+                unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+            }
+            return Err(Refusal::WorkerStartFailed);
+        };
+        workers.execs.push(exec);
+        workers.threads.push(thread);
+    }
+    drop(ready);
+    for _ in 0..width {
+        acknowledgments
+            .recv()
+            .expect("started scoped worker acknowledgement");
+    }
+    let owners = workers
+        .execs
+        .iter()
+        .map(|exec| super::Owner::Compute(Arc::as_ptr(exec).expose_provenance()))
+        .collect();
+    *slot = Some(workers);
+    Ok(owners)
+}
+
+pub(super) fn request_exit(execs: &Execs) {
+    if let Some(workers) = &*execs.scoped.lock().unwrap() {
+        workers.request_exit();
+    }
+}
+
+pub(super) fn shutdown(execs: &Execs) {
+    if let Some(workers) = &mut *execs.scoped.lock().unwrap() {
+        workers.join();
+    }
+}
+
+pub(super) fn busy(execs: &Execs) -> usize {
+    execs.scoped.lock().unwrap().as_ref().map_or(0, |workers| {
+        workers.execs.iter().filter(|exec| exec.busy()).count()
+    })
+}
+
+pub(super) fn workers(execs: &Execs) -> Vec<*mut Worker> {
+    execs
+        .scoped
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or_else(Vec::new, |workers| {
+            workers
+                .execs
+                .iter()
+                .map(|exec| exec.worker.get())
+                .filter(|worker| !worker.is_null())
+                .collect()
+        })
+}
+
+/// After all scoped frames are saved and their results transferred. Orphan
+/// heaps remain in the run registry for remote returns and result destruction.
+pub(super) unsafe fn finish(run: *mut RunShared) {
+    let execs = unsafe { (*(*run).execs.get()).as_deref().unwrap() };
+    if let Some(mut workers) = execs.scoped.lock().unwrap().take() {
+        workers.join();
+        for exec in &workers.execs {
+            assert!(!exec.busy());
+            unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+        }
+    }
+}
+
+pub(super) fn forget(execs: &mut Execs) -> Vec<*mut Worker> {
+    execs
+        .scoped
+        .get_mut()
+        .unwrap()
+        .take()
+        .map_or_else(Vec::new, |workers| {
+            // Detached reclaim runs only after the last native worker exited.
+            workers.execs.iter().map(|exec| exec.worker.get()).collect()
+        })
+}
+
+/// Enter and leave migrate through the ordinary saved-frame owner protocol.
+/// The caller gives back its process credit before requesting the full batch.
+/// # Safety
+/// A running physical-dispatch task holds the scheduler role. Its selected
+/// policy supports the scoped operation; replay uses its serial path instead.
+pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal> {
+    if !matches!(width, 1 | 4 | 8 | 16) {
+        return Err(Refusal::InvalidWidth);
+    }
+    if crate::tasks::cpu_scoped(ctx) {
+        return Err(Refusal::NestedPool);
+    }
+    let run = unsafe { (*ctx).run_ptr() };
+    let execs = super::execs(ctx);
+    if execs.scoped.lock().unwrap().is_some() {
+        return Err(Refusal::Busy);
+    }
+    super::release_permit(ctx);
+    let reservation = execs.permits.try_reserve(width);
+    let owners = match reservation {
+        Ok(reservation) => unsafe { start(run, reservation) },
+        Err(error) => Err(error),
+    };
+    let owners = match owners {
+        Ok(owners) => owners,
+        Err(error) => {
+            {
+                let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
+                super::acquire_permit(ctx);
+            }
+            return Err(error);
+        }
+    };
+    let old = crate::tasks::cpu_owner(ctx, owners[0], true);
+    execs.scoped.lock().unwrap().as_mut().unwrap().caller = Some(old);
+    unsafe { migrate(ctx) };
+    Ok(())
+}
+
+unsafe fn migrate(ctx: *mut TaskCtx) {
+    let run = unsafe { (*ctx).run_ptr() };
+    let key = crate::tasks::running_key(ctx);
+    let owner = crate::tasks::dispatch_owner(ctx);
+    // Latch a self-wake while Running. Only the idle save publishes the frame.
+    unsafe { super::free::schedule_saved(run, key, owner) };
+    unsafe { super::free::suspend_current(ctx, false) };
+}
+
+/// Assign mapper children in input order. Addressed posts are the existing
+/// dispatcher's per-worker transport; there is no second shared ready queue.
+pub(crate) fn next_owner(ctx: *mut TaskCtx) -> Owner {
+    let execs = super::execs(ctx);
+    let mut slot = execs.scoped.lock().unwrap();
+    let workers = slot.as_mut().expect("live CPU batch");
+    let index = workers.cursor % workers.execs.len();
+    workers.cursor += 1;
+    Owner::Compute(Arc::as_ptr(&workers.execs[index]).expose_provenance())
+}
+
+/// # Safety
+/// All mapper children and their cleanup completed. The caller is the entering
+/// task, holding the role, and no scoped child can publish another frame.
+pub(crate) unsafe fn leave(ctx: *mut TaskCtx) {
+    let run = unsafe { (*ctx).run_ptr() };
+    let execs = super::execs(ctx);
+    let old = execs
+        .scoped
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .caller
+        .take()
+        .expect("scoped caller");
+    crate::tasks::cpu_owner(ctx, old, false);
+    // Exit posts run only after the caller's idle save publishes its image to
+    // the original topology. Its old CPU worker then returns its reserved
+    // credit, allowing the original worker to reacquire without a W+1 holder.
+    request_exit(execs);
+    unsafe { migrate(ctx) };
+    unsafe { finish(run) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pool::Kind;
+
+    #[test]
+    fn fresh_workers_acknowledge_and_every_failed_startup_prefix_returns_its_credits() {
+        // Idle startup/rollback needs no physical CPU overlap. Physical-width
+        // acceptance uses the exact-CPU harness, not this lifecycle test.
+        unsafe {
+            let mut ctx = std::ptr::null_mut();
+            assert_eq!(
+                crate::context::hirsel_rt_v2_ctx_create(&crate::Config::new(), &mut ctx),
+                0
+            );
+            let run = (*ctx).run_ptr();
+            let execs = super::super::init_execs(ctx);
+            for width in [1, 4, 8, 16] {
+                let permits = Arc::new(Permits::new(width));
+                for fail_at in (0..width).map(Some).chain([None]) {
+                    let reservation = permits.try_reserve(width).unwrap();
+                    let owners = start_at(run, reservation, fail_at);
+                    if fail_at.is_some() {
+                        assert_eq!(owners, Err(Refusal::WorkerStartFailed));
+                        assert!(workers(execs).is_empty());
+                        assert_eq!(permits.available(), width);
+                        assert_eq!(execs.holders.count.load(Ordering::Acquire), 1);
+                        continue;
+                    }
+                    let owners = owners.unwrap();
+                    assert_eq!(owners.len(), width as usize);
+                    assert_eq!(workers(execs).len(), width as usize);
+                    assert_eq!(permits.available(), 0);
+                    let other = Arc::new(Permits::new(1));
+                    assert_eq!(
+                        start(run, other.try_reserve(1).unwrap()),
+                        Err(Refusal::Busy)
+                    );
+                    assert_eq!(other.available(), 1);
+                    request_exit(execs);
+                    shutdown(execs);
+                    assert_eq!(permits.available(), width);
+                    finish(run);
+                    assert!(workers(execs).is_empty());
+                }
+            }
+            assert_eq!(execs.holders.count.load(Ordering::Acquire), 1);
+            crate::context::hirsel_rt_v2_ctx_destroy(ctx);
+        }
+    }
+
+    #[test]
+    fn caller_yields_its_only_credit_and_migrates_back_after_fresh_width_one_calls() {
+        let mut run = crate::host::BodyRun::new(1, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |_| {},
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                let original = std::thread::current().id();
+                for _ in 0..2 {
+                    enter(ctx, 1).unwrap();
+                    assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
+                    assert_ne!(std::thread::current().id(), original);
+                    assert_eq!(enter(ctx, 1), Err(Refusal::NestedPool));
+                    assert!(matches!(next_owner(ctx), Owner::Compute(_)));
+                    leave(ctx);
+                    assert_eq!(std::thread::current().id(), original);
+                    assert!(!crate::tasks::cpu_scoped(ctx));
+                    assert!(workers(super::super::execs(ctx)).is_empty());
+                }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
 
     fn exec() -> Arc<Exec> {
         Exec::new(Kind::Compute(0), std::ptr::null_mut(), false)
@@ -185,6 +524,7 @@ mod tests {
             worker.lost.store(true, Ordering::Release);
         }
         drop(reservation);
+        permits.release(&worker);
         assert_eq!(permits.available(), 0);
         assert_eq!(permits.state.lock().unwrap().lost, 1);
         assert!(matches!(

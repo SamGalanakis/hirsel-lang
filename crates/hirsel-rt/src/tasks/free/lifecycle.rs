@@ -421,6 +421,8 @@ pub(crate) unsafe fn spawn(
         (*child_ctx).task_id = index;
     }
     let mut task = Task::new(generation, child_ctx, Some(scope), path, canceled);
+    inherit_cpu(ctx, &mut task);
+    let owner = task.owner;
     task.code = Some((code, environment, operation_site));
     task.stack = stack;
     task.inline_context = owned;
@@ -477,7 +479,7 @@ pub(crate) unsafe fn spawn(
             crate::pool::free::schedule_saved(
                 (*ctx).run_ptr(),
                 TaskKey::new(index, generation),
-                Owner::Any,
+                owner,
             );
         }
         try_yield(&mut *ctx)

@@ -102,7 +102,7 @@ impl Registration {
 
 /// The first section word past every executor's preferred one: transient registrations
 /// search from here.
-const TRANSIENT: usize = crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2;
+const TRANSIENT: usize = crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2 + 16;
 
 /// A phase's executor slot: the running executor's own, or a transient one.
 struct Checkout {
@@ -877,7 +877,7 @@ impl Recording {
             binding,
             // Home, a full compute topology and the blocking pool register for their lifetime;
             // the second half holds retiring executors not yet exited and transient callers.
-            2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2),
+            2 * (crate::pool::MAX_WIDTH as usize + crate::pool::POOL_THREADS + 2 + 16),
             durable,
             trace,
             metrics,

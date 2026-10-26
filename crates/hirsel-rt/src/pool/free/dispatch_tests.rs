@@ -41,6 +41,7 @@ pub(super) fn topology(width: u16) -> Topology {
             threads: Vec::new(),
         }),
         pool: Mutex::new(Vec::new()),
+        scoped: Mutex::new(None),
         permits: Arc::new(Permits::new(u32::from(width))),
         holders: Arc::new(Holders {
             count: AtomicU32::new(1),
@@ -631,4 +632,31 @@ fn runtime50_notify_save_shrink_batch() {
         drop(frame);
         assert_eq!(dispatch.count.live.load(Ordering::Acquire), 0, "{order:?}");
     }
+}
+
+#[test]
+fn scoped_workers_take_only_addressed_frames_and_never_ordinary_work() {
+    let execs = topology(1);
+    let scoped = Exec::new(Kind::Scoped(0), std::ptr::null_mut(), false);
+    publish(&execs, segment(&execs, 19), false, false);
+    assert!(next(&execs, &scoped).is_none());
+    let owner = Owner::Compute(Arc::as_ptr(&scoped).expose_provenance());
+    let addressed = segment(&execs, 23);
+    addressed.frame.placement.set_owner(owner_word(owner));
+    publish(&execs, addressed, false, false);
+    let Post::Saved(saved) = scoped.take().0 else {
+        panic!("scoped addressed frame")
+    };
+    assert_eq!(saved.queued.start().value().task.slot, 23);
+    let ordinary = execs.compute.lock().unwrap().active[0].clone();
+    assert_eq!(
+        next(&execs, &ordinary)
+            .unwrap()
+            .queued
+            .start()
+            .value()
+            .task
+            .slot,
+        19
+    );
 }

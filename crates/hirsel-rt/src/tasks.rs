@@ -256,6 +256,8 @@ struct Task {
     /// (a home foreign interval, or the run's Io binding in use) or the blocking-pool
     /// thread its interval runs on.
     owner: Owner,
+    /// The task belongs to the active closed CPU batch.
+    cpu_scoped: bool,
     /// It is the home thread's only until its next suspension, for the run's Io binding.
     pinned: bool,
     /// The compute worker it last ran on, at width > 1.
@@ -1017,6 +1019,7 @@ impl Task {
             finishing: false,
             priority: 0,
             owner: Owner::Any,
+            cpu_scoped: false,
             pinned: false,
             last: None,
         }
@@ -1721,6 +1724,27 @@ pub(crate) fn dispatch_owner(ctx: *mut TaskCtx) -> Owner {
         let me = t.current;
         t.task(me).owner
     })
+}
+
+/// The scheduler role owns scoped membership and addressed affinity. It never
+/// stores a pointer to a caller's runtime frame.
+pub(crate) fn cpu_scoped(ctx: *mut TaskCtx) -> bool {
+    role::with_role(ctx, |s| s.task(unsafe { (*ctx).task_id }).cpu_scoped)
+}
+
+pub(crate) fn cpu_owner(ctx: *mut TaskCtx, owner: Owner, member: bool) -> Owner {
+    role::with_role(ctx, |s| {
+        let row = s.task(unsafe { (*ctx).task_id });
+        row.cpu_scoped = member;
+        std::mem::replace(&mut row.owner, owner)
+    })
+}
+
+fn inherit_cpu(ctx: *mut TaskCtx, task: &mut Task) {
+    if cpu_scoped(ctx) {
+        task.cpu_scoped = true;
+        task.owner = crate::pool::cpu_scoped::next_owner(ctx);
+    }
 }
 
 /// Record a physical claim without invoking a stop-aware task entry before
@@ -3427,6 +3451,7 @@ unsafe fn spawn_child(
     unsafe { child.write(TaskCtx::new(worker, run)) };
     // SAFETY: caller contract.
     let scope = unsafe { scope.read() };
+    let cpu_owner = cpu_scoped(ctx).then(|| crate::pool::cpu_scoped::next_owner(ctx));
     let (index, generation, child) = role::with_role(ctx, |s| {
         let scope = s.scope_handle(scope);
         let current = s.current;
@@ -3437,6 +3462,10 @@ unsafe fn spawn_child(
         parent.spawned += 1;
         let (index, generation) = s.take_task_slot();
         let mut task = Task::new(generation, child, Some(scope), path, canceled);
+        if let Some(owner) = cpu_owner {
+            task.owner = owner;
+            task.cpu_scoped = true;
+        }
         task.code = Some((code, environment, operation_site));
         task.priority = s.schedule.admit();
         unsafe {

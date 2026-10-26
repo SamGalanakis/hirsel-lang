@@ -54,7 +54,7 @@ pub(crate) mod ordered_commit;
     not(test),
     expect(dead_code, reason = "scoped CPU callback admission is not enabled yet")
 )]
-mod cpu_scoped;
+pub(crate) mod cpu_scoped;
 
 /// The most blocking-pool threads one run starts.
 pub(crate) const POOL_THREADS: usize = 64;
@@ -81,6 +81,8 @@ pub(crate) enum Owner {
 enum Kind {
     Home,
     Compute(u16),
+    /// A CPU-scoped worker serves addressed frames, never the ordinary queue.
+    Scoped(u16),
     Pool(u16),
     Commit,
 }
@@ -373,9 +375,9 @@ impl Permits {
         let mut state = self.state.lock().unwrap();
         if !exec.reserved.load(Ordering::Acquire) {
             state.held -= 1;
-        }
-        if exec.lost.swap(false, Ordering::AcqRel) {
-            state.lost -= 1;
+            if exec.lost.swap(false, Ordering::AcqRel) {
+                state.lost -= 1;
+            }
         }
         self.freed.notify_one();
     }
@@ -413,7 +415,9 @@ impl Holders {
             .unwrap()
             .iter()
             .filter_map(std::sync::Weak::upgrade)
-            .filter(|exec| exec.held.load(Ordering::Acquire))
+            .filter(|exec| {
+                exec.held.load(Ordering::Acquire) || exec.reserved.load(Ordering::Acquire)
+            })
             .count() as u32
     }
     pub(crate) fn left(&self) -> u32 {
@@ -448,6 +452,7 @@ pub(crate) struct Execs {
     home_idle: Mutex<Option<Stack>>,
     compute: Mutex<ComputeWorkers>,
     pool: Mutex<Vec<PoolThread>>,
+    scoped: Mutex<Option<cpu_scoped::Workers>>,
     pub(crate) permits: Arc<Permits>,
     holders: Arc<Holders>,
     /// The next compute worker a task with no worker of its own goes to.
@@ -734,7 +739,7 @@ pub(crate) unsafe fn settled(run: *mut RunShared) -> bool {
     }
     // SAFETY: a thread's own exec lives while the thread serves its run.
     match unsafe { (*current).kind } {
-        Kind::Compute(_) => true,
+        Kind::Compute(_) | Kind::Scoped(_) => true,
         Kind::Home => execs.compute.lock().unwrap().active.is_empty(),
         Kind::Pool(_) | Kind::Commit => false,
     }
@@ -806,6 +811,7 @@ pub(crate) fn recorder_slot() -> usize {
     match unsafe { (*exec).kind } {
         Kind::Home => 0,
         Kind::Compute(index) => usize::from(index) + 1,
+        Kind::Scoped(index) => MAX_WIDTH as usize + POOL_THREADS + 2 + usize::from(index),
         Kind::Pool(index) => MAX_WIDTH as usize + 1 + usize::from(index),
         Kind::Commit => MAX_WIDTH as usize + 1 + POOL_THREADS,
     }
@@ -817,7 +823,12 @@ pub(crate) fn recorder_slot() -> usize {
 /// explicit home intervals and Pool already have exact owner routes.
 pub(crate) fn pin_foreign_compute() -> Option<Owner> {
     let exec = own_exec();
-    if exec.is_null() || !matches!(unsafe { (*exec).kind }, Kind::Compute(_) | Kind::Home) {
+    if exec.is_null()
+        || !matches!(
+            unsafe { (*exec).kind },
+            Kind::Compute(_) | Kind::Scoped(_) | Kind::Home
+        )
+    {
         return None;
     }
     unsafe { (*exec).foreign_frames.fetch_add(1, Ordering::AcqRel) };
@@ -867,6 +878,7 @@ unsafe fn init_execs(ctx: *mut TaskCtx) -> &'static mut Execs {
                 home_idle: Mutex::new(None),
                 compute: Mutex::new(ComputeWorkers::default()),
                 pool: Mutex::new(Vec::new()),
+                scoped: Mutex::new(None),
                 permits: process_permits(),
                 holders: Arc::new(Holders {
                     count: AtomicU32::new(1),
@@ -956,7 +968,7 @@ pub(crate) fn resumes_into_hirsel(ctx: *mut TaskCtx, to: *const Exec) -> bool {
     }
     // SAFETY: `to` is one of the run's live execs.
     match unsafe { (*to).kind } {
-        Kind::Compute(_) => true,
+        Kind::Compute(_) | Kind::Scoped(_) => true,
         Kind::Home => {
             // SAFETY: the context is live.
             let run = unsafe { (*ctx).run_ref() };
@@ -1263,11 +1275,26 @@ unsafe impl Send for RunPtr {}
 /// A compute or pool thread: posts until the run ends, then it leaves; a detached run's last
 /// thread frees it.
 fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
+    worker_main_reserved(run, exec, holders, None, None);
+}
+
+fn worker_main_reserved(
+    run: RunPtr,
+    exec: Arc<Exec>,
+    holders: Arc<Holders>,
+    assigned: Option<cpu_scoped::Assigned>,
+    ready: Option<std::sync::mpsc::SyncSender<()>>,
+) {
     let run = run.0;
     EXEC.with(|e| e.set(Arc::as_ptr(&exec)));
     // SAFETY: this exec's own thread, before its first post: no role or section is held. A
     // starting executor may wait for a retiring one's slot.
     unsafe { exec.recording.register(&*run, recorder_slot(), true) };
+    if let Some(ready) = ready {
+        // A disconnected startup owner already requested rollback. Still serve
+        // its Exit post, so recorder retirement and native-stack cleanup run.
+        let _ = ready.send(());
+    }
     // The idle fiber of a worker thread is the thread's own stack, here.
     // SAFETY: this is the exec's own thread, idle between posts.
     while unsafe { serve(run, &exec) } {}
@@ -1277,6 +1304,7 @@ fn worker_main(run: RunPtr, exec: Arc<Exec>, holders: Arc<Holders>) {
     if matches!(exec.kind, Kind::Compute(_)) {
         unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };
     }
+    drop(assigned);
     exec.exited.store(true, Ordering::Release);
     if holders.count.fetch_sub(1, Ordering::AcqRel) == 1 && holders.detached.load(Ordering::Acquire)
     {
@@ -1633,7 +1661,7 @@ pub(crate) fn busy(run: &RunShared) -> u32 {
         .iter()
         .filter(|thread| thread.exec.busy())
         .count();
-    (compute + pool) as u32
+    (compute + pool + cpu_scoped::busy(execs)) as u32
 }
 
 /// Run `call` on the home thread: at once on home and in a run without compute workers;
@@ -1882,6 +1910,7 @@ pub(crate) fn shutdown(run: &RunShared) {
         return;
     };
     execs.home.close();
+    cpu_scoped::shutdown(execs);
     let mut compute = execs.compute.lock().unwrap();
     for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
@@ -1931,6 +1960,7 @@ pub(crate) fn workers(run: &RunShared) -> Vec<*mut Worker> {
                 .iter()
                 .map(|thread| thread.exec.worker.get()),
         )
+        .chain(cpu_scoped::workers(execs))
         .collect()
 }
 
@@ -1960,6 +1990,7 @@ pub(crate) fn detach(run: &RunShared) -> bool {
         return false;
     };
     execs.home.close();
+    cpu_scoped::request_exit(execs);
     let compute = execs.compute.lock().unwrap();
     for exec in compute.active.iter().chain(&compute.retiring) {
         exec.post(Post::Exit, None);
@@ -1978,7 +2009,9 @@ pub(crate) fn detach(run: &RunShared) -> bool {
             .iter()
             .filter_map(std::sync::Weak::upgrade)
         {
-            if exec.held.load(Ordering::Acquire) && !exec.lost.swap(true, Ordering::AcqRel) {
+            if (exec.held.load(Ordering::Acquire) || exec.reserved.load(Ordering::Acquire))
+                && !exec.lost.swap(true, Ordering::AcqRel)
+            {
                 state.lost += 1;
             }
         }
@@ -1993,6 +2026,7 @@ pub(crate) fn forget(run: &mut RunShared) {
     let Some(mut execs) = run.execs.take() else {
         return;
     };
+    let scoped = cpu_scoped::forget(&mut execs);
     let compute = execs.compute.get_mut().unwrap();
     compute.threads.clear();
     let workers: Vec<_> = compute
@@ -2005,6 +2039,7 @@ pub(crate) fn forget(run: &mut RunShared) {
             thread.thread.take();
             thread.exec.worker.get()
         }))
+        .chain(scoped)
         .collect();
     for worker in workers.into_iter().filter(|worker| !worker.is_null()) {
         // SAFETY: every thread of the run left.
