@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 75
+#define HIRSEL_RT_V2_ABI_VERSION 76
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -868,6 +868,8 @@ uint8_t hirsel_rt_v2_resume_run(hirsel_rt_v2_ctx *ctx, hirsel_rt_v2_header *envi
    the code continues; when the run's fuel is spent the run ends with BudgetExceeded (fuel), as
    a Blocked run ends, and the call does not return (runtime ABI 27). */
 void hirsel_rt_v2_fuel_refill(hirsel_rt_v2_ctx *ctx);
+
+uint8_t hirsel_rt_v2_ordered_join(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, uint64_t *scope, uint64_t *child, uint8_t *slot, uint64_t size, uint32_t align);
 
 #ifdef __cplusplus
 }

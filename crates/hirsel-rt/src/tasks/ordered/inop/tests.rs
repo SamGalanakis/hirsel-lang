@@ -1,5 +1,6 @@
 //! Scripted Pending plus a separate joining child, with no clock sleeps.
 use super::super::*;
+use crate::STATUS_SUSPENDED;
 use crate::io::{AdapterError, Completion, Ready, Request};
 use crate::io_concurrent::ConcurrentAdapter;
 use crate::tasks::*;
@@ -348,5 +349,212 @@ fn stdin_and_watch_skip_the_initial_yield_and_errors_do_not_poison_the_next_wait
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
         assert_eq!(*host.0.lock().unwrap(), [1, 1, 2, 2, 3, 3]);
+    }
+}
+
+unsafe extern "C" fn compact_joiner(
+    ctx: *mut TaskCtx,
+    env: *mut Header,
+    caller: u64,
+    site: u64,
+) -> u8 {
+    unsafe {
+        crate::continuation::hirsel_rt_v2_resume_run(ctx, env, caller, site, join_dispatcher, 48)
+    }
+}
+
+unsafe extern "C" fn join_dispatcher(
+    ctx: *mut TaskCtx,
+    env: *mut Header,
+    _: u64,
+    _: u64,
+    frame: *mut u8,
+) -> u8 {
+    let words = frame.cast::<u64>();
+    if unsafe { words.read() } == 0 {
+        let [scope, child] = unsafe { crate::alloc::payload(env).cast::<[u64; 2]>().read() };
+        unsafe {
+            words.add(1).write(scope);
+            words.add(2).write(child);
+            words.add(3).write(0);
+            words.add(4).write(0);
+            words.write(1);
+        }
+    }
+    unsafe { crate::continuation::binding::hirsel_rt_v2_resume_tail(ctx, frame, 1, 32, 48, 0, 0) };
+    let status = unsafe {
+        hirsel_rt_v2_ordered_join(
+            ctx,
+            0,
+            0,
+            words.add(1),
+            words.add(2),
+            words.add(3).cast(),
+            16,
+            8,
+        )
+    };
+    if status == STATUS_SUSPENDED {
+        // Only the original record may supply the taken child on re-entry.
+        // Saving cannot restore this cell into the runtime's identity.
+        unsafe { words.add(2).write(u64::MAX) };
+        return status;
+    }
+    assert_eq!(status, STATUS_OK);
+    assert_eq!(unsafe { words.add(3).cast::<[u64; 2]>().read() }, [1, 7]);
+    unsafe { words.write(2) };
+    unsafe { finish_value(ctx, words.add(4).read()) }
+}
+
+#[test]
+fn retained_join_bounds_refuse_header_overlap_alignment_escape_and_overflow() {
+    assert_eq!(retained_offset(0x1000, 64, 0x1010, 16, 8), Some(16));
+    for (extent, address, size, align) in [
+        (64, 0x1000, 16, 8),
+        (64, 0x1011, 16, 8),
+        (64, 0x1030, 32, 8),
+        (64, 0x1010, 16, 0),
+        (64, 0x1010, 16, 3),
+        (64, 0x1020, 16, 32),
+        (64, 0x0ff0, 16, 8),
+        (64, 0x1010, u64::MAX, 8),
+    ] {
+        assert_eq!(retained_offset(0x1000, extent, address, size, align), None);
+    }
+}
+
+#[test]
+fn retained_join_releases_its_stack_and_never_rereads_the_taken_handle() {
+    for width in [1, 4] {
+        let environment = layout();
+        let result = layout();
+        let layouts = [&environment as *const crate::Layout, &result];
+        let host = Arc::new(Host::default());
+        let setup = host.clone();
+        let observe = host.clone();
+        let compact_saves = Arc::new(AtomicUsize::new(0));
+        let count_saves = compact_saves.clone();
+        let mut run = crate::host::BodyRun::new(width, true);
+        run.config.layouts = layouts.as_ptr();
+        run.config.layout_count = 2;
+        run.concurrent_adapter = Some(host.clone());
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            move |ctx| unsafe {
+                engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                );
+                setup.run.store((*ctx).run_ptr(), Ordering::Release);
+                engine::driver(ctx).after_save = Some(Box::new(move |s, task, completed| {
+                    if completed {
+                        return;
+                    }
+                    let Logical::Ordered(d) = &s.logical else {
+                        unreachable!()
+                    };
+                    let id = handle(task, s.tasks[task as usize].as_ref().unwrap().generation);
+                    if let Some(op) = d.in_operations.get(&id) {
+                        if matches!(op, Operation::Join(_))
+                            && s.tasks[task as usize]
+                                .as_ref()
+                                .unwrap()
+                                .context_home
+                                .is_some()
+                        {
+                            count_saves.fetch_add(1, Ordering::Relaxed);
+                        }
+                        observe
+                            .saves
+                            .lock()
+                            .unwrap()
+                            .push((id, matches!(op, Operation::Host(_))));
+                    }
+                }));
+            },
+            move |ctx| unsafe {
+                let mut scope = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
+                    STATUS_OK
+                );
+                let mut child = 0;
+                let env =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(env).cast::<[u64; 2]>().write([0, 0]);
+                assert_eq!(
+                    hirsel_rt_v2_task_spawn(
+                        ctx,
+                        0,
+                        0,
+                        std::ptr::null_mut(),
+                        &mut child,
+                        &scope,
+                        sleeper,
+                        env,
+                        0
+                    ),
+                    STATUS_OK
+                );
+                let env =
+                    crate::alloc::hirsel_rt_v2_alloc(ctx, 2, 16, 8, crate::alloc::DOMAIN_HEAP, 0);
+                crate::alloc::payload(env)
+                    .cast::<[u64; 2]>()
+                    .write([scope, child]);
+                let mut joining = 0;
+                assert_eq!(
+                    hirsel_rt_v2_task_spawn(
+                        ctx,
+                        0,
+                        0,
+                        std::ptr::null_mut(),
+                        &mut joining,
+                        &scope,
+                        compact_joiner,
+                        env,
+                        0
+                    ),
+                    STATUS_OK
+                );
+                let mut result = [0u64; 2];
+                assert_eq!(
+                    hirsel_rt_v2_task_join(
+                        ctx,
+                        0,
+                        0,
+                        &scope,
+                        &mut joining,
+                        result.as_mut_ptr().cast(),
+                        16
+                    ),
+                    STATUS_OK
+                );
+                assert_eq!(result, [1, 7]);
+                assert!(engine::driver(ctx).in_operations.is_empty());
+                assert!(engine::driver(ctx).host_ops.is_empty());
+                assert_eq!(
+                    hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
+                    STATUS_OK
+                );
+                STATUS_OK
+            },
+        );
+        assert!(
+            compact_saves.load(Ordering::Relaxed) > 0,
+            "join never released its original stack"
+        );
+        assert_eq!(outcome.ended, Ok(STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+        assert_eq!(*host.calls.lock().unwrap(), [1, 1]);
+        assert_eq!(host.finishes.load(Ordering::Acquire), 1);
+        let saves = host.saves.lock().unwrap();
+        assert!(
+            saves.iter().any(|(_, host)| *host),
+            "host continuation was never saved"
+        );
+        assert!(
+            saves.iter().any(|(_, host)| !*host),
+            "join continuation was never saved"
+        );
     }
 }

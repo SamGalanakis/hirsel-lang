@@ -1,10 +1,9 @@
 //! Owned continuations of entered Ordered operations. Each drive finishes all
 //! callbacks and loans before returning Pending; a wait never restarts entry.
 //!
-//! This first runtime slice uses the existing stackful suspension. Its join
-//! destination is therefore explicitly stackful. Compact admission needs a
-//! separately checked retained-frame destination before these drives can leave
-//! a stack. In particular this is not the first-effect/reissue protocol.
+//! Stackful callers retain their destination's activation. Certified callers
+//! instead retain a checked frame offset and continue their exact entered
+//! invocation. This is separate from the first-effect/reissue protocol.
 //!
 //! Like Tokio's Idle/Busy file state (`fs/file.rs:649-712` at ce685ee6), the
 //! phase stays valid on error and owns the continuation until completion or
@@ -210,9 +209,57 @@ enum JoinPhase {
 /// This destination borrows an existing stackful activation. It confers no
 /// permission to discard that stack; a frame certificate will be a distinct
 /// representation, not an unchecked conversion of this address.
+#[derive(Clone, Copy)]
 pub(super) struct StackfulDestination {
     pub(super) address: *mut u8,
     pub(super) size: u64,
+}
+
+#[derive(Clone, Copy)]
+enum Destination {
+    Stackful(StackfulDestination),
+    Retained {
+        site: crate::continuation::binding::BoundSite,
+        offset: usize,
+        size: u64,
+        align: usize,
+    },
+}
+
+impl Destination {
+    fn resolve(self, ctx: *mut TaskCtx) -> (*mut u8, u64) {
+        match self {
+            Self::Stackful(d) => (d.address, d.size),
+            Self::Retained {
+                site,
+                offset,
+                size,
+                align,
+            } => {
+                assert_eq!(
+                    crate::tasks::running_key(ctx),
+                    site.task,
+                    "stale join destination"
+                );
+                assert!(crate::tasks::compact::contains_frame(
+                    ctx,
+                    site.frame,
+                    site.bytes as usize
+                ));
+                let address = site
+                    .frame
+                    .checked_add(offset)
+                    .expect("join address overflow");
+                assert_eq!(address % align, 0, "misaligned retained join destination");
+                assert!(
+                    offset
+                        .checked_add(size as usize)
+                        .is_some_and(|end| end <= site.bytes as usize)
+                );
+                (address as *mut u8, size)
+            }
+        }
+    }
 }
 
 pub(super) struct Join {
@@ -220,7 +267,7 @@ pub(super) struct Join {
     child_word: u64,
     scope: Option<u32>,
     child: Option<u32>,
-    destination: StackfulDestination,
+    destination: Destination,
     caller_site: u64,
     phase: JoinPhase,
 }
@@ -237,7 +284,7 @@ impl Join {
             child_word: child,
             scope: None,
             child: None,
-            destination,
+            destination: Destination::Stackful(destination),
             caller_site,
             phase: JoinPhase::Prepared,
         }
@@ -251,6 +298,112 @@ fn with_join<T>(ctx: *mut TaskCtx, f: impl FnOnce(&mut Join) -> T) -> T {
         };
         f(join)
     })
+}
+
+fn retained_offset(
+    frame: usize,
+    extent: usize,
+    address: usize,
+    size: u64,
+    align: u32,
+) -> Option<usize> {
+    let align = align as usize;
+    let size = usize::try_from(size).ok()?;
+    if align == 0 || !align.is_power_of_two() || align > 16 || address % align != 0 {
+        return None;
+    }
+    let offset = address.checked_sub(frame)?;
+    (offset >= 8 && offset.checked_add(size)? <= extent).then_some(offset)
+}
+
+/// Continue the same independently certified TaskJoin invocation. On re-entry
+/// the original scope/child words and destination come from the owned record;
+/// neither the taken handle nor the initial None is read again.
+/// # Safety
+/// The compiler proved the complete wrapper, its exact Option layout and one
+/// mutable loan. `slot` is that retained cell, with the certified extent and
+/// alignment. Only this helper's certified callers accept STATUS_SUSPENDED.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_ordered_join(
+    ctx: *mut TaskCtx,
+    caller_site: u64,
+    operation_site: u64,
+    scope: *const u64,
+    child: *mut u64,
+    slot: *mut u8,
+    size: u64,
+    align: u32,
+) -> u8 {
+    let _role = unsafe { role::Guard::new(ctx) };
+    let bound = unsafe { crate::continuation::binding::take_bound(ctx, 32) };
+    let Some(site) = bound.filter(|_| engine::on(ctx)) else {
+        let status = unsafe {
+            crate::tasks::hirsel_rt_v2_task_join(
+                ctx,
+                caller_site,
+                operation_site,
+                scope,
+                child,
+                slot,
+                size,
+            )
+        };
+        if let Some(site) = bound {
+            unsafe { crate::continuation::binding::complete_bound(ctx, site) };
+        }
+        return status;
+    };
+    assert_eq!(site.task, crate::tasks::running_key(ctx));
+    assert_eq!(site.operation_site, operation_site, "join operation site");
+    let existing = with_operation(ctx, |d, task| match d.in_operations.get(&task) {
+        None => false,
+        Some(Operation::Join(Join {
+            destination: Destination::Retained { site: original, .. },
+            ..
+        })) => {
+            assert_eq!(*original, site, "stale entered join identity");
+            true
+        }
+        _ => panic!("different entered operation at join"),
+    });
+    if !existing {
+        let offset = retained_offset(site.frame, site.bytes as usize, slot as usize, size, align)
+            .expect("join destination outside retained wrapper");
+        let destination = Destination::Retained {
+            site,
+            offset,
+            size,
+            align: align as usize,
+        };
+        destination.resolve(ctx);
+        let join = Join {
+            scope_word: unsafe { scope.read() },
+            child_word: unsafe { child.read() },
+            scope: None,
+            child: None,
+            destination,
+            caller_site,
+            phase: JoinPhase::Prepared,
+        };
+        start(ctx, Operation::Join(join));
+    }
+    assert!(unsafe { (*ctx).ordered_inop_leave.is_none() });
+    loop {
+        match unsafe { crate::stop::check(ctx, drive_join(ctx)) } {
+            Drive::Complete(status) => {
+                finish(ctx);
+                unsafe { crate::continuation::binding::complete_bound(ctx, site) };
+                return status;
+            }
+            Drive::Pending { head_only } => {
+                if unsafe { crate::continuation::binding::can_leave(ctx, site) } {
+                    unsafe { (*ctx).ordered_inop_leave = Some(head_only) };
+                    return crate::STATUS_SUSPENDED;
+                }
+                engine::suspend(ctx, engine::current(ctx), head_only);
+            }
+        }
+    }
 }
 
 /// Drive the entered join, retaining the original branch across its first
@@ -278,8 +431,8 @@ pub(super) unsafe fn drive_join(ctx: *mut TaskCtx) -> Stopped<Drive<u8>> {
                     j.child = Some(child);
                 });
                 if state == State::Holding {
-                    let (slot, size) =
-                        with_join(ctx, |j| (j.destination.address, j.destination.size));
+                    let destination = with_join(ctx, |j| j.destination);
+                    let (slot, size) = destination.resolve(ctx);
                     let progress = unsafe {
                         lifecycle::call_start(
                             ctx,
@@ -309,14 +462,9 @@ pub(super) unsafe fn drive_join(ctx: *mut TaskCtx) -> Stopped<Drive<u8>> {
                 }
             }
             JoinPhase::Park => {
-                let (child, slot, size, site) = with_join(ctx, |j| {
-                    (
-                        j.child.unwrap(),
-                        j.destination.address,
-                        j.destination.size,
-                        j.caller_site,
-                    )
-                });
+                let (child, destination, site) =
+                    with_join(ctx, |j| (j.child.unwrap(), j.destination, j.caller_site));
+                let (slot, size) = destination.resolve(ctx);
                 let (_, progress) = engine::head_continuation(ctx, || {
                     role::with_role(ctx, |s| {
                         let me = s.current;

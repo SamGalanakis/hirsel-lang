@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 75;
+pub const ABI_VERSION: u32 = 76;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -601,6 +601,8 @@ pub enum RuntimeEntry {
     ReceiptRegionExit,
     ReceiptBits,
     SealPrepareCommit,
+    /// Enter/resume a certified Ordered join without re-taking its handle.
+    OrderedJoin,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -672,7 +674,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 103] = [
+    pub const ALL: [RuntimeEntry; 104] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -776,6 +778,7 @@ impl RuntimeEntry {
         Self::ReceiptRegionExit,
         Self::ReceiptBits,
         Self::SealPrepareCommit,
+        Self::OrderedJoin,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1413,6 +1416,22 @@ impl RuntimeEntry {
                 U8,
                 const { &[CTX, p("frame", ptr(N::U8, 1)), p("state", U32)] },
             ),
+            Self::OrderedJoin => (
+                "hirsel_rt_v2_ordered_join",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("caller_site", U64),
+                        OPERATION_SITE,
+                        p("scope", ptr(N::U64, 1)),
+                        p("child", ptr(N::U64, 1)),
+                        p("slot", ptr(N::U8, 1)),
+                        p("size", U64),
+                        p("align", U32),
+                    ]
+                },
+            ),
             Self::ResumeTail => (
                 "hirsel_rt_v2_resume_tail",
                 VOID,
@@ -1603,4 +1622,5 @@ snapshot_enum!(RuntimeEntry {
     ReceiptRegionExit,
     ReceiptBits,
     SealPrepareCommit,
+    OrderedJoin,
 });

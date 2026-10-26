@@ -678,6 +678,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_ahead_state", Local),
     entry("hirsel_rt_v2_resume_point", Local),
     entry("hirsel_rt_v2_resume_tail", Local),
+    ops("hirsel_rt_v2_ordered_join", &["task.join"]),
     entry("hirsel_rt_v2_resume_run", Physical),
     entry("hirsel_rt_v2_ahead_handoff", Local),
     // Arm validates task-owned recipe/buffer custody under the scheduler role;

@@ -214,6 +214,9 @@ pub(crate) fn waited(ctx: *mut TaskCtx) -> bool {
 /// The running task holds the role at a resume point of the body its task
 /// entry called.
 pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
+    // Consume the Pending promise even if a physical policy refuses leave;
+    // the dispatcher then activates the same frame on this stack.
+    let entered = unsafe { (*ctx).ordered_inop_leave.take() };
     // SAFETY: caller contract.
     if !unsafe { movable(ctx) } {
         return false;
@@ -223,6 +226,10 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) -> bool {
         s.task(me).hold_left
     });
     if ordered::engine::on(ctx) {
+        if let Some(head_only) = entered {
+            ordered::engine::transfer(ctx, head_only);
+            return true;
+        }
         let published = crate::pool::free::migrating(unsafe { (*ctx).run_ref() });
         // A held end resumes when its parent calls its rest, as its park would.
         ordered::engine::transfer(ctx, !published && !holding);
