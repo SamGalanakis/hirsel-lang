@@ -197,16 +197,43 @@ def check_catalog(data):
 
 
 def judge_recording(view, recorded_output):
-    """Fail closed until committed RPC/token observations are available.
+    """Judge the Rust lineage consumer's result, then the admission invariants.
 
-    A complete ordinary view, a timing sidecar, or an exactly replaying run is
-    insufficient: none witnesses pure reserve/drop or task-to-RPC ownership.
-    Keep this result distinct from the captured bytes used for replay.
+    `view` is an internal adapter input: config/report/replay plus `lineage`
+    returned by lineage.rs::consume after Trace::analyze. It is not a decoder
+    entry point for arbitrary JSON sidecars or a claim of emitter coverage.
+    The live tape reader still supplies None until its mappings are admitted.
     """
-    return dict(semantic_verdict="unproven: witness missing",
-                coverage=dict(admission="unproven", request_credits="unproven",
-                              upstream_credits="unproven"),
-                recorded_output=recorded_output)
+    verdict = dict(semantic_verdict="unproven: witness missing",
+                   coverage=dict(admission="unproven", request_credits="unproven",
+                                 upstream_credits="unproven"),
+                   recorded_output=recorded_output)
+    if not isinstance(view, dict) or not isinstance(view.get('lineage'), dict):
+        return verdict
+    lineage = view['lineage']
+    verdict['missing_evidence'] = lineage.get('missing', ['lineage coverage missing'])
+    verdict['witnessed'] = lineage.get('witnessed', [])
+    coverage = lineage.get('coverage', {})
+    if (lineage.get('complete') is not True or lineage.get('missing') != []
+            or not isinstance(coverage, dict)
+            or any(coverage.get(key) != 'witnessed' for key in verdict['coverage'])):
+        return verdict
+    try:
+        replay = view['replay']
+        # Report/replay remain separately checked facts, never ownership evidence.
+        if replay['expected'] != recorded_output:
+            raise Violation('report')
+        check(dict(config=view['config'], events=lineage['events'],
+                   report=view['report'], replay=replay))
+    except Violation as error:
+        verdict['semantic_verdict'] = 'fail: ' + str(error)
+    except (KeyError, TypeError, ValueError, IndexError):
+        verdict['missing_evidence'] = ['admission identity/timing/report mapping missing']
+        return verdict
+    else:
+        verdict['semantic_verdict'] = 'pass'
+    verdict['coverage'] = coverage
+    return verdict
 
 
 def main(path):

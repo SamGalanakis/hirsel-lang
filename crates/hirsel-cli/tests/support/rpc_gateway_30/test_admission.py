@@ -62,5 +62,44 @@ class MissingWitness(unittest.TestCase):
                 self.assertEqual(verdict['coverage']['request_credits'], 'unproven')
 
 
+class LineageAdapter(unittest.TestCase):
+    def view(self):
+        vector = copy.deepcopy(DATA['vectors'][0])
+        vector['lineage'] = dict(complete=True, missing=[], events=vector.pop('events'),
+                                witnessed=[], coverage=dict(admission='witnessed',
+                                request_credits='witnessed', upstream_credits='witnessed'))
+        return vector
+
+    def test_complete_internal_join_reaches_all_invariants(self):
+        view = self.view()
+        self.assertEqual(judge_recording(view, view['replay']['expected'])['semantic_verdict'], 'pass')
+
+    def test_partial_join_never_reaches_checker(self):
+        for field, value in [('complete', False), ('missing', ['RPC timing mapping missing']),
+                             ('coverage', {}), ('events', None)]:
+            with self.subTest(field=field):
+                view = self.view()
+                view['lineage'][field] = value
+                verdict = judge_recording(view, view['replay']['expected'])
+                self.assertEqual(verdict['semantic_verdict'], 'unproven: witness missing')
+
+    def test_supported_ownership_does_not_excuse_bad_backoff(self):
+        view = self.view()
+        event = next(e for e in view['lineage']['events'] if e['op'] == 'backoff')
+        event['until'] += 1
+        self.assertEqual(judge_recording(view, view['replay']['expected'])['semantic_verdict'], 'fail: backoff')
+
+    def test_recorded_bytes_must_match_checked_report(self):
+        view = self.view()
+        wrong = dict(view['replay']['expected'], stdout='forged')
+        self.assertEqual(judge_recording(view, wrong)['semantic_verdict'], 'fail: report')
+
+    def test_missing_admission_mapping_does_not_pass(self):
+        view = self.view()
+        del view['config']
+        self.assertEqual(judge_recording(view, view['replay']['expected'])['semantic_verdict'],
+                         'unproven: witness missing')
+
+
 if __name__ == '__main__':
     unittest.main()

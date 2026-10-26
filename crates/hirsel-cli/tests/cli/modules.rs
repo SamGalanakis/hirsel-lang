@@ -138,3 +138,4 @@ mod ownership_source_request_49;
 mod ordered_deadline_liveness_55;
 mod trace_resource_tape_55;
 mod c_header_bootstrap_57;
+mod rpc_lineage_consumer_59;
