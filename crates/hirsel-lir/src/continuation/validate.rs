@@ -468,6 +468,7 @@ fn check_state(
     exclusive: Option<&ExclusiveParameter>,
     frame: &[LiveStorage],
     base: u64,
+    isolate: Option<(&isolate::IsolateProtocol, &ValidatedUnit<Ready>)>,
 ) -> Result<(), ContinuationError> {
     let id = u.header.instance;
     let n = ordinal + 1;
@@ -647,6 +648,18 @@ fn check_state(
     }
     if ordered_await::candidate(u) {
         if !ordered_await::check(u, table, frame, state) || runtime_base != end {
+            return Err(ContinuationError::RuntimeOperation(id, n));
+        }
+    } else if let Some((protocol, wrapper)) = isolate {
+        let runtime = state
+            .runtime
+            .as_ref()
+            .ok_or(ContinuationError::RuntimeOperation(id, n))?;
+        if expected.call != protocol.begin.call
+            || state.callee.is_some()
+            || state.tail.is_some()
+            || !protocol.check_begin_operation(wrapper, table, runtime_base, runtime)
+        {
             return Err(ContinuationError::RuntimeOperation(id, n));
         }
     } else if scope::check(u, table, units, state, runtime_base)? != end {
@@ -1126,6 +1139,7 @@ pub fn validate(
                         site.exclusive.as_ref(),
                         &plan.storage,
                         base,
+                        None,
                     )?;
                 }
                 for (i, (state, &(block, instruction))) in
@@ -1483,6 +1497,7 @@ pub fn validate_runtime_operations(
                 None,
                 &plan.storage,
                 base,
+                None,
             )?;
         }
     }
@@ -1802,4 +1817,212 @@ mod region_width_tests {
             Err(ContinuationError::RegionRecord(_, 1))
         ));
     }
+}
+
+/// Physical checker for an inactive isolate proposal. Ordinary plans continue
+/// to refuse the exception until source/emitter admission is qualified.
+pub(super) fn isolate_frame(
+    units: &[&ValidatedUnit<Ready>],
+    inputs: &PlanInputs<'_>,
+    ordinary: &ContinuationPlans,
+    protocol: &isolate::IsolateProtocol,
+    plan: &ContinuationPlan,
+) -> Result<(), ContinuationError> {
+    let id = protocol.identity.wrapper;
+    let wrapper = units
+        .iter()
+        .copied()
+        .find(|u| u.unit().header.instance == id)
+        .ok_or(ContinuationError::Body(id))?;
+    let u = wrapper.unit();
+    let index: BTreeMap<_, _> = units
+        .iter()
+        .map(|u| (u.unit().header.instance, u.unit()))
+        .collect();
+    if plan.body != id || plan.digest != u.digest() {
+        return Err(ContinuationError::Body(id));
+    }
+    if plan.representation != Representation::Resumable
+        || !plan.cleanups.is_empty()
+        || !root_instruction_sites(u, inputs.table).is_empty()
+    {
+        return Err(ContinuationError::Representation(id));
+    }
+    let suspends = ordinary.plans.keys().copied().collect();
+    let effects: Vec<_> = u
+        .tables
+        .calls
+        .iter()
+        .enumerate()
+        .map(|(id, call)| {
+            if CallId(id as u32) == protocol.begin.call {
+                if let Callee::Operation(op) = call.callee
+                    && u.tables.operations[op.index()]
+                        .definition
+                        .is_core("$intrinsic.IsolateBegin")
+                {
+                    return CallEffect::Boundary(
+                        u.tables.operations[op.index()].definition.clone(),
+                    );
+                }
+                return CallEffect::Unknown("wrong isolate begin".into());
+            }
+            if let Callee::Operation(op) = call.callee {
+                let definition = &u.tables.operations[op.index()].definition;
+                if [
+                    "$intrinsic.IsolateEnd",
+                    "$intrinsic.IsolateCount",
+                    "$intrinsic.IsolateKind",
+                    "$intrinsic.IsolateRule",
+                    "$intrinsic.IsolateDefinition",
+                    "$intrinsic.IsolateLine",
+                    "$intrinsic.IsolateColumn",
+                    "$intrinsic.IsolateSpawn",
+                ]
+                .iter()
+                .any(|path| definition.is_core(path))
+                {
+                    return CallEffect::Local;
+                }
+            }
+            call_effect(u, call, &index, &suspends, inputs.classify)
+        })
+        .collect();
+    // Enumerate actual terminators rather than using the producer's sites.
+    let mut boundaries = Vec::new();
+    for (b, term) in u.terminators.iter().enumerate() {
+        let Terminator::Call {
+            call,
+            normal: Some(normal),
+            ..
+        } = *term
+        else {
+            continue;
+        };
+        let (operation, callee) = match &effects[call.index()] {
+            CallEffect::Local => continue,
+            CallEffect::Unknown(_) => return Err(ContinuationError::Representation(id)),
+            CallEffect::Boundary(op) => (op.clone(), None),
+            CallEffect::Nested(body) => {
+                let nested = ordinary
+                    .get(*body)
+                    .filter(|p| p.representation == Representation::Resumable)
+                    .ok_or(ContinuationError::Representation(id))?;
+                let abi = &inputs.table.fn_abis[u.tables.calls[call.index()].abi.0 as usize];
+                if abi
+                    .parameters
+                    .iter()
+                    .any(|p| p.passing == ParameterPassing::ExclusiveAddress)
+                {
+                    return Err(ContinuationError::Exclusive(
+                        id,
+                        boundaries.len() as u32 + 1,
+                    ));
+                }
+                (
+                    callee_symbol(u, &u.tables.calls[call.index()])
+                        .unwrap()
+                        .definition,
+                    Some((*body, nested.cost.frame_bytes)),
+                )
+            }
+        };
+        let block = BlockId(b as u32);
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![u.tables.edges[normal.index()].target];
+        while let Some(at) = pending.pop() {
+            if at == block {
+                return Err(ContinuationError::Representation(id));
+            }
+            if seen.insert(at) {
+                pending.extend(successors(u, at));
+            }
+        }
+        boundaries.push((
+            ExistingBoundary {
+                block,
+                call,
+                operation,
+            },
+            callee,
+        ));
+    }
+    if boundaries.len() != plan.states.len() || boundaries.is_empty() {
+        return Err(ContinuationError::States(id));
+    }
+    let mut end = check_fixed(u, inputs.table, inputs.target, plan)?;
+    let slots: BTreeSet<_> = boundaries
+        .iter()
+        .flat_map(|(site, _)| storage(u, site.block).0)
+        .filter(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)))
+        .collect();
+    if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
+        != slots.iter().copied().collect::<Vec<_>>()
+    {
+        return Err(ContinuationError::Storage(id, 0));
+    }
+    for slot in &plan.storage {
+        let ty = &u.types[u.slots[slot.slot.index()].ty.index()];
+        let (bytes, align) =
+            fixed(inputs.table, slot.layout).ok_or(ContinuationError::Frame(id))?;
+        if slot.layout != ty.layout
+            || slot.repr != ty.repr
+            || slot.offset < end
+            || slot.offset % align != 0
+        {
+            return Err(ContinuationError::Storage(id, 0));
+        }
+        end = slot
+            .offset
+            .checked_add(bytes)
+            .filter(|e| *e <= MAX_FRAME_BYTES)
+            .ok_or(ContinuationError::Frame(id))?;
+    }
+    let base = end.next_multiple_of(8);
+    let live = Live::compute(u);
+    let mut begins = 0;
+    for (ordinal, (state, (site, callee))) in plan.states.iter().zip(&boundaries).enumerate() {
+        let begin = site.call == protocol.begin.call;
+        begins += usize::from(begin);
+        check_state(
+            u,
+            inputs.table,
+            &index,
+            &live,
+            ordinal as u32,
+            state,
+            site,
+            *callee,
+            None,
+            &plan.storage,
+            base,
+            begin.then_some((protocol, wrapper)),
+        )?;
+    }
+    let frame = plan.states.iter().map(|s| s.bytes).max().unwrap_or(0);
+    if begins != 1
+        || plan.cost.frame_bytes != frame
+        || frame > MAX_FRAME_BYTES
+        || plan.cost.boundaries as usize != plan.states.len()
+        || plan.captures != inputs.environments.get(&id).copied().flatten()
+    {
+        return Err(ContinuationError::Frame(id));
+    }
+    let digests = index.iter().map(|(k, u)| (*k, u.digest())).collect();
+    let certificate = certify(
+        u,
+        inputs,
+        &effects,
+        &digests,
+        &plan.representation,
+        (&plan.parameters, &plan.records),
+        &plan.storage,
+        &plan.states,
+        &plan.cleanups,
+        plan.captures,
+    );
+    if plan.certificate != certificate {
+        return Err(ContinuationError::Certificate(id));
+    }
+    Ok(())
 }

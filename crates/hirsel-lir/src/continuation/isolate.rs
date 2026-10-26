@@ -13,7 +13,9 @@ use crate::stage::Ready;
 
 mod begin;
 mod cleanup;
+mod frame;
 pub use cleanup::{CleanupOwner, SynchronousCleanup, SynchronousCleanupPlan};
+pub use frame::IsolatePlan;
 mod protocol;
 pub use protocol::{CallPoint, CleanupPoint, HeldResult, InstructionPoint, IsolateProtocol};
 
