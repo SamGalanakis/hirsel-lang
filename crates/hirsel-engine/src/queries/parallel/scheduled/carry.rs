@@ -349,12 +349,11 @@ impl BodyTask {
             .unwrap_or_else(|e| e.into_inner())
             .insert(self.input, outcome);
         queries.store_adoptions.fetch_add(1, Relaxed);
-        // Carried facts were already accepted. This validates their current
-        // reads and publishes references; it does not rewrite body memos.
+        // Carried facts complete this in-process query independently of body
+        // storage. Publishing a body association would fetch its archive just
+        // to check existence, even though Check needs only these compact facts.
+        // A later actual body demand owns materialization and its association.
         timings::count(Count::StoreHits);
-        queries
-            .store
-            .associate_product(self.query.address, action, reference);
         Some(Ok(ProductRef {
             address: self.query.address,
             action,
