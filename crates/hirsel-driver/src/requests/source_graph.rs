@@ -811,6 +811,7 @@ pub(super) fn install(
     request: &CompileRequest,
     ledger: Arc<InspectionLedger>,
     carry: Option<&Carry>,
+    source_index: &Mutex<Option<hirsel_engine::SourceIndexState>>,
     scratch_parent: &std::path::Path,
     toolchain: Option<&Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -863,11 +864,22 @@ pub(super) fn install(
     let mut selected_config = config.clone();
     selected_config.store = store.clone();
     let selected_compiler = compiler.clone().with_config(selected_config);
-    let mut program =
-        match selected_compiler.load_check_package_inputs(&request.path, &request.inputs, true) {
-            Ok(program) => program,
-            Err(error) => return Err(loading.failed(error)),
-        };
+    let prior_index = source_index
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    let loaded = match prior_index {
+        Some(index) => selected_compiler.load_check_package_inputs_with_source_index(
+            &request.path,
+            &request.inputs,
+            index,
+        ),
+        None => selected_compiler.load_check_package_inputs(&request.path, &request.inputs, true),
+    };
+    let mut program = match loaded {
+        Ok(program) => program,
+        Err(error) => return Err(loading.failed(error)),
+    };
     if let CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) =
         &request.operation
         && let Err(error) = super::native_sources::install(
@@ -936,6 +948,10 @@ pub(super) fn install(
         let inspection_bytes =
             GraphMeter::input_bytes(definitions, program.engine.memo_snapshot().len())
                 .ok_or_else(uninstalled)?;
+        let source_index_bytes = program.engine.source_index_bytes().unwrap_or(0);
+        let inspection_bytes = inspection_bytes
+            .checked_add(source_index_bytes)
+            .ok_or_else(uninstalled)?;
         Plan::new(
             limits,
             config,
@@ -1087,6 +1103,7 @@ pub(super) fn install(
             .map_or(0, |inputs| inputs.input_bytes()),
     )?;
     let sources = program.engine.sources.clone();
+    let source_index_bytes = program.engine.source_index_bytes().unwrap_or(0);
     let GraphAdmission {
         runtime,
         source,
@@ -1098,6 +1115,8 @@ pub(super) fn install(
         mut run,
     } = loading.finish(plan.snapshots)?;
     let mut check = check;
+    let mut source = source;
+    let source_index_allowance = source.split(source_index_bytes).ok_or_else(uninstalled)?;
     let source = Arc::new(source);
     let query_error = |error| ToolError::Query {
         error,
@@ -1476,6 +1495,11 @@ pub(super) fn install(
             )
         })
         .collect();
+    let touched_memos = program.engine.take_touched_memos();
+    let initial = RequestWork {
+        touched_memos,
+        ..initial
+    };
     let meter = GraphMeter::new(
         ledger,
         front.clone(),
@@ -1491,6 +1515,15 @@ pub(super) fn install(
     runtime
         .observe(Arc::new(MeterOwner(meter.clone())))
         .map_err(registration)?;
+    // Move only source/header state. Scalar bodies, S1 and every controller
+    // are dropped before the immutable graph becomes visible.
+    if source_index_bytes != 0 {
+        let state = program
+            .engine
+            .into_source_index(source_index_allowance)
+            .ok();
+        *source_index.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    }
     let products = Arc::new(SourceProducts {
         entry: program.entry,
         inputs: request.inputs.clone(),

@@ -26,6 +26,7 @@ pub struct CompilerRequests {
     /// Accepted front facts and Lower outcomes carried from one source
     /// revision's graph to the next.
     carry: Option<super::source_graph::Carry>,
+    source_index: std::sync::Mutex<Option<hirsel_engine::SourceIndexState>>,
     scratch_parent: std::path::PathBuf,
     toolchain: Option<Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
@@ -100,6 +101,7 @@ impl CompilerRequests {
             budget,
             limits,
             carry,
+            source_index: std::sync::Mutex::new(None),
             scratch_parent: std::env::temp_dir(),
             toolchain: None,
             host_toolchain: false,
@@ -183,6 +185,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
         let config = &self.config;
         let limits = self.limits;
         let carry = self.carry.as_ref();
+        let source_index = &self.source_index;
         let scratch_parent = &self.scratch_parent;
         let toolchain = self.toolchain.as_ref();
         let host_toolchain = self.host_toolchain;
@@ -196,6 +199,7 @@ impl hirsel_engine::requests::RequestEngine for CompilerRequests {
                 request,
                 ledger,
                 carry,
+                source_index,
                 scratch_parent,
                 toolchain,
                 host_toolchain,

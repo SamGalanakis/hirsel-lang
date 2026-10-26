@@ -654,17 +654,3 @@ pub use queries::native_discovery::{
     NATIVE_DISCOVERY_KIND, NativeBodyContracts, NativeDiscoveryCache, NativeDiscoveryCounts,
     NativeDiscoveryProduct,
 };
-
-#[doc(hidden)]
-pub fn carl19_probe(why: &str) {
-    *carl19_probe_lock().entry(why.to_string()).or_default() += 1;
-}
-#[doc(hidden)]
-pub fn carl19_probe_take() -> std::collections::BTreeMap<String, u64> {
-    std::mem::take(&mut *carl19_probe_lock())
-}
-fn carl19_probe_lock() -> std::sync::MutexGuard<'static, std::collections::BTreeMap<String, u64>> {
-    static COUNTS: std::sync::Mutex<std::collections::BTreeMap<String, u64>> =
-        std::sync::Mutex::new(std::collections::BTreeMap::new());
-    COUNTS.lock().unwrap_or_else(|e| e.into_inner())
-}
