@@ -28,6 +28,7 @@ struct FrameState {
 }
 struct CallState {
     definition: DefPath,
+    arena_scope: bool,
     body: Option<hirsel_tir::BodyId>,
     captures: Vec<(u32, Owner)>,
     borrowed_captures: Vec<(u32, Owner)>,
@@ -777,7 +778,7 @@ impl Observer for Resources {
                     } else {
                         let mut borrowed_captures = vec![];
                         let mut capture_views = vec![];
-                        let (definition, body, captures) = match callee {
+                        let (mut definition, body, captures) = match callee {
                             hirsel_tir::Callee::Definition { path, .. } => {
                                 (path.clone(), None, vec![])
                             }
@@ -903,8 +904,27 @@ impl Observer for Resources {
                             }
                             None => None,
                         };
+                        let arena_scope = definition.is_core("arena.with");
+                        if arena_scope {
+                            let callback = arguments
+                                .iter()
+                                .find(|argument| argument.parameter.0 == 0)
+                                .and_then(|argument| frame.observe(argument.value.place).ok());
+                            let Some(Value::FunctionReference(callback)) = callback else {
+                                self.unsupported("arena callback needs observed capture transport");
+                                return;
+                            };
+                            if !incoming.is_empty() || !views.is_empty() {
+                                self.unsupported(
+                                    "arena callback has untransported resource arguments",
+                                );
+                                return;
+                            }
+                            definition = callback.definition.clone();
+                        }
                         self.call = Some(CallState {
                             definition,
+                            arena_scope,
                             body,
                             captures,
                             borrowed_captures,
@@ -952,6 +972,7 @@ impl Observer for Resources {
         if callee.definition.path.path() != &call.definition
             || call.body.is_some_and(|body| callee.body_id != body)
             || callee.bounded.is_some()
+            || callee.arena_scope.is_some() != call.arena_scope
         {
             self.unsupported("call target or bounded transport changed");
             return;
