@@ -110,6 +110,26 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 &self.unit.header.implementation_revision,
                 marker.site,
             );
+            if marker.kind == 3 {
+                let alias = self.ownership_function(
+                    "hirsel_rt_v2_ownership_alias",
+                    self.module.void_type(),
+                    &[ptr, i64, i32, i64, i64, i64, i32],
+                )?;
+                self.builder.call(
+                    alias,
+                    &[
+                        self.context,
+                        frame,
+                        self.module.const_int(i32, u128::from(marker.id.0)),
+                        self.const_u64(location(marker.token)),
+                        self.const_u64(location(marker.owner)),
+                        self.const_u64(site),
+                        self.module.const_int(i32, u128::from(marker.layout.0)),
+                    ],
+                );
+                continue;
+            }
             self.builder.call(
                 event,
                 &[

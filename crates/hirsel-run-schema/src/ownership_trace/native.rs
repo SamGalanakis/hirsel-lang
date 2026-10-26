@@ -59,6 +59,8 @@ pub struct Log {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Metadata {
     pub action: u32,
+    /// Independently checked exact call-site target, present only for Alias.
+    pub callee: Option<[u8; 32]>,
     pub token: u64,
     pub owner: u64,
     pub site: u64,
@@ -79,6 +81,7 @@ pub enum Error {
     UnknownUnit([u8; 32]),
     InvalidMarker(u32),
     InvalidLocation(u64),
+    RetainedEnvironment(u32),
     Consistency(Diagnostic),
 }
 impl std::fmt::Display for Error {
@@ -188,7 +191,7 @@ fn decode(
         id: u64,
         unit: [u8; 32],
         environment: Option<Owner>,
-        pending: Option<Owner>,
+        pending: Option<(Owner, [u8; 32])>,
     }
     let mut frames: Vec<Frame> = Vec::new();
     let mut entered = BTreeSet::new();
@@ -220,10 +223,24 @@ fn decode(
                 if !frames.is_empty() && !metadata.is_empty() && !allowed {
                     return Err(Error::InvalidFrame(frame));
                 }
-                let environment = if allowed {
-                    frames.last_mut().and_then(|parent| parent.pending.take())
-                } else {
-                    None
+                let environment = match frames.last_mut() {
+                    Some(parent)
+                        if parent
+                            .pending
+                            .as_ref()
+                            .is_some_and(|(_, expected)| *expected == unit) =>
+                    {
+                        if !allowed {
+                            return Err(Error::InvalidFrame(frame));
+                        }
+                        parent.pending.take().map(|(owner, _)| owner)
+                    }
+                    Some(parent)
+                        if parent.pending.is_some() && (allowed || !metadata.is_empty()) =>
+                    {
+                        return Err(Error::InvalidFrame(frame));
+                    }
+                    _ => None,
                 };
                 frames.push(Frame {
                     id: frame,
@@ -269,7 +286,17 @@ fn decode(
                 {
                     return Err(Error::InvalidMarker(marker));
                 }
-                current.pending = Some(owner(frame, parent, current.environment.as_ref(), target)?);
+                let expected_callee = expected.callee.ok_or(Error::InvalidMarker(marker))?;
+                if !calls
+                    .and_then(|calls| calls.get(&current.unit))
+                    .is_some_and(|targets| targets.contains(&expected_callee))
+                {
+                    return Err(Error::InvalidMarker(marker));
+                }
+                current.pending = Some((
+                    owner(frame, parent, current.environment.as_ref(), target)?,
+                    expected_callee,
+                ));
             }
             Row::Event {
                 frame,
@@ -322,6 +349,19 @@ fn decode(
                         tracker
                             .move_tree(&context, &from, &to)
                             .map_err(Error::Consistency)?;
+                    }
+                    // A callable shell has no Resource identity. Its
+                    // checked physical retirement is complete only when every
+                    // actual captured resource already left or was dropped.
+                    // Never infer descendant resource drops from the shell.
+                    4 if from == to => {
+                        if tracker.inventory().owners.keys().any(|at| {
+                            at.task == from.task
+                                && at.storage == from.storage
+                                && at.path.starts_with(&from.path)
+                        }) {
+                            return Err(Error::RetainedEnvironment(marker));
+                        }
                     }
                     2 if from == to => {
                         tracker

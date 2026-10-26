@@ -120,10 +120,31 @@ impl FnEmitter<'_, '_, '_> {
             let owner = self.b.ins().iconst(types::I64, location(marker.owner));
             let site = self.b.ins().iconst(types::I64, site as i64);
             let layout = self.b.ins().iconst(types::I32, i64::from(marker.layout.0));
-            self.b.ins().call(
-                event,
-                &[self.context, frame, id, kind, source, owner, site, layout],
-            );
+            if marker.kind == 3 {
+                let alias = self.ownership_function(
+                    "hirsel_rt_v2_ownership_alias",
+                    None,
+                    &[
+                        PTR,
+                        types::I64,
+                        types::I32,
+                        types::I64,
+                        types::I64,
+                        types::I64,
+                        types::I32,
+                    ],
+                )?;
+                let alias = self.func_ref(alias);
+                self.b.ins().call(
+                    alias,
+                    &[self.context, frame, id, source, owner, site, layout],
+                );
+            } else {
+                self.b.ins().call(
+                    event,
+                    &[self.context, frame, id, kind, source, owner, site, layout],
+                );
+            }
         }
         Ok(())
     }

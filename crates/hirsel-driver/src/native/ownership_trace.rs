@@ -119,6 +119,8 @@ pub(crate) fn emit_relocated(
         .digest();
     let calls = hirsel_lir::ownership_trace::native::local_calls(selected)
         .map_err(|message| NativeError::new(StageName::Emission, message))?;
+    let call_sites =
+        hirsel_lir::ownership_trace::native::local_call_sites(selected).map_err(failed)?;
     let mut units = BTreeMap::new();
     for unit in selected {
         let original = plans
@@ -179,6 +181,25 @@ pub(crate) fn emit_relocated(
                 marker.id.0,
                 Metadata {
                     action: marker.kind,
+                    callee: if marker.kind == 3 {
+                        let row = original
+                            .observations
+                            .iter()
+                            .find(|row| row.marker.id == marker.id)
+                            .ok_or_else(|| failed("Alias lost original call binding"))?;
+                        let hirsel_lir::ownership_trace::Point::CallEntered(block) = row.point
+                        else {
+                            return Err(failed("Alias is not an entered call"));
+                        };
+                        Some(
+                            *call_sites
+                                .get(&body.digest().0)
+                                .and_then(|sites| sites.get(&block))
+                                .ok_or_else(|| failed("Alias has no exact checked callee"))?,
+                        )
+                    } else {
+                        None
+                    },
                     token: location(marker.token),
                     owner: location(marker.owner),
                     site: site_code(

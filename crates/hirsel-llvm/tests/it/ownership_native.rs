@@ -142,6 +142,7 @@ fn metadata(program: &support::programs::Program) -> Units {
                         marker.id.0,
                         Metadata {
                             action: marker.kind,
+                            callee: None,
                             token: location(marker.token),
                             owner: location(marker.owner),
                             site: site_code(

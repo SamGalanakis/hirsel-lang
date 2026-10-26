@@ -20,6 +20,7 @@ fn fixture() -> (Log, Units) {
     ] {
         let metadata = Metadata {
             action,
+            callee: None,
             token,
             owner,
             site: 42,
@@ -376,6 +377,7 @@ fn owned_call_rows() -> (Log, Units, LocalCalls) {
     let mut event = |unit, frame, marker, action, token, owner| {
         let metadata = Metadata {
             action,
+            callee: None,
             token,
             owner,
             site: 42,
@@ -480,6 +482,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
             marker,
             Metadata {
                 action,
+                callee: None,
                 token,
                 owner,
                 site,
@@ -530,6 +533,7 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
     rows.push(Row::Leave { task: 0, frame: 1 });
     let mut alias_metadata = units[&caller][&2].clone();
     alias_metadata.action = 3;
+    alias_metadata.callee = Some(callee);
     alias_metadata.token = 2;
     alias_metadata.owner = slot;
     alias_metadata.site = 43;
@@ -573,6 +577,19 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
         decode_local_calls(&forged, [49; 32], &units, &calls, 100).unwrap_err(),
         Error::InvalidMarker(3)
     );
+    let mut swapped = log.clone();
+    let Row::Enter { unit, .. } = &mut swapped.rows[5] else {
+        unreachable!()
+    };
+    *unit = [9; 32];
+    let mut swapped_units = units.clone();
+    swapped_units.insert([9; 32], units[&callee].clone());
+    let mut swapped_calls = calls.clone();
+    swapped_calls.get_mut(&caller).unwrap().insert([9; 32]);
+    assert_eq!(
+        decode_local_calls(&swapped, [49; 32], &swapped_units, &swapped_calls, 100).unwrap_err(),
+        Error::InvalidFrame(2)
+    );
     let mut false_metadata = units.clone();
     false_metadata
         .get_mut(&caller)
@@ -584,4 +601,36 @@ fn native_alias_binds_capture_custody_without_an_ownership_event() {
         decode_local_calls(&forged, [49; 32], &false_metadata, &calls, 100),
         Err(Error::Consistency(_))
     ));
+}
+
+#[test]
+fn native_empty_carrier_retirement_never_invents_resource_drops() {
+    let (mut log, mut units) = fixture();
+    let owner = 1u64 << 32;
+    let mut marker = units[&[7; 32]][&2].clone();
+    marker.action = 4;
+    marker.token = owner;
+    marker.owner = owner;
+    units.get_mut(&[7; 32]).unwrap().insert(20, marker.clone());
+    let retirement = Row::Event {
+        task: 0,
+        frame: 1,
+        marker: 20,
+        action: 4,
+        token: owner,
+        owner,
+        site: marker.site,
+        layout: marker.layout,
+    };
+    log.rows.insert(4, retirement); // immediately after actual Resource Drop
+    log.row_count += 1;
+    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+    assert_eq!(trace.events.len(), 6);
+    assert_eq!(trace.analyze([49; 32], 100).unwrap().dropped, 2);
+    log.rows.remove(4);
+    log.rows.insert(3, retirement); // still-owned resource before actual Drop
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+        Error::RetainedEnvironment(20)
+    );
 }

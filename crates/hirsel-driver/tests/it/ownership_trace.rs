@@ -1390,3 +1390,24 @@ pub fn main() -> Result[(), ()] {
         hirsel_run_schema::exit::FAILED,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn ownership_native_once_capture_returns_original_resource_on_four_engines() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { value: u64 }
+drop(x) {}
+fn relay(take token: Token) -> Token {
+  let captured: once fn() -> Token = fn() -> Token { take token }
+  captured()
+}
+pub fn main() -> Result[(), ()] {
+  let first = relay(Token(value: 7u64))
+  let second = relay(Token(value: 7u64))
+  Ok(())
+}
+"#,
+        2,
+    );
+}

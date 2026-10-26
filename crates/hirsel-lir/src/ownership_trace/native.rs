@@ -7,6 +7,8 @@ use super::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::{Ready, ValidatedUnit};
 
+mod calls;
+
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
 pub const ABI_VERSION: u32 = 72;
@@ -94,8 +96,7 @@ impl LeafPlan {
             // create an additional resource token for the callable shell.
             // Native encoding still refuses it until environment transport
             // has an independently checked representation.
-            let carrier_move = source_only
-                && matches!(kind, Kind::Move | Kind::Drop)
+            let carrier_move = matches!(kind, Kind::Move | Kind::Drop | Kind::Alias)
                 && layouts
                     .layout(layout)
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }));
@@ -117,11 +118,9 @@ impl LeafPlan {
                         kind: match kind {
                             Kind::Create => 0,
                             Kind::Move => 1,
+                            Kind::Drop if carrier_move => 4,
                             Kind::Drop => 2,
-                            Kind::Alias => return Err(
-                                "native ownership tracing: Alias hook transport is not implemented"
-                                    .into(),
-                            ),
+                            Kind::Alias => 3,
                         },
                         token: location(unit, from, point)?,
                         owner: location(unit, to, point)?,
@@ -226,7 +225,7 @@ impl LeafPlan {
                     }
                     Inst::Closure {
                         result, closure, ..
-                    } if source_only => {
+                    } => {
                         let site = &unit.tables.closures[closure.index()];
                         for (capture, captured) in site
                             .captures
@@ -356,6 +355,7 @@ impl LeafPlan {
                     | Inst::IntArith { .. }
                     | Inst::MulAdd { .. }
                     | Inst::ScalarUnary { .. }
+                    | Inst::UpdateMask { .. }
                     | Inst::Check { .. }
                     | Inst::Read { .. }
                     | Inst::Store { .. }
@@ -383,20 +383,43 @@ impl LeafPlan {
             match unit.terminators[b.index()] {
                 Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
-                    // The call borrows its callable holder; C keeps that
-                    // holder alive on both exits. Only actual capture takes
-                    // move lineage. Native target/environment binding is
-                    // still required before emission can accept this call.
-                    let source_once = source_only
-                        && call.callee.value().is_some()
+                    let once = call.callee.value().is_some()
                         && layouts.fn_abis.get(call.abi.0 as usize).is_some_and(|abi| {
                             abi.environment
                                 && abi.multiplicity == crate::abi_types::CallMultiplicity::Once
                         });
-                    if (!matches!(call.callee, Callee::Direct(_)) && !source_once)
+                    if (!matches!(call.callee, Callee::Direct(_)) && !once)
                         || call.pretransfer_failure.is_some()
                     {
                         return Err("native ownership tracing: mutable or indirect call transport is not implemented".into());
+                    }
+                    if once {
+                        let view = call
+                            .callee
+                            .value()
+                            .ok_or("once call has no callable view")?;
+                        let mut reads = unit.instructions.iter().filter_map(|inst| match *inst {
+                            Inst::Read {
+                                result,
+                                address,
+                                mode: ReadMode::Borrow,
+                                ..
+                            } if result == view => Some(address),
+                            _ => None,
+                        });
+                        let address = reads
+                            .next()
+                            .ok_or("once call has no checked borrowed environment owner")?;
+                        if reads.next().is_some() {
+                            return Err("once callable view is not unique".into());
+                        }
+                        push(
+                            Point::CallEntered(b),
+                            Kind::Alias,
+                            Location::Value(view),
+                            Location::Address(address),
+                            layout(view),
+                        )?;
                     }
                     for argument in call
                         .arguments
@@ -595,13 +618,15 @@ impl LeafPlan {
                     kind: match marker.kind {
                         Kind::Create => 0,
                         Kind::Move => 1,
-                        Kind::Drop => 2,
-                        Kind::Alias => {
-                            return Err(
-                                "native ownership tracing: Alias hook transport is not implemented"
-                                    .into(),
-                            );
+                        Kind::Drop
+                            if layouts.layout(layout).is_some_and(|record| {
+                                matches!(record.kind, LayoutKind::Callable { .. })
+                            }) =>
+                        {
+                            4
                         }
+                        Kind::Drop => 2,
+                        Kind::Alias => 3,
                     },
                     token: location(body, marker.token, observation.point)?,
                     owner: location(body, marker.owner, observation.point)?,
@@ -739,13 +764,24 @@ impl LeafPlan {
 pub fn local_calls(
     units: &[&ValidatedUnit<Ready>],
 ) -> Result<BTreeMap<[u8; 32], std::collections::BTreeSet<[u8; 32]>>, String> {
+    Ok(local_call_sites(units)?
+        .into_iter()
+        .map(|(unit, sites)| (unit, sites.into_values().collect()))
+        .collect())
+}
+
+/// Exact checked target of each original caller block. An Alias names one
+/// call site, never the union of all functions that caller might invoke.
+pub fn local_call_sites(
+    units: &[&ValidatedUnit<Ready>],
+) -> Result<BTreeMap<[u8; 32], BTreeMap<BlockId, [u8; 32]>>, String> {
     let mut symbols = BTreeMap::new();
     for unit in units {
         let body = unit.unit();
         if symbols
             .insert(
                 (&body.header.definition, body.header.instance),
-                body.digest().0,
+                (body.digest().0, body.header.abi),
             )
             .is_some()
         {
@@ -755,22 +791,41 @@ pub fn local_calls(
     let mut calls = BTreeMap::new();
     for unit in units {
         let body = unit.unit();
-        let mut targets = std::collections::BTreeSet::new();
-        for terminator in &body.terminators {
+        let mut targets = BTreeMap::new();
+        let codes = calls::discover(body);
+        for (block, terminator) in body.terminators.iter().enumerate() {
             let Terminator::Call { call, .. } = terminator else {
                 continue;
             };
-            let Callee::Direct(symbol) = body.tables.calls[call.index()].callee else {
-                return Err("native ownership tracing: indirect or operation call target".into());
+            let (symbol, abi) = match body.tables.calls[call.index()].callee {
+                Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
+                    (&body.tables.symbols[symbol.index()], None)
+                }
+                Callee::Indirect(value) => {
+                    let calls::Code::Known(target) = &codes[value.index()] else {
+                        return Err(
+                            "native ownership tracing: unresolved diagnostic callable target"
+                                .into(),
+                        );
+                    };
+                    (&target.symbol, target.abi)
+                }
+                Callee::Operation(_) => {
+                    return Err("native ownership tracing: operation call target".into());
+                }
             };
-            let symbol = &body.tables.symbols[symbol.index()];
             let instance = symbol
                 .instance
                 .ok_or("native ownership tracing: unspecialized diagnostic call target")?;
             let target = symbols
                 .get(&(&symbol.definition, instance))
                 .ok_or("native ownership tracing: missing diagnostic call target")?;
-            targets.insert(*target);
+            if abi.is_some_and(|abi| abi != target.1) {
+                return Err(
+                    "native ownership tracing: closure code ABI differs from emitted body".into(),
+                );
+            }
+            targets.insert(BlockId(block as u32), target.0);
         }
         calls.insert(body.digest().0, targets);
     }
@@ -795,9 +850,15 @@ fn location<S>(
                 }
                 match info.base {
                     AddressBase::Slot(slot) => {
-                        return Ok(NativeLocation {
-                            kind: 1,
-                            index: slot.0,
+                        return Ok(match unit.slots[slot.index()].kind {
+                            SlotKind::Capture(capture) => NativeLocation {
+                                kind: 6,
+                                index: capture,
+                            },
+                            _ => NativeLocation {
+                                kind: 1,
+                                index: slot.0,
+                            },
                         });
                     }
                     AddressBase::Address(parent) => address = parent,
@@ -806,6 +867,12 @@ fn location<S>(
             }
             Err("native ownership tracing: projected or nonlocal storage is not implemented".into())
         }
+        Location::Capture { closure, capture } => Ok(NativeLocation {
+            kind: capture
+                .checked_add(8)
+                .ok_or("capture ordinal exceeds native diagnostic encoding")?,
+            index: closure.0,
+        }),
         Location::Parameter(index) => Ok(NativeLocation {
             kind: if point == Point::Entry { 3 } else { 2 },
             index,
