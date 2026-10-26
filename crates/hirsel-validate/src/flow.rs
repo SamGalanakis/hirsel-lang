@@ -6944,6 +6944,7 @@ mod nominal_limit_tests {
                 returned: BTreeMap::new(),
                 static_data: None,
                 proof_errors: std::cell::RefCell::new(Vec::new()),
+                unique_parts_cache: Default::default(),
             };
             let model = Model::new(&mut checker);
             let lifetime_global = |ty: TypeId| {
@@ -7060,6 +7061,7 @@ mod header_name_tests {
                 returned: BTreeMap::new(),
                 static_data: None,
                 proof_errors: std::cell::RefCell::new(Vec::new()),
+                unique_parts_cache: Default::default(),
             };
             let model = Model::new(&mut checker);
             let state = model.initial(
@@ -7157,6 +7159,7 @@ mod header_name_tests {
                 returned: BTreeMap::new(),
                 static_data: None,
                 proof_errors: std::cell::RefCell::new(Vec::new()),
+                unique_parts_cache: Default::default(),
             };
             let model = Model::new(&mut checker);
             let state = model.initial(
