@@ -1,6 +1,9 @@
 // rule: MODE-2
-// expect: reject MODE-2 at line 5
-// A counted wrapper copy cannot export unique payload aliases.
-fn load(take r: Result[unique Bytes, ()]) -> (Result[unique Bytes, ()], Result[unique Bytes, ()]) {
+// expect: reject MODE-2 at line 8
+// twin: MODE/MODE-2-nested-unique-copy-ok.hir
+fn load(take r: Result[unique Bytes, ()]) -> (
+  Result[unique Bytes, ()],
+  Result[unique Bytes, ()]
+) {
   (copy r, take r)
 }

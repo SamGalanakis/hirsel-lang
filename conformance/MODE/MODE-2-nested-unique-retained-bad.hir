@@ -1,6 +1,6 @@
 // rule: MODE-2
 // expect: reject MODE-2 at line 5
-// Even returning only the original cannot retain its nested unique claim.
+// twin: MODE/MODE-2-nested-unique-copy-ok.hir
 fn load(take r: Result[unique Bytes, ()]) -> Result[unique Bytes, ()] {
   let alias = copy r
   take r

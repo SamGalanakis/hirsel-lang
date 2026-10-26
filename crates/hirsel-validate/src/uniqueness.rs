@@ -453,8 +453,10 @@ impl Checker<'_> {
                 &roles,
             );
             if let Ok(Some(root)) = root {
-                let incoming = self.copied_with(&value.value, values.iter().map(|v| &v.value));
-                self.nested_unique_transfer(state, store, root, &incoming, report);
+                if self.has_unique_parts(store, root) {
+                    let incoming = self.copied_with(&value.value, values.iter().map(|v| &v.value));
+                    self.nested_unique_transfer(state, store, root, &incoming, report);
+                }
                 self.nested_crossing_receipt(state, store, root, &value.value, report);
             }
         }
@@ -637,11 +639,11 @@ impl Checker<'_> {
         if others.any(|other| {
             let source = &self.body.places[other.place.0 as usize];
             other.usage == UseKind::Copy
-                && !self.flat_value(other.place)
-                && !super::handle_root(self.t, self.place_type(other.place))
                 && access.root == source.root
                 && (access.projection.starts_with(&source.projection)
                     || source.projection.starts_with(&access.projection))
+                && !super::handle_root(self.t, self.place_type(other.place))
+                && !self.flat_value(other.place)
         }) {
             incoming.usage = UseKind::Copy;
         }
@@ -668,6 +670,25 @@ impl Checker<'_> {
             && self.t.row(expected).modes.relation.has_environment()
     }
 
+    fn has_unique_parts(&self, store: &TypeInterner, root: TypeId) -> bool {
+        if let Some(required) = self.unique_parts_cache.borrow().get(&root) {
+            return *required;
+        }
+        match hirsel_types::owned_unique_parts(
+            store,
+            root,
+            &self.generic_declarations(),
+            &mut |p| Ok(self.signatures.get(p).cloned().map(std::sync::Arc::new)),
+        ) {
+            Ok(parts) => {
+                let required = !parts.is_empty();
+                self.unique_parts_cache.borrow_mut().insert(root, required);
+                required
+            }
+            Err(error) => self.proof_failure(error, false),
+        }
+    }
+
     pub(super) fn rvalue_shares_unique_parts(
         &self,
         state: &State,
@@ -679,19 +700,13 @@ impl Checker<'_> {
         };
         let source = &self.body.places[value.place.0 as usize];
         if !(value.usage == UseKind::Copy || state.shared[source.root.0 as usize])
+            || !self.has_unique_parts(self.t, self.place_type(destination))
             || self.flat_value(value.place)
             || super::handle_root(self.t, self.place_type(value.place))
         {
             return false;
         }
-        hirsel_types::owned_unique_parts(
-            self.t,
-            self.place_type(destination),
-            &self.generic_declarations(),
-            &mut |p| Ok(self.signatures.get(p).cloned().map(std::sync::Arc::new)),
-        )
-        .map(|parts| !parts.is_empty())
-        .unwrap_or_else(|error| self.proof_failure(error, false))
+        true
     }
 
     fn nested_unique_transfer(
@@ -707,6 +722,7 @@ impl Checker<'_> {
         // only an owned receiving position exports its payload contracts.
         if !matches!(value.usage, UseKind::Take | UseKind::Copy)
             || !(state.shared[access.root.0 as usize] || value.usage == UseKind::Copy)
+            || !self.has_unique_parts(store, destination)
             || self.flat_value(value.place)
             || super::handle_root(self.t, self.place_type(value.place))
             // Copy also stages borrowed matches in environment-local slots.
@@ -716,21 +732,12 @@ impl Checker<'_> {
         {
             return;
         }
-        let parts = hirsel_types::owned_unique_parts(
-            store,
-            destination,
-            &self.generic_declarations(),
-            &mut |p| Ok(self.signatures.get(p).cloned().map(std::sync::Arc::new)),
-        )
-        .unwrap_or_else(|error| self.proof_failure(error, Vec::new()));
-        if !parts.is_empty() {
-            self.flow_error(
-                report,
-                ViolationKind::TypeMismatch {
-                    entity: "value modes",
-                },
-            );
-        }
+        self.flow_error(
+            report,
+            ViolationKind::TypeMismatch {
+                entity: "value modes",
+            },
+        );
     }
 
     pub(super) fn mode_transfer(
@@ -864,9 +871,13 @@ impl Checker<'_> {
                 if let Some(parts) = self.constructor_layout(store, ty, constructor, fields.len()) {
                     for field in fields {
                         if let Some(expected) = parts.get(field.field as usize).copied() {
-                            let incoming =
-                                self.copied_with(&field.value, fields.iter().map(|f| &f.value));
-                            self.nested_unique_transfer(state, store, expected, &incoming, report);
+                            if self.has_unique_parts(store, expected) {
+                                let incoming =
+                                    self.copied_with(&field.value, fields.iter().map(|f| &f.value));
+                                self.nested_unique_transfer(
+                                    state, store, expected, &incoming, report,
+                                );
+                            }
                             if store.get(expected).unwrap().sendability_requirement
                                 == hirsel_types::SendabilityRequirement::Sendable
                             {

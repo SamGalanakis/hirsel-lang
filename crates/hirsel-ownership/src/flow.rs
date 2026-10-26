@@ -1344,6 +1344,7 @@ impl InitialStorage {
 struct Checker<'a, 's> {
     t: &'a TypeInterner,
     proof_error: std::cell::RefCell<Option<QueryError>>,
+    unique_parts_cache: std::cell::RefCell<std::collections::HashMap<TypeId, Vec<Vec<Projection>>>>,
     syntax: &'a ItemSyntax,
     tree: &'a hirsel_syntax::SyntaxTree,
     /// Diagnostics of this graph awaiting their causes (R1).
@@ -1825,6 +1826,7 @@ pub(super) fn check(
         callable: std::cell::OnceCell::new(),
         crossing_receipts: Default::default(),
         proof_error: std::cell::RefCell::new(None),
+        unique_parts_cache: Default::default(),
         modes: BTreeMap::new(),
         forwarded: BTreeMap::new(),
         binding_modes: BTreeMap::new(),
@@ -8758,31 +8760,43 @@ impl Checker<'_, '_> {
         if !deep {
             return self.shallow_unique_contract_on(root, path);
         }
-        // Keep the existing root/ancestor judgment, and inspect every owned
-        // descendant under a shared prefix, including nominal variant payloads.
-        let parts = owned_unique_parts(
+        if let Some(parts) = self.unique_parts_cache.borrow().get(&root) {
+            return parts
+                .iter()
+                .any(|parts| parts.starts_with(path) || path.starts_with(parts));
+        }
+        let parts = match owned_unique_parts(
             self.t,
             root,
             &self.body.resolution.generic_declarations,
             &mut |p| Ok(self.signatures.cached(p)),
-        )
-        .unwrap_or_else(|error| {
-            *self.proof_error.borrow_mut() = Some(error);
-            Vec::new()
-        });
-        parts.into_iter().any(|parts| {
-            let parts: Vec<_> = parts
-                .into_iter()
-                .map(|p| match p {
-                    OwnedTypePart::Field(f) => Projection::Field(f),
-                    OwnedTypePart::VariantField { variant, field } => {
-                        Projection::VariantField { variant, field }
-                    }
-                    OwnedTypePart::Elements => Projection::Elements,
-                })
-                .collect();
-            deep && parts.starts_with(path) || path.starts_with(&parts)
-        })
+        ) {
+            Ok(parts) => parts,
+            Err(error) => {
+                *self.proof_error.borrow_mut() = Some(error);
+                return false;
+            }
+        };
+        let parts: Vec<Vec<_>> = parts
+            .into_iter()
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .map(|p| match p {
+                        OwnedTypePart::Field(f) => Projection::Field(f),
+                        OwnedTypePart::VariantField { variant, field } => {
+                            Projection::VariantField { variant, field }
+                        }
+                        OwnedTypePart::Elements => Projection::Elements,
+                    })
+                    .collect()
+            })
+            .collect();
+        let required = parts
+            .iter()
+            .any(|parts| parts.starts_with(path) || path.starts_with(parts));
+        self.unique_parts_cache.borrow_mut().insert(root, parts);
+        required
     }
 
     fn shallow_unique_contract_on(&self, root: TypeId, path: &[Projection]) -> bool {

@@ -390,6 +390,7 @@ fn validate_input(
             returned: BTreeMap::new(),
             static_data: None,
             proof_errors: std::cell::RefCell::new(Vec::new()),
+            unique_parts_cache: Default::default(),
         };
         let mut witnessed = BTreeSet::new();
         for tail in &body.tail_sites {
@@ -510,6 +511,7 @@ fn validate_input(
             returned: BTreeMap::new(),
             static_data: None,
             proof_errors: std::cell::RefCell::new(Vec::new()),
+            unique_parts_cache: Default::default(),
         };
         checker.flow(&environments[&index], false);
         if !checker.proof_errors.borrow().is_empty() {
@@ -549,6 +551,7 @@ fn validate_input(
             returned: BTreeMap::new(),
             static_data: None,
             proof_errors: std::cell::RefCell::new(Vec::new()),
+            unique_parts_cache: Default::default(),
         };
         if let Some(captures) = environments.get(&(index as u32)) {
             checker.flow(captures, true);
@@ -579,6 +582,7 @@ fn validate_input(
                         returned: BTreeMap::new(),
                         static_data: None,
                         proof_errors: std::cell::RefCell::new(Vec::new()),
+                        unique_parts_cache: Default::default(),
                     };
                     proof.flow_with(captures, true, Some(parameter));
                     checker.errors.extend(proof.errors.into_iter().filter(|v| {
@@ -729,6 +733,7 @@ struct Checker<'a> {
     returned: BTreeMap<u32, hirsel_types::Type>,
     static_data: Option<static_data::Values>,
     proof_errors: std::cell::RefCell<Vec<Violation>>,
+    unique_parts_cache: std::cell::RefCell<std::collections::HashMap<TypeId, bool>>,
 }
 impl<'a> Checker<'a> {
     fn proof_failure<T>(&self, error: hirsel_types::QueryError, fallback: T) -> T {

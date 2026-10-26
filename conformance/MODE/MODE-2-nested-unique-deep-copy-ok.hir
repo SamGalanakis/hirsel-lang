@@ -1,5 +1,8 @@
 // rule: MODE-2
 // expect: accept
-fn load(take r: Result[unique Bytes, ()]) -> (unique Result[unique Bytes, ()], Result[unique Bytes, ()]) {
+fn load(take r: Result[unique Bytes, ()]) -> (
+  unique Result[unique Bytes, ()],
+  Result[unique Bytes, ()]
+) {
   (unique r, take r)
 }

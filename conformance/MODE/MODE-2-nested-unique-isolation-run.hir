@@ -2,7 +2,10 @@
 // expect: run
 // entry: trial
 // Port Rc's independent-copy mutation assertion without refcount restoration.
-fn split(take wrapped: (unique List[u64],)) -> ((unique List[u64],), (unique List[u64],)) {
+fn split(take wrapped: (unique List[u64],)) -> (
+  (unique List[u64],),
+  (unique List[u64],)
+) {
   (unique wrapped, take wrapped)
 }
 

@@ -311,6 +311,7 @@ impl Checker<'_> {
                 returned: BTreeMap::new(),
                 static_data: None,
                 proof_errors: std::cell::RefCell::new(Vec::new()),
+                unique_parts_cache: Default::default(),
             };
             checker.flow(&[], false);
             self.proof_errors
