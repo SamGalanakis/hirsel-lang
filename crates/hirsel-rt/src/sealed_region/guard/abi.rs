@@ -127,8 +127,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_bits(
 
 /// Entered prepare/commit. Success publishes one opaque generation; exhausted
 /// returns 2 with null output and unchanged source custody. Invalid/incomplete
-/// checked contracts trap. Currently only actual-empty pointer-free plans are
-/// linked; a retained inventory is never treated as empty. Public bodies stay off.
+/// checked contracts trap. The typed planner checks the complete root and
+/// retained inventory before transaction entry. Public bodies stay off.
 ///
 /// # Safety
 /// The independently validated entered call owns grant/root, and `receipt` is
@@ -169,9 +169,17 @@ pub unsafe extern "C" fn hirsel_rt_v2_seal_prepare_commit(
     if root.run() != unsafe { metadata_run(ctx) } {
         crate::fault("foreign seal root receipt");
     }
-    let plan =
-        unsafe { super::bits::bits_plan(ctx, record, index, value.cast_mut().cast(), &root) }
-            .unwrap_or_else(|_| crate::fault("invalid or incomplete seal plan contract"));
+    let journal = unsafe { (*record).inventory.as_ref() }
+        .unwrap_or_else(|| crate::fault("invalid or incomplete seal plan contract"));
+    let plan = unsafe {
+        journal.plan(
+            ptr::addr_of_mut!((*record).base),
+            index,
+            value.cast_mut().cast(),
+            &root,
+        )
+    }
+    .unwrap_or_else(|_| crate::fault("invalid or incomplete seal plan contract"));
     match unsafe { seal_record(ctx, record, &root, &plan) } {
         Ok(owner) => {
             unsafe { out_owner.write(into_native_owner(ctx, owner)) };

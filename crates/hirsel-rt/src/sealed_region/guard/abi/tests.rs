@@ -308,3 +308,301 @@ fn native_guard_entry_33_forged_false_hint_refuses_the_entered_ordinary_record()
         "{output:?}"
     );
 }
+
+#[test]
+fn native_graph_entry_64_evacuates_heap_root_and_reads_after_scope_exit() {
+    use crate::alloc::payload;
+    use crate::sealed_region::{Charge, receipt::semantic};
+    super::super::super::planner::tests::fixture(|ctx| unsafe {
+        let mut guard = MaybeUninit::<ReceiptArenaGuard<'static>>::uninit();
+        let raw = guard.as_mut_ptr().cast();
+        hirsel_rt_v2_receipt_region_enter(ctx, raw);
+        let run = metadata_run(ctx);
+        let leaf = crate::alloc::hirsel_rt_v2_alloc(ctx, 4, 19, 8, crate::DOMAIN_HEAP, 0);
+        payload(leaf).cast::<[u64; 2]>().write([3, 3]);
+        ptr::copy_nonoverlapping(b"abc".as_ptr(), payload(leaf).add(16), 3);
+        crate::count::hirsel_rt_v2_dup(ctx, leaf); // independent outside alias
+        let child = semantic::snapshot(
+            run,
+            Origin::Heap,
+            Charge::Bytes(3),
+            std::slice::from_raw_parts(payload(leaf), 19),
+            8,
+            &[],
+        )
+        .unwrap();
+        let value = crate::views::Slice {
+            owner: leaf,
+            start: 8,
+            length: 3,
+        };
+        let receipt = semantic::snapshot(
+            run,
+            Origin::Inline,
+            Charge::Bytes(0),
+            std::slice::from_raw_parts(ptr::from_ref(&value).cast(), size_of_val(&value)),
+            8,
+            &[child],
+        )
+        .unwrap();
+        let mut owner = ptr::null_mut();
+        assert_eq!(
+            hirsel_rt_v2_seal_prepare_commit(
+                ctx,
+                raw,
+                ptr::from_ref(&value).cast(),
+                5,
+                receipt.as_raw(),
+                0,
+                &mut owner
+            ),
+            STATUS_OK
+        );
+        assert_eq!(hirsel_rt_v2_receipt_region_exit(ctx, raw, 0, 0), STATUS_OK);
+        let borrowed = hirsel_rt_v2_sealed_root(ctx, owner)
+            .cast::<crate::views::Slice>()
+            .read();
+        assert_ne!(borrowed.owner, leaf);
+        assert_eq!((borrowed.start, borrowed.length), (8, 3));
+        assert_eq!(
+            std::slice::from_raw_parts(payload(borrowed.owner).add(16), 3),
+            b"abc"
+        );
+        assert_eq!(std::slice::from_raw_parts(payload(leaf).add(16), 3), b"abc");
+        hirsel_rt_v2_sealed_release(ctx, owner);
+        assert_eq!(
+            crate::release::release_block(&mut *ctx, leaf, ptr::null(), 0, 0),
+            STATUS_OK
+        );
+    });
+}
+
+#[test]
+fn native_graph_entry_64_counts_dead_and_elided_retained_occurrences_before_publication() {
+    use crate::alloc::payload;
+    use crate::sealed_region::{
+        Charge,
+        receipt::{journal::Update, semantic},
+    };
+    for elided in [false, true] {
+        super::super::super::planner::tests::fixture(|ctx| unsafe {
+            let mut guard = MaybeUninit::<ReceiptArenaGuard<'static>>::uninit();
+            let raw = guard.as_mut_ptr().cast();
+            hirsel_rt_v2_receipt_region_enter(ctx, raw);
+            let run = metadata_run(ctx);
+            let leaf = crate::alloc::hirsel_rt_v2_alloc(ctx, 4, 19, 8, crate::DOMAIN_HEAP, 0);
+            payload(leaf).cast::<[u64; 2]>().write([3, 3]);
+            ptr::copy_nonoverlapping(b"abc".as_ptr(), payload(leaf).add(16), 3);
+            crate::count::hirsel_rt_v2_dup(ctx, leaf);
+            crate::count::hirsel_rt_v2_dup(ctx, leaf);
+            let child = semantic::snapshot(
+                run,
+                Origin::Heap,
+                Charge::Bytes(3),
+                std::slice::from_raw_parts(payload(leaf), 19),
+                8,
+                &[],
+            )
+            .unwrap();
+            let values = [crate::views::Slice {
+                owner: leaf,
+                start: 8,
+                length: 3,
+            }; 2];
+            let base = ptr::addr_of_mut!((*guard.as_mut_ptr()).base);
+            let block = (!elided).then(|| region::hirsel_rt_v2_arena_alloc(ctx, base, 6, 48, 8, 0));
+            if let Some(block) = block {
+                payload(block)
+                    .cast::<[crate::views::Slice; 2]>()
+                    .write(values);
+            }
+            let journal = (*guard.as_mut_ptr()).inventory;
+            let retained = semantic::snapshot(
+                run,
+                Origin::Arena((*journal).grant()),
+                Charge::Bytes(16),
+                std::slice::from_raw_parts(values.as_ptr().cast(), 48),
+                8,
+                &[child.clone(), child],
+            )
+            .unwrap();
+            (*journal)
+                .allocate_typed(
+                    Update {
+                        value: retained,
+                        additions: vec![leaf, leaf],
+                    },
+                    6,
+                    block,
+                    48,
+                )
+                .ok()
+                .unwrap();
+            let value = 7u64;
+            let receipt = hirsel_rt_v2_receipt_bits(ctx, 2, ptr::from_ref(&value).cast());
+            region::hirsel_rt_v2_arena_bound(ctx, base, 5);
+            let mut owner = ptr::without_provenance_mut(1);
+            assert_eq!(
+                hirsel_rt_v2_seal_prepare_commit(
+                    ctx,
+                    raw,
+                    ptr::from_ref(&value).cast(),
+                    2,
+                    receipt,
+                    17,
+                    &mut owner
+                ),
+                crate::STATUS_EXHAUSTED
+            );
+            assert!(owner.is_null());
+            assert_eq!((*journal).inventory().entries().len(), 1);
+            assert_eq!(
+                (*journal).holders((*journal).inventory().entries().next().unwrap().0),
+                Some([leaf, leaf].as_slice())
+            );
+            region::hirsel_rt_v2_arena_bound(ctx, base, 6);
+            assert_eq!(
+                hirsel_rt_v2_seal_prepare_commit(
+                    ctx,
+                    raw,
+                    ptr::from_ref(&value).cast(),
+                    2,
+                    receipt,
+                    17,
+                    &mut owner
+                ),
+                STATUS_OK
+            );
+            assert_eq!(hirsel_rt_v2_receipt_region_exit(ctx, raw, 0, 0), STATUS_OK);
+            assert_eq!(*hirsel_rt_v2_sealed_root(ctx, owner).cast::<u64>(), 7);
+            hirsel_rt_v2_sealed_release(ctx, owner);
+            hirsel_rt_v2_receipt_release(receipt);
+            assert_eq!(
+                crate::release::release_block(&mut *ctx, leaf, ptr::null(), 0, 0),
+                STATUS_OK
+            );
+        });
+    }
+}
+
+#[test]
+fn native_graph_entry_64_replacements_keep_exact_bindings_and_refuse_stale_images() {
+    use crate::sealed_region::{
+        Charge,
+        planner::Retained,
+        receipt::{
+            journal::{Error, Update},
+            semantic,
+        },
+    };
+    super::super::super::planner::tests::fixture(|ctx| unsafe {
+        let mut guard = MaybeUninit::<ReceiptArenaGuard<'static>>::uninit();
+        let raw = guard.as_mut_ptr().cast();
+        hirsel_rt_v2_receipt_region_enter(ctx, raw);
+        let run = metadata_run(ctx);
+        let base = ptr::addr_of_mut!((*guard.as_mut_ptr()).base);
+        let journal = (*guard.as_mut_ptr()).inventory;
+        let source = 7u64;
+        let retained = semantic::snapshot(
+            run,
+            Origin::Arena((*journal).grant()),
+            Charge::Bytes(8),
+            &source.to_ne_bytes(),
+            8,
+            &[],
+        )
+        .unwrap();
+        let id = (*journal)
+            .allocate_typed(
+                Update {
+                    value: retained.clone(),
+                    additions: vec![],
+                },
+                2,
+                None,
+                8,
+            )
+            .ok()
+            .unwrap();
+        let root = semantic::snapshot(
+            run,
+            Origin::Inline,
+            Charge::Bytes(0),
+            &source.to_ne_bytes(),
+            8,
+            &[],
+        )
+        .unwrap();
+        let binding = |extent| Retained {
+            allocation: id,
+            descriptor: 2,
+            block: None,
+            extent,
+        };
+        let previous = (*journal)
+            .inventory()
+            .entries()
+            .next()
+            .unwrap()
+            .1
+            .generation();
+        let rejected = (*journal).replace_typed(
+            binding(7),
+            &[],
+            &[],
+            Update {
+                value: retained.clone(),
+                additions: vec![],
+            },
+        );
+        assert!(matches!(rejected, Err((Error::PhysicalBinding, _))));
+        assert_eq!(
+            (*journal)
+                .inventory()
+                .entries()
+                .next()
+                .unwrap()
+                .1
+                .generation(),
+            previous
+        );
+        assert!(
+            (*journal)
+                .plan(base, 2, ptr::from_ref(&source).cast_mut().cast(), &root)
+                .is_ok()
+        );
+        (*journal)
+            .replace_typed(
+                binding(8),
+                &[],
+                &[],
+                Update {
+                    value: retained.clone(),
+                    additions: vec![],
+                },
+            )
+            .ok()
+            .unwrap();
+        assert!(
+            (*journal)
+                .plan(base, 2, ptr::from_ref(&source).cast_mut().cast(), &root)
+                .is_ok()
+        );
+        (*journal)
+            .replace(
+                id,
+                &[],
+                Update {
+                    value: retained,
+                    additions: vec![],
+                },
+            )
+            .ok()
+            .unwrap();
+        assert!(matches!(
+            (*journal).plan(base, 2, ptr::from_ref(&source).cast_mut().cast(), &root),
+            Err(crate::sealed_region::planner::Error::Coverage)
+        ));
+        assert_eq!(hirsel_rt_v2_receipt_region_exit(ctx, raw, 0, 0), STATUS_OK);
+    });
+}

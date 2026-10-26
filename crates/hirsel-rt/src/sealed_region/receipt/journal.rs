@@ -15,6 +15,8 @@ use super::{MetadataRun, Receipt};
 use crate::alloc::Header;
 use crate::context::TaskCtx;
 use crate::region::sealed_cleanup::Credits;
+use crate::sealed_region::planner::Retained;
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
@@ -33,6 +35,7 @@ pub enum Error {
     InvalidRetention,
     /// Private custody identity space exhausted; never a language budget error.
     CreditIdExhausted,
+    PhysicalBinding,
 }
 
 pub type Rejected = (Error, Update);
@@ -61,6 +64,7 @@ pub struct Journal<'ctx> {
     lifetime: PhantomData<&'ctx mut TaskCtx>,
     inventory: Inventory,
     custody: Custody,
+    physical: BTreeMap<AllocationId, Retained>,
 }
 impl<'ctx> Journal<'ctx> {
     pub fn new(ctx: &'ctx mut TaskCtx, run: MetadataRun) -> Self {
@@ -82,6 +86,7 @@ impl<'ctx> Journal<'ctx> {
             lifetime: PhantomData,
             inventory: Inventory::new(run),
             custody: Custody::new(),
+            physical: BTreeMap::new(),
         }
     }
     pub fn grant(&self) -> GrantId {
@@ -94,6 +99,112 @@ impl<'ctx> Journal<'ctx> {
     /// physical relocation deduplication. These words grant no new credit.
     pub fn holders(&self, id: AllocationId) -> Option<&[*mut Header]> {
         self.custody.holders(id)
+    }
+
+    /// Bind a committed semantic allocation to its complete physical payload,
+    /// or to its initialized image when the physical allocation was elided.
+    /// This transfers the same source credits as allocate, without retaining them.
+    ///
+    /// # Safety
+    /// allocate's contract applies. The descriptor and optional block describe
+    /// this exact payload in the current run; the block stays live under this
+    /// guard until replacement or seal. No source mutation/suspension may
+    /// separate the ordinary construction from this journal publication.
+    pub unsafe fn allocate_typed(
+        &mut self,
+        input: Update,
+        descriptor: u32,
+        block: Option<*mut Header>,
+        extent: usize,
+    ) -> Result<AllocationId, Rejected> {
+        if input
+            .value
+            .bytes()
+            .is_none_or(|bytes| bytes.len() != extent)
+            || block.is_some_and(|block| block.is_null())
+        {
+            return Err((Error::PhysicalBinding, input));
+        }
+        let id = unsafe { self.allocate(input) }?;
+        self.physical.insert(
+            id,
+            Retained {
+                allocation: id,
+                descriptor,
+                block,
+                extent,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Publish a new physical representation with a successful semantic
+    /// replacement. A failed binding check leaves the old representation and
+    /// every old source credit untouched. COW uses allocate_typed instead.
+    ///
+    /// # Safety
+    /// replace_transfer's complete mutation/custody contract and
+    /// allocate_typed's physical-binding contract apply to the new payload.
+    pub unsafe fn replace_typed(
+        &mut self,
+        binding: Retained,
+        keep: &[usize],
+        take: &[usize],
+        input: Update,
+    ) -> Result<Replacement, Rejected> {
+        if input
+            .value
+            .bytes()
+            .is_none_or(|bytes| bytes.len() != binding.extent)
+            || binding.block.is_some_and(|block| block.is_null())
+        {
+            return Err((Error::PhysicalBinding, input));
+        }
+        let result = unsafe { self.replace_transfer(binding.allocation, keep, take, input) }?;
+        self.physical.insert(binding.allocation, binding);
+        Ok(result)
+    }
+
+    /// Produce the native transaction plan from every retained allocation,
+    /// including dead and elided payloads. Untyped entries cannot disappear.
+    ///
+    /// # Safety
+    /// planner::plan's source custody, descriptor, initialized-image and root
+    /// pairing contract applies. arena is this journal's exact live guard.
+    pub(crate) unsafe fn plan(
+        &self,
+        arena: *mut crate::region::Region,
+        descriptor: u32,
+        value: *mut u8,
+        root: &Receipt<Record>,
+    ) -> Result<crate::sealed_region::Plan, crate::sealed_region::planner::Error> {
+        let retained = self
+            .physical
+            .values()
+            .map(|binding| Retained {
+                allocation: binding.allocation,
+                descriptor: binding.descriptor,
+                block: binding.block,
+                extent: binding.extent,
+            })
+            .collect::<Vec<_>>();
+        // Physical storage without semantic history is never an empty scope.
+        if self.inventory.entries().len() == 0
+            && unsafe { !(*arena).segment.is_null() || !(*arena).cleanup.is_null() }
+        {
+            return Err(crate::sealed_region::planner::Error::Coverage);
+        }
+        unsafe {
+            crate::sealed_region::planner::plan_inventory(
+                self.ctx.as_ptr(),
+                arena,
+                &self.inventory,
+                descriptor,
+                value,
+                root,
+                &retained,
+            )
+        }
     }
 
     /// Record a committed construction or COW allocation. All additions become
@@ -172,6 +283,7 @@ impl<'ctx> Journal<'ctx> {
             Ok(previous) => previous,
             Err(error) => return Err((Error::Semantic(error), input)),
         };
+        self.physical.remove(&id);
         let (transferred, removed) = self.custody.commit(id, change);
         // Kept and taken credits moved, so only omitted credits retire.
         unsafe { Credits::from_owned(removed).release(self.ctx.as_mut()) };

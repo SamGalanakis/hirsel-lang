@@ -60,15 +60,37 @@ pub unsafe fn plan(
     root: &Receipt<Record>,
     retained: &[Retained],
 ) -> Result<Plan, Error> {
-    let inventory = guard.inventory().map_err(|_| Error::Guard)?;
-    let grant = guard.grant().map_err(|_| Error::Guard)?;
+    unsafe {
+        plan_inventory(
+            guard.context(),
+            guard.base(),
+            guard.inventory().map_err(|_| Error::Guard)?,
+            descriptor,
+            value,
+            root,
+            retained,
+        )
+    }
+}
+
+/// The native entry borrows the same live journal instead of manufacturing a
+/// second guard owner. Source custody and initialized images obey plan's contract.
+pub(super) unsafe fn plan_inventory(
+    ctx: *mut TaskCtx,
+    base: *mut crate::region::Region,
+    inventory: &super::receipt::semantic::Inventory,
+    descriptor: u32,
+    value: *mut u8,
+    root: &Receipt<Record>,
+    retained: &[Retained],
+) -> Result<Plan, Error> {
+    let grant = inventory.grant();
     let charge = inventory.seal_charge(root).map_err(|_| Error::Semantic)?;
     if root.record().origin() != Origin::Inline {
         return Err(Error::Image);
     }
-    let ctx = guard.context();
     let mut active = unsafe { (*ctx).region };
-    while !active.is_null() && active != guard.base() {
+    while !active.is_null() && active != base {
         active = unsafe { (*active).parent };
     }
     if active.is_null() {
@@ -138,7 +160,7 @@ pub unsafe fn plan(
                     let id = unsafe {
                         block_plan(
                             ctx,
-                            guard.base(),
+                            base,
                             block,
                             binding.descriptor,
                             receipt,
@@ -175,15 +197,7 @@ pub unsafe fn plan(
                     continue;
                 }
                 let id = unsafe {
-                    block_plan(
-                        ctx,
-                        guard.base(),
-                        block,
-                        index,
-                        receipt,
-                        &mut result,
-                        &mut physical,
-                    )
+                    block_plan(ctx, base, block, index, receipt, &mut result, &mut physical)
                 }?;
                 (
                     index,
@@ -254,7 +268,7 @@ pub unsafe fn plan(
             let id = unsafe {
                 block_plan(
                     ctx,
-                    guard.base(),
+                    base,
                     block,
                     child_index,
                     child,
@@ -379,4 +393,4 @@ unsafe fn block_plan(
 }
 
 #[cfg(all(test, feature = "diagnostic"))]
-mod tests;
+pub(in crate::sealed_region) mod tests;

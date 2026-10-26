@@ -36,7 +36,7 @@ fn release(offset: u64, slice: bool, shared: bool) -> crate::Step {
         layout: ptr::null(),
     }
 }
-fn fixture(test: impl FnOnce(*mut TaskCtx)) {
+pub(in crate::sealed_region) fn fixture(test: impl FnOnce(*mut TaskCtx)) {
     fixture_with(|_| {}, test);
 }
 fn fixture_with(change: impl FnOnce(&mut Vec<Vec<u64>>), test: impl FnOnce(*mut TaskCtx)) {
