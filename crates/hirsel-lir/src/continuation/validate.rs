@@ -3,6 +3,8 @@
 //! not consulted, so an error in either analysis shows up as a refusal.
 use super::*;
 use crate::ahead::{AheadPlan, MachineEvidence};
+#[path = "validate_scope.rs"]
+mod scope;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ContinuationError {
@@ -444,6 +446,7 @@ fn exclusive_proof(
 fn check_state(
     u: &LirUnit<Ready>,
     table: &LayoutTable,
+    units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
     live: &Live,
     ordinal: u32,
     state: &ResumeState,
@@ -590,20 +593,49 @@ fn check_state(
         }
         _ => return Err(ContinuationError::Frame(id)),
     }
+    let runtime_base = end;
+    if let Some(runtime) = &state.runtime {
+        for slot in &runtime.results {
+            let Some((bytes, align)) = fixed(table, slot.layout) else {
+                return Err(ContinuationError::Frame(id));
+            };
+            if slot.bytes != bytes || slot.align != align || slot.offset % align != 0 {
+                return Err(ContinuationError::Frame(id));
+            }
+            match slot.source {
+                RuntimeResultSource::CallResult(_) => {
+                    if slot.offset < end {
+                        return Err(ContinuationError::Frame(id));
+                    }
+                    end = (slot.offset + bytes).next_multiple_of(8);
+                }
+                RuntimeResultSource::ArgumentSlot { slot: place, .. } => {
+                    if !state.storage.iter().any(|stored| {
+                        stored.slot == place
+                            && stored.layout == slot.layout
+                            && stored.offset == slot.offset
+                    }) {
+                        return Err(ContinuationError::Frame(id));
+                    }
+                }
+            }
+        }
+    }
     if state.bytes != end || state.bytes > MAX_FRAME_BYTES {
         return Err(ContinuationError::Frame(id));
     }
-    // No operation is admitted by the shared data shape itself. Each kind's
-    // independent provenance/result walk must qualify it before selection.
-    // Keep this after all frame/storage checks, as for nested actions.
-    if state.runtime.is_some() {
+    if scope::check(u, table, units, state, runtime_base)? != end {
         return Err(ContinuationError::RuntimeOperation(id, n));
     }
     // Check the action only after independently checking the nested frame,
     // so a forged frame retains its structural rejection.
-    let action = match state.callee {
-        Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
-        None => ResumeAction::RetryUnenteredCall(expected.call),
+    let action = if state.runtime.is_some() {
+        ResumeAction::ResumeRuntime(expected.call)
+    } else {
+        match state.callee {
+            Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
+            None => ResumeAction::RetryUnenteredCall(expected.call),
+        }
     };
     if state.action != action {
         return Err(ContinuationError::ResumeLabel(id, n));
@@ -885,6 +917,7 @@ pub fn validate(
                     check_state(
                         u,
                         inputs.table,
+                        &index,
                         &live,
                         i as u32,
                         state,
@@ -1133,4 +1166,76 @@ impl AheadCertificate {
         }
         Ok(())
     }
+}
+
+/// Recheck entered-runtime evidence at each native emitter's public entry.
+/// Callers supply complete Ready content, including bodies that stay stackful,
+/// because incoming callable provenance cannot be inferred from a plan hash.
+pub fn validate_runtime_operations(
+    units: &[&ValidatedUnit<Ready>],
+    table: &LayoutTable,
+    target: &TargetSpec,
+    plans: &ContinuationPlans,
+) -> Result<(), ContinuationError> {
+    let index: BTreeMap<_, _> = units
+        .iter()
+        .map(|u| (u.unit().header.instance, u.unit()))
+        .collect();
+    for (id, plan) in &plans.plans {
+        if !plan.states.iter().any(|s| s.runtime.is_some()) {
+            continue;
+        }
+        let u = index.get(id).ok_or(ContinuationError::Body(*id))?;
+        if plan.digest != u.digest() || plan.body != *id {
+            return Err(ContinuationError::Body(*id));
+        }
+        let mut end = check_fixed(u, table, target, plan)?;
+        for slot in &plan.storage {
+            let ty = &u.types[u.slots[slot.slot.index()].ty.index()];
+            let (bytes, align) = fixed(table, slot.layout).ok_or(ContinuationError::Frame(*id))?;
+            if slot.layout != ty.layout
+                || slot.repr != ty.repr
+                || slot.offset < end
+                || slot.offset % align != 0
+            {
+                return Err(ContinuationError::Storage(*id, 0));
+            }
+            end = slot.offset + bytes;
+        }
+        let base = end.next_multiple_of(8);
+        let live = Live::compute(u);
+        for (ordinal, state) in plan
+            .states
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.runtime.is_some())
+        {
+            let Terminator::Call { call, .. } = u.terminators[state.boundary.block.index()] else {
+                return Err(ContinuationError::Boundary(*id, ordinal as u32 + 1));
+            };
+            let site = &u.tables.calls[call.index()];
+            let Callee::Operation(op) = site.callee else {
+                return Err(ContinuationError::RuntimeOperation(*id, ordinal as u32 + 1));
+            };
+            let expected = ExistingBoundary {
+                block: state.boundary.block,
+                call,
+                operation: u.tables.operations[op.index()].definition.clone(),
+            };
+            check_state(
+                u,
+                table,
+                &index,
+                &live,
+                ordinal as u32,
+                state,
+                &expected,
+                None,
+                None,
+                &plan.storage,
+                base,
+            )?;
+        }
+    }
+    Ok(())
 }

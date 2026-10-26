@@ -2185,7 +2185,10 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     let Some(result) = &abi.result else {
                         return self.invalid("a result slot without a result");
                     };
-                    let place = self.stack(result.layout)?;
+                    let place = match self.runtime_result(call, result.layout)? {
+                        Some(place) => place,
+                        None => self.stack(result.layout)?,
+                    };
                     args.push(place.ptr);
                     result_place = Some(place);
                 }
@@ -2319,6 +2322,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             name
         };
         self.ownership_call(call, false)?;
+        self.bind_runtime(call, name.as_deref(), codes)?;
         let returned = match (&name, code) {
             (Some(name), _) => {
                 let id = self.em.import_function(name, &physical_signature)?;

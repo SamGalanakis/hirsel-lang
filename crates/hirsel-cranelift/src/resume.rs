@@ -284,15 +284,20 @@ impl FnEmitter<'_, '_, '_> {
             resume.resuming = None;
         }
         let frame = self.frame();
-        if state.runtime.is_some() {
-            return self
-                .invalid("an entered runtime operation without qualified helper/result evidence");
-        }
         let callee = match state.action {
             ResumeAction::ResumeNested(at, frame) if at == call && state.callee == Some(frame) => {
                 Some(frame)
             }
-            ResumeAction::RetryUnenteredCall(at) if at == call && state.callee.is_none() => None,
+            ResumeAction::RetryUnenteredCall(at)
+                if at == call && state.callee.is_none() && state.runtime.is_none() =>
+            {
+                None
+            }
+            ResumeAction::ResumeRuntime(at)
+                if at == call && state.callee.is_none() && state.runtime.is_some() =>
+            {
+                None
+            }
             _ => return self.invalid("unsupported or inconsistent resume action"),
         };
         if let Some(callee) = callee {
@@ -322,6 +327,75 @@ impl FnEmitter<'_, '_, '_> {
         Ok(None)
     }
 
+    pub(crate) fn runtime_result(
+        &mut self,
+        call: CallId,
+        layout: hirsel_lir::LayoutId,
+    ) -> Emitted<Option<Place>> {
+        let Some(state) = self
+            .resume
+            .as_ref()
+            .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
+        else {
+            return Ok(None);
+        };
+        let Some(runtime) = &state.runtime else {
+            return Ok(None);
+        };
+        let [slot] = runtime.results.as_slice() else {
+            return self.invalid("entered intrinsic result cell count");
+        };
+        if slot.layout != layout
+            || !matches!(slot.source,hirsel_lir::continuation::RuntimeResultSource::CallResult(value) if Some(value)==self.unit.tables.calls[call.index()].result)
+        {
+            return self.invalid("entered intrinsic result cell differs from ABI");
+        }
+        self.frame_place(slot.offset, slot.layout).map(Some)
+    }
+
+    pub(crate) fn bind_runtime(
+        &mut self,
+        call: CallId,
+        name: Option<&str>,
+        codes: (Value, Value),
+    ) -> Emitted {
+        let Some((plan, state)) = self.resume.as_ref().and_then(|r| {
+            r.plan
+                .states
+                .iter()
+                .find(|s| s.boundary.call == call)
+                .map(|s| (r.plan, s))
+        }) else {
+            return Ok(());
+        };
+        let Some(runtime) = &state.runtime else {
+            return Ok(());
+        };
+        if state.action != ResumeAction::ResumeRuntime(call)
+            || name != Some(runtime.helper.as_str())
+        {
+            return self.invalid("entered runtime helper differs from its proof");
+        }
+        let frame = self.frame();
+        let number = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(state.target.state));
+        let kind = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(runtime.kind.tag()));
+        let bytes = self
+            .b
+            .ins()
+            .iconst(types::I32, plan.cost.frame_bytes as i64);
+        self.rt(
+            RuntimeEntry::ResumeTail,
+            &[self.context, frame, number, kind, bytes, codes.0, codes.1],
+        )
+        .map(|_| ())
+    }
+
     /// After a nested resumable call: a suspended callee suspends this frame,
     /// whose state the boundary already recorded.
     pub(crate) fn resume_propagate(&mut self, status: Value) -> Emitted {
@@ -345,6 +419,22 @@ pub(crate) fn emit(
     inputs: &EmitInputs<'_>,
     plans: &ContinuationPlans,
 ) -> Emitted<ObjectArtifact> {
+    hirsel_lir::continuation::validate_runtime_operations(
+        units,
+        inputs.layouts,
+        inputs.target,
+        plans,
+    )
+    .map_err(|error| crate::CodegenError::Invalid {
+        definition: units
+            .first()
+            .expect("entered runtime units")
+            .unit()
+            .header
+            .definition
+            .clone(),
+        what: error.to_string(),
+    })?;
     let mut emitter = Emitter::new(Inputs::units(inputs), false)?;
     let mut bodies = Vec::new();
     for unit in units {

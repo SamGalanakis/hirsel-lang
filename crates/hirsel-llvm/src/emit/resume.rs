@@ -258,15 +258,20 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             resume.resuming = None;
         }
         let frame = resume.frame;
-        if state.runtime.is_some() {
-            return self
-                .invalid("an entered runtime operation without qualified helper/result evidence");
-        }
         let callee = match state.action {
             ResumeAction::ResumeNested(at, frame) if at == call && state.callee == Some(frame) => {
                 Some(frame)
             }
-            ResumeAction::RetryUnenteredCall(at) if at == call && state.callee.is_none() => None,
+            ResumeAction::RetryUnenteredCall(at)
+                if at == call && state.callee.is_none() && state.runtime.is_none() =>
+            {
+                None
+            }
+            ResumeAction::ResumeRuntime(at)
+                if at == call && state.callee.is_none() && state.runtime.is_some() =>
+            {
+                None
+            }
             _ => return self.invalid("unsupported or inconsistent resume action"),
         };
         if let Some(callee) = callee {
@@ -334,6 +339,72 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 definition: self.definition().clone(),
                 what,
             })
+    }
+
+    pub(super) fn runtime_result(
+        &self,
+        call: CallId,
+        layout: LayoutId,
+    ) -> Emitted<Option<Place<'m>>> {
+        let Some(state) = self
+            .resume
+            .as_ref()
+            .and_then(|r| r.plan.states.iter().find(|s| s.boundary.call == call))
+        else {
+            return Ok(None);
+        };
+        let Some(runtime) = &state.runtime else {
+            return Ok(None);
+        };
+        let [slot] = runtime.results.as_slice() else {
+            return self.invalid("entered intrinsic result cell count");
+        };
+        if slot.layout != layout
+            || !matches!(slot.source,hirsel_lir::continuation::RuntimeResultSource::CallResult(value) if Some(value)==self.unit.tables.calls[call.index()].result)
+        {
+            return self.invalid("entered intrinsic result cell differs from ABI");
+        }
+        self.frame_place(slot.offset, slot.layout).map(Some)
+    }
+
+    pub(super) fn bind_runtime(
+        &mut self,
+        call: CallId,
+        name: Option<&str>,
+        codes: (Value<'m>, Value<'m>),
+    ) -> Emitted {
+        let Some((plan, state, frame)) = self.resume.as_ref().and_then(|r| {
+            r.plan
+                .states
+                .iter()
+                .find(|s| s.boundary.call == call)
+                .map(|s| (r.plan, s, r.frame))
+        }) else {
+            return Ok(());
+        };
+        let Some(runtime) = &state.runtime else {
+            return Ok(());
+        };
+        if state.action != ResumeAction::ResumeRuntime(call)
+            || name != Some(runtime.helper.as_str())
+        {
+            return self.invalid("entered runtime helper differs from its proof");
+        }
+        let point = self.runtime(RuntimeEntry::ResumeTail)?;
+        let number = self
+            .module
+            .const_int(self.module.int_type(32), u128::from(state.target.state));
+        let kind = self
+            .module
+            .const_int(self.module.int_type(32), u128::from(runtime.kind.tag()));
+        let bytes = self
+            .module
+            .const_int(self.module.int_type(32), u128::from(plan.cost.frame_bytes));
+        self.builder.call(
+            point,
+            &[self.context, frame, number, kind, bytes, codes.0, codes.1],
+        );
+        Ok(())
     }
 
     /// After a nested resumable call: a suspended callee suspends this frame,

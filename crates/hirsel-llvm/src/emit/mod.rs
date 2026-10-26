@@ -394,6 +394,22 @@ pub fn emit_resume_object(
     inputs: &EmitInputs<'_>,
     plans: &hirsel_lir::continuation::ContinuationPlans,
 ) -> Result<ObjectArtifact, CodegenError> {
+    hirsel_lir::continuation::validate_runtime_operations(
+        units,
+        inputs.layouts,
+        inputs.target,
+        plans,
+    )
+    .map_err(|error| CodegenError::Invalid {
+        definition: units
+            .first()
+            .expect("entered runtime units")
+            .unit()
+            .header
+            .definition
+            .clone(),
+        what: error.to_string(),
+    })?;
     let (bytes, manifested, _) = lower(
         units,
         inputs,

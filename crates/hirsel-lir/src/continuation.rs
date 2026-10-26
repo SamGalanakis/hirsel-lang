@@ -46,6 +46,7 @@ pub use runtime::{RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot, RuntimeResult
 pub use scope::ScopeOpPlan;
 pub use validate::{
     AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
+    validate_runtime_operations,
 };
 
 /// The continuation alternates of a resumable body: its dispatcher (`None`),
@@ -538,6 +539,16 @@ pub(crate) fn call_effect(
             (symbol.definition, body)
         }
     };
+    // A specialized reviewed scope exposes its nested callback and entered
+    // intrinsics. Classification grants no custody: plan_unit and import
+    // validation reconstruct its callable and scope-flow evidence first.
+    if let Some(id) = body.filter(|id| scope::candidate(units[id])) {
+        return if suspending.contains(&id) {
+            CallEffect::Nested(id)
+        } else {
+            CallEffect::Local
+        };
+    }
     // A classified operation is the boundary itself, even when its native
     // disposition is a library body: that body is the operation's implementation.
     match (classify(&definition), body) {
@@ -1383,7 +1394,13 @@ fn plan_unit(
             return Ok((Fixed::default(), Vec::new(), Vec::new()));
         }
         let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
-        let (storage, states) = states(u, inputs.table, &sites, base)?;
+        let (storage, mut states) = states(u, inputs.table, &sites, base)?;
+        if scope::candidate(u) {
+            let wrapper = scope::wrapper(u, units).ok_or("unproved scope callback or exit flow")?;
+            for state in &mut states {
+                wrapper.plan(u, inputs.table, state)?;
+            }
+        }
         Ok(((parameters, records), storage, states))
     });
     let none = || (Fixed::default(), Vec::new(), Vec::new());

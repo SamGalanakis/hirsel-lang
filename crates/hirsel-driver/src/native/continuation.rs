@@ -98,14 +98,10 @@ pub(super) fn objects(
     if !plans.resumable() {
         return Ok(Vec::new());
     }
-    let units: Vec<_> = units(program)
-        .into_iter()
-        .filter(|u| {
-            plans.get(u.unit().header.instance).is_some_and(|p| {
-                p.representation == hirsel_lir::continuation::Representation::Resumable
-            })
-        })
-        .collect();
+    // Entered-runtime certificates include incoming callable provenance from
+    // callers that may themselves remain stackful. Emitters check this full
+    // set, then emit alternates only for Resumable bodies.
+    let units = units(program);
     static EMPTY: std::collections::BTreeSet<ContentHash> = std::collections::BTreeSet::new();
     let inputs = hirsel_lir::emission::EmitInputs {
         ahead: None,

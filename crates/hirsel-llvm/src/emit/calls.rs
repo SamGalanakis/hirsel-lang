@@ -511,7 +511,10 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                     let Some(result) = &abi.result else {
                         return self.invalid("a result slot without a result");
                     };
-                    let place = self.stack(result.layout)?;
+                    let place = match self.runtime_result(call, result.layout)? {
+                        Some(place) => place,
+                        None => self.stack(result.layout)?,
+                    };
                     args.push(place.ptr);
                     result_place = Some(place);
                 }
@@ -732,6 +735,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.host_read_boundary(call, false)?;
         self.ahead_flush();
         self.ownership_call(call, false)?;
+        self.bind_runtime(call, name.as_deref(), codes)?;
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
             None => self.builder.call_typed(signature.ty, callee, &args),
