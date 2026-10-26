@@ -26,6 +26,7 @@ pub(crate) struct Service {
     rows: Mutex<BTreeMap<u64, Row>>,
     pending: AtomicUsize,
     jobs: Jobs,
+    control: Arc<crate::stop::Control>,
 }
 
 struct Row {
@@ -96,6 +97,7 @@ impl Service {
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
                     jobs,
+                    control: run.control.clone(),
                 }))
                 .is_ok()
         );
@@ -254,6 +256,9 @@ impl Service {
         let row = rows.get_mut(&token)?;
         let job = row.job.as_mut()?;
         let Some(slot) = &job.slot else {
+            if self.control.stopped().is_some() {
+                return Some((false, None));
+            }
             if job.reservation.as_mut().is_some_and(|r| r.granted()) {
                 let credit = job.reservation.take().and_then(|r| r.take()).unwrap();
                 let (adapter, request) = (self.adapter.clone(), row.request.clone());
@@ -449,6 +454,7 @@ mod generation_tests {
                     rows: Default::default(),
                     pending: AtomicUsize::new(0),
                     jobs: Default::default(),
+                    control: unsafe { (*ctx).run_ref().control.clone() },
                 };
                 let s = crate::tasks::scheduler(ctx);
                 let generation = s.task(0).generation;

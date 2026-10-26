@@ -38,7 +38,7 @@ pub(crate) struct Driver {
     pub(super) submitted: BTreeMap<TaskId, u64>,
     pub(super) recorded: BTreeMap<TaskId, u64>,
     pub(super) events: Option<super::events::Log>,
-    /// Bounded observation only: called under IdleGuard, before selection.
+    /// Bounded test hook under IdleGuard, before selection.
     #[cfg(test)]
     pub(super) after_save: Option<SaveHook>,
     pub(super) waiting: BTreeMap<TaskId, u64>,
@@ -69,7 +69,7 @@ pub(crate) struct Driver {
 }
 
 #[cfg(test)]
-type SaveHook = Box<dyn Fn(&super::super::Scheduler, u32, bool) + Send + Sync>;
+type SaveHook = Box<dyn Fn(&mut super::super::Scheduler, u32, bool) + Send + Sync>;
 
 impl Driver {
     pub(crate) fn new(root: TaskId, policy: Policy, settled: Settled, objects: Registry) -> Self {
@@ -353,11 +353,15 @@ pub(crate) fn after_save(
     }
     #[cfg(test)]
     {
-        let super::super::Logical::Ordered(driver) = &s.logical else {
+        let super::super::Logical::Ordered(driver) = &mut s.logical else {
             unreachable!()
         };
-        if let Some(hook) = &driver.after_save {
+        if let Some(hook) = driver.after_save.take() {
             hook(s, task, completed);
+            let super::super::Logical::Ordered(driver) = &mut s.logical else {
+                unreachable!()
+            };
+            driver.after_save = Some(hook);
         }
     }
     let super::super::Logical::Ordered(driver) = &mut s.logical else {

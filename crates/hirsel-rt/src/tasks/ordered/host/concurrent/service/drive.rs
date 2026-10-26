@@ -149,7 +149,9 @@ pub(super) unsafe fn drive(ctx: *mut TaskCtx) -> Stopped<Drive<Result<Completion
                 // After the attempt, InitialOutcome preserves evidence first.
                 unsafe { crate::stop::observe(ctx) }?;
                 let request = unsafe { &*request_ptr(ctx) };
-                if adapter.blocking(request) {
+                let blocking = adapter.blocking(request);
+                crate::stop::observe(ctx)?;
+                if blocking {
                     let request = with(ctx, |p, _| p.request.take().unwrap());
                     let wait = token | CONCURRENT;
                     let mut owned = unsafe { Owned::new(ctx) };

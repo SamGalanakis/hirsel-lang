@@ -223,6 +223,7 @@ unsafe extern "C" fn dispatch(
                 2 => 19 << 32,
                 3 => 1 | (7 << 32),
                 4 => 2,
+                7 => 1 | (u64::from(CANCEL_REQUESTED) << 32),
                 _ => 3,
             }
         );
@@ -236,6 +237,10 @@ unsafe extern "C" fn dispatch(
             }
             1 => assert_eq!(out.words, [0, 4, 0, 0]),
             2 => assert_eq!(out.words, [1, 19 << 32, 0, 0]),
+            7 => assert_eq!(
+                out.words,
+                [1, 1 | (u64::from(CANCEL_REQUESTED) << 32), 0, 0]
+            ),
             _ => assert_eq!(out.words, [1, 1 | (7 << 32), 0, 0]),
         }
     }
@@ -315,12 +320,15 @@ fn witness(kind: u32, concurrent: bool, delayed: bool, mode: u8, cut: bool) {
                         assert_eq!(host.binding.unwrap().site.kind, kind);
                         assert!(!host.yielded, "read entered the initial yield phase");
                         observe.saves.fetch_add(1, Ordering::Relaxed);
+                        if mode == 7 {
+                            s.cancel(task, CANCEL_REQUESTED);
+                        }
                         if cut {
                             (*(run_ptr as *const crate::context::RunShared))
                                 .control
                                 .request_inside(crate::stop::Stop::Requested);
                         }
-                        observe.ready.store(true, Ordering::Release);
+                        observe.ready.store(mode != 7, Ordering::Release);
                     }
                 }));
             },
@@ -396,7 +404,11 @@ fn witness(kind: u32, concurrent: bool, delayed: bool, mode: u8, cut: bool) {
         let calls = read.calls.lock().unwrap();
         assert_eq!(
             calls.len(),
-            if delayed && !cut && mode != 6 { 2 } else { 1 }
+            if delayed && !cut && mode != 6 && mode != 7 {
+                2
+            } else {
+                1
+            }
         );
         assert!(calls.iter().all(|token| *token == calls[0]));
         let finishes = read.finishes.lock().unwrap();
@@ -461,5 +473,14 @@ fn cut_after_read_save_abandons_owned_wait_without_delivery() {
 fn retained_read_jobs_keep_late_owned_completions_in_quarantine_after_cut() {
     for kind in [34, 35] {
         witness(kind, true, true, 6, true);
+    }
+}
+
+#[test]
+fn cancellation_after_read_pooled_save_skips_retry_and_converts_once_on_both_routes() {
+    for kind in [34, 35] {
+        for concurrent in [false, true] {
+            witness(kind, concurrent, true, 7, false);
+        }
     }
 }
