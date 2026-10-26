@@ -2838,3 +2838,226 @@ fn ownership_trace_once_invocation_borrows_environment_and_retains_both_caller_c
         Err(Error::InvalidBinding(_))
     ));
 }
+
+fn alias_fixture() -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Value>,
+    hirsel_lir::layout_types::LayoutTable,
+    Plan,
+    ValueId,
+    LoanId,
+) {
+    use hirsel_lir::abi_types::{CallMultiplicity, CallableShape};
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(&[], None);
+    let captured = t.int(ENTRY);
+    let slot = t.slot(l::ERASED_ONCE, SlotKind::Temporary, ROOT);
+    t.builder.push(ENTRY, Inst::StorageLive { slot });
+    let address = t.at(ENTRY, slot, &[], &[]);
+    let abi = t.abi_shaped(CallableShape::Closure, &[], None);
+    t.table.fn_abis[abi.0 as usize].multiplicity = CallMultiplicity::Once;
+    let code = t.symbol(SymbolKind::Function);
+    let captures = PoolRange::push(
+        &mut t.builder.unit.pools.captures,
+        [CaptureValue {
+            value: captured,
+            usage: CaptureUse::Copy,
+        }],
+    );
+    t.builder.unit.tables.closures.push(ClosureSite {
+        receipts: None,
+        scoped: false,
+        code: Some(ClosureCode { symbol: code, abi }),
+        environment: l::ENV,
+        captures,
+        destination: DestinationClass::Heap,
+        placement: None,
+        anchor: SourceAnchorId(0),
+    });
+    let callable = t.owned(l::ERASED_ONCE);
+    let failure = t.fails();
+    t.builder.push(
+        ENTRY,
+        Inst::Closure {
+            result: callable,
+            closure: ClosureId(0),
+            failure,
+        },
+    );
+    let version = t.store(ENTRY, address, callable, slot);
+    let loan = t.loan(address, false);
+    t.begin(ENTRY, loan);
+    let view = t.read(ENTRY, address, version, ReadMode::Borrow, Some(loan));
+    let cleanup = [support::Undo::End(loan), support::Undo::Drop(slot)];
+    let next = t.cleanup_exit(&cleanup, None);
+    let failure = t.cleanup(&cleanup);
+    t.call_to(
+        ENTRY,
+        Callee::Indirect(view),
+        abi,
+        &[],
+        None,
+        &[],
+        (next, &[]),
+        failure,
+    );
+    let (raw, table, _) = t.finish();
+    let unit = checked_native_fixture(raw, &table);
+    let alias = Observation {
+        point: Point::CallEntered(ENTRY),
+        marker: ObserveOwnership {
+            id: MarkerId(100),
+            site: unit.unit().tables.source_anchors[0].site,
+            kind: Kind::Alias,
+            token: Location::Value(view),
+            owner: Location::Address(address),
+        },
+    };
+    let plan = Plan::new(unit.unit(), vec![alias.clone()]);
+    (unit, table, plan, callable, loan)
+}
+
+#[test]
+fn ownership_trace_alias_binds_live_owned_caller_slot_without_transferring_lineage() {
+    let (unit, _, plan, callable, loan) = alias_fixture();
+    let alias = plan.observations[0].clone();
+    let Location::Value(view) = alias.marker.token else {
+        panic!("alias view")
+    };
+    check(unit.unit(), &plan).unwrap();
+    let decoded: Plan = hirsel_codec::from_text(&hirsel_codec::to_text(&plan)).unwrap();
+    assert_eq!(decoded, plan);
+    check_transform(
+        unit.unit(),
+        &plan,
+        unit.unit(),
+        &plan,
+        Some(&recipe(&plan, &plan)),
+    )
+    .unwrap();
+    let absent = Plan::new(unit.unit(), vec![]);
+    assert_eq!(
+        check_transform(
+            unit.unit(),
+            &plan,
+            unit.unit(),
+            &absent,
+            Some(&recipe(&plan, &absent))
+        )
+        .unwrap_err(),
+        Error::MissingMarker(MarkerId(100))
+    );
+    let mut forged = plan.clone();
+    forged.observations[0].marker.owner = Location::Value(callable);
+    assert_eq!(
+        check(unit.unit(), &forged).unwrap_err(),
+        Error::InvalidBinding(MarkerId(100))
+    );
+    let mut wrong = unit.unit().clone();
+    let read = wrong
+        .instructions
+        .iter()
+        .position(|inst| matches!(inst, Inst::Read { result, .. } if *result == view))
+        .unwrap();
+    wrong.instructions[read] = Inst::EndLoan {
+        loan,
+        if_active: false,
+    };
+    let stale_view = Plan::new(&wrong, vec![alias.clone()]);
+    assert_eq!(
+        check(&wrong, &stale_view).unwrap_err(),
+        Error::InvalidBinding(MarkerId(100))
+    );
+    let mut plain = unit.unit().clone();
+    plain.values[callable.index()].holding = Holding::Plain;
+    let unowned = Plan::new(&plain, vec![alias]);
+    assert_eq!(
+        check(&plain, &unowned).unwrap_err(),
+        Error::InvalidBinding(MarkerId(100))
+    );
+}
+
+#[test]
+fn ownership_trace_alias_survives_every_recipe_without_changing_ordinary_ready() {
+    let (unit, table, input, _, _) = alias_fixture();
+    let ordinary = hirsel_codec::to_text(unit.unit());
+    let operations = support::registry();
+    let manifest = support::manifest(hirsel_core_contract::Disposition::RuntimePrimitive(
+        "hirsel_rt_op".into(),
+    ));
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let placement = hirsel_rc::placement::Options::default();
+    let proofs = hirsel_rc::insert::Proofs::default();
+    let reuse = hirsel_rc::reuse::Options::default();
+    let finalizers = Default::default();
+    let options = hirsel_rc::observed::Options {
+        placement: &placement,
+        proofs: &proofs,
+        elide: true,
+        reuse: &reuse,
+        finalizers: &finalizers,
+    };
+    check(unit.unit(), &input).unwrap();
+    assert_eq!(hirsel_codec::to_text(unit.unit()), ordinary);
+    let unobserved = Plan::new(unit.unit(), vec![]);
+    let without =
+        hirsel_rc::observed::lower_validated(unit.unit().clone(), &unobserved, &inputs, &options)
+            .unwrap();
+    let output =
+        hirsel_rc::observed::lower_validated(unit.into_raw(), &input, &inputs, &options).unwrap();
+    assert_eq!(
+        hirsel_codec::to_text(&output.unit),
+        hirsel_codec::to_text(&without.unit)
+    );
+    assert_eq!(output.recipes.len(), 10);
+    assert_eq!(output.plan.observations.len(), 1);
+    assert_eq!(
+        output.plan.observations[0].marker,
+        input.observations[0].marker
+    );
+    assert_eq!(output.plan.observations[0].marker.kind, Kind::Alias);
+    let ready = checked_native_fixture(output.unit, &table);
+    check(ready.unit(), &output.plan).unwrap();
+    assert!(native::LeafPlan::from_relocated(&ready, &table, &output.plan).is_err());
+}
+
+#[test]
+fn ownership_trace_alias_refuses_ended_owner_scope_and_reactivated_stale_view() {
+    let (unit, _, plan, _, loan) = alias_fixture();
+    for suffix in [
+        vec![Inst::EndScope { scope: ROOT }],
+        vec![
+            Inst::EndLoan {
+                loan,
+                if_active: false,
+            },
+            Inst::BeginLoan {
+                loan,
+                address: unit.unit().tables.loans[loan.index()].address,
+                mutable: false,
+                if_inactive: false,
+            },
+        ],
+    ] {
+        let mut raw = unit.unit().clone();
+        let mut code = raw.blocks[ENTRY.index()]
+            .instructions
+            .get(&raw.instructions)
+            .unwrap()
+            .to_vec();
+        code.extend(suffix);
+        raw.blocks[ENTRY.index()].instructions = PoolRange::push(&mut raw.instructions, code);
+        let forged = Plan::new(&raw, plan.observations.clone());
+        assert_eq!(
+            check(&raw, &forged).unwrap_err(),
+            Error::InvalidBinding(MarkerId(100))
+        );
+    }
+}

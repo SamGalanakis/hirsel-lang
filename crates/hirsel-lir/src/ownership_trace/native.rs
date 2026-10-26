@@ -118,6 +118,10 @@ impl LeafPlan {
                             Kind::Create => 0,
                             Kind::Move => 1,
                             Kind::Drop => 2,
+                            Kind::Alias => return Err(
+                                "native ownership tracing: Alias hook transport is not implemented"
+                                    .into(),
+                            ),
                         },
                         token: location(unit, from, point)?,
                         owner: location(unit, to, point)?,
@@ -592,6 +596,12 @@ impl LeafPlan {
                         Kind::Create => 0,
                         Kind::Move => 1,
                         Kind::Drop => 2,
+                        Kind::Alias => {
+                            return Err(
+                                "native ownership tracing: Alias hook transport is not implemented"
+                                    .into(),
+                            );
+                        }
                     },
                     token: location(body, marker.token, observation.point)?,
                     owner: location(body, marker.owner, observation.point)?,

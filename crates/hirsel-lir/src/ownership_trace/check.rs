@@ -202,7 +202,144 @@ pub(super) fn used_edges<S>(unit: &LirUnit<S>) -> std::collections::BTreeSet<Edg
     edges
 }
 
+/// The initial alias vocabulary accepts a callable stored and borrowed in the
+/// same block as its call. C independently checks the ordinary unit; this
+/// checker replays the named slot's live/initialized version and loan rather
+/// than trusting a producer's alias target or an equal callable layout.
+fn call_alias<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> bool {
+    fn whole<S>(unit: &LirUnit<S>, mut address: AddressId) -> Option<SlotId> {
+        for _ in 0..unit.addresses.len() {
+            let info = unit.addresses.get(address.index())?;
+            if info.projection.len != 0 {
+                return None;
+            }
+            match info.base {
+                AddressBase::Slot(slot) => return Some(slot),
+                AddressBase::Address(parent) => address = parent,
+                _ => return None,
+            }
+        }
+        None
+    }
+    let Point::CallEntered(block) = observation.point else {
+        return false;
+    };
+    let (Location::Value(view), Location::Address(owner)) =
+        (observation.marker.token, observation.marker.owner)
+    else {
+        return false;
+    };
+    let Some(info) = unit.values.get(view.index()) else {
+        return false;
+    };
+    let Holding::Borrowed(loan) = info.holding else {
+        return false;
+    };
+    let Some(loan_info) = unit.tables.loans.get(loan.index()) else {
+        return false;
+    };
+    let Some(slot) = whole(unit, owner) else {
+        return false;
+    };
+    if loan_info.mutable
+        || whole(unit, loan_info.address) != Some(slot)
+        || unit
+            .slots
+            .get(slot.index())
+            .is_none_or(|slot| slot.ty != info.ty)
+        || unit
+            .types
+            .get(info.ty.index())
+            .is_none_or(|ty| ty.repr != ValueRepr::Callable)
+    {
+        return false;
+    }
+    let Some(Terminator::Call { call, .. }) = unit.terminators.get(block.index()) else {
+        return false;
+    };
+    let Some(call) = unit.tables.calls.get(call.index()) else {
+        return false;
+    };
+    if call.callee.value() != Some(view) || call.pretransfer_failure.is_some() {
+        return false;
+    }
+    let Some(code) = unit
+        .blocks
+        .get(block.index())
+        .and_then(|block| block.instructions.get(&unit.instructions))
+    else {
+        return false;
+    };
+    let (mut live, mut version, mut active, mut borrowed) = (false, None, false, None);
+    for instruction in code {
+        match *instruction {
+            Inst::StorageLive { slot: current } if current == slot => {
+                live = true;
+                version = None;
+            }
+            Inst::StorageDead { slot: current, .. } if current == slot => {
+                live = false;
+                version = None;
+            }
+            Inst::EndScope { scope } => {
+                let mut current = Some(unit.slots[slot.index()].scope);
+                for _ in 0..unit.scopes.len() {
+                    let Some(at) = current else { break };
+                    if at == scope {
+                        live = false;
+                        version = None;
+                        break;
+                    }
+                    current = unit.scopes.get(at.index()).and_then(|info| info.parent);
+                }
+            }
+            Inst::Store {
+                address,
+                value,
+                version: next,
+            } if whole(unit, address) == Some(slot) => {
+                version = unit
+                    .values
+                    .get(value.index())
+                    .filter(|value| value.holding == Holding::Owned && value.ty == info.ty)
+                    .map(|_| next);
+            }
+            Inst::Read {
+                address,
+                mode: ReadMode::Take,
+                ..
+            }
+            | Inst::Drop { address, .. }
+            | Inst::FinalizeEnd { address, .. }
+                if whole(unit, address) == Some(slot) =>
+            {
+                version = None
+            }
+            Inst::Replace { address, .. } if whole(unit, address) == Some(slot) => version = None,
+            Inst::BeginLoan { loan: current, .. } if current == loan => {
+                active = true;
+                borrowed = None;
+            }
+            Inst::EndLoan { loan: current, .. } if current == loan => {
+                active = false;
+                borrowed = None;
+            }
+            Inst::Read {
+                result,
+                address,
+                reaching,
+                mode: ReadMode::Borrow,
+            } if result == view && address == owner && active => borrowed = Some(reaching),
+            _ => (),
+        }
+    }
+    live && active && version.is_some() && borrowed == version
+}
+
 fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
+    if observation.marker.kind == Kind::Alias {
+        return Ok(call_alias(unit, observation));
+    }
     use Kind::{Create, Drop, Move};
     use Location::{Address, Capture, EnvironmentCapture, Field, Parameter, Return, Value};
     let m = &observation.marker;

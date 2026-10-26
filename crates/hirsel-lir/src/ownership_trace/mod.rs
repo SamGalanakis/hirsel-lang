@@ -29,7 +29,7 @@ pub use check::{check, check_transform};
 mod finalizer;
 pub mod native;
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -48,8 +48,16 @@ pub enum Kind {
     Create,
     Move,
     Drop,
+    /// Internal borrowed-call environment binding. This creates no holder,
+    /// transfers no credit and must never become a user lineage event.
+    Alias,
 }
-snapshot_enum!(Kind { Create, Move, Drop });
+snapshot_enum!(Kind {
+    Create,
+    Move,
+    Drop,
+    Alias
+});
 
 /// A logical shadow location. Field/capture numbers are declaration ordinals,
 /// not byte offsets. Addresses retain LIR's checked dynamic projection operands.
@@ -130,7 +138,8 @@ snapshot_enum!(Point {
 });
 
 /// At Create/Drop `token == owner`. At Move `token` is the previous shadow
-/// location and `owner` is its recipient. These are not program-visible values.
+/// location and `owner` is its recipient. Alias binds a borrowed callable view
+/// to its still-live owned caller slot. These are not program-visible values.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ObserveOwnership {
     pub id: MarkerId,
