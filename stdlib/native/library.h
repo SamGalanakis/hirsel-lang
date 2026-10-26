@@ -260,6 +260,7 @@ uint8_t hirsel_rt_v2_task_canceled(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*
 /* task.isolate (FAIL-2): the caught chain, record by record; the program descriptor carries
    the failure table of site positions and rule IDs. */
 uint8_t hirsel_rt_v2_isolate_begin(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
+uint8_t hirsel_rt_v2_isolate_end(hirsel_rt_v2_ctx*, const uint64_t*);
 uint8_t hirsel_rt_v2_isolate_count(hirsel_rt_v2_ctx*, uint64_t*, const uint64_t*);
 uint8_t hirsel_rt_v2_isolate_kind(hirsel_rt_v2_ctx*, uint32_t*, const uint64_t*, uint64_t);
 uint8_t hirsel_rt_v2_isolate_rule(hirsel_rt_v2_ctx*, void*, hirsel_rt_v2_slice*, const uint64_t*, uint64_t);

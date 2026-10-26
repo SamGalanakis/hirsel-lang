@@ -1,9 +1,11 @@
 //! Contract-bearing and ordinary owning twins use the identical raw body.
+//! These bodies model lowered owning releases at Ready: an erased callable
+//! can destroy resources, so an Rc body must retain its semantic Drop instead.
 use crate::support::*;
 use hirsel_core_contract::Passing;
 use hirsel_lir::abi_types::ParameterPath;
 use hirsel_lir::ir::*;
-use hirsel_lir::stage::{Rc, Value};
+use hirsel_lir::stage::{Ready, Value};
 
 fn contract(t: &mut Lir<impl hirsel_lir::stage::Stage>, paths: Vec<ParameterPath>) {
     let abi = &mut t.table.fn_abis[t.builder.unit.header.abi.0 as usize];
@@ -40,7 +42,7 @@ enum Route {
     Erased,
 }
 fn retain(scoped: bool, route: Route) -> Vec<K> {
-    let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], Some(l::ERASED));
+    let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::ERASED)], Some(l::ERASED));
     if scoped {
         contract(
             &mut t,
@@ -198,7 +200,7 @@ fn contract_serialization_and_stripping_changes_identity() {
         .is_err()
     );
 }
-fn carrier(t: &mut Lir<Rc>, borrowed: bool) -> hirsel_lir::LayoutId {
+fn carrier(t: &mut Lir<Ready>, borrowed: bool) -> hirsel_lir::LayoutId {
     use hirsel_lir::layout_types::*;
     let mut r = t.table.layouts[l::ERASED.0 as usize].clone();
     r.kind = LayoutKind::Aggregate;
@@ -230,7 +232,7 @@ enum CarrierSink {
     OwningCapture,
 }
 fn carrier_retainer(scoped: bool, sink: CarrierSink) -> Vec<K> {
-    let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
+    let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::ERASED)], None);
     let container = carrier(&mut t, false);
     let second = if matches!(sink, CarrierSink::Mut) {
         let abi = &mut t.table.fn_abis[t.builder.unit.header.abi.0 as usize];
@@ -471,7 +473,7 @@ fn field_projection_heap_mut_and_nested_owning_capture_keep_provenance() {
 #[test]
 fn failure_only_copy_retains_its_incoming_scoped_origin() {
     for scoped in [false, true] {
-        let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
+        let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::ERASED)], None);
         if scoped {
             contract(
                 &mut t,
@@ -518,7 +520,7 @@ fn failure_only_copy_retains_its_incoming_scoped_origin() {
 #[test]
 fn two_arm_union_keeps_each_scoped_origin() {
     for scoped in [false, true] {
-        let mut t = Lir::<Rc>::new(
+        let mut t = Lir::<Ready>::new(
             &[(Passing::Borrow, l::ERASED), (Passing::Borrow, l::ERASED)],
             Some(l::ERASED),
         );
@@ -670,7 +672,7 @@ fn linked_body_claims_cover_calls_and_closure_entries() {
 #[test]
 fn mut_call_writeback_cannot_launder_the_incoming_contract() {
     for scoped in [false, true] {
-        let mut t = Lir::<Rc>::new(&[(Passing::Mut, l::ERASED)], Some(l::ERASED));
+        let mut t = Lir::<Ready>::new(&[(Passing::Mut, l::ERASED)], Some(l::ERASED));
         if scoped {
             contract(
                 &mut t,
@@ -731,7 +733,7 @@ fn mut_call_writeback_cannot_launder_the_incoming_contract() {
 fn scoped_borrow_forwarding_requires_the_parameter_contract() {
     for scoped in [false, true] {
         for promised in [false, true] {
-            let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
+            let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::ERASED)], None);
             if scoped {
                 contract(
                     &mut t,
@@ -807,7 +809,7 @@ fn scoped_borrow_forwarding_requires_the_parameter_contract() {
 #[test]
 fn unknown_indirect_entry_does_not_qualify_a_scoped_contract() {
     for promised in [false, true] {
-        let mut t = Lir::<Rc>::new(&[(Passing::Borrow, l::ERASED)], None);
+        let mut t = Lir::<Ready>::new(&[(Passing::Borrow, l::ERASED)], None);
         if promised {
             contract(
                 &mut t,
@@ -879,7 +881,7 @@ fn unknown_indirect_entry_does_not_qualify_a_scoped_contract() {
 #[test]
 fn formal_field_selector_is_reconstructed_before_a_copy() {
     for scoped in [false, true] {
-        let mut t = Lir::<Rc>::new(&[], Some(l::ERASED));
+        let mut t = Lir::<Ready>::new(&[], Some(l::ERASED));
         let carrier = carrier(&mut t, false);
         let abi = t.abi(&[(Passing::Borrow, carrier)], Some(l::ERASED));
         t.builder.unit.header.abi = abi;
@@ -919,7 +921,7 @@ fn formal_field_selector_is_reconstructed_before_a_copy() {
 #[test]
 fn a_capture_selector_cannot_name_an_absent_capture() {
     for forged in [false, true] {
-        let mut t = Lir::<Rc>::new(&[], None);
+        let mut t = Lir::<Ready>::new(&[], None);
         if forged {
             let abi = &mut t.table.fn_abis[t.builder.unit.header.abi.0 as usize];
             abi.nonretaining_captures = vec![ParameterPath {
