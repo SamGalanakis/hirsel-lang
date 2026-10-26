@@ -2323,6 +2323,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         };
         self.ownership_call(call, false)?;
         self.bind_runtime(call, name.as_deref(), codes)?;
+        self.resume_tail_bind(call)?;
         let returned = match (&name, code) {
             (Some(name), _) => {
                 let id = self.em.import_function(name, &physical_signature)?;

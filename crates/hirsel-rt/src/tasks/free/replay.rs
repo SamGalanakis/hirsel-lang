@@ -470,18 +470,8 @@ unsafe fn wait_object_from(
         return Ok(false);
     }
     loop {
-        {
-            let object = object(ctx, handle).expect("an admitted object replay");
-            let Some(dependency) = object.pending(ctx)? else {
-                return Ok(false);
-            };
-            if !entered {
-                object.token.publish(ctx, Phase::Entered, || ())?;
-                entered = true;
-            }
-            if dependency.subscribe(subscriber(ctx)) {
-                continue;
-            }
+        if poll_object(ctx, handle, &mut entered)? {
+            return Ok(false);
         }
         if leave && unsafe { crate::tasks::compact::can_wait(ctx) } {
             unsafe { crate::tasks::park_left(ctx, Wait::Retry { cancelable: false }) }?;
@@ -489,6 +479,32 @@ unsafe fn wait_object_from(
             return Ok(true);
         }
         unsafe { park(ctx) }?;
+    }
+}
+
+/// Poll the original object's version, subscribing before returning Pending.
+/// The caller owns `entered` across every save; this function begins no op.
+/// No token, dependency, session lock or subscriber survives its return.
+pub(super) fn poll_object(
+    ctx: *mut TaskCtx,
+    handle: hirsel_free::session::Handle,
+    entered: &mut bool,
+) -> Stopped<bool> {
+    if !on(ctx) {
+        return Ok(true);
+    }
+    loop {
+        let object = object(ctx, handle).expect("an admitted object replay");
+        let Some(dependency) = object.pending(ctx)? else {
+            return Ok(true);
+        };
+        if !*entered {
+            object.token.publish(ctx, Phase::Entered, || ())?;
+            *entered = true;
+        }
+        if !dependency.subscribe(subscriber(ctx)) {
+            return Ok(false);
+        }
     }
 }
 

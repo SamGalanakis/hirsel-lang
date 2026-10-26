@@ -230,6 +230,21 @@ pub(crate) unsafe fn take(
 pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+    let next = unsafe { put_action(ctx, word, payload) }?;
+    if let Some(next) = next {
+        notify(ctx, next);
+    }
+    unsafe { try_yield(&mut *ctx) }
+}
+
+/// The admitted put's bounded cell action. No entry, wait or yield occurs here.
+/// # Safety
+/// The role is held, the original ordinal is current and payload is Some.
+pub(super) unsafe fn put_action(
+    ctx: *mut TaskCtx,
+    word: u64,
+    payload: *mut u8,
+) -> Stopped<Option<u32>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     super::objects::keep_mutex(ctx, word, &cell);
@@ -255,10 +270,7 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
     drop(replay);
     unsafe { role::enter(ctx) };
     publication?;
-    if let Some(next) = next {
-        notify(ctx, next);
-    }
-    unsafe { try_yield(&mut *ctx) }
+    Ok(next)
 }
 
 /// # Safety
@@ -266,6 +278,25 @@ pub(crate) unsafe fn put(ctx: *mut TaskCtx, word: u64, payload: *mut u8) -> Stop
 pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+    let waiters = unsafe { kill_action(ctx, word) }?;
+    unsafe {
+        role::with_held(ctx, |s| {
+            for task in waiters {
+                s.task(task).retried = true;
+                s.wake(task);
+            }
+        })
+    };
+    unsafe { try_yield(&mut *ctx) }
+}
+
+/// Snapshot only after admission, then publish the existing kill once.
+/// # Safety
+/// As for kill, after its wait has admitted the original ordinal.
+pub(super) unsafe fn kill_action(
+    ctx: *mut TaskCtx,
+    word: u64,
+) -> Stopped<std::collections::VecDeque<u32>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     // Capture the chain only after the replay wait, then avoid stop-aware
     // accessors while this frame owns it or the detached wake list.
@@ -299,15 +330,7 @@ pub(crate) unsafe fn kill(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     drop(tokens);
     drop(cell);
     drop(replay);
-    unsafe {
-        role::with_held(ctx, |s| {
-            for task in waiters {
-                s.task(task).retried = true;
-                s.wake(task);
-            }
-        })
-    };
-    unsafe { try_yield(&mut *ctx) }
+    Ok(waiters)
 }
 
 /// # Safety
@@ -415,6 +438,19 @@ pub(super) unsafe fn destroy(
 pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     super::record::begin(ctx);
     unsafe { super::replay::wait_object(ctx, (crate::free::MUTEX, word)) }?;
+    let chain = unsafe { cause_action(ctx, word) }?;
+    unsafe { (*ctx).failure.append_chain(chain.as_ref().clone()) };
+    super::replay::start(ctx);
+    Ok(())
+}
+
+/// Return the admitted cause for its original append suffix.
+/// # Safety
+/// As for cause, after its wait has admitted the original ordinal.
+pub(super) unsafe fn cause_action(
+    ctx: *mut TaskCtx,
+    word: u64,
+) -> Stopped<std::sync::Arc<Vec<crate::failure::Chained>>> {
     let replay = super::replay::object(ctx, (crate::free::MUTEX, word));
     let cell = role::with_role(ctx, |s| s.sync.mutex(word));
     let mut state = cell.lock();
@@ -433,9 +469,7 @@ pub(crate) unsafe fn cause(ctx: *mut TaskCtx, word: u64) -> Stopped<()> {
     drop(state);
     drop(cell);
     drop(replay);
-    unsafe { (*ctx).failure.append_chain(chain.as_ref().clone()) };
-    super::replay::start(ctx);
-    Ok(())
+    Ok(chain)
 }
 
 #[cfg(test)]

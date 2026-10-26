@@ -19,7 +19,7 @@ use cranelift_module::{Linkage, Module};
 use hirsel_lir::abi_types::ParameterPassing;
 use hirsel_lir::continuation::{
     ContinuationPlan, ContinuationPlans, ExclusiveSlot, NestedFrame, Representation, ResumeAction,
-    ResumeState, resume_hint, resume_name,
+    ResumeState, resume_site_hint, resume_name,
 };
 use hirsel_lir::emission::{EmitInputs, artifact};
 use hirsel_lir::ir::*;
@@ -298,6 +298,17 @@ impl FnEmitter<'_, '_, '_> {
             {
                 None
             }
+            ResumeAction::AfterEnteredCall(at, edge)
+                if at == call
+                    && edge == state.target.edge
+                    && state.callee.is_none()
+                    && state.tail.is_some() =>
+            {
+                if !resuming {
+                    self.materialize(state)?;
+                }
+                return Ok(None);
+            }
             _ => return self.invalid("unsupported or inconsistent resume action"),
         };
         if let Some(callee) = callee {
@@ -311,7 +322,7 @@ impl FnEmitter<'_, '_, '_> {
         }
         if !resuming {
             self.materialize(state)?;
-            let hint = resume_hint(&state.boundary.operation);
+            let hint = resume_site_hint(self.unit, state);
             let number = self
                 .b
                 .ins()
@@ -394,6 +405,41 @@ impl FnEmitter<'_, '_, '_> {
             &[self.context, frame, number, kind, bytes, codes.0, codes.1],
         )
         .map(|_| ())
+    }
+
+    pub(crate) fn resume_tail_bind(&mut self, call: CallId) -> Emitted {
+        let Some(resume) = self.resume.as_ref() else {
+            return Ok(());
+        };
+        let Some(state) = resume
+            .plan
+            .states
+            .iter()
+            .find(|s| s.boundary.call == call && s.tail.is_some())
+        else {
+            return Ok(());
+        };
+        let number = self
+            .b
+            .ins()
+            .iconst(types::I32, i64::from(state.target.state));
+        let kind = self
+            .b
+            .ins()
+            .iconst(types::I32, state.tail.as_ref().unwrap().kind as i64);
+        let bytes = self
+            .b
+            .ins()
+            .iconst(types::I32, resume.plan.cost.frame_bytes as i64);
+        let site = &self.unit.tables.calls[call.index()];
+        let code = self.anchor_code(site.anchor)?;
+        let codes = self.caller_sites(code, site.forward_caller);
+        let frame = self.frame();
+        self.rt(
+            RuntimeEntry::ResumeTail,
+            &[self.context, frame, number, kind, bytes, codes.0, codes.1],
+        )?;
+        Ok(())
     }
 
     /// After a nested resumable call: a suspended callee suspends this frame,

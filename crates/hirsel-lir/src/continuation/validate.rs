@@ -535,6 +535,7 @@ fn check_state(
     if state.storage != expected_storage || expected_storage.len() != slots.len() {
         return Err(ContinuationError::Storage(id, n));
     }
+    check_tail(u, table, b, call, state, &slots, &loans, frame)?;
     if state.loans != loans.into_iter().collect::<Vec<_>>() {
         return Err(ContinuationError::Loan(id, n));
     }
@@ -641,12 +642,175 @@ fn check_state(
     } else {
         match state.callee {
             Some(frame) => ResumeAction::ResumeNested(expected.call, frame),
+            None if state.tail.is_some() => ResumeAction::AfterEnteredCall(expected.call, normal),
             None => ResumeAction::RetryUnenteredCall(expected.call),
         }
     };
     if state.action != action {
         return Err(ContinuationError::ResumeLabel(id, n));
     }
+    Ok(())
+}
+
+/// Rebuild entered-tail custody from the Ready arguments and the independently
+/// computed live slots/loans. The producer's transfer proof is not consulted.
+#[allow(clippy::too_many_arguments)]
+fn check_tail(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    block: BlockId,
+    call: CallId,
+    state: &ResumeState,
+    slots: &BTreeSet<SlotId>,
+    loans: &BTreeSet<LoanId>,
+    frame: &[LiveStorage],
+) -> Result<(), ContinuationError> {
+    let refused = ContinuationError::LiveOwner(u.header.instance, state.target.state);
+    let operation = match u.tables.calls[call.index()].callee {
+        Callee::Operation(op) => core_name(&u.tables.operations[op.index()].definition),
+        _ => None,
+    };
+    let kind = match operation.as_deref() {
+        Some("$intrinsic.MutexPut") => Some(TailKind::Put),
+        Some("$intrinsic.MutexKill") => Some(TailKind::Kill),
+        Some("$intrinsic.MutexCause") => Some(TailKind::Cause),
+        _ => None,
+    };
+    let known = core_name(&u.header.definition).as_deref() == Some("mutex.with")
+        && u.tables
+            .calls
+            .iter()
+            .any(|c| matches!(c.callee, Callee::Direct(_) | Callee::Bound { .. }))
+        && u.tables
+            .calls
+            .iter()
+            .all(|c| !matches!(c.callee, Callee::Indirect(_)));
+    if !known || kind.is_none() {
+        return if state.tail.is_none() {
+            Ok(())
+        } else {
+            Err(refused)
+        };
+    }
+    let kind = kind.unwrap();
+    let proof = state.tail.as_ref().ok_or(refused.clone())?;
+    let Terminator::Call {
+        normal: Some(normal),
+        failure,
+        ..
+    } = u.terminators[block.index()]
+    else {
+        return Err(refused);
+    };
+    if proof.kind != kind
+        || proof.normal != normal
+        || proof.failure != failure
+        || state.callee.is_some()
+    {
+        return Err(refused);
+    }
+    // A callback failure cannot release payload/captures before the kill.
+    for term in &u.terminators {
+        let Terminator::Call { call, failure, .. } = *term else {
+            continue;
+        };
+        if !matches!(
+            u.tables.calls[call.index()].callee,
+            Callee::Direct(_) | Callee::Bound { .. }
+        ) {
+            continue;
+        }
+        let mut todo =
+            vec![u.tables.edges[u.tables.failures[failure.index()].cleanup.index()].target];
+        let mut seen = BTreeSet::new();
+        while let Some(b) = todo.pop() {
+            if !seen.insert(b) {
+                continue;
+            }
+            if u.blocks[b.index()]
+                .instructions
+                .get(&u.instructions)
+                .unwrap_or(&[])
+                .iter()
+                .any(|i| {
+                    matches!(
+                        i,
+                        Inst::Drop { .. } | Inst::Release { .. } | Inst::FinalizeBegin { .. }
+                    )
+                })
+            {
+                return Err(refused);
+            }
+            if let Terminator::Call { call, .. } = u.terminators[b.index()] {
+                let Callee::Operation(op) = u.tables.calls[call.index()].callee else {
+                    return Err(refused);
+                };
+                if core_name(&u.tables.operations[op.index()].definition).as_deref()
+                    != Some("$intrinsic.MutexKill")
+                {
+                    return Err(refused);
+                }
+                continue;
+            }
+            let next = successors_of(u, b);
+            if next.is_empty() {
+                return Err(refused);
+            }
+            todo.extend(next);
+        }
+    }
+    if kind != TailKind::Put {
+        return if proof.carrier.is_none() {
+            Ok(())
+        } else {
+            Err(refused)
+        };
+    }
+    let carrier = proof.carrier.as_ref().ok_or(refused.clone())?;
+    let args = u.tables.calls[call.index()]
+        .arguments
+        .get(&u.pools.call_arguments)
+        .unwrap_or(&[]);
+    let passed: Vec<_> = args.iter().filter(|a| a.parameter == 1).collect();
+    let [arg] = passed[..] else {
+        return Err(refused);
+    };
+    let ArgumentValue::Address { address, .. } = arg.value else {
+        return Err(refused);
+    };
+    let at = &u.addresses[address.index()];
+    let AddressBase::Slot(slot) = at.base else {
+        return Err(refused);
+    };
+    let layout = u.types[u.slots[slot.index()].ty.index()].layout;
+    let (size, align) = fixed(table, layout).ok_or(refused.clone())?;
+    let stored: Vec<_> = frame.iter().filter(|s| s.slot == slot).collect();
+    let [stored] = stored[..] else {
+        return Err(refused);
+    };
+    let active: Vec<_> = loans
+        .iter()
+        .copied()
+        .filter(|l| root_slot(u, u.tables.loans[l.index()].address) == Some(slot))
+        .collect();
+    let [loan] = active[..] else {
+        return Err(refused);
+    };
+    let expected = TailCarrier {
+        slot,
+        address,
+        loan,
+        layout,
+        offset: stored.offset,
+        size,
+        align,
+    };
+    if *carrier != expected || !slots.contains(&slot) || stored.layout != layout || stored.offset % align != 0
+        || at.projection.len != 0 || !at.unchecked.is_empty() || u.types[at.ty.index()].layout != layout
+        || !matches!(u.slots[slot.index()].kind, SlotKind::Local | SlotKind::Temporary)
+        || !u.tables.loans[loan.index()].mutable || u.tables.loans[loan.index()].address != address
+        || args.iter().any(|a| a.parameter != 1 && matches!(a.value, ArgumentValue::Address { address, .. } if root_slot(u, address) == Some(slot)))
+    { return Err(refused); }
     Ok(())
 }
 

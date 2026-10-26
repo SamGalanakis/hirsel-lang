@@ -22,6 +22,7 @@ pub const HIGHER_ORDER: &[&str] = &[
     "task.scope",
     "task.scope_until",
     "task.isolate",
+    "mutex.with",
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]

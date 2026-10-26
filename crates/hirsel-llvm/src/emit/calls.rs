@@ -736,6 +736,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.ahead_flush();
         self.ownership_call(call, false)?;
         self.bind_runtime(call, name.as_deref(), codes)?;
+        self.resume_tail_bind(call)?;
         let returned = match function {
             Some(function) => self.builder.call(function, &args),
             None => self.builder.call_typed(signature.ty, callee, &args),

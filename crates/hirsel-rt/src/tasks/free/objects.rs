@@ -41,7 +41,7 @@ mod compact_mutex_tests;
 #[cfg(test)]
 mod receive_registration_tests;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 /// Leases one task keeps per kind; the oldest is dropped first.
 const LEASES: usize = 8;

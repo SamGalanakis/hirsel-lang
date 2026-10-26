@@ -4807,6 +4807,11 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_put(
     m: *const u64,
     payload: *mut u8,
 ) -> u8 {
+    if let Some(status) =
+        unsafe { free::tail::invoke_mutex(ctx, free::tail::Kind::Put, mutex_word(m), payload) }
+    {
+        return status;
+    }
     // SAFETY: caller contract; only a registered successor's wake needs R.
     if let Some(result) = unsafe { free::objects::mutex_put(ctx, mutex_word(m), payload) } {
         return unsafe { free::objects::finish(ctx, result) };
@@ -4951,6 +4956,16 @@ fn stack_rss(ctx: &mut TaskCtx) -> u64 {
 /// `ctx` is live, its failure active, and `m` borrows a counted Mutex wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    if let Some(status) = unsafe {
+        free::tail::invoke_mutex(
+            ctx,
+            free::tail::Kind::Kill,
+            mutex_word(m),
+            std::ptr::null_mut(),
+        )
+    } {
+        return status;
+    }
     // SAFETY: caller contract; a resolved held mutex dies without the role.
     if let Some(result) = unsafe { free::objects::mutex_kill(ctx, mutex_word(m)) } {
         return unsafe { free::objects::finish(ctx, result) };
@@ -4987,6 +5002,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_mutex_kill(ctx: *mut TaskCtx, m: *const u6
 /// `ctx` is live and `m` borrows a dead Mutex's wrapper.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_mutex_cause(ctx: *mut TaskCtx, m: *const u64) -> u8 {
+    if let Some(status) = unsafe {
+        free::tail::invoke_mutex(
+            ctx,
+            free::tail::Kind::Cause,
+            mutex_word(m),
+            std::ptr::null_mut(),
+        )
+    } {
+        return status;
+    }
     // SAFETY: caller contract; a resolved dead mutex's chain is cell state.
     if let Some(result) = unsafe { free::objects::mutex_cause(ctx, mutex_word(m)) } {
         return unsafe { free::objects::finish(ctx, result) };

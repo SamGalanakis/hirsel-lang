@@ -38,12 +38,14 @@ mod ordered_await;
 mod ordered_join;
 mod runtime;
 mod scope;
-mod validate;
 pub use ordered::{check_ordered_host_result, ordered_host_result};
 pub use ordered_await::{AwaitCleanup, OrderedAwaitProtocol};
 pub use ordered_join::{check_ordered_join_result, ordered_join_result};
 pub use runtime::{RuntimeOpKind, RuntimeOpPlan, RuntimeResultSlot, RuntimeResultSource};
 pub use scope::ScopeOpPlan;
+mod tail;
+mod validate;
+pub use tail::{OwnedTail, TailCarrier, TailKind};
 pub use validate::{
     AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
     validate_runtime_operations,
@@ -236,6 +238,18 @@ pub fn leaves_in_library(definition: &DefPath) -> bool {
     core_name(definition).is_some_and(|name| LEAVES_IN_LIBRARY.contains(&name.as_str()))
 }
 
+/// The existing mutex.with take admission applies at its nested wrapper's
+/// take site too. Put/kill/cause use a distinct entered-tail binder.
+pub fn resume_site_hint(u: &LirUnit<Ready>, state: &ResumeState) -> u32 {
+    if tail::known_wrapper(u)
+        && core_name(&state.boundary.operation).as_deref() == Some("$intrinsic.MutexTake")
+    {
+        resume_hint(&u.header.definition)
+    } else {
+        resume_hint(&state.boundary.operation)
+    }
+}
+
 /// What a call does to its caller's continuation, as the runtime's reviewed
 /// operation descriptors classify it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -409,6 +423,8 @@ pub struct ResumeState {
     pub action: ResumeAction,
     /// A typed entered operation; absent for retry, nested and cleanup actions.
     pub runtime: Option<RuntimeOpPlan>,
+    /// Entered intrinsic custody, independently derived from this Ready site.
+    pub tail: Option<OwnedTail>,
     /// Set when the boundary is a call of a resumable body.
     pub callee: Option<NestedFrame>,
     /// Set when that callee takes an exclusive parameter.
@@ -551,6 +567,12 @@ pub(crate) fn call_effect(
     }
     // A classified operation is the boundary itself, even when its native
     // disposition is a library body: that body is the operation's implementation.
+    if core_name(&definition).as_deref() == Some("mutex.with")
+        && let Some(id) = body
+        && tail::known_wrapper(units[&id])
+    {
+        return CallEffect::Nested(id);
+    }
     match (classify(&definition), body) {
         (Some(CalleeClass::Local), _) => CallEffect::Local,
         (Some(CalleeClass::Boundary), _) => CallEffect::Boundary(definition),
@@ -1222,17 +1244,23 @@ fn states(
             ),
             (Some(_), None) => return Err("exclusive argument without a nested frame".into()),
         };
+        let tail = tail::derive(u, table, site.call, site.block, &slots, &loans, &storage)?;
         out.push(ResumeState {
             boundary: ExistingBoundary {
                 block: site.block,
                 call: site.call,
                 operation: site.operation.clone(),
             },
-            action: match callee {
-                Some(frame) => ResumeAction::ResumeNested(site.call, frame),
-                None => ResumeAction::RetryUnenteredCall(site.call),
+            action: if tail.is_some() {
+                ResumeAction::AfterEnteredCall(site.call, normal)
+            } else {
+                match callee {
+                    Some(frame) => ResumeAction::ResumeNested(site.call, frame),
+                    None => ResumeAction::RetryUnenteredCall(site.call),
+                }
             },
             runtime: None,
+            tail,
             callee,
             exclusive,
             live: values
