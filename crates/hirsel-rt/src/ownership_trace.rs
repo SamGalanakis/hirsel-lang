@@ -9,7 +9,7 @@ use hirsel_run_schema::ownership_trace::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-pub const ABI_VERSION: u32 = 88;
+pub const ABI_VERSION: u32 = 89;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -133,6 +133,19 @@ pub(crate) fn task(run: &crate::context::RunShared, task: u64, path: &[u32]) {
         observer.record(Row::TaskPart {
             task,
             index: index as u32,
+            ordinal,
+        });
+    }
+}
+
+/// Copy the actual runtime-assigned task operation, without acquiring any
+/// scheduler state, sampling a clock or allocating diagnostic storage.
+/// # Safety
+/// `ctx` belongs to the issuing task; `ordinal` was assigned by its runtime.
+pub(crate) unsafe fn operation(ctx: *mut TaskCtx, ordinal: u64) {
+    if let Some(observer) = unsafe { observer(ctx) } {
+        unsafe { &*observer }.record(Row::Operation {
+            task: unsafe { (*ctx).ownership_task },
             ordinal,
         });
     }
@@ -343,3 +356,7 @@ pub(crate) unsafe fn retired(ctx: &TaskCtx, layout: *const crate::release::Layou
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ownership_trace_tests.rs"]
+mod tests;

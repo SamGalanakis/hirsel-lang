@@ -431,6 +431,11 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
             .checked_add(1)
             .expect("native op ordinal overflow");
     }
+    #[cfg(feature = "ownership-trace")]
+    if let Some(task) = unsafe { (*ctx).recording.as_ref() } {
+        let ordinal = task.ordinal;
+        unsafe { crate::ownership_trace::operation(ctx, ordinal) };
+    }
 }
 
 /// [`begin`] for an immediate op whose task token checked its cut: replay
@@ -439,7 +444,11 @@ pub(super) fn begin_replayed(ctx: *mut TaskCtx, replay: &super::replay::Token) {
     // SAFETY: the running task owns its context.
     unsafe { (*ctx).point_ops = (*ctx).point_ops.saturating_add(1) };
     entry(ctx);
-    replay.begin();
+    let _ordinal = replay.begin();
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        crate::ownership_trace::operation(ctx, _ordinal)
+    };
 }
 
 /// Publish another phase of the current ordinal; no section escapes action.
@@ -550,6 +559,11 @@ pub(super) fn begin_entered(ctx: *mut TaskCtx) -> bool {
             .ordinal
             .checked_add(1)
             .expect("native op ordinal overflow");
+    }
+    #[cfg(feature = "ownership-trace")]
+    if let Some(task) = unsafe { (*ctx).recording.as_ref() } {
+        let ordinal = task.ordinal;
+        unsafe { crate::ownership_trace::operation(ctx, ordinal) };
     }
     true
 }

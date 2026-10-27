@@ -315,7 +315,7 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::CleanupBegin { frame, .. }
             | Row::CleanupDrop { frame, .. }
             | Row::CleanupEnd { frame, .. } => *frame = 2,
-            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
+            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);
@@ -1503,4 +1503,58 @@ fn native_task_missing_rebind_and_stale_generation_never_relabel_owners() {
         decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
         Error::InvalidTask((2 << 32) | 1)
     );
+}
+
+#[test]
+fn native_ownership_operation_stamps_preserve_task_local_ordinals_and_refuse_gaps() {
+    let (mut log, units) = fixture();
+    log.rows.insert(
+        4,
+        Row::Operation {
+            task: 0,
+            ordinal: 1,
+        },
+    );
+    log.rows.insert(
+        1,
+        Row::Operation {
+            task: 0,
+            ordinal: 0,
+        },
+    );
+    log.row_count = log.rows.len() as u64;
+    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+    assert!(trace.events[..3].iter().all(|event| event.operation == 0));
+    assert!(trace.events[3..].iter().all(|event| event.operation == 1));
+    assert_eq!(trace.events[3].subordinal, 0);
+    for ordinal in [0, 2, u64::MAX] {
+        let mut forged = log.clone();
+        forged.rows[5] = Row::Operation { task: 0, ordinal };
+        assert_eq!(
+            decode_leaf(&forged, [49; 32], &units, 100).unwrap_err(),
+            Error::InvalidOperation { task: 0, ordinal }
+        );
+    }
+    let mut unknown = log.clone();
+    unknown.rows[1] = Row::Operation {
+        task: 99,
+        ordinal: 0,
+    };
+    assert_eq!(
+        decode_leaf(&unknown, [49; 32], &units, 100).unwrap_err(),
+        Error::UnsupportedTask(99)
+    );
+    let mut missing = log.clone();
+    missing.rows.insert(
+        5,
+        Row::Operation {
+            task: 0,
+            ordinal: 2,
+        },
+    );
+    missing.row_count += 1;
+    assert!(matches!(
+        decode_leaf(&missing, [49; 32], &units, 100),
+        Err(Error::InvalidOperation { .. })
+    ));
 }

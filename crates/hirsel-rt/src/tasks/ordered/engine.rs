@@ -546,13 +546,23 @@ fn advance(ctx: *mut TaskCtx) -> Stopped<()> {
 }
 
 fn accepted(ctx: *mut TaskCtx, task: TaskId, waiting: bool) {
+    #[cfg(feature = "ownership-trace")]
+    let mut assigned = 0;
     with_driver(ctx, |driver| {
         let ordinal = driver.submitted.entry(task).or_default();
         if waiting {
             assert!(driver.waiting.insert(task, *ordinal).is_none());
         }
+        #[cfg(feature = "ownership-trace")]
+        {
+            assigned = *ordinal;
+        }
         *ordinal += 1;
     });
+    #[cfg(feature = "ownership-trace")]
+    unsafe {
+        crate::ownership_trace::operation(ctx, assigned)
+    };
 }
 
 pub(super) fn suspend(ctx: *mut TaskCtx, task: TaskId, head_only: bool) {

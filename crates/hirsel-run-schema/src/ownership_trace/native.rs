@@ -7,7 +7,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -24,6 +24,12 @@ pub enum Row {
         task: u64,
         index: u32,
         ordinal: u32,
+    },
+    /// Canonical operation ordinal assigned by this task's runtime policy.
+    /// This is a diagnostic association, never a clock or a retirement proof.
+    Operation {
+        task: u64,
+        ordinal: u64,
     },
     Enter {
         task: u64,
@@ -132,6 +138,7 @@ pub enum Error {
     Incomplete,
     UnsupportedTask(u64),
     InvalidTask(u64),
+    InvalidOperation { task: u64, ordinal: u64 },
     InvalidFrame(u64),
     UnknownUnit([u8; 32]),
     InvalidMarker(u32),
@@ -320,12 +327,14 @@ fn decode(
     struct TaskIdentity {
         depth: u32,
         path: TaskPath,
+        operation: Option<u64>,
     }
     let mut tasks = BTreeMap::from([(
         0,
         TaskIdentity {
             depth: 0,
             path: TaskPath::default(),
+            operation: None,
         },
     )]);
     let mut slots = BTreeMap::<u32, u64>::new();
@@ -368,6 +377,7 @@ fn decode(
                     TaskIdentity {
                         depth,
                         path: TaskPath::default(),
+                        operation: None,
                     },
                 );
                 continue;
@@ -396,6 +406,24 @@ fn decode(
             }
             _ => (),
         }
+        if let Row::Operation { task, ordinal } = row {
+            let identity = tasks.get_mut(&task).ok_or(Error::UnsupportedTask(task))?;
+            if (task != 0 && slots.get(&(task as u32)) != Some(&task))
+                || identity.path.0.len() != identity.depth as usize
+            {
+                return Err(Error::InvalidTask(task));
+            }
+            // Ordered starts at zero; Free's tape starts at one. Subsequent
+            // entries must be contiguous within the same canonical task.
+            if identity
+                .operation
+                .map_or(ordinal > 1, |prior| prior.checked_add(1) != Some(ordinal))
+            {
+                return Err(Error::InvalidOperation { task, ordinal });
+            }
+            identity.operation = Some(ordinal);
+            continue;
+        }
         let task = match row {
             Row::Enter { task, .. }
             | Row::Event { task, .. }
@@ -404,7 +432,7 @@ fn decode(
             | Row::CleanupDrop { task, .. }
             | Row::CleanupEnd { task, .. }
             | Row::Leave { task, .. } => task,
-            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
+            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
         if task != 0 && slots.get(&(task as u32)) != Some(&task) {
@@ -415,8 +443,9 @@ fn decode(
         }
         let frames = stacks.entry(task).or_default();
         let task = &identity.path;
+        let operation = identity.operation.unwrap_or(0);
         match row {
-            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
+            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
             Row::Enter { frame, unit, .. } => {
                 if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));
@@ -538,7 +567,7 @@ fn decode(
                 let source = &units[&current.unit][&marker].source;
                 let context = Context {
                     task: task.clone(),
-                    operation: 0,
+                    operation,
                     site: source.clone(),
                 };
                 tracker
@@ -694,7 +723,7 @@ fn decode(
                 )?;
                 let context = Context {
                     task: task.clone(),
-                    operation: 0,
+                    operation,
                     site: expected.source.clone(),
                 };
                 match action {

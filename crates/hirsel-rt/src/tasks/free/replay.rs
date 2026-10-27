@@ -357,6 +357,12 @@ pub(super) fn begin(ctx: *mut TaskCtx) {
     let path = path(ctx);
     let mut task = state.task(&path).state.lock().unwrap();
     task.op = task.op.checked_add(1).expect("native op ordinal overflow");
+    #[cfg(feature = "ownership-trace")]
+    {
+        let ordinal = task.op;
+        drop(task);
+        unsafe { crate::ownership_trace::operation(ctx, ordinal) };
+    }
 }
 
 /// # Safety
@@ -676,8 +682,17 @@ impl Token {
     }
 
     /// The role-free [`begin`].
+    #[cfg(not(feature = "ownership-trace"))]
     pub(super) fn begin(&self) {
         self.with(|task| task.op = task.op.checked_add(1).expect("native op ordinal overflow"));
+    }
+
+    #[cfg(feature = "ownership-trace")]
+    pub(super) fn begin(&self) -> u64 {
+        self.with(|task| {
+            task.op = task.op.checked_add(1).expect("native op ordinal overflow");
+            task.op
+        })
     }
 
     pub(super) fn bind(&self, handle: Handle) -> Object {
