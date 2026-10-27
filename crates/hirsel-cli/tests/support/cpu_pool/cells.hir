@@ -1,0 +1,52 @@
+type Matrix = List[List[f64]]
+pub type AppError = Grant(GrantError) | Pool(String)
+
+fn matrix(n: u64, salt: u64) -> unique Matrix {
+  let mut generated: Matrix = []
+  for i in 0u64..n {
+    let mut row: List[f64] = []
+    for j in 0u64..n {
+      let scalar: f64 = float.from_int(i * n + j + salt)
+      let value = scalar / 13.0 - 2.0
+      list.push(mut row, value)
+    }
+    list.push(mut generated, take row)
+  }
+  take generated
+}
+
+// The untransposed serial i/j/k loop is independent of the chunked implementation.
+fn serial(a: Matrix, b: Matrix) -> unique Matrix {
+  let n = list.len(a)
+  let mut out: Matrix = []
+  for i in 0u64..n {
+    let mut row: List[f64] = []
+    for j in 0u64..n {
+      let mut total: f64 = 0.0
+      for k in 0u64..n { total += a[i][k] * b[k][j] }
+      list.push(mut row, total)
+    }
+    list.push(mut out, take row)
+  }
+  take out
+}
+
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  for n in SIZES {
+    let a = shared.freeze(matrix(n, 1))
+    let b = shared.freeze(matrix(n, 7))
+    let expected = shared.with(a, fn(left: Matrix) -> Matrix uses {} {
+      shared.with(b, fn(right: Matrix) -> Matrix uses {} { serial(left, right) })
+    })
+    let actual = matmul_parallel.multiply(tasks, WIDTH, a, b)?Pool
+    failure.check(list.len(actual) == n, Bounds())
+    for i in 0u64..n {
+      failure.check(list.len(actual[i]) == n, Bounds())
+      for j in 0u64..n {
+        failure.check(core@1/f64.bits(actual[i][j]) == core@1/f64.bits(expected[i][j]), Bounds())
+      }
+    }
+  }
+  Ok(())
+}

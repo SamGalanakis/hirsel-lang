@@ -1,6 +1,11 @@
 use std::{fs, process::Command};
 
+static COMPILER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn quick_matmul(width: u32) {
+    let _compiler = COMPILER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let (name, n, expected) = match width {
@@ -97,5 +102,93 @@ pub fn main(rt: Io) -> Result[(), String] {{
             String::from_utf8_lossy(&executed.stderr)
         );
         eprintln!("{name} {backend}: n={n}, iterations=3, warmup=1, checksum={expected}");
+    }
+}
+
+fn every_cell(width: u32) {
+    let _compiler = COMPILER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    for (name, source) in [
+        (
+            "matmul_parallel.hir",
+            include_str!("../../../../../bench/langarena/matmul_parallel.hir"),
+        ),
+        (
+            "harness.hir",
+            include_str!("../../../../../bench/langarena/harness.hir"),
+        ),
+        (
+            "cpu_harness.hir",
+            include_str!("../../../../../bench/langarena/cpu_harness.hir"),
+        ),
+    ] {
+        fs::write(root.join(name), source).unwrap();
+    }
+    let mut sizes = vec![1, width.saturating_sub(1), width, width + 1, 7];
+    sizes.sort_unstable();
+    sizes.dedup();
+    let source = include_str!("cells.hir")
+        .replace("WIDTH", &format!("{width}u32"))
+        .replace(
+            "SIZES",
+            &format!(
+                "[{}]",
+                sizes
+                    .iter()
+                    .map(|n| format!("{n}u64"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        );
+    fs::write(root.join("main.hir"), source).unwrap();
+    let manifest = root.join("hirsel.json");
+    let std = std::path::Path::new("../../stdlib/std@1/hirsel.json")
+        .canonicalize()
+        .unwrap();
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_cells","version":"1"},
+        "sources":[{"path":"main.hir","module":[]},{"path":"matmul_parallel.hir","module":["matmul_parallel"]},
+          {"path":"harness.hir","module":["harness"]},{"path":"cpu_harness.hir","module":["cpu_harness"]}],
+        "dependencies":[{"manifest":std,"package":{"name":"std","version":"1"},"expose":[]}],
+        "entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    fs::write(
+        &grants,
+        serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1",
+        "cpu":{"provider":"cpu.scoped@1","max_workers":width,"max_domains":1,
+         "max_physical_bytes":1073741824u64,"max_batch_bytes":16777216}}})
+        .to_string(),
+    )
+    .unwrap();
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        for mut command in [
+            {
+                let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+                build
+                    .args(["build", "--validate-stages", "--backend", backend])
+                    .arg(&manifest)
+                    .arg("-o")
+                    .arg(&executable);
+                build
+            },
+            {
+                let mut run = Command::new(&executable);
+                run.arg("--hirsel-grants").arg(&grants);
+                run
+            },
+        ] {
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{backend} W={width} sizes={sizes:?}: {output:?}"
+            );
+        }
+        eprintln!(
+            "CPU every-cell {backend} W={width}, sizes={sizes:?}, cells={}",
+            sizes.iter().map(|n| n * n).sum::<u32>()
+        );
     }
 }

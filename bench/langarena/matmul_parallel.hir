@@ -3,7 +3,7 @@
 // langarena: Matmul::T16
 // Port: LangArena rust/src/benchmarks/matmul.rs (3c9f84d), MIT.
 // Each step creates and joins a fresh CPU pool. The j/k order matches Single.
-type Matrix = List[List[f64]]
+pub type Matrix = List[List[f64]]
 type Job {
   a: Shared[Matrix],
   bt: Shared[Matrix],
@@ -33,8 +33,9 @@ fn matgen(n: u64) -> unique Matrix {
   take out
 }
 
-fn step(tasks: Tasks, take initial_state: State, iteration: u64) -> Result[State, String] {
-  let State(width: width, a: input_a, b: input_b, value_out: old_value) = take initial_state
+pub fn multiply(tasks: Tasks, width: u32, borrowed_a: Shared[Matrix], borrowed_b: Shared[Matrix]) -> Result[Matrix, String] {
+  let input_a = copy borrowed_a
+  let input_b = copy borrowed_b
   let rows: Result[List[Shared[Matrix]], CpuPoolError] = core@1/cpu.map_scoped(
     tasks,
     width,
@@ -100,6 +101,12 @@ fn step(tasks: Tasks, take initial_state: State, iteration: u64) -> Result[State
     let Ok(chunk_rows) = shared.thaw(take chunk) else { return Error("CPU result unexpectedly aliased") }
     for row in take chunk_rows { list.push(mut c, take row) }
   }
+  Ok(take c)
+}
+
+fn step(tasks: Tasks, take initial_state: State, iteration: u64) -> Result[State, String] {
+  let State(width: width, a: input_a, b: input_b, value_out: old_value) = take initial_state
+  let c = multiply(tasks, width, input_a, input_b)?
   let n = list.len(c)
   let value_out = int.wrapping_add(old_value, harness.hash_float(c[n / 2][n / 2]))
   Ok(State(width: width, a: take input_a, b: take input_b, value_out: value_out))

@@ -78,84 +78,86 @@ fn run_width(width: usize) {
     let grants = root.join("grants.json");
     fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
-    let executable = root.join("batch");
-    let cli = env!("CARGO_BIN_EXE_hirsel");
-    checked(
-        Command::new(cli)
-            .args(["build", "--fuel", "--backend", "llvm"])
-            .arg(&manifest)
-            .arg("-o")
-            .arg(&executable)
-            .output()
-            .unwrap(),
-    );
-    let probe = root.join("probe.txt");
-    let mut child = Command::new(&executable)
-        .arg("--hirsel-grants")
-        .arg(&grants)
-        .env("HIRSEL_RT_CPU_PROBE", &probe)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    // The exact-CPU executor owns this cpuset. Place only this test's fresh
-    // workers on its distinct admitted CPUs, so OS wake affinity cannot keep
-    // every runnable worker on the creating CPU during the finite control.
-    let mut allowed = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-    assert_eq!(
-        unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&allowed), &mut allowed) },
-        0
-    );
-    let cpus: Vec<_> = (0..libc::CPU_SETSIZE as usize)
-        .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &allowed) })
-        .collect();
-    assert_eq!(cpus.len(), width);
-    let mut pinned = BTreeSet::new();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while pinned.len() < width && std::time::Instant::now() < deadline {
-        if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", child.id())) {
-            for entry in entries.flatten() {
-                let Ok(name) = fs::read_to_string(entry.path().join("comm")) else {
-                    continue;
-                };
-                let Some(worker) = name
-                    .trim()
-                    .strip_prefix("hirsel-cpu-")
-                    .and_then(|n| n.parse::<usize>().ok())
-                else {
-                    continue;
-                };
-                if worker >= width || pinned.contains(&worker) {
-                    continue;
-                }
-                let tid = entry.file_name().to_string_lossy().parse::<i32>().unwrap();
-                let mut selected = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
-                unsafe { libc::CPU_SET(cpus[worker], &mut selected) };
-                if unsafe {
-                    libc::sched_setaffinity(tid, std::mem::size_of_val(&selected), &selected)
-                } == 0
-                {
-                    pinned.insert(worker);
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        let cli = env!("CARGO_BIN_EXE_hirsel");
+        checked(
+            Command::new(cli)
+                .args(["build", "--fuel", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let probe = root.join("probe.txt");
+        let mut child = Command::new(&executable)
+            .arg("--hirsel-grants")
+            .arg(&grants)
+            .env("HIRSEL_RT_CPU_PROBE", &probe)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        // The exact-CPU executor owns this cpuset. Place only this test's fresh
+        // workers on its distinct admitted CPUs, so OS wake affinity cannot keep
+        // every runnable worker on the creating CPU during the finite control.
+        let mut allowed = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
+        assert_eq!(
+            unsafe { libc::sched_getaffinity(0, std::mem::size_of_val(&allowed), &mut allowed) },
+            0
+        );
+        let cpus: Vec<_> = (0..libc::CPU_SETSIZE as usize)
+            .filter(|&cpu| unsafe { libc::CPU_ISSET(cpu, &allowed) })
+            .collect();
+        assert_eq!(cpus.len(), width);
+        let mut pinned = BTreeSet::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while pinned.len() < width && std::time::Instant::now() < deadline {
+            if let Ok(entries) = fs::read_dir(format!("/proc/{}/task", child.id())) {
+                for entry in entries.flatten() {
+                    let Ok(name) = fs::read_to_string(entry.path().join("comm")) else {
+                        continue;
+                    };
+                    let Some(worker) = name
+                        .trim()
+                        .strip_prefix("hirsel-cpu-")
+                        .and_then(|n| n.parse::<usize>().ok())
+                    else {
+                        continue;
+                    };
+                    if worker >= width || pinned.contains(&worker) {
+                        continue;
+                    }
+                    let tid = entry.file_name().to_string_lossy().parse::<i32>().unwrap();
+                    let mut selected = unsafe { std::mem::zeroed::<libc::cpu_set_t>() };
+                    unsafe { libc::CPU_SET(cpus[worker], &mut selected) };
+                    if unsafe {
+                        libc::sched_setaffinity(tid, std::mem::size_of_val(&selected), &selected)
+                    } == 0
+                    {
+                        pinned.insert(worker);
+                    }
                 }
             }
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        if child.try_wait().unwrap().is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+        checked(child.wait_with_output().unwrap());
+        assert_eq!(
+            pinned.len(),
+            width,
+            "all fresh workers must receive the exact admitted placement"
+        );
+        let samples = fs::read_to_string(&probe).unwrap();
+        assert!(
+            overlap(&samples, width),
+            "no switch-free CPU overlap at W={width}\n{samples}"
+        );
+        eprintln!(
+            "CPU {backend} P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"
+        );
     }
-    checked(child.wait_with_output().unwrap());
-    assert_eq!(
-        pinned.len(),
-        width,
-        "all fresh workers must receive the exact admitted placement"
-    );
-    let samples = fs::read_to_string(&probe).unwrap();
-    assert!(
-        overlap(&samples, width),
-        "no switch-free CPU overlap at W={width}\n{samples}"
-    );
-    eprintln!(
-        "CPU P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"
-    );
 }
