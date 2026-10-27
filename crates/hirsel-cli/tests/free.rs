@@ -79,6 +79,32 @@ impl Drop for Scratch {
     }
 }
 
+// Compile children share the action's memory allowance across test bodies
+// and prefix workers. Match Condvar::wait_while's predicate-under-lock pattern
+// in Rust std a7c37f9f, library/std/src/sync/poison/condvar.rs:182-193.
+static COMPILERS: (std::sync::Mutex<usize>, std::sync::Condvar) =
+    (std::sync::Mutex::new(0), std::sync::Condvar::new());
+
+struct CompilerSlot;
+impl CompilerSlot {
+    fn take() -> Self {
+        let (active, available) = &COMPILERS;
+        let mut active = available
+            .wait_while(active.lock().unwrap(), |active| *active == 2)
+            .unwrap();
+        *active += 1;
+        Self
+    }
+}
+impl Drop for CompilerSlot {
+    fn drop(&mut self) {
+        let (active, available) = &COMPILERS;
+        let mut active = active.lock().unwrap();
+        *active -= 1;
+        available.notify_one();
+    }
+}
+
 /// One run of `program` under the test channel `hook`. Bound each child so
 /// a stuck replay names its engine, phase/cut and seed before the pool's
 /// whole-harness timeout discards its output. Follow cli/dwarf.rs's watchdog,
@@ -87,18 +113,22 @@ impl Drop for Scratch {
 /// timeout stops and collects this child's descendants before killing them.
 fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> Output {
     use std::time::{Duration, Instant};
+    let _compiler = engine.is_empty().then(CompilerSlot::take);
     // Concurrent replays of one recording each capture their own output.
     static CHILD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let child = CHILD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let stdout = program.with_extension(format!("child-{child}.stdout"));
     let stderr = program.with_extension(format!("child-{child}.stderr"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+    let mut command = if engine.is_empty() {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.arg("run").arg(program).arg("--grants").arg(grants);
+        command
+    } else {
+        let mut command = Command::new(native_trace(engine, program, grants));
+        command.args(["--hirsel-grants", grants]);
+        command
+    };
     command
-        .arg("run")
-        .args(engine)
-        .arg(program)
-        .arg("--grants")
-        .arg(grants)
         .env("HIRSEL_RT_FREE_TEST", hook)
         .process_group(0)
         .stdout(std::fs::File::create(&stdout).unwrap())
@@ -134,10 +164,41 @@ fn run(engine: &[&str], program: &Path, grants: &str, hook: &str) -> Output {
     output
 }
 
+// A trace source is immutable for its scratch directory's lifetime. Compile
+// each backend/fuel configuration once, then run every prefix on that image,
+// as the existing standalone external-stop and queued-stop fixtures do.
+fn native_trace(engine: &[&str], program: &Path, grants: &str) -> PathBuf {
+    static BUILDS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let backend = match engine {
+        ["--native"] => "llvm",
+        ["--native", "--backend", "cranelift"] => "cranelift",
+        _ => panic!("unsupported native trace engine: {engine:?}"),
+    };
+    let grants: serde_json::Value = serde_json::from_str(grants).unwrap();
+    let fueled = !grants["budgets"]["fuel"].is_null();
+    let executable = program.with_extension(format!("{backend}-fuel-{fueled}"));
+    let _build = BUILDS.lock().unwrap();
+    if !executable.exists() {
+        let mut build = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        build
+            .args(["build", "--backend", backend])
+            .arg(program)
+            .arg("-o")
+            .arg(&executable);
+        if fueled {
+            build.arg("--fuel");
+        }
+        let output = bounded_output(&mut build, program, "native trace build");
+        assert!(output.status.success(), "{engine:?}: {output:?}");
+    }
+    executable
+}
+
 /// Production acceptance children use the same bounded watchdog as test-channel
 /// runs. File capture also prevents a detached native runner retaining a pipe.
 fn bounded_output(command: &mut Command, program: &Path, cell: &str) -> Output {
     use std::time::{Duration, Instant};
+    let _compiler = CompilerSlot::take();
     let stdout = program.with_extension("matrix.stdout");
     let stderr = program.with_extension("matrix.stderr");
     command
@@ -359,8 +420,8 @@ fn verify(engine: &[&str], grants: &str, outcome: &str, recorded: &Recorded) {
         "{what}: the replay under seed {REPLAY_SEED}"
     );
     let bytes = std::fs::read(&tape).unwrap();
-    // Every cut of this one recording, truncated and torn. A replay is one
-    // single-threaded process, so they run together on the action's CPUs.
+    // Every cut of this one recording, truncated and torn. Native prefixes
+    // share the compiled image, so only runtime processes run concurrently.
     let prefixes: Vec<_> = recorded.cuts[..recorded.cuts.len() - 1]
         .iter()
         .flat_map(|(offset, projection)| [0, TORN].map(|extra| (*offset, extra, projection)))
@@ -571,7 +632,11 @@ fn racing_trace(name: &str, outcomes: &[&str], engine: &[&str]) {
     // Seeds are searched in order, a group of concurrent recordings at a time;
     // the smallest seed that prints `want` is the one a sequential search finds.
     let seeds: Vec<u64> = (0..64).collect();
-    let width = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let width = if engine.is_empty() {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        2
+    };
     for &want in outcomes {
         let seed = seeds
             .chunks(width)
@@ -696,47 +761,71 @@ fn coalesced_root_releases_reach_the_joiners_thaw_on_every_engine() {
 /// including rests with no remaining value to drop, across all three engines.
 #[test]
 fn native_returned_rest_completion_replays_across_engines() {
-    for durable in [false, true] {
-        let recorded = record(ENGINES[1], "mutex_cycle", GRANTS, 0, durable);
-        let (_, live) = recorded.cuts.last().unwrap();
-        assert!(
-            live.contains("outcome: \"returned\""),
-            "{}: {live}",
+    native_returned_rest_completion_at(false);
+}
+
+#[test]
+fn native_returned_rest_completion_replays_across_engines_durable() {
+    native_returned_rest_completion_at(true);
+}
+
+fn native_returned_rest_completion_at(durable: bool) {
+    let recorded = record(ENGINES[1], "mutex_cycle", GRANTS, 0, durable);
+    let (_, live) = recorded.cuts.last().unwrap();
+    assert!(
+        live.contains("outcome: \"returned\""),
+        "{}: {live}",
+        recorded.what
+    );
+    let program = recorded.scratch.path("main.hir");
+    let tape = recorded.scratch.path("tape");
+    for engine in ENGINES {
+        assert_eq!(
+            replayed(engine, &program, GRANTS, &tape, REPLAY_SEED),
+            format!("replayed {live}"),
+            "{} replayed on {engine:?}",
             recorded.what
         );
-        let program = recorded.scratch.path("main.hir");
-        let tape = recorded.scratch.path("tape");
-        for engine in ENGINES {
-            assert_eq!(
-                replayed(engine, &program, GRANTS, &tape, REPLAY_SEED),
-                format!("replayed {live}"),
-                "{} replayed on {engine:?}",
-                recorded.what
-            );
-        }
-        // The join is admitted only through entry, but its child's returned
-        // cleanup may already have completed. Both sides must reach that cut.
-        let bytes = std::fs::read(&tape).unwrap();
-        let prefix = recorded.scratch.path("prefix");
-        let calls: Vec<_> = recorded
-            .cuts
-            .iter()
-            .filter(|(_, projection)| projection.contains("[]: Progress { op: 5, phase: Entered }"))
-            .collect();
-        assert!(!calls.is_empty(), "{}: no calling cut", recorded.what);
-        for (offset, projection) in calls {
-            for extra in [0, TORN] {
-                std::fs::write(&prefix, &bytes[..(offset + extra).min(bytes.len())]).unwrap();
-                for engine in ENGINES {
+    }
+    // The join is admitted only through entry, but its child's returned
+    // cleanup may already have completed. Both sides must reach that cut.
+    let bytes = std::fs::read(&tape).unwrap();
+    let calls: Vec<_> = recorded
+        .cuts
+        .iter()
+        .filter(|(_, projection)| projection.contains("[]: Progress { op: 5, phase: Entered }"))
+        .collect();
+    assert!(!calls.is_empty(), "{}: no calling cut", recorded.what);
+    let cases: Vec<_> = calls
+        .into_iter()
+        .flat_map(|(offset, projection)| {
+            [0, TORN].into_iter().flat_map(move |extra| {
+                ENGINES
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(index, engine)| (*offset, extra, index, engine, projection))
+            })
+        })
+        .collect();
+    let width = std::thread::available_parallelism().map_or(1, |n| n.get());
+    for group in cases.chunks(width) {
+        std::thread::scope(|scope| {
+            for &(offset, extra, index, engine, projection) in group {
+                let (program, bytes, recorded) = (&program, &bytes, &recorded);
+                scope.spawn(move || {
+                    let prefix = recorded
+                        .scratch
+                        .path(&format!("prefix-{offset}-{extra}-{index}"));
+                    std::fs::write(&prefix, &bytes[..(offset + extra).min(bytes.len())]).unwrap();
                     assert_eq!(
-                        replayed(engine, &program, GRANTS, &prefix, 3),
+                        replayed(engine, program, GRANTS, &prefix, 3),
                         format!("replayed {projection}"),
                         "{} calling cut {offset} (+{extra}) on {engine:?}",
                         recorded.what
                     );
-                }
+                });
             }
-        }
+        });
     }
 }
 
