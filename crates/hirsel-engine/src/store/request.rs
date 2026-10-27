@@ -42,6 +42,7 @@ impl Admission {
 }
 pub struct RequestStore {
     backend: Arc<dyn ResultStore>,
+    verifier: Option<Arc<hirsel_validate::VerifierCache>>,
     memory: Arc<Admission>,
     state: Mutex<State>,
 }
@@ -81,9 +82,30 @@ impl RequestStore {
         )?);
         Ok(Self::admitted(backend, admission))
     }
+    /// Preserve V's private content under the same admitted request transport.
+    /// Its selected cache may evict rows or bodies independently; only V still
+    /// issues associations and opaque acceptance capabilities.
+    pub fn with_scratch_and_verifier_transport(
+        backend: Arc<dyn ResultStore>,
+        memory: MemoryReservation,
+        parent: &std::path::Path,
+        disk_bytes: u64,
+    ) -> std::io::Result<Self> {
+        let mut request = Self::with_scratch(backend, memory, parent, disk_bytes)?;
+        if let Some(verifier) = &request.verifier {
+            request.verifier = Some(verifier.with_transport(Arc::new(RequestVerifierRows {
+                backend: request.backend.clone(),
+                admission: request.memory.clone(),
+                rows: Mutex::new(BTreeMap::new()),
+            })));
+        }
+        Ok(request)
+    }
     fn admitted(backend: Arc<dyn ResultStore>, memory: Arc<Admission>) -> Self {
+        let verifier = backend.verifier();
         Self {
             backend,
+            verifier,
             memory,
             state: Mutex::new(State {
                 used: 0,
@@ -108,6 +130,44 @@ impl RequestStore {
         true
     }
 }
+struct RequestVerifierRows {
+    backend: Arc<dyn ResultStore>,
+    admission: Arc<Admission>,
+    rows: Mutex<BTreeMap<ContentHash, Reference>>,
+}
+impl Drop for RequestVerifierRows {
+    fn drop(&mut self) {
+        let entries = self
+            .rows
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .len();
+        self.admission.release((entries as u64) * ENTRY_CHARGE);
+    }
+}
+impl hirsel_artifact_store::Contents for RequestVerifierRows {
+    fn get_content(&self, reference: Reference) -> Option<Bytes> {
+        self.backend.get_content(reference)
+    }
+    fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+        self.backend.put_content(domain, bytes)
+    }
+}
+impl hirsel_validate::VerifierRows for RequestVerifierRows {
+    fn row(&self, key: ContentHash) -> Option<Reference> {
+        self.rows
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&key)
+            .copied()
+    }
+    fn set_row(&self, key: ContentHash, reference: Reference) {
+        let mut rows = self.rows.lock().unwrap_or_else(|error| error.into_inner());
+        if rows.contains_key(&key) || self.admission.charge(ENTRY_CHARGE) {
+            rows.insert(key, reference);
+        }
+    }
+}
 impl ResultStore for RequestStore {
     fn query_cache_enabled(&self) -> bool {
         self.backend.query_cache_enabled()
@@ -122,7 +182,7 @@ impl ResultStore for RequestStore {
         self.backend.local_product_store()
     }
     fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
-        self.backend.verifier()
+        self.verifier.clone()
     }
     // Transient transport is enabled even if the selected durable policy is off.
     fn get(&self, key: &EntryKey) -> Option<Bytes> {

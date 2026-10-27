@@ -326,6 +326,38 @@ mod tests {
     const ENTRY: u64 = 100 + PAYLOAD_CHARGE;
 
     #[test]
+    fn admitted_check_keeps_verifier_products_when_ordinary_cache_entries_evict_them() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let manifest = directory.path().join("hirsel.json");
+            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"evicted_v","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+            let mut source = String::from(
+                "pub opaque type Code: plain + inert + noalloc_drop uses {} { code:u8, }\n",
+            );
+            for n in 0..32 {
+                use std::fmt::Write;
+                writeln!(source, "pub const C{n}:Code=Code(code:{n}u8)").unwrap();
+            }
+            source.push_str("pub fn main(){}\n");
+            std::fs::write(directory.path().join("main.hir"), source).unwrap();
+            let budget = ProcessBudget::new(1 << 20);
+            let store = Arc::new(ResidentStore::new(budget, 16 << 10));
+            let mut session = crate::session::Session::open_configured(
+                &manifest,
+                hirsel_engine::CompileConfig {
+                    jobs: hirsel_intern::jobs::Jobs::new(1),
+                    store,
+                    ..Default::default()
+                },
+            );
+            for _ in 0..2 {
+                let checked = session.check().unwrap();
+                assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+            }
+        });
+    }
+
+    #[test]
     fn resident_store_evicts_least_recent_within_capacity_and_releases_its_charge() {
         let budget = ProcessBudget::new(1 << 20);
         let store = ResidentStore::new(budget.clone(), SLOTS + 2 * ENTRY);

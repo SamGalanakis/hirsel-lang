@@ -41,6 +41,105 @@ mod tests {
     }
 
     #[test]
+    fn transported_outputs_survive_cache_eviction_and_recheck_the_current_environment() {
+        #[derive(Default)]
+        struct Rows(
+            Mutex<hirsel_artifact_store::Memory>,
+            Mutex<HashMap<ContentHash, Reference>>,
+        );
+        impl hirsel_artifact_store::Contents for Rows {
+            fn get_content(&self, reference: Reference) -> Option<hirsel_artifact_store::Bytes> {
+                self.0.lock().unwrap().get_content(reference)
+            }
+            fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
+                self.0.lock().unwrap().put_content(domain, bytes)
+            }
+        }
+        impl VerifierRows for Rows {
+            fn row(&self, key: ContentHash) -> Option<Reference> {
+                self.1.lock().unwrap().get(&key).copied()
+            }
+            fn set_row(&self, key: ContentHash, reference: Reference) {
+                self.1.lock().unwrap().insert(key, reference);
+            }
+        }
+        let rows = Arc::new(Rows::default());
+        let selected = Arc::new(VerifierCache::hosted(rows.clone()));
+        let request = selected.with_transport(Arc::new(Rows::default()));
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let definition = Arc::new(f.definition.clone());
+        let policy = ContentHash::of_bytes(b"transported private output");
+        let (report, _, _, evidence) = validate_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            &f.signatures,
+            policy,
+            Some(&request),
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
+        let output = request
+            .definition_output_from_evidence(
+                &definition,
+                session(),
+                policy,
+                &f.signatures,
+                &evidence.unwrap(),
+            )
+            .unwrap();
+        let (stored, bytes) = request.compact_definition_output(&output).unwrap();
+        *rows.0.lock().unwrap() = Default::default();
+        rows.1.lock().unwrap().clear();
+        assert!(
+            stored
+                .load(
+                    &selected,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+        let restored = stored
+            .load(
+                &request,
+                &session(),
+                &f.signatures,
+                &bytes,
+                stored.decode_bytes(),
+            )
+            .unwrap();
+        assert_eq!(restored, output);
+        assert_eq!(
+            request
+                .read_definition(
+                    &restored,
+                    session(),
+                    |_, _| Some(Anchor::default()),
+                    policy,
+                    &f.signatures
+                )
+                .unwrap()
+                .path,
+            definition.path
+        );
+        f.signatures.clear();
+        assert!(
+            stored
+                .load(
+                    &request,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn stored_output_rechecks_current_inputs_and_refuses_before_decode() {
         let mut f = Fixture::unit();
         owner_sig(&mut f, &[]);

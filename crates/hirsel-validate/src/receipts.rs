@@ -206,6 +206,40 @@ enum Backend {
         Arc<dyn VerifierRows>,
         Arc<dyn hirsel_artifact_store::Contents>,
     ),
+    Transport(
+        Arc<VerifierCache>,
+        Arc<dyn VerifierRows>,
+        Arc<TransportContents>,
+    ),
+}
+
+struct TransportContents {
+    selected: Arc<dyn hirsel_artifact_store::Contents>,
+    request: Arc<dyn hirsel_artifact_store::Contents>,
+}
+impl hirsel_artifact_store::Contents for TransportContents {
+    fn get_content(
+        &self,
+        reference: hirsel_artifact_store::Reference,
+    ) -> Option<hirsel_artifact_store::Bytes> {
+        if let Some(bytes) = self.request.get_content(reference) {
+            return Some(bytes);
+        }
+        let bytes = self.selected.get_content(reference)?;
+        (self.request.put_content(reference.domain, &bytes)? == reference).then_some(bytes)
+    }
+    fn put_content(
+        &self,
+        domain: Domain,
+        bytes: &[u8],
+    ) -> Option<hirsel_artifact_store::Reference> {
+        let reference = domain.reference(bytes)?;
+        if self.request.put_content(domain, bytes)? != reference {
+            return None;
+        }
+        let _ = self.selected.put_content(domain, bytes);
+        Some(reference)
+    }
 }
 /// A host-owned, bounded home for verifier rows and their content. Only this
 /// cache publishes rows, so product bytes in the same host cannot supply them.
@@ -251,9 +285,30 @@ impl VerifierCache {
         Self(Backend::Hosted(rows.clone(), rows), Mutex::default())
     }
 
+    /// Keep this request's verifier content through best-effort cache eviction.
+    /// Association lookup and publication remain in the selected verifier;
+    /// transport bytes grant no authority and use the caller's existing bound.
+    pub fn with_transport<T: VerifierRows + 'static>(
+        self: &Arc<Self>,
+        request: Arc<T>,
+    ) -> Arc<Self> {
+        Arc::new(Self(
+            Backend::Transport(
+                self.clone(),
+                request.clone(),
+                Arc::new(TransportContents {
+                    selected: self.contents(),
+                    request,
+                }),
+            ),
+            Mutex::default(),
+        ))
+    }
+
     pub(crate) fn publication_batch(&self) -> Option<hirsel_artifact_store::Batch> {
         match &self.0 {
             Backend::Directory(store) => Some(store.batch()),
+            Backend::Transport(selected, _, _) => selected.publication_batch(),
             Backend::Memory(..) | Backend::Hosted(..) => None,
         }
     }
@@ -263,6 +318,7 @@ impl VerifierCache {
     pub fn publication_request(&self) -> Option<hirsel_artifact_store::Request> {
         match &self.0 {
             Backend::Directory(store) => Some(store.request()),
+            Backend::Transport(selected, _, _) => selected.publication_request(),
             _ => None,
         }
     }
@@ -277,6 +333,23 @@ impl VerifierCache {
         key: ContentHash,
         domain: Domain,
     ) -> Option<(hirsel_artifact_store::Reference, T)> {
+        let (reference, bytes) = self.row_content(key, domain)?;
+        let value = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(&bytes)
+            .ok()?;
+        Some((reference, value))
+    }
+    fn row_content(
+        &self,
+        key: ContentHash,
+        domain: Domain,
+    ) -> Option<(
+        hirsel_artifact_store::Reference,
+        hirsel_artifact_store::Bytes,
+    )> {
         let (reference, bytes) = match &self.0 {
             Backend::Memory(rows, _) => rows
                 .lock()
@@ -297,17 +370,23 @@ impl VerifierCache {
                 let reference = rows.row(key)?;
                 (reference, contents.get_content(reference)?)
             }
+            Backend::Transport(selected, rows, contents) => {
+                if let Some(reference) = rows.row(key) {
+                    (reference, contents.request.get_content(reference)?)
+                } else {
+                    let (reference, bytes) = selected.row_content(key, domain)?;
+                    if contents.request.put_content(domain, &bytes)? != reference {
+                        return None;
+                    }
+                    rows.set_row(key, reference);
+                    (reference, bytes)
+                }
+            }
         };
         if reference.domain != domain {
             return None;
         }
-        let value = bincode::DefaultOptions::new()
-            .with_fixint_encoding()
-            .with_limit(bytes.len() as u64)
-            .reject_trailing_bytes()
-            .deserialize(&bytes)
-            .ok()?;
-        Some((reference, value))
+        Some((reference, bytes))
     }
     fn publish<T: Serialize>(&self, key: ContentHash, domain: Domain, receipt: &T) {
         let Ok(bytes) = bincode::serialize(receipt) else {
@@ -316,6 +395,9 @@ impl VerifierCache {
         if bytes.len() > hirsel_artifact_store::MAX_RECORD {
             return;
         }
+        self.publish_bytes(key, domain, &bytes);
+    }
+    fn publish_bytes(&self, key: ContentHash, domain: Domain, bytes: &[u8]) {
         match &self.0 {
             Backend::Memory(rows, contents) => {
                 use hirsel_artifact_store::Contents;
@@ -339,6 +421,16 @@ impl VerifierCache {
                 if let Some(reference) = contents.put_content(domain, &bytes) {
                     rows.set_row(key, reference);
                 }
+            }
+            Backend::Transport(selected, rows, contents) => {
+                let Some(reference) = domain.reference(bytes) else {
+                    return;
+                };
+                if contents.request.put_content(domain, bytes) != Some(reference) {
+                    return;
+                }
+                rows.set_row(key, reference);
+                selected.publish_bytes(key, domain, bytes);
             }
         }
     }
@@ -397,12 +489,13 @@ impl VerifierCache {
             Backend::Memory(_, contents) => contents.clone(),
             Backend::Directory(store) => Arc::new(store.clone()),
             Backend::Hosted(_, contents) => contents.clone(),
+            Backend::Transport(_, _, contents) => contents.clone(),
         }
     }
     fn records(&self, types: Arc<TypeInterner>) -> Arc<hirsel_product_codec::TypeRecords> {
         // Hosted storage bounds bytes only; a cached codec would keep its type
         // maps and interner alive beyond the host's bound and revision.
-        if let Backend::Hosted(..) = &self.0 {
+        if matches!(&self.0, Backend::Hosted(..) | Backend::Transport(..)) {
             return hirsel_product_codec::TypeRecords::new(types, self.contents());
         }
         let mut current = self.1.lock().unwrap_or_else(|error| error.into_inner());

@@ -1018,7 +1018,7 @@ pub(super) fn install(
         .checked_add(limits.snapshot_bytes)
         .and_then(|bytes| bytes.checked_add(limits.transport_bytes))
         .ok_or_else(|| uninstalled())?;
-    let store = match RequestStore::with_scratch(
+    let store = match RequestStore::with_scratch_and_verifier_transport(
         config.store.clone(),
         loading.take_transport(),
         scratch_parent,
