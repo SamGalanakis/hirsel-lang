@@ -109,6 +109,7 @@ impl OwnershipCompilation {
             OWNERSHIP_COMPILATION_KIND,
             OWNERSHIP_READY_KIND,
             OWNERSHIP_ROOT_KIND,
+            super::seal_demand::SEAL_DEMAND_KIND,
         ] {
             factories.push((kind, own.clone()));
         }
@@ -136,7 +137,7 @@ impl OwnershipCompilation {
         .with_store_verification(self.verify_store)?;
         Arc::get_mut(&mut snapshot)
             .ok_or("ownership snapshot shared before admission")?
-            .retained_allowances = Vec::with_capacity(4);
+            .retained_allowances = Vec::with_capacity(5);
         Arc::get_mut(&mut snapshot)
             .unwrap()
             .retained_allowances
@@ -145,6 +146,24 @@ impl OwnershipCompilation {
                 self.instances.retained_source_allowance(),
                 self.arena.retained_allowance(),
             ]);
+        let mut allowance = self
+            .allowance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or("ownership dispatch admission consumed twice")?;
+        if snapshot.needs_guard {
+            let inputs = snapshot.instances.completed_inputs()?;
+            let bytes = super::seal_demand::Plan::admission_bytes(
+                inputs.iter().map(|(_, output)| &output.seal_demand),
+            );
+            let guard_allowance = allowance
+                .split(bytes)
+                .ok_or("ownership seal-demand metadata exceeds dispatch admission")?;
+            let snapshot = Arc::get_mut(&mut snapshot).unwrap();
+            snapshot.guard_admitted_bytes = bytes;
+            snapshot.retained_allowances.push(Arc::new(guard_allowance));
+        }
         let snapshot_bytes = Arc::get_mut(&mut snapshot)
             .unwrap()
             .retained_dispatch_bytes();
@@ -159,17 +178,14 @@ impl OwnershipCompilation {
         copied.add(size_of::<super::arena_tasks::ArenaTaskFactory>() + 2 * size_of::<usize>());
         copied.add(size_of::<Factory>() + 2 * size_of::<usize>());
         copied.add(size_of::<super::ownership_tasks::Factory>() + 2 * size_of::<usize>());
-        copied.bulk_tree::<u32, Arc<dyn QueryFactory>>(2);
+        copied.bulk_tree::<u32, Arc<dyn QueryFactory>>(
+            2 + usize::from(native.guard_factory().is_some()),
+        );
         let bytes = operations_bytes
             .saturating_add(snapshot_bytes)
             .saturating_add(dispatch_bytes)
             .saturating_add(copied.bytes());
-        let mut allowance = self
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or("ownership dispatch admission consumed twice")?;
+
         let dispatch_allowance = allowance
             .split(bytes)
             .ok_or("ownership compilation dispatch allowance exhausted")?;
@@ -179,12 +195,16 @@ impl OwnershipCompilation {
             .unwrap()
             .retained_allowances
             .push(Arc::new(dispatch_allowance));
+        let guard = native.guard_factory();
         let ownership = OwnershipTasks::new(native, self.weight, allowance)?;
         let factory = ownership.factory();
-        let factories = BTreeMap::from([
+        let mut factories = BTreeMap::from([
             (OWNERSHIP_READY_KIND, factory.clone()),
             (OWNERSHIP_ROOT_KIND, factory),
         ]);
+        if let Some((query, factory)) = guard {
+            factories.insert(query.kind, factory);
+        }
         self.dispatch
             .set(Dispatch {
                 discovery,

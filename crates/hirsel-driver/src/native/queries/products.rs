@@ -326,6 +326,7 @@ impl DemandProducts {
         &mut self,
         key: &InstanceAddress,
     ) -> Result<super::ready::ObservedReady, String> {
+        self.local.guard = self.snapshot.guard_selection()?;
         self.local.observe(
             &self.snapshot.instances,
             key,

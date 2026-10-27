@@ -780,6 +780,14 @@ impl Task {
                 .map(Ok)
                 .map_err(fail)
         } else {
+            if let Some(guard) = owner.native.snapshot.guard.get() {
+                match cx.read(guard.query_id()) {
+                    Poll::Pending => return Ok(Err(vec![guard.query_id()])),
+                    Poll::Ready(Err(error)) => return Err(error),
+                    Poll::Ready(Ok(product)) if guard.accepts(product) => (),
+                    _ => return Err(fail("ownership seal-demand dependency changed".into())),
+                }
+            }
             let request = request.unwrap();
             let mut products = DemandProducts::new(owner.native.snapshot.clone());
             let observed = products

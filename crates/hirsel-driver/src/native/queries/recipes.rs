@@ -23,6 +23,25 @@ impl InstancePlan {
                 .actuals(&instances.actuals[id.index()])?,
         })
     }
+    pub(super) fn sealed_source(
+        &self,
+        program: &Program,
+        key: &InstanceKey,
+    ) -> Result<Option<hirsel_rc::sealed_source::SourceExpectation>, String> {
+        if !key.definition().is_core("arena.seal") && !key.definition().is_core("region.with") {
+            return Ok(None);
+        }
+        let expected = hirsel_rc::library::sealed_region::source_expectation(
+            program,
+            key.definition(),
+            self.actuals.arguments.clone(),
+        )
+        .map_err(|e| format!("sealed library source expectation: {e:?}"))?;
+        if expected.witness().instance != key.digest() {
+            return Err("sealed library source actuals differ from selected instance".into());
+        }
+        Ok(Some(expected))
+    }
     pub fn register(
         &self,
         program: &Program,

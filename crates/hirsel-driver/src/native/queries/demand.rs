@@ -281,7 +281,7 @@ impl DemandInstances {
         &self,
         ordinary: Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync>,
     ) -> Arc<dyn hirsel_lir::operation::OperationDeclarations + Send + Sync> {
-        if self.receipt_sources.is_empty() {
+        if self.receipt_sources.is_empty() && self.seal_inventory.is_empty() {
             return ordinary;
         }
         Arc::new(super::seal_inventory::declarations(
@@ -311,6 +311,8 @@ impl DemandInstances {
             })
             .collect::<Result<BTreeSet<_>, _>>()?;
         self.seal_inventory.clear();
+        let requests = self.requests.values().cloned().collect::<Vec<_>>();
+        self.bind_library_seals(source, &requests)?;
         for roots in roots.into_values() {
             let (graph, sources) = super::receipt_requests::current(
                 source,
@@ -552,6 +554,29 @@ impl DemandInstances {
             self.requests.insert(key.encoding().to_vec(), request);
         }
         Ok(self.address(key))
+    }
+
+    fn bind_library_seals(
+        &mut self,
+        source: &impl NativeSourceProvider,
+        requests: &[Request],
+    ) -> Result<(), String> {
+        for request in requests {
+            let key = request.key.bind()?;
+            if request.recipe.domain != LIBRARY_RECIPE
+                || (!key.definition().is_core("arena.seal") && !key.definition().is_core("region.with"))
+            {
+                continue;
+            }
+            let bytes = self.store.get_content(request.plan)
+                .ok_or("missing sealed library instance plan")?;
+            let plan: InstancePlan = self.records.decode(source, &bytes)
+                .ok_or("sealed library instance plan decoding failed")?;
+            if let Some(expected) = plan.sealed_source(&source.declarations().program, &key)? {
+                self.seal_inventory.insert((key.definition().clone(), key.digest()), expected);
+            }
+        }
+        Ok(())
     }
 
     /// Reconstruct only independent declarations and ABI inputs. Ordinary
@@ -933,6 +958,7 @@ impl DemandInstances {
         } else {
             inputs.declarations().program.operation_registry()
         };
+        self.bind_library_seals(inputs, std::slice::from_ref(&request))?;
         self.bind_planned_adapters(inputs, [&request], &mut operations)?;
         let adapters = operations
             .pretransfer_adapters
