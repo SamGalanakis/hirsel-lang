@@ -406,6 +406,30 @@ impl Compiler {
         }
         Ok(())
     }
+    /// `check_path`, then, when the program checks complete and accepted, the
+    /// escape from capability checking its entry reaches (CAP-6).
+    pub fn check_safe_path(
+        &self,
+        path: &Path,
+    ) -> Result<(CheckOutput, Option<(DefPath, Option<UnsafeReach>)>), ToolError> {
+        with_compiler_stack(|| {
+            let mut program = self.load_check_package(path)?;
+            let output = program
+                .check(self.lowering)
+                .map_err(|error| program.error(error))?;
+            if crate::queries::has_errors(&output.diagnostics)
+                || output.completion != CheckCompletion::Complete
+            {
+                return Ok((output, None));
+            }
+            if program.launch_entry().is_none() {
+                return Ok((output, None));
+            }
+            let reach = program.unsafe_reach()?;
+            Ok((output, Some((program.entry.clone(), reach))))
+        })
+        .or_else(|error| check_diagnostics(error).map(|output| (output, None)))
+    }
     /// Format one source, preserving the single-source API's output.
     pub fn format_path(&self, path: &Path) -> Result<String, ToolError> {
         self.prepare_format_source(path)
@@ -457,6 +481,23 @@ impl Compiler {
             inputs: vec![],
         };
         run_snapshot(&mut program.engine, &config, simulation, stdout)
+    }
+}
+
+/// Parsing may reject while the graph is indexed, before LoadedProgram exists.
+/// Checks return those language diagnostics through the same output as body errors.
+fn check_diagnostics(error: ToolError) -> Result<CheckOutput, ToolError> {
+    match error {
+        ToolError::Query {
+            error: QueryError::Diagnostics(diagnostics),
+            sources,
+            ..
+        } => Ok(CheckOutput {
+            diagnostics: select_diagnostics(diagnostics, Some(&sources)),
+            sources,
+            ..Default::default()
+        }),
+        error => Err(error),
     }
 }
 
