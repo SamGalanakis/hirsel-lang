@@ -339,16 +339,22 @@ fn declaration_export_graph_cannot_supply_a_check_without_foreign_link_inputs() 
             .unwrap();
         assert!(matches!(&exported.result, CompileResult::NativeSources(_)));
         assert!(!fixture.root.join("geo/lib.o").exists());
+        let inputs = exported.inputs.clone();
+        drop(exported);
         let checked = selector.select(&CompileRequest {
             path: fixture.manifest.clone(),
-            inputs: exported.inputs.clone(),
+            inputs,
             operation: CompileOperation::Check {
                 lowering: LoweringPolicy::Reachable,
             },
         });
+        let error = checked
+            .err()
+            .expect("declaration-only discovery authorized a check with missing link inputs");
+        let message = error.to_string();
         assert!(
-            checked.is_err(),
-            "declaration-only discovery authorized a check with missing link inputs"
+            message.contains("uncaptured loader input") && message.contains("lib.o"),
+            "{message}"
         );
     });
 }
