@@ -367,7 +367,7 @@ impl QueryEngine {
                 .all(|(id, _)| hirsel_types::unique_summary::same_module(id.path(), path)))
         .then_some(facts)
     }
-    pub(super) fn restored_private_summary(
+    pub(in crate::queries) fn restored_private_summary(
         &mut self,
         id: DefId,
     ) -> Option<hirsel_types::UniqueSummary> {
@@ -444,8 +444,13 @@ impl QueryEngine {
         if result.is_err() {
             let mut changes = crate::memo::ChangeSet::default();
             for id in self.private_summaries.keys() {
-                let read = ReadKey::PrivateSummary(*id);
-                changes.read(read, self.durability_of(&read));
+                for read in [
+                    ReadKey::PrivateSummary(*id),
+                    ReadKey::Signature(*id),
+                    ReadKey::ExecutedSignature(*id),
+                ] {
+                    changes.read(read, self.durability_of(&read));
+                }
             }
             self.apply_changes(&changes);
             self.retire_snapshot();

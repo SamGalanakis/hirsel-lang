@@ -741,6 +741,7 @@ impl QueryEngine {
     pub fn memo_reads(&self, definition: &DefPath, kind: QueryKind) -> Option<&Reads> {
         let id = DefId::intern(definition);
         match kind {
+            QueryKind::PrivateInference => self.private_summary_reads.get(&id).map(Arc::as_ref),
             QueryKind::Signature => self.signatures.get(&id).map(|e| e.reads()),
             QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.reads()),
             QueryKind::Check => self.checked.get(&id).map(|e| e.reads()),
@@ -759,6 +760,7 @@ impl QueryEngine {
     pub fn shared_memo_reads(&self, definition: &DefPath, kind: QueryKind) -> Option<Arc<Reads>> {
         let id = DefId::intern(definition);
         match kind {
+            QueryKind::PrivateInference => self.private_summary_reads.get(&id).cloned(),
             QueryKind::Signature => self.signatures.get(&id).map(|e| e.memo.reads.clone()),
             QueryKind::Resolve => self.resolutions.get(&id).map(|e| e.memo.reads.clone()),
             QueryKind::Check => self.checked.get(&id).map(|e| e.memo.reads.clone()),

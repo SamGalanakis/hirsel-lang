@@ -49,9 +49,16 @@ fn admitted_private_facts_reuse_unchanged_inputs_and_refuse_body_and_membership_
                 hirsel_syntax::DefId::intern(&value),
             )
             .unwrap();
-            let reads = program
+            let signature_reads = program
                 .engine
                 .memo_reads(&value, QueryKind::Signature)
+                .unwrap();
+            assert!(signature_reads.iter().any(
+                |(key, _)| matches!(key, memo::ReadKey::PrivateSummary(id) if id.path() == &value)
+            ));
+            let reads = program
+                .engine
+                .memo_reads(&value, QueryKind::PrivateInference)
                 .unwrap();
             assert!(
                 reads
@@ -359,9 +366,14 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let context = default_context();
         let entry = entry_path(&context);
+        let mut helper = entry.clone();
+        helper.0.name = "helper".into();
         let file = engine
             .sources
-            .add("failed-inference.hir", "fn main()->u64{1u64}".into())
+            .add(
+                "failed-inference.hir",
+                "fn helper()->u64{1u64}\npub fn main()->u64{helper()}".into(),
+            )
             .unwrap();
         assert!(
             check_progress(&mut engine, file, &context)
@@ -369,10 +381,11 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
                 .diagnostics
                 .is_empty()
         );
+        engine.lower_to_tir(&entry).unwrap();
         let original = engine.signature_snapshot();
         assert!(
             original
-                .signature(hirsel_syntax::DefId::intern(&entry))
+                .signature(hirsel_syntax::DefId::intern(&helper))
                 .unwrap()
                 .is_ok()
         );
@@ -380,7 +393,10 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
         engine.adapters.modes = Some(Arc::new(RefuseInference(modes.clone())));
         let file = engine
             .sources
-            .add("failed-inference.hir", "fn main()->u64{2u64}".into())
+            .add(
+                "failed-inference.hir",
+                "fn helper()->u64{2u64}\npub fn main()->u64{helper()}".into(),
+            )
             .unwrap();
         engine.parse_file(file, &context).unwrap();
         let budget = ProcessBudget::new(256 << 20);
@@ -390,11 +406,13 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
                 .is_err()
         );
         assert_eq!(budget.reserved(), 0);
-        assert!(engine.item_signature(&entry).is_err());
+        assert!(engine.item_signature(&helper).is_err());
+        assert!(engine.mode_definition(&entry).is_err());
+        assert!(engine.lower_to_tir(&entry).is_err());
         assert!(
             engine
                 .signature_snapshot()
-                .signature(hirsel_syntax::DefId::intern(&entry))
+                .signature(hirsel_syntax::DefId::intern(&helper))
                 .unwrap()
                 .is_err()
         );
@@ -402,11 +420,13 @@ fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
         engine
             .prepare_private_inference(budget.reserve(256 << 20).unwrap())
             .unwrap();
-        assert!(engine.item_signature(&entry).is_ok());
+        assert!(engine.item_signature(&helper).is_ok());
+        assert!(engine.mode_definition(&entry).is_ok());
+        engine.lower_to_tir(&entry).unwrap();
         assert!(
             engine
                 .signature_snapshot()
-                .signature(hirsel_syntax::DefId::intern(&entry))
+                .signature(hirsel_syntax::DefId::intern(&helper))
                 .unwrap()
                 .is_ok()
         );
