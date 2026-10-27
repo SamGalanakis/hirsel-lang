@@ -1235,6 +1235,38 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         let Some(environment) = self.environment else {
             return self.invalid("capture slots in a unit without an environment");
         };
+        if let Some(entry) = &unit.tables.receipt_entry
+            && let Some(environment_layout) = entry.environment
+        {
+            entry
+                .check_transport(self.sig.abi, unit, self.em.layouts())
+                .map_err(|what| crate::CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: what.into(),
+                })?;
+            let (base, _) = hirsel_lir::receipt_closure::transport_environment(
+                self.em.layouts(),
+                environment_layout,
+                self.sig.abi.receipts.as_ref().unwrap(),
+            )
+            .map_err(|what| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: what.into(),
+            })?;
+            let record = self.layout(base)?;
+            let payload = self.payload_of(environment, environment_layout)?;
+            if record.fields.len() != captures.len() {
+                return self.invalid("receipt wrapper base differs from capture storage");
+            }
+            for ((ordinal, slot, layout), field) in captures.iter().zip(&record.fields) {
+                if *ordinal != field.ordinal || *layout != field.layout {
+                    return self.invalid("receipt wrapper field differs from capture slot");
+                }
+                self.slots[*slot] =
+                    Some(self.field_place(payload, field.offset, field.layout, field.unaligned)?);
+            }
+            return Ok(());
+        }
         let mut offset = 0u64;
         let mut align = 1u32;
         let mut fields = Vec::new();

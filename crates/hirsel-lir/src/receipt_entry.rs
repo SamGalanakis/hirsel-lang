@@ -76,7 +76,7 @@ impl ReceiptEntry {
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
     ) -> Result<(), &'static str> {
-        self.check_inner(abi, unit, layouts, None)
+        self.check_inner(abi, unit, layouts, None, false)
     }
 
     /// Structural entry bindings for a complete owning-capture schema. This
@@ -95,7 +95,17 @@ impl ReceiptEntry {
         if !source.contract.captures.is_empty() && self.environment.is_none() {
             return Err("receipt capture entry lacks its complete environment");
         }
-        self.check_inner(abi, unit, layouts, Some(source))
+        self.check_inner(abi, unit, layouts, Some(source), false)
+    }
+
+    /// Physical emitter checks after admission, without original-source authority.
+    pub fn check_transport<S>(
+        &self,
+        abi: &FnAbi,
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+    ) -> Result<(), &'static str> {
+        self.check_inner(abi, unit, layouts, None, true)
     }
 
     fn check_inner<S>(
@@ -104,6 +114,7 @@ impl ReceiptEntry {
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
         source: Option<&crate::sealed_payload_source::ReceiptSource>,
+        transport: bool,
     ) -> Result<(), &'static str> {
         crate::abi::check_receipt_contract(abi, layouts)?;
         let contract = abi
@@ -114,7 +125,9 @@ impl ReceiptEntry {
             return Err("receipt entry names a different complete contract");
         }
         if let Some(environment) = self.environment {
-            let (base, _) = if contract
+            let (base, suffix) = if transport {
+                crate::receipt_closure::transport_environment(layouts, environment, contract)?
+            } else if contract
                 .captures
                 .iter()
                 .any(|c| c.mode == crate::sealed_payload_source::ReceiptMode::Take)
@@ -129,6 +142,23 @@ impl ReceiptEntry {
                 crate::receipt_closure::borrowed_environment(layouts, environment, contract)?
             };
             self.check_capture_storage(base, unit, layouts)?;
+            for ((binding, capture), field) in
+                self.captures.iter().zip(&contract.captures).zip(suffix)
+            {
+                let metadata = unit
+                    .slots
+                    .get(binding.slot.index())
+                    .and_then(|slot| unit.types.get(slot.ty.index()))
+                    .ok_or("receipt entry has a foreign metadata slot")?;
+                if capture.mode == crate::sealed_payload_source::ReceiptMode::Take
+                    && metadata.layout != field.layout
+                {
+                    return Err("receipt entry metadata differs from its typed owning field");
+                }
+            }
+        }
+        if transport && !contract.captures.is_empty() && self.environment.is_none() {
+            return Err("receipt capture entry lacks its complete environment");
         }
         if self.parameters.len() != contract.parameters.len()
             || self.captures.len() != contract.captures.len()

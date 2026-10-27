@@ -8,7 +8,7 @@ use hirsel_codec::snapshot_struct;
 use hirsel_syntax::ContentHash;
 
 mod owned;
-pub use owned::{owned_environment, owned_environment_key};
+pub use owned::{owned_environment, owned_environment_key, transport_environment};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct ReceiptClosureCapture {
@@ -41,7 +41,7 @@ impl ReceiptClosure {
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
     ) -> Result<(), &'static str> {
-        self.check_inner(site, abi, unit, layouts, None)
+        self.check_inner(site, abi, unit, layouts, None, false)
     }
 
     /// Validate the owning schema against complete original capture profiles.
@@ -58,7 +58,18 @@ impl ReceiptClosure {
         if abi.receipts.as_ref() != Some(&source.contract) {
             return Err("receipt closure source differs from its complete code contract");
         }
-        self.check_inner(site, abi, unit, layouts, Some(source))
+        self.check_inner(site, abi, unit, layouts, Some(source), false)
+    }
+
+    /// Physical emitter checks after admission, without original-source authority.
+    pub fn check_transport<S>(
+        &self,
+        site: &ClosureSite,
+        abi: &FnAbi,
+        unit: &LirUnit<S>,
+        layouts: &LayoutTable,
+    ) -> Result<(), &'static str> {
+        self.check_inner(site, abi, unit, layouts, None, true)
     }
 
     fn check_inner<S>(
@@ -68,6 +79,7 @@ impl ReceiptClosure {
         unit: &LirUnit<S>,
         layouts: &LayoutTable,
         source: Option<&crate::sealed_payload_source::ReceiptSource>,
+        transport: bool,
     ) -> Result<(), &'static str> {
         crate::abi::check_receipt_contract(abi, layouts)?;
         if !site.scoped
@@ -91,7 +103,9 @@ impl ReceiptClosure {
             .captures
             .iter()
             .any(|c| c.mode == ReceiptMode::Take);
-        let (base, _) = if owned {
+        let (base, suffix) = if transport {
+            transport_environment(layouts, site.environment, contract)?
+        } else if owned {
             owned_environment(
                 layouts,
                 site.environment,
@@ -114,7 +128,8 @@ impl ReceiptClosure {
         if count != ordinary.len() {
             return Err("receipt closure base differs from its original captures");
         }
-        for (binding, demanded) in self.captures.iter().zip(&contract.captures) {
+        for ((binding, demanded), field) in self.captures.iter().zip(&contract.captures).zip(suffix)
+        {
             if binding.ordinal != demanded.ordinal {
                 return Err("receipt closure capture selectors are not canonical");
             }
@@ -146,7 +161,8 @@ impl ReceiptClosure {
                 .types
                 .get(value.ty.index())
                 .ok_or("receipt closure has a foreign receipt type")?;
-            if ty.repr != ValueRepr::PayloadReceipt
+            if (owned && field.layout != ty.layout)
+                || ty.repr != ValueRepr::PayloadReceipt
                 || if owned {
                     value.holding != Holding::Owned
                 } else {

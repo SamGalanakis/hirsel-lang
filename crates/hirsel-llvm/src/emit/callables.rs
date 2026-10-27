@@ -98,10 +98,40 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(site) = unit.tables.closures.get(closure.index()) else {
             return self.invalid("a closure outside the closure table");
         };
-        if site.receipts.is_some() {
-            return self
-                .unsupported("receipt closure construction requires physical capture transport");
-        }
+        let wrapper = if let Some(receipts) = &site.receipts {
+            let code = site.code.ok_or_else(|| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "receipt closure has no code ABI".into(),
+            })?;
+            let abi = self
+                .inputs
+                .layouts
+                .fn_abis
+                .get(code.abi.0 as usize)
+                .ok_or_else(|| crate::CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: "receipt closure has a foreign code ABI".into(),
+                })?;
+            receipts
+                .check_transport(site, abi, unit, self.inputs.layouts)
+                .map_err(|what| crate::CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: what.into(),
+                })?;
+            Some(
+                hirsel_lir::receipt_closure::transport_environment(
+                    self.inputs.layouts,
+                    site.environment,
+                    abi.receipts.as_ref().unwrap(),
+                )
+                .map_err(|what| crate::CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: what.into(),
+                })?,
+            )
+        } else {
+            None
+        };
         // A generic nested function's value has no code of its own (LIR
         // schema revision 9): its code word is null, and bound calls name
         // each instantiation's code.
@@ -146,9 +176,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let block = self.alloc_block(site.environment, self.const_u64(size), align, site.anchor)?;
         let payload = self.payload_of(block, site.environment)?;
         self.builder.memset(payload.ptr, 0, size, align);
+        let ordinary = if let Some((base, _)) = wrapper {
+            self.layout(base)?
+        } else {
+            record
+        };
         let captures = self.pool(site.captures, &unit.pools.captures)?;
         for (i, capture) in captures.iter().enumerate() {
-            let Some(field) = record.fields.iter().find(|f| f.ordinal == i as u32) else {
+            let Some(field) = ordinary.fields.iter().find(|f| f.ordinal == i as u32) else {
                 return self.invalid("a capture without its environment field");
             };
             let at = self.field_place(payload, field.offset, field.layout, field.unaligned)?;
@@ -164,11 +199,21 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.dup_holders(at)?;
             }
         }
-        if let LayoutKind::Environment { movable } = &record.kind {
-            let field = record.fields.last().expect("live word");
+        if let LayoutKind::Environment { movable } = &ordinary.kind {
+            let field = ordinary.fields.last().expect("live word");
             let at = self.field_place(payload, field.offset, field.layout, field.unaligned)?;
             let bits = u64::MAX >> (64 - movable.len());
             self.store(Shape::Scalar(ScalarKind::U64), self.const_u64(bits), at);
+        }
+        if let (Some(receipts), Some((_, fields))) = (&site.receipts, wrapper) {
+            for (binding, field) in receipts.captures.iter().zip(fields) {
+                let at = self.field_place(payload, field.offset, field.layout, field.unaligned)?;
+                self.store(
+                    Shape::Scalar(ScalarKind::Pointer),
+                    self.get(binding.receipt)?,
+                    at,
+                );
+            }
         }
         self.callable(layout, code, block)
     }

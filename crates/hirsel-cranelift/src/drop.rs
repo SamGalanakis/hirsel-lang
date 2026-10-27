@@ -305,3 +305,6 @@ mod receipt_tests;
 
 #[cfg(test)]
 mod sealed_tests;
+
+#[cfg(test)]
+mod capture_tests;

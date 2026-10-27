@@ -67,11 +67,16 @@ pub fn check_receipt_contract(
 
 /// Data companions use appended physical carriers. Parameter inventory uses
 /// the existing Arena carrier, checked by `check_receipt_contract` and original
-/// source validation. Capture and caller-destination inventories remain closed.
+/// source validation. Capture companions use the checked environment wrapper;
+/// capture and caller-destination inventories remain closed.
 /// Independent current source and live custody remain mandatory in C.
 pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {
     if let Some(contract) = &abi.receipts {
-        if !contract.captures.is_empty()
+        if (!contract.captures.is_empty() && !abi.environment)
+            || contract
+                .captures
+                .iter()
+                .any(|capture| capture.mode == crate::sealed_payload_source::ReceiptMode::MutSlot)
             || contract.inventory.iter().any(|grant| {
                 !matches!(
                     grant,
@@ -79,7 +84,9 @@ pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {
                 )
             })
         {
-            return Err("receipt capture or non-parameter inventory transport is not implemented");
+            return Err(
+                "receipt capture needs an environment without mutable metadata; non-parameter inventory transport is not implemented",
+            );
         }
         if abi.key.receipt_contract != Some(contract.content()?) {
             return Err("receipt ABI key disagrees with its complete contract");

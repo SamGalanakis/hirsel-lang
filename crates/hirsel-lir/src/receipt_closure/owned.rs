@@ -24,7 +24,46 @@ pub fn owned_environment<'a>(
     source: &ReceiptSource,
 ) -> Result<(LayoutId, &'a [FieldLayout]), &'static str> {
     source.check_structure()?;
-    let contract = &source.contract;
+    if !source
+        .contract
+        .captures
+        .iter()
+        .any(|capture| capture.mode == ReceiptMode::Take)
+    {
+        return Err(
+            "owning receipt environment requires owned capture demand without mutable captures",
+        );
+    }
+    let result = transport_environment(layouts, environment, &source.contract)?;
+    for (field, capture) in result.1.iter().zip(&source.contract.captures) {
+        let profile = source
+            .profile(ReceiptPort::Capture(capture.ordinal))
+            .ok_or("owning receipt capture profile is missing")?;
+        if capture.mode == ReceiptMode::Take
+            && !matches!(layouts.layout(field.layout).map(|record| &record.kind),
+                Some(LayoutKind::PayloadReceipt { root }) if root == &profile.root.ty)
+        {
+            return Err("owning receipt companion has another original type or metadata custody");
+        }
+    }
+    Ok(result)
+}
+
+/// Physical transport of an already admitted wrapper. This checks geometry and
+/// metadata custody only; original type/profile authority remains with C/H.
+pub fn transport_environment<'a>(
+    layouts: &'a LayoutTable,
+    environment: LayoutId,
+    contract: &ReceiptContract,
+) -> Result<(LayoutId, &'a [FieldLayout]), &'static str> {
+    contract.check_structure()?;
+    if contract
+        .captures
+        .iter()
+        .all(|c| c.mode == ReceiptMode::Borrow)
+    {
+        return borrowed_environment(layouts, environment, contract);
+    }
     if !contract
         .captures
         .iter()
@@ -82,23 +121,18 @@ pub fn owned_environment<'a>(
         let child = layouts
             .layout(field.layout)
             .ok_or("owning receipt companion layout is missing")?;
-        let profile = source
-            .profile(ReceiptPort::Capture(capture.ordinal))
-            .ok_or("owning receipt capture profile is missing")?;
         let owning = capture.mode == ReceiptMode::Take;
-        let kind = if owning {
-            LayoutKind::PayloadReceipt {
-                root: profile.root.ty.clone(),
-            }
+        let kind_matches = if owning {
+            matches!(child.kind, LayoutKind::PayloadReceipt { .. })
         } else {
-            LayoutKind::Scalar(ScalarKind::Pointer)
+            child.kind == LayoutKind::Scalar(ScalarKind::Pointer)
         };
         let expected_drop = if owning {
             vec![DropStep::ReleaseReceipt { offset: 0 }]
         } else {
             vec![]
         };
-        if child.kind != kind
+        if !kind_matches
             || child.copy
                 != if owning {
                     CopyRecipe::NotCopyable

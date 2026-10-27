@@ -26,14 +26,34 @@ impl FnEmitter<'_, '_, '_> {
             return Ok(());
         };
         entry
-            .check(abi, unit, self.em.layouts())
+            .check_transport(abi, unit, self.em.layouts())
             .map_err(|what| crate::CodegenError::Invalid {
                 definition: self.definition().clone(),
                 what: what.into(),
             })?;
-        if !entry.captures.is_empty() {
-            return self
-                .unsupported("receipt capture fields require a physical environment contract");
+        if let Some(environment_layout) = entry.environment {
+            let (_, fields) = hirsel_lir::receipt_closure::transport_environment(
+                self.em.layouts(),
+                environment_layout,
+                abi.receipts.as_ref().unwrap(),
+            )
+            .map_err(|what| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: what.into(),
+            })?;
+            let environment = self
+                .environment
+                .ok_or_else(|| crate::CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: "receipt entry has no environment pointer".into(),
+                })?;
+            let payload = self.payload_of(environment, environment_layout)?;
+            for (binding, field) in entry.captures.iter().zip(fields) {
+                let mut place =
+                    self.field_place(payload, field.offset, field.layout, field.unaligned)?;
+                place.layout = self.lir_type(unit.slots[binding.slot.index()].ty)?.layout;
+                self.slots[binding.slot.index()] = Some(place);
+            }
         }
         let first =
             self.sig.hidden.len() + abi.parameters.iter().map(|p| p.slots.len()).sum::<usize>();
@@ -98,27 +118,13 @@ impl FnEmitter<'_, '_, '_> {
                 definition: self.definition().clone(),
                 what: what.into(),
             })?;
-        if let Some(contract) = &abi.receipts {
-            // A source-selected capture-free callback may require the Arena's
-            // existing inventory carrier without appending any metadata words.
-            let ordinary_bound = matches!(site.callee, Callee::Bound { .. })
-                && contract.parameters.is_empty()
-                && contract.result.is_none()
-                && contract.captures.is_empty()
-                && contract.inventory.iter().all(|grant| {
-                    matches!(
-                        grant,
-                        hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(_)
-                    )
-                });
-            if !ordinary_bound
-                && (!matches!(site.callee, Callee::Direct(_))
-                    || abi.environment
-                    || !contract.captures.is_empty())
-            {
-                return self
-                    .unsupported("receipt calls require a direct entry without capture transport");
-            }
+        if abi.receipts.is_some()
+            && !matches!(
+                site.callee,
+                Callee::Direct(_) | Callee::Bound { .. } | Callee::Indirect(_)
+            )
+        {
+            return self.unsupported("receipt call has no callable entry");
         }
         Ok(())
     }
