@@ -1,6 +1,6 @@
 use hirsel_driver::*;
 use hirsel_engine::{runtime::*, store::MemStore, *};
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 
 #[test]
 fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_ownership() {
@@ -212,50 +212,54 @@ fn admitted_native_roots_preserve_selection_constants_and_detached_metadata_owne
                     .unwrap();
                 assert!(reader.read(&entry).is_some());
                 drop(reader);
-                let mut scalar = COMPILER
-                    .with_config(CompileConfig {
-                        store: Arc::new(MemStore::default()),
+                let expected_store = Arc::new(MemStore::default());
+                let mut oracle = session::Session::open_configured(
+                    &manifest,
+                    CompileConfig {
+                        store: expected_store.clone(),
                         ..Default::default()
+                    },
+                );
+                let expected_output = oracle
+                    .request(hirsel_driver::requests::CompileOperation::NativeSources {
+                        roots: seeds.clone(),
                     })
-                    .with_owned_engines()
-                    .load_program(&manifest)
                     .unwrap();
-                let expected_roots = scalar.engine.native_source_roots(&seeds).unwrap();
-                assert_eq!(actual.roots.definitions, expected_roots.definitions);
-                let selected = expected_roots
-                    .definitions
-                    .into_iter()
-                    .collect::<BTreeSet<_>>();
-                let expected = scalar.engine.native_static_inputs(&selected).unwrap();
-                assert_eq!(actual.statics.definitions, expected.definitions);
+                let hirsel_driver::requests::CompileResult::NativeSources(expected) = &expected_output.result
+                else {
+                    panic!("native source oracle returned another operation");
+                };
+                assert_eq!(actual.roots.definitions, expected.roots.definitions);
+                assert_eq!(actual.statics.definitions, expected.statics.definitions);
                 let constant_order = &actual.statics.definitions;
                 assert!(
                     constant_order.iter().position(|p| p.0.name == "B").unwrap()
                         < constant_order.iter().position(|p| p.0.name == "A").unwrap()
                 );
                 let expected_codec = NativeRecords::new(
-                    scalar.engine.types().clone(),
+                    expected.signatures.types().clone(),
                     Arc::new(MemStore::default()),
                 );
-                assert_eq!(
-                    codec.encode(&anchors, &actual.statics.constants),
-                    expected_codec.encode(&scalar.engine, &expected.constants)
-                );
-                let source_constants = actual
-                    .catalogue
-                    .iter()
-                    .filter(|d| d.source.constant.is_some())
-                    .map(|d| d.source.definition.clone())
-                    .collect();
-                let expected_extra = scalar
-                    .engine
-                    .native_static_requirements(&expected, &selected, &source_constants)
+                let expected_reader = expected
+                    .original_context
+                    .reader(
+                        expected.originals.iter().map(|product| (**product).clone()),
+                        expected_store.clone(),
+                    )
                     .unwrap();
                 assert_eq!(
-                    codec.encode(&anchors, &actual.extra),
-                    expected_codec.encode(&scalar.engine, &expected_extra)
+                    codec.encode(&anchors, &actual.statics.constants),
+                    expected_codec.encode(
+                        expected_reader.record_context().as_ref(),
+                        &expected.statics.constants
+                    )
                 );
-                assert_eq!(actual.roots.environment, expected_roots.environment);
+                assert_eq!(
+                    codec.encode(&anchors, &actual.extra),
+                    expected_codec
+                        .encode(expected_reader.record_context().as_ref(), &expected.extra)
+                );
+                assert_eq!(actual.roots.environment, expected.roots.environment);
                 let sources = actual.roots.sources.clone();
                 let file = sources.file(hirsel_span::FileId(0)).unwrap().clone();
                 drop(actual);
