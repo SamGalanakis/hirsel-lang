@@ -19,6 +19,7 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
         build.0.name = "build".into();
         let public = engine.item_signature(&hidden).unwrap().value;
         assert!(matches!(&public.kind, SignatureKind::Type(t) if t.representation.is_none()));
+        let snapshot = engine.signature_snapshot();
         let function = engine.item_signature(&build).unwrap().value;
         let types = engine.types().clone();
         let mut row = Type::unit();
@@ -42,7 +43,7 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
             caller_bodies: vec![],
             protocol_associations: vec![],
             path: hirsel_syntax::DefId::intern(&build),
-            inferred_unique: Default::default(),
+            inferred_unique: function.metadata.inferred_unique.clone(),
             signature_hash: function.fingerprint,
             types: std::sync::Arc::from([]),
             entry: BodyId(0),
@@ -128,7 +129,6 @@ fn hand_built_opaque_construction_needs_the_owner_input_and_checks_fields() {
                 .violations
                 .is_empty()
         );
-        let snapshot = engine.signature_snapshot();
         let owner_input = snapshot.validation(&context.package);
         definition.types = hirsel_tir::definition_types(engine.types(), &definition);
         let report =
