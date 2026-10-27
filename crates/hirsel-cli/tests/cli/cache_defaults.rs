@@ -445,29 +445,48 @@ fn check_root_and_dependency_cache(
     assert_eq!(cold["store hits"], 0, "{cold}");
     let definitions = cold["definitions"].as_u64().unwrap();
     if package == "std" {
+        // Independently index the manifest-selected declarations and register
+        // their closed `with` specializations, without checking bodies or
+        // reading store counters. The latter are ordinary source products too.
+        // Each source declaration requires one Signature and one complete Modes
+        // publication, replacing the unproved 4240 literal. Checked
+        // summaries are embedded in Modes, not separate physical store products.
+        let inventory = hirsel_engine::with_compiler_stack(|| {
+            let mut declarations = hirsel_driver::COMPILER
+                .with_owned_engines()
+                .load_package_declarations(library)
+                .unwrap();
+            let indexed = declarations.engine.indexed_definitions();
+            declarations.engine.register_specializations(&indexed);
+            let required = declarations.engine.front_source_roots();
+            declarations.engine.register_specializations(&required);
+            indexed
+                .into_iter()
+                .chain(declarations.engine.front_source_roots())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len() as u64
+        });
         assert_eq!(
-            definitions, 4240,
+            definitions, inventory,
             "the complete checked std source inventory"
         );
     }
-    // One Signature and Summary adoption cover every source definition. Later
-    // S1 body demands also adopt Modes; those are real additional physical
-    // store hits, rather than additional definitions or missing source work.
-    let mode_hits = if package == "std" { 698 } else { 0 };
     assert_eq!(
         warm["definitions"], 0,
         "all source bodies must be adopted: {warm}"
     );
     assert_eq!(warm["store signature hits"], definitions, "{warm}");
-    assert_eq!(warm["store summary hits"], definitions, "{warm}");
-    assert_eq!(warm["store mode hits"], mode_hits, "{warm}");
-    assert_eq!(warm["store hits"], 2 * definitions + mode_hits, "{warm}");
+    assert_eq!(warm["store summary hits"], 0, "{warm}");
+    assert_eq!(warm["store mode hits"], definitions, "{warm}");
+    assert_eq!(warm["store hits"], 2 * definitions, "{warm}");
     assert_eq!(warm["store misses"], 0, "{warm}");
-    for kind in ["signature", "summary", "mode"] {
+    assert_eq!(cold["store summary misses"], 0, "{cold}");
+    assert_eq!(warm["store summary misses"], 0, "{warm}");
+    for kind in ["signature", "mode"] {
         assert_eq!(cold[format!("store {kind} misses")], definitions, "{cold}");
         assert_eq!(warm[format!("store {kind} misses")], 0, "{warm}");
     }
-    assert_eq!(cold["store misses"], 3 * definitions, "{cold}");
+    assert_eq!(cold["store misses"], 2 * definitions, "{cold}");
     // Verify before a dependency run can replace a root-written record.
     let verified = check(&client, true);
     assert_eq!(
@@ -477,10 +496,11 @@ fn check_root_and_dependency_cache(
     );
     // A recomputation alone is insufficient: a rejected cache variant also
     // recomputes, without comparing its payload. Only the new client may miss.
-    // The one new client misses each of the three physical source products;
-    // every cached library product must still be compared, with no extra miss.
-    assert_eq!(verified["store misses"], 3, "{verified}");
-    for kind in ["signature", "summary", "mode"] {
+    // The one new client misses both physical source products; every cached
+    // library product must still be compared, with no extra miss.
+    assert_eq!(verified["store misses"], 2, "{verified}");
+    assert_eq!(verified["store summary misses"], 0, "{verified}");
+    for kind in ["signature", "mode"] {
         assert_eq!(verified[format!("store {kind} misses")], 1, "{verified}");
     }
     eprintln!(

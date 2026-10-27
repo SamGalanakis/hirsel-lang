@@ -526,11 +526,17 @@ impl QueryEngine {
     /// names and anchors only. Explicit parse/body queries demand syntax later.
     pub fn index_source(&mut self, file: FileId, context: &FileContext) -> Result<(), QueryError> {
         let environment = self.package_environment(&context.package);
-        if self
-            .indexed_sources
-            .get(&file)
-            .is_some_and(|(previous, inputs)| previous == context && inputs == &environment)
+        if let Some((previous, inputs)) = self.indexed_sources.get_mut(&file)
+            && previous == context
+            && inputs.interface_version == environment.interface_version
+            && inputs.compiler_version == environment.compiler_version
+            && inputs.spec_hash == environment.spec_hash
+            && inputs.builtin_signatures_hash == environment.builtin_signatures_hash
         {
+            // The immutable source and its parse context did not change.
+            // Manifest-only edits change semantic keys, not declaration heads;
+            // adopting those same heads again would duplicate retained items.
+            inputs.package_manifest_hash = environment.package_manifest_hash;
             return Ok(());
         }
         if self.catalog.files.get(&file) == Some(context) {
@@ -640,7 +646,7 @@ impl QueryEngine {
                 let path = h.definition.path();
                 path.0.package == context.package
                     && path.0.modules == context.modules
-                    && h.kind <= 3
+                    && h.kind <= 5
                     && h.start <= h.end
                     && h.facts.comptime.windows(2).all(|w| w[0].0 < w[1].0)
                     && h.facts.comptime.iter().all(|(id, start, end)| {
@@ -931,6 +937,62 @@ impl QueryEngine {
 mod tests {
     use super::*;
     use crate::store::ResultStore;
+
+    #[test]
+    fn parse_heads_reuse_signature_and_implementation_declarations_and_reject_unknown_kinds() {
+        crate::with_compiler_stack(|| {
+            let store = Arc::new(crate::store::MemStore::default());
+            let create = || {
+                QueryEngine::new(default_environment(), crate::phases::engine_only_adapters())
+                    .with_result_store(store.clone())
+            };
+            let context = default_context();
+            let text = "signature Value { fn get()->u8 uses {} }\nfn get()->u8{1u8}\nimplementation ops: Value { get = get }\n";
+            let mut cold = create();
+            let file = cold.sources.add("families.hir", text.into()).unwrap();
+            cold.index_source(file, &context).unwrap();
+            let paths = cold.indexed_definitions();
+            let mut record = cold.capture_heads(file, &context);
+            assert!(record.heads.iter().any(|h| h.kind == 4));
+            assert!(record.heads.iter().any(|h| h.kind == 5));
+            assert!(cold.valid_heads(file, &context, &record));
+            record.heads[0].kind = 6;
+            record.integrity = heads_integrity(&record.heads);
+            assert!(!cold.valid_heads(file, &context, &record));
+            let mut warm = create();
+            let file = warm.sources.add("families.hir", text.into()).unwrap();
+            warm.index_source(file, &context).unwrap();
+            assert!(warm.parsed.is_empty());
+            assert!(warm.items.is_empty());
+            assert_eq!(warm.indexed_definitions(), paths);
+        });
+    }
+
+    #[test]
+    fn manifest_only_edits_do_not_adopt_duplicate_heads_over_retained_syntax() {
+        crate::with_compiler_stack(|| {
+            let mut engine =
+                QueryEngine::new(default_environment(), crate::phases::engine_only_adapters())
+                    .with_result_store(Arc::new(crate::store::MemStore::default()));
+            let context = default_context();
+            let file = engine
+                .sources
+                .add("manifest.hir", "fn value()->u8{1u8}\n".into())
+                .unwrap();
+            engine.index_source(file, &context).unwrap();
+            let path = engine.indexed_definitions().pop().unwrap();
+            let anchor = engine.declarations.sites(&path)[0].name_span.anchor;
+            for revision in ["first", "second"] {
+                engine.environment.package_manifest_hash =
+                    ContentHash::of_bytes(revision.as_bytes());
+                engine.index_source(file, &context).unwrap();
+                assert_eq!(engine.declarations.sites(&path).len(), 1);
+                assert_eq!(engine.declarations.sites(&path)[0].name_span.anchor, anchor);
+                assert_eq!(engine.items[&path].len(), 1);
+                assert!(engine.catalog.candidates.is_empty());
+            }
+        });
+    }
 
     #[test]
     fn generated_probe_uses_positive_heads_and_preserves_syntax_shadowing() {

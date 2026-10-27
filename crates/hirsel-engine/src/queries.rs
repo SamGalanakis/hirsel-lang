@@ -945,16 +945,9 @@ impl QueryEngine {
         // and verify its stored variant in the final publication pass.
         let provisional = self.verify_store == crate::store::VerifyStore::Recompute
             && self.private_summary_active
-            && !self.private_summaries.contains_key(&id)
             && self
                 .source_facts(definition)
-                .is_some_and(|facts| facts.body && !facts.constant)
-            && self
-                .frozen_declarations()
-                .metadata()
-                .definitions
-                .get(definition)
-                .is_some_and(|metadata| !metadata.public);
+                .is_some_and(|facts| facts.body && !facts.constant);
         // Read the complete previous action before invoking normalization or
         // reconstructing its private view. Active cycles retain the ordinary
         // provisional-group/reentrant path and are never restored as settled.

@@ -982,6 +982,7 @@ impl BodyTask {
             );
         queries.store_adoptions.fetch_add(1, Relaxed);
         timings::count(Count::StoreHits);
+        timings::count(Count::StoreModeHits);
         if !failed {
             self.remember_carry(variant.output);
         }
@@ -1013,6 +1014,8 @@ impl BodyTask {
             if let Some(hit) = self.load() {
                 return hit;
             }
+            timings::count(Count::StoreMisses);
+            timings::count(Count::StoreModeMisses);
         }
         let queries = &self.queries;
         let input = &queries.inputs[&self.input];
@@ -1034,6 +1037,13 @@ impl BodyTask {
         } else {
             None
         };
+        if !self.materialize
+            && queries.verify_store == crate::store::VerifyStore::Recompute
+            && expected.is_none()
+        {
+            timings::count(Count::StoreMisses);
+            timings::count(Count::StoreModeMisses);
+        }
         let worker = queries.worker();
         let syntax = queries.syntax(input).ok_or(queries.errors.protocol)?;
         let done = worker.run(Task {
