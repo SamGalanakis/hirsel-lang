@@ -156,6 +156,8 @@ struct Input {
 /// publish declarations, fuel or a later source root's diagnostics.
 pub struct FrontBodyQueries {
     inputs: BTreeMap<Key, Input>,
+    by_definition: BTreeMap<DefId, Key>,
+    body_demands: BTreeMap<Key, Key>,
     types: Arc<hirsel_types::TypeInterner>,
     memo: Arc<hirsel_types::TypeMemo>,
     snapshot: Arc<SignatureSnapshot>,
@@ -304,6 +306,9 @@ impl FrontBodyQueries {
     /// metadata consumes the remaining allowance only on demand. Archive bytes
     /// belong to the selected provider, not to these reference-only rows.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
+        let mut indexes = crate::NativeMetadataWeight::default();
+        indexes.tree::<DefId, Key>(definitions.len());
+        indexes.tree::<Key, Key>(definitions.len());
         (definitions.len() as u64)
             .checked_mul(
                 (std::mem::size_of::<Input>()
@@ -311,7 +316,8 @@ impl FrontBodyQueries {
                     + 8 * std::mem::size_of::<crate::memo::MemoKey>()
                     + 32 * std::mem::size_of::<usize>()) as u64,
             )?
-            .checked_add(std::mem::size_of::<Self>() as u64)
+            .checked_add(std::mem::size_of::<Self>() as u64)?
+            .checked_add(indexes.bytes())
     }
     fn retain(
         &self,
@@ -630,11 +636,10 @@ impl FrontBodyQueries {
     }
 
     pub fn query(&self, definition: &DefPath) -> Option<QueryId> {
-        self.inputs.iter().find_map(|(&address, input)| {
-            (input.definition.path() == definition).then_some(QueryId {
-                kind: FRONT_BODY_KIND,
-                address: hirsel_artifact_store::Address(address),
-            })
+        let address = *self.by_definition.get(&DefId::get(definition)?)?;
+        Some(QueryId {
+            kind: FRONT_BODY_KIND,
+            address: hirsel_artifact_store::Address(address),
         })
     }
     /// A separately admitted body materialization after the compact P settles.
@@ -738,8 +743,7 @@ impl FrontBodyQueries {
         path: &DefPath,
     ) -> Option<&Arc<AcceptedFrontRegistration>> {
         self.inputs
-            .values()
-            .find(|input| input.definition.path() == path)?
+            .get(self.by_definition.get(&DefId::get(path)?)?)?
             .registration
             .as_ref()
     }
@@ -810,15 +814,12 @@ impl QueryFactory for Factory {
         let (key, input, materialize) = if let Some(input) = self.0.inputs.get(&query.address.0) {
             (query.address.0, input, false)
         } else {
-            self.0
-                .inputs
-                .iter()
-                .find_map(|(key, input)| {
-                    (ContentHash::of_parts("hirsel.front.body-demand.v1", [key.0.as_slice()])
-                        == query.address.0)
-                        .then_some((*key, input, true))
-                })
-                .ok_or(self.0.errors.protocol)?
+            let key = *self
+                .0
+                .body_demands
+                .get(&query.address.0)
+                .ok_or(self.0.errors.protocol)?;
+            (key, &self.0.inputs[&key], true)
         };
         Ok(Box::new(BodyTask {
             queries: self.0.clone(),
@@ -1486,8 +1487,23 @@ impl QueryEngine {
                 )
             })
             .collect();
+        let by_definition = inputs
+            .iter()
+            .map(|(&key, input)| (input.definition, key))
+            .collect();
+        let body_demands = inputs
+            .keys()
+            .map(|&key| {
+                (
+                    ContentHash::of_parts("hirsel.front.body-demand.v1", [key.0.as_slice()]),
+                    key,
+                )
+            })
+            .collect();
         Ok(Arc::new(FrontBodyQueries {
             inputs,
+            by_definition,
+            body_demands,
             types: self.types.clone(),
             memo: self.memo.clone(),
             snapshot,

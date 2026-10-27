@@ -330,6 +330,7 @@ impl FrontLowerOutput {
 }
 pub struct FrontLowerQueries {
     inputs: BTreeMap<DefPath, Input>,
+    paths: BTreeMap<(u32, ContentHash), DefId>,
     /// Implementation hashes of the opaque types a lowered body can read the
     /// private representation of: its LayoutBody inputs.
     layouts: BTreeMap<DefId, ContentHash>,
@@ -358,7 +359,9 @@ impl FrontLowerQueries {
     /// Compact potential dependency inventory; no Lower/Evaluate output or
     /// maximum continuation is reserved until that query is actually demanded.
     pub fn input_bytes(definitions: &[DefPath]) -> Option<u64> {
-        definitions.iter().try_fold(0u64, |total, path| {
+        let mut indexes = crate::NativeMetadataWeight::default();
+        indexes.tree::<(u32, ContentHash), DefId>(definitions.len().checked_mul(2)?);
+        definitions.iter().try_fold(indexes.bytes(), |total, path| {
             let path_bytes = bincode::serialized_size(path).ok()?;
             total.checked_add(path_bytes.checked_add(
                 (std::mem::size_of::<(DefPath, Input)>() + 6 * std::mem::size_of::<usize>()) as u64,
@@ -821,10 +824,9 @@ impl FrontLowerQueries {
         })
     }
     fn path(&self, id: QueryId) -> Option<DefPath> {
-        self.inputs
-            .keys()
-            .find(|p| self.id(p, id.kind) == Some(id))
-            .cloned()
+        self.paths
+            .get(&(id.kind, id.address.0))
+            .map(|path| path.path().clone())
     }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn LocalQueryFactory> {
         Arc::new(Factory(self.clone()))
@@ -1856,8 +1858,19 @@ impl QueryEngine {
             *retention = retention.checked_sub(layout_bytes).ok_or_else(refusal)?;
         }
         let runtime = self.comptime_runtime_types()?;
+        let paths = inputs
+            .iter()
+            .flat_map(|(path, input)| {
+                let path = DefId::intern(path);
+                [
+                    ((FRONT_LOWER_KIND, input.lower.0), path),
+                    ((FRONT_EVALUATE_KIND, input.evaluate.0), path),
+                ]
+            })
+            .collect();
         Ok(Arc::new(FrontLowerQueries {
             inputs,
+            paths,
             layouts,
             front,
             snapshot,
