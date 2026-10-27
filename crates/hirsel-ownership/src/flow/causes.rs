@@ -1354,7 +1354,7 @@ impl Checker<'_, '_> {
             .any(|(_, p)| p.moved.is_some() || p.installed.is_some() || p.uniqueness.is_some())
     }
     /// Recover trace sites for this graph's explanations, then render them.
-    pub(super) fn explain(&mut self, initial: State, live: &LiveSets) {
+    pub(super) fn explain(&mut self, inputs: Vec<Option<State>>) {
         if self.explanations.is_empty() {
             return;
         }
@@ -1365,7 +1365,6 @@ impl Checker<'_, '_> {
                 .filter_map(|(_, p)| p.uniqueness.map(|(b, _)| b))
                 .collect();
             self.emit = false;
-            let inputs = solve(self, initial, live);
             self.trace = Some(Trace::default());
             for (id, input) in inputs.into_iter().enumerate() {
                 if let Some(mut input) = input {

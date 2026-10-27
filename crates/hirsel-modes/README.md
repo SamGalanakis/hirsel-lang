@@ -25,8 +25,8 @@ Invariants and boundary:
   requirement kinds, their wording, the one qualifier spelling function and the
   verified repair table. The ownership pass records pending explanations while it
   emits. A temporary cause is the issue site of the loan the value holds on that
-  scope; only when a graph failed does it rerun its solve with a trace transfer that
-  logs moves and field writes (`hirsel-ownership/src/flow/causes.rs`). The authority walk
+  scope; only when a graph failed does it replay its converged inputs with a trace transfer
+  that logs moves and field writes (`hirsel-ownership/src/flow/causes.rs`). The authority walk
   renders at each site (`hirsel-authority/src/walk/causes.rs`). Explanations never change a
   verdict, a rule or a primary span.
 
@@ -91,7 +91,9 @@ callee entry; replacement initialises storage again. Resource takes use the same
 move facts and do not request a drop at the take site.
 
 The private CFG builder, temporary liveness and forward fixed-point solver all
-use explicit worklists. Backward temporary demand starts in CFG postorder,
+use explicit worklists. The entry and its uniqueness proofs share immutable
+temporary demand and traversal ranks. Nested graphs prepare their own inputs
+after earlier graphs publish their rows. Backward temporary demand starts in CFG postorder,
 so acyclic successors settle before their predecessors. `work::read(Counter::
 OwnershipLivenessSteps)` counts node transfers; cycles still iterate to convergence. Recovery types suppress dependent ownership diagnostics.
 Diagnostics follow docs/spec/diagnostics.md source/site/rule ordering and prerequisite suppression.

@@ -17,8 +17,10 @@ mod loans;
 mod parameter_parts;
 mod sealed;
 mod state;
+mod worklist;
 use hirsel_modes::explain::{Cause, Explanation, Fact, Requirement};
 use loans::{Kind, Loan, LoanSet, On, Site};
+use worklist::Pending;
 
 const LIVE: u8 = 1;
 const MOVED: u8 = 2;
@@ -1727,6 +1729,59 @@ pub(super) fn capture_crossing_uses(
     Ok(result)
 }
 
+pub(super) struct Prepared {
+    constants: BTreeSet<ExprId>,
+    live: LiveSets,
+    order: Vec<usize>,
+    rank: Vec<usize>,
+}
+
+/// Demand and traversal depend on the checked graph and structural properties,
+/// independently of the uniqueness selection used for a particular entry.
+pub(super) fn prepare(
+    t: &TypeInterner,
+    syntax: &ItemSyntax,
+    body: &CheckedBody,
+    source_rows: &super::source_rows::SourceRows,
+    properties: &PropertyTable,
+    projection_lifetimes: &BTreeMap<ExprId, super::properties::ProjectionLifetime>,
+    graph: &Graph,
+) -> Prepared {
+    let tree = &syntax.tree;
+    let constants =
+        constant_temporaries(graph, body, source_rows, properties, projection_lifetimes);
+    let live = super::liveness::Liveness {
+        t,
+        tree,
+        body,
+        rows: source_rows,
+        properties,
+        graph,
+        constants: &constants,
+    }
+    .after();
+    let successors: Vec<Vec<usize>> = graph
+        .nodes
+        .iter()
+        .map(|node| node.next.iter().rev().copied().collect())
+        .collect();
+    let order: Vec<_> =
+        super::liveness::graph_postorder(graph.nodes.len(), graph.entry, |id| &successors[id])
+            .into_iter()
+            .rev()
+            .collect();
+    let mut rank = vec![0; graph.nodes.len()];
+    for (index, &id) in order.iter().enumerate() {
+        rank[id] = index;
+    }
+    Prepared {
+        constants,
+        live,
+        order,
+        rank,
+    }
+}
+
 pub(super) fn check(
     t: &TypeInterner,
     syntax: &ItemSyntax,
@@ -1741,6 +1796,7 @@ pub(super) fn check(
     pattern_declarations: &BTreeMap<hirsel_syntax::PatternId, TypeId>,
     field_loan_places: &BTreeMap<ExprId, super::properties::FieldPlace>,
     graph: Graph,
+    prepared: Option<&Prepared>,
     capture_crossing_uses: &BTreeMap<ExprId, Vec<(usize, Vec<Projection>)>>,
     facts: &mut OwnershipFacts,
     diagnostics: &mut Vec<Diagnostic>,
@@ -1749,18 +1805,19 @@ pub(super) fn check(
     proof: Option<ParamId>,
 ) -> Result<FlowOutput, QueryError> {
     let tree = &syntax.tree;
-    let constants =
-        constant_temporaries(&graph, body, source_rows, properties, projection_lifetimes);
-    let live = super::liveness::Liveness {
-        t,
-        tree,
-        body,
-        rows: source_rows,
-        properties,
-        graph: &graph,
-        constants: &constants,
-    }
-    .after();
+    let local = prepared.is_none().then(|| {
+        prepare(
+            t,
+            syntax,
+            body,
+            source_rows,
+            properties,
+            projection_lifetimes,
+            &graph,
+        )
+    });
+    let prepared = prepared.or(local.as_ref()).unwrap();
+    let live = &prepared.live;
     let parameters = initial_storage
         .owners
         .get(&graph.owner)
@@ -1861,8 +1918,13 @@ pub(super) fn check(
         unique_proof: proof,
         unique_results: None,
         unique_failures: vec![],
-        live: &live,
-        constants: constants.into_iter().map(|e| (e, None)).collect(),
+        live,
+        constants: prepared
+            .constants
+            .iter()
+            .copied()
+            .map(|e| (e, None))
+            .collect(),
     };
     checker.destroying = graph
         .statements
@@ -1913,7 +1975,7 @@ pub(super) fn check(
     // replacement facts disagree with the emitted copy. Each restart adds a
     // site to a finite set, with no iteration cap or weakened availability.
     let inputs = loop {
-        let inputs = solve(&mut checker, initial.clone(), &live);
+        let inputs = solve(&mut checker, initial.clone(), prepared);
         let mut changed = false;
         for (node, input) in graph.nodes.iter().zip(&inputs) {
             let (Op::Finish { expression, .. }, Some(input)) = (&node.op, input) else {
@@ -1936,7 +1998,7 @@ pub(super) fn check(
         }
     };
     checker.emit = true;
-    for (id, input) in inputs.into_iter().enumerate() {
+    for (id, input) in inputs.iter().cloned().enumerate() {
         checker.node = id;
         if let Some(mut input) = input {
             checker.transfer(&graph.nodes[id].op, &mut input);
@@ -1946,8 +2008,7 @@ pub(super) fn check(
     }
     if !checker.explanations.is_empty() {
         // Only a graph that reported a diagnostic pays for its explanation.
-        let initial = checker.proof_entry(initial_storage.initial(&checker));
-        checker.explain(initial, &live);
+        checker.explain(inputs);
         checker.emit = true;
     }
     // Node storage order is not evaluation order. Publish extraction facts
@@ -2147,30 +2208,18 @@ fn constant_temporaries(
         .collect()
 }
 /// The converged input of every node.
-fn solve(checker: &mut Checker<'_, '_>, initial: State, live: &LiveSets) -> Vec<Option<State>> {
+fn solve(checker: &mut Checker<'_, '_>, initial: State, prepared: &Prepared) -> Vec<Option<State>> {
     let graph = checker.graph;
     let mut inputs: Vec<Option<State>> = vec![None; graph.nodes.len()];
     inputs[graph.entry] = Some(initial);
-    // Reverse the DFS successor order so source-first alternatives keep their
-    // priority. Every acyclic predecessor settles before its join and suffix;
-    // feedback still runs to the same fixed point, without an iteration limit.
-    let successors: Vec<Vec<usize>> = graph
-        .nodes
-        .iter()
-        .map(|node| node.next.iter().rev().copied().collect())
-        .collect();
-    let mut rank = vec![0; graph.nodes.len()];
-    for (index, id) in
-        super::liveness::graph_postorder(graph.nodes.len(), graph.entry, |id| &successors[id])
-            .into_iter()
-            .rev()
-            .enumerate()
-    {
-        rank[id] = index;
-    }
+    let Prepared {
+        order, rank, live, ..
+    } = prepared;
     let mut slots = SlotJoins::new(Slot::join);
-    let mut pending = BTreeSet::from([(rank[graph.entry], graph.entry)]);
-    while let Some((_, id)) = pending.pop_first() {
+    let mut pending = Pending::new(graph.nodes.len());
+    pending.insert(rank[graph.entry]);
+    while let Some(index) = pending.pop_first() {
+        let id = order[index];
         work::count(Counter::OwnershipFlowSteps);
         let mut output = inputs[id].clone().unwrap();
         work::count_by(Counter::OwnershipStateRows, output.values.len() as u64);
@@ -2181,8 +2230,7 @@ fn solve(checker: &mut Checker<'_, '_>, initial: State, live: &LiveSets) -> Vec<
             output,
             &graph.nodes[id].next,
             &mut inputs,
-            &rank,
-            &mut pending,
+            &mut |successor| pending.insert(rank[successor]),
             &mut slots,
         );
     }
@@ -2195,8 +2243,7 @@ fn forward_output(
     output: State,
     next: &[usize],
     inputs: &mut [Option<State>],
-    rank: &[usize],
-    pending: &mut BTreeSet<(usize, usize)>,
+    schedule: &mut impl FnMut(usize),
     slots: &mut SlotJoins,
 ) {
     // Rustc19833af7 mir_dataflow/framework/mod.rs:351-375 minimizes
@@ -2205,7 +2252,7 @@ fn forward_output(
     for (index, successor) in next.iter().enumerate() {
         if index + 1 == next.len() && inputs[*successor].is_none() {
             inputs[*successor] = Some(output);
-            pending.insert((rank[*successor], *successor));
+            schedule(*successor);
             return;
         }
         let changed = if let Some(input) = &mut inputs[*successor] {
@@ -2217,7 +2264,7 @@ fn forward_output(
             true
         };
         if changed {
-            pending.insert((rank[*successor], *successor));
+            schedule(*successor);
         }
     }
 }
@@ -9255,8 +9302,9 @@ mod loan_tests {
                     output.clone(),
                     next,
                     &mut inputs,
-                    &rank,
-                    &mut pending,
+                    &mut |successor| {
+                        pending.insert((rank[successor], successor));
+                    },
                     &mut slots,
                 );
                 let clones = FORWARD_STATE_CLONES.with(std::cell::Cell::get) - before;

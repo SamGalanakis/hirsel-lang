@@ -317,6 +317,22 @@ pub fn check_ownership_with_clauses(
             }
         }
     }
+    // The entry is first after clause sorting. Proofs clone its checked rows;
+    // no earlier graph can publish a changed input before the ordinary run.
+    let prepared = graphs
+        .first()
+        .filter(|g| g.owner == NameSite::Item && g.clause.is_none())
+        .map(|graph| {
+            flow::prepare(
+                t,
+                syntax,
+                body,
+                &rows,
+                &properties,
+                &projection_lifetimes,
+                graph,
+            )
+        });
     for parameter in promised {
         for graph in graphs
             .iter()
@@ -341,6 +357,9 @@ pub fn check_ownership_with_clauses(
                 &pattern_declarations,
                 &field_loan_places,
                 graph.clone(),
+                prepared
+                    .as_ref()
+                    .filter(|_| std::ptr::eq(graph, &graphs[0])),
                 &capture_crossing_uses,
                 &mut proof_facts,
                 &mut proof_diagnostics,
@@ -388,7 +407,7 @@ pub fn check_ownership_with_clauses(
             );
         }
     }
-    for graph in &graphs {
+    for (index, graph) in graphs.iter().enumerate() {
         let checked = flow::check(
             t,
             syntax,
@@ -403,6 +422,7 @@ pub fn check_ownership_with_clauses(
             &pattern_declarations,
             &field_loan_places,
             graph.clone(),
+            prepared.as_ref().filter(|_| index == 0),
             &capture_crossing_uses,
             &mut facts,
             &mut diagnostics,
