@@ -1015,7 +1015,13 @@ impl Task {
         let foreign = foreign_use(&program, &queries.inputs);
         // PROG-4: C called outside a deterministic wrapper makes every run of
         // this entry unrecordable, as the checked package decides it.
-        let unreplayable = !queries.check.unsafe_ffi().is_empty() && !foreign.unmodeled.is_empty();
+        let unreplayable = !queries
+            .check
+            .as_ref()
+            .ok_or(QueryError::NotImplemented)?
+            .unsafe_ffi()
+            .is_empty()
+            && !foreign.unmodeled.is_empty();
         let revision = program.revision(root)?;
         let code = reach(root)?;
         let semantic_program = if queries.native_roots.is_empty() || queries.batch.is_some() {
