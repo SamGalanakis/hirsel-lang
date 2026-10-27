@@ -5962,6 +5962,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if f.regions.last() != Some(&rt) {
                     return fail(V::Malformed, "a region exits before one entered inside it");
                 }
+                if self.ledger.regions[rt].storage != crate::ledger::sealed::StorageCustody::Scope {
+                    self.exit_region(f, rt)?;
+                    return Ok(Control::Continue);
+                }
                 let mut work = Vec::new();
                 for alloc in self.ledger.regions[rt].allocations.clone() {
                     let a = self.ledger.get(alloc);

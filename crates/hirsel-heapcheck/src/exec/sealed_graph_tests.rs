@@ -1098,6 +1098,16 @@ fn sealed_graph_read_instruction_lends_storage_then_expires_its_loan() {
         let mut x = fixture();
         set_root(&mut x.p, 2);
         x.p.units[0].values[1].holding = Holding::Borrowed(LoanId(0));
+        let mark_type = LirTypeId(x.p.units[0].types.len() as u32);
+        x.p.units[0].types.push(LirType {
+            repr: ValueRepr::RegionMark,
+            layout: LayoutId(0),
+        });
+        let mark = ValueId(x.p.units[0].values.len() as u32);
+        x.p.units[0].values.push(ValueInfo {
+            ty: mark_type,
+            holding: Holding::Plain,
+        });
         let c = config(&mut x.p, 2, &[], full);
         let mut ops = NoOperations;
         let mut m = Machine::new(&x.p, &c, &mut ops);
@@ -1105,6 +1115,19 @@ fn sealed_graph_read_instruction_lends_storage_then_expires_its_loan() {
         let source = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
         root(&mut m, &mut f, Val::Ptr(source));
         seal(&mut m, &mut f, 2);
+        m.define_fresh(&mut f, mark, Val::Mark(0)).unwrap();
+        let exit = Inst::RegionExit {
+            mark,
+            region: RegionInstanceId(0),
+            failure: FailureId(0),
+        };
+        let retained = m.ledger.regions[0].allocations[0];
+        m.ledger.get_mut(retained).published = false;
+        assert_eq!(m.exec(&mut f, &exit).err().unwrap().kind, V::WritePublished);
+        assert!(m.ledger.regions[0].live);
+        m.ledger.get_mut(retained).published = true;
+        assert!(matches!(m.exec(&mut f, &exit).unwrap(), Control::Continue));
+        assert!(!m.ledger.regions[0].live);
         let moved = m.take_value(&mut f, ValueId(3)).unwrap();
         let Val::Ptr(control) = moved.val else {
             panic!()
@@ -1132,7 +1155,9 @@ fn sealed_graph_read_instruction_lends_storage_then_expires_its_loan() {
             let Val::Ptr(view) = m.read_use(&f, ValueId(1)).unwrap() else {
                 panic!()
             };
+            assert_eq!(m.read_scalar(view, 8).unwrap(), 2);
             assert_eq!(m.read_scalar(view.at(16), 8).unwrap(), 11);
+            assert_eq!(m.read_scalar(view.at(24), 8).unwrap(), 12);
             assert_eq!(
                 m.ledger
                     .begin_sealed_drop(m.ledger.sealed_control(control).unwrap())
@@ -1154,7 +1179,6 @@ fn sealed_graph_read_instruction_lends_storage_then_expires_its_loan() {
             );
             f.values[1] = None;
         }
-        m.exit_region(&mut f, 0).unwrap();
         let mut work = vec![];
         m.release_sealed(place, LayoutId(1), &mut work).unwrap();
         drain(&mut m, work);
