@@ -36,3 +36,21 @@ pub fn main()->Result[(),()] {
         8,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn source_resource_selection_keeps_owned_data_fields_inside_each_resource_lifetime() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token { data:String }
+drop(x) {}
+pub fn main()->Result[(),u64] {
+ let first=Token(data:"equal owned data")
+ let second=Token(data:"equal owned data")
+ let moved=take first
+ Ok(())
+}
+"#,
+        2,
+    );
+}

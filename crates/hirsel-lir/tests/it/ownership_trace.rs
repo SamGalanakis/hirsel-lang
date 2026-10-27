@@ -3309,20 +3309,34 @@ fn compound_drop_fixture_with_parent(
     CleanupAnchorId,
     hirsel_lir::layout_types::LayoutTable,
 ) {
+    compound_drop_fixture_with_children(alternatives, parent, l::RES)
+}
+
+fn compound_drop_fixture_with_children(
+    alternatives: bool,
+    parent: bool,
+    child: hirsel_lir::LayoutId,
+) -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    Plan,
+    CleanupAnchorId,
+    hirsel_lir::layout_types::LayoutTable,
+) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
     let pair = &mut t.table.layouts[l::PAIR.0 as usize];
-    pair.fields[0].layout = l::RES;
-    pair.fields[1].layout = l::RES;
+    pair.fields[0].layout = child;
+    pair.fields[1].layout = child;
     pair.copy = CopyRecipe::NotCopyable;
     pair.drop = vec![
         DropStep::Child {
             offset: 8,
-            layout: l::RES,
+            layout: child,
         },
         DropStep::Child {
             offset: 0,
-            layout: l::RES,
+            layout: child,
         },
     ];
     if parent {
@@ -3335,6 +3349,19 @@ fn compound_drop_fixture_with_parent(
         pair.drop.insert(0, DropStep::Finalize);
     }
     pair.scan.clear();
+    if child == l::BLK {
+        pair.scan = vec![
+            hirsel_lir::layout_types::ScanStep::Counted { offset: 0 },
+            hirsel_lir::layout_types::ScanStep::Counted { offset: 8 },
+        ];
+        pair.drop = vec![
+            DropStep::Release { offset: 8 },
+            DropStep::Release { offset: 0 },
+        ];
+        if parent {
+            pair.drop.insert(0, DropStep::Finalize);
+        }
+    }
     let abi = t.abi(&[(Passing::Borrow, l::RES)], None);
     let parent_abi = t.abi(&[(Passing::Borrow, l::PAIR)], None);
     let slot = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
@@ -4929,4 +4956,60 @@ fn ownership_trace_native_variant_field_locations_keep_the_checked_arm_and_decla
             }]
         })
     );
+}
+
+#[test]
+fn ownership_trace_data_child_release_requires_its_exact_take_and_complete_cleanup_cut() {
+    let (after, output, _, anchor, _) = compound_drop_fixture_with_children(false, true, l::BLK);
+    let checked = check(after.unit(), &output).unwrap();
+    let commits = checked.commits(after.unit(), MarkerId(0)).unwrap();
+    assert_eq!(commits.len(), 3, "only the parent has a Resource finalizer");
+    let Point::Instruction { block, index, .. } = commits[0] else {
+        unreachable!()
+    };
+    let mut prefix = output.clone();
+    let Point::CompoundDrop {
+        normal, index: cut, ..
+    } = &mut prefix.observations[0].point
+    else {
+        unreachable!()
+    };
+    *normal = block;
+    *cut = index + 1;
+    assert!(
+        check(after.unit(), &prefix).is_err(),
+        "a cut cannot omit the data child releases"
+    );
+    let raw = after.into_raw();
+    let physical = raw
+        .instructions
+        .iter()
+        .position(|inst| matches!(inst, Inst::Release { anchor: action, .. } if *action == anchor))
+        .unwrap();
+    for forged_anchor in [false, true] {
+        let mut forged = raw.clone();
+        if forged_anchor {
+            let mut wrong = forged.tables.cleanup_anchors[anchor.index()].clone();
+            wrong.cleanup += 1;
+            let next = CleanupAnchorId(forged.tables.cleanup_anchors.len() as u32);
+            forged.tables.cleanup_anchors.push(wrong);
+            let Inst::Release { anchor, .. } = &mut forged.instructions[physical] else {
+                unreachable!()
+            };
+            *anchor = next;
+        } else {
+            let Location::Address(parent) = output.observations[0].marker.token else {
+                unreachable!()
+            };
+            let Inst::Read { address, .. } = &mut forged.instructions[physical - 1] else {
+                unreachable!()
+            };
+            *address = parent;
+        }
+        let forged_plan = Plan::selected(&forged, output.selection, output.observations.clone());
+        assert!(
+            check(&forged, &forged_plan).is_err(),
+            "forged child release accepted, anchor={forged_anchor}"
+        );
+    }
 }

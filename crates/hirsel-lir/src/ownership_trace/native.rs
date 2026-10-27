@@ -157,7 +157,7 @@ impl LeafPlan {
                 });
             let resource_tree = layouts.layout(layout).is_some_and(|record| {
                 matches!(record.kind, LayoutKind::Resource)
-                    && static_resource_tree(layouts, layout, &mut BTreeSet::new())
+                    && static_resource_tree(layouts, layout, selection, &mut BTreeSet::new())
             });
             if !leaf(layouts, layout)
                 && !resource_tree
@@ -1464,9 +1464,10 @@ fn plain(table: &LayoutTable, id: LayoutId, depth: usize) -> bool {
 fn static_resource_tree(
     table: &LayoutTable,
     layout: LayoutId,
+    selection: Selection,
     active: &mut BTreeSet<LayoutId>,
 ) -> bool {
-    if plain(table, layout, 0) {
+    if !selection.tracks_layout(table, layout) || plain(table, layout, 0) {
         return true;
     }
     let Some(record) = table.layout(layout) else {
@@ -1480,7 +1481,7 @@ fn static_resource_tree(
     let supported = record
         .fields
         .iter()
-        .all(|field| static_resource_tree(table, field.layout, active));
+        .all(|field| static_resource_tree(table, field.layout, selection, active));
     active.remove(&layout);
     supported
 }
@@ -1814,6 +1815,7 @@ impl LeafPlan {
         fn descend(
             layouts: &LayoutTable,
             layout: LayoutId,
+            selection: Selection,
             offset: u64,
             path: Vec<u32>,
             binding: u32,
@@ -1824,7 +1826,9 @@ impl LeafPlan {
             let record = layouts
                 .layout(layout)
                 .ok_or("ownership cleanup field is absent")?;
-            if record.drop.is_empty() && record.finalizer.is_none() {
+            if !selection.tracks_layout(layouts, layout)
+                || (record.drop.is_empty() && record.finalizer.is_none())
+            {
                 return Ok(());
             }
             if !active.insert(layout) {
@@ -1832,7 +1836,10 @@ impl LeafPlan {
             }
             if matches!(record.kind, LayoutKind::Resource)
                 && record.finalizer.is_some()
-                && leaf(layouts, layout)
+                && record.fields.iter().all(|field| {
+                    !selection.tracks_layout(layouts, field.layout)
+                        || plain(layouts, field.layout, 0)
+                })
             {
                 if captures
                     .iter()
@@ -1880,6 +1887,7 @@ impl LeafPlan {
                     descend(
                         layouts,
                         child_layout,
+                        selection,
                         offset
                             .checked_add(child_offset)
                             .ok_or("ownership capture offset overflow")?,
@@ -1902,6 +1910,7 @@ impl LeafPlan {
             descend(
                 layouts,
                 field.layout,
+                self.plan.selection,
                 field.offset,
                 vec![field.ordinal],
                 field.ordinal,

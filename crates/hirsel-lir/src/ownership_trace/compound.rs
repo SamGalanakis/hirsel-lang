@@ -48,9 +48,12 @@ pub(super) fn parts<S: Stage>(
     let (slot, prefix) = path(unit, root)?;
     // The containing Resource has its own finalizer before its child actions.
     // The exact slot/prefix and common cleanup anchor still bind the whole cut.
-    let descendant =
-        |address| path(unit, address).is_some_and(|(s, p)| s == slot && p.starts_with(&prefix));
-    if !descendant(first) {
+    let descendant = |address: AddressId, strict: bool| {
+        path(unit, address).is_some_and(|(s, p)| {
+            s == slot && p.starts_with(&prefix) && (!strict || p.len() > prefix.len())
+        })
+    };
+    if !descendant(first, false) {
         return None;
     }
     struct Walk {
@@ -67,7 +70,7 @@ pub(super) fn parts<S: Stage>(
         index: u32,
         failure: BlockId,
         anchor: CleanupAnchorId,
-        descendant: &impl Fn(AddressId) -> bool,
+        descendant: &impl Fn(AddressId, bool) -> bool,
         walk: &mut Walk,
     ) -> Option<()> {
         if block == failure {
@@ -101,13 +104,13 @@ pub(super) fn parts<S: Stage>(
             code
         };
         let mut next = Vec::new();
-        for instruction in code {
+        for (index, instruction) in code.iter().enumerate() {
             match *instruction {
                 Inst::FinalizeBegin {
                     address,
                     anchor: action,
                 } => {
-                    if action != anchor || !descendant(address) {
+                    if action != anchor || !descendant(address, false) {
                         return None;
                     }
                     finalizer::exits(unit, block, address)?;
@@ -117,9 +120,32 @@ pub(super) fn parts<S: Stage>(
                     address,
                     anchor: action,
                 } => {
-                    if action != anchor || !descendant(address) {
+                    if action != anchor || !descendant(address, false) {
                         return None;
                     }
+                }
+                Inst::Release {
+                    value,
+                    anchor: action,
+                    live: MaskRef::All,
+                    ..
+                } => {
+                    let Inst::Read {
+                        result,
+                        address,
+                        mode: ReadMode::Take,
+                        ..
+                    } = *code.get(index.checked_sub(1)?)?
+                    else {
+                        return None;
+                    };
+                    if action != anchor || result != value || !descendant(address, true) {
+                        return None;
+                    }
+                    // This proves the physical child release belongs to this
+                    // cut. Native preparation independently requires coverage
+                    // of every selected Ready transition, so a selected child
+                    // cannot disappear through an unobserved release.
                 }
                 Inst::Release { .. } | Inst::Drop { .. } => return None,
                 _ => (),
@@ -134,7 +160,7 @@ pub(super) fn parts<S: Stage>(
             let term = unit.terminators.get(block.index())?;
             if matches!(term, Terminator::Call { .. }) {
                 let (address, action) = finalizer::begin(unit, block)?;
-                if action != anchor || !descendant(address) {
+                if action != anchor || !descendant(address, false) {
                     return None;
                 }
             } else if !matches!(term, Terminator::Jump(_) | Terminator::Branch { .. }) {
@@ -193,7 +219,7 @@ pub(super) fn parts<S: Stage>(
             .instructions
             .get(&unit.instructions)?;
         let mut stopped = false;
-        for inst in code.get(start as usize..)? {
+        for (relative, inst) in code.get(start as usize..)?.iter().enumerate() {
             match *inst {
                 Inst::StorageDead { slot: at, .. } | Inst::StorageLive { slot: at }
                     if at == slot =>
@@ -201,11 +227,32 @@ pub(super) fn parts<S: Stage>(
                     stopped = true;
                     break;
                 }
+                Inst::Release {
+                    value,
+                    anchor: action,
+                    ..
+                } => {
+                    let at = start as usize + relative;
+                    if let Some(Inst::Read {
+                        result,
+                        address,
+                        mode: ReadMode::Take,
+                        ..
+                    }) = at.checked_sub(1).and_then(|at| code.get(at))
+                        && *result == value
+                        && action == anchor
+                        && descendant(*address, true)
+                    {
+                        return None;
+                    }
+                    stopped = true;
+                    break;
+                }
                 Inst::FinalizeBegin {
                     address,
                     anchor: action,
                 } => {
-                    if action == anchor && descendant(address) {
+                    if action == anchor && descendant(address, false) {
                         return None;
                     }
                     stopped = true;
