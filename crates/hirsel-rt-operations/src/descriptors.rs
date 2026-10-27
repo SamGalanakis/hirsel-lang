@@ -700,7 +700,7 @@ pub const ENTRIES: &[Entry] = &[
     // credits are actually released later, at canonical admission.
     entry("hirsel_rt_v2_host_arm", Physical),
     entry("hirsel_rt_v2_host_enter", Local),
-    entry("hirsel_rt_v2_cpu_ahead_arm", Physical),
+    entry("hirsel_rt_v2_cpu_ahead_arm", Local),
     entry("hirsel_rt_v2_cpu_ahead_enter", Local),
     entry("hirsel_rt_v2_host_active", Local),
     entry("hirsel_rt_v2_host_defer", Local),
@@ -1166,7 +1166,7 @@ pub const REGISTRY: &[(&str, &[&str])] = &[
             "task.scope_enter",
             "task.scope_exit",
             "task.async",
-            "task.await",
+            "task.join",
         ],
     ),
     ("$intrinsic.CpuMapScoped", &["cpu.control"]),
