@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Full-value BWT oracles. Registered by tests.py; also runnable directly."""
+"""Full-value BWT oracles. Each engine runs in its own Buck2 target."""
+import argparse
 import itertools
 import json
 import os
@@ -116,4 +117,9 @@ class BwtOracles(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--hirsel')
+    options, tests = parser.parse_known_args()
+    if options.hirsel:
+        os.environ['HIRSEL'] = options.hirsel
+    unittest.main(argv=[__file__, *tests], verbosity=2)

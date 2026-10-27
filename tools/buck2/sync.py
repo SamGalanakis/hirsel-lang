@@ -1014,6 +1014,14 @@ def first_party(meta: dict) -> str:
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             runtime_archives=RUNTIME_ARCHIVES,
                             data=Raw('glob(["bench/langarena/*.hir", "bench/langarena/*.py", "bench/langarena/*.js", "bench/micro/measure.py", "stdlib/**"])')))
+    for suite, case in (("bwt", "BwtOracles"), ("crc32", "CRC32Recurrence")):
+        for engine in ("interpreter", "llvm", "cranelift"):
+            name = f"gate-langarena-{suite}-9-{engine}"
+            out.append("\n" + call("hirsel_script_test", name=name, script=f"bench/langarena/tests_{suite}_9.py",
+                                    full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
+                                    args=["--hirsel", f"buck-out/tmp/cargo-bin-exe/{name}/hirsel", f"{case}.test_{engine}"],
+                                    runtime_archives=RUNTIME_ARCHIVES,
+                                    data=Raw('glob(["bench/langarena/*.hir", "bench/langarena/*.py", "bench/langarena/*.js", "bench/micro/measure.py", "stdlib/**"])')))
     out.append("\n" + call("hirsel_script_test", name="gate-langarena-astar-9", script="bench/langarena/tests_astar_9.py",
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             runtime_archives=RUNTIME_ARCHIVES,

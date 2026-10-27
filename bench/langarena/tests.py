@@ -12,7 +12,6 @@ from unittest.mock import patch
 
 import build
 import compare
-from tests_crc32_9 import CRC32Recurrence
 
 ROOT = build.ROOT
 HERE = build.HERE
@@ -225,10 +224,6 @@ class NativeProtocol(unittest.TestCase):
         output = self.run_config(json.loads((HERE / 'test.js').read_text()), 'not-a-task')
         self.assertNotEqual(output.returncode, 0)
         self.assertIn('no implemented tasks selected', output.stderr)
-
-
-# Custom Python harness registration; Buck2 forwards unittest selectors.
-from tests_bwt_9 import BwtOracles  # noqa: E402, F401
 
 
 if __name__ == '__main__':

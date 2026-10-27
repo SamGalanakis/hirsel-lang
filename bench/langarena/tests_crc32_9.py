@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """CRC32 recurrence checks on the interpreter, LLVM and Cranelift.
 
-Run through gate-langarena's CRC32Recurrence selector. For an additional live
+Each engine runs in its own Buck2 target. For an additional live
 Rust oracle, set CRC32_9_RUST_REFERENCE to the la_crc32_9_reference executable.
 The scored function is extracted verbatim from hash.hir; std.crc32 is only an
 independent oracle. Generated test programs live in a temporary directory.
 """
+import argparse
 import json
 import os
 from pathlib import Path
@@ -168,4 +169,9 @@ class CRC32Recurrence(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--hirsel')
+    options, tests = parser.parse_known_args()
+    if options.hirsel:
+        os.environ['HIRSEL'] = options.hirsel
+    unittest.main(argv=[__file__, *tests], verbosity=2)
