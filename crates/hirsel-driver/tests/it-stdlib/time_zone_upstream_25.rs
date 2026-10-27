@@ -1,5 +1,6 @@
 //! Pinned Jiff answers; every row executes on reference, checked H, LLVM and Cranelift.
-use hirsel_driver::{load_program_source, native};
+use crate::source_std::load_program_source;
+use hirsel_driver::native;
 use hirsel_engine::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

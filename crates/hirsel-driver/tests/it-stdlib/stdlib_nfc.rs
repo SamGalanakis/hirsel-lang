@@ -1,3 +1,4 @@
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_interp::{Limits, Outcome, Value, library::Library};

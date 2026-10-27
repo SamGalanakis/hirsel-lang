@@ -2,6 +2,7 @@
 //! MIT license in third-party/LICENSE.zmij.
 //! Fixed expectations cross-checked with Ryū 4c0618b0 and exact rational intervals.
 //! Rendering adapts -6/21 thresholds, e spelling, integral suffix and special values.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use serde_json::Value;

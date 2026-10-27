@@ -1,4 +1,5 @@
 //! Frozen serde_json expectations, with direct Value literals and four real engines.
+use crate::source_std::load_program_source;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use serde_json::Value;

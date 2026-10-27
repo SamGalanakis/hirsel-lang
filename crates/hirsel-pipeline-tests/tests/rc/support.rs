@@ -42,7 +42,7 @@ pub fn try_compile(source: &str) -> Result<Program, String> {
     let source = source.to_string();
     with_compiler_stack(move || {
         let mut engine = if source.contains("std@1/") {
-            let mut loaded = hirsel_driver::load_program_source(
+            let mut loaded = crate::source_std::load_program_source(
                 &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                     .join("../hirsel-driver/tests/fixtures/std_numeric.hir"),
                 Some(&source),
