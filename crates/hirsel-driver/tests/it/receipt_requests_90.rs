@@ -36,6 +36,11 @@ fn aware_source_request_transfers_taken_heap_companions_through_rc_and_reuse() {
     borrowed_request(true, true);
 }
 
+#[test]
+fn aware_source_request_borrows_then_releases_a_taken_entry_companion() {
+    borrowed_request(false, true);
+}
+
 fn borrowed_request(forward: bool, take: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
@@ -62,6 +67,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
 
 "#,
                     take,
+                    !forward,
                 ),
             )
             .unwrap();
@@ -366,6 +372,7 @@ fn forward_again(root:List[u64])->u64 {forward(root)}
 pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
 "#,
                     take,
+                    !forward,
                 ),
             )
             .unwrap();
@@ -433,16 +440,24 @@ impl runtime::QueryContext for LowerReads {
     }
 }
 
-fn custody_source(text: &str, take: bool) -> String {
+fn custody_source(text: &str, take: bool, borrow_leaf: bool) -> String {
     if !take {
         return text.into();
     }
-    text.replace("root: List[u64]", "take root: List[u64]")
+    let source = text
+        .replace("root: List[u64]", "take root: List[u64]")
         .replace("root:List[u64]", "take root:List[u64]")
         .replace(
             "forward(root)+forward_again(root)",
             "forward_again(take root)",
         )
         .replace("read(root)", "read(take root)")
-        .replace("forward(root)", "forward(take root)")
+        .replace("forward(root)", "forward(take root)");
+    if borrow_leaf {
+        source
+            .replace("fn read(take root", "fn read(root")
+            .replace("read(take root)", "read(root)")
+    } else {
+        source
+    }
 }
