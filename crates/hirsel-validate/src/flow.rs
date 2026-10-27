@@ -956,15 +956,21 @@ impl Model {
             })
             .collect();
         let mut header_names = BTreeSet::new();
-        for local in &body.locals {
-            let _ = hirsel_types::visit_type_origins(checker.t, local.ty, |origin, depth| {
-                if (depth > 0 || local.storage == Storage::Capture && checker.arena_place(origin))
-                    && declarations.contains(&origin.root)
-                {
-                    header_names.insert(origin.root.clone());
-                }
-                Ok(())
-            });
+        for local in body.locals.iter().filter(|_| !declarations.is_empty()) {
+            let _ = checker.scratch.origin_types[checker.site.body.0 as usize].visit(
+                checker.t,
+                local.ty,
+                &|_| true,
+                |origin, depth| {
+                    if (depth > 0
+                        || local.storage == Storage::Capture && checker.arena_place(origin))
+                        && declarations.contains(&origin.root)
+                    {
+                        header_names.insert(origin.root.clone());
+                    }
+                    Ok(())
+                },
+            );
         }
         Self {
             header_names,
@@ -1402,7 +1408,7 @@ impl Model {
         for local in &body.parameters {
             let root = self.roots[local.0 as usize];
             let mut names = BTreeSet::new();
-            let _ = hirsel_types::visit_type_origins(&types, self.places[root].ty, |origin, _| {
+            let _ = origin_types.visit(&types, self.places[root].ty, &|_| true, |origin, _| {
                 if outer(&origin.root) && !state.origins.bindings.contains_key(&origin.root) {
                     names.insert(origin.root.clone());
                 }

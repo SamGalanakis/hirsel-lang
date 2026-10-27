@@ -373,7 +373,7 @@ impl<'a> Checker<'a> {
                 self.t.semantic_eq(expected, actual)
                     || current.is_some_and(|current| self.t.semantic_eq(current, p.ty))
                     || (!p.projection.is_empty()
-                        && (Self::has_origins(&store, expected) || Self::has_origins(self.t, p.ty)))
+                        && (self.has_origins(&store, expected) || self.has_origins(self.t, p.ty)))
             });
             if !valid {
                 self.error(ViolationKind::InvalidProjection(PlaceId(i as u32)));
@@ -3226,7 +3226,7 @@ impl<'a> Checker<'a> {
                     if let Some(t) = expected.get(field.field as usize) {
                         let mut expected_field = *t;
                         let actual = self.place_type(field.value.place);
-                        if Self::has_siblings(&store, *t) {
+                        if self.has_siblings(&store, *t) {
                             // Operand identities are available only at this
                             // instruction's flow state. The complete field
                             // relationship is checked there, before extraction.
@@ -3664,12 +3664,17 @@ impl<'a> Checker<'a> {
             }
         }
     }
-    pub(super) fn has_origins(store: &TypeInterner, ty: TypeId) -> bool {
+    pub(super) fn has_origins(&self, store: &TypeInterner, ty: TypeId) -> bool {
         let mut found = false;
-        let _ = visit_type_origins(store, ty, |_, _| {
-            found = true;
-            Ok(())
-        });
+        let _ = self.scratch.origin_types[self.site.body.0 as usize].visit(
+            store,
+            ty,
+            &|_| true,
+            |_, _| {
+                found = true;
+                Ok(())
+            },
+        );
         found
     }
     /// Every proper projected prefix of the place is declared unique. An
@@ -3779,14 +3784,19 @@ impl<'a> Checker<'a> {
             };
             if let Some(next) = next {
                 let mut fields = BTreeMap::new();
-                let _ = visit_type_origins(store, next, |origin, _| {
-                    if let OriginRoot::Sibling(field) = origin.root {
-                        if let Some(owner) = sibling(depth, field) {
-                            fields.insert(field, owner);
+                let _ = self.scratch.origin_types[self.site.body.0 as usize].visit(
+                    store,
+                    next,
+                    &|_| true,
+                    |origin, _| {
+                        if let OriginRoot::Sibling(field) = origin.root {
+                            if let Some(owner) = sibling(depth, field) {
+                                fields.insert(field, owner);
+                            }
                         }
-                    }
-                    Ok(())
-                });
+                        Ok(())
+                    },
+                );
                 let next = instantiate_sibling_origins(store, next, &fields).ok()?;
                 let evidence = store.get(next).unwrap().modes.sendability.clone();
                 let next = self.placed_part(store, ty, next, &generics);
@@ -3858,12 +3868,17 @@ impl<'a> Checker<'a> {
         }
         false
     }
-    fn has_siblings(store: &TypeInterner, ty: TypeId) -> bool {
+    fn has_siblings(&self, store: &TypeInterner, ty: TypeId) -> bool {
         let mut found = false;
-        let _ = visit_type_origins(store, ty, |origin, _| {
-            found |= matches!(origin.root, OriginRoot::Sibling(_));
-            Ok(())
-        });
+        let _ = self.scratch.origin_types[self.site.body.0 as usize].visit(
+            store,
+            ty,
+            &|_| true,
+            |origin, _| {
+                found |= matches!(origin.root, OriginRoot::Sibling(_));
+                Ok(())
+            },
+        );
         found
     }
     fn placed_part(

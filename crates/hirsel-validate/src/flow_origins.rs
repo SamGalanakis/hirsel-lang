@@ -357,15 +357,31 @@ impl OriginState {
         }
     }
     pub fn introduce(&mut self, owner: &Origin) {
-        if let Some(mut paths) = self.dead.get(&owner.root).cloned() {
-            paths.retain(|path| {
+        if owner.fields.is_empty() {
+            self.dead.remove(&owner.root);
+            return;
+        }
+        let Some(paths) = self.dead.get(&owner.root) else {
+            return;
+        };
+        // Lexicographic field paths keep every descendant in one contiguous range.
+        let replaced: Vec<_> = paths
+            .range(owner.fields.clone()..)
+            .take_while(|path| {
                 work::count(Counter::ValidateOriginDependencyRows);
-                !path.starts_with(&owner.fields)
-            });
-            if paths.is_empty() {
-                self.dead.remove(&owner.root);
-            } else {
-                self.dead.insert(owner.root.clone(), paths);
+                path.starts_with(&owner.fields)
+            })
+            .cloned()
+            .collect();
+        if replaced.len() == paths.len() {
+            self.dead.remove(&owner.root);
+        } else if !replaced.is_empty() {
+            let paths = self
+                .dead
+                .entry(owner.root.clone())
+                .or_insert_with(BTreeSet::new);
+            for path in replaced {
+                paths.remove(&path);
             }
         }
     }
@@ -833,6 +849,35 @@ mod environment_tests {
         empty.clear_value(7);
         empty.clear_value(31);
         assert_eq!(work::read(Counter::ValidateCopiedRows), before);
+    }
+
+    #[test]
+    fn introducing_a_prefix_visits_only_its_ended_descendants() {
+        let origin = |fields: &[u32]| Origin {
+            root: OriginRoot::Local(lexical(), hirsel_types::LocalId(0)),
+            fields: fields.iter().copied().map(hirsel_types::FieldId).collect(),
+        };
+        let mut state = OriginState::new(0);
+        for sibling in 0..2048 {
+            state.expire(&origin(&[sibling, 0]));
+        }
+        state.expire(&origin(&[1024, 1]));
+        let before = state.clone();
+        let visits = work::read(Counter::ValidateOriginDependencyRows);
+        state.introduce(&origin(&[1024]));
+        assert!(work::read(Counter::ValidateOriginDependencyRows) - visits <= 3);
+        let paths = state.dead.get(&origin(&[]).root).unwrap();
+        assert_eq!(paths.len(), 2047);
+        assert!(paths.contains(&origin(&[1023, 0]).fields));
+        assert!(paths.contains(&origin(&[1025, 0]).fields));
+        assert!(!paths.contains(&origin(&[1024, 0]).fields));
+        assert!(!paths.contains(&origin(&[1024, 1]).fields));
+        assert_eq!(before.dead.get(&origin(&[]).root).unwrap().len(), 2049);
+        let visits = work::read(Counter::ValidateOriginDependencyRows);
+        state.introduce(&origin(&[]));
+        assert_eq!(work::read(Counter::ValidateOriginDependencyRows), visits);
+        assert!(state.dead.get(&origin(&[]).root).is_none());
+        assert_eq!(before.dead.get(&origin(&[]).root).unwrap().len(), 2049);
     }
 
     #[test]
