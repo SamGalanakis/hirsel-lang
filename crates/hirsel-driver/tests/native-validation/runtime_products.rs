@@ -51,7 +51,7 @@ fn actual_runtime_products_reopen_changed_leaf_versions_and_refuse_missing_closu
     let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
     let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
     let floor = PathBuf::from(std::env::var_os("HIRSEL_GLIBC_FLOOR").unwrap());
-    let qemu = PathBuf::from(std::env::var_os("HIRSEL_QEMU").unwrap());
+    let qemu = PathBuf::from(std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap());
     for target in [
         super::super::super::TargetSpec::x86_64_unknown_linux_gnu(),
         super::super::super::TargetSpec::aarch64_unknown_linux_gnu(),
@@ -334,7 +334,7 @@ fn actual_loader_discovers_transitive_runtime_inputs_and_closes_replay() {
     let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
     let auditors = PathBuf::from(std::env::var_os("HIRSEL_AUDITOR_PACKAGE").unwrap());
     let floor = PathBuf::from(std::env::var_os("HIRSEL_GLIBC_FLOOR").unwrap());
-    let qemu = PathBuf::from(std::env::var_os("HIRSEL_QEMU").unwrap());
+    let qemu = PathBuf::from(std::env::var_os("HIRSEL_QEMU_AARCH64").unwrap());
     for target in [
         super::super::super::TargetSpec::x86_64_unknown_linux_gnu(),
         super::super::super::TargetSpec::aarch64_unknown_linux_gnu(),

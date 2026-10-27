@@ -12,7 +12,7 @@ CASE = "native::object_queries::capture::tests::packaged_capture_replays_changed
 def command(arguments, environment):
     linker, llvm, harness = (Path(arg).resolve() for arg in arguments)
     env = {**environment, "HIRSEL_CAPTURE_LINKER": str(linker),
-           "HIRSEL_CAPTURE_LLVM": str(llvm), "LD_LIBRARY_PATH": str(llvm / "lib")}
+           "LLVM_SYS_231_PREFIX": str(llvm), "LD_LIBRARY_PATH": str(llvm / "lib")}
     return [str(harness), "--ignored", "--exact", CASE, "--test-threads=1", "--nocapture"], env
 
 

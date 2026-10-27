@@ -576,7 +576,7 @@ mod tests {
         use sha2::Digest;
         let store = MemStore::default();
         let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
-        let llvm = input("HIRSEL_CAPTURE_LLVM");
+        let llvm = input("LLVM_SYS_231_PREFIX");
         let root = tempfile::tempdir().unwrap();
         let limits = CaptureLimits {
             archive_bytes: 16 << 20,

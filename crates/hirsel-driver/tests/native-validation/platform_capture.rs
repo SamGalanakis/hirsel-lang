@@ -34,7 +34,7 @@ fn selected_platform_closes_runtime_before_keys_and_replays_without_originals() 
     let linker = FrozenLinker::snapshot(&store, &package).unwrap();
     let auditors = input("HIRSEL_AUDITOR_PACKAGE");
     let floor = input("HIRSEL_GLIBC_FLOOR");
-    let qemu = input("HIRSEL_QEMU");
+    let qemu = input("HIRSEL_QEMU_AARCH64");
     let limits = CaptureLimits {
         archive_bytes: 256 << 20,
         files: 1024,

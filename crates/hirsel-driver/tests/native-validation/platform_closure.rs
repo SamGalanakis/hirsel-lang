@@ -54,7 +54,7 @@ fn selected_virtual_inputs_keep_scripts_thin_members_and_absolute_dso_names() {
     let linker = FrozenLinker::snapshot(&store, &input("HIRSEL_CAPTURE_LINKER")).unwrap();
     let floor = input("HIRSEL_GLIBC_FLOOR");
     let auditors = input("HIRSEL_AUDITOR_PACKAGE");
-    let qemu = input("HIRSEL_QEMU");
+    let qemu = input("HIRSEL_QEMU_AARCH64");
     let limits = CaptureLimits {
         archive_bytes: 256 << 20,
         files: 2048,

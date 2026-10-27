@@ -66,7 +66,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'requests::native_bootstrap::tests::actual_native_bootstrap_links_both_backends_and_restores_after_runtime_drop': {
         'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
@@ -77,7 +77,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'requests::native_bootstrap::tests::actual_native_bootstrap_uses_selected_closed_runtime_on_link_and_reopen': {
         'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
@@ -88,7 +88,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'native::object_queries::platform::tests::selected_platform_closes_runtime_before_keys_and_replays_without_originals': {
         'source': 'crates/hirsel-driver/tests/native-validation/platform_capture.rs',
@@ -99,7 +99,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'requests::native_bootstrap::tests::actual_native_bootstrap_binds_run_identity_and_delivers_live_output': {
         'source': 'crates/hirsel-driver/src/requests/native_bootstrap/tests.rs',
@@ -110,7 +110,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'requests::native_selection::tests::actual_native_selector_coalesces_build_and_bound_run_without_a_retained_controller': {
         'source': 'crates/hirsel-driver/src/requests/native_selection/tests.rs',
@@ -121,7 +121,7 @@ PROOFS = {
                         'HIRSEL_CAPTURE_LINKER': '/original packaged linker',
                         'HIRSEL_LINK_KIT': '/selected kit', 'HIRSEL_RUNTIME_ARCHIVES': '/selected runtime',
                         'HIRSEL_AUDITOR_PACKAGE': '/selected auditors', 'HIRSEL_GLIBC_FLOOR': '/selected floor',
-                        'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'native::object_queries::capture::tests::packaged_capture_replays_changed_inputs_without_originals': {
         'source': 'crates/hirsel-driver/tests/native-validation/link_capture.rs',
@@ -153,7 +153,7 @@ PROOFS = {
         'probe': 'tools/buck2/native-toolchain/runtime_store_proof.py',
         'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
         'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
-                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'native::object_queries::runtime::tests::equal_bytes_keep_distinct_loaded_libraries_and_shared_aliases': {
         'source': 'crates/hirsel-driver/tests/native-validation/runtime_products.rs',
@@ -161,7 +161,7 @@ PROOFS = {
         'probe': 'tools/buck2/native-toolchain/runtime_identity_case_proof.py',
         'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
         'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
-                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'native::object_queries::runtime::tests::actual_loader_discovers_transitive_runtime_inputs_and_closes_replay': {
         'source': 'crates/hirsel-driver/tests/native-validation/runtime_products.rs',
@@ -169,7 +169,7 @@ PROOFS = {
         'probe': 'tools/buck2/native-toolchain/runtime_discovery_proof.py',
         'arguments': ['/original pinned llvm', '/selected auditor', '/selected floor', '/selected qemu', '/selected harness'],
         'environment': {'LLVM_SYS_231_PREFIX': '/original pinned llvm', 'HIRSEL_AUDITOR_PACKAGE': '/selected auditor',
-                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU': '/selected qemu/qemu-aarch64'},
+                        'HIRSEL_GLIBC_FLOOR': '/selected floor', 'HIRSEL_QEMU_AARCH64': '/selected qemu/qemu-aarch64'},
     },
     'native_compilation_tasks_19::frozen_root_plans_run_both_backends_without_live_linker_inputs': {
         'source': 'crates/hirsel-driver/tests/it/native_compilation_tasks_19.rs',
@@ -355,7 +355,7 @@ class IgnoredTests(unittest.TestCase):
             arguments = home.get('arguments', ['/original packaged linker', '/original pinned llvm', '/selected harness'])
             selected, environment = probe['command'](arguments, {'KEEP': 'original'})
             self.assertEqual(selected, [arguments[-1], '--ignored', '--exact', case, '--test-threads=1', '--nocapture'])
-            forwarded = home.get('environment', {'HIRSEL_CAPTURE_LINKER': arguments[0], 'HIRSEL_CAPTURE_LLVM': arguments[1]})
+            forwarded = home.get('environment', {'HIRSEL_CAPTURE_LINKER': arguments[0], 'LLVM_SYS_231_PREFIX': arguments[1]})
             for key, value in forwarded.items():
                 self.assertEqual(environment[key], value)
             self.assertEqual(environment['LD_LIBRARY_PATH'], '/original pinned llvm/lib')

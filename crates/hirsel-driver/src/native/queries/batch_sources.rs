@@ -62,7 +62,20 @@ mod tests {
             let scratch = tempfile::tempdir().unwrap();
             let path = scratch.path().join("sealed-heap.hir");
             std::fs::write(&path, source).unwrap();
-            let mut loaded = crate::load_program(&path).unwrap();
+            let manifest = scratch.path().join("hirsel.json");
+            std::fs::write(
+                &manifest,
+                serde_json::json!({
+                    "schema": 1,
+                    "package": {"name": "standalone", "version": "0"},
+                    "sources": [{"path": "sealed-heap.hir", "module": []}],
+                    "dependencies": [],
+                    "entry": {"module": [], "name": "main"},
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let mut loaded = crate::load_program(&manifest).unwrap();
             loaded.check_for_execution().unwrap();
             let input = loaded.engine.export_native_input().unwrap();
             let validated = loaded.engine.import_native_input(input).unwrap();

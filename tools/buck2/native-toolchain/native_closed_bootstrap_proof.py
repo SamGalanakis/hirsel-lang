@@ -14,7 +14,7 @@ def command(arguments, environment):
     env = {**environment, 'LLVM_SYS_231_PREFIX': llvm, 'LD_LIBRARY_PATH': llvm + '/lib',
            'HIRSEL_CAPTURE_LINKER': linker, 'HIRSEL_LINK_KIT': kit, 'HIRSEL_RUNTIME_ARCHIVES': runtime,
            'HIRSEL_AUDITOR_PACKAGE': auditors, 'HIRSEL_GLIBC_FLOOR': floor,
-           'HIRSEL_QEMU': qemu + '/qemu-aarch64', 'HIRSEL_JOBS': '1'}
+           'HIRSEL_QEMU_AARCH64': qemu + '/qemu-aarch64', 'HIRSEL_JOBS': '1'}
     return [harness, '--ignored', '--exact', CASE, '--test-threads=1', '--nocapture'], env
 
 

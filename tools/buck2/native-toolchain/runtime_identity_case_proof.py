@@ -13,7 +13,7 @@ def command(arguments, environment):
     llvm, auditor, floor, qemu, harness = map(lambda arg: Path(arg).resolve(), arguments)
     env = {**environment, "LLVM_SYS_231_PREFIX": str(llvm), "LD_LIBRARY_PATH": str(llvm / "lib"),
            "HIRSEL_AUDITOR_PACKAGE": str(auditor), "HIRSEL_GLIBC_FLOOR": str(floor),
-           "HIRSEL_QEMU": str(qemu / "qemu-aarch64"), "HIRSEL_JOBS": "1"}
+           "HIRSEL_QEMU_AARCH64": str(qemu / "qemu-aarch64"), "HIRSEL_JOBS": "1"}
     return [str(harness), "--ignored", "--exact", CASE, "--test-threads=1", "--nocapture"], env
 
 

@@ -160,7 +160,7 @@ fn capture_descriptors_bind_invocation_and_require_the_entire_content_closure() 
 fn packaged_capture_replays_changed_inputs_without_originals() {
     let package =
         PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LINKER").expect("packaged linker input"));
-    let llvm = PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LLVM").expect("pinned LLVM input"));
+    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").expect("pinned LLVM input"));
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("source with spaces");
     std::fs::create_dir(&source).unwrap();
@@ -267,7 +267,7 @@ fn large_tool_snapshots_and_replays_under_none_and_unwritable_with_original_ram_
         store::{NoneStore, RequestStore},
     };
     let package = PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LINKER").unwrap());
-    let llvm = PathBuf::from(std::env::var_os("HIRSEL_CAPTURE_LLVM").unwrap());
+    let llvm = PathBuf::from(std::env::var_os("LLVM_SYS_231_PREFIX").unwrap());
     for unwritable in [false, true] {
         let scratch = tempfile::tempdir().unwrap();
         let blocked = scratch.path().join("not-a-directory");

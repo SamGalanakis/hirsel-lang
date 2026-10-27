@@ -7,6 +7,19 @@ use hirsel_lir::layout_types::{LayoutKind, ScalarKind, SizeSpec};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+fn load_document(path: &Path, replacement: Option<&str>) -> hirsel_engine::LoadedProgram {
+    use std::sync::{Arc, OnceLock};
+    static STORE: OnceLock<Arc<hirsel_engine::store::MemStore>> = OnceLock::new();
+    let store = STORE.get_or_init(|| Arc::new(hirsel_engine::store::MemStore::bounded(256 << 20)));
+    crate::COMPILER
+        .with_config(hirsel_engine::CompileConfig {
+            store: store.clone(),
+            ..crate::COMPILER.configuration()
+        })
+        .load_program_source(path, replacement)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
 #[test]
 fn dense_nodes_and_detached_text_drain_in_both_audit_modes() {
     check_detached_retention("retention");
@@ -30,8 +43,7 @@ fn check_detached_retention(fixture: &str) {
             .unwrap()
             .replace("0u64..96u64", "0u64..2u64")
             .replace("0u64..4u64", &format!("0u64..{parses}u64"));
-        let mut loaded =
-            crate::load_program_source(&path, Some(&source)).unwrap_or_else(|e| panic!("{e}"));
+        let mut loaded = load_document(&path, Some(&source));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -185,8 +197,7 @@ fn construction_and_extraction_failures_drain_in_both_audit_modes() {
             .unwrap()
             .replace("0u64..4u64", "0u64..1u64")
             .replace("0u64..96u64", "0u64..2u64");
-        let mut loaded =
-            crate::load_program_source(&path, Some(&source)).unwrap_or_else(|e| panic!("{e}"));
+        let mut loaded = load_document(&path, Some(&source));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -265,7 +276,7 @@ fn private_malformed_spans_links_and_tags_have_checked_twins() {
   Ok(())
 }"#
         );
-        let mut loaded = crate::load_program_source(&fixture, Some(&source)).unwrap();
+        let mut loaded = load_document(&fixture, Some(&source));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -302,7 +313,7 @@ fn a_small_input_slice_keeps_its_ordinary_backing_during_the_callback() {
     with_compiler_stack(|| {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/SEM/SEM-3-json-document-backing-run.hir");
-        let mut loaded = crate::load_program(&path).unwrap();
+        let mut loaded = load_document(&path, None);
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -376,8 +387,7 @@ fn scratch_construction_and_extraction_failures_drain_in_both_audit_modes() {
   failure.check(observed == Ok(Some("aaaaaaaaaaaaaaaaa")), TextInvariant())
   Ok(())
 }"#;
-        let mut loaded =
-            crate::load_program_source(&path, Some(source)).unwrap_or_else(|e| panic!("{e}"));
+        let mut loaded = load_document(&path, Some(source));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
@@ -431,7 +441,7 @@ fn scratch_full_hash_collisions_preserve_exact_key_comparison() {
   failure.check(observed == Error(DuplicateKey(55)), TextInvariant())
   Ok(())
 }"#;
-        let mut loaded = crate::load_program_source(&path, Some(source)).unwrap();
+        let mut loaded = load_document(&path, Some(source));
         loaded
             .check_for_execution()
             .unwrap_or_else(|e| panic!("{e}"));
