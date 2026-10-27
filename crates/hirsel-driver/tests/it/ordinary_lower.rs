@@ -1,4 +1,5 @@
 //! Program checking must consume ordinary Lower products through current V.
+use hirsel_driver::requests::*;
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_syntax::{DefPath, ItemPath, PackageId};
@@ -44,20 +45,49 @@ fn program_check_reuses_current_ordinary_lower_products_without_worker_relowerin
                 hold_bytes: 0,
                 ..CompileConfig::for_memory_cap(None)
             });
-            let mut program = compiler.load_check_package(&manifest).unwrap();
-            let checked = program.check(LoweringPolicy::Reachable).unwrap();
+            let config = compiler.configuration();
+            let mut requests = CompilerRequests::for_host(compiler.clone(), config);
+            let output = requests
+                .execute(
+                    &manifest,
+                    CompileOperation::Check {
+                        lowering: LoweringPolicy::Reachable,
+                    },
+                )
+                .unwrap();
+            let CompileResult::Check(checked) = &output.result else {
+                panic!("expected Check");
+            };
             assert!(checked.diagnostics.is_empty());
             assert_eq!(checked.completion, CheckCompletion::Complete);
+            let inspection = requests
+                .execute(
+                    &manifest,
+                    CompileOperation::Inspect {
+                        definitions: vec![path("first"), path("second")],
+                    },
+                )
+                .unwrap();
+            let CompileResult::Inspect(inspection) = &inspection.result else {
+                panic!("expected inspection");
+            };
+            assert_eq!(inspection.definitions.len(), 2);
             for name in ["first", "second"] {
+                let work = inspection
+                    .definitions
+                    .iter()
+                    .find(|work| work.definition == path(name))
+                    .unwrap();
                 assert_eq!(
-                    program.engine.lower_adapter_calls(&path(name)),
-                    0,
+                    work.lower_calls, 0,
                     "jobs={jobs}: current ordinary Lower was ignored during program check"
                 );
                 assert_eq!(
-                    program
-                        .engine
-                        .recompute_count(&path(name), QueryKind::Lower),
+                    work.recomputations
+                        .iter()
+                        .find(|(kind, _)| *kind == QueryKind::Lower)
+                        .unwrap()
+                        .1,
                     0
                 );
             }
@@ -144,28 +174,59 @@ fn readonly_comptime_products_reuse_only_the_consumers_local_verifier() {
             jobs: hirsel_intern::jobs::Jobs::new(1),
             ..CompileConfig::for_memory_cap(None)
         });
-        let mut first = compiler.load_check_package(&manifest).unwrap();
-        assert!(
-            first
-                .check(LoweringPolicy::Reachable)
-                .unwrap()
-                .diagnostics
-                .is_empty()
-        );
+        let mut first = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+        let output = first
+            .execute(
+                &manifest,
+                CompileOperation::Check {
+                    lowering: LoweringPolicy::Reachable,
+                },
+            )
+            .unwrap();
+        let CompileResult::Check(checked) = &output.result else {
+            panic!("expected Check");
+        };
+        assert!(checked.diagnostics.is_empty());
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        drop(output);
         drop(first);
-        let mut warm = compiler.load_check_package(&manifest).unwrap();
-        assert!(
-            warm.check(LoweringPolicy::Reachable)
-                .unwrap()
-                .diagnostics
-                .is_empty()
-        );
-        let calls: u64 = warm
-            .engine
-            .indexed_definitions()
+        let mut warm = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+        let output = warm
+            .execute(
+                &manifest,
+                CompileOperation::Check {
+                    lowering: LoweringPolicy::Reachable,
+                },
+            )
+            .unwrap();
+        let CompileResult::Check(checked) = &output.result else {
+            panic!("expected Check");
+        };
+        assert!(checked.diagnostics.is_empty());
+        assert_eq!(checked.completion, CheckCompletion::Complete);
+        let definitions = ["LEAF", "CHAIN", "value", "VALUE"]
+            .map(|name| {
+                DefPath(ItemPath {
+                    package: PackageId {
+                        name: "library".into(),
+                        version: "1".into(),
+                    },
+                    modules: vec![],
+                    name: name.into(),
+                })
+            })
+            .to_vec();
+        let inspection = warm
+            .execute(&manifest, CompileOperation::Inspect { definitions })
+            .unwrap();
+        let CompileResult::Inspect(inspection) = &inspection.result else {
+            panic!("expected inspection");
+        };
+        assert_eq!(inspection.definitions.len(), 4);
+        let calls: u64 = inspection
+            .definitions
             .iter()
-            .filter(|path| path.0.package.name == "library")
-            .map(|path| warm.engine.lower_adapter_calls(path))
+            .map(|work| work.lower_calls)
             .sum();
         assert_eq!(
             calls, 0,
