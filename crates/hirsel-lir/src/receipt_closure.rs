@@ -55,6 +55,16 @@ impl ReceiptClosure {
         source: &crate::sealed_payload_source::ReceiptSource,
     ) -> Result<(), &'static str> {
         source.check_structure()?;
+        let symbol = site
+            .code
+            .and_then(|code| unit.tables.symbols.get(code.symbol.index()))
+            .ok_or("receipt closure lacks its selected source code")?;
+        if symbol.kind != SymbolKind::Function
+            || symbol.definition != source.original.definition
+            || symbol.instance != Some(source.instance)
+        {
+            return Err("receipt closure code differs from its selected original source");
+        }
         if abi.receipts.as_ref() != Some(&source.contract) {
             return Err("receipt closure source differs from its complete code contract");
         }

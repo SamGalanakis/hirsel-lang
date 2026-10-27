@@ -234,7 +234,7 @@ fn fixture_with_custody(
     unit.tables.symbols.push(Symbol {
         kind: SymbolKind::Function,
         definition: unit.header.definition.clone(),
-        instance: None,
+        instance: Some(hash),
     });
     unit.blocks.push(Block {
         kind: BlockKind::Body,
@@ -593,4 +593,60 @@ fn receipt_closure_33_environment_rejects_a_selector_for_the_once_live_word() {
         hirsel_lir::receipt_closure::borrowed_environment(&table, wrapper, &contract),
         Err("receipt environment names a foreign original capture")
     );
+}
+
+#[test]
+fn receipt_capture_166_source_checks_reject_same_contract_foreign_code_and_entry() {
+    for once in [false, true] {
+        for owned in [false, true] {
+            let (mut unit, table, abi, site, entry) = fixture_with_custody(once, owned);
+            let mut source = capture_source(abi.receipts.clone().unwrap());
+            source.instance = ContentHash::of_bytes(b"selected receipt-aware child");
+            assert_ne!(source.instance, source.original.instance);
+            unit.header.instance = source.instance;
+            unit.tables.symbols[0].instance = Some(source.instance);
+            let closure = site.receipts.as_ref().unwrap();
+            closure
+                .check_with_source(&site, &abi, &unit, &table, &source)
+                .unwrap();
+            entry
+                .check_with_source(&abi, &unit, &table, &source)
+                .unwrap();
+            for mutation in 0..4 {
+                let mut changed = unit.clone();
+                match mutation {
+                    0 => changed.tables.symbols[0].definition = DefPath::core("foreign_child"),
+                    1 => {
+                        changed.tables.symbols[0].instance =
+                            Some(ContentHash::of_bytes(b"foreign aware request"))
+                    }
+                    2 => changed.tables.symbols[0].instance = None,
+                    3 => changed.tables.symbols[0].kind = SymbolKind::Type,
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    closure.check_with_source(&site, &abi, &changed, &table, &source),
+                    Err("receipt closure code differs from its selected original source"),
+                    "mutation {mutation}"
+                );
+            }
+            for mutation in 0..3 {
+                let mut changed = unit.clone();
+                match mutation {
+                    0 => changed.header.definition = DefPath::core("foreign_entry"),
+                    1 => changed.header.instance = ContentHash::of_bytes(b"foreign aware request"),
+                    2 => {
+                        changed.header.implementation_revision =
+                            ContentHash::of_bytes(b"stale source")
+                    }
+                    _ => unreachable!(),
+                }
+                assert_eq!(
+                    entry.check_with_source(&abi, &changed, &table, &source),
+                    Err("receipt entry differs from its selected original source"),
+                    "mutation {mutation}"
+                );
+            }
+        }
+    }
 }

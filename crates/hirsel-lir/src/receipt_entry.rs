@@ -89,6 +89,12 @@ impl ReceiptEntry {
         source: &crate::sealed_payload_source::ReceiptSource,
     ) -> Result<(), &'static str> {
         source.check_structure()?;
+        if unit.header.definition != source.original.definition
+            || unit.header.instance != source.instance
+            || unit.header.implementation_revision != source.implementation_revision
+        {
+            return Err("receipt entry differs from its selected original source");
+        }
         if abi.receipts.as_ref() != Some(&source.contract) {
             return Err("receipt entry source differs from its complete code contract");
         }
