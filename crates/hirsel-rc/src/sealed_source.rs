@@ -213,7 +213,17 @@ fn producer(
 /// their independently checked reaching/path representations are linked.
 pub fn payloads(
     context: &Context<'_>,
+    substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+) -> Result<Vec<SourcePayload>, SourceError> {
+    payloads_selected(context, substitute, |_, _| true)
+}
+
+/// Select obligations from original source demand before resolving operands.
+/// Unselected heap values do not belong to a sealed root or retained inventory.
+fn payloads_selected(
+    context: &Context<'_>,
     mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+    mut include: impl FnMut(u32, &Rvalue) -> bool,
 ) -> Result<Vec<SourcePayload>, SourceError> {
     let body = context.body;
     if context.parameters.len() != body.parameters.len() {
@@ -248,7 +258,9 @@ pub fn payloads(
                         .ok_or(SourceError::Malformed("source rvalue"))?;
                     let local = context.local(destination)?;
                     definitions[local].push(Definition::Value(index, source.clone()));
-                    if matches!(rvalue, Rvalue::Construct { .. } | Rvalue::Closure { .. }) {
+                    if matches!(rvalue, Rvalue::Construct { .. } | Rvalue::Closure { .. })
+                        && include(local as u32, rvalue)
+                    {
                         constructions.push((destination, rvalue, source));
                     }
                 }

@@ -1,6 +1,6 @@
 //! Original Lower observation retained before discovery/import may release or
 //! rewrite a body. No candidate LIR is accepted by any constructor in this file.
-use super::{Context, SourceError, payloads};
+use super::{Context, SourceError, payloads_selected};
 use hirsel_layout::instance::InstanceKey;
 use hirsel_lir::operation::{NativeType, OperationArgument, OperationDeclarations};
 use hirsel_lir::sealed_payload_source::*;
@@ -13,6 +13,11 @@ mod entry;
 mod environments;
 pub use entry::{SourceCallableEntry, SourceCapture, SourceEntryKind, SourceParameter};
 pub use environments::SourceEnvironment;
+
+struct BodyExpansion<'a> {
+    closed_closures: &'a BTreeSet<u32>,
+    requirements: Option<&'a super::demand::Requirements>,
+}
 
 /// Capture at the actual original-Lower miss, before discovery/import/drop.
 /// The source-query identity and owner revision come from the actual query owner.
@@ -130,7 +135,7 @@ impl SourceInput {
         parameters: &[u32],
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceExpectation, SourceError> {
-        self.derive_body(key, types, parameters, substitute, false, &BTreeSet::new())
+        self.derive_body(key, types, parameters, substitute, None)
     }
 
     /// Use the current source graph's complete declaration-backed expansion.
@@ -176,14 +181,16 @@ impl SourceInput {
             }
         }
         self.check_closed_environments(request, types, &mut substitute)?;
-        let transport = request.closures().keys().copied().collect();
+        let closed_closures = request.closures().keys().copied().collect();
         let mut expected = self.derive_body(
             request.aware_key().unwrap_or(base),
             types,
             parameters,
             &mut substitute,
-            true,
-            &transport,
+            Some(BodyExpansion {
+                closed_closures: &closed_closures,
+                requirements: Some(request.declaration().requirements()),
+            }),
         )?;
         expected.environments = self.environment_recipes(request, types, parameters, substitute)?;
         Ok(expected)
@@ -195,12 +202,11 @@ impl SourceInput {
         types: &TypeInterner,
         parameters: &[u32],
         mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
-        expanded_calls: bool,
-        closed_closures: &BTreeSet<u32>,
+        expansion: Option<BodyExpansion<'_>>,
     ) -> Result<SourceExpectation, SourceError> {
         let body = self.demand_body(key)?;
         for block in &body.blocks {
-            if !expanded_calls && matches!(block.terminator, Terminator::Call { .. }) {
+            if expansion.is_none() && matches!(block.terminator, Terminator::Call { .. }) {
                 return Err(SourceError::Unsupported(
                     "source witness needs reviewed call event expansion",
                 ));
@@ -217,8 +223,8 @@ impl SourceInput {
         }
         if body.rvalues.iter().enumerate().any(|(value, r)| {
             matches!(r, Rvalue::Closure { captures, destination, .. }
-            if !expanded_calls || (!captures.is_empty()
-                && !(closed_closures.contains(&(value as u32))
+            if expansion.is_none() || (!captures.is_empty()
+                && !(expansion.as_ref().is_some_and(|e| e.closed_closures.contains(&(value as u32)))
                     && matches!(destination, hirsel_types::Destination::Heap | hirsel_types::Destination::Inferred))))
         }) {
             return Err(SourceError::Unsupported(
@@ -226,7 +232,7 @@ impl SourceInput {
             ));
         }
         let anchors = hirsel_tir::source_anchors(&self.definition);
-        let mut payloads = payloads(
+        let mut payloads = payloads_selected(
             &Context {
                 body,
                 body_id: hirsel_tir::BodyId(key.body()),
@@ -235,10 +241,27 @@ impl SourceInput {
                 parameters,
             },
             &mut substitute,
+            |local, rvalue| {
+                expansion
+                    .as_ref()
+                    .and_then(|e| e.requirements)
+                    .is_none_or(|required| {
+                        required.payload_locals.contains(&local)
+                            || required.inventory_locals.contains(&local)
+                            || matches!(
+                                rvalue,
+                                Rvalue::Construct {
+                                    destination: hirsel_types::Destination::Arena(_)
+                                        | hirsel_types::Destination::Caller(_),
+                                    ..
+                                }
+                            )
+                    })
+            },
         )?;
-        if expanded_calls {
-            // Empty code and heap environments outside the complete original
-            // seal demand contribute no retained arena or root payload.
+        if expansion.is_some() {
+            // Ordinary callback environments retain separate complete source
+            // recipes. They are not sealed contents or retained Arena blocks.
             payloads.retain(|payload| !matches!(payload.root_type, NativeType::Function(_)));
         }
         let mut events = Vec::new();
@@ -606,7 +629,16 @@ mod nonpayload_closure_tests {
             let key = witness_key(&types, &definition);
             let source =
                 SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
-            let omitted = source.derive_body(&key, &types, &[0], Ok, true, &BTreeSet::from([0]));
+            let omitted = source.derive_body(
+                &key,
+                &types,
+                &[0],
+                Ok,
+                Some(BodyExpansion {
+                    closed_closures: &BTreeSet::from([0]),
+                    requirements: None,
+                }),
+            );
             if arena {
                 assert_eq!(
                     omitted.err(),
@@ -622,7 +654,16 @@ mod nonpayload_closure_tests {
             }
             assert_eq!(
                 source
-                    .derive_body(&key, &types, &[0], Ok, true, &BTreeSet::new())
+                    .derive_body(
+                        &key,
+                        &types,
+                        &[0],
+                        Ok,
+                        Some(BodyExpansion {
+                            closed_closures: &BTreeSet::new(),
+                            requirements: None
+                        })
+                    )
                     .err(),
                 Some(SourceError::Unsupported(
                     "source witness needs closed held code instances"
@@ -635,5 +676,94 @@ mod nonpayload_closure_tests {
                 ))
             );
         }
+    }
+
+    #[test]
+    fn source_demand_135_omits_unrelated_heap_operands_but_keeps_dead_arena_allocations() {
+        use hirsel_tir::*;
+        let types = TypeInterner::new(None);
+        let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+        let list = types.intern(Type::with_kind(TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(scalar)].into(),
+        }));
+        let arena = types.intern(Type::with_kind(TypeKind::Named {
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("Arena")),
+            arguments: Default::default(),
+        }));
+        let origin = Origin {
+            root: OriginRoot::Parameter(ParameterRef::bound(ParamId(2))),
+            fields: Default::default(),
+        };
+        let mut original = body(&[scalar, tuple, arena, list, list, list], 3);
+        original.places[2].binding = Some(origin.clone());
+        original.places.push(Place {
+            root: LocalId(1),
+            projection: vec![Projection::Field(0)].into(),
+            ty: scalar,
+            loan: None,
+            binding: None,
+        });
+        for (local, input, destination) in [
+            (3, 0, Destination::Heap),
+            (4, 6, Destination::Heap),
+            (5, 0, Destination::Arena(origin)),
+        ] {
+            assign(
+                &mut original,
+                local,
+                Rvalue::Construct {
+                    constructor: Constructor::Sequence,
+                    fields: vec![ConstructField {
+                        field: 0,
+                        value: operand(input),
+                    }],
+                    destination,
+                },
+            );
+        }
+        let definition = witness_definition(original);
+        let key = witness_key(&types, &definition);
+        let source = SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
+        let mut required = super::super::demand::Requirements::default();
+        required.payload_locals.insert(3);
+        let derive = |required: &super::super::demand::Requirements| {
+            source.derive_body(
+                &key,
+                &types,
+                &[0, 1, 2],
+                Ok,
+                Some(BodyExpansion {
+                    closed_closures: &BTreeSet::new(),
+                    requirements: Some(required),
+                }),
+            )
+        };
+        let accepted = derive(&required).unwrap();
+        assert_eq!(
+            accepted
+                .payloads()
+                .iter()
+                .map(|p| p.recipe.source.statement)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(accepted.events().len(), 1);
+        assert_eq!(accepted.events()[0].anchor.statement, 2);
+        accepted.source().check().unwrap();
+        required.payload_locals.insert(4);
+        assert_eq!(
+            derive(&required).err(),
+            Some(SourceError::Unsupported(
+                "projected payload producer needs source path transport"
+            ))
+        );
+        assert_eq!(
+            source.derive(&key, &types, &[0, 1, 2], Ok).err(),
+            Some(SourceError::Unsupported(
+                "projected payload producer needs source path transport"
+            ))
+        );
     }
 }

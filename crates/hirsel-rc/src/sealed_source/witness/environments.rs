@@ -93,7 +93,7 @@ impl SourceInput {
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<Vec<SourceEnvironment>, SourceError> {
         let anchors = hirsel_tir::source_anchors(&self.definition);
-        let payloads = payloads(
+        let payloads = payloads_selected(
             &Context {
                 body: self.demand_body(request.ordinary_key())?,
                 body_id: hirsel_tir::BodyId(request.ordinary_key().body()),
@@ -102,6 +102,7 @@ impl SourceInput {
                 parameters,
             },
             substitute,
+            |_, rvalue| matches!(rvalue, Rvalue::Closure { .. }),
         )?;
         request
             .closures()
