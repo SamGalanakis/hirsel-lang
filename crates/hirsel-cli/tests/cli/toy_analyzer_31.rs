@@ -351,8 +351,8 @@ fn scripted_native(group: u8) {
     hirsel_engine::with_compiler_stack(|| {
         let scratch = scratch();
         let path = package(scratch.path());
-        // Every test owns an initially empty ordinary store. Each replay still
-        // opens a fresh compiler, using the same policy as repeated CLI runs.
+        // Each body owns one compiled fixture; replay providers and tape state
+        // are fresh on every call.
         let compiler = hirsel_driver::COMPILER
             .clone()
             .with_config(hirsel_engine::CompileConfig {
@@ -617,10 +617,9 @@ fn scripted_native(group: u8) {
                     assert_eq!(observe(&replay, &ready, &sites).unwrap(), expected);
                 }
                 for checked in [false, true] {
-                    let replay = |tape: &Path| {
-                        let mut program = compiler.load_program(&path)?;
+                    let mut replay = |tape: &Path| {
                         hirsel_driver::replay_loaded_observations(
-                            &mut program,
+                            &mut loaded,
                             tape,
                             Some(steps),
                             checked,
