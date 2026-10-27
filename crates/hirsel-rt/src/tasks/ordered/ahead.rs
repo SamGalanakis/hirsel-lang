@@ -333,7 +333,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     } else {
         let version = unsafe { std::ptr::addr_of!((*info).version).read() };
         let flags = unsafe { std::ptr::addr_of!((*info).flags).read() };
-        if !matches!(version, 1..=5) || flags != 0 {
+        if !matches!(version, 1..=6) || flags != 0 {
             unsafe {
                 crate::stop::raise(
                     ctx,
@@ -361,7 +361,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         } else {
             #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
             let certificate = unsafe {
-                if version == 5 {
+                if version == 6 {
+                    cpu_worker::validate_preclaimed(ctx, environment, info.cast())
+                } else if version == 5 {
                     cpu_worker::validate(ctx, environment, info.cast())
                 } else if version == 4 {
                     host_return::validate_resumable(ctx, environment, info.cast())

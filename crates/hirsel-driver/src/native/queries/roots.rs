@@ -1,4 +1,7 @@
 //! Descriptor-only root publication and linker assembly over actual C outputs.
+#[path = "cpu.rs"]
+mod cpu;
+
 use super::{
     instance::STATICS_FINALIZERS_DOMAIN,
     local::{FinalizerRows, StaticRows, UnitEmissionContext, read_statics},
@@ -332,13 +335,15 @@ impl RootProducts {
             .emission
             .debug
             .then(|| self.source.profiles());
-        self.with_link_context(root, products, |program| {
+        let opt = self.inner.snapshot.emission.opt;
+        self.with_program_context(root, products, Some(objects), |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                 &program.table,
                 &program.finalizers,
             );
             let mut objects = objects.to_vec();
+            cpu::emit(program, backend, &mut objects, opt)?;
             objects.push(
                 crate::native::emit_glue(program, backend, &registry).map_err(|e| e.to_string())?,
             );
@@ -639,8 +644,20 @@ impl NativeRoots for RootProducts {
         products: &[Arc<ReadyProduct>],
         use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
     ) -> Result<R, String> {
+        self.with_program_context(root, products, None, use_context)
+    }
+}
+
+impl RootProducts {
+    fn with_program_context<R>(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        cpu_objects: Option<&[hirsel_lir::stage::ObjectArtifact]>,
+        use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
+    ) -> Result<R, String> {
         self.admitted_root(root)?;
-        let snapshot = &self.inner.snapshot;
+        let snapshot = self.inner.snapshot.clone();
         if products.len() != root.instances.len() || !snapshot.emission.inline_instances.is_empty()
         {
             return Err("link selection or optimizer dependency closure is incomplete".into());
@@ -820,8 +837,21 @@ impl NativeRoots for RootProducts {
                 }
             }
         }
-        with_link_assembly(
-            snapshot,
+        let cpu_units = if let Some(objects) = cpu_objects {
+            cpu::materialize(
+                self,
+                root,
+                &selected,
+                &summaries,
+                &binding,
+                &operations,
+                objects,
+            )?
+        } else {
+            Vec::new()
+        };
+        with_link_assembly_units(
+            &snapshot,
             &self.source,
             LinkAssembly {
                 operations,
@@ -833,6 +863,7 @@ impl NativeRoots for RootProducts {
                 keys,
                 statics: statics.into_values().collect(),
             },
+            cpu_units,
             use_context,
         )
     }
@@ -854,6 +885,16 @@ pub(super) fn with_link_assembly<R>(
     snapshot: &NativeSnapshot,
     source: &NativeLinkSource,
     assembly: LinkAssembly,
+    use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
+) -> Result<R, String> {
+    with_link_assembly_units(snapshot, source, assembly, Vec::new(), use_context)
+}
+
+fn with_link_assembly_units<R>(
+    snapshot: &NativeSnapshot,
+    source: &NativeLinkSource,
+    assembly: LinkAssembly,
+    units: Vec<hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>>,
     use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
 ) -> Result<R, String> {
     let LinkAssembly {
@@ -892,8 +933,10 @@ pub(super) fn with_link_assembly<R>(
         table,
         keys,
         manifest: snapshot.manifest.clone(),
-        units: vec![],
-        ahead_environments: BTreeMap::new(),
+        ahead_environments: hirsel_lir::ahead::environments(
+            &units.iter().map(|u| u.unit().clone()).collect::<Vec<_>>(),
+        ),
+        units,
         summaries,
         inline_instances: BTreeSet::new(),
         callbacks,

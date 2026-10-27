@@ -16,6 +16,7 @@ pub(super) struct Batch {
     claims: Vec<Option<TaskId>>,
     owners: BTreeMap<TaskId, usize>,
     jobs: Jobs,
+    pending: BTreeMap<TaskId, (u32, u64)>,
 }
 
 impl Batch {
@@ -28,6 +29,7 @@ impl Batch {
             claims: vec![None; count],
             owners: BTreeMap::new(),
             jobs,
+            pending: BTreeMap::new(),
         }
     }
 
@@ -43,6 +45,19 @@ impl Batch {
             self.owners.insert(task, ordinal).is_none(),
             "one job per task"
         );
+    }
+
+    pub(super) fn pending(&self, parent: TaskId, width: u32, ordinal: u64) -> bool {
+        self.pending.get(&parent) == Some(&(width, ordinal))
+    }
+
+    pub(super) fn bind(&mut self, parent: TaskId, child: TaskId) -> bool {
+        if let Some((width, ordinal)) = self.pending.remove(&parent) {
+            self.claim(child, width, ordinal);
+            true
+        } else {
+            false
+        }
     }
 
     pub(super) fn limit(&self, task: TaskId) -> Option<u64> {
@@ -123,7 +138,7 @@ pub(crate) fn control(
     let (_, progress) = engine::head_canonical(
         ctx,
         "cpu.control",
-        || ((), Next::Yield),
+        || ((), if action == 5 { Next::Keep } else { Next::Yield }),
         |_| {
             Some(vec![(
                 events::CanonicalItem::Root,
@@ -153,6 +168,12 @@ pub(crate) fn control(
                     count,
                     d.frontier.as_ref().unwrap().settled,
                 ));
+            }
+            5 => {
+                let batch = d.cpu_batch.as_mut().expect("preclaim follows CPU batch");
+                assert_eq!(width, batch.width);
+                assert!(count < batch.claims.len() as u64);
+                assert!(batch.pending.insert(task, (width, count)).is_none());
             }
             3 => d
                 .cpu_batch

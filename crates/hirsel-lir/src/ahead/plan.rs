@@ -867,7 +867,7 @@ impl AheadPlan {
         self.roots
             .get(&unit)
             .and_then(|root| root.cpu.as_ref())
-            .is_some_and(|cpu| cpu.binding.worker.claim == call)
+            .is_some_and(|cpu| cpu.binding.worker.claim == Some(call))
     }
     pub fn host_read(&self, id: ContentHash, call: CallId) -> Option<&ReadContinuation> {
         self.roots

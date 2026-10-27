@@ -14,7 +14,10 @@ use crate::stage::{Ready, ValidatedUnit};
 mod cpu_worker;
 mod host_return;
 mod plan;
-pub use cpu_worker::{CpuMapperBinding, CpuWorkerGraph, CpuWorkerProtocol, validate_cpu_workers};
+pub use cpu_worker::{
+    CpuMapperBinding, CpuWorkerGraph, CpuWorkerProtocol, cpu_mapper_candidates,
+    validate_cpu_workers,
+};
 pub use host_return::{HostReturnGraph, ReadContinuation, Spine, read_metadata_name};
 pub use plan::{
     AheadPlan, CaptureRecipe, RootPlan, alternate_name, alternate_resume_name, environments,

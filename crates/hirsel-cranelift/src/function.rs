@@ -2351,6 +2351,53 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         }
         self.host_read_boundary(call, false)?;
         self.ahead_flush();
+        if let Some((root, identity, source, source_abi)) =
+            self.em.inputs.unit().ahead.and_then(|p| {
+                let root = p.cpu_start(unit, call)?;
+                let recipe = &p.roots[&root].recipe;
+                Some((
+                    root,
+                    p.identity,
+                    recipe.source_code.clone(),
+                    recipe.source_abi,
+                ))
+            })
+        {
+            let slot = unit
+                .slots
+                .iter()
+                .position(|s| s.kind == SlotKind::Parameter(3))
+                .and_then(|s| self.slots[s])
+                .ok_or_else(|| CodegenError::Invalid {
+                    definition: unit.header.definition.clone(),
+                    what: "missing CPU mapper slot".into(),
+                })?;
+            let actual = self.load_ptr(slot.ptr);
+            let name = symbol_name(&source.definition, source.instance.as_ref());
+            let abi = self.em.fn_abi(source_abi, &source.definition)?;
+            let signature = self.em.entry_signature(abi, &source.definition)?;
+            let id = self.em.import_function(&name, &signature.ir)?;
+            self.em.manifest_import(
+                &name,
+                ObjectSymbolKind::Function,
+                Some(&source.definition),
+                Some(abi),
+            );
+            let expected = self.func_addr(id);
+            let metadata = hirsel_lir::ahead::metadata_name(root, identity);
+            self.em
+                .manifest_import(&metadata, ObjectSymbolKind::Data, None, None);
+            let (id, _) = self
+                .em
+                .declare_data(&metadata, cranelift_module::Linkage::Import)?;
+            let metadata = self.data_addr(id, 0);
+            let version = self.load_ty(types::I32, metadata, 0);
+            let certified = self.b.ins().icmp_imm_s(IntCC::Equal, version, 6);
+            let matches = self.b.ins().icmp(IntCC::Equal, actual, expected);
+            let matches = self.b.ins().band(certified, matches);
+            let certified = self.b.ins().iconst(types::I32, 4);
+            args[4] = self.b.ins().select(matches, certified, args[4]);
+        }
         let ahead_root = self.em.inputs.unit().ahead.and_then(|p| {
             p.spawns
                 .get(&(unit.header.instance, call))

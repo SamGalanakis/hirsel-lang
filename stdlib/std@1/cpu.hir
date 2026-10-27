@@ -3,4 +3,7 @@
 /// Call the operation directly with locally visible callbacks. Both callbacks
 /// are closed, sendable and authority-free. Workers join before
 /// return; results preserve input order. Native replay starts no workers.
+/// Ordered requires a CpuWorker certificate for a non-allocating scalar mapper.
+/// Allocating mappers and graphs outside that certificate return
+/// MapperNotCertified before preparation runs.
 pub type PoolError = CpuPoolError

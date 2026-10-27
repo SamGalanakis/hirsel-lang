@@ -13,6 +13,7 @@ fn native(ctx: *mut TaskCtx, live: *mut u64) -> Box<Native> {
         host: std::ptr::null(),
         resume: None,
         cpu: true,
+        preclaimed: false,
         live,
         mask: 1,
         source: std::ptr::null_mut(),

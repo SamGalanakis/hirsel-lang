@@ -67,3 +67,89 @@ fn replay_width(width: usize) {
         );
     }
 }
+
+fn ordered_replay_width(width: usize) {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let source = include_str!("physical.hir")
+        .replace("3000000u64", "2048u64")
+        .replace("WIDTH64", &format!("{}u64", 2 * width))
+        .replace("WIDTH", &format!("{width}u32"));
+    let mut expected = vec![];
+    for q in 1..=2 * width as u64 {
+        let mut x = q;
+        for i in 0..2048 {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(i);
+            x ^= x >> 29;
+        }
+        expected.push(format!("{x}u64"));
+    }
+    fs::write(
+        root.join("main.hir"),
+        source.replace("EXPECTED", &format!("[{}]", expected.join(","))),
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_ordered_replay","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .args(["build", "--fuel", "--validate-stages", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let mut reference = None;
+        for reorder in ["off", "auto"] {
+            fs::write(&grants, serde_json::json!({"placement":{"cores":1,"reorder":reorder},
+                "io":{"dirs":[],"tasks":"tasks.cooperative@1","cpu":{"provider":"cpu.scoped@1",
+                "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+            let tape = root.join(format!("{backend}-{reorder}.tape"));
+            let trace = root.join("live.events");
+            checked(
+                Command::new(&executable)
+                    .arg("--hirsel-grants")
+                    .arg(&grants)
+                    .arg("--hirsel-record")
+                    .arg(&tape)
+                    .arg("--hirsel-trace-events")
+                    .arg(&trace)
+                    .output()
+                    .unwrap(),
+            );
+            let mut recording = hirsel_rt::host_launch::read_recording(&tape).unwrap();
+            let binding = recording.binding.as_mut().unwrap();
+            binding.admitted_at = 0;
+            binding.placement = None;
+            let live = (fs::read(&trace).unwrap(), recording);
+            if let Some(reference) = &reference {
+                assert_eq!(&live, reference, "{backend} W{width} {reorder}");
+            } else {
+                reference = Some(live);
+            }
+            let replayed = root.join("replay.events");
+            let probe = root.join("replay.probe");
+            checked(
+                Command::new(&executable)
+                    .arg("--hirsel-replay")
+                    .arg(&tape)
+                    .arg("--hirsel-trace-events")
+                    .arg(&replayed)
+                    .env("HIRSEL_RT_WORKERS", "1")
+                    .env("HIRSEL_RT_CPU_PROBE", &probe)
+                    .output()
+                    .unwrap(),
+            );
+            assert_eq!(fs::read(&replayed).unwrap(), reference.as_ref().unwrap().0);
+            assert!(fs::read(&probe).unwrap().is_empty());
+        }
+        eprintln!(
+            "D02 {backend} W{width}: serial off == physical auto == one-permit replay, complete canonical trace and projected tape"
+        );
+    }
+}

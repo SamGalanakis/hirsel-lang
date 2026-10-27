@@ -1,4 +1,4 @@
-//! CPU worker proposals bind the Shared mapper loan and consuming job cursor
+//! CPU worker proposals bind the Shared mapper loan and direct owned job
 //! separately from scalar spawn wrappers. Only a proved scalar mapper segment
 //! runs privately; worker allocation, publication and cleanup remain barriers.
 use super::*;
@@ -9,6 +9,76 @@ pub struct CpuWorkerGraph {
     pub binding: CpuMapperBinding,
     pub shared_payload: LayoutId,
     pub spine: Spine,
+}
+
+/// Known mapper code at direct calls of the selected typed map instances.
+pub fn cpu_mapper_candidates(
+    unit: &LirUnit<Ready>,
+    maps: &BTreeSet<ContentHash>,
+) -> BTreeSet<ContentHash> {
+    unit.tables
+        .calls
+        .iter()
+        .filter_map(|call| {
+            let Callee::Direct(symbol) = call.callee else {
+                return None;
+            };
+            if !unit.tables.symbols[symbol.index()]
+                .instance
+                .is_some_and(|id| maps.contains(&id))
+            {
+                return None;
+            }
+            let arg = call
+                .arguments
+                .get(&unit.pools.call_arguments)?
+                .iter()
+                .find(|arg| arg.parameter == 3)?;
+            let ArgumentValue::Value(value) = arg.value else {
+                return None;
+            };
+            super::plan::known_code(unit, value, &[], false)
+        })
+        .collect()
+}
+
+impl AheadPlan {
+    /// The private start selector carries no new source operation or ABI field.
+    /// Emitters compare the actual mapper code against this checked recipe.
+    pub fn cpu_start(&self, unit: &LirUnit<Ready>, call: CallId) -> Option<ContentHash> {
+        if !unit.header.definition.is_core("cpu.map_scoped") {
+            return None;
+        }
+        let site = unit.tables.calls.get(call.index())?;
+        let Callee::Operation(op) = site.callee else {
+            return None;
+        };
+        if !unit
+            .tables
+            .operations
+            .get(op.index())?
+            .definition
+            .is_core("$intrinsic.CpuMapScoped")
+        {
+            return None;
+        }
+        let action = site
+            .arguments
+            .get(&unit.pools.call_arguments)?
+            .iter()
+            .find(|arg| arg.parameter == 2)?;
+        let ArgumentValue::Value(action) = action.value else {
+            return None;
+        };
+        if integer(unit, action)? != 0 {
+            return None;
+        }
+        self.roots.iter().find_map(|(id, root)| {
+            let cpu = root.cpu.as_ref()?;
+            (cpu.binding.map == unit.header.instance && cpu.binding.map_digest == unit.digest())
+                .then_some(*id)
+        })
+    }
 }
 
 /// Recheck CPU work at each backend's public entry. Pointer matching in the
@@ -52,6 +122,48 @@ pub fn validate_cpu_workers(
         else {
             return false;
         };
+        // Alternate objects contain only the certified graph. At the full
+        // program entry, additionally recheck the start selector's provenance.
+        if let (Some(map), Some(caller)) = (
+            units
+                .iter()
+                .find(|u| u.unit().header.instance == cpu.binding.map),
+            units
+                .iter()
+                .find(|u| u.unit().header.instance == cpu.binding.caller),
+        ) {
+            let mut envs = BTreeMap::new();
+            for unit in units {
+                for site in &unit.unit().tables.closures {
+                    if let Some(id) = site
+                        .code
+                        .and_then(|code| unit.unit().tables.symbols[code.symbol.index()].instance)
+                    {
+                        envs.entry(id)
+                            .and_modify(|layout| {
+                                if *layout != Some(site.environment) {
+                                    *layout = None;
+                                }
+                            })
+                            .or_insert(Some(site.environment));
+                    }
+                }
+            }
+            if CpuMapperBinding::derive(
+                caller,
+                cpu.binding.invocation,
+                map,
+                worker,
+                callback_unit,
+                table,
+                &envs,
+            )
+            .as_ref()
+                != Some(&cpu.binding)
+            {
+                return false;
+            }
+        }
         let callback_unit = callback_unit.unit();
         let expected =
             &table.fn_abis[worker.unit().tables.calls[protocol.mapper.index()].abi.0 as usize];
@@ -318,7 +430,7 @@ pub struct CpuWorkerProtocol {
     pub ordinal: SlotId,
     pub mapper: CallId,
     pub mapper_loan: LoanId,
-    pub claim: CallId,
+    pub claim: Option<CallId>,
     pub finish: CallId,
     pub result: SlotId,
     pub job_layout: LayoutId,
@@ -335,6 +447,7 @@ pub struct CpuMapperBinding {
     pub map: ContentHash,
     pub map_digest: ContentHash,
     pub worker: CpuWorkerProtocol,
+    pub preclaim: CallId,
     pub callback: Symbol,
     pub callback_digest: ContentHash,
     pub environment: Option<LayoutId>,
@@ -408,6 +521,40 @@ impl CpuMapperBinding {
         {
             return None;
         }
+        let mut preclaims = map
+            .tables
+            .calls
+            .iter()
+            .enumerate()
+            .filter_map(|(index, call)| {
+                let Callee::Operation(op) = call.callee else {
+                    return None;
+                };
+                if !map
+                    .tables
+                    .operations
+                    .get(op.index())?
+                    .definition
+                    .is_core("$intrinsic.CpuMapScoped")
+                {
+                    return None;
+                }
+                let args = call.arguments.get(&map.pools.call_arguments)?;
+                let arg = |p| args.iter().find(|a| a.parameter == p).map(|a| a.value);
+                if !matches!(arg(2), Some(ArgumentValue::Value(v)) if integer(map, v) == Some(5)) {
+                    return None;
+                }
+                (args.len() == 4
+                    && args.iter().all(|a| a.passing == Passing::Borrow)
+                    && arg(0) == Some(ArgumentValue::Value(captures[2].value))
+                    && arg(1) == Some(ArgumentValue::Value(captures[3].value))
+                    && arg(3) == Some(ArgumentValue::Value(captures[4].value)))
+                .then_some(CallId(index as u32))
+            });
+        let preclaim = preclaims.next()?;
+        if preclaims.next().is_some() {
+            return None;
+        }
         let expected =
             &table.fn_abis[worker.unit().tables.calls[protocol.mapper.index()].abi.0 as usize];
         let actual = &table.fn_abis[callback.header.abi.0 as usize];
@@ -433,6 +580,7 @@ impl CpuMapperBinding {
             map: map.header.instance,
             map_digest: map.digest(),
             worker: protocol,
+            preclaim,
             callback: Symbol {
                 kind: SymbolKind::Function,
                 definition: callback.header.definition.clone(),
@@ -468,16 +616,6 @@ fn place(unit: &LirUnit<Ready>, address: AddressId) -> Option<(SlotId, Vec<Proje
 fn whole(unit: &LirUnit<Ready>, address: AddressId) -> Option<SlotId> {
     let (slot, path) = place(unit, address)?;
     path.is_empty().then_some(slot)
-}
-
-fn sequence(table: &LayoutTable, id: LayoutId) -> Option<LayoutId> {
-    let LayoutKind::Block { payload } = table.layout(id)?.kind else {
-        return None;
-    };
-    let LayoutKind::Sequence { element } = table.layout(payload)?.kind else {
-        return None;
-    };
-    Some(element)
 }
 
 fn integer(unit: &LirUnit<Ready>, value: ValueId) -> Option<u128> {
@@ -567,7 +705,10 @@ impl CpuWorkerProtocol {
         {
             return None;
         }
-        let job_layout = sequence(table, wrapper.fields[1].layout)?;
+        let job_layout = wrapper.fields[1].layout;
+        if !scalar_image(table, job_layout) {
+            return None;
+        }
         let mut mapper_calls =
             unit.tables.calls.iter().enumerate().filter(|(_, call)| {
                 matches!(call.callee, Callee::Indirect(_) | Callee::Bound { .. })
@@ -623,14 +764,7 @@ impl CpuWorkerProtocol {
             _ => None,
         });
         let taken_jobs_value = taken_jobs.next()?;
-        if taken_jobs.next().is_some()
-            || !unit.instructions.iter().any(|inst| {
-                matches!(inst,
-                Inst::Read { result, address, mode: ReadMode::Take, .. }
-                    if *result == job && place(unit, *address).is_some_and(|(_, path)|
-                        path == [ProjectionStep::VariantField { variant: 1, field: 0 }]))
-            })
-        {
+        if taken_jobs.next().is_some() || taken_jobs_value != job {
             return None;
         }
         let mut clears = unit.instructions.iter().filter_map(|inst| match *inst {
@@ -693,119 +827,55 @@ impl CpuWorkerProtocol {
                 return None;
             }
         }
-        let mut claim = None;
+        // The complete worker has only the scalar mapper and TaskFinish.
+        // Its held Option owns exactly that mapper's result.
         let mut finish = None;
-        let mut sink = None;
-        let mut opened_jobs = None;
-        let mut next_job = None;
         for (index, call) in unit.tables.calls.iter().enumerate() {
             if index == mapper_index {
                 continue;
             }
-            let arguments = call.arguments.get(&unit.pools.call_arguments)?;
-            match call.callee {
-                Callee::Operation(op) => {
-                    let definition = &unit.tables.operations.get(op.index())?.definition;
-                    let selected = if definition.is_core("$intrinsic.CpuMapScoped") {
-                        let from_capture = |parameter, slot| {
-                            arguments.iter().any(|arg| {
-                            arg.parameter == parameter && arg.passing == Passing::Borrow
-                                && matches!(arg.value, ArgumentValue::Value(value)
-                                    if unit.instructions.iter().any(|inst| matches!(inst,
-                                        Inst::Read { result, address, mode: ReadMode::Bits, .. }
-                                            if *result == value && whole(unit, *address) == Some(slot))))
-                        })
-                        };
-                        if arguments.len() != 4
-                            || !from_capture(0, tasks)
-                            || !from_capture(1, width)
-                            || !from_capture(3, ordinal)
-                            || !arguments.iter().any(|arg| {
-                                arg.parameter == 2
-                                    && arg.passing == Passing::Borrow
-                                    && matches!(arg.value, ArgumentValue::Value(value)
-                                    if integer(unit, value) == Some(3))
-                            })
-                        {
-                            return None;
-                        }
-                        &mut claim
-                    } else if definition.is_core("$intrinsic.TaskFinish") {
-                        &mut finish
-                    } else {
-                        return None;
-                    };
-                    if selected.replace(CallId(index as u32)).is_some() {
-                        return None;
-                    }
-                }
-                Callee::Direct(symbol) => {
-                    let definition = &unit.tables.symbols.get(symbol.index())?.definition;
-                    if definition.is_core("$intrinsic.ListConsume_open") {
-                        if opened_jobs.is_some()
-                            || !arguments.iter().any(|arg| {
-                                arg.parameter == 0
-                                    && arg.passing == Passing::Take
-                                    && arg.value == ArgumentValue::Value(taken_jobs_value)
-                            })
-                        {
-                            return None;
-                        }
-                        opened_jobs = Some(call);
-                    } else if definition.is_core("list.push") {
-                        let destination = arguments.iter().find(|arg| arg.parameter == 0)?;
-                        let ArgumentValue::Address { address, .. } = destination.value else {
-                            return None;
-                        };
-                        let slot = whole(unit, address)?;
-                        if destination.passing != Passing::Mut
-                            || matches!(unit.slots.get(slot.index())?.kind, SlotKind::Capture(_))
-                            || sequence(
-                                table,
-                                unit.types[unit.slots[slot.index()].ty.index()].layout,
-                            )? != result_layout
-                            || !arguments.iter().any(|arg| {
-                                arg.parameter == 1
-                                    && arg.passing == Passing::Take
-                                    && arg.value == ArgumentValue::Value(mapped)
-                            })
-                            || sink.replace(slot).is_some()
-                        {
-                            return None;
-                        }
-                    } else if definition.is_core("$intrinsic.ListConsume_next") {
-                        if next_job.replace(call).is_some() {
-                            return None;
-                        }
-                    } else if definition.is_core("$native.owned_cursor_drop") {
-                        // RC materializes the cursor's finalizer on normal and
-                        // failure cleanup. These calls remain canonical barriers.
-                    } else {
-                        return None;
-                    }
-                }
-                _ => return None,
+            let Callee::Operation(op) = call.callee else {
+                return None;
+            };
+            if !unit
+                .tables
+                .operations
+                .get(op.index())?
+                .definition
+                .is_core("$intrinsic.TaskFinish")
+                || finish.replace(CallId(index as u32)).is_some()
+            {
+                return None;
             }
         }
-        let opened_jobs = opened_jobs?;
-        let next_job = next_job?;
-        let cursor = opened_jobs.result?;
-        let cursor_slot = stored(unit, cursor)?;
-        let next_args = next_job.arguments.get(&unit.pools.call_arguments)?;
-        if next_args.len() != 1
-            || next_args[0].passing != Passing::Mut
-            || !matches!(next_args[0].value, ArgumentValue::Address { address, .. }
-                if whole(unit, address) == Some(cursor_slot))
-        {
+        let finish = finish?;
+        let args = unit.tables.calls[finish.index()]
+            .arguments
+            .get(&unit.pools.call_arguments)?;
+        let destination = args.iter().find(|a| a.parameter == 0)?;
+        let ArgumentValue::Address { address, .. } = destination.value else {
+            return None;
+        };
+        if destination.passing != Passing::Mut {
             return None;
         }
-        let item_slot = stored(unit, next_job.result?)?;
-        if !unit.instructions.iter().any(|inst| {
-            matches!(inst,
-            Inst::Read { result, address, mode: ReadMode::Take, .. }
-                if *result == job && place(unit, *address) == Some((item_slot,
-                    vec![ProjectionStep::VariantField { variant: 1, field: 0 }])))
-        }) {
+        let sink = whole(unit, address)?;
+        let some = unit.instructions.iter().find_map(|inst| {
+            let Inst::Construct {
+                result, construct, ..
+            } = *inst
+            else {
+                return None;
+            };
+            let c = &unit.tables.constructs[construct.index()];
+            let fields = c.fields.get(&unit.pools.fields)?;
+            (matches!(c.constructor, ConstructorKind::Variant { variant: 1, .. })
+                && fields.len() == 1
+                && fields[0].field == 0
+                && fields[0].value == mapped)
+                .then_some(result)
+        })?;
+        if stored(unit, some)? != sink {
             return None;
         }
         Some(Self {
@@ -818,9 +888,9 @@ impl CpuWorkerProtocol {
             ordinal,
             mapper: CallId(mapper_index as u32),
             mapper_loan,
-            claim: claim?,
-            finish: finish?,
-            result: sink?,
+            claim: None,
+            finish,
+            result: sink,
             job_layout,
             result_layout,
         })

@@ -94,9 +94,27 @@ pub(super) fn objects(
     // callers that may themselves remain stackful. Emitters check this full
     // set, then emit alternates only for Resumable bodies.
     let units = units(program);
+    let mut ahead = super::ahead::plan(program);
+    if !hirsel_lir::ahead::validate_cpu_workers(
+        &units,
+        &program.table,
+        &program.target,
+        &ahead,
+        program.fuel,
+    ) {
+        return Err(NativeError::new(
+            StageName::Emission,
+            "invalid CPU ahead certificate",
+        ));
+    }
+    // Compact map callers need the same certified start and worker spawn
+    // selection as their ordinary entries. Keep other spawn policies intact.
+    ahead
+        .spawns
+        .retain(|_, root| ahead.roots.get(root).is_some_and(|root| root.cpu.is_some()));
     static EMPTY: std::collections::BTreeSet<ContentHash> = std::collections::BTreeSet::new();
     let inputs = hirsel_lir::emission::EmitInputs {
-        ahead: None,
+        ahead: Some(&ahead),
         continuation: Some(&plans),
         alternate: false,
         index: None,

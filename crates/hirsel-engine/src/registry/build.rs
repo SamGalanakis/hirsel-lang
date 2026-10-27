@@ -145,7 +145,7 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         (
             "CpuPoolError",
             "",
-            "InvalidWidth()|NotGranted()|Busy()|WidthUnavailable()|NestedPool()|BatchTooLarge()|WorkerStartFailed()|CapacityLost()|Canceled(CancelCause)|NotSupported()|ResourceLimit()",
+            "InvalidWidth()|NotGranted()|Busy()|WidthUnavailable()|NestedPool()|BatchTooLarge()|WorkerStartFailed()|CapacityLost()|Canceled(CancelCause)|NotSupported()|ResourceLimit()|MapperNotCertified()",
         ),
         (
             "FileError",

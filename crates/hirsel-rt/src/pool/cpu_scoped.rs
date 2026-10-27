@@ -443,12 +443,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
     count: u64,
 ) -> u8 {
     let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
-    if action > 3 {
+    if action > 5 {
         crate::fault("invalid scoped CPU action");
     }
     let live = || unsafe {
         match action {
-            0 => {
+            0 | 4 => {
                 if !matches!(width, 1 | 4 | 8 | 16) {
                     return 1;
                 }
@@ -458,8 +458,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                 if crate::tasks::cpu_scoped(ctx) {
                     return 5;
                 }
-                if !(*ctx).run_ref().free_mode {
-                    return 9;
+                if !(*ctx).run_ref().free_mode && action != 4 {
+                    return 11;
                 }
                 if let Some(cause) = crate::tasks::canceled(ctx) {
                     return 16 + cause;
@@ -497,9 +497,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
                     0
                 }
             }
-            2 | 3 => {
+            2 | 3 | 5 => {
                 if (action == 2 && count > u64::from(width) * 2)
-                    || (action == 3 && count >= u64::from(width) * 2)
+                    || (matches!(action, 3 | 5) && count >= u64::from(width) * 2)
                 {
                     6
                 } else if capacity_lost(ctx) {

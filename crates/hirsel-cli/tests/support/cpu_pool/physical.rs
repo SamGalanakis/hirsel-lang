@@ -17,6 +17,7 @@ fn checked(output: std::process::Output) -> std::process::Output {
 fn overlap(text: &str, width: usize) -> bool {
     let mut events = vec![];
     let mut present = BTreeMap::new();
+    let mut intervals = BTreeMap::new();
     let mut workers = BTreeSet::new();
     for line in text.lines() {
         let fields: Vec<_> = line.split_whitespace().collect();
@@ -29,26 +30,40 @@ fn overlap(text: &str, width: usize) -> bool {
         let progress: u64 = fields[6].parse().unwrap();
         assert!(progress > 0 && end > start && worker < width);
         workers.insert(worker);
+        intervals.insert((worker, start), (end, progress));
         events.push((start, 1, worker, cpu));
         events.push((end, 0, worker, cpu));
     }
     assert_eq!(workers.len(), width, "every worker must make CPU progress");
     events.sort_unstable();
-    for (_, enter, worker, cpu) in events {
+    for (time, enter, worker, cpu) in events {
         if enter == 1 {
-            present.insert(worker, cpu);
+            present.insert(worker, (cpu, time));
         } else {
             present.remove(&worker);
         }
         if present.len() == width
-            && present.values().copied().collect::<BTreeSet<_>>().len() == width
+            && present
+                .values()
+                .map(|(cpu, _)| *cpu)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == width
         {
+            for (worker, (cpu, start)) in &present {
+                let (end, progress) = intervals[&(*worker, *start)];
+                eprintln!("P W{width} worker={worker} CPU={cpu} [{start},{end}] cpu_ns={progress}");
+            }
             return true;
         }
     }
     false
 }
 fn run_width(width: usize) {
+    run_width_policy(width, "tasks.free@1");
+    run_width_policy(width, "tasks.cooperative@1");
+}
+fn run_width_policy(width: usize, provider: &str) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let source = include_str!("physical.hir");
@@ -76,7 +91,7 @@ fn run_width(width: usize) {
     fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_physical","version":"1"},
         "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
     let grants = root.join("grants.json");
-    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":provider,"cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
     for backend in ["llvm", "cranelift"] {
         let executable = root.join(backend);
@@ -157,7 +172,7 @@ fn run_width(width: usize) {
             "no switch-free CPU overlap at W={width}\n{samples}"
         );
         eprintln!(
-            "CPU {backend} P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"
+            "CPU {provider} {backend} P({width}): overlapping switch-free intervals on {width} distinct CPUs with positive CPU progress"
         );
     }
 }

@@ -329,7 +329,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 
 #[test]
-fn ordered_refusal_replays_without_invoking_closed_callbacks() {
+fn ordered_uncertified_refusal_replays_without_invoking_closed_callbacks() {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     fs::write(
@@ -339,8 +339,8 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let outcome = core@1/cpu.map_scoped(tasks, 1u32,
     fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
-    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
-  failure.check(outcome == Error(NotSupported()), Bounds())
+    fn(take job: u64) -> u64 uses {} { let xs = [job]; xs[0] })
+  failure.check(outcome == Error(MapperNotCertified()), Bounds())
   Ok(())
 }
 "#,

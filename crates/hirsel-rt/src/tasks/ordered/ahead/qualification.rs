@@ -30,7 +30,7 @@ fn unsupported_metadata_refuses_before_scope_or_environment_access() {
     for width in [1, 2, 4] {
         for (version, flags) in [
             (0, 0),
-            (6, 0),
+            (7, 0),
             (1, 1),
             (2, 1),
             (3, 1),
@@ -290,7 +290,7 @@ fn version_dispatch_does_not_overread_legacy_or_unsupported_prefixes() {
             libc::mprotect(mapping.cast::<u8>().add(page).cast(), page, libc::PROT_NONE),
             0
         );
-        for version in [1, 6] {
+        for version in [1, 7] {
             // The next byte is inaccessible. v1 has exactly its original16
             // bytes; unsupported metadata has only its8-byte dispatch prefix.
             let bytes = if version == 1 { 16 } else { 8 };

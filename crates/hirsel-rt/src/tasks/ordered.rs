@@ -440,11 +440,15 @@ impl Backend<Command> for Objects<'_> {
                         .borrow_mut()
                         .take()
                         .expect("spawn committed once");
+                    let preclaimed = spawn.preclaimed;
                     let (word, held, inherited) = spawn.install(s);
                     self.spawned.push((word, held));
                     let mut outcome = Outcome::image(0, word.to_ne_bytes().to_vec());
                     outcome.inheritance = Some(inherited);
-                    (outcome, Next::Yield)
+                    // A CPU batch publishes all its already claimed children
+                    // before joining them. Their checked scalar prefixes may
+                    // compute while this parent retains the canonical head.
+                    (outcome, if preclaimed { Next::Keep } else { Next::Yield })
                 }
                 Command::RootRelease { .. } => unreachable!("handled without a scheduler borrow"),
                 Command::Head { .. } => panic!("strict head effect requires its owner callback"),

@@ -9,3 +9,8 @@ include!("support/cpu_pool/replay.rs");
 fn wide_graph_batches_record_and_replay_after_worker_teardown() {
     replay_width(8);
 }
+
+#[test]
+fn ordered_scalar_jobs_match_serial_reference_and_replay() {
+    ordered_replay_width(8);
+}

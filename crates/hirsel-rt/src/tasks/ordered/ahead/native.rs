@@ -38,6 +38,7 @@ pub(crate) struct Certificate {
     /// A v4 root: the ordinary dispatcher a save continues in, and its frame.
     pub(crate) resume: Option<(crate::continuation::ResumeDispatcher, u32)>,
     pub(crate) cpu: bool,
+    pub(crate) preclaimed: bool,
     pub(super) live: *mut u64,
     pub(super) mask: u64,
     pub(super) source: *mut Header,
@@ -196,6 +197,7 @@ pub(super) unsafe fn validate_capture(
             host: std::ptr::null(),
             resume: None,
             cpu: false,
+            preclaimed: false,
             live,
             mask,
             source,
@@ -288,7 +290,9 @@ impl Native {
             .map_or(std::ptr::null_mut(), |(_, frame)| frame.as_mut_ptr());
         Box::new(Self {
             physical: Physical {
-                points_left: if certificate.host.is_null() && !certificate.cpu {
+                points_left: if certificate.host.is_null()
+                    && (!certificate.cpu || certificate.preclaimed)
+                {
                     1024
                 } else {
                     i64::MAX
@@ -313,7 +317,7 @@ impl Native {
             resume,
             continued: false,
             cpu: certificate.cpu,
-            cpu_phase: 0,
+            cpu_phase: if certificate.preclaimed { 2 } else { 0 },
             allocation: super::cpu_allocation::Request::new(),
         })
     }
@@ -513,7 +517,35 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             crate::stop::set_running(ctx);
             // Save exactly this idle continuation. Normal post-admission runtime
             // suspensions read the same pointer through pool::idle_of.
-            crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
+            crate::pool::cpu_scoped::probe::resume(ctx);
+            loop {
+                crate::fiber::switch(&raw mut (*native).physical.idle_sp, sp);
+                // A scalar CPU quantum owns no shared state. Keep the same
+                // 1024-point checkpoint and every stop/save/fuel/barrier test,
+                // without taking the scheduler role for a quota-only return.
+                if (*native).cpu
+                    && (*native).cpu_phase == 2
+                    && (*native).physical.reason == 1
+                    && !private(ctx)
+                    && (*run).control.stopped().is_none()
+                    && !(*ctx)
+                        .ahead
+                        .as_ref()
+                        .unwrap()
+                        .save_requested
+                        .load(Ordering::Acquire)
+                    && !(*native).pending_refill
+                    && !(*native).allocation.pending()
+                    && exec.leaving.get().is_none()
+                {
+                    (*native).physical.points_left = 1024;
+                    (*native).physical.reason = 0;
+                    sp = (*native).physical.saved_sp;
+                    continue;
+                }
+                break;
+            }
+            crate::pool::cpu_scoped::probe::checkpoint(ctx);
             exec.idle.set((*native).physical.idle_sp);
             crate::stop::set_running(std::ptr::null_mut());
             if exec.leaving.get().is_some() {

@@ -10,6 +10,7 @@ fn certificate(live: *mut u64) -> Certificate {
         host: std::ptr::null(),
         resume: None,
         cpu: false,
+        preclaimed: false,
         live,
         mask: 1,
         source: std::ptr::null_mut(),
@@ -276,8 +277,22 @@ fn cpu_capture_recipe_checks_the_frozen_mapper_and_consumed_job_owners() {
     run.config.layouts = layouts.as_ptr();
     run.config.layout_count = layouts.len() as u32;
     let outcome = run.run(
-        |_| {},
         |ctx| unsafe {
+            (*ctx).run().cpu_grant = Some(hirsel_run_schema::CpuGrant {
+                provider: "cpu.scoped@1".into(),
+                max_workers: 4,
+                max_domains: 1,
+                max_physical_bytes: 1 << 30,
+                max_batch_bytes: 1 << 20,
+            });
+            crate::tasks::ordered::engine::enable(
+                ctx,
+                crate::ordered::Policy::admit(&Default::default(), None),
+            );
+        },
+        |ctx| unsafe {
+            let _role = crate::tasks::role::Guard::new(ctx);
+            crate::tasks::ordered::engine::at_head(ctx).unwrap();
             let alloc = |index, size| {
                 crate::alloc::hirsel_rt_v2_alloc(ctx, index, size, 8, crate::alloc::DOMAIN_HEAP, 0)
             };
@@ -380,6 +395,45 @@ fn cpu_capture_recipe_checks_the_frozen_mapper_and_consumed_job_owners() {
             assert!(!valid(&info));
             (*callable)[1] = capture as usize;
             assert!(valid(&info));
+            {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                use crate::tasks::ordered::cpu::control;
+                assert_eq!(control(ctx, 4, 2, 1, || 0), Ok(0));
+                info.prefix.prefix.version = 6;
+                info.jobs_descriptor = 3;
+                let v6 = super::super::cpu_worker::PreclaimedInfo {
+                    prefix: info,
+                    width_offset: 24,
+                    ordinal_offset: 16,
+                };
+                let valid = || {
+                    super::super::cpu_worker::validate_preclaimed(ctx, env, &v6)
+                        .is_some_and(|cert| cert.cpu && cert.preclaimed)
+                };
+                assert!(!valid(), "no canonical parent claim");
+                assert_eq!(control(ctx, 4, 5, 0, || 0), Ok(0));
+                assert!(valid());
+                (*image)[2] = 1;
+                assert!(!valid(), "wrong job ordinal");
+                (*image)[2] = 0;
+                (*image)[3] = 8;
+                assert!(!valid(), "wrong pool width");
+                (*image)[3] = 4;
+                let parent = crate::tasks::ordered::engine::current(ctx);
+                crate::tasks::ordered::engine::with_driver(ctx, |d| {
+                    let batch = d.cpu_batch.as_mut().unwrap();
+                    let child = 0x100000007;
+                    assert!(batch.bind(parent, child));
+                    assert_eq!(batch.limit(child), Some(1 << 20));
+                    assert_eq!(batch.limit(parent), None);
+                    assert!(!batch.bind(parent, child));
+                });
+                assert!(
+                    !valid(),
+                    "the claim is consumed by one generation-qualified child"
+                );
+                assert_eq!(control(ctx, 4, 1, 0, || 0), Ok(0));
+            }
             for block in [env, mapper, input, capture] {
                 crate::release::release_block(&mut *ctx, block, std::ptr::null(), 0, 0);
             }

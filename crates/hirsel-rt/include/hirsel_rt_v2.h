@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 91
+#define HIRSEL_RT_V2_ABI_VERSION 92
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -874,6 +874,12 @@ typedef struct {
 } hirsel_rt_v2_cpu_ahead_info;
 _Static_assert(sizeof(hirsel_rt_v2_cpu_ahead_info) == 48, "hirsel_rt_v2_cpu_ahead_info size");
 _Static_assert(offsetof(hirsel_rt_v2_cpu_ahead_info, shared_descriptor) == 32, "hirsel_rt_v2_cpu_ahead_info.shared_descriptor offset");
+/* Metadata v6 owns one scalar job; its parent canonically preclaims the ordinal. */
+typedef struct {
+    hirsel_rt_v2_cpu_ahead_info prefix;
+    uint32_t width_offset, ordinal_offset;
+} hirsel_rt_v2_cpu_ahead_info_v6;
+_Static_assert(sizeof(hirsel_rt_v2_cpu_ahead_info_v6) == 56, "hirsel_rt_v2_cpu_ahead_info_v6 size");
 void hirsel_rt_v2_cpu_ahead_arm(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_cpu_ahead_enter(hirsel_rt_v2_ahead_physical *state);
 /* CPU-only idle allocation; ends the private segment until job settlement is certified. */

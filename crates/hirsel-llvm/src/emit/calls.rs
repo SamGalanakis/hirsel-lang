@@ -724,6 +724,56 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 self.flush_length(slot)?;
             }
         }
+        if let Some((root, identity, source, source_abi)) = self.inputs.ahead.and_then(|p| {
+            let root = p.cpu_start(unit, call)?;
+            let recipe = &p.roots[&root].recipe;
+            Some((
+                root,
+                p.identity,
+                recipe.source_code.clone(),
+                recipe.source_abi,
+            ))
+        }) {
+            let slot = unit
+                .slots
+                .iter()
+                .position(|s| s.kind == SlotKind::Parameter(3))
+                .and_then(|s| self.slots[s])
+                .ok_or_else(|| CodegenError::Invalid {
+                    definition: self.definition().clone(),
+                    what: "missing CPU mapper slot".into(),
+                })?;
+            let actual = self.builder.load(self.module.ptr_type(), slot.ptr, 8);
+            let name = symbol_name(&source.definition, source.instance.as_ref());
+            let abi = fn_abi(self.inputs.layouts, source_abi, self.definition())?;
+            self.import_function(&name, &source.definition, Some(abi_digest(abi)));
+            Signature::of(self.module, self.inputs.layouts, abi, &source.definition)?.declare(
+                self.module,
+                self.inputs.layouts,
+                &name,
+                &source.definition,
+                false,
+                Aliasing::Unstated,
+            )?;
+            let expected = self.module.function_address(&name);
+            let metadata = self.glue_cell(
+                &hirsel_lir::ahead::metadata_name(root, identity),
+                self.module.int_type(8),
+            );
+            let version = self.builder.load(self.module.int_type(32), metadata, 4);
+            let certified = self.builder.icmp(
+                IntPredicate::Eq,
+                version,
+                self.module.const_int(self.module.int_type(32), 6),
+            );
+            let matches = self.builder.icmp(IntPredicate::Eq, actual, expected);
+            let matches = self.builder.binary(BinOp::And, certified, matches);
+            args[4] = self.builder.select(
+                matches,
+                self.module.const_int(self.module.int_type(32), 4),
+                args[4],
+            );
+        }
         let ahead_root = self.inputs.ahead.and_then(|p| {
             p.spawns
                 .get(&(unit.header.instance, call))

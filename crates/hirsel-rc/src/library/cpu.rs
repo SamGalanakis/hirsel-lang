@@ -77,28 +77,16 @@ fn direct(
 /// Each task owns one input job. Its mapper is borrowed from one immutable
 /// Shared root, exactly as shared.with lends its frozen value.
 fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
-    let job = cx.type_actual(0)?;
+    let _job = cx.type_actual(0)?;
     let result = cx.type_actual(1)?;
     let mapper = cx.type_actual(2)?;
-    let list_result = builtin(cx, BuiltinType::List, result);
-    let (open, open_type) = require(cx, "$intrinsic.ListConsume_open", job)?;
-    let (next, next_type) = require(cx, "$intrinsic.ListConsume_next", job)?;
-    let (push, _) = require(cx, "list.push", result)?;
-    let item_option = match &cx.types.row(next_type).kind {
-        TypeKind::Function(f) => f.result,
-        _ => unreachable!(),
-    };
-    let _item_option = cx.layout(item_option)?;
-    let result_layout = cx.layout(list_result)?;
-    let job_layout = cx.layout(job)?;
     let mapper_layout = cx.layout(mapper)?;
     let mapper_abi = cx
         .layouts
         .fn_abi(cx.types, mapper, CallableShape::Closure)
         .map_err(|error| PassError::Layout(cx.path.clone(), error))?;
-    let (held_layout, held_size) = option_of(cx, list_result)?;
-    let control = intrinsic(cx, "CpuMapScoped", vec![])?;
-    let finish = intrinsic(cx, "TaskFinish", vec![GenericArgument::Type(list_result)])?;
+    let (held_layout, held_size) = option_of(cx, result)?;
+    let finish = intrinsic(cx, "TaskFinish", vec![GenericArgument::Type(result)])?;
     let descriptor_layout = cx.primitive(hirsel_types::Primitive::U32)?;
     let environment = cx
         .environment()
@@ -107,9 +95,9 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let mut b = Body::new(cx)?;
     let root = b.capture(0, fields[0].layout)?;
     let jobs = b.capture(1, fields[1].layout)?;
-    let tasks = b.capture(2, fields[2].layout)?;
-    let width = b.capture(3, fields[3].layout)?;
-    let ordinal = b.capture(4, fields[4].layout)?;
+    b.capture(2, fields[2].layout)?;
+    b.capture(3, fields[3].layout)?;
+    b.capture(4, fields[4].layout)?;
     let live = b.capture(5, fields[5].layout)?;
     b.ed.unit.tables.init_flags.push(InitFlag {
         path: PoolRange::EMPTY,
@@ -117,6 +105,13 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         slot: live.slot,
         environment: Some(environment),
     });
+    let mapper_address = b.place(
+        AddressBase::Address(root.address),
+        &[ProjectionStep::Field(0)],
+        mapper_layout,
+        None,
+    )?;
+    let (mapper, loan) = b.borrow(mapper_address, false)?;
     let input = b.take(jobs.address)?;
     let old = b.read_bits(live.address)?;
     let cleared = b.value(fields[5].layout, Holding::Plain);
@@ -127,131 +122,16 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         initialized: false,
     });
     b.store(live.address, cleared)?;
-    let cursor = direct(&mut b, &open, vec![argument(0, Passing::Take, input)], &[])
-        .ok_or_else(|| PassError::Malformed(format!("CPU consuming cursor {open_type:?}")))?;
-    let (cursor_slot, cursor_address) = local(&mut b, cursor)?;
-    let empty = super::slots::construct(&mut b, result_layout, ConstructorKind::Sequence, &[])?;
-    let (out_slot, out_address) = local(&mut b, empty)?;
-    let count = b.u64(1)?;
-    b.seq_reserve(out_address, count)?;
-    let cursor_version = b.version(cursor_slot);
-    let out_version = b.version(out_slot);
-    let head = b.block(BlockKind::Body, &[cursor_version, out_version]);
-    let body = b.block(BlockKind::Body, &[]);
-    let done = b.block(BlockKind::Body, &[]);
-    let cursor_before = b.reaching(cursor_slot)?;
-    let out_before = b.reaching(out_slot)?;
-    b.jump(head, &[cursor_before, out_before]);
-    b.at(head);
-    b.set_reaching(cursor_slot, cursor_version);
-    b.set_reaching(out_slot, out_version);
-    let (_, loan) = b.borrow(cursor_address, true)?;
-    let args = vec![exclusive(&mut b, 0, cursor_slot, cursor_address)];
-    let item = direct(&mut b, &next, args, &[loan])
-        .ok_or_else(|| PassError::Malformed("CPU next result".into()))?;
-    let (item_slot, item_address) = local(&mut b, item)?;
-    let (tag, item_loan) = b.borrow(item_address, false)?;
-    let yes = b.edge(body, &[]);
-    let no = b.edge(done, &[]);
-    let arms = PoolRange::push(
-        &mut b.ed.unit.pools.switch_arms,
-        [SwitchArm {
-            value: 1,
-            edge: yes,
-        }],
-    );
-    b.terminate(Terminator::Switch {
-        value: tag,
-        arms,
-        otherwise: no,
-    });
-    b.at(body);
-    b.end_loan(item_loan);
-    let item_held = b.held_state();
-    let tasks_value = b.read_bits(tasks.address)?;
-    let width_value = b.read_bits(width.address)?;
-    let action = b.constant(descriptor_layout, ConstantValue::Integer(3));
-    let job_index = b.read_bits(ordinal.address)?;
-    let callee = operation(&mut b, &control);
-    let status = b
-        .call(
-            callee.0,
-            callee.1,
-            control.abi,
-            vec![
-                argument(0, Passing::Borrow, tasks_value),
-                argument(1, Passing::Borrow, width_value),
-                argument(2, Passing::Borrow, action),
-                argument(3, Passing::Borrow, job_index),
-            ],
-            &[],
-        )
-        .unwrap();
-    let zero32 = b.constant(descriptor_layout, ConstantValue::Integer(0));
-    let admitted = b.compare(BinaryOp::Eq, status, zero32)?;
-    let execute = b.block(BlockKind::Body, &[]);
-    let withdrawn = b.block(BlockKind::Body, &[]);
-    b.branch(admitted, execute, withdrawn);
-    b.at(withdrawn);
-    drop_local(&mut b, item_slot, item_address);
-    let out = b.reaching(out_slot)?;
-    let cursor = b.reaching(cursor_slot)?;
-    b.jump(head, &[cursor, out]);
-    b.at(execute);
-    b.restore_held(&item_held);
-    let field = b.place(
-        AddressBase::Address(item_address),
-        &[ProjectionStep::VariantField {
-            variant: 1,
-            field: 0,
-        }],
-        job_layout,
-        None,
-    )?;
-    let mapper_address = b.place(
-        AddressBase::Address(root.address),
-        &[ProjectionStep::Field(0)],
-        mapper_layout,
-        None,
-    )?;
-    let (mapper, loan) = b.borrow(mapper_address, false)?;
-    let job = b.take(field)?;
-    b.emptied(item_slot);
-    b.push(Inst::StorageDead {
-        slot: item_slot,
-        if_live: false,
-    });
     let value = b
         .call(
             Callee::Indirect(mapper),
             vec![],
             mapper_abi,
-            vec![argument(0, Passing::Take, job)],
+            vec![argument(0, Passing::Take, input)],
             &[loan],
         )
         .ok_or_else(|| PassError::Malformed("CPU mapper returns a value".into()))?;
-    let (_, loan) = b.borrow(out_address, true)?;
-    let args = vec![
-        exclusive(&mut b, 0, out_slot, out_address),
-        argument(1, Passing::Take, value),
-    ];
-    direct(&mut b, &push, args, &[loan]);
-    let cursor_after = b.reaching(cursor_slot)?;
-    let out_after = b.reaching(out_slot)?;
-    b.jump(head, &[cursor_after, out_after]);
-    b.at(done);
-    b.set_reaching(out_slot, out_version);
-    b.hold(item_slot, item_address);
-    b.end_loan(item_loan);
-    drop_local(&mut b, item_slot, item_address);
-    drop_local(&mut b, cursor_slot, cursor_address);
-    let result = b.take(out_address)?;
-    b.emptied(out_slot);
-    b.push(Inst::StorageDead {
-        slot: out_slot,
-        if_live: false,
-    });
-    let some = option(&mut b, held_layout, 1, &[result]);
+    let some = option(&mut b, held_layout, 1, &[value]);
     let (slot, address) = local(&mut b, some)?;
     let none = option(&mut b, held_layout, 0, &[]);
     let (none_slot, none_address) = local(&mut b, none)?;
@@ -370,7 +250,7 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let list_result = builtin(cx, BuiltinType::List, result);
     let shared_mapper = builtin(cx, BuiltinType::Shared, mapper);
     let root_layout = cx.layout(shared_mapper)?;
-    let jobs_layout = cx.layout(list_job)?;
+
     let results_layout = cx.layout(list_result)?;
     let job_layout = cx.layout(job)?;
     let result_layout = cx.layout(result)?;
@@ -381,8 +261,8 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let pool = intrinsic(cx, "CpuMapScoped", vec![])?;
     let scope_enter = intrinsic(cx, "TaskScopeEnter", vec![])?;
     let scope_exit = intrinsic(cx, "TaskScopeExit", vec![])?;
-    let spawn = intrinsic(cx, "TaskSpawn", vec![Actual(list_result)])?;
-    let join = intrinsic(cx, "TaskJoin", vec![Actual(list_result)])?;
+    let spawn = intrinsic(cx, "TaskSpawn", vec![Actual(result)])?;
+    let join = intrinsic(cx, "TaskJoin", vec![Actual(result)])?;
     let handle_type = match &cx.types.row(spawn.callable).kind {
         TypeKind::Function(f) => f.result,
         _ => unreachable!(),
@@ -391,12 +271,9 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let handles_layout = cx.layout(handles_type)?;
     let (open_jobs, _) = require(cx, "$intrinsic.ListConsume_open", job)?;
     let (next_job, _) = require(cx, "$intrinsic.ListConsume_next", job)?;
-    let (push_job, _) = require(cx, "list.push", job)?;
     let (push_handle, _) = require(cx, "list.push", handle_type)?;
     let (open_handles, _) = require(cx, "$intrinsic.ListConsume_open", handle_type)?;
     let (next_handle, _) = require(cx, "$intrinsic.ListConsume_next", handle_type)?;
-    let (open_results, _) = require(cx, "$intrinsic.ListConsume_open", result)?;
-    let (next_result, _) = require(cx, "$intrinsic.ListConsume_next", result)?;
     let (push_result, _) = require(cx, "list.push", result)?;
     let worker_type = parameter(cx.types, spawn.callable, 1)?;
     let path = native_path("cpu_worker");
@@ -412,7 +289,7 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
                 body: 0,
                 captures: &[
                     (shared_mapper, Passing::Take),
-                    (list_job, Passing::Take),
+                    (job, Passing::Take),
                     (tasks_type, Passing::Borrow),
                     (width_type, Passing::Borrow),
                     (ordinal_type, Passing::Borrow),
@@ -432,10 +309,9 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     request.environment = Some(environment);
     let worker = cx.require(request)?;
     let worker_layout = cx.layout(worker_type)?;
-    let (result_option, result_size) = option_of(cx, list_result)?;
+    let (result_option, result_size) = option_of(cx, result)?;
     let (job_option, _) = option_of(cx, job)?;
     let (handle_option, _) = option_of(cx, handle_type)?;
-    let (element_option, _) = option_of(cx, result)?;
     let u32_layout = cx.primitive(Primitive::U32)?;
     let mut b = Body::new(cx)?;
     let [tasks, width, prepare, mapper] = b.parameters[..] else {
@@ -631,16 +507,36 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let more = b.compare(BinaryOp::Lt, q, count)?;
     b.branch(more, chunk, joined);
     b.at(chunk);
-    let empty = super::slots::construct(&mut b, jobs_layout, ConstructorKind::Sequence, &[])?;
-    let batch = local(&mut b, empty)?;
-    b.seq_reserve(batch.1, one)?;
+    // The parent issues the canonical ordinal before publishing the child.
+    // The next spawn binds this receipt to its generation-qualified owner.
+    let action = b.constant(u32_layout, ConstantValue::Integer(5));
+    let callee = operation(&mut b, &pool);
+    let status = b
+        .call(
+            callee.0,
+            callee.1,
+            pool.abi,
+            vec![
+                argument(0, Passing::Borrow, tasks_value),
+                argument(1, Passing::Borrow, width_value),
+                argument(2, Passing::Borrow, action),
+                argument(3, Passing::Borrow, q),
+            ],
+            &[],
+        )
+        .unwrap();
+    let admitted = b.compare(BinaryOp::Eq, status, zero32)?;
+    let execute = b.block(BlockKind::Body, &[]);
+    b.branch(admitted, execute, joined);
+    b.at(execute);
     let item = cursor_next(&mut b, &next_job, cursor_slot, cursor_address)?;
-    let value = take_some(&mut b, item, job_option, job_layout)?;
-    push_value(&mut b, &push_job, batch, value)?;
+    let job = take_some(&mut b, item, job_option, job_layout)?;
+    let job = local(&mut b, job)?;
     let failure = b.failure(None);
     let root = b.copy(root_address, failure)?;
-    let jobs = b.take(batch.1)?;
-    b.emptied(batch.0);
+    let jobs = b.take(job.1)?;
+    b.emptied(job.0);
+
     let closure = make_worker(
         &mut b,
         &worker,
@@ -722,38 +618,9 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         argument(3, Passing::Borrow, size),
     ];
     b.call(callee.0, callee.1, join.abi, args, &[loan]);
-    let values = field(&mut b, result.1, 1, results_layout)?;
+    let value = field(&mut b, result.1, 1, result_layout)?;
     b.emptied(result.0);
-    let values = direct(
-        &mut b,
-        &open_results,
-        vec![argument(0, Passing::Take, values)],
-        &[],
-    )
-    .unwrap();
-    let values = local(&mut b, values)?;
-    let each_slots = [values.0, out.0];
-    let (each, each_versions) = merge_block(&mut b, &each_slots);
-    let each_one = b.block(BlockKind::Body, &[]);
-    let each_done = b.block(BlockKind::Body, &[]);
-    let each_held = b.held_state();
-    jump_merge(&mut b, each, &each_slots)?;
-    at_merge(&mut b, each, &each_slots, &each_versions);
-    let value = cursor_next(&mut b, &next_result, values.0, values.1)?;
-    let value = local(&mut b, value)?;
-    let element_loan = switch_some(&mut b, value.1, each_one, each_done)?;
-    b.at(each_one);
-    b.end_loan(element_loan);
-    let item = field(&mut b, value.1, 1, result_layout)?;
-    b.emptied(value.0);
-    push_value(&mut b, &push_result, out, item)?;
-    jump_merge(&mut b, each, &each_slots)?;
-    b.at(each_done);
-    b.end_loan(element_loan);
-    b.set_reaching(out.0, each_versions[1]);
-    b.restore_held(&each_held);
-    drop_local(&mut b, value.0, value.1);
-    drop_local(&mut b, values.0, values.1);
+    push_value(&mut b, &push_result, out, value)?;
     jump_merge(&mut b, collect, &collect_slots)?;
     b.at(complete);
     b.end_loan(member_loan);
@@ -802,7 +669,7 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let result_layout = b.cx.fn_abi().result.unwrap().layout;
     let result = super::arena::variant(&mut b, result_layout, "Result", 0, &[result]);
     b.ret(Some(result));
-    let _ = (element_option, result_option, result_size);
+    let _ = (result_option, result_size);
     Ok(b.finish())
 }
 
@@ -878,7 +745,7 @@ fn return_error(b: &mut Body<'_, '_>, status: ValueId) -> R<()> {
         reason: "invalid CPU pool outcome".into(),
     });
     let mut arms = vec![];
-    for code in (1..=10u32).chain(16..=19) {
+    for code in (1..=11u32).chain(16..=19) {
         let arm = b.block(BlockKind::Body, &[]);
         b.at(arm);
         let (variant, values) = if code >= 16 {

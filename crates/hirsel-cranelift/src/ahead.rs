@@ -142,7 +142,7 @@ pub(crate) fn metadata(
             .and_then(|plans| plans.get(*id))
             .filter(|p| p.representation == hirsel_lir::continuation::Representation::Resumable);
         let (version, size) = match (&root.host, resumable) {
-            _ if root.cpu.is_some() => (5u32, 48),
+            _ if root.cpu.is_some() => (6u32, 56),
             (_, Some(_)) => (4u32, 56),
             (Some(_), None) => (3u32, 40),
             (None, None) => (2u32, 32),
@@ -203,22 +203,10 @@ pub(crate) fn metadata(
             info[16..24].copy_from_slice(&bound.to_le_bytes());
             if let Some(cpu) = &root.cpu {
                 let wrapper = inputs.layouts.layout(recipe.wrapper).unwrap();
-                let hirsel_lir::layout_types::LayoutKind::Block {
-                    payload: jobs_payload,
-                } = inputs
-                    .layouts
-                    .layout(wrapper.fields[1].layout)
-                    .unwrap()
-                    .kind
-                else {
-                    return Err(crate::CodegenError::Object {
-                        message: "CPU jobs are not a list".into(),
-                    });
-                };
                 for (offset, layout) in [
                     (32, wrapper.fields[0].layout),
                     (36, cpu.shared_payload),
-                    (40, jobs_payload),
+                    (40, wrapper.fields[1].layout),
                 ] {
                     let descriptor =
                         registry
@@ -234,6 +222,14 @@ pub(crate) fn metadata(
                     }
                 })?;
                 info[44..48].copy_from_slice(&offset.to_le_bytes());
+                for (start, field) in [(48, 3), (52, 4)] {
+                    let offset = u32::try_from(wrapper.fields[field].offset).map_err(|_| {
+                        crate::CodegenError::Object {
+                            message: "CPU claim capture offset overflow".into(),
+                        }
+                    })?;
+                    info[start..start + 4].copy_from_slice(&offset.to_le_bytes());
+                }
             }
             if let Some(resumed) = resumable {
                 let bytes = u32::try_from(resumed.cost.frame_bytes).map_err(|_| {

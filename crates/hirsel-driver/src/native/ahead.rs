@@ -2,6 +2,7 @@ use super::*;
 use hirsel_lir::ahead::AheadPlan;
 use hirsel_lir::continuation::ContinuationPlans;
 use hirsel_syntax::ContentHash;
+use std::collections::BTreeMap;
 
 pub(super) fn helper_identity() -> ContentHash {
     // This names the actual helper contract embedded in ahead metadata. The
@@ -42,8 +43,17 @@ pub(super) fn objects(
     opt: hirsel_lir::emission::OptLevel,
     registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
 ) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
-    use std::collections::BTreeMap;
     let plan = plan(program);
+    objects_with_plan(program, backend, opt, registry, &plan)
+}
+
+pub(super) fn objects_with_plan(
+    program: &ReadyProgram,
+    backend: super::emit::Backend,
+    opt: hirsel_lir::emission::OptLevel,
+    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
+    plan: &AheadPlan,
+) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
     if plan.roots.is_empty() {
         return Ok(Vec::new());
     }
@@ -277,8 +287,15 @@ pub fn check_objects(
     program: &ReadyProgram,
     objects: &[hirsel_lir::stage::ObjectArtifact],
 ) -> Result<(), NativeError> {
-    use std::collections::BTreeMap;
     let plan = plan(program);
+    check_objects_with_plan(program, objects, &plan)
+}
+
+pub(super) fn check_objects_with_plan(
+    program: &ReadyProgram,
+    objects: &[hirsel_lir::stage::ObjectArtifact],
+    plan: &AheadPlan,
+) -> Result<(), NativeError> {
     let plans = super::continuation::plans(program);
     let fail =
         |reason: &str| NativeError::new(StageName::Link, format!("ahead certificate: {reason}"));

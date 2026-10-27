@@ -114,6 +114,32 @@ pub(crate) unsafe fn checkpoint(ctx: *mut TaskCtx) {
         (*ctx).cpu_sample = Some(Sample::now(start.domain, start.worker));
     }
 }
+/// Restart on the current physical owner, excluding time saved on idle.
+pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
+    #[cfg(target_os = "linux")]
+    unsafe {
+        if (*ctx).run_ref().cpu_probe.is_none() {
+            return;
+        }
+        let super::super::Kind::Scoped(worker) = (*super::super::own_exec()).kind else {
+            (*ctx).cpu_sample = None;
+            return;
+        };
+        let domain = if let Some(start) = (*ctx).cpu_sample {
+            Some(start.domain)
+        } else {
+            let execs = super::super::execs(ctx);
+            let slot = execs.scoped.lock().unwrap();
+            slot.as_ref()
+                .filter(|w| w.caller_task != (*ctx).task_id)
+                .map(|w| w.domain)
+        };
+        if let Some(domain) = domain {
+            (*ctx).cpu_sample = Some(Sample::now(domain, u32::from(worker)));
+        }
+    }
+}
+
 pub(crate) unsafe fn begin(ctx: *mut TaskCtx, domain: u64, worker: u32) {
     #[cfg(target_os = "linux")]
     unsafe {

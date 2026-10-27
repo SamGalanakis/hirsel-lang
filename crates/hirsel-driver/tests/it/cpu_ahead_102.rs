@@ -55,6 +55,15 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             "{:?}",
             plan.refusals
         );
+        assert!(
+            program.units.iter().any(|unit| {
+                unit.unit().tables.calls.iter().enumerate().any(|(i, _)| {
+                    plan.cpu_start(unit.unit(), hirsel_lir::ir::CallId(i as u32))
+                        .is_some()
+                })
+            }),
+            "the certified map selects its start helper"
+        );
         let all: Vec<_> = program.units.iter().collect();
         assert!(hirsel_lir::ahead::validate_cpu_workers(
             &all,
@@ -63,7 +72,7 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             &plan,
             program.fuel
         ));
-        for field in 0..4 {
+        for field in 0..6 {
             let mut bad = plan.clone();
             let root = bad
                 .roots
@@ -74,8 +83,16 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
                 0 => root.recipe.callable_offset = root.recipe.live_word_offset,
                 1 => root.recipe.source_abi = worker.unit().header.abi,
                 2 => root.cpu.as_mut().unwrap().spine.scalar_calls.clear(),
-                _ => {
+                3 => {
                     root.cpu.as_mut().unwrap().binding.callback_digest =
+                        hirsel_syntax::ContentHash::default()
+                }
+                4 => {
+                    root.cpu.as_mut().unwrap().binding.map_digest =
+                        hirsel_syntax::ContentHash::default()
+                }
+                _ => {
+                    root.cpu.as_mut().unwrap().binding.caller_digest =
                         hirsel_syntax::ContentHash::default()
                 }
             }
@@ -123,8 +140,19 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             metadata.bytes[0] ^= 1;
             assert!(hirsel_driver::native::check_ahead_objects(&program, &damaged).is_err());
         }
-        let claim = protocol.claim.index();
-        let mut changed = worker.clone().into_raw();
+        let binding = &plan
+            .roots
+            .values()
+            .find_map(|r| r.cpu.as_ref())
+            .unwrap()
+            .binding;
+        let map = program
+            .units
+            .iter()
+            .find(|u| u.unit().header.instance == binding.map)
+            .unwrap();
+        let claim = binding.preclaim.index();
+        let mut changed = map.clone().into_raw();
         let control = &changed.tables.calls[claim];
         let action = control
             .arguments
@@ -158,7 +186,27 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
         };
         let changed = hirsel_lir::validate::validate_ready(changed, &inputs).unwrap();
         assert!(
-            CpuWorkerProtocol::derive(&changed, &program.table).is_none(),
+            hirsel_lir::ahead::CpuMapperBinding::derive(
+                program
+                    .units
+                    .iter()
+                    .find(|u| u.unit().header.instance == binding.caller)
+                    .unwrap(),
+                binding.invocation,
+                &changed,
+                worker,
+                program
+                    .units
+                    .iter()
+                    .find(|u| Some(u.unit().header.instance) == binding.callback.instance)
+                    .unwrap(),
+                &program.table,
+                &std::collections::BTreeMap::from([(
+                    binding.callback.instance.unwrap(),
+                    binding.environment
+                )])
+            )
+            .is_none(),
             "leave is not a job claim"
         );
         for field in 0..10 {
@@ -168,8 +216,8 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
                 1 => bad.shared_mapper = bad.jobs,
                 2 => bad.jobs = bad.shared_mapper,
                 3 => bad.live = bad.jobs,
-                4 => bad.mapper = bad.claim,
-                5 => bad.claim = bad.finish,
+                4 => bad.mapper = bad.finish,
+                5 => bad.claim = Some(bad.finish),
                 6 => bad.result = bad.jobs,
                 7 => bad.job_layout = bad.environment,
                 8 => bad.result_layout = bad.environment,

@@ -2888,7 +2888,10 @@ unsafe extern "C" fn task_entry(ctx: *mut u8, task: *mut u8) -> ! {
     let mut status = {
         // SAFETY: no scheduler borrow survives the call into compiled code.
         let _segment = unsafe { role::Segment::new(ctx) };
-        unsafe { code(ctx, environment, operation_site, operation_site) }
+        unsafe {
+            crate::pool::cpu_scoped::probe::resume(ctx);
+            code(ctx, environment, operation_site, operation_site)
+        }
     };
     // An uncommitted prefix cannot run environment cleanup or publish an end.
     unsafe { ordered::ahead::barrier(ctx) };

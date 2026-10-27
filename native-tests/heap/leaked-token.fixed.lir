@@ -5,13 +5,13 @@
     (ScalarAlignments 1 2 4 8 16 4 8 8 16)
     (SysV64)
     (Elf) "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-    (ArtifactVersions 62 10 5 91 0))
-  (LayoutTable #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 10 5
+    (ArtifactVersions 62 10 5 92 0))
+  (LayoutTable #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 10 5
     (list
       (LayoutRecord
         (LayoutIdentity
           (none)
-          (none) #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 10)
+          (none) #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 10)
         (Scalar
           (U64))
         (Fixed 8) 8
@@ -32,7 +32,7 @@
       (LayoutRecord
         (LayoutIdentity
           (none)
-          (none) #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 10)
+          (none) #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 10)
         (Scalar
           (Bool))
         (Fixed 1) 1
@@ -53,7 +53,7 @@
       (LayoutRecord
         (LayoutIdentity
           (none)
-          (none) #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 10)
+          (none) #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 10)
         (Aggregate)
         (Fixed 8) 8
         (list
@@ -72,7 +72,7 @@
       (LayoutRecord
         (LayoutIdentity
           (none)
-          (none) #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 10)
+          (none) #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 10)
         (Block 2)
         (Fixed 8) 8
         (list)
@@ -106,7 +106,7 @@
         (Reuse) 62
         (Source) #0000000000000000000000000000000000000000000000000000000000000000
         (DefPath "fixture" "0"
-          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #e5f4a5f74592c8912798a34c09a3b772041205269e66ef1838c2207e7894ac70 0)
+          (list "heap") "main") #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #a5e4939f53e930f8076bb974b9df1ba966edebb0ad1775f42d4cbc5fa1bf422d #129e48a05c685e98aaa77e1ef9c8611304c7e764de8771096fb9a3329ee85870 0)
       (list
         (LirType
           (Scalar

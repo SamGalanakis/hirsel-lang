@@ -22,6 +22,7 @@ pub(crate) struct Spawn {
     scope: u64,
     shield: u32,
     task: Option<Task>,
+    pub(super) preclaimed: bool,
     held: crate::ordered::footprint::Held,
     started: Option<std::time::Instant>,
     run: *mut crate::context::RunShared,
@@ -272,6 +273,13 @@ pub(crate) unsafe fn spawn_certified(
             .contains(&unsafe { (*environment).index() });
         (held, plain)
     });
+    let preclaimed = engine::with_driver(ctx, |d| {
+        d.cpu_batch
+            .as_mut()
+            .is_some_and(|batch| batch.bind(parent, word))
+    });
+    // CPU Shared roots use their checked custody recipe. Their scalar tail
+    // starts after spawn retirement, without an unpublished reservation.
     let host = certificate
         .as_ref()
         .is_some_and(|c| !c.host.is_null() || c.cpu);
@@ -342,6 +350,7 @@ pub(crate) unsafe fn spawn_certified(
         scope,
         shield: unsafe { (*ctx).shield },
         task,
+        preclaimed,
         held,
         started: unsafe { (*ctx).run_ref() }
             .worker_metrics

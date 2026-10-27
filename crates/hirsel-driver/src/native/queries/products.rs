@@ -305,6 +305,13 @@ pub struct DemandProducts {
     pub(super) selected: BTreeMap<ContentHash, ProductRef>,
 }
 impl DemandProducts {
+    pub(super) fn materialized(&mut self) {
+        self.ready_materializations += 1;
+        self.snapshot
+            .materializations
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn new(snapshot: Arc<NativeSnapshot>) -> Self {
         Self {
             local: LocalReadyQueries::with_validator(
