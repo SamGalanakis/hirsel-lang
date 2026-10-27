@@ -233,37 +233,26 @@ fn ready_case_inner_mutation(
             if fresh {
                 engine.adapters.lowering = None;
             }
-            let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-            let declarations =
-                NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
-            let paths = declarations
-                .context
-                .sources
-                .keys()
-                .cloned()
+            let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+            let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
+            let reader = facts
+                .original_context
+                .reader(
+                    facts.originals.iter().map(|product| (**product).clone()),
+                    store.clone(),
+                )
+                .unwrap();
+            let originals = facts
+                .originals
+                .iter()
+                .map(|product| {
+                    Arc::downgrade(reader.read(&product.definition).unwrap().definition())
+                })
                 .collect::<Vec<_>>();
-            let context = engine.native_original_context(&paths).unwrap();
-            let records = NativeRecords::new(engine.types().clone(), store.clone());
-            let mut products = Vec::new();
-            let mut originals = Vec::new();
-            for path in &paths {
-                let source = &declarations.sources[path];
-                let (body, verified) = engine.native_definition_body_with_output(source).unwrap();
-                originals.push(Arc::downgrade(&body));
-                let bytes = records.encode(&engine, &body).unwrap();
-                products.push(NativeOriginalProduct {
-                    definition: path.clone(),
-                    implementation_revision: source.source.implementation_revision,
-                    signature: source.signature.fingerprint,
-                    body: store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap(),
-                    verified,
-                });
-            }
-            let reader = context.reader(products, store.clone()).unwrap();
+            drop(facts);
             let manifest = declarations.manifest().unwrap();
             let input = declarations.program.input.clone();
             let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
-            drop(discovery);
             drop(engine);
             assert!(originals.iter().all(|body| body.upgrade().is_none()));
             let runtime_bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + (64 << 20);

@@ -412,27 +412,16 @@ fn run_program_case(
                 execution.observation.as_ref().unwrap(),
             ))
         };
-        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-        let mut declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
-        let paths = declarations
-            .context
-            .sources
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let lower = engine
-            .native_original_reader(&paths, store.clone())
+        let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+        let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
+        let lower = facts
+            .original_context
+            .reader(
+                facts.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
             .unwrap();
-        for (path, source) in &mut declarations.sources {
-            source.lower = lower
-                .input(path)
-                .and_then(|(output, _, _, _)| output.cloned());
-        }
-        let semantic = Arc::new(
-            engine
-                .native_semantic_program(declarations.roots.definitions.clone())
-                .unwrap(),
-        );
+        let semantic = facts.semantic.clone();
         let entries = declarations
             .context
             .sources
@@ -452,7 +441,7 @@ fn run_program_case(
                     declarations: &declarations.sources,
                     entries: &entries,
                     anchors: &declarations.source_anchors,
-                    signatures: engine.signature_snapshot(),
+                    signatures: facts.signatures.clone(),
                     semantic,
                     selected: std::slice::from_ref(&main),
                     callees: None,
@@ -478,7 +467,7 @@ fn run_program_case(
             fuel: false,
         };
         let inputs = NativeInstanceInputs::from_products(declarations, lower).unwrap();
-        drop(cache);
+        drop(facts);
         drop(engine);
         let trace = hirsel_lir::construction::ValueTrace::default();
         let _guard = trace.enter();
