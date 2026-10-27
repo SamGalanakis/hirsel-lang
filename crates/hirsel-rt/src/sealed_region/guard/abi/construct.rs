@@ -133,7 +133,40 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_construct(
     inputs: *mut *mut c_void,
     input_count: u64,
 ) -> *mut c_void {
-    if ctx.is_null() || (input_count != 0 && inputs.is_null()) || kind > 2 {
+    if kind > 2 {
+        crate::fault("invalid construction receipt kind");
+    }
+    unsafe { construct(ctx, index, value, kind, inputs, input_count, None) }
+}
+
+/// Snapshot an original Arena construction from explicitly paired live children.
+///
+/// # Safety
+/// The heap constructor's complete child correspondence contract applies.
+/// `raw` is this construction's independently checked, open demanded guard;
+/// its physical cleanup retains the original child credits until seal or exit.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_receipt_arena_construct(
+    ctx: *mut TaskCtx,
+    raw: *mut c_void,
+    index: u32,
+    value: *const c_void,
+    inputs: *mut *mut c_void,
+    input_count: u64,
+) -> *mut c_void {
+    unsafe { construct(ctx, index, value, 3, inputs, input_count, Some(raw)) }
+}
+
+unsafe fn construct(
+    ctx: *mut TaskCtx,
+    index: u32,
+    value: *const c_void,
+    kind: u8,
+    inputs: *mut *mut c_void,
+    input_count: u64,
+    arena: Option<*mut c_void>,
+) -> *mut c_void {
+    if ctx.is_null() || (input_count != 0 && inputs.is_null()) || kind > 3 {
         crate::fault("invalid construction receipt arguments");
     }
     let run = unsafe { metadata_run(ctx) };
@@ -169,7 +202,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_construct(
         };
         if edge.offset != 0
             || edge.shared
-            || (kind == 1 && edge.slice)
+            || (kind != 2 && edge.slice)
             || (kind == 2 && !children.is_empty())
         {
             crate::fault("invalid original construction boundary");
@@ -178,7 +211,24 @@ pub unsafe extern "C" fn hirsel_rt_v2_receipt_construct(
         if block.is_null() {
             crate::fault("null construction block");
         }
-        let origin = if kind == 1 {
+        let origin = if let Some(raw) = arena {
+            let record = guard(raw);
+            unsafe { &*ctx }
+                .run_ref()
+                .sealed_owners
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .check_guard(raw.addr(), ctx.addr());
+            let extent = unsafe { extent(ctx, block) };
+            if !unsafe {
+                region::contains_storage(ptr::addr_of_mut!((*record).base), block, extent)
+            } {
+                crate::fault("receipt construction belongs to another Arena");
+            }
+            let journal = unsafe { (*record).inventory.as_ref() }
+                .unwrap_or_else(|| crate::fault("consumed construction inventory"));
+            Origin::Arena(journal.grant())
+        } else if kind == 1 {
             Origin::Heap
         } else {
             Origin::Static

@@ -139,6 +139,7 @@ fn fixture() -> (support::Lir<Rc>, Declarations, ValueId, ValueId, LayoutId) {
     t.builder.push(
         ENTRY,
         Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result: receipt,
             value: root,
             shape: SealDescriptorId(0),
@@ -215,7 +216,7 @@ fn local_source_snapshot_has_independent_source_proof_and_one_metadata_holder() 
     let (unit, table, manifest) = finish(t, root, receipt, meta);
     let errors = check(&unit, &table, &manifest, &declarations);
     assert!(errors.is_empty(), "{errors:#?}");
-    for mutation in 0..4 {
+    for mutation in 0..5 {
         let mut broken = unit.clone();
         match mutation {
             0 => {
@@ -230,6 +231,11 @@ fn local_source_snapshot_has_independent_source_proof_and_one_metadata_holder() 
             }
             3 => {
                 broken.values[receipt.index()].holding = Holding::Plain;
+            }
+            4 => {
+                if let Inst::PayloadReceipt { arena, .. } = &mut broken.instructions[2] {
+                    *arena = Some(root).into();
+                }
             }
             _ => unreachable!(),
         }
@@ -380,5 +386,5 @@ fn an_agreeing_source_recipe_cannot_invent_a_different_heap_origin() {
     declarations.payloads[0].recipe.operation = operation.clone();
     unit.tables.seal_payloads[0].bindings[0].recipe.operation = operation;
     let errors = check(&unit, &table, &manifest, &declarations);
-    assert!(errors.iter().any(|v| matches!(&v.kind, K::Sealed(text) if text.contains("ordered ordinary heap construction"))), "{errors:#?}");
+    assert!(errors.iter().any(|v| matches!(&v.kind, K::Sealed(text) if text.contains("ordered original construction and destination"))), "{errors:#?}");
 }

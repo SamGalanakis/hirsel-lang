@@ -70,6 +70,8 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::SealedRelease
         | R::ReceiptRegionEnter
         | R::ReceiptRegionExit
+        | R::ReceiptArenaConstruct
+        | R::ReceiptArenaInventoryPaired
         | R::ReceiptArenaInventory
         | R::ReceiptConstruct
         | R::ReceiptBits

@@ -897,19 +897,21 @@ impl FnEmitter<'_, '_, '_> {
                 origin,
             } => self.seal_arena(result, grant, root, shape, failure, origin),
             Inst::PayloadReceipt {
+                arena,
                 result,
                 value,
                 shape,
                 binding,
                 inputs,
-            } => self.payload_receipt(result, value, shape, binding, inputs),
+            } => self.payload_receipt(result, value, shape, binding, (inputs, arena.get())),
             Inst::ArenaInventory {
+                receipt,
                 arena,
                 allocation,
                 value,
                 shape,
                 previous,
-            } => self.arena_inventory(arena, allocation, value, shape, previous),
+            } => self.arena_inventory(arena, allocation, value, shape, (previous, receipt.get())),
             Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {
                 self.invalid("an operation outside the Ready vocabulary")
             }

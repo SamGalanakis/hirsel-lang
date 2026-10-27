@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 90;
+pub const ABI_VERSION: u32 = 91;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -618,6 +618,8 @@ pub enum RuntimeEntry {
     CpuAheadArm,
     CpuAheadEnter,
     CpuAheadAlloc,
+    ReceiptArenaConstruct,
+    ReceiptArenaInventoryPaired,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -689,7 +691,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 115] = [
+    pub const ALL: [RuntimeEntry; 117] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -805,6 +807,8 @@ impl RuntimeEntry {
         Self::CpuAheadAlloc,
         Self::ReceiptConstruct,
         Self::ReceiptArenaInventory,
+        Self::ReceiptArenaConstruct,
+        Self::ReceiptArenaInventoryPaired,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -901,6 +905,33 @@ impl RuntimeEntry {
                         p("guard", ptr(N::Void, 1)),
                         LAYOUT,
                         p("value", cptr(N::Void)),
+                    ]
+                },
+            ),
+            Self::ReceiptArenaConstruct => (
+                "hirsel_rt_v2_receipt_arena_construct",
+                ptr(N::Void, 1),
+                const {
+                    &[
+                        CTX,
+                        p("guard", ptr(N::Void, 1)),
+                        LAYOUT,
+                        p("value", cptr(N::Void)),
+                        p("inputs", ptr(N::Void, 2)),
+                        p("input_count", U64),
+                    ]
+                },
+            ),
+            Self::ReceiptArenaInventoryPaired => (
+                "hirsel_rt_v2_receipt_arena_inventory_paired",
+                VOID,
+                const {
+                    &[
+                        CTX,
+                        p("guard", ptr(N::Void, 1)),
+                        LAYOUT,
+                        p("value", cptr(N::Void)),
+                        p("receipt", cptr(N::Void)),
                     ]
                 },
             ),
@@ -1798,4 +1829,6 @@ snapshot_enum!(RuntimeEntry {
     CpuAheadArm,
     CpuAheadEnter,
     CpuAheadAlloc,
+    ReceiptArenaConstruct,
+    ReceiptArenaInventoryPaired,
 });

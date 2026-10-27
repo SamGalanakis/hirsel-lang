@@ -234,8 +234,21 @@ pub fn emit(
             address,
             failure: preparation_failure,
         });
+        let paired = unit
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(at, inst)| match *inst {
+                Inst::PayloadReceipt {
+                    result,
+                    value: original,
+                    shape: actual,
+                    ..
+                } if original == *value && actual == shape => Some((at, result)),
+                _ => None,
+            });
         after.insert(
-            *index,
+            paired.map_or(*index, |(at, _)| at),
             vec![
                 Inst::Read {
                     result: arena,
@@ -244,6 +257,7 @@ pub fn emit(
                     mode: ReadMode::Borrow,
                 },
                 Inst::ArenaInventory {
+                    receipt: paired.map(|(_, result)| result).into(),
                     arena,
                     allocation: site.anchor,
                     value: *value,

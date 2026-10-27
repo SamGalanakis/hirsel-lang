@@ -2459,12 +2459,16 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.create(site, st, cr, result);
             }
             Inst::PayloadReceipt {
+                arena,
                 result,
                 value,
                 inputs,
                 ..
             } => {
                 self.borrow(site, st, cr, value);
+                if let Some(arena) = arena.get() {
+                    self.borrow(site, st, cr, arena);
+                }
                 for input in inputs
                     .get(&self.cx.unit.pools.receipt_inputs)
                     .unwrap_or(&[])
@@ -2476,12 +2480,16 @@ impl<S: Stage> Walker<'_, '_, S> {
                 self.create(site, st, cr, result);
             }
             Inst::ArenaInventory {
+                receipt,
                 arena,
                 value,
                 previous,
                 ..
             } => {
                 self.borrow(site, st, cr, arena);
+                if let Some(receipt) = receipt.get() {
+                    self.borrow(site, st, cr, receipt);
+                }
                 self.borrow(site, st, cr, value);
                 if let Some(previous) = previous {
                     self.borrow(site, st, cr, previous);

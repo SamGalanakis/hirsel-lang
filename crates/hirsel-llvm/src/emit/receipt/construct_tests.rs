@@ -114,11 +114,14 @@ fn probe(target: &TargetSpec, malformed: u8, inventory: bool) -> Vec<u8> {
             allocation,
             ValueId(1),
             SealDescriptorId(0),
-            if malformed == 1 {
-                Some(ValueId(1))
-            } else {
-                None
-            },
+            (
+                if malformed == 1 {
+                    Some(ValueId(1))
+                } else {
+                    None
+                },
+                None,
+            ),
         )
     } else {
         f.payload_receipt(
@@ -126,7 +129,7 @@ fn probe(target: &TargetSpec, malformed: u8, inventory: bool) -> Vec<u8> {
             ValueId(1),
             SealDescriptorId(0),
             PayloadBindingId(0),
-            PoolRange::EMPTY,
+            (PoolRange::EMPTY, None),
         )
     };
     if malformed != 0 {

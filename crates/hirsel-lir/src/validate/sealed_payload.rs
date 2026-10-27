@@ -29,6 +29,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
             shape,
             binding,
             inputs,
+            arena,
             ..
         } = *inst
         else {
@@ -60,17 +61,49 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
             .iter()
             .filter(|site| &unit.tables.source_anchors[site.anchor.index()] == source)
             .collect();
-        let supported = matches!(
-            binding.recipe.operation,
-            PayloadOperation::Allocate {
-                destination: PayloadDestination::Heap
+        let ordered = matches!(constructors.as_slice(), [site]
+            if site.fields.get(&unit.pools.fields).unwrap_or(&[]).iter()
+                .map(|field| field.value).eq(binding.values.iter().copied()));
+        let destination = match (
+            &binding.recipe.operation,
+            arena.get(),
+            constructors.as_slice(),
+        ) {
+            (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap,
+                },
+                None,
+                [site],
+            ) => matches!(
+                site.destination,
+                DestinationClass::Heap | DestinationClass::Inferred
+            ),
+            (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Arena(original),
+                },
+                Some(arena),
+                [site],
+            ) => {
+                let slot = match site.destination {
+                    DestinationClass::Arena(slot) => Some(slot),
+                    _ => None,
+                };
+                let parameter = slot.and_then(|slot| match unit.slots[slot.index()].kind {
+                    SlotKind::Parameter(source) => unit.parameters.get(source as usize).copied(),
+                    _ => None,
+                });
+                original.capture_slot.is_none()
+                    && cx.repr(arena) == ValueRepr::Arena
+                    && origins[arena.index()] == vec![original.producer.clone()]
+                    && parameter
+                        .is_some_and(|value| origins[value.index()] == origins[arena.index()])
             }
-        ) && matches!(constructors.as_slice(), [site]
-                if matches!(site.destination, DestinationClass::Heap | DestinationClass::Inferred)
-                    && site.fields.get(&unit.pools.fields).unwrap_or(&[]).iter()
-                        .map(|field| field.value).eq(binding.values.iter().copied()));
-        if !supported {
-            reject("payload receipt requires its ordered ordinary heap construction");
+            _ => false,
+        };
+        if !ordered || !destination {
+            reject("payload receipt requires its ordered original construction and destination");
         }
         for (input, source) in inputs.iter().zip(&binding.recipe.inputs) {
             match input.receipt {
@@ -192,6 +225,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
             value,
             shape,
             previous,
+            receipt,
             ..
         } = *instruction
         else {
@@ -213,6 +247,19 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
             );
             continue;
         };
+        if let Some(receipt) = receipt.get() {
+            let kind = cx.layouts.get(cx.value_layout(receipt)).map(|r| &r.kind);
+            if !pairs.paired(value, receipt)
+                || cx.repr(receipt) != ValueRepr::PayloadReceipt
+                || !matches!(kind, Some(crate::layout_types::LayoutKind::PayloadReceipt { root })
+                    if root == &unit.tables.seal_descriptors[shape.index()].root_type)
+            {
+                report.add(
+                    Site::UNIT,
+                    K::Sealed("inventory receipt differs from its paired original root".into()),
+                );
+            }
+        }
         match binding.recipe.operation {
             PayloadOperation::Allocate { ref destination } => {
                 match destination {

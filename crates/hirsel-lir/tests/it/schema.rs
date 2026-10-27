@@ -1709,6 +1709,7 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
             shape: SealDescriptorId(0),
         },
         Inst::ArenaInventory {
+            receipt: hirsel_lir::ir::OptionalValueId::NONE,
             arena: ValueId(0),
             allocation: SourceAnchorId(0),
             value: ValueId(1),
@@ -1716,6 +1717,7 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
             previous: None,
         },
         Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result: ValueId(0),
             value: ValueId(1),
             shape: SealDescriptorId(0),
@@ -1729,7 +1731,10 @@ fn every_opcode_is_covered_and_admitted_by_a_stage() {
             StageKind::Ready.admits(opcode),
             matches!(
                 opcode,
-                Opcode::SealArena | Opcode::BorrowSealedRoot | Opcode::PayloadReceipt
+                Opcode::SealArena
+                    | Opcode::BorrowSealedRoot
+                    | Opcode::PayloadReceipt
+                    | Opcode::ArenaInventory
             )
         );
         seen.push(opcode);

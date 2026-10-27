@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 90
+#define HIRSEL_RT_V2_ABI_VERSION 91
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -899,6 +899,9 @@ uint8_t hirsel_rt_v2_ordered_sleep_until(hirsel_rt_v2_ctx *ctx, uint64_t caller_
 uint8_t hirsel_rt_v2_ordered_stdin_read(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, uint8_t *destination, uint8_t *out, uint64_t *stdin, hirsel_rt_v2_header **buffer, uint64_t max);
 uint8_t hirsel_rt_v2_ordered_watcher_next(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, uint8_t *destination, uint8_t *out, uint64_t *directory, uint64_t *watcher);
 uint8_t hirsel_rt_v2_ordered_print(hirsel_rt_v2_ctx *ctx, uint64_t caller_site, uint64_t operation_site, uint8_t *destination, uint8_t *out, uint64_t *stdout, hirsel_rt_v2_header *owner, uint64_t start, uint64_t len);
+
+void *hirsel_rt_v2_receipt_arena_construct(hirsel_rt_v2_ctx *ctx, void *guard, uint32_t index, const void *value, void **inputs, uint64_t input_count);
+void hirsel_rt_v2_receipt_arena_inventory_paired(hirsel_rt_v2_ctx *ctx, void *guard, uint32_t index, const void *value, const void *receipt);
 
 #ifdef __cplusplus
 }

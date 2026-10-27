@@ -349,6 +349,7 @@ fn inventory(m: &mut Machine<'_, Rc>, f: &mut Frame, ptr: Ptr, shape: u32, ordin
     m.exec(
         f,
         &Inst::ArenaInventory {
+            receipt: hirsel_lir::ir::OptionalValueId::NONE,
             arena: ValueId(5),
             allocation: SourceAnchorId(ordinal),
             value: ValueId(6),
@@ -1041,6 +1042,7 @@ fn sealed_graph_s3_record_variants_list_and_box_preserve_active_edges() {
                 m.exec(
                     &mut f,
                     &Inst::ArenaInventory {
+                        receipt: hirsel_lir::ir::OptionalValueId::NONE,
                         arena: ValueId(5),
                         allocation: SourceAnchorId(2),
                         value: ValueId(7),
@@ -1369,6 +1371,7 @@ fn sealed_graph_actual_construct_binds_inventory_and_forged_binding_refuses() {
         let actual = m.seal_allocations.remove(&ptr.alloc).unwrap();
         assert_eq!(actual.1.statement, 1);
         let event = Inst::ArenaInventory {
+            receipt: hirsel_lir::ir::OptionalValueId::NONE,
             arena: ValueId(5),
             allocation: SourceAnchorId(1),
             value: ValueId(6),
@@ -1438,6 +1441,7 @@ fn sealed_graph_growth_replaces_retired_backing_without_new_semantic_allocation(
         m.exec(
             &mut f,
             &Inst::ArenaInventory {
+                receipt: hirsel_lir::ir::OptionalValueId::NONE,
                 arena: ValueId(5),
                 allocation: SourceAnchorId(2),
                 value: ValueId(6),

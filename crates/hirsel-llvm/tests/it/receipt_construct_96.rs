@@ -165,6 +165,7 @@ fn fixture(target: &TargetSpec) -> (Table, LirUnit<hirsel_lir::stage::Ready>, So
     unit.builder.push(
         ENTRY,
         Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result: receipt,
             value: list,
             shape: SealDescriptorId(0),

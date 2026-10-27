@@ -177,8 +177,9 @@ impl<S: Stage> Machine<'_, S> {
         value: ValueId,
         shape: SealDescriptorId,
         binding: PayloadBindingId,
-        inputs: PoolRange<ReceiptInput>,
+        operands: (PoolRange<ReceiptInput>, Option<ValueId>),
     ) -> Checked<()> {
+        let (inputs, arena) = operands;
         let unit = self.unit(f.unit);
         let descriptor = unit
             .tables
@@ -304,7 +305,7 @@ impl<S: Stage> Machine<'_, S> {
         if self.seal_allocations.get(&ptr.alloc) != Some(&(f.unit, source_anchor)) {
             return fail(V::Malformed, "receipt has no actual H construction event");
         }
-        self.check_receipt_construction(f, &sites, binding, root_layout, &value)?;
+        self.check_receipt_construction(f, &sites, binding, root_layout, &value, arena)?;
         let snapshot = self.receipt_snapshot(root, value)?;
         let control = self.heap_alloc(layout, self.word, self.record(layout)?.align)?;
         self.receipts.insert(control.alloc, snapshot);
@@ -318,23 +319,60 @@ impl<S: Stage> Machine<'_, S> {
         binding: &hirsel_lir::sealed_payload::PayloadBinding,
         layout: LayoutId,
         value: &Val,
+        arena: Option<ValueId>,
     ) -> Checked<()> {
         use hirsel_lir::sealed_payload_source::{PayloadDestination, PayloadOperation};
         let [site] = sites else {
             return fail(V::Malformed, "receipt construction is ambiguous");
         };
-        if !matches!(
-            binding.recipe.operation,
-            PayloadOperation::Allocate {
-                destination: PayloadDestination::Heap
+        let destination = match (&binding.recipe.operation, arena, &site.destination) {
+            (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap,
+                },
+                None,
+                DestinationClass::Heap | DestinationClass::Inferred,
+            ) => true,
+            (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Arena(_),
+                },
+                Some(arena),
+                DestinationClass::Arena(slot),
+            ) => {
+                let Val::Arena(Some(region)) = self.get(f, arena)?.val else {
+                    return fail(V::TypeConfusion, "receipt Arena has no live scope");
+                };
+                let at = match f.slots.get(slot.index()) {
+                    Some(SlotStore::Own(at) | SlotStore::Alias(at)) => *at,
+                    _ => {
+                        return fail(
+                            V::Malformed,
+                            "receipt Arena destination has no slot storage",
+                        );
+                    }
+                };
+                let ty = &self.unit(f.unit).types[self.unit(f.unit).slots[slot.index()].ty.index()];
+                let image =
+                    self.ledger
+                        .check(at)?
+                        .extent
+                        .copy(at.offset, self.size(ty.layout)?, None);
+                let destination = self.val_from(image, ty.repr, ty.layout)?.0;
+                if destination != Val::Arena(Some(region)) {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt Arena differs from its original destination slot",
+                    );
+                }
+                matches!(value, Val::Ptr(ptr) if self.ledger.check(*ptr).is_ok_and(|a| a.owner == Owner::Region(region)))
             }
-        ) || !matches!(
-            site.destination,
-            DestinationClass::Heap | DestinationClass::Inferred
-        ) {
+            _ => false,
+        };
+        if !destination {
             return fail(
                 V::Malformed,
-                "receipt needs its original ordinary heap construction",
+                "receipt needs its original construction destination",
             );
         }
         let (Val::Ptr(ptr), LayoutKind::Block { payload }) = (value, &self.record(layout)?.kind)

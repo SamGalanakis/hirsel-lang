@@ -21,6 +21,37 @@ use hirsel_core_contract::Passing;
 use hirsel_syntax::{ContentHash, DefPath};
 use std::marker::PhantomData;
 
+/// A compact optional SSA operand. The reserved maximum index keeps instruction
+/// rows within 32 bytes; every present index still passes ordinary reference checks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct OptionalValueId(u32);
+impl OptionalValueId {
+    pub const NONE: Self = Self(u32::MAX);
+    pub const fn get(self) -> Option<ValueId> {
+        if self.0 == u32::MAX {
+            None
+        } else {
+            Some(ValueId(self.0))
+        }
+    }
+}
+impl From<Option<ValueId>> for OptionalValueId {
+    fn from(value: Option<ValueId>) -> Self {
+        Self(value.map_or(u32::MAX, |value| {
+            assert_ne!(value.0, u32::MAX, "SSA value index exhausted");
+            value.0
+        }))
+    }
+}
+impl hirsel_codec::Snapshot for OptionalValueId {
+    fn write(&self, w: &mut hirsel_codec::Writer) {
+        w.uint(u128::from(self.0));
+    }
+    fn read(r: &mut hirsel_codec::Reader<'_>) -> Result<Self, hirsel_codec::DecodeError> {
+        Ok(Self(<u32 as hirsel_codec::Snapshot>::read(r)?))
+    }
+}
+
 /// Native persistent environment and SSA initialization masks share one u64 word.
 pub const LIVE_MASK_WORD_BITS: u32 = u64::BITS;
 
@@ -1150,6 +1181,8 @@ pub enum Inst {
         value: ValueId,
         shape: SealDescriptorId,
         previous: Option<ValueId>,
+        /// Paired live original root metadata, required for child-bearing payloads.
+        receipt: OptionalValueId,
     },
     /// Snapshot the original source semantics before physical rewriting.
     /// Inputs follow the selected original binding exactly. This retains only
@@ -1160,6 +1193,8 @@ pub enum Inst {
         shape: SealDescriptorId,
         binding: PayloadBindingId,
         inputs: PoolRange<ReceiptInput>,
+        /// Explicit original Arena destination; heap and inline snapshots use NONE.
+        arena: OptionalValueId,
     },
 }
 
@@ -2720,12 +2755,16 @@ impl Inst {
                 f(R::SealDescriptor(shape));
             }
             Self::ArenaInventory {
+                receipt,
                 arena,
                 allocation,
                 value,
                 shape,
                 previous,
             } => {
+                if let Some(receipt) = receipt.get() {
+                    f(R::Value(receipt));
+                }
                 f(R::Value(arena));
                 f(R::SourceAnchor(allocation));
                 f(R::Value(value));
@@ -2735,6 +2774,7 @@ impl Inst {
                 }
             }
             Self::PayloadReceipt {
+                arena,
                 result,
                 value,
                 shape,
@@ -2746,6 +2786,9 @@ impl Inst {
                 f(R::SealDescriptor(shape));
                 f(R::PayloadBinding(binding));
                 f(R::ReceiptInputs(inputs));
+                if let Some(arena) = arena.get() {
+                    f(R::Value(arena));
+                }
             }
             Self::ArenaOpen { result, budget } => {
                 f(R::Value(result));
@@ -3554,8 +3597,8 @@ snapshot_enum!(Inst {
     SliceView { result, value, start, end, failure },
     SealArena { result, grant, root, shape, failure, origin },
     BorrowSealedRoot { result, owner, loan, shape },
-    ArenaInventory { arena, allocation, value, shape, previous },
-    PayloadReceipt { result, value, shape, binding, inputs },
+    ArenaInventory { arena, allocation, value, shape, previous, receipt },
+    PayloadReceipt { result, value, shape, binding, inputs, arena },
 });
 snapshot_struct!(Edge { target, arguments });
 snapshot_struct!(SwitchArm { value, edge });

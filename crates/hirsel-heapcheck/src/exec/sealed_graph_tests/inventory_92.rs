@@ -179,6 +179,7 @@ fn seal_inventory_92_static_correspondence_rejects_erased_event_pairs_before_exe
     let code = [
         seal_inst(0),
         Inst::ArenaInventory {
+            receipt: hirsel_lir::ir::OptionalValueId::NONE,
             arena: ValueId(5),
             allocation: SourceAnchorId(1),
             value: ValueId(6),
@@ -238,6 +239,7 @@ fn seal_inventory_92_uncalled_body_inventory_does_not_belong_to_an_empty_scope()
     unused.blocks[0].instructions = PoolRange::push(
         &mut unused.instructions,
         [Inst::ArenaInventory {
+            receipt: hirsel_lir::ir::OptionalValueId::NONE,
             arena: ValueId(5),
             allocation: SourceAnchorId(0),
             value: ValueId(6),

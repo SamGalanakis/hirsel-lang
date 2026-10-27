@@ -65,6 +65,7 @@ fn empty_operand_pool_preserves_legacy_bytes_and_hash() {
 #[test]
 fn producer_roundtrips_and_walks_every_local_reference() {
     let inst = Inst::PayloadReceipt {
+        arena: crate::ir::OptionalValueId::NONE,
         result: ValueId(9),
         value: ValueId(3),
         shape: SealDescriptorId(4),

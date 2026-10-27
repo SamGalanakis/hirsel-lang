@@ -105,6 +105,13 @@ pub(super) fn check<S: Stage>(
             };
             if S::KIND == crate::stage::StageKind::Ready
                 && matches!(inst, Inst::ArenaInventory { .. })
+                && matches!(
+                    inst,
+                    Inst::ArenaInventory {
+                        receipt: crate::ir::OptionalValueId::NONE,
+                        ..
+                    }
+                )
                 && unit.tables.seal_descriptors[shape.index()]
                     .bits_root(cx.layouts.0)
                     .is_err()

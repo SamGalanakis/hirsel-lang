@@ -17,6 +17,11 @@ reference interpreter, checked H, LLVM and Cranelift, including record/replay.
 `MEM-4-sealed-heap-charge-run.hir` also checks bounded evacuation: capacity 15
 refuses two u64 elements, while capacities 16 and 17 preserve both elements.
 `MEM-4-sealed-empty-heap-empty-run.hir` accepts an empty heap list at bound zero.
+`MEM-4-sealed-arena-root-run.hir` also qualifies a capture-free Arena
+`List[List[u64]]` root with a copied heap `List[u64]` child, repeated reads and
+record/replay on all four engines. Its explicit, live construction receipts
+pair both the original Arena destination and every heap child; physical guard
+cleanup retains the child credits until seal or exit.
 Original source declarations and ordered child receipts remain mandatory.
 Captured closures, held environments, tasks, additional mutation recipes and
 fully elided payload custody remain unsupported on this path.

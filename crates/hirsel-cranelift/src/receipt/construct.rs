@@ -11,8 +11,9 @@ impl FnEmitter<'_, '_, '_> {
         value: ValueId,
         shape: SealDescriptorId,
         binding: PayloadBindingId,
-        inputs: PoolRange<ReceiptInput>,
+        operands: (PoolRange<ReceiptInput>, Option<ValueId>),
     ) -> Emitted {
+        let (inputs, arena) = operands;
         use hirsel_lir::sealed_payload::*;
         let Some((descriptor, binding)) = self.unit.tables.payload_binding(binding) else {
             return self.invalid("missing original construction recipe");
@@ -25,14 +26,30 @@ impl FnEmitter<'_, '_, '_> {
                 what: what.into(),
             })?;
         if descriptor != shape
-            || !matches!(
-                binding.recipe.operation,
-                PayloadOperation::Allocate {
-                    destination: PayloadDestination::Heap
-                }
-            )
+            || !matches!(binding.recipe.operation, PayloadOperation::Allocate { .. })
         {
             return self.unsupported("receipt construction requires an original heap recipe");
+        }
+        let destination = matches!(
+            (&binding.recipe.operation, arena),
+            (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Heap
+                },
+                None
+            ) | (
+                PayloadOperation::Allocate {
+                    destination: PayloadDestination::Arena(_)
+                },
+                Some(_)
+            )
+        );
+        if !destination
+            || arena.is_some_and(|arena| {
+                self.unit.types[self.unit.values[arena.index()].ty.index()].repr != ValueRepr::Arena
+            })
+        {
+            return self.invalid("receipt construction has another original destination");
         }
         let descriptor = &self.unit.tables.seal_descriptors[shape.index()];
         if self.value_type(value)?.layout != descriptor.root_layout
@@ -78,7 +95,7 @@ impl FnEmitter<'_, '_, '_> {
                 }
             }
         }
-        let receipt = self.construction_snapshot(value, kind, &children)?;
+        let receipt = self.construction_snapshot_in(value, kind, &children, arena)?;
         for child in temporary {
             self.rt(RuntimeEntry::ReceiptRelease, &[child])?;
         }
@@ -91,8 +108,9 @@ impl FnEmitter<'_, '_, '_> {
         allocation: SourceAnchorId,
         value: ValueId,
         shape: SealDescriptorId,
-        previous: Option<ValueId>,
+        companions: (Option<ValueId>, Option<ValueId>),
     ) -> Emitted {
+        let (previous, receipt) = companions;
         use hirsel_lir::sealed_payload::*;
         if previous.is_some() {
             return self.unsupported("arena replacement requires original holder correspondence");
@@ -105,20 +123,27 @@ impl FnEmitter<'_, '_, '_> {
                 what,
             })?;
         let layout = descriptor.root_layout;
+        if let Some(receipt) = receipt
+            && !matches!(&self.layout(self.value_type(receipt)?.layout)?.kind,
+                LayoutKind::PayloadReceipt { root } if root == &descriptor.root_type)
+        {
+            return self.invalid("inventory receipt has another original root type");
+        }
         let payload = match self.layout(layout)?.kind {
             LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
             _ => return self.unsupported("arena inventory requires an original block"),
         };
         // Complete original source facts plus typed physical coverage. An empty
         // release program alone would miss arena-local and Shared child edges.
-        if !self.layout(payload)?.scan.is_empty()
-            || !self.layout(payload)?.drop.is_empty()
-            || descriptor.logical.facts.iter().skip(1).any(|fact| {
-                !matches!(
-                    fact.class,
-                    hirsel_lir::logical_storage::StorageClass::Inline
-                )
-            })
+        if receipt.is_none()
+            && (!self.layout(payload)?.scan.is_empty()
+                || !self.layout(payload)?.drop.is_empty()
+                || descriptor.logical.facts.iter().skip(1).any(|fact| {
+                    !matches!(
+                        fact.class,
+                        hirsel_lir::logical_storage::StorageClass::Inline
+                    )
+                }))
         {
             return self.unsupported("arena inventory payload needs paired original receipts");
         }
@@ -146,10 +171,14 @@ impl FnEmitter<'_, '_, '_> {
         self.store(shape, root, image)?;
         let arena = self.get1(arena)?;
         let index = self.descriptor_value(layout)?;
-        self.rt(
-            RuntimeEntry::ReceiptArenaInventory,
-            &[self.context, arena, index, image.ptr],
-        )?;
+        let mut args = vec![self.context, arena, index, image.ptr];
+        let entry = if let Some(receipt) = receipt {
+            args.push(self.get1(receipt)?);
+            RuntimeEntry::ReceiptArenaInventoryPaired
+        } else {
+            RuntimeEntry::ReceiptArenaInventory
+        };
+        self.rt(entry, &args)?;
         Ok(())
     }
 
@@ -158,6 +187,16 @@ impl FnEmitter<'_, '_, '_> {
         value: ValueId,
         kind: u8,
         children: &[cranelift_codegen::ir::Value],
+    ) -> Emitted<cranelift_codegen::ir::Value> {
+        self.construction_snapshot_in(value, kind, children, None)
+    }
+
+    fn construction_snapshot_in(
+        &mut self,
+        value: ValueId,
+        kind: u8,
+        children: &[cranelift_codegen::ir::Value],
+        arena: Option<ValueId>,
     ) -> Emitted<cranelift_codegen::ir::Value> {
         use cranelift_codegen::ir::{InstBuilder, types};
         let layout = self.value_type(value)?.layout;
@@ -174,9 +213,18 @@ impl FnEmitter<'_, '_, '_> {
         let index = self.descriptor_value(layout)?;
         let kind = self.b.ins().iconst(types::I8, i64::from(kind));
         let count = self.u64c(children.len() as u64);
-        self.rt1(
-            RuntimeEntry::ReceiptConstruct,
-            &[self.context, index, image.ptr, kind, array, count],
-        )
+        let (entry, args) = if let Some(arena) = arena {
+            let arena = self.get1(arena)?;
+            (
+                RuntimeEntry::ReceiptArenaConstruct,
+                vec![self.context, arena, index, image.ptr, array, count],
+            )
+        } else {
+            (
+                RuntimeEntry::ReceiptConstruct,
+                vec![self.context, index, image.ptr, kind, array, count],
+            )
+        };
+        self.rt1(entry, &args)
     }
 }

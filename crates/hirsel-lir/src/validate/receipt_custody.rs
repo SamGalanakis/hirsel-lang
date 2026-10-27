@@ -164,6 +164,16 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                         );
                     }
                 }
+                Inst::ArenaInventory {
+                    arena,
+                    value,
+                    previous,
+                    ..
+                } => {
+                    if metadata(arena) || metadata(value) || previous.is_some_and(metadata) {
+                        reject(site, "private receipt used as original inventory payload");
+                    }
+                }
                 Inst::Release { value, .. } if metadata(value) => (),
                 // No implicit copy, recast, freeze, forget or user operation
                 // can manufacture or consume a metadata credit.

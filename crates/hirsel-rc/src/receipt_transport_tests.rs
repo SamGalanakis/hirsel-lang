@@ -186,6 +186,7 @@ fn local_producer_33_liveness_uses_metadata_without_rereading_consumed_originals
         ],
     );
     let inst = Inst::PayloadReceipt {
+        arena: hirsel_lir::ir::OptionalValueId::NONE,
         result: ValueId(14),
         value: ValueId(4),
         shape: SealDescriptorId(2),
@@ -215,6 +216,7 @@ fn local_producer_33_remap_preserves_binding_and_all_pooled_pairs() {
         ],
     );
     unit.instructions.push(Inst::PayloadReceipt {
+        arena: hirsel_lir::ir::OptionalValueId::NONE,
         result: ValueId(14),
         value: ValueId(4),
         shape: SealDescriptorId(2),
@@ -225,6 +227,7 @@ fn local_producer_33_remap_preserves_binding_and_all_pooled_pairs() {
     assert_eq!(
         unit.instructions[0],
         Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result: ValueId(34),
             value: ValueId(24),
             shape: SealDescriptorId(2),

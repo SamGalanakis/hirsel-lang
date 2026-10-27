@@ -55,6 +55,12 @@ impl<'a, S> Pairing<'a, S> {
                     reaching,
                     address,
                     ..
+                }
+                | Inst::Copy {
+                    result,
+                    reaching,
+                    address,
+                    ..
                 } if super::identity_address(unit, address) => (result, Origin::Alias(reaching)),
                 Inst::Store {
                     version,

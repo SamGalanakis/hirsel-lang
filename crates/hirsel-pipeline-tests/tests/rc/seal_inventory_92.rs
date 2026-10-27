@@ -57,6 +57,20 @@ fn seal_inventory_92_dead_source_allocation_is_emitted_and_checked_at_value_plac
         assert!(errors.is_empty(), "{errors:?}\n{}", dump(unit));
     };
     check(&unit);
+    let mut unpaired = unit.clone();
+    for instruction in &mut unpaired.instructions {
+        if let Inst::ArenaInventory { receipt, arena, .. } = instruction {
+            *receipt = Some(*arena).into();
+        }
+    }
+    assert!(
+        hirsel_lir::validate::check_scoped_transport(&unpaired, &inputs)
+            .iter()
+            .any(
+                |error| matches!(&error.kind, hirsel_lir::validate::ViolationKind::Sealed(text)
+            if text.contains("inventory receipt differs from its paired original root"))
+            )
+    );
     let placed = hirsel_rc::placement::place(
         unit.clone(),
         &lowered.table,

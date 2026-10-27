@@ -3998,7 +3998,13 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *grant = map(*grant);
                 *root = map(*root);
             }
-            Inst::PayloadReceipt { result, value, .. } => {
+            Inst::PayloadReceipt {
+                arena,
+                result,
+                value,
+                ..
+            } => {
+                *arena = arena.get().map(map).into();
                 *result = map(*result);
                 *value = map(*value);
             }
@@ -4007,12 +4013,14 @@ pub(crate) fn remap_values<S>(unit: &mut LirUnit<S>, map: &impl Fn(ValueId) -> V
                 *owner = map(*owner);
             }
             Inst::ArenaInventory {
+                receipt,
                 arena,
                 value,
                 previous,
                 ..
             } => {
                 *arena = map(*arena);
+                *receipt = receipt.get().map(map).into();
                 *value = map(*value);
                 if let Some(previous) = previous {
                     *previous = map(*previous);

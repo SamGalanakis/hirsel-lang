@@ -197,8 +197,9 @@ impl<S: Stage> Machine<'_, S> {
         allocation: SourceAnchorId,
         value: ValueId,
         shape: SealDescriptorId,
-        previous: Option<ValueId>,
+        companions: (Option<ValueId>, Option<ValueId>),
     ) -> Checked<()> {
+        let (previous, receipt) = companions;
         let descriptor = self
             .unit(f.unit)
             .tables
@@ -282,6 +283,18 @@ impl<S: Stage> Machine<'_, S> {
             None
         };
         let snapshot = self.receipt_snapshot(descriptor.root_type.clone(), Val::Ptr(ptr))?;
+        if let Some(receipt) = receipt {
+            let Val::Ptr(control) = self.read_use(f, receipt)? else {
+                return fail(V::ForgedPointer, "inventory receipt has no private control");
+            };
+            let layout = self.value_type(f.unit, receipt)?.layout;
+            if self.receipt_control(control, layout)? != &snapshot {
+                return fail(
+                    V::TypeConfusion,
+                    "inventory receipt differs from original live cells",
+                );
+            }
+        }
         let entries = self.seal_inventory.entry(region).or_default();
         if entries.contains_key(&ptr.alloc) && old != Some(ptr.alloc) {
             return fail(

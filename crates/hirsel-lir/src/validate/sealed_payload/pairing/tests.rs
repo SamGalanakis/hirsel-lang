@@ -37,6 +37,7 @@ fn value(unit: &mut LirUnit<Value>) -> ValueId {
 fn receipt(unit: &mut LirUnit<Value>, original: ValueId) -> ValueId {
     let result = value(unit);
     unit.instructions.push(Inst::PayloadReceipt {
+        arena: crate::ir::OptionalValueId::NONE,
         result,
         value: original,
         shape: SealDescriptorId(0),

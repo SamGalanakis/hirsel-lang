@@ -882,10 +882,10 @@ impl Importer<'_> {
         Ok(())
     }
 
-    /// Follow only whole-value SSA moves back to an incoming parameter.
-    /// Copies, projections, new payloads and unproved joins need their own
+    /// Follow whole-value moves and ordinary shared copies to their snapshot.
+    /// Projections, deep copies, new payloads and unproved joins need their own
     /// receipt producer. C recovers the final pairing independently.
-    fn receipt_slot(&self, mut value: ValueId) -> Option<SlotId> {
+    pub(super) fn receipt_slot(&self, mut value: ValueId) -> Option<SlotId> {
         let whole = |mut address: AddressId| {
             for _ in 0..=self.out.addresses.len() {
                 let row = &self.out.addresses[address.index()];
@@ -905,6 +905,12 @@ impl Importer<'_> {
             let (result, source) = match *instruction {
                 Inst::Weaken { result, value } => (result, value),
                 Inst::Read {
+                    result,
+                    reaching,
+                    address,
+                    ..
+                }
+                | Inst::Copy {
                     result,
                     reaching,
                     address,

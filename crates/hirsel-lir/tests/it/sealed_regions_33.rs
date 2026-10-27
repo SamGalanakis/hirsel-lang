@@ -915,6 +915,7 @@ fn receipt_local_33_public_c_refuses_producer_before_complete_custody_proof() {
     unit.instructions.insert(
         1,
         Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result,
             value: root,
             shape: SealDescriptorId(0),

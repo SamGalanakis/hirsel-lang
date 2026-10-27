@@ -79,7 +79,7 @@ impl StageKind {
             // Source/grant/loan checks remain mandatory. Heap seals also
             // require a live companion describing the exact taken snapshot.
             Opcode::SealArena | Opcode::BorrowSealedRoot => true,
-            Opcode::ArenaInventory => rank < StageKind::Ready as u8,
+            Opcode::ArenaInventory => true,
             Opcode::CopyValue => rank <= StageKind::Placed as u8,
             Opcode::HoleOpen | Opcode::HoleFill | Opcode::HoleAbandon => true,
             Opcode::Copy

@@ -4792,8 +4792,14 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
     let op = |v| (v, Usage::Operand);
     let mut out = Vec::new();
     match *inst {
-        Inst::PayloadReceipt { value, inputs, .. } => {
+        Inst::PayloadReceipt {
+            value,
+            inputs,
+            arena,
+            ..
+        } => {
             out.push(op(value));
+            out.extend(arena.get().map(op));
             for input in inputs.get(&unit.pools.receipt_inputs).unwrap_or(&[]) {
                 out.extend(input.receipt.map(op));
             }
@@ -4801,6 +4807,7 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
         Inst::SealArena { grant, root, .. } => out.extend([op(grant), op(root)]),
         Inst::BorrowSealedRoot { owner, .. } => out.push(op(owner)),
         Inst::ArenaInventory {
+            receipt,
             arena,
             value,
             previous,
@@ -4808,6 +4815,7 @@ pub(super) fn inst_operands<S>(cx: &Cx<'_, S>, inst: &Inst) -> Vec<(ValueId, Usa
         } => {
             out.extend([op(arena), op(value)]);
             out.extend(previous.map(op));
+            out.extend(receipt.get().map(op));
         }
         Inst::CopyValue { value: operand, .. }
         | Inst::Unary { operand, .. }

@@ -3742,22 +3742,31 @@ impl<'p, S: Stage> Machine<'p, S> {
                 }
             }
             Inst::ArenaInventory {
+                receipt,
                 arena,
                 allocation,
                 value,
                 shape,
                 previous,
             } => {
-                self.record_seal_inventory(f, arena, allocation, value, shape, previous)?;
+                self.record_seal_inventory(
+                    f,
+                    arena,
+                    allocation,
+                    value,
+                    shape,
+                    (previous, receipt.get()),
+                )?;
             }
             Inst::PayloadReceipt {
+                arena,
                 result,
                 value,
                 shape,
                 binding,
                 inputs,
             } => {
-                self.payload_receipt(f, result, value, shape, binding, inputs)?;
+                self.payload_receipt(f, result, value, shape, binding, (inputs, arena.get()))?;
             }
             Inst::BorrowSealedRoot {
                 result,

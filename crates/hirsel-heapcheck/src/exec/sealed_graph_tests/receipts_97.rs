@@ -119,6 +119,7 @@ fn snapshot(m: &mut Machine<'_, Rc>, f: &mut Frame, result: ValueId) -> Ptr {
     m.exec(
         f,
         &Inst::PayloadReceipt {
+            arena: hirsel_lir::ir::OptionalValueId::NONE,
             result,
             value: ValueId(4),
             shape: SealDescriptorId(2),
@@ -222,6 +223,7 @@ fn h_receipt_forged_bytes_and_wrong_construction_identity_are_rejected() {
     let ptr = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
     root(&mut m, &mut f, Val::Ptr(ptr));
     let instruction = Inst::PayloadReceipt {
+        arena: hirsel_lir::ir::OptionalValueId::NONE,
         result,
         value: ValueId(4),
         shape: SealDescriptorId(2),
@@ -555,6 +557,7 @@ fn h_receipt_source_operands_reject_a_changed_constructor_before_snapshot_public
         .unwrap();
     }
     let instruction = Inst::PayloadReceipt {
+        arena: hirsel_lir::ir::OptionalValueId::NONE,
         result,
         value: ValueId(4),
         shape: SealDescriptorId(2),
@@ -761,6 +764,7 @@ fn h_heap_receipt_107_requires_the_sequence_payload_layout() {
         let outcome = m.exec(
             &mut f,
             &Inst::PayloadReceipt {
+                arena: hirsel_lir::ir::OptionalValueId::NONE,
                 result,
                 value: ValueId(4),
                 shape: SealDescriptorId(2),
@@ -774,4 +778,81 @@ fn h_heap_receipt_107_requires_the_sequence_payload_layout() {
             outcome.unwrap();
         }
     }
+}
+
+#[test]
+fn h_receipt_117_rejects_an_arena_operand_on_an_original_heap_construction() {
+    let (x, c, _, result) = setup(false);
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&x.p, &c, &mut ops);
+    let (mut f, _) = prepare(&mut m, 100);
+    let ptr = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
+    root(&mut m, &mut f, Val::Ptr(ptr));
+    m.seal_allocations.insert(
+        ptr.alloc,
+        (0, x.p.units[0].tables.source_anchors[0].clone()),
+    );
+    snapshot(&mut m, &mut f, result);
+    let broken = Inst::PayloadReceipt {
+        result,
+        value: ValueId(4),
+        shape: SealDescriptorId(2),
+        binding: PayloadBindingId(0),
+        inputs: PoolRange::new(0, 2),
+        arena: Some(ValueId(5)).into(),
+    };
+    assert_eq!(m.exec(&mut f, &broken).err().unwrap().kind, V::Malformed);
+}
+
+#[test]
+fn h_inventory_117_requires_its_paired_live_root_with_an_accepted_control() {
+    let (mut x, _, layout, receipt) = setup(false);
+    x.p.units[0].values[6].ty = x.p.units[0].values[4].ty;
+    let c = config(&mut x.p, 2, &[2], false);
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&x.p, &c, &mut ops);
+    let (mut f, _) = prepare(&mut m, 100);
+    let first = nums(&mut m, true, x.payloads[1], &[7], 1);
+    let other = nums(&mut m, true, x.payloads[1], &[8], 1);
+    let anchor = x.p.units[0].tables.source_anchors[1].clone();
+    m.seal_allocations.insert(first.alloc, (0, anchor));
+    f.values[6] = Some(Held {
+        val: Val::Ptr(first),
+        credits: 0,
+        borrow: None,
+    });
+    let root_type = x.p.units[0].tables.seal_descriptors[2].root_type.clone();
+    let snapshot = m
+        .receipt_snapshot(root_type.clone(), Val::Ptr(other))
+        .unwrap();
+    let control = m
+        .heap_alloc(layout, m.word, m.record(layout).unwrap().align)
+        .unwrap();
+    m.receipts.insert(control.alloc, snapshot);
+    m.define_fresh(&mut f, receipt, Val::Ptr(control)).unwrap();
+    let instruction = Inst::ArenaInventory {
+        arena: ValueId(5),
+        allocation: SourceAnchorId(1),
+        value: ValueId(6),
+        shape: SealDescriptorId(2),
+        previous: None,
+        receipt: Some(receipt).into(),
+    };
+    let error = m.exec(&mut f, &instruction).err().unwrap();
+    assert_eq!(error.kind, V::TypeConfusion);
+    assert!(
+        error
+            .message
+            .contains("inventory receipt differs from original live cells"),
+        "{error:?}"
+    );
+    assert!(
+        m.seal_inventory
+            .get(&0)
+            .is_none_or(|entries| entries.is_empty())
+    );
+    let snapshot = m.receipt_snapshot(root_type, Val::Ptr(first)).unwrap();
+    m.receipts.insert(control.alloc, snapshot);
+    m.exec(&mut f, &instruction).unwrap();
+    assert!(m.seal_inventory[&0].contains_key(&first.alloc));
 }
