@@ -13,6 +13,11 @@ impl Drop for Root {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+fn index_bytes(entries: usize) -> u64 {
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<ContentHash, (Reference, PathBuf)>(entries);
+    weight.bytes()
+}
 struct Files {
     disk: u64,
     metadata: u64,
@@ -56,7 +61,9 @@ impl ScratchStore {
         }
         builder.create(&path)?;
         let root = Arc::new(Root(path));
-        let metadata = ENTRY_CHARGE.saturating_add(root.0.capacity() as u64);
+        let metadata = ENTRY_CHARGE
+            .saturating_add(root.0.capacity() as u64)
+            .saturating_add(index_bytes(0));
         if !admission.charge(metadata) {
             return Err(std::io::Error::other(
                 "scratch metadata exceeds admitted transport",
@@ -128,7 +135,11 @@ impl ResultStore for ScratchStore {
             .map(|byte| format!("{byte:02x}"))
             .collect();
         let path = self.root.0.join(name);
-        let metadata = ENTRY_CHARGE.checked_add(path.capacity() as u64)?;
+        // Spool entries own a BTree slot and a path buffer, not a payload
+        // allocation. Charge the same Rust-node bound as other native metadata.
+        let metadata = index_bytes(files.entries.len().checked_add(1)?)
+            .checked_sub(index_bytes(files.entries.len()))?
+            .checked_add(path.capacity() as u64)?;
         if !self.admission.charge(metadata) {
             return None;
         }
@@ -250,6 +261,37 @@ mod tests {
         assert_eq!(&*held, &[19; 13]);
         drop(held);
         assert!(!directory.exists());
+        assert_eq!(budget.reserved(), 0);
+    }
+    #[test]
+    fn scratch_many_small_records_use_their_index_layout_bound() {
+        let parent = tempfile::tempdir().unwrap();
+        let ram = 256 << 10;
+        let budget = ProcessBudget::new(ram);
+        let request = RequestStore::with_scratch(
+            Arc::new(NoneStore),
+            budget.reserve(ram).unwrap(),
+            parent.path(),
+            2 << 20,
+        )
+        .unwrap();
+        let mut last = None;
+        for number in 0u32..400 {
+            let mut value = vec![0; 256];
+            value[..4].copy_from_slice(&number.to_le_bytes());
+            last = Some(
+                request
+                    .put_content(domain(), &value)
+                    .expect("bounded descriptor index"),
+            );
+        }
+        let held = request.get_content(last.unwrap()).unwrap();
+        assert_eq!(&held[..4], &399u32.to_le_bytes());
+        assert!(request.retained_bytes() <= ram);
+        assert!(budget.reserve(1).is_err());
+        drop(request);
+        assert_eq!(budget.reserved(), ram);
+        drop(held);
         assert_eq!(budget.reserved(), 0);
     }
     #[test]
