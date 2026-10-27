@@ -22,12 +22,25 @@ impl SourceEnvironment {
 }
 
 impl SourceInput {
-    pub(super) fn check_closed_environments(
+    /// Reopen complete original closure entries and profiles. This is source
+    /// data validation, not operand-path expansion or executable C/H custody.
+    pub fn check_closed_environments(
         &self,
         request: &Request,
         types: &TypeInterner,
         substitute: &mut impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<(), SourceError> {
+        let current = self.demand_projection(request.ordinary_key())?;
+        let observed = request.source();
+        if current.reference() != observed.reference()
+            || current.source_identity() != observed.source_identity()
+            || current.implementation_revision() != observed.implementation_revision()
+            || current.projection() != observed.projection()
+        {
+            return Err(SourceError::Malformed(
+                "inventory request differs from current original source",
+            ));
+        }
         if !request
             .source()
             .projection()

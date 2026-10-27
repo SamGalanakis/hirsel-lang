@@ -236,7 +236,7 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
             let graph = named_graph(&provider, roots.clone(), &mut cases).unwrap();
             graph.recheck(&provider, roots, &mut cases).unwrap();
             let mut owned = 0;
-            let mut environments = 0;
+            let mut closed_entries = 0;
             for (request, context) in graph.requests.iter().zip(&graph.contexts) {
                 let Some(source) = request.receipt_source().unwrap() else {
                     continue;
@@ -268,25 +268,11 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                 let original = provider
                     .original(request.ordinary_key().definition())
                     .unwrap();
-                let nominals = input
-                    .signatures
-                    .iter()
-                    .filter(|(_, s)| matches!(s.kind, hirsel_types::SignatureKind::Type(_)))
-                    .map(|(p, s)| (hirsel_syntax::DefId::intern(p), s.clone()))
-                    .collect();
                 let source_input = hirsel_rc::sealed_source::SourceInput::capture(
                     original.output().unwrap().observation_identity(),
                     original.implementation_revision(),
                     original.definition().clone(),
-                )
-                .with_nominals(nominals);
-                let parameters = request
-                    .declaration()
-                    .entry()
-                    .parameters()
-                    .iter()
-                    .map(|p| p.ordinal)
-                    .collect::<Vec<_>>();
+                );
                 let substitute = |ty| {
                     hirsel_rc::instance::substitute(
                         &input.types,
@@ -297,23 +283,14 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     )
                     .map_err(|e| SourceError::Type(format!("{e:?}")))
                 };
-                let expected = source_input
-                    .derive_request(request, &input.types, &parameters, substitute)
+                source_input
+                    .check_closed_environments(request, &input.types, &mut { substitute })
                     .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-                expected.source().check().unwrap();
-                assert_eq!(expected.environments().len(), request.closures().len());
-                for environment in expected.environments() {
-                    assert_eq!(
-                        environment.payload().recipe.inputs.len(),
-                        environment.entry().captures().len()
-                    );
-                    environments += 1;
-                }
-                // Keeping the parent observation and recipe is insufficient:
-                // a changed original child capture must be reopened too.
-                if let Some(environment) = expected
-                    .environments()
-                    .iter()
+                closed_entries += request.closures().len();
+                // Reopening only the parent cannot authorize changed child captures.
+                if let Some(environment) = request
+                    .closures()
+                    .values()
                     .find(|e| !e.entry().captures().is_empty())
                 {
                     let mut changed = original.definition().clone();
@@ -330,7 +307,7 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     );
                     assert!(
                         changed
-                            .derive_request(request, &input.types, &parameters, substitute)
+                            .check_closed_environments(request, &input.types, &mut { substitute })
                             .is_err(),
                         "changed original capture was accepted"
                     );
@@ -338,8 +315,8 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
             }
             assert!(owned > 0, "{name} has no demanded owning capture");
             assert!(
-                environments > 0,
-                "{name} has no closed original environments"
+                closed_entries > 0,
+                "{name} has no checked original closure entries"
             );
         }
     });
