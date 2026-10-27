@@ -25,13 +25,14 @@ use hirsel_syntax::ContentHash;
 use std::collections::BTreeMap;
 
 mod check;
+mod cleanup;
 pub use check::{check, check_transform};
 mod compound;
 mod finalizer;
 pub mod native;
 mod staged;
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// Stable within a unit's initial trace plan. Relocation never changes this id.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -183,6 +184,43 @@ pub struct Observation {
 }
 snapshot_struct!(Observation { point, marker });
 
+/// Immutable cause of a generated cleanup, checked at its creation boundary.
+/// Later lowering preserves this unit/point instead of retargeting the cause.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CleanupOrigin {
+    pub unit: ContentHash,
+    pub point: Point,
+}
+snapshot_struct!(CleanupOrigin { unit, point });
+
+/// An additional destruction path introduced by RC release failure cleanup.
+/// The original marker remains the source identity; token and site name the
+/// actual checked cleanup. Trigger is the release whose failure owns this path.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CleanupObservation {
+    pub marker: MarkerId,
+    pub point: Point,
+    pub token: Location,
+    pub site: SiteRange,
+    pub trigger: CleanupOrigin,
+}
+snapshot_struct!(CleanupObservation {
+    marker,
+    point,
+    token,
+    site,
+    trigger
+});
+
+/// Existing cleanup placements relocate exactly once. A new placement must
+/// prove an introduced release and its actual failure-cleanup path.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CleanupRelocation {
+    pub before: Option<CleanupObservation>,
+    pub after: CleanupObservation,
+}
+snapshot_struct!(CleanupRelocation { before, after });
+
 /// Immutable diagnostic selection. Generic native clients retain Owned;
 /// source resource tracing selects Resources before the first compiler pass.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -199,12 +237,14 @@ pub struct Plan {
     pub unit: ContentHash,
     pub selection: Selection,
     pub observations: Vec<Observation>,
+    pub cleanups: Vec<CleanupObservation>,
 }
 snapshot_struct!(Plan {
     version,
     unit,
     selection,
-    observations
+    observations,
+    cleanups
 });
 
 impl Plan {
@@ -222,6 +262,7 @@ impl Plan {
             unit: unit.digest(),
             selection,
             observations,
+            cleanups: Vec::new(),
         }
     }
 }
@@ -250,11 +291,13 @@ pub struct Recipe {
     pub before: ContentHash,
     pub after: ContentHash,
     pub relocations: Vec<Relocation>,
+    pub cleanups: Vec<CleanupRelocation>,
 }
 snapshot_struct!(Recipe {
     before,
     after,
-    relocations
+    relocations,
+    cleanups
 });
 
 /// Borrowed and checked, so mutation cannot invalidate a check before emission.
@@ -337,6 +380,7 @@ impl<'a> CheckedPlan<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
+    InvalidCleanup(MarkerId),
     Version(u32),
     StalePlan,
     MissingRecipe,

@@ -236,7 +236,56 @@ pub fn insert_observed(
             ));
         }
     }
-    let (unit, plan, releases) = crate::observation::finish(&before, &plan, editor, &origins.rows)?;
+    let whole_slot = |mut address: AddressId| -> Option<SlotId> {
+        for _ in 0..editor.unit.addresses.len() {
+            let info = editor.unit.addresses.get(address.index())?;
+            if info.projection.len != 0 {
+                return None;
+            }
+            match info.base {
+                AddressBase::Slot(slot) => return Some(slot),
+                AddressBase::Address(parent) if parent.0 < address.0 => address = parent,
+                _ => return None,
+            }
+        }
+        None
+    };
+    let mut source_drops = BTreeMap::new();
+    for row in &plan.observations {
+        if row.marker.kind == hirsel_lir::ownership_trace::Kind::Drop
+            && let hirsel_lir::ownership_trace::Location::Address(address) = row.marker.token
+            && let Some(slot) = whole_slot(address)
+        {
+            source_drops.entry(slot).or_insert(row.marker.id);
+        }
+    }
+    let generated = origins
+        .generated
+        .iter()
+        .filter_map(|(&(block, address), &(trigger, anchor, if_live))| {
+            let marker = *source_drops.get(&whole_slot(address)?)?;
+            Some(hirsel_lir::ownership_trace::CleanupObservation {
+                marker,
+                point: hirsel_lir::ownership_trace::Point::Instruction {
+                    block,
+                    index: 0,
+                    moment: if if_live {
+                        hirsel_lir::ownership_trace::Moment::IfLive
+                    } else {
+                        hirsel_lir::ownership_trace::Moment::Before
+                    },
+                },
+                token: hirsel_lir::ownership_trace::Location::Address(address),
+                site: editor.unit.tables.cleanup_anchors[anchor.index()].site,
+                trigger: hirsel_lir::ownership_trace::CleanupOrigin {
+                    unit: plan.unit,
+                    point: trigger,
+                },
+            })
+        })
+        .collect();
+    let (unit, plan, releases) =
+        crate::observation::finish_generated(&before, &plan, editor, &origins.rows, generated)?;
     Ok((unit, plan, vec![copies, detach, releases]))
 }
 
@@ -2844,7 +2893,19 @@ pub(crate) fn synthesize_failure<S: Stage>(
     facts: &mut Facts,
     state: &State,
     at: SourceAnchorId,
+    shared: Option<&mut SharedChains>,
+) -> Option<FailureId> {
+    synthesize_failure_reporting::<S, false>(ed, lay, facts, state, at, shared, |_, _, _, _| {})
+}
+
+fn synthesize_failure_reporting<S: Stage, const TRACE: bool>(
+    ed: &mut Editor<S>,
+    lay: Lay<'_>,
+    facts: &mut Facts,
+    state: &State,
+    at: SourceAnchorId,
     mut shared: Option<&mut SharedChains>,
+    mut observed: impl FnMut(BlockId, AddressId, CleanupAnchorId, bool),
 ) -> Option<FailureId> {
     let unit = &ed.unit;
     let mut pending = Vec::new();
@@ -3017,6 +3078,15 @@ pub(crate) fn synthesize_failure<S: Stage>(
                 next,
             )
         });
+        if TRACE {
+            let Inst::Drop {
+                anchor, if_live, ..
+            } = ed.code[next.index()][0]
+            else {
+                unreachable!("shared cleanup drop link")
+            };
+            observed(next, address, anchor, if_live);
+        }
     }
     for &v in pending.iter().rev() {
         next = step(ed, SharedLink::Release(v), next, &mut |ed, next| {
@@ -3352,6 +3422,8 @@ struct Point {
 struct ReleaseOrigins<const TRACK: bool> {
     rows: Vec<Vec<Option<u32>>>,
     cloned: Vec<BlockId>,
+    generated:
+        BTreeMap<(BlockId, AddressId), (hirsel_lir::ownership_trace::Point, CleanupAnchorId, bool)>,
 }
 impl<const TRACK: bool> ReleaseOrigins<TRACK> {
     fn new(unit: &LirUnit<Rc>) -> Self {
@@ -3365,6 +3437,7 @@ impl<const TRACK: bool> ReleaseOrigins<TRACK> {
                 Vec::new()
             },
             cloned: Vec::new(),
+            generated: BTreeMap::new(),
         }
     }
     fn insert(&mut self, block: usize, at: usize, count: usize) {
@@ -3752,7 +3825,27 @@ fn release_pass<const TRACK: bool>(
             continue;
         };
         let at = ed.unit.blocks[b.index()].anchor;
-        match synthesize_failure(&mut ed, lay, &mut facts, state, at, Some(&mut shared)) {
+        match synthesize_failure_reporting::<Rc, TRACK>(
+            &mut ed,
+            lay,
+            &mut facts,
+            state,
+            at,
+            Some(&mut shared),
+            |block, address, anchor, if_live| {
+                if TRACK {
+                    origins.generated.entry((block, address)).or_insert((
+                        hirsel_lir::ownership_trace::Point::Instruction {
+                            block: b,
+                            index: i as u32,
+                            moment: hirsel_lir::ownership_trace::Moment::Before,
+                        },
+                        anchor,
+                        if_live,
+                    ));
+                }
+            },
+        ) {
             Some(f) => {
                 if let Some(slot) = Inst::failure_mut(&mut ed.code[b.index()][i]) {
                     *slot = f;

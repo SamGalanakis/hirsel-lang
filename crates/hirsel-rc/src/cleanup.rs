@@ -221,6 +221,17 @@ pub fn lower_observed<S: Stage>(
     .map_err(|error| error.to_string())?;
     output.unit = after.digest();
     let recipe = hirsel_lir::ownership_trace::Recipe {
+        cleanups: input
+            .cleanups
+            .iter()
+            .zip(&output.cleanups)
+            .map(
+                |(before, after)| hirsel_lir::ownership_trace::CleanupRelocation {
+                    before: Some(before.clone()),
+                    after: after.clone(),
+                },
+            )
+            .collect(),
         before: input.unit,
         after: output.unit,
         relocations: output

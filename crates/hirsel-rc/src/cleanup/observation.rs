@@ -101,8 +101,19 @@ impl Reporter for Observations {
         Ok(())
     }
     fn inserted(&mut self, insertions: &[(BlockId, usize)]) -> Result<(), PassError> {
-        for row in &mut self.plan.observations {
-            let at = match &mut row.point {
+        let points = self
+            .plan
+            .observations
+            .iter_mut()
+            .map(|row| &mut row.point)
+            .chain(
+                self.plan
+                    .cleanups
+                    .iter_mut()
+                    .flat_map(|row| [&mut row.point]),
+            );
+        for point in points {
+            let at = match point {
                 Point::Instruction { block, index, .. }
                 | Point::ReleaseDrop { block, index }
                 | Point::CompoundDrop {
@@ -133,7 +144,9 @@ impl Reporter for Observations {
     fn versions(&mut self, ed: &Editor<Ready>, before: bool) -> Result<(), PassError> {
         let unit = snapshot(ed);
         if before {
-            let plan = Plan::selected(&unit, self.plan.selection, self.plan.observations.clone());
+            let mut plan =
+                Plan::selected(&unit, self.plan.selection, self.plan.observations.clone());
+            plan.cleanups = self.plan.cleanups.clone();
             trace::check(&unit, &plan).map_err(refused)?;
             self.versions = Some((unit, plan));
         } else {
@@ -202,9 +215,9 @@ impl Reporter for Observations {
                 _ => point,
             })
         };
-        for observation in &mut self.plan.observations {
+        let mut transport = |point: &mut Point, marker: trace::MarkerId| -> Result<(), PassError> {
             let relocate = |old: u32| start as u32 + old - index as u32 - 1;
-            observation.point = match observation.point {
+            *point = match *point {
                 Point::Instruction {
                     block: b,
                     index: i,
@@ -214,7 +227,7 @@ impl Reporter for Observations {
                         replacement.ok_or_else(|| {
                             refused(format!(
                                 "compound drop {:?} needs a transport recipe",
-                                observation.marker.id
+                                marker
                             ))
                         })?
                     } else if i as usize > index {
@@ -224,7 +237,7 @@ impl Reporter for Observations {
                             moment,
                         }
                     } else {
-                        inserted(observation.point)?
+                        inserted(*point)?
                     }
                 }
                 Point::ReleaseDrop { block: b, index: i } if b == block && i as usize > index => {
@@ -246,7 +259,7 @@ impl Reporter for Observations {
                     index: cut,
                     failure,
                 } => {
-                    let shifted = inserted(observation.point)?;
+                    let shifted = inserted(*point)?;
                     let Point::CompoundDrop {
                         index: shifted_cut, ..
                     } = shifted
@@ -275,14 +288,22 @@ impl Reporter for Observations {
                 Point::FinalizerDrop { block: b } if b == block => {
                     Point::FinalizerDrop { block: tail }
                 }
-                _ => inserted(observation.point)?,
+                _ => inserted(*point)?,
             };
+            Ok(())
+        };
+        for observation in &mut self.plan.observations {
+            transport(&mut observation.point, observation.marker.id)?;
+        }
+        for extra in &mut self.plan.cleanups {
+            transport(&mut extra.point, extra.marker)?;
         }
         Ok(())
     }
     fn finish(self, ed: Editor<Ready>) -> Result<(LirUnit<Ready>, Plan), PassError> {
         let before = snapshot(&ed);
-        let plan = Plan::selected(&before, self.plan.selection, self.plan.observations);
+        let mut plan = Plan::selected(&before, self.plan.selection, self.plan.observations);
+        plan.cleanups = self.plan.cleanups;
         let origins: Vec<Vec<Option<u32>>> = ed
             .code
             .iter()

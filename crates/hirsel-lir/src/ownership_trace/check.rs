@@ -46,6 +46,7 @@ pub fn check<'a, S: Stage>(unit: &'a LirUnit<S>, plan: &'a Plan) -> Result<Check
             return Err(Error::DuplicateObservation(marker.id));
         }
     }
+    super::cleanup::check(unit, plan)?;
     Ok(CheckedPlan { plan, markers })
 }
 
@@ -166,6 +167,7 @@ pub fn check_transform<'a, A: Stage, B: Stage>(
     {
         return Err(Error::ChangedOrder);
     }
+    super::cleanup::transform(before, input.plan, after, output.plan, recipe)?;
     Ok(output)
 }
 
@@ -481,7 +483,10 @@ pub(super) fn mutable_alias<S>(unit: &LirUnit<S>, observation: &Observation) -> 
                 && matches!(argument.value, ArgumentValue::Address { address: actual, .. } if actual == address)))
 }
 
-fn binding<S: Stage>(unit: &LirUnit<S>, observation: &Observation) -> Result<bool, Error> {
+pub(super) fn binding<S: Stage>(
+    unit: &LirUnit<S>,
+    observation: &Observation,
+) -> Result<bool, Error> {
     if observation.marker.kind == Kind::Alias {
         return Ok(call_alias(unit, observation) || mutable_alias(unit, observation));
     }
@@ -757,7 +762,7 @@ pub(super) fn site<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<SiteRang
 
 // Exact cleanup identity is stricter than equal source ranges: two actions of
 // one source statement may have the same span and still name different drops.
-fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
+pub(super) fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnchor> {
     if let Point::FinalizerDrop { block } | Point::CompoundDrop { block, .. } = point {
         let (_, anchor) = super::finalizer::begin(unit, block)?;
         return unit.tables.cleanup_anchors.get(anchor.index());
@@ -811,7 +816,7 @@ fn drop_anchor<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<&CleanupAnch
 
 // A bundled logical drop cannot be reduced to one of its physical exits.
 // Only a semantic Drop may expand to a checked release/finalizer transport.
-fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
+pub(super) fn drop_form<S: Stage>(unit: &LirUnit<S>, point: Point) -> Option<u8> {
     match point {
         Point::ReleaseDrop { .. } => Some(1),
         Point::FinalizerDrop { .. } => Some(2),

@@ -567,6 +567,7 @@ fn ready_case_inner_mutation(
                         observed.unit.unit(),
                         &forged,
                         Some(&hirsel_lir::ownership_trace::Recipe {
+                            cleanups: Vec::new(),
                             before: observed.plan.unit,
                             after: forged.unit,
                             relocations: Vec::new(),

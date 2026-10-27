@@ -745,6 +745,9 @@ impl LeafPlan {
         layouts: &LayoutTable,
         plan: &Plan,
     ) -> Result<Self, String> {
+        if !plan.cleanups.is_empty() {
+            return Self::with_cleanup_transports(unit, layouts, plan);
+        }
         let body = unit.unit();
         let checked = check(body, plan).map_err(|error| error.to_string())?;
         let expected = Self::from_unit(body, layouts, false, true, plan.selection)?;
@@ -995,6 +998,75 @@ impl LeafPlan {
             empty_codes: Vec::new(),
         };
         edges::stage(&mut prepared)?;
+        Ok(prepared)
+    }
+
+    /// Expand only the pass-authored cleanup placements for independent Ready
+    /// coverage, then restore each original logical marker and source. Temporary
+    /// ids are private preparation keys and never become trace token identities.
+    fn with_cleanup_transports(
+        unit: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+        plan: &Plan,
+    ) -> Result<Self, String> {
+        check(unit.unit(), plan).map_err(|error| error.to_string())?;
+        let mut expanded = plan.clone();
+        let mut next = expanded
+            .observations
+            .iter()
+            .map(|row| row.marker.id.0)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("ownership physical marker overflow")?;
+        let mut aliases = BTreeMap::new();
+        for extra in std::mem::take(&mut expanded.cleanups) {
+            let source = plan
+                .observations
+                .iter()
+                .find(|row| row.marker.id == extra.marker)
+                .ok_or("additional cleanup lost its original marker")?;
+            let id = MarkerId(next);
+            next = next
+                .checked_add(1)
+                .ok_or("ownership physical marker overflow")?;
+            aliases.insert(id, (extra.marker, source.marker.site));
+            expanded.observations.push(Observation {
+                point: extra.point,
+                marker: ObserveOwnership {
+                    id,
+                    kind: Kind::Drop,
+                    site: extra.site,
+                    token: extra.token,
+                    owner: extra.token,
+                },
+            });
+        }
+        let mut prepared = Self::from_relocated(unit, layouts, &expanded)?;
+        for native in prepared.commits.iter_mut().map(|(_, native)| native) {
+            if let Some(&(id, site)) = aliases.get(&native.id) {
+                native.id = id;
+                native.site = site;
+            }
+        }
+        for (temporary, (original, site)) in aliases {
+            let physical = prepared
+                .markers
+                .remove(&temporary)
+                .ok_or("additional cleanup has no prepared marker")?;
+            let target = prepared
+                .markers
+                .get_mut(&original)
+                .ok_or("additional cleanup lost its prepared source marker")?;
+            for mut native in physical {
+                native.id = original;
+                native.site = site;
+                if !target.contains(&native) {
+                    target.push(native);
+                }
+            }
+        }
+        prepared.plan = plan.clone();
         Ok(prepared)
     }
 

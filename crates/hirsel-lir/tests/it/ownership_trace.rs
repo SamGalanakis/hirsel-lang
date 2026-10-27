@@ -95,6 +95,15 @@ fn fixture() -> (LirUnit<Rc>, Plan) {
 
 fn recipe(input: &Plan, output: &Plan) -> Recipe {
     Recipe {
+        cleanups: output
+            .cleanups
+            .iter()
+            .enumerate()
+            .map(|(index, row)| CleanupRelocation {
+                before: input.cleanups.get(index).cloned(),
+                after: row.clone(),
+            })
+            .collect(),
         before: input.unit,
         after: output.unit,
         relocations: output
@@ -4607,13 +4616,29 @@ fn ownership_resource_selection_ignores_data_release_but_refuses_hidden_resource
     );
 }
 
-#[test]
-fn ownership_trace_release_relocates_resource_drops_after_silent_cleanup_is_removed() {
+fn release_cleanup_fixture() -> (
+    LirUnit<hirsel_lir::stage::Placed>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+) {
+    release_cleanup_fixture_with(l::BLK)
+}
+
+fn release_cleanup_fixture_with(
+    data_layout: hirsel_lir::LayoutId,
+) -> (
+    LirUnit<hirsel_lir::stage::Placed>,
+    Plan,
+    hirsel_lir::layout_types::LayoutTable,
+) {
     use hirsel_lir::stage::Placed;
     use support::Undo;
-    let mut t = Lir::<Placed>::new(&[(Passing::Take, l::RES), (Passing::Take, l::BLK)], None);
+    let mut t = Lir::<Placed>::new(
+        &[(Passing::Take, l::RES), (Passing::Take, data_layout)],
+        None,
+    );
     let resource = t.slot(l::RES, SlotKind::Parameter(0), ROOT);
-    let data = t.slot(l::BLK, SlotKind::Parameter(1), ROOT);
+    let data = t.slot(data_layout, SlotKind::Parameter(1), ROOT);
     let resource_version = t.version_of(resource);
     let data_version = t.version_of(data);
     t.param(resource_version);
@@ -4663,6 +4688,12 @@ fn ownership_trace_release_relocates_resource_drops_after_silent_cleanup_is_remo
             },
         }],
     );
+    (before, input, table)
+}
+
+#[test]
+fn ownership_trace_release_relocates_resource_drops_after_silent_cleanup_is_removed() {
+    let (before, input, table) = release_cleanup_fixture();
     let ordinary = hirsel_rc::insert::insert(before.clone(), &table, &Default::default()).unwrap();
     let (after, output, recipes) =
         hirsel_rc::insert::insert_observed(before.clone(), &table, &Default::default(), &input)
@@ -4698,4 +4729,157 @@ fn ownership_trace_release_relocates_resource_drops_after_silent_cleanup_is_remo
         .unwrap_err(),
         Error::MissingMarker(MarkerId(71))
     );
+}
+
+#[test]
+fn ownership_trace_additional_cleanup_requires_an_introduced_release_and_the_same_resource() {
+    for data_layout in [l::BLK, l::PAIR] {
+        let (placed, input, table) = release_cleanup_fixture_with(data_layout);
+        let before = checked_native_fixture(placed.clone().into_stage::<Rc>(), &table).into_raw();
+        let mut input = input;
+        input.unit = before.digest();
+        let (after, output, _) = hirsel_rc::insert::insert_observed(
+            placed,
+            &table,
+            &Default::default(),
+            &Plan::new(
+                &before.clone().into_stage::<hirsel_lir::stage::Placed>(),
+                input.observations.clone(),
+            ),
+        )
+        .unwrap();
+        let after = checked_native_fixture(after, &table).into_raw();
+        let mut triggers = Vec::new();
+        let mut generated = None;
+        for (block, info) in after.blocks.iter().enumerate() {
+            for (index, instruction) in info
+                .instructions
+                .get(&after.instructions)
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                let point = Point::Instruction {
+                    block: BlockId(block as u32),
+                    index: index as u32,
+                    moment: Moment::Before,
+                };
+                match *instruction {
+                    Inst::Release { failure, .. } => {
+                        triggers.push((point, failure));
+                    }
+                    Inst::Drop {
+                        address,
+                        failure,
+                        if_live,
+                        ..
+                    } if after.addresses[address.index()].base == AddressBase::Slot(SlotId(1)) => {
+                        triggers.push((
+                            match point {
+                                Point::Instruction { block, index, .. } => Point::Instruction {
+                                    block,
+                                    index,
+                                    moment: if if_live {
+                                        Moment::IfLive
+                                    } else {
+                                        Moment::Before
+                                    },
+                                },
+                                _ => unreachable!(),
+                            },
+                            failure,
+                        ));
+                    }
+                    Inst::Drop {
+                        address, anchor, ..
+                    } if after.tables.cleanup_anchors[anchor.index()].cleanup == STATE_RELEASE
+                        && after.addresses[address.index()].base
+                            == AddressBase::Slot(SlotId(0)) =>
+                    {
+                        generated = Some((
+                            point,
+                            address,
+                            after.tables.cleanup_anchors[anchor.index()].site,
+                        ));
+                    }
+                    _ => (),
+                }
+            }
+        }
+        let (point, token, site) = generated.unwrap();
+        let Point::Instruction { block: cleanup, .. } = point else {
+            unreachable!()
+        };
+        let trigger = triggers
+            .into_iter()
+            .find_map(|(point, failure)| {
+                let edge = after.tables.failures[failure.index()].cleanup;
+                (after.tables.edges[edge.index()].target == cleanup).then_some(point)
+            })
+            .unwrap();
+        let extra = CleanupObservation {
+            marker: MarkerId(71),
+            point,
+            token: Location::Address(token),
+            site,
+            trigger: CleanupOrigin {
+                unit: after.digest(),
+                point: trigger,
+            },
+        };
+        assert_eq!(output.cleanups, vec![extra.clone()]);
+        let transport = recipe(&input, &output);
+        check_transform(&before, &input, &after, &output, Some(&transport)).unwrap();
+        check_transform(
+            &after,
+            &output,
+            &after,
+            &output,
+            Some(&recipe(&output, &output)),
+        )
+        .unwrap();
+        let mut omitted = output.clone();
+        omitted.cleanups.clear();
+        assert!(
+            check_transform(
+                &after,
+                &output,
+                &after,
+                &omitted,
+                Some(&recipe(&output, &omitted))
+            )
+            .is_err()
+        );
+        let mut duplicated = output.clone();
+        duplicated.cleanups.push(extra.clone());
+        assert!(check(&after, &duplicated).is_err());
+        let text = hirsel_codec::to_text(&output);
+        assert_eq!(output, hirsel_codec::from_text::<Plan>(&text).unwrap());
+        let mut missing = transport.clone();
+        missing.cleanups.clear();
+        assert!(check_transform(&before, &input, &after, &output, Some(&missing)).is_err());
+        let mut wrong = output.clone();
+        wrong.cleanups[0].marker = MarkerId(999);
+        assert!(check(&after, &wrong).is_err());
+        let mut wrong = output.clone();
+        let data_address = after
+            .addresses
+            .iter()
+            .position(|info| info.base == AddressBase::Slot(SlotId(1)))
+            .unwrap();
+        wrong.cleanups[0].token = Location::Address(AddressId(data_address as u32));
+        assert!(check(&after, &wrong).is_err());
+        let mut wrong = output.clone();
+        wrong.cleanups[0].site.start += 1;
+        assert!(check(&after, &wrong).is_err());
+        let mut wrong = output.clone();
+        wrong.cleanups[0].point = output.observations[0].point;
+        assert!(check(&after, &wrong).is_err());
+        let mut wrong = output.clone();
+        wrong.cleanups[0].trigger.point = Point::Return(after.entry);
+        assert!(check(&after, &wrong).is_err());
+        let mut wrong = transport;
+        wrong.cleanups[0].before = Some(extra);
+        assert!(check_transform(&before, &input, &after, &output, Some(&wrong)).is_err());
+    }
 }
