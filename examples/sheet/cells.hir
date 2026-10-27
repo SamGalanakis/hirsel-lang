@@ -46,7 +46,7 @@ pub fn empty() -> Workbook uses {} {
 
 // Parse/edge admission finishes before any mutation of the old workbook.
 // A malformed expression is durable typed cell state, while a bound refuses the edit.
-pub fn edit(mut book: Workbook, id: u64, take source: String) -> Result[
+fn write(mut book: Workbook, id: u64, take source: String, fresh: bool) -> Result[
   (),
   formula.Refusal
 ] uses {} {
@@ -63,11 +63,35 @@ pub fn edit(mut book: Workbook, id: u64, take source: String) -> Result[
     Ok(tree) => graph.dependencies(tree),
     Error(_) => [],
   }
-  let edges = graph.rewire(book.edges, id, dependencies)?
+  let edges = if fresh {
+    if list.len(dependencies) > 4096 - list.len(book.edges) {
+      return Error(EdgeLimit())
+    }
+    let mut appended = replace(mut book.edges, [])
+    for dependency in dependencies {
+      list.push(mut appended, toposort.Edge(from: dependency, to: id))
+    }
+    take appended
+  } else {
+    graph.rewire(book.edges, id, dependencies)?
+  }
   let _ = replace_value(mut book.sources[id], take source)
   // Replaced recursive nodes are taken and dropped; read-only evaluation never takes them.
   let old = replace(mut book.expressions[id], take expression)
   book.edges = take edges
-  graph.invalidate(book.edges, mut book.dirty, id)
+  if fresh {
+    book.dirty[id] = true
+  } else {
+    graph.invalidate(book.edges, mut book.dirty, id)
+  }
   Ok(())
+}
+
+pub fn edit(mut book: Workbook, id: u64, take source: String) -> Result[(), formula.Refusal] uses {} {
+  write(mut book, id, take source, false)
+}
+
+// decode starts empty and checks each id once; every installed formula is dirty.
+pub fn load(mut book: Workbook, id: u64, take source: String) -> Result[(), formula.Refusal] uses {} {
+  write(mut book, id, take source, true)
 }

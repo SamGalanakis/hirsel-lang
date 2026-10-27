@@ -99,7 +99,7 @@ pub fn decode(take source: String) -> Result[cells.Workbook, Problem] uses {} {
     let Some(text) = json_access.as_text(raw) else {
       return Error(Invalid("cell_schema"))
     }
-    if let Error(limit) = cells.edit(mut book, id, unique text) {
+    if let Error(limit) = cells.load(mut book, id, unique text) {
       return Error(Refused(formula.refusal_text(limit)))
     }
   }
