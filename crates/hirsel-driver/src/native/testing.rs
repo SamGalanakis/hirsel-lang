@@ -26,13 +26,13 @@ pub fn test_path(
     schedules: &crate::testing::Schedules,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let discovery =
-        crate::testing::discover_request(path, filters, seed, Selection::Tests, verify)?;
+    let (discovery, selector) =
+        crate::testing::discover_with_selector(path, filters, seed, Selection::Tests, verify)?;
     let tests = &discovery.tests;
     if tests.is_empty() {
         return Ok(vec![]);
     }
-    run(path, &discovery, tests, verify, backend, bless, schedules)
+    run(path, &discovery, tests, selector, backend, bless, schedules)
         .map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
@@ -46,13 +46,13 @@ pub fn bench_path(
     target: Duration,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let discovery =
-        crate::testing::discover_request(path, filters, seed, Selection::Benches, verify)?;
+    let (discovery, selector) =
+        crate::testing::discover_with_selector(path, filters, seed, Selection::Benches, verify)?;
     let benches = &discovery.tests;
     if benches.is_empty() {
         return Ok(vec![]);
     }
-    bench(path, &discovery, benches, verify, backend, target)
+    bench(path, &discovery, benches, selector, backend, target)
         .map_err(|e| ToolError::Runtime(e.to_string()))
 }
 
@@ -69,7 +69,7 @@ impl Executable {
         path: &Path,
         discovery: &crate::testing::TestDiscovery,
         tests: &[Test],
-        verify: hirsel_engine::Verify,
+        selector: CompilerRequests,
         backend: Backend,
         optimization: OptLevel,
     ) -> Result<Self, NativeError> {
@@ -81,9 +81,7 @@ impl Executable {
             .map(PathBuf::from)
             .unwrap_or_else(super::runtime_cache::default_directory);
         let tools = Arc::new(Toolchain::in_tree(&cache, &[&target])?);
-        let compiler = crate::COMPILER.with_verify(verify);
-        let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration())
-            .with_toolchain(tools);
+        let mut selector = selector.with_toolchain(tools);
         let request = CompileRequest {
             path: path.to_owned(),
             inputs: discovery.inputs.clone(),
@@ -233,12 +231,12 @@ fn run(
     path: &Path,
     discovery: &crate::testing::TestDiscovery,
     tests: &[Test],
-    verify: hirsel_engine::Verify,
+    selector: CompilerRequests,
     backend: Backend,
     bless: bool,
     schedules: &crate::testing::Schedules,
 ) -> Result<Vec<TestResult>, NativeError> {
-    let executable = Executable::build(path, discovery, tests, verify, backend, OptLevel::None)?;
+    let executable = Executable::build(path, discovery, tests, selector, backend, OptLevel::None)?;
     let mut results = Vec::new();
     for (index, test) in tests.iter().enumerate() {
         let mut error = None;
@@ -263,7 +261,7 @@ fn bench(
     path: &Path,
     discovery: &crate::testing::TestDiscovery,
     benches: &[Test],
-    verify: hirsel_engine::Verify,
+    selector: CompilerRequests,
     backend: Backend,
     target: Duration,
 ) -> Result<Vec<BenchResult>, NativeError> {
@@ -282,7 +280,7 @@ fn bench(
         path,
         discovery,
         &entries,
-        verify,
+        selector,
         backend,
         OptLevel::Default,
     )?;

@@ -374,18 +374,7 @@ pub(crate) struct TestDiscovery {
     source_paths: Vec<PathBuf>,
 }
 
-pub(crate) fn discover_request(
-    path: &Path,
-    filters: &[String],
-    override_seed: Option<u64>,
-    selection: Selection,
-    verify: hirsel_engine::Verify,
-) -> Result<TestDiscovery, ToolError> {
-    discover_with_selector(path, filters, override_seed, selection, verify)
-        .map(|(discovery, _)| discovery)
-}
-
-fn discover_with_selector(
+pub(crate) fn discover_with_selector(
     path: &Path,
     filters: &[String],
     override_seed: Option<u64>,
