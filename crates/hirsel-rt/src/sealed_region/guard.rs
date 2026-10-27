@@ -232,6 +232,15 @@ unsafe fn seal_record<'ctx>(
     root: &Receipt<Record>,
     plan: &Plan,
 ) -> Result<*mut SealedRegion, Error> {
+    unsafe { seal_record_with(raw, root, plan, &mut |_| Ok(())) }
+}
+
+unsafe fn seal_record_with<'ctx>(
+    raw: *mut ReceiptArenaGuard<'ctx>,
+    root: &Receipt<Record>,
+    plan: &Plan,
+    checkpoint: &mut impl FnMut(super::transaction::Event) -> Result<(), super::SealError>,
+) -> Result<*mut SealedRegion, Error> {
     // SAFETY: take exactly the owned journal allocation. Its slot stays
     // allocated, allowing failure restoration without allocating again.
     let journal = unsafe { ptr::replace(ptr::addr_of_mut!((*raw).inventory), ptr::null_mut()) };
@@ -240,7 +249,7 @@ unsafe fn seal_record<'ctx>(
     }
     let slot = JournalSlot(journal.cast::<MaybeUninit<Journal<'ctx>>>());
     let value = unsafe { journal.read() };
-    match unsafe { value.seal(ptr::addr_of_mut!((*raw).base), root, plan) } {
+    match unsafe { value.seal_with(ptr::addr_of_mut!((*raw).base), root, plan, checkpoint) } {
         Ok(owner) => {
             unsafe { (*raw).sealed_owner = owner };
             // self-drop already consumed private metadata/empty batches.

@@ -161,6 +161,28 @@ pub unsafe extern "C" fn hirsel_rt_v2_seal_prepare_commit(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .check_guard(raw.addr(), ctx.addr());
+    match unsafe { prepare(ctx, record, value, index, receipt, &mut |_| Ok(())) } {
+        Ok(owner) => {
+            unsafe { out_owner.write(into_native_owner(ctx, owner)) };
+            crate::STATUS_OK
+        }
+        Err(Error::Seal(journal::SealError::Transaction(SealError::Exhausted))) => {
+            crate::STATUS_EXHAUSTED
+        }
+        Err(_) => crate::fault("invalid entered seal transaction"),
+    }
+}
+
+/// Shared typed entry path. The closure is a recoverable harness interruption,
+/// never a new language failure or cancellation point.
+unsafe fn prepare(
+    ctx: *mut TaskCtx,
+    record: *mut ReceiptArenaGuard<'_>,
+    value: *const c_void,
+    index: u32,
+    receipt: *const c_void,
+    checkpoint: &mut impl FnMut(crate::sealed_region::transaction::Event) -> Result<(), SealError>,
+) -> Result<*mut SealedRegion, Error> {
     if receipt.is_null() {
         crate::fault("null seal root receipt");
     }
@@ -180,16 +202,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_seal_prepare_commit(
         )
     }
     .unwrap_or_else(|_| crate::fault("invalid or incomplete seal plan contract"));
-    match unsafe { seal_record(ctx, record, &root, &plan) } {
-        Ok(owner) => {
-            unsafe { out_owner.write(into_native_owner(ctx, owner)) };
-            crate::STATUS_OK
-        }
-        Err(Error::Seal(journal::SealError::Transaction(SealError::Exhausted))) => {
-            crate::STATUS_EXHAUSTED
-        }
-        Err(_) => crate::fault("invalid entered seal transaction"),
-    }
+    unsafe { seal_record_with(record, &root, &plan, checkpoint) }
 }
 
 #[cfg(all(test, feature = "diagnostic"))]

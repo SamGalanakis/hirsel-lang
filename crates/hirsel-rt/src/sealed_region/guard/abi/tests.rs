@@ -606,3 +606,5 @@ fn native_graph_entry_64_replacements_keep_exact_bindings_and_refuse_stale_image
         assert_eq!(hirsel_rt_v2_receipt_region_exit(ctx, raw, 0, 0), STATUS_OK);
     });
 }
+
+mod heap91;

@@ -4,7 +4,7 @@ use hirsel_lir::LayoutId;
 use hirsel_lir::layout_types::{LayoutKind, LayoutTable, TargetSpec};
 use hirsel_types::{Primitive, testing::Types};
 
-fn native(table: &LayoutTable, test: impl FnOnce(*mut TaskCtx)) {
+pub(in crate::sealed_region) fn native(table: &LayoutTable, test: impl FnOnce(*mut TaskCtx)) {
     let desc: Vec<_> = (0..table.layouts.len())
         .map(|i| hirsel_lir::rt_program::descriptor(table, LayoutId(i as u32)).unwrap())
         .collect();

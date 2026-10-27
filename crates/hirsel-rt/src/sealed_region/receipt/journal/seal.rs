@@ -40,7 +40,7 @@ impl<'ctx> Journal<'ctx> {
         unsafe { self.seal_with(arena, root, plan, &mut |_| Ok(())) }
     }
 
-    pub(super) unsafe fn seal_with(
+    pub(in crate::sealed_region) unsafe fn seal_with(
         mut self,
         arena: *mut Region,
         root: &Receipt<Record>,

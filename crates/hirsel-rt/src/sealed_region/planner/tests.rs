@@ -8,7 +8,7 @@ use crate::context::{
 use crate::region::hirsel_rt_v2_arena_alloc;
 use hirsel_core_contract::handle_scan::*;
 use std::ptr;
-mod compiler;
+pub(in crate::sealed_region) mod compiler;
 
 fn op(code: u64, operands: &[u64]) -> Vec<u64> {
     let mut words = vec![0; 8];
