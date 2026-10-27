@@ -11,11 +11,7 @@ pub(in crate::tasks::ordered::ahead) struct Plan {
 /// Compute the same class extent as block_grow/seq_grow without allocating,
 /// freeing, or changing a saved input. Regional and shared growth stay refused.
 unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(Plan, u64, u64)> {
-    if !matches!(request.kind, GROW_BLOCK | GROW_SEQUENCE)
-        || request.flags != 0
-        || !request.region.is_null()
-        || request.block.is_null()
-    {
+    if !matches!(request.kind, GROW_BLOCK | GROW_SEQUENCE) || request.block.is_null() {
         return None;
     }
     // SAFETY: the checked Growth caller retains its live unique block.
@@ -23,8 +19,7 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(Plan, u64, u64)> 
         let old = request.block;
         if (*old).count != crate::count::COUNT_UNIQUE
             || (*old).domain() != alloc::DOMAIN_HEAP
-            || (*old).index() != request.index
-            || request.index >= (*ctx).heap_ref().layout_count()
+            || (*old).index() >= (*ctx).heap_ref().layout_count()
         {
             return None;
         }
@@ -151,7 +146,7 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
         unsafe {
             (*native)
                 .allocation
-                .begin(request.index, extent, align.max(8));
+                .begin((*plan.old).index(), extent, align.max(8));
             (*native).growth_plan = Some(plan);
         }
     }

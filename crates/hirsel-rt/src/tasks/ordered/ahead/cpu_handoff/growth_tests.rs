@@ -88,9 +88,10 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool, refusal: Option<Refusa
                 },
                 ordinal: u64::from(matches!(refusal, Some(Refusal::Ordinal))),
                 block: old,
-                region: std::ptr::null_mut(),
-                index: 0,
-                flags: 0,
+                // These fields belong only to ALLOC_REGION in the landed ABI.
+                region: std::ptr::dangling_mut(),
+                index: u32::MAX,
+                flags: u32::MAX,
                 extent: 65536,
                 align: 8,
                 keep: 16,
