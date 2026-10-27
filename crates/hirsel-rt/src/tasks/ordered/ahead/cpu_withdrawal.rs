@@ -62,7 +62,7 @@ pub(super) fn request(ctx: *mut TaskCtx) {
                 // are accessed while that owner's mapper may still be running.
                 let local = unsafe { (*row.ctx).ahead.as_ref() };
                 if let Some(local) = local {
-                    local.withdraw_requested.store(true, Ordering::Release);
+                    local.save_requested.store(true, Ordering::Release);
                     targets.insert(task);
                 }
             }
@@ -123,7 +123,7 @@ pub(super) fn release(ctx: *mut TaskCtx) {
                     .ahead
                     .as_ref()
                     .unwrap()
-                    .withdraw_requested
+                    .save_requested
                     .store(false, Ordering::Release)
             };
         }

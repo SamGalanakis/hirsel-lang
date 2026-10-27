@@ -26,7 +26,6 @@ pub(crate) const MAX_RESERVATIONS: usize = 8;
 pub(crate) struct Local {
     pub(crate) admitted: AtomicBool,
     pub(crate) save_requested: AtomicBool,
-    pub(crate) withdraw_requested: AtomicBool,
     grant: Cell<u64>,
     fuel: Cell<u64>,
     custody: Cell<Custody>,
@@ -38,7 +37,6 @@ impl Local {
         Self {
             admitted: AtomicBool::new(admitted),
             save_requested: AtomicBool::new(false),
-            withdraw_requested: AtomicBool::new(false),
             grant: Cell::new(0),
             fuel: Cell::new(0),
             custody: Cell::new(Custody::Logical),
@@ -67,6 +65,9 @@ impl Local {
             descriptor: None,
         });
         self.custody.set(custody);
+        // The private owner has acknowledged this save. A later CPU backing
+        // withdrawal reuses the same flag after logical admission.
+        self.save_requested.store(false, Ordering::Release);
         if let Some(native) = self.native.as_mut() {
             native.adopt();
         }
