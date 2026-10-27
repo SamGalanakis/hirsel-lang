@@ -179,6 +179,37 @@ impl Executions {
 mod tests {
     use super::*;
     #[test]
+    fn empty_test_selection_still_rejects_an_invalid_unselected_body() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("suite.json");
+            std::fs::write(
+                directory.path().join("suite.hir"),
+                "@test\nfn valid(){}\nfn broken()->u8{\"wrong type\"}\n",
+            )
+            .unwrap();
+            std::fs::write(&path, r#"{"schema":1,"package":{"name":"empty","version":"1"},"sources":[{"path":"suite.hir","module":[]}],"dependencies":[]}"#).unwrap();
+            let (discovery, mut selector) = crate::testing::discover_with_selector(
+                &path,
+                &["absent".into()],
+                None,
+                crate::testing::Selection::Tests,
+                hirsel_engine::Verify::On,
+            )
+            .unwrap();
+            assert!(discovery.tests.is_empty());
+            assert!(
+                crate::testing::check_empty_selection(&path, &discovery, &mut selector).is_err()
+            );
+            assert!(
+                Executions::new(&path, &discovery, selector, None)
+                    .unwrap()
+                    .prepare_all()
+                    .is_err()
+            );
+        });
+    }
+    #[test]
     fn immutable_test_entries_keep_captured_text_seed_isolation_and_step_limits() {
         hirsel_engine::with_compiler_stack(|| {
             let directory = tempfile::tempdir().unwrap();
