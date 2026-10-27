@@ -220,18 +220,13 @@ pub(crate) unsafe fn spawn_certified(
             handle(index, generation) as usize as *mut u8,
         );
     }
-    // Scoped children already have an addressed worker. Keep their ordinary
-    // saved frame rather than advertising a private prefix to the global queue.
-    let scoped = cpu_scoped(ctx);
-    let wide = !scoped
-        && unsafe {
-            (*ctx)
-                .run_ref()
-                .control
-                .width
-                .load(std::sync::atomic::Ordering::Acquire)
-                > 1
-        };
+    let wide = crate::pool::cpu_scoped::width(ctx).unwrap_or_else(|| unsafe {
+        (*ctx)
+            .run_ref()
+            .control
+            .width
+            .load(std::sync::atomic::Ordering::Acquire)
+    }) > 1;
     let alternate = ahead_entry.filter(|_| wide && engine::with_driver(ctx, |d| d.private_enabled));
     let mut task = Task::new(generation, child, Some(scope as u32), path, None);
     task.code = Some((alternate.unwrap_or(code), environment, operation_site));
@@ -358,11 +353,16 @@ pub(crate) unsafe fn spawn_certified(
     // A committed spawn has already moved out of the private owner map.
     // Only an owned unpublished frame can be advertised by this path.
     if engine::with_driver(ctx, |d| d.reserved.contains_key(&index)) {
+        let owner = role::with_role(ctx, |s| {
+            super::ahead::physical(s, TaskKey::new(index, generation))
+                .expect("owned private reservation")
+                .owner
+        });
         unsafe {
             crate::pool::free::schedule_saved(
                 (*ctx).run_ptr(),
                 TaskKey::new(index, generation),
-                Owner::Any,
+                owner,
             )
         };
     }

@@ -165,7 +165,8 @@ unsafe fn start_at(
     let mut workers = Workers {
         execs: Vec::with_capacity(width as usize),
         threads: Vec::with_capacity(width as usize),
-        cursor: 0,
+        // The caller remains on worker zero while it publishes children.
+        cursor: usize::from(!unsafe { (*run).free_mode }),
         caller: None,
         _topology: topology.clone(),
         contraction: execs.permits.state.lock().unwrap().contraction,
@@ -361,6 +362,20 @@ pub(crate) fn next_owner(ctx: *mut TaskCtx) -> Owner {
     let index = workers.cursor % workers.execs.len();
     workers.cursor += 1;
     Owner::Compute(Arc::as_ptr(&workers.execs[index]).expose_provenance())
+}
+
+/// The scoped reservation replaces the ordinary run width while it is live.
+pub(crate) fn width(ctx: *mut TaskCtx) -> Option<u32> {
+    if !crate::tasks::cpu_scoped(ctx) {
+        return None;
+    }
+    let execs = unsafe { (*(*ctx).run_ref().execs.get()).as_deref() }?;
+    execs
+        .scoped
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|workers| workers.execs.len() as u32)
 }
 
 /// # Safety

@@ -348,7 +348,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         // Validate the prefix in every mode, but inspect a certificate only
         // when this run can use it. W1 and strict execution start ordinary code.
         let enabled = version != 0
-            && unsafe { (*ctx).run_ref().control.width.load(Ordering::Acquire) > 1 }
+            && crate::pool::cpu_scoped::width(ctx).unwrap_or_else(|| unsafe {
+                (*ctx).run_ref().control.width.load(Ordering::Acquire)
+            }) > 1
             && super::engine::with_driver(ctx, |d| d.private_enabled);
         let (entry, certificate) = if !enabled {
             (None, None)
@@ -420,6 +422,7 @@ pub(super) mod tests {
     struct Probe {
         entered: AtomicU32,
         private: AtomicU32,
+        scoped: bool,
     }
 
     unsafe extern "C" fn child(
@@ -431,6 +434,13 @@ pub(super) mod tests {
         let [address, ordinal] =
             unsafe { crate::alloc::payload(environment).cast::<[u64; 2]>().read() };
         let probe = unsafe { &*(address as *const Probe) };
+        if probe.scoped {
+            assert!(
+                std::thread::current()
+                    .name()
+                    .is_some_and(|name| name.starts_with("hirsel-cpu-"))
+            );
+        }
         if private(ctx) {
             // Observer only: this is not a language-visible shared operation.
             unsafe { role::enter(ctx) };
@@ -455,6 +465,21 @@ pub(super) mod tests {
 
     #[test]
     pub(crate) fn a_second_real_frame_runs_before_its_spawn_is_admitted_and_is_adopted_once() {
+        private_frames_case(2, false);
+        private_frames_case(4, false);
+    }
+
+    #[test]
+    fn scoped_private_frames_keep_their_addressed_workers_through_adoption() {
+        // Protocol coverage, like the other BodyRun dispatcher fixtures. No
+        // claim about on-CPU overlap comes from this synthetic manager grant.
+        let previous = crate::pool::compute_permits().0;
+        crate::pool::set_compute_grant(4);
+        private_frames_case(4, true);
+        crate::pool::set_compute_grant(previous);
+    }
+
+    fn private_frames_case(width: u32, scoped: bool) {
         let layout = crate::Layout {
             magic: crate::LAYOUT_MAGIC,
             version: crate::LAYOUT_VERSION,
@@ -471,10 +496,13 @@ pub(super) mod tests {
             scan_words: 0,
         };
         let layouts = [&layout as *const crate::Layout];
-        for width in [2, 4] {
-            let probe = Arc::new(Probe::default());
+        {
+            let probe = Arc::new(Probe {
+                scoped,
+                ..Default::default()
+            });
             let seen = probe.clone();
-            let mut run = crate::host::BodyRun::new(width, false);
+            let mut run = crate::host::BodyRun::new(if scoped { 1 } else { width }, false);
             run.config.layouts = layouts.as_ptr();
             run.config.layout_count = 1;
             unsafe { run.use_physical_dispatch() };
@@ -486,6 +514,10 @@ pub(super) mod tests {
                     )
                 },
                 move |ctx| unsafe {
+                    if scoped {
+                        let _role = role::Guard::new(ctx);
+                        crate::pool::cpu_scoped::enter(ctx, width).unwrap();
+                    }
                     let mut scope = 0;
                     assert_eq!(
                         hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
@@ -506,22 +538,33 @@ pub(super) mod tests {
                         let mut task = 0;
                         let _role = role::Guard::new(ctx);
                         assert_eq!(
-                            super::super::lifecycle::spawn_with_entry(
+                            hirsel_rt_v2_task_spawn_ahead(
                                 ctx,
+                                0,
+                                0,
+                                std::ptr::null_mut(),
                                 &mut task,
                                 &scope,
                                 child,
                                 env,
                                 0,
-                                Some(child)
+                                &SpawnAheadInfo {
+                                    version: 1,
+                                    flags: 0,
+                                    entry: Some(child),
+                                },
                             ),
-                            Ok(crate::STATUS_OK)
+                            crate::STATUS_OK
                         );
                     }
                     assert_eq!(
                         hirsel_rt_v2_task_scope_exit(ctx, 0, 0, &scope, 0),
                         crate::STATUS_OK
                     );
+                    if scoped {
+                        let _role = role::Guard::new(ctx);
+                        crate::pool::cpu_scoped::leave(ctx);
+                    }
                     crate::STATUS_OK
                 },
             );
