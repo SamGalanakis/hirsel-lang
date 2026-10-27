@@ -30,7 +30,7 @@ pub fn lower(
     index: &hirsel_lir::LayoutIndex<'_>,
     options: &Options<'_>,
 ) -> Result<Lowered, String> {
-    lower_with_checks(unit, input, index, options, None)
+    lower_with_checks(unit, input, index, options, None, None)
 }
 
 /// The diagnostic query path checks ordinary Value and intermediate stages as
@@ -42,8 +42,28 @@ pub fn lower_validated(
     inputs: &hirsel_lir::validate::Inputs<'_>,
     options: &Options<'_>,
 ) -> Result<Lowered, String> {
+    lower_validated_with_guard(unit, input, inputs, options, None)
+}
+
+/// Apply the same original-instance guard selection as ordinary Ready.
+/// The physical hint changes only placement metadata; the placement recipe
+/// still checks every original ownership marker across that exact boundary.
+pub fn lower_validated_with_guard(
+    unit: LirUnit<Value>,
+    input: &Plan,
+    inputs: &hirsel_lir::validate::Inputs<'_>,
+    options: &Options<'_>,
+    guard: Option<&crate::seal_demand::UnitDemand>,
+) -> Result<Lowered, String> {
     let validation = hirsel_lir::validate::ValidationContext::new(inputs);
-    lower_with_checks(unit, input, validation.index(), options, Some(inputs))
+    lower_with_checks(
+        unit,
+        input,
+        validation.index(),
+        options,
+        Some(inputs),
+        guard,
+    )
 }
 
 fn checked<S: hirsel_lir::stage::Stage>(
@@ -68,11 +88,27 @@ fn lower_with_checks(
     index: &hirsel_lir::LayoutIndex<'_>,
     options: &Options<'_>,
     inputs: Option<&hirsel_lir::validate::Inputs<'_>>,
+    guard: Option<&crate::seal_demand::UnitDemand>,
 ) -> Result<Lowered, String> {
     let unit = checked(unit, inputs)?;
     let table = index.table();
-    let (unit, plan, placement) = placement::place_observed(unit, table, options.placement, input)
-        .map_err(|error| format!("ownership placement: {error}"))?;
+    let original = guard.map(|_| unit.clone());
+    let (mut unit, mut plan, mut placement) =
+        placement::place_observed(unit, table, options.placement, input)
+            .map_err(|error| format!("ownership placement: {error}"))?;
+    if let Some(guard) = guard {
+        guard.apply(&mut unit)?;
+        plan.unit = unit.digest();
+        placement.after = plan.unit;
+        hirsel_lir::ownership_trace::check_transform(
+            original.as_ref().unwrap(),
+            input,
+            &unit,
+            &plan,
+            Some(&placement),
+        )
+        .map_err(|error| format!("ownership demanded-guard placement: {error}"))?;
+    }
     let unit = checked(unit, inputs)?;
     let mut recipes = vec![placement];
     let (unit, plan, insertion) = insert::insert_observed(unit, table, options.proofs, &plan)

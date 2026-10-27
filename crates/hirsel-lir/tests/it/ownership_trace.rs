@@ -5785,3 +5785,73 @@ fn only_an_exact_empty_drop_can_eliminate_its_failure_cleanup_observation() {
         Err(Error::InvalidTransport(_))
     ));
 }
+
+#[test]
+fn ownership_trace_uses_the_original_guard_selection_at_the_placement_boundary() {
+    use hirsel_lir::stage::Value;
+    let mut t = Lir::<Value>::new(&[], None);
+    t.builder.unit.header.origin = UnitOrigin::Library;
+    let arena = t.plain(l::ARENA);
+    t.builder.push(
+        ENTRY,
+        Inst::ArenaOpen {
+            result: arena,
+            budget: None,
+        },
+    );
+    t.builder.ret(ENTRY, None);
+    let operations = t.operations.clone();
+    let (unit, table, manifest) = t.finish();
+    let target = hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu();
+    let inputs = hirsel_lir::validate::Inputs {
+        memo: Default::default(),
+        discharge: None,
+        operations: &operations,
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+    };
+    let original: hirsel_rc::seal_demand::UnitDemand = serde_json::from_value(serde_json::json!({
+        "owner": [unit.header.definition, unit.header.instance],
+        "original_values": unit.values.len(), "values": [arena.0],
+    }))
+    .unwrap();
+    let plan = Plan::new(&unit, vec![]);
+    let options = hirsel_rc::observed::Options {
+        placement: &Default::default(),
+        proofs: &Default::default(),
+        elide: true,
+        reuse: &Default::default(),
+        finalizers: &Default::default(),
+    };
+    let plain =
+        hirsel_rc::observed::lower_validated(unit.clone(), &plan, &inputs, &options).unwrap();
+    assert_eq!(plain.unit.tables.regions.len(), 1);
+    assert!(!plain.unit.tables.regions[0].seal_demand);
+    let selected = hirsel_rc::observed::lower_validated_with_guard(
+        unit.clone(),
+        &plan,
+        &inputs,
+        &options,
+        Some(&original),
+    )
+    .unwrap();
+    assert!(selected.unit.tables.regions[0].seal_demand);
+    assert_eq!(selected.recipes.len(), 10);
+    assert_eq!(selected.recipes[0].before, plan.unit);
+    assert_eq!(selected.recipes.last().unwrap().after, selected.plan.unit);
+    check(&selected.unit, &selected.plan).unwrap();
+    let mut other = unit;
+    other.header.instance = support::hash("another guard owner");
+    let other_plan = Plan::new(&other, vec![]);
+    assert!(
+        hirsel_rc::observed::lower_validated_with_guard(
+            other,
+            &other_plan,
+            &inputs,
+            &options,
+            Some(&original),
+        )
+        .is_err()
+    );
+}

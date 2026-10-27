@@ -303,7 +303,7 @@ impl ReadyQueries {
             })?;
         let facts = miss.source.local(miss.options.regions);
         self.counts.transformations += 1;
-        let lowered = hirsel_rc::observed::lower_validated(
+        let lowered = hirsel_rc::observed::lower_validated_with_guard(
             value.unit().clone(),
             &initial,
             inputs,
@@ -316,6 +316,7 @@ impl ReadyQueries {
                 },
                 finalizers: miss.finalizers,
             },
+            miss.guard,
         )
         .map_err(|error| {
             format!(

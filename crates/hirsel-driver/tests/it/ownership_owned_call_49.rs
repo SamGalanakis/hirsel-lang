@@ -145,7 +145,12 @@ pub(super) fn source_calls_granted(source: &str, created: u64, expected_exit: i3
                     },
                 )
                 .unwrap();
-            assert_eq!(run.execution.exit, Some(expected_exit));
+            assert_eq!(
+                run.execution.exit,
+                Some(expected_exit),
+                "{backend:?}: {:#?}",
+                run.execution
+            );
             let outcome = execution.observe_run(&objects, &run.execution).unwrap();
             assert_eq!(
                 outcome, outcomes[0],
