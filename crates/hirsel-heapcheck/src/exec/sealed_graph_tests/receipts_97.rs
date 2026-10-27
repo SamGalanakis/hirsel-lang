@@ -22,12 +22,52 @@ fn setup(full: bool) -> (Fixture, Config, LayoutId, ValueId) {
         ty,
         holding: Holding::Owned,
     });
+    let scalar_ty = LirTypeId(unit.types.len() as u32);
+    unit.types.push(LirType {
+        layout: LayoutId(0),
+        repr: ValueRepr::Scalar(ScalarKind::U64),
+    });
+    let values = [
+        ValueId(unit.values.len() as u32),
+        ValueId(unit.values.len() as u32 + 1),
+    ];
+    unit.values.extend(values.map(|_| ValueInfo {
+        ty: scalar_ty,
+        holding: Holding::Plain,
+    }));
+    let receipt_inputs = PoolRange::push(
+        &mut unit.pools.receipt_inputs,
+        values.map(|value| ReceiptInput {
+            original: value,
+            receipt: None,
+        }),
+    );
+    assert_eq!(receipt_inputs.start, 0);
+    let fields = PoolRange::push(
+        &mut unit.pools.fields,
+        values
+            .into_iter()
+            .enumerate()
+            .map(|(field, value)| FieldValue {
+                field: field as u32,
+                value,
+            }),
+    );
     let recipe = PayloadRecipe {
         source: unit.tables.source_anchors[0].clone(),
         operation: PayloadOperation::Allocate {
             destination: PayloadDestination::Heap,
         },
-        inputs: vec![],
+        inputs: [11u128, 12]
+            .into_iter()
+            .enumerate()
+            .map(|(place, value)| PayloadOperand {
+                place: place as u32,
+                ty: T::Primitive(P::U64),
+                producer: PayloadProducer::Literal(PayloadLiteral::Integer(value)),
+                capture_slot: None,
+            })
+            .collect(),
     };
     unit.tables.constructs.push(ConstructSite {
         arena_no_drop: false,
@@ -36,14 +76,14 @@ fn setup(full: bool) -> (Fixture, Config, LayoutId, ValueId) {
         layout: x.lists[1],
         destination: DestinationClass::Heap,
         placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
-        fields: PoolRange::EMPTY,
+        fields,
         anchor: SourceAnchorId(0),
     });
     unit.tables.seal_payloads.push(PayloadTable {
         descriptor: SealDescriptorId(2),
         bindings: vec![PayloadBinding {
             recipe: recipe.clone(),
-            values: vec![],
+            values: values.to_vec(),
         }],
     });
     let mut c = config(&mut x.p, 2, &[], full);
@@ -64,6 +104,18 @@ fn setup(full: bool) -> (Fixture, Config, LayoutId, ValueId) {
     (x, c, layout, result)
 }
 fn snapshot(m: &mut Machine<'_, Rc>, f: &mut Frame, result: ValueId) -> Ptr {
+    for (index, bits) in [11u128, 12].into_iter().enumerate() {
+        let value = ValueId(result.0 + index as u32 + 1);
+        m.define_fresh(
+            f,
+            value,
+            Val::Bits {
+                scalar: ScalarKind::U64,
+                bits,
+            },
+        )
+        .unwrap();
+    }
     m.exec(
         f,
         &Inst::PayloadReceipt {
@@ -71,7 +123,7 @@ fn snapshot(m: &mut Machine<'_, Rc>, f: &mut Frame, result: ValueId) -> Ptr {
             value: ValueId(4),
             shape: SealDescriptorId(2),
             binding: PayloadBindingId(0),
-            inputs: PoolRange::EMPTY,
+            inputs: PoolRange::new(0, 2),
         },
     )
     .unwrap();
@@ -174,8 +226,19 @@ fn h_receipt_forged_bytes_and_wrong_construction_identity_are_rejected() {
         value: ValueId(4),
         shape: SealDescriptorId(2),
         binding: PayloadBindingId(0),
-        inputs: PoolRange::EMPTY,
+        inputs: PoolRange::new(0, 2),
     };
+    for (index, bits) in [11u128, 12].into_iter().enumerate() {
+        m.define_fresh(
+            &mut f,
+            ValueId(result.0 + index as u32 + 1),
+            Val::Bits {
+                scalar: ScalarKind::U64,
+                bits,
+            },
+        )
+        .unwrap();
+    }
     assert_eq!(
         m.exec(&mut f, &instruction).err().unwrap().kind,
         V::Malformed
@@ -466,4 +529,46 @@ fn h_borrowed_receipt_entry_cannot_be_taken_or_retired_before_return() {
         },
     )
     .unwrap();
+}
+
+#[test]
+fn h_receipt_source_operands_reject_a_changed_constructor_before_snapshot_publication() {
+    let (x, c, _, result) = setup(false);
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&x.p, &c, &mut ops);
+    let (mut f, _) = prepare(&mut m, 100);
+    let ptr = nums(&mut m, false, x.payloads[1], &[99, 12], 1);
+    root(&mut m, &mut f, Val::Ptr(ptr));
+    m.seal_allocations.insert(
+        ptr.alloc,
+        (0, x.p.units[0].tables.source_anchors[0].clone()),
+    );
+    for (index, bits) in [11u128, 12].into_iter().enumerate() {
+        m.define_fresh(
+            &mut f,
+            ValueId(result.0 + index as u32 + 1),
+            Val::Bits {
+                scalar: ScalarKind::U64,
+                bits,
+            },
+        )
+        .unwrap();
+    }
+    let instruction = Inst::PayloadReceipt {
+        result,
+        value: ValueId(4),
+        shape: SealDescriptorId(2),
+        binding: PayloadBindingId(0),
+        inputs: PoolRange::new(0, 2),
+    };
+    assert_eq!(
+        m.exec(&mut f, &instruction).err().unwrap().kind,
+        V::TypeConfusion
+    );
+    assert!(f.values[result.index()].is_none());
+    m.ledger
+        .get_mut(ptr.alloc)
+        .extent
+        .write_bytes(16, &11u64.to_le_bytes());
+    m.exec(&mut f, &instruction).unwrap();
 }

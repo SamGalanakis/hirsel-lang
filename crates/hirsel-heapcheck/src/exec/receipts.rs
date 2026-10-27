@@ -198,6 +198,12 @@ impl<S: Stage> Machine<'_, S> {
                         "receipt child names another original value",
                     );
                 }
+                self.check_receipt_pair(
+                    control,
+                    layout,
+                    &original.ty,
+                    self.get(f, input.original)?.val.clone(),
+                )?;
             } else {
                 let plain = self.config.seal_descriptors.iter().any(|d| {
                     d.root_type == original.ty && d.bits_root(&self.program.layouts).is_ok()
@@ -227,10 +233,118 @@ impl<S: Stage> Machine<'_, S> {
         if self.seal_allocations.get(&ptr.alloc) != Some(&(f.unit, source_anchor)) {
             return fail(V::Malformed, "receipt has no actual H construction event");
         }
+        self.check_receipt_construction(f, &sites, binding, root_layout, &value)?;
         let snapshot = self.receipt_snapshot(root, value)?;
         let control = self.heap_alloc(layout, self.word, self.record(layout)?.align)?;
         self.receipts.insert(control.alloc, snapshot);
         self.define_fresh(f, result, Val::Ptr(control))
+    }
+
+    fn check_receipt_construction(
+        &self,
+        f: &Frame,
+        sites: &[&ConstructSite],
+        binding: &hirsel_lir::sealed_payload::PayloadBinding,
+        layout: LayoutId,
+        value: &Val,
+    ) -> Checked<()> {
+        use hirsel_lir::sealed_payload_source::{PayloadDestination, PayloadOperation};
+        let [site] = sites else {
+            return fail(V::Malformed, "receipt construction is ambiguous");
+        };
+        if !matches!(
+            binding.recipe.operation,
+            PayloadOperation::Allocate {
+                destination: PayloadDestination::Heap
+            }
+        ) || !matches!(
+            site.destination,
+            DestinationClass::Heap | DestinationClass::Inferred
+        ) || site.layout != layout
+        {
+            return fail(
+                V::Malformed,
+                "receipt needs its original ordinary heap construction",
+            );
+        }
+        let (Val::Ptr(ptr), LayoutKind::Block { payload }) = (value, &self.record(layout)?.kind)
+        else {
+            return fail(
+                V::Unsupported,
+                "H receipt needs sequence construction correspondence",
+            );
+        };
+        let LayoutKind::Sequence { element } = self.record(*payload)?.kind else {
+            return fail(
+                V::Unsupported,
+                "H receipt needs sequence construction correspondence",
+            );
+        };
+        if site.constructor != ConstructorKind::Sequence
+            || ptr.offset != 0
+            || self.ledger.check(*ptr)?.layout != Some(*payload)
+        {
+            return fail(
+                V::TypeConfusion,
+                "receipt construction has another physical payload",
+            );
+        }
+        let image = &self.ledger.check(*ptr)?.extent;
+        let count = self.scan_scalar(*ptr, 8)? as u64;
+        if count != binding.values.len() as u64 {
+            return fail(
+                V::TypeConfusion,
+                "receipt construction length differs from original operands",
+            );
+        }
+        let mut scan = self.scan_cell_offsets(image, *payload, true)?;
+        scan.extend(self.scan_cell_offsets(image, *payload, false)?);
+        let scanned = scan.into_iter().collect::<std::collections::BTreeSet<_>>();
+        let actual = image
+            .cells
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if scanned != actual || !image.resources.is_empty() {
+            return fail(
+                V::TypeConfusion,
+                "receipt construction cells differ from its complete scan",
+            );
+        }
+        let (start, stride) = self.sequence_shape(element)?;
+        let size = self.size(element)?;
+        for (index, (value, original)) in binding
+            .values
+            .iter()
+            .zip(&binding.recipe.inputs)
+            .enumerate()
+        {
+            let ty = self.value_type(f.unit, *value)?;
+            if ty.layout != element {
+                return fail(V::TypeConfusion, "receipt input has another element layout");
+            }
+            let offset = start
+                .checked_add(
+                    (index as u64)
+                        .checked_mul(stride)
+                        .ok_or_else(|| err(V::OutOfExtent, "receipt element offset overflow"))?,
+                )
+                .ok_or_else(|| err(V::OutOfExtent, "receipt element offset overflow"))?;
+            image.check_range(offset, size)?;
+            let child = self
+                .val_from(image.copy(offset, size, None), ty.repr, element)?
+                .0;
+            let expected =
+                self.receipt_snapshot(original.ty.clone(), self.get(f, *value)?.val.clone())?;
+            let actual = self.receipt_snapshot(original.ty.clone(), child)?;
+            if expected != actual {
+                return fail(
+                    V::TypeConfusion,
+                    "receipt construction differs from original operand cells",
+                );
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn bind_receipt_call(
