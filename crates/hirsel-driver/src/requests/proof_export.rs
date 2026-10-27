@@ -26,7 +26,8 @@ pub(super) struct ProofExport {
     query: QueryId,
     safe: Arc<SafeCheck>,
     capture: Arc<FrontProofExport>,
-    allowance: Mutex<Option<MemoryReservation>>,
+    budget: Arc<ProcessBudget>,
+    _allowance: MemoryReservation,
     completed: Mutex<Option<Arc<Settled>>>,
     store: Arc<dyn ResultStore>,
     errors: RuntimeErrors,
@@ -36,6 +37,7 @@ impl ProofExport {
         safe: Arc<SafeCheck>,
         capture: Arc<FrontProofExport>,
         allowance: MemoryReservation,
+        budget: Arc<ProcessBudget>,
         store: Arc<dyn ResultStore>,
         errors: RuntimeErrors,
     ) -> Arc<Self> {
@@ -53,7 +55,8 @@ impl ProofExport {
             },
             safe,
             capture,
-            allowance: Mutex::new(Some(allowance)),
+            budget,
+            _allowance: allowance,
             completed: Mutex::new(None),
             store,
             errors,
@@ -86,18 +89,9 @@ impl ProofExport {
         ))
     }
     fn build(&self, product: ProductRef) -> Result<(FrontProofText, MemoryReservation), String> {
-        let mut pool = self
-            .allowance
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or_else(|| "proof export admission is unavailable".to_owned())?;
-        let mut stage = |bytes, name| {
-            pool.split(bytes).ok_or_else(|| {
-                format!(
-                    "proof export {name} needs {bytes} bytes, {} remain",
-                    pool.bytes()
-                )
+        let stage = |bytes, name| {
+            self.budget.reserve(bytes).map_err(|error| {
+                format!("proof export {name} needs {bytes} bytes from the shared process budget: {error}")
             })
         };
         let error = |e| format!("proof export: {e:?}");

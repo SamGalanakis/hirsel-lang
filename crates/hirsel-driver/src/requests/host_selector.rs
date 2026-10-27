@@ -185,6 +185,9 @@ pub(super) struct GraphBudget {
 type BudgetIndex = Vec<(Weak<ProcessBudget>, Weak<GraphBudget>)>;
 static BUDGETS: OnceLock<Mutex<BudgetIndex>> = OnceLock::new();
 impl GraphBudget {
+    pub fn process_budget(&self) -> Arc<ProcessBudget> {
+        self.budget.clone()
+    }
     fn shared(budget: &Arc<ProcessBudget>) -> Arc<Self> {
         let mut budgets = BUDGETS
             .get_or_init(Mutex::default)

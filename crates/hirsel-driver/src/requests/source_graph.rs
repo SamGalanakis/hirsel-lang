@@ -765,7 +765,7 @@ impl Plan {
         // and input rows (20MB), so a receipt leaves the front a sixteenth.
         let front_slack = if needs_ownership {
             slack * 83 / 96
-        } else if needs_receipt || needs_export {
+        } else if needs_receipt {
             slack / 16
         } else {
             slack / 4
@@ -777,7 +777,7 @@ impl Plan {
         // grant is the smaller continuation bound), so Lower keeps a sixteenth.
         let lower_slack = if needs_ownership {
             slack / 12
-        } else if needs_receipt || needs_export {
+        } else if needs_receipt {
             slack / 16
         } else if needs_run {
             slack / 3
@@ -789,7 +789,7 @@ impl Plan {
         // (2MB for full std), so Growth keeps that thirty-second too.
         let growth_slack = if needs_ownership {
             slack / 48
-        } else if needs_receipt || needs_export {
+        } else if needs_receipt {
             slack / 32
         } else {
             slack / 8
@@ -798,7 +798,7 @@ impl Plan {
         // receipt needs just its captured headers from this partition.
         let check_slack = if needs_ownership {
             slack / 48
-        } else if needs_receipt || needs_export {
+        } else if needs_receipt {
             slack / 32
         } else if needs_run {
             slack / 8
@@ -931,7 +931,7 @@ impl Plan {
             run: MemoryWeight {
                 // Run accumulates the selected semantic closure, so it uses
                 // its two root shares rather than one Lower body.
-                retained: (run_slack / if needs_export { 16 } else { 4 }).min(2 * root_bound),
+                retained: (run_slack / 4).min(2 * root_bound),
                 scratch,
                 stack: 0,
             },
@@ -1474,26 +1474,19 @@ pub(super) fn install(
     } else {
         None
     };
-    // PS9 source metadata and its staged construction share the existing Run
-    // partition. Run retains only the compact semantic graph; export admits
-    // actual input, tables and text before each stage allocates.
+    // Source metadata shares Run's existing snapshot partition. Export stages
+    // reserve their measured buffers separately from the same process budget,
+    // after source queries settle, preserving the front and Lower allowances.
     let export_allowance = if artifacts {
         let headers = program
             .engine
             .front_checked_signatures_bytes(&front)
             .map_err(&query_error)?;
         let headers = run.split(headers).ok_or_else(|| uninstalled())?;
-        let available = run
-            .bytes()
-            .checked_sub(
-                run_inputs
-                    .as_ref()
-                    .ok_or_else(|| uninstalled())?
-                    .input_bytes(),
-            )
+        let export = run.split(run.bytes() / 4).ok_or_else(|| uninstalled())?;
+        let output = run
+            .split(super::proof_export::BYTES)
             .ok_or_else(|| uninstalled())?;
-        let export = run.split(available / 16).ok_or_else(|| uninstalled())?;
-        let output = run.split(available * 3 / 4).ok_or_else(|| uninstalled())?;
         Some((headers, export, output))
     } else {
         None
@@ -1596,6 +1589,7 @@ pub(super) fn install(
             safe.as_ref().unwrap().clone(),
             capture,
             allowance,
+            budget.process_budget(),
             store.clone(),
             errors,
         )
