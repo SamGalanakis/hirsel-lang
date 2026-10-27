@@ -684,7 +684,8 @@ fn unique_receipt_shared_intermediate_and_unqualified_payload_refused() {
                 "    }; let _ = take snapshot },\n    None",
             );
         let inferred = original.replace("unique Result[unique Bytes, ()]", "Result[Bytes, ()]");
-        let mut loaded = load_program_source(&path(), Some(&inferred)).unwrap_or_else(report);
+        let mut loaded =
+            crate::source_std::load_program_source(&path(), Some(&inferred)).unwrap_or_else(report);
         let run = RunConfiguration {
             entry: loaded.entry.clone(),
             hash_seed: 0,
@@ -722,7 +723,8 @@ fn unique_receipt_shared_intermediate_and_unqualified_payload_refused() {
             ("unqualified-intermediate", wrapper),
             ("unqualified-stream-item", stream),
         ] {
-            let mut loaded = load_program_source(&path(), Some(&source)).unwrap_or_else(report);
+            let mut loaded = crate::source_std::load_program_source(&path(), Some(&source))
+                .unwrap_or_else(report);
             let run = RunConfiguration {
                 entry: loaded.entry.clone(),
                 hash_seed: 0,
