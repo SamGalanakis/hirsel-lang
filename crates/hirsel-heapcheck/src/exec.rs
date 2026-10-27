@@ -3529,11 +3529,45 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "finite count bound does not fit the ABI v2 u32 counter",
             );
         }
-        if self.unit(entry).tables.receipt_entry.is_some() {
-            return fail(
-                V::Malformed,
-                "harness entry has no incoming receipt custody",
-            );
+        if let Some(binding) = &self.unit(entry).tables.receipt_entry {
+            let unit = self.unit(entry);
+            let abi = &self.program.layouts.fn_abis[unit.header.abi.0 as usize];
+            binding
+                .check(abi, unit, &self.program.layouts)
+                .map_err(|e| err(V::Malformed, e))?;
+            if abi
+                .receipts
+                .as_ref()
+                .is_none_or(|contract| !contract.is_empty())
+            {
+                return fail(
+                    V::Malformed,
+                    "harness entry has no incoming receipt custody",
+                );
+            }
+            let source = self
+                .config
+                .receipt_sources
+                .iter()
+                .find(|source| {
+                    source.original.definition == unit.header.definition
+                        && source.instance == unit.header.instance
+                })
+                .ok_or_else(|| {
+                    err(
+                        V::Malformed,
+                        "receipt entry lacks independent source declaration",
+                    )
+                })?;
+            source.check_structure().map_err(|e| err(V::Malformed, e))?;
+            if abi.receipts.as_ref() != Some(&source.contract)
+                || source.implementation_revision != unit.header.implementation_revision
+            {
+                return fail(
+                    V::Malformed,
+                    "receipt entry differs from independent source declaration",
+                );
+            }
         }
         self.entry = entry;
         let mut f = self.frame(entry, Role::Entry, None);

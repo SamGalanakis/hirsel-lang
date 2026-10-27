@@ -4,9 +4,16 @@ use super::{Cx, Inputs, Report, Site, ViolationKind as K};
 use crate::{ir::*, sealed_payload_source::*, stage::Stage};
 
 fn supported(contract: &ReceiptContract) -> Result<(), &'static str> {
-    if !contract.captures.is_empty() || !contract.inventory.is_empty() {
+    if !contract.captures.is_empty()
+        || contract.inventory.iter().any(|grant| {
+            !matches!(
+                grant,
+                crate::sealed_payload_source::ReceiptGrant::Parameter(_)
+            )
+        })
+    {
         return Err(
-            "receipt boundary requires data parameters and results without captures or inventory",
+            "receipt boundary requires data parameters and results without captures or non-parameter inventory",
         );
     }
     Ok(())

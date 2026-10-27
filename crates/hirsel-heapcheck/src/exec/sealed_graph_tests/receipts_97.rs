@@ -660,3 +660,73 @@ fn h_historical_charge_still_counts_repeated_heap_occurrences() {
     assert_eq!(m.scan_scalar(ptr, 8).unwrap(), 0);
     f.values[4] = None;
 }
+
+#[test]
+fn h_empty_internal_receipt_entry_107_needs_current_source_but_no_incoming_holders() {
+    use hirsel_lir::sealed_payload_source::{ReceiptContract, ReceiptSource};
+    let l = Layouts::new(hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu());
+    let (target, mut layouts) = l.finish();
+    let mut unit = crate::build::fixture_unit::<Rc>(crate::build::path("empty_receipt_107"));
+    unit.header.target = target.digest();
+    let contract = ReceiptContract::new(vec![], None, vec![], vec![]).unwrap();
+    let digest = contract.content().unwrap();
+    layouts.fn_abis[0].key.receipt_contract = Some(digest);
+    layouts.fn_abis[0].receipts = Some(contract.clone());
+    unit.tables.receipt_entry = Some(ReceiptEntry {
+        contract: digest,
+        parameters: vec![],
+        captures: vec![],
+        result: None,
+        environment: None,
+    });
+    let source = ReceiptSource {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: unit.header.definition.clone(),
+            instance: hirsel_syntax::ContentHash::of_bytes(b"original empty entry"),
+            body: 0,
+        },
+        instance: unit.header.instance,
+        source: hirsel_syntax::ContentHash::of_bytes(b"empty source"),
+        implementation_revision: unit.header.implementation_revision,
+        contract,
+        profiles: vec![],
+    };
+    let p = Program {
+        target,
+        layouts,
+        units: vec![unit],
+        statics: vec![],
+        invocation_bodies: vec![],
+        pretransfer_adapters: vec![],
+        invocations: Default::default(),
+    };
+    let config = Config {
+        receipt_sources: vec![source],
+        ..Config::default()
+    };
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&p, &config, &mut ops);
+    m.start(0, &[]).unwrap();
+    for mutation in 0..3 {
+        let mut config = config.clone();
+        match mutation {
+            0 => config.receipt_sources.clear(),
+            1 => {
+                config.receipt_sources[0].instance =
+                    hirsel_syntax::ContentHash::of_bytes(b"other entry")
+            }
+            2 => {
+                config.receipt_sources[0].implementation_revision =
+                    hirsel_syntax::ContentHash::of_bytes(b"other source")
+            }
+            _ => unreachable!(),
+        }
+        let mut ops = NoOperations;
+        let mut m = Machine::new(&p, &config, &mut ops);
+        assert_eq!(
+            m.start(0, &[]).unwrap_err().kind,
+            V::Malformed,
+            "mutation {mutation}"
+        );
+    }
+}

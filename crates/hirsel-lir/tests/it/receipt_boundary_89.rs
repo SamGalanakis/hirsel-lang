@@ -1275,3 +1275,71 @@ fn mutable_pairing_survives_shared_cleanup_of_rejected_and_entered_outcomes() {
     let errors = check(&unit, &table, &manifest, &declarations);
     assert!(!errors.is_empty(), "{errors:#?}");
 }
+
+#[test]
+fn parameter_inventory_107_uses_only_its_original_arena_carrier() {
+    let mut t = support::Lir::<Rc>::new(&[(Passing::Borrow, support::l::ARENA)], None);
+    let grant = t.value_as(ValueRepr::Arena, support::l::ARENA, Holding::Plain);
+    t.param(grant);
+    t.builder.ret(ENTRY, None);
+    let contract =
+        ReceiptContract::new(vec![], None, vec![], vec![ReceiptGrant::Parameter(0)]).unwrap();
+    let identity = contract.content().unwrap();
+    let own = t.builder.unit.header.abi;
+    t.table.fn_abis[own.0 as usize].key.receipt_contract = Some(identity);
+    t.table.fn_abis[own.0 as usize].receipts = Some(contract.clone());
+    t.builder.unit.tables.receipt_entry = Some(ReceiptEntry {
+        contract: identity,
+        parameters: vec![],
+        captures: vec![],
+        result: None,
+        environment: None,
+    });
+    let source = ReceiptSource {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: t.builder.unit.header.definition.clone(),
+            instance: support::hash("original inventory entry"),
+            body: 0,
+        },
+        instance: t.builder.unit.header.instance,
+        source: support::hash("inventory source"),
+        implementation_revision: t.builder.unit.header.implementation_revision,
+        contract,
+        profiles: vec![ReceiptProfile {
+            port: ReceiptPort::Parameter(0),
+            profile: ClosedStorageProfile {
+                schema: ClosedStorageProfile::SCHEMA,
+                root: ClosedStorageType {
+                    ty: NativeType::Named(DefPath::core("Arena"), vec![]),
+                    source_type: support::hash("original Arena"),
+                },
+                functions: vec![],
+            },
+        }],
+    };
+    let declarations = Declarations {
+        ordinary: t.operations.clone(),
+        sources: vec![source],
+    };
+    let (unit, table, manifest) = t.finish();
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+    for mutation in 0..3 {
+        let mut table = table.clone();
+        let mut source = declarations.sources[0].clone();
+        match mutation {
+            0 => source.profiles[0].profile.root.ty = NativeType::Primitive(Primitive::U64),
+            1 => table.fn_abis[own.0 as usize].parameters[0].layout = support::l::U64,
+            2 => source.instance = support::hash("another inventory entry"),
+            _ => unreachable!(),
+        }
+        let declarations = Declarations {
+            ordinary: declarations.ordinary.clone(),
+            sources: vec![source],
+        };
+        assert!(
+            !check(&unit, &table, &manifest, &declarations).is_empty(),
+            "mutation {mutation}"
+        );
+    }
+}

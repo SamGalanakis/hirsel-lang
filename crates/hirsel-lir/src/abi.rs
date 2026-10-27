@@ -65,13 +65,21 @@ pub fn check_receipt_contract(
     Ok(())
 }
 
-/// Data companions use appended physical carriers. Captures and inventory
-/// still require their separate environment and arena transport contracts.
+/// Data companions use appended physical carriers. Parameter inventory uses
+/// the existing Arena carrier, checked by `check_receipt_contract` and original
+/// source validation. Capture and caller-destination inventories remain closed.
 /// Independent current source and live custody remain mandatory in C.
 pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {
     if let Some(contract) = &abi.receipts {
-        if !contract.captures.is_empty() || !contract.inventory.is_empty() {
-            return Err("receipt capture or inventory transport is not implemented");
+        if !contract.captures.is_empty()
+            || contract.inventory.iter().any(|grant| {
+                !matches!(
+                    grant,
+                    crate::sealed_payload_source::ReceiptGrant::Parameter(_)
+                )
+            })
+        {
+            return Err("receipt capture or non-parameter inventory transport is not implemented");
         }
         if abi.key.receipt_contract != Some(contract.content()?) {
             return Err("receipt ABI key disagrees with its complete contract");
