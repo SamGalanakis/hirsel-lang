@@ -20,7 +20,14 @@ unsafe extern "C" fn growing(_request: *mut u8, _native: *mut u8) -> ! {
     );
 }
 
-fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
+#[derive(Clone, Copy)]
+enum Refusal {
+    Ordinal,
+    Version,
+    Region,
+}
+
+fn run_growth(sequence: bool, refuse: bool, repeat: bool, refusal: Option<Refusal>) {
     let grant = hirsel_run_schema::CpuGrant {
         provider: "cpu.scoped@1".into(),
         max_workers: 4,
@@ -67,9 +74,19 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_arm(ctx);
             super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);
             let mut request = Growth {
-                version: VERSION,
-                kind: if sequence { GROW_SEQUENCE } else { GROW_BLOCK },
-                ordinal: 0,
+                version: if matches!(refusal, Some(Refusal::Version)) {
+                    VERSION + 1
+                } else {
+                    VERSION
+                },
+                kind: if matches!(refusal, Some(Refusal::Region)) {
+                    ALLOC_REGION
+                } else if sequence {
+                    GROW_SEQUENCE
+                } else {
+                    GROW_BLOCK
+                },
+                ordinal: u64::from(matches!(refusal, Some(Refusal::Ordinal))),
                 block: old,
                 region: std::ptr::null_mut(),
                 index: 0,
@@ -98,6 +115,26 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
             crate::stop::set_running(std::ptr::null_mut());
             crate::tasks::role::enter(ctx);
             assert_eq!(serve(ctx, &raw mut *native), Ok(!refuse));
+            if refusal.is_some() {
+                assert_eq!(native.growth_status, u32::from(NOT_CERTIFIED));
+                assert_eq!(request.block, old);
+                assert_eq!(
+                    alloc::payload(old).cast::<[u64; 4]>().read(),
+                    [1, 2, 112, 0]
+                );
+                assert_eq!((*ctx).heap_ref().live().0, 1);
+                crate::tasks::role::release(ctx);
+                crate::stop::set_running(ctx);
+                let saved = native.physical.saved_sp;
+                crate::fiber::switch(&raw mut native.physical.idle_sp, saved);
+                assert_eq!(native.physical.reason, 64);
+                assert!(native.growth.is_null());
+                (*ctx).ahead_physical = std::ptr::null_mut();
+                (*ctx).heap().free(old);
+                (*ctx).heap().trim();
+                assert_eq!((*ctx).heap_ref().live().0, 0);
+                return crate::STATUS_OK;
+            }
             if refuse {
                 let state = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
                 for _ in 0..3 {
@@ -181,20 +218,27 @@ fn run_growth(sequence: bool, refuse: bool, repeat: bool) {
 #[test]
 fn saved_growth_reclaims_real_old_blocks_without_leaking() {
     for sequence in [false, true] {
-        run_growth(sequence, false, false);
+        run_growth(sequence, false, false, None);
     }
 }
 
 #[test]
 fn repeated_growth_calls_do_not_free_the_returned_block_twice() {
     for sequence in [false, true] {
-        run_growth(sequence, false, true);
+        run_growth(sequence, false, true, None);
     }
 }
 
 #[test]
 fn refused_growth_keeps_the_same_input_and_charge_until_backing_is_available() {
     for sequence in [false, true] {
-        run_growth(sequence, true, true);
+        run_growth(sequence, true, true, None);
+    }
+}
+
+#[test]
+fn native_growth_refuses_wrong_claims_versions_and_regions_without_consuming_the_input() {
+    for refusal in [Refusal::Ordinal, Refusal::Version, Refusal::Region] {
+        run_growth(false, false, false, Some(refusal));
     }
 }
