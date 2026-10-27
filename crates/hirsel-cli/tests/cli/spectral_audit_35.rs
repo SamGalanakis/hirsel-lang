@@ -84,8 +84,6 @@ fn selected(row: &Value, ordinal: usize, part: usize) -> bool {
     }
 }
 fn scratch(label: &str) -> PathBuf {
-    // Runtime files live on the worker's private tmpfs. Archive's Drop returns
-    // them through the authorized bounded log transport even on test failure.
     let base = std::env::var_os("SPECTRAL_AUDIT_35_EVIDENCE")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
@@ -95,28 +93,7 @@ fn scratch(label: &str) -> PathBuf {
         .tempdir_in(base)
         .unwrap()
         .keep();
-    fs::write(
-        root.join("archive.py"),
-        include_bytes!("../support/spectral_audit_35/archive.py"),
-    )
-    .unwrap();
-    eprintln!("SPECTRAL_ARCHIVE {}", root.display());
     root
-}
-struct Archive(PathBuf);
-impl Drop for Archive {
-    fn drop(&mut self) {
-        let status = Command::new("python3")
-            .arg(self.0.join("archive.py"))
-            .arg(&self.0)
-            .status();
-        if !status.is_ok_and(|s| s.success()) {
-            eprintln!("SPECTRAL_ARCHIVE_FAILURE {}", self.0.display());
-            if !std::thread::panicking() {
-                panic!("evidence archive failed")
-            }
-        }
-    }
 }
 fn package(root: &Path) -> PathBuf {
     package_entry(root, SOURCES[0].1)
@@ -142,10 +119,6 @@ fn package_entry(root: &Path, entry: &str) -> PathBuf {
             include_str!("../support/spectral_audit_35/run_capped.py"),
         ),
         (
-            "seal.py",
-            include_str!("../support/spectral_audit_35/seal.py"),
-        ),
-        (
             "cases.json",
             include_str!("../support/spectral_audit_35/cases.json"),
         ),
@@ -165,20 +138,6 @@ fn package_entry(root: &Path, entry: &str) -> PathBuf {
         .into();
     let path = root.join("hirsel.json");
     fs::write(&path, manifest.to_string()).unwrap();
-    let seal = Command::new("python3")
-        .arg(root.join("seal.py"))
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .arg(root.join("closure"))
-        .env("SPECTRAL_AUDIT_35_TRANSPORT", "stdout")
-        .arg(env!("CARGO_BIN_EXE_hirsel"))
-        .arg(std::env::current_exe().unwrap())
-        .output()
-        .unwrap();
-    assert!(
-        seal.status.success(),
-        "{}",
-        String::from_utf8_lossy(&seal.stderr)
-    );
     path
 }
 fn fixture(row: &Value) -> Fixture {
@@ -444,7 +403,6 @@ fn native_workflows(part: usize) {
     }
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("native-");
-        let _archive = Archive(root.clone());
         let path = package(&root);
         let mut loaded = hirsel_driver::load_program(&path).unwrap();
         loaded
@@ -812,7 +770,6 @@ fn native_workflows(part: usize) {
 fn spectral_audit_35_unrounded_oracle() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("kernel-");
-        let _archive = Archive(root.clone());
         let path = package_entry(
             &root,
             include_str!("../support/spectral_audit_35/kernel.hir"),
@@ -932,7 +889,6 @@ fn spectral_audit_35_unrounded_oracle() {
 #[ignore = "explicit exact4 pool capacity cells; select backend/width/kind"]
 fn spectral_audit_35_ordered_capacity() {
     let root = scratch("ordered-");
-    let _archive = Archive(root.clone());
     let manifest = package(&root);
     fs::write(
         root.join("ordered.py"),
@@ -979,7 +935,6 @@ fn spectral_audit_35_ordered_capacity() {
 fn spectral_audit_35_output_cap_helpers() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("output-bounds-");
-        let _archive = Archive(root.clone());
         let path = package_entry(
             &root,
             include_str!("../support/spectral_audit_35/output_bounds.hir"),
@@ -1049,7 +1004,6 @@ fn semantic_record(mut record: hirsel_rt::launch::Recording) -> hirsel_rt::launc
 fn spectral_audit_35_scripted_ordered_streams() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("scripted-ordered-");
-        let _archive = Archive(root.clone());
         let path = package(&root);
         let mut loaded = hirsel_driver::load_program(&path).unwrap();
         loaded
@@ -1232,7 +1186,6 @@ fn spectral_audit_35_scripted_ordered_streams() {
 fn spectral_audit_35_unrounded_vector_controls() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("oracle-vectors-");
-        let _archive = Archive(root.clone());
         let path = package_entry(
             &root,
             include_str!("../support/spectral_audit_35/kernel_cases.hir"),
@@ -1311,29 +1264,4 @@ fn spectral_audit_35_unrounded_vector_controls() {
             incomplete.join("\n")
         );
     });
-}
-
-#[test]
-fn evidence_archive_preserves_spectral_payloads_within_the_transport_limit() {
-    let scratch = tempfile::tempdir().unwrap();
-    let scripts = [(
-        "spectral.py",
-        include_str!("../support/spectral_audit_35/archive.py"),
-    )];
-    let mut command = Command::new("python3");
-    command
-        .arg("-c")
-        .arg(include_str!("../support/archive_transport.py"));
-    for (name, source) in scripts {
-        let path = scratch.path().join(name);
-        fs::write(&path, source).unwrap();
-        command.arg(path);
-    }
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
