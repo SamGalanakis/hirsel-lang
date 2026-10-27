@@ -20,9 +20,12 @@ under the existing 300-second build cap. Select `sheet_eval_31` or
 `TOY_ANALYZER_31_ARCHIVES`, `SHEET_EVAL_31_PRODUCTION`, or
 `DURABLE_QUEUE_31_TAPES` to the corresponding explicit ignored host audit.
 The refusal tests alter scratch copies and retain exact consumption checks.
-The ToyAnalyzer cancellation audit still exposes a current read-suppression
-failure after successful binding and replay. Its known-failure row belongs to
-runtime-reds-82; the fresh tapes preserve that failure.
+ToyAnalyzer uses the size returned by readiness metadata before entering
+`task.all`. The producer fixes real input mtimes and waits for the recorded
+blocked stdin read and the native home thread's kernel readiness wait before
+sending input, so all widths record the same handshake.
+Its cancellation audit checks that a younger error suppresses the
+remaining reads, closes the canceled source, and replays exactly.
 
 PubSub also retains the ten recovered historical prefixes in its `current-tapes`
 directory. Its explicit historical complement test generates fresh native

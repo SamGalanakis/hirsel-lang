@@ -183,10 +183,7 @@ fn load(
                   if info.kind != Regular() {
                     return Error(1)
                   }
-                  let Ok(size) = file.size(d, path.of(items[index].path)) else {
-                    return Error(1)
-                  }
-                  if size > syntax.SOURCE_BYTES {
+                  if info.size > syntax.SOURCE_BYTES {
                     return Error(2)
                   }
                 }
