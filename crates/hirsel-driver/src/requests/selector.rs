@@ -88,6 +88,7 @@ impl CompilerRequests {
             .and_then(|allowance| hirsel_engine::LowerCarry::new(allowance).ok());
         let carry = front
             .zip(lower)
+            .filter(|_| config.verify_store == hirsel_engine::store::VerifyStore::Off)
             .map(|(front, lower)| super::source_graph::Carry { front, lower });
         let graphs = super::host_selector::GraphSelections::new(&budget);
         let ledger =
