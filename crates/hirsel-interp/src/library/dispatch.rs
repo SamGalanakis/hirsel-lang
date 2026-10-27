@@ -30,6 +30,7 @@ pub struct Library {
     pub(super) signals: super::signals::Signals,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
+    pub(super) cpu_waits: std::collections::BTreeMap<u64, super::cpu::Batch>,
     pub(super) cpu_active: std::collections::BTreeSet<u64>,
     pub(super) next_shared: u64,
     /// A scripted client's unmet Expect at the last handle drop (LANG-9).
@@ -113,6 +114,7 @@ impl Library {
             callbacks: Default::default(),
             next_callback: 0,
             cpu_active: Default::default(),
+            cpu_waits: Default::default(),
             next_shared: 0,
             drop_failure: None,
             runners: Default::default(),
@@ -1366,6 +1368,9 @@ impl Library {
         token: u64,
         context: &mut OperationContext<'_>,
     ) -> Result<Option<OperationResult>, Error> {
+        if self.cpu_waits.contains_key(&token) {
+            return self.poll_cpu(token, context);
+        }
         if self.synchronizers.takes.contains_key(&token) {
             return self.poll_take(token, context);
         }
@@ -1452,6 +1457,12 @@ impl Operations for Library {
         self.tasks
             .retained_bytes()
             .saturating_add(self.channels.retained_bytes())
+            .saturating_add(
+                self.cpu_waits
+                    .values()
+                    .map(super::cpu::Batch::bytes)
+                    .sum::<u64>(),
+            )
             .saturating_add(
                 self.callbacks
                     .values()
@@ -1627,6 +1638,7 @@ impl Operations for Library {
             context,
         )?;
         self.free_end(id)?;
+        self.cpu_active.remove(&id);
         self.tasks.finished(id, result)
     }
     fn defer_release(&mut self, root: &crate::value::SharedRoot) -> bool {

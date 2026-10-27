@@ -444,6 +444,15 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
             observer.sync(task, &frames, sources);
         }
         for start in operations.take_tasks() {
+            let parent_frames = if start.parent == task {
+                &frames
+            } else if let Some((_, stack, _)) =
+                runnable.iter().find(|(id, _, _)| *id == start.parent)
+            {
+                stack
+            } else {
+                return Err(invalid("spawned task has no runnable parent stack"));
+            };
             let mut invocation_types = Default::default();
             let (definition, body, captures, sizes) = match &start.callee {
                 Value::Closure {
@@ -496,7 +505,7 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 runtime.types.clone(),
                 definition,
                 body,
-                vec![],
+                start.arguments.clone(),
                 captures,
                 sizes,
             )?;
@@ -504,48 +513,48 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                 child.caller = start
                     .site
                     .and_then(|site| {
-                        frames
+                        parent_frames
                             .last()
                             .map(|frame| CallerSite::new(frame, site, sources))
                     })
                     .transpose()?;
             }
             child.type_arguments = invocation_types;
-            if let Some(parent) = frames.last().and_then(|f| f.check.as_ref()) {
-                let callee =
-                    frames
-                        .last()
-                        .and_then(|f| f.operation.as_deref())
-                        .and_then(|(_, state)| {
-                            let bounds = state.bounds.as_ref()?;
-                            let Value::Closure {
-                                captures,
-                                environment,
-                                ..
-                            } = &start.callee
-                            else {
-                                return None;
-                            };
-                            let shadow = crate::checked::native_shadow(
-                                &start.callee,
-                                &state.arguments,
-                                bounds,
-                            );
-                            Some(crate::checked::Callee {
-                                captures: captures
-                                    .iter()
-                                    .enumerate()
-                                    .map(|(i, value)| {
-                                        value
-                                            .as_ref()
-                                            .map(|v| shadow.part(i).for_value(v))
-                                            .unwrap_or_default()
-                                    })
-                                    .collect(),
-                                owned: environment.owned_captures.clone(),
-                                lifetime: shadow.lifetime(),
-                            })
-                        });
+            if let Some(parent) = parent_frames.last().and_then(|f| f.check.as_ref()) {
+                let callee = parent_frames
+                    .last()
+                    .and_then(|f| f.operation.as_deref())
+                    .and_then(|(_, state)| {
+                        let bounds = state.bounds.as_ref()?;
+                        let Value::Closure {
+                            captures,
+                            environment,
+                            ..
+                        } = &start.callee
+                        else {
+                            return None;
+                        };
+                        let shadow =
+                            crate::checked::native_shadow(&start.callee, &state.arguments, bounds);
+                        Some(crate::checked::Callee {
+                            captures: captures
+                                .iter()
+                                .enumerate()
+                                .map(|(i, value)| {
+                                    value
+                                        .as_ref()
+                                        .map(|v| shadow.part(i).for_value(v))
+                                        .unwrap_or_default()
+                                })
+                                .collect(),
+                            owned: environment
+                                .owned_captures
+                                .iter()
+                                .map(|owned| *owned && !start.borrowed)
+                                .collect(),
+                            lifetime: shadow.lifetime(),
+                        })
+                    });
                 // OWN-6: a taken capture's blocks become the child's.
                 if let Some(callee) = &callee {
                     for (capture, owned) in callee.captures.iter().zip(&callee.owned) {
@@ -554,17 +563,41 @@ pub(crate) async fn execute_frames<O: crate::ownership_trace::Observer>(
                         }
                     }
                 }
-                child.check = Some(enter_checked(&parent.state, &child, vec![], callee)?);
+                let arguments = parent_frames
+                    .last()
+                    .and_then(|f| f.operation.as_deref())
+                    .and_then(|(_, state)| Some((state, state.bounds.as_ref()?)))
+                    .map(|(state, bounds)| {
+                        start
+                            .arguments
+                            .iter()
+                            .map(|value| {
+                                let shadow =
+                                    crate::checked::native_shadow(value, &state.arguments, bounds)
+                                        .for_value(value);
+                                shadow.release();
+                                crate::checked::Argument {
+                                    lifetime: shadow.total(),
+                                    shadow,
+                                    mutable: false,
+                                }
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                child.check = Some(enter_checked(&parent.state, &child, arguments, callee)?);
             }
             if O::ENABLED {
                 observer.task_started(
-                    task,
+                    start.parent,
                     start.id,
                     operations.ownership_task_path(start.id),
                     &child,
                 );
             }
-            budgets.storage.environment_entry(&start.callee)?;
+            if !start.borrowed {
+                budgets.storage.environment_entry(&start.callee)?;
+            }
             start.callee.begin_call();
             start.callee.discard();
             runnable.push_back((start.id, vec![child], vec![]));

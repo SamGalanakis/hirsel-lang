@@ -314,7 +314,13 @@ pub struct TaskStart {
     /// Actual spawn invocation, independent of inherited failure attribution.
     pub site: Option<hirsel_span::Span>,
     pub id: u64,
+    /// The spawning stack, also when a provider poll publishes the task.
+    pub parent: u64,
     pub callee: Value,
+    /// Owned inputs moved into the child in parameter order.
+    pub arguments: Vec<Value>,
+    /// The scope retains an immutable mapper environment until every child rests.
+    pub borrowed: bool,
 }
 // One inventory defines the extension boundary and its forwarding adapter. A new
 // operation hook therefore delegates automatically instead of inheriting a no-op.

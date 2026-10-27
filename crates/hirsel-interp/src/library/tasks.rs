@@ -542,6 +542,87 @@ impl Library {
         Ok(result)
     }
 
+    pub(super) fn cpu_scope(&mut self) -> u64 {
+        let scope = self.tasks.fresh();
+        self.tasks.scopes.insert(
+            scope,
+            ScopeState {
+                owner: self.tasks.current,
+                ..Default::default()
+            },
+        );
+        self.tasks
+            .active_scopes
+            .entry(self.tasks.current)
+            .or_default()
+            .push(scope);
+        scope
+    }
+
+    pub(super) fn cpu_child_result(&mut self, child: u64) -> Option<OperationResult> {
+        self.tasks.tasks.get_mut(&child)?.result.take()
+    }
+
+    pub(super) fn spawn_child(
+        &mut self,
+        scope: u64,
+        callee: Value,
+        arguments: Vec<Value>,
+        borrowed: bool,
+        context: &OperationContext<'_>,
+    ) -> Result<u64, Error> {
+        let task = self.tasks.fresh();
+        let mut path = self.tasks.path();
+        let children = self
+            .tasks
+            .scopes
+            .get_mut(&scope)
+            .ok_or_else(|| invalid("expired task scope"))?;
+        let ordinal = self
+            .tasks
+            .spawn_counts
+            .entry(self.tasks.current)
+            .or_default();
+        path.push(*ordinal);
+        *ordinal += 1;
+        children.children.push(task);
+        let canceled = self.tasks.canceled().map(|_| 1);
+        self.tasks.tasks.insert(
+            task,
+            Child {
+                scope,
+                path,
+                canceled,
+                finished: false,
+                detached: false,
+                completed: 0,
+                result: None,
+                priority: self.tasks.schedule.admit(),
+            },
+        );
+        // Free mode: the child registers in this spawn's section; a replay never
+        // starts a child its cut does not hold.
+        let path = self.tasks.tasks[&task].path.clone();
+        let starts = self
+            .free
+            .as_mut()
+            .is_none_or(|free| free.session.start(&path));
+        if starts {
+            self.tasks.starts.push(TaskStart {
+                site: context.anchor().map(|anchor| anchor.site),
+                id: task,
+                parent: self.tasks.current,
+                callee,
+                arguments,
+                borrowed,
+            });
+        }
+        if self.cpu_active.contains(&self.tasks.current) {
+            self.cpu_active.insert(task);
+        }
+        Ok(task)
+    }
+
     fn task_callback(
         &mut self,
         pending: Pending,
@@ -804,49 +885,7 @@ impl Library {
             }
             "task.async" => {
                 let scope = id(arg(a, 0)?, "Scope")?;
-                let task = self.tasks.fresh();
-                let mut path = self.tasks.path();
-                let children = self
-                    .tasks
-                    .scopes
-                    .get_mut(&scope)
-                    .ok_or_else(|| invalid("expired task scope"))?;
-                let ordinal = self
-                    .tasks
-                    .spawn_counts
-                    .entry(self.tasks.current)
-                    .or_default();
-                path.push(*ordinal);
-                *ordinal += 1;
-                children.children.push(task);
-                let canceled = self.tasks.canceled().map(|_| 1);
-                self.tasks.tasks.insert(
-                    task,
-                    Child {
-                        scope,
-                        path,
-                        canceled,
-                        finished: false,
-                        detached: false,
-                        completed: 0,
-                        result: None,
-                        priority: self.tasks.schedule.admit(),
-                    },
-                );
-                // Free mode: the child registers in this spawn's section; a replay never
-                // starts a child its cut does not hold.
-                let path = self.tasks.tasks[&task].path.clone();
-                let starts = self
-                    .free
-                    .as_mut()
-                    .is_none_or(|free| free.session.start(&path));
-                if starts {
-                    self.tasks.starts.push(TaskStart {
-                        site: context.anchor().map(|anchor| anchor.site),
-                        id: task,
-                        callee: arg(a, 1)?.clone(),
-                    });
-                }
+                let task = self.spawn_child(scope, arg(a, 1)?.clone(), vec![], false, context)?;
                 OperationResult::returned(handle("Task", task)).transferring([1])
             }
             "task.await" | "task.cancel" | "task.detach" => {
@@ -1180,7 +1219,7 @@ impl Library {
         }
         Ok(result)
     }
-    fn record_join(
+    pub(super) fn record_join(
         &mut self,
         task: u64,
         result: &OperationResult,
