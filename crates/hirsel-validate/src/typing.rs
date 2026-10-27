@@ -2863,6 +2863,11 @@ impl<'a> Checker<'a> {
                 definition,
                 arguments,
             } => {
+                if definition.is_core("cpu.map_scoped") {
+                    self.error(ViolationKind::TypeMismatch {
+                        entity: "indirect CPU operation",
+                    });
+                }
                 self.table_key_arguments(definition, arguments);
                 let Some(signature) = self.signatures.get(definition) else {
                     self.error(ViolationKind::MissingSignature(definition.clone()));

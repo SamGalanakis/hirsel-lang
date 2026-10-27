@@ -97,3 +97,19 @@ fn cpu_proof_rejects_external_calls_inside_a_nested_callback() {
         entity: "unproved external CPU helper"
     }));
 }
+
+#[test]
+fn cpu_operation_cannot_escape_as_an_indirect_function_value() {
+    let mut f = fixture();
+    f.valid();
+    f.body().rvalues.push(Rvalue::FunctionReference {
+        definition: DefPath::core("cpu.map_scoped"),
+        arguments: vec![],
+    });
+    let value = f.body().rvalues.last().unwrap().clone();
+    f.body().rvalues.pop();
+    f.assign(1, value, 0);
+    assert!(f.kinds().contains(&ViolationKind::TypeMismatch {
+        entity: "indirect CPU operation"
+    }));
+}

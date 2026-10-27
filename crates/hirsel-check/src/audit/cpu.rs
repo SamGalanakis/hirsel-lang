@@ -3,6 +3,30 @@ use super::*;
 impl Audit<'_, '_> {
     pub(super) fn cpu_callbacks(&mut self) -> Result<(), QueryError> {
         let calls = self.input.checked.calls.clone();
+        for (expression, name) in self.input.checked.resolution.expressions.clone() {
+            if !matches!(name, ResolvedName::Definition(ref path) if path.is_core("cpu.map_scoped"))
+            {
+                continue;
+            }
+            let span = self.input.syntax.tree.expressions[expression.0 as usize]
+                .origin
+                .span;
+            let direct = calls.iter().any(|call| {
+                if !matches!(&call.target, CallTarget::Definition(path) if path.is_core("cpu.map_scoped")) {
+                    return false;
+                }
+                let ast::ExprKind::Call { callee, .. } = self.input.syntax.tree.expressions[call.expression.0 as usize].kind else { return false; };
+                let at = self.input.syntax.tree.expressions[callee.0 as usize].origin.span;
+                at.start <= span.start && at.end >= span.end
+            });
+            if !direct {
+                self.report(
+                    const { RuleId::of("CAP-3") },
+                    span,
+                    "cpu.map_scoped requires a direct call so its closed callbacks can be proved",
+                );
+            }
+        }
         for call in calls {
             if !matches!(&call.target, CallTarget::Definition(path) if path.is_core("cpu.map_scoped") || (path.0.package.package_is("std", "1") && path.0.modules == ["cpu"] && path.0.name == "map_scoped"))
             {
