@@ -68,28 +68,27 @@ impl CompilerRequests {
         budget: Arc<ProcessBudget>,
         limits: RequestLimits,
     ) -> Self {
-        // Without a durable store, this selector's source revisions share a
-        // bounded transient one, so an edit revalidates rather than recomputes.
-        // The store and the front and Lower carries split that one bound.
-        let mut carry = None;
+        // Every provider can evict ordinary products. Compact front and Lower
+        // facts therefore have the same bounded carry regardless of provider.
+        // An off provider also gets a transient byte store within this bound.
+        let quarter = limits.transport_bytes / 4;
         if !config.store.enabled() {
-            let quarter = limits.transport_bytes / 4;
             config.store = Arc::new(super::resident_store::ResidentStore::new(
                 budget.clone(),
                 limits.transport_bytes - 2 * quarter,
             ));
-            let front = budget
-                .reserve(quarter)
-                .ok()
-                .and_then(|allowance| hirsel_engine::FrontCarry::new(allowance).ok());
-            let lower = budget
-                .reserve(quarter)
-                .ok()
-                .and_then(|allowance| hirsel_engine::LowerCarry::new(allowance).ok());
-            carry = front
-                .zip(lower)
-                .map(|(front, lower)| super::source_graph::Carry { front, lower });
         }
+        let front = budget
+            .reserve(quarter)
+            .ok()
+            .and_then(|allowance| hirsel_engine::FrontCarry::new(allowance).ok());
+        let lower = budget
+            .reserve(quarter)
+            .ok()
+            .and_then(|allowance| hirsel_engine::LowerCarry::new(allowance).ok());
+        let carry = front
+            .zip(lower)
+            .map(|(front, lower)| super::source_graph::Carry { front, lower });
         let graphs = super::host_selector::GraphSelections::new(&budget);
         let ledger =
             super::inspection::InspectionLedger::new(budget.clone(), limits.snapshot_bytes / 8);

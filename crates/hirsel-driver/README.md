@@ -18,9 +18,13 @@ sources and manifests of this crate and of every workspace crate it depends on,
 with Cargo.lock and the toolchain pin. Std images are keyed by it, so any edit to
 the compiler retires every std image written before it.
 
-This crate exports only that wiring. Callers import queries, sessions and their
-data from hirsel-engine directly, so each caller's dependency on the backends
-and front phases is explicit.
+Fresh, no-daemon and resident path calls select immutable `CompilerRequests`.
+The source loader installs the admitted front, Lower, Check, Run and Object
+producers, then drops its mutable engine before clients receive the graph.
+`Session` retains input observations and host policy. Query products own their
+admission and validity; the Session has no semantic program or invalidation cache.
+Native build and run use the same Object producers and host launch binding.
+Explicit engine APIs remain available to compiler fixtures and source bootstrap.
 
 `native::backend_features` inventories LIR opcodes with operand representations,
 arithmetic and conversion modes, projections, layout shapes, validation stage

@@ -35,7 +35,7 @@ pub struct FrontCarry {
 impl FrontCarry {
     pub fn new(allowance: MemoryReservation) -> Result<Arc<Self>, MemoryReservation> {
         let header = size_of::<Self>() as u64 + 2 * size_of::<usize>() as u64;
-        if allowance.bytes() < header {
+        if allowance.bytes() < header.saturating_add(index_bytes(0, 0)) {
             return Err(allowance);
         }
         Ok(Arc::new(Self {
@@ -47,7 +47,9 @@ impl FrontCarry {
         }))
     }
     pub fn retained_bytes(&self) -> u64 {
-        self.rows.lock().unwrap_or_else(|e| e.into_inner()).used
+        let rows = self.rows.lock().unwrap_or_else(|e| e.into_inner());
+        rows.used
+            .saturating_add(index_bytes(rows.entries.len(), rows.subscriptions.len()))
     }
     pub fn len(&self) -> usize {
         self.rows
@@ -70,14 +72,7 @@ impl FrontCarry {
         decode_bytes: u64,
     ) {
         let mut charge = crate::NativeMetadataWeight::default();
-        // At most one full internal node per row bounds every BTree split.
-        charge.tree::<Key, Row>(0);
         charge.add(2 * size_of::<usize>() + bytes.len());
-        // Every subscription may cause a tree split. Interned read keys have
-        // no separately owned payload. Charge each possible node to its row.
-        for _ in reads.iter() {
-            charge.tree::<(ReadKey, DefId, ContentHash, Key), ()>(0);
-        }
         let mut read_weight = Weight::default();
         read_weight.reads(&reads);
         let charge = charge.bytes().saturating_add(read_weight.bytes);
@@ -90,7 +85,17 @@ impl FrontCarry {
         else {
             return;
         };
-        if used > self.allowance.bytes() {
+        let old_reads = rows.entries.get(&key).map_or(0, |row| row.reads.len());
+        let Some(subscriptions) = rows
+            .subscriptions
+            .len()
+            .checked_sub(old_reads)
+            .and_then(|len| len.checked_add(reads.len()))
+        else {
+            return;
+        };
+        let entries = rows.entries.len() + usize::from(!rows.entries.contains_key(&key));
+        if used.saturating_add(index_bytes(entries, subscriptions)) > self.allowance.bytes() {
             return;
         }
         let Some(generation) = rows.generation.checked_add(1) else {
@@ -120,6 +125,15 @@ impl FrontCarry {
         );
         rows.used = used;
     }
+}
+
+// Count the complete trees once using Rust's minimum node occupancy bound.
+// Charging a whole node for every read makes bounded carry discard most facts.
+fn index_bytes(entries: usize, subscriptions: usize) -> u64 {
+    let mut weight = crate::NativeMetadataWeight::default();
+    weight.tree::<Key, Row>(entries);
+    weight.tree::<(ReadKey, DefId, ContentHash, Key), ()>(subscriptions);
+    weight.bytes()
 }
 
 #[derive(serde::Serialize)]
@@ -475,7 +489,7 @@ mod tests {
                         *key,
                         owner,
                         *key,
-                        Arc::new(Reads::empty()),
+                        Arc::new(Reads::from_vec(vec![(ReadKey::Environment, *key)]).unwrap()),
                         reference,
                         vec![9; 64],
                         1024,
@@ -504,7 +518,7 @@ mod tests {
                     *key,
                     owner,
                     *key,
-                    Arc::new(Reads::empty()),
+                    Arc::new(Reads::from_vec(vec![(ReadKey::Environment, *key)]).unwrap()),
                     reference,
                     vec![9; 64],
                     1024,

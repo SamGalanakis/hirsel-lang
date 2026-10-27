@@ -221,13 +221,13 @@ impl FrontCheckScope {
                 );
             }
         }
-        let mut required = BTreeMap::new();
+        let mut required = BTreeSet::new();
         for (path, definition) in &definitions {
             if signatures
                 .get(path)
                 .is_some_and(|s| matches!(s.public.kind, hirsel_types::SignatureKind::Const { .. }))
             {
-                required.insert(path.clone(), (path.clone(), Vec::new()));
+                required.insert(path.clone());
             }
             for value in definition.bodies.iter().flat_map(|body| &body.rvalues) {
                 if let hirsel_tir::Rvalue::ReadConstant {
@@ -248,20 +248,25 @@ impl FrontCheckScope {
                         } else {
                             hirsel_tir::constant_instance_path(definition, &arguments)
                         };
-                        required.insert(selected, (definition.clone(), arguments));
+                        required.insert(selected);
                     }
                 }
             }
         }
         let mut constants = BTreeMap::new();
-        for (selected, (path, arguments)) in required {
-            constants.insert(
-                selected,
-                (*lower
-                    .settled_constant(&path, &arguments)
-                    .map_err(|error| receipt_input_failure("constant", &path, error))?)
-                .clone(),
-            );
+        // Like the scalar receipt, include only values this Check actually
+        // evaluated. A cached Lower body may mention a runtime constant whose
+        // Evaluate query was never demanded; inspection must not demand it.
+        for path in lower.settled_constants() {
+            if required.contains(&path) {
+                constants.insert(
+                    path.clone(),
+                    (*lower
+                        .settled_constant(&path, &[])
+                        .map_err(|error| receipt_input_failure("constant", &path, error))?)
+                    .clone(),
+                );
+            }
         }
         let sources = Rc::new(lower.sources().clone());
         let locator: Locator = Rc::new(move |span| {
