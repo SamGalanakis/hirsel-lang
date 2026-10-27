@@ -244,12 +244,16 @@ impl UnitGlue {
                 }
             }
         }
-        // A bounded arena's exhaustion (MEM-6) starts at any arena construction or copy;
-        // only `arena.bounded`'s recovery opens one.
+        // Arena construction, copy and seal exhaustion record MEM-6. A seal
+        // also checks overflow when no bounded recovery is linked.
         if unit
             .terminators
             .iter()
             .any(|t| matches!(t, Terminator::Recover { .. }))
+            || unit
+                .instructions
+                .iter()
+                .any(|inst| matches!(inst, crate::ir::Inst::SealArena { .. }))
         {
             glue.failure_rules.insert(BOUNDED_RULE.to_string());
         }

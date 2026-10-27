@@ -42,7 +42,11 @@ impl FnEmitter<'_, '_, '_> {
         origin: SourceAnchorId,
     ) -> Emitted {
         let (status, output) = self.prepare_seal(result, grant, root, shape, origin)?;
-        self.status_guard(status, failure)?;
+        // Prepare reports exhaustion without recording a language failure.
+        // Attribute it to this grant before entering ordinary failure cleanup.
+        let grant = self.get1(grant)?;
+        let exhausted = self.exhausted_block(grant, origin, failure)?;
+        self.branch_to(status, exhausted)?;
         let owner = self.load_ptr(output);
         self.define1(result, owner)
     }

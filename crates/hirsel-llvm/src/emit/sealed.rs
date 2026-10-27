@@ -38,7 +38,14 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         origin: SourceAnchorId,
     ) -> Emitted {
         let (status, output) = self.prepare_seal(result, grant, root, shape, origin)?;
-        self.status_guard(status, failure)?;
+        // Prepare reports exhaustion without recording a language failure.
+        // Attribute it to this grant before entering ordinary failure cleanup.
+        let zero = self.module.const_int(self.module.int_type(8), 0);
+        let failed = self.builder.icmp(IntPredicate::Ne, status, zero);
+        let exhausted = self.exhausted_block(self.get(grant)?, origin, failure)?;
+        let next = self.module.append_block(self.function);
+        self.builder.cold_cond_br(failed, exhausted, next);
+        self.builder.position(next);
         let owner = self.builder.load(self.module.ptr_type(), output, 8);
         self.define(result, owner)
     }

@@ -3,9 +3,19 @@ use hirsel_engine::{RunConfiguration, SimulationConfig, with_compiler_stack};
 
 #[test]
 fn sealed_heap_107_runs_on_four_engines_and_replays() {
+    run_sealed_program("MEM-4-sealed-heap-run.hir");
+}
+
+#[test]
+fn sealed_heap_charge_107_runs_on_four_engines_and_replays() {
+    run_sealed_program("MEM-4-sealed-heap-charge-run.hir");
+}
+
+fn run_sealed_program(name: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../conformance/MEM/MEM-4-sealed-heap-run.hir");
+            .join("../../conformance/MEM")
+            .join(name);
         let mut program = load_program(&path).unwrap();
         program.check_for_execution().unwrap();
         let run = RunConfiguration {
