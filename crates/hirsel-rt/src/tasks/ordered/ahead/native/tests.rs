@@ -260,6 +260,136 @@ fn v2_capture_recipe_binds_code_live_word_descriptor_extent_and_exclusivity() {
 }
 
 #[test]
+fn cpu_capture_recipe_checks_the_frozen_mapper_and_consumed_job_owners() {
+    let wrapper = layout(40);
+    let source = layout(8);
+    let mut frozen = layout(16);
+    frozen.flags = crate::LAYOUT_FROZEN;
+    let jobs = layout(16);
+    let layouts = [
+        &wrapper as *const _,
+        &source as *const _,
+        &frozen as *const _,
+        &jobs as *const _,
+    ];
+    let mut run = crate::host::BodyRun::new(1, false);
+    run.config.layouts = layouts.as_ptr();
+    run.config.layout_count = layouts.len() as u32;
+    let outcome = run.run(
+        |_| {},
+        |ctx| unsafe {
+            let alloc = |index, size| {
+                crate::alloc::hirsel_rt_v2_alloc(ctx, index, size, 8, crate::alloc::DOMAIN_HEAP, 0)
+            };
+            let env = alloc(2, 40);
+            let capture = alloc(3, 8);
+            let mapper = alloc(4, 16);
+            let input = alloc(5, 16);
+            let callable = crate::alloc::payload(mapper).cast::<[usize; 2]>();
+            callable.write([code as usize, capture as usize]);
+            let image = crate::alloc::payload(env).cast::<[u64; 5]>();
+            image.write([mapper as u64, input as u64, 0, 4, 1]);
+            let recipe = Recipe {
+                wrapper_descriptor: 2,
+                source_descriptor: 3,
+                wrapper_extent: 40,
+                callable_offset: 0,
+                live_word_offset: 32,
+                source_extent: 8,
+                live_mask: 1,
+                source_code: code as *const u8,
+            };
+            let mut info = super::super::cpu_worker::Info {
+                prefix: Info {
+                    prefix: SpawnAheadInfo {
+                        version: 5,
+                        flags: 0,
+                        entry: Some(code),
+                    },
+                    stack_bytes: 128,
+                    recipe: &recipe,
+                },
+                shared_descriptor: 4,
+                shared_payload_descriptor: 4,
+                jobs_descriptor: 5,
+                jobs_offset: 8,
+            };
+            let valid = move |info: &super::super::cpu_worker::Info| {
+                super::super::cpu_worker::validate(ctx, env, info).is_some_and(|cert| cert.cpu)
+            };
+            assert!(valid(&info));
+            for changed in [
+                Recipe {
+                    wrapper_descriptor: 3,
+                    ..recipe
+                },
+                Recipe {
+                    source_descriptor: 5,
+                    ..recipe
+                },
+                Recipe {
+                    wrapper_extent: 32,
+                    ..recipe
+                },
+                Recipe {
+                    source_extent: 16,
+                    ..recipe
+                },
+                Recipe {
+                    callable_offset: 8,
+                    ..recipe
+                },
+                Recipe {
+                    live_word_offset: 8,
+                    ..recipe
+                },
+                Recipe {
+                    live_mask: 3,
+                    ..recipe
+                },
+                Recipe {
+                    source_code: std::ptr::null(),
+                    ..recipe
+                },
+            ] {
+                info.prefix.recipe = &changed;
+                assert!(!valid(&info));
+            }
+            info.prefix.recipe = &recipe;
+            for changed in [0, 4, 32, u32::MAX] {
+                info.jobs_offset = changed;
+                assert!(!valid(&info));
+            }
+            info.jobs_offset = 8;
+            info.shared_payload_descriptor = 3;
+            assert!(!valid(&info));
+            info.shared_payload_descriptor = 4;
+            info.jobs_descriptor = 3;
+            assert!(!valid(&info));
+            info.jobs_descriptor = 5;
+            (*env).count = 2;
+            assert!(!valid(&info));
+            (*env).count = 1;
+            (*image)[4] = 0;
+            assert!(!valid(&info));
+            (*image)[4] = 1;
+            (*callable)[0] = 0;
+            assert!(!valid(&info));
+            (*callable)[0] = code as usize;
+            (*callable)[1] = 0;
+            assert!(!valid(&info));
+            (*callable)[1] = capture as usize;
+            assert!(valid(&info));
+            for block in [env, mapper, input, capture] {
+                crate::release::release_block(&mut *ctx, block, std::ptr::null(), 0, 0);
+            }
+            crate::STATUS_OK
+        },
+    );
+    assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+}
+
+#[test]
 fn inert_value_metadata_is_admitted_but_owner_and_opaque_scan_programs_are_refused() {
     use hirsel_core_contract::handle_scan::*;
     let bits = [VALUE, VALUE_BITS, 8, 0, 0, 0, 0, 0];
