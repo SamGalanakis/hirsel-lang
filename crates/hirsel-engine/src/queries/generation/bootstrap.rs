@@ -94,6 +94,12 @@ impl QueryEngine {
     ) -> Result<Vec<DefPath>, QueryError> {
         let mut roots = Vec::new();
         for path in definitions {
+            if self
+                .source_facts(path)
+                .is_some_and(|facts| !facts.generator)
+            {
+                continue;
+            }
             self.materialize(path)?;
             if generator(self.snapshot(path)?.as_ref()).is_some() {
                 roots.push(path.clone());
