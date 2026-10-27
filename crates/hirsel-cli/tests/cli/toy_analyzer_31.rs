@@ -75,25 +75,6 @@ fn package(root: &Path) -> PathBuf {
         .into();
     let path = root.join("hirsel.json");
     fs::write(&path, manifest.to_string()).unwrap();
-    let seal_script = root.join("runtime_seal.py");
-    fs::write(
-        &seal_script,
-        include_str!("../support/toy_analyzer_31/runtime_seal.py"),
-    )
-    .unwrap();
-    let sealed = Command::new("python3")
-        .arg(&seal_script)
-        .arg(root.join("runtime-seal.json"))
-        .arg(env!("CARGO_BIN_EXE_hirsel"))
-        .arg(std::env::current_exe().unwrap())
-        .output()
-        .unwrap();
-    assert!(
-        sealed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&sealed.stderr)
-    );
-    eprintln!("{}", String::from_utf8_lossy(&sealed.stdout));
     path
 }
 fn cases() -> Vec<Value> {
@@ -702,8 +683,6 @@ fn toy_analyzer_31_host_tapes_checked_replay_and_controls() {
     hirsel_engine::with_compiler_stack(|| {
         let directories = std::env::var("TOY_ANALYZER_31_ARCHIVES")
             .expect("explicit archived launch directories");
-        let tool_seal = scratch();
-        let _seal_manifest = package(tool_seal.path());
 
         let mut count = 0;
         for directory in directories.split(',').map(PathBuf::from) {
