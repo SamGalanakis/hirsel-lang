@@ -41,6 +41,121 @@ mod tests {
     }
 
     #[test]
+    fn stored_output_rechecks_current_inputs_and_refuses_before_decode() {
+        let mut f = Fixture::unit();
+        owner_sig(&mut f, &[]);
+        let definition = Arc::new(f.definition.clone());
+        let cache = VerifierCache::default();
+        let policy = ContentHash::of_bytes(b"stored source validation");
+        let (report, _, _, evidence) = validate_definition(
+            &definition,
+            session(),
+            |_| Some((path("main"), 0)),
+            &f.signatures,
+            policy,
+            Some(&cache),
+        );
+        assert!(report.violations.is_empty(), "{report:?}");
+        let output = cache
+            .definition_output_from_evidence(
+                &definition,
+                session(),
+                policy,
+                &f.signatures,
+                &evidence.unwrap(),
+            )
+            .unwrap();
+        let (stored, bytes) = cache.compact_definition_output(&output).unwrap();
+        assert!(
+            stored
+                .load(
+                    &cache,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes() - 1
+                )
+                .is_none()
+        );
+        for damaged in [bytes[..bytes.len() - 1].to_vec(), {
+            let mut damaged = bytes.clone();
+            damaged[0] ^= 1;
+            damaged
+        }] {
+            assert!(
+                stored
+                    .load(
+                        &cache,
+                        &session(),
+                        &f.signatures,
+                        &damaged,
+                        stored.decode_bytes()
+                    )
+                    .is_none()
+            );
+        }
+        let restored = stored
+            .load(
+                &cache,
+                &session(),
+                &f.signatures,
+                &bytes,
+                stored.decode_bytes(),
+            )
+            .unwrap();
+        assert_eq!(restored, output);
+        assert!(
+            stored
+                .load(
+                    &VerifierCache::default(),
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+        let mut wrong = stored.clone();
+        wrong.artifact = ContentHash::of_bytes(b"different body");
+        assert!(
+            wrong
+                .load(
+                    &cache,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+        let mut wrong = stored.clone();
+        wrong.policy = ContentHash::of_bytes(b"different policy");
+        assert!(
+            wrong
+                .load(
+                    &cache,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+        f.signatures.clear();
+        assert!(
+            stored
+                .load(
+                    &cache,
+                    &session(),
+                    &f.signatures,
+                    &bytes,
+                    stored.decode_bytes()
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn completed_definition_returns_its_existing_verifier_replay_without_publication() {
         for directory_backed in [false, true] {
             let mut f = Fixture::unit();
@@ -463,7 +578,104 @@ impl VerifiedDefinitionOutput {
         &self.metadata
     }
 }
+/// Compact retained authority for a completed V output. Its metadata can live
+/// in ordinary bounded storage; bytes alone cannot construct this capability.
+#[derive(Clone)]
+pub struct StoredDefinitionOutput {
+    owner: DefId,
+    policy: ContentHash,
+    artifact: ContentHash,
+    reference: Reference,
+    metadata: ContentHash,
+    decode_bytes: u64,
+}
+impl StoredDefinitionOutput {
+    /// Peak metadata decode storage, checked before provider I/O by consumers.
+    pub fn decode_bytes(&self) -> u64 {
+        self.decode_bytes
+    }
+    /// Restore only the bytes bound by this verifier-minted capability, with
+    /// current independent input validation. No body is decoded or accepted here.
+    pub fn load(
+        &self,
+        cache: &VerifierCache,
+        types: &TypeInterner,
+        signatures: &dyn SignatureLookup,
+        bytes: &[u8],
+        allowance: u64,
+    ) -> Option<VerifiedDefinitionOutput> {
+        if self.decode_bytes > allowance
+            || bytes.len() as u64 > allowance
+            || ContentHash::of_bytes(bytes) != self.metadata
+        {
+            return None;
+        }
+        let record: Record = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .with_limit(bytes.len() as u64)
+            .reject_trailing_bytes()
+            .deserialize(bytes)
+            .ok()?;
+        if record.owner != self.owner
+            || record.artifact != self.artifact
+            || record.policy != self.policy
+            || record.reference != self.reference
+            || record.subject != receipt_action(record.artifact, record.policy, &record.reads)
+            || !record
+                .reads
+                .iter()
+                .all(|read| crate::input::read_holds_for_types(types, read, signatures))
+        {
+            return None;
+        }
+        cache.contents().get_content(self.reference)?;
+        Some(VerifiedDefinitionOutput {
+            owner: self.owner,
+            reference: self.reference,
+            artifact: self.artifact,
+            policy: self.policy,
+            reads: record.reads.into(),
+            metadata: record.metadata.into(),
+            invocations: Arc::new(record.invocations),
+        })
+    }
+}
 impl VerifierCache {
+    /// Return compact authority and its ordinary transport bytes. This does
+    /// not publish another verifier receipt or retain the metadata in V.
+    pub fn compact_definition_output(
+        &self,
+        output: &VerifiedDefinitionOutput,
+    ) -> Option<(StoredDefinitionOutput, Vec<u8>)> {
+        self.contents().get_content(output.reference)?;
+        let record = Record {
+            subject: output.observation_identity(),
+            owner: output.owner,
+            policy: output.policy,
+            artifact: output.artifact,
+            reference: output.reference,
+            reads: output.reads.to_vec(),
+            metadata: output.metadata.to_vec(),
+            invocations: (*output.invocations).clone(),
+        };
+        let bytes = bincode::serialize(&record).ok()?;
+        let decode_bytes = output
+            .retained_bytes()?
+            .checked_mul(3)?
+            .checked_add((bytes.len() as u64).checked_mul(4)?)?
+            .checked_add(std::mem::size_of::<Record>() as u64)?;
+        Some((
+            StoredDefinitionOutput {
+                owner: output.owner,
+                policy: output.policy,
+                artifact: output.artifact,
+                reference: output.reference,
+                metadata: ContentHash::of_bytes(&bytes),
+                decode_bytes,
+            },
+            bytes,
+        ))
+    }
     /// V encodes the actual immutable body, rather than accepting a caller's
     /// claimed body reference. The subject is only its query lookup address.
     pub fn publish_definition(
