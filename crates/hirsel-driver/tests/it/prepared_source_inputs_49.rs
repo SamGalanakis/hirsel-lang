@@ -202,3 +202,105 @@ fn prepared_source_inputs_enforce_exact_caps_and_snapshot_identity_49() {
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn semantic_source_products_do_not_require_a_launch_or_program_check() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"semantic_library","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[]}"#).unwrap();
+        std::fs::write(
+            directory.path().join("main.hir"),
+            "pub fn value()->u64 {7u64}\nfn invalid()->u64 {true}\n",
+        )
+        .unwrap();
+        let mut program = COMPILER
+            .with_config(CompileConfig {
+                store: Arc::new(MemStore::default()),
+                hold_bytes: 0,
+                ..Default::default()
+            })
+            .with_owned_engines()
+            .load_check_package(&manifest)
+            .unwrap();
+        let paths = program.engine.front_source_roots();
+        let budget = ProcessBudget::new(256 << 20);
+        let errors = crate::scheduled_front::errors();
+        let weight = MemoryWeight {
+            retained: 64 << 10,
+            scratch: 8 << 20,
+            stack: 0,
+        };
+        let front = program
+            .engine
+            .front_body_queries(&paths, weight, budget.reserve(16 << 20).unwrap(), errors)
+            .unwrap();
+        let lower = program
+            .engine
+            .front_lower_queries(
+                &paths,
+                front.clone(),
+                weight,
+                3 * paths.len(),
+                budget.reserve(16 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let run = program
+            .engine
+            .front_semantic_queries(
+                front.clone(),
+                lower.clone(),
+                weight,
+                budget.reserve(16 << 20).unwrap(),
+                errors,
+            )
+            .unwrap();
+        let path = paths
+            .iter()
+            .find(|path| path.0.name == "value")
+            .unwrap()
+            .clone();
+        let query = run.semantic_query(&path).unwrap();
+        assert!(run.query(&path).is_none());
+        let expected = program
+            .engine
+            .semantic_program_nodes([path.clone()])
+            .unwrap()
+            .into_iter()
+            .find(|node| node.identity == path.to_string())
+            .unwrap();
+        drop(program);
+        let mut runtime = AdmittedRuntime::new(
+            hirsel_intern::jobs::Jobs::new(2),
+            budget.reserve(128 << 20).unwrap(),
+            errors,
+        )
+        .unwrap();
+        runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
+        runtime
+            .register_local(FRONT_LOWER_KIND, lower.factory())
+            .unwrap();
+        runtime
+            .register_local(FRONT_EVALUATE_KIND, lower.factory())
+            .unwrap();
+        runtime.register(FRONT_RUN_KIND, run.factory()).unwrap();
+        // No Check or Growth factory is installed. The invalid sibling must
+        // remain undemanded, and the library has no launch entry.
+        let request = runtime.request(&[query]);
+        let product = runtime.wait(request).unwrap()[0];
+        let actual = run.semantic_node(product).unwrap();
+        assert_eq!(actual.identity, expected.identity);
+        assert_eq!(actual.content, expected.content);
+        assert_eq!(actual.dependencies, expected.dependencies);
+        assert!(run.outcome(product).is_none());
+        let before = lower.work_snapshot();
+        let repeated = runtime.request(&[query]);
+        assert_eq!(runtime.wait(repeated).unwrap(), vec![product]);
+        assert_eq!(lower.work_snapshot(), before);
+        let mut wrong = product;
+        wrong.action = hirsel_artifact_store::Action(hirsel_syntax::ContentHash::default());
+        assert!(run.semantic_node(wrong).is_err());
+        runtime.shutdown();
+    });
+}

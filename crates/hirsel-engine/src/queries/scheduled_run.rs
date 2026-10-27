@@ -2,6 +2,7 @@
 use super::*;
 mod content;
 mod proof_export;
+mod semantic;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
 pub use proof_export::{
     FrontBuiltProof, FrontPreparedProof, FrontProofExport, FrontProofInput, FrontProofText,
@@ -86,10 +87,13 @@ pub struct FrontRunQueries {
     native_roots: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
     ids: BTreeMap<DefPath, QueryId>,
-    check: Arc<FrontCheckQueries>,
+    semantic_ids: BTreeMap<DefPath, QueryId>,
+    semantic_paths: BTreeMap<ContentHash, DefId>,
+    semantic_completed: Mutex<BTreeMap<ContentHash, (ProductRef, Arc<GraphEntry>)>>,
+    check: Option<Arc<FrontCheckQueries>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
-    runtime: Arc<hirsel_interp::aggregate::RuntimeTypes>,
+    runtime: Option<Arc<hirsel_interp::aggregate::RuntimeTypes>>,
     foreign_threads: BTreeMap<hirsel_syntax::PackageId, hirsel_types::ForeignThreads>,
     foreign_links: Vec<LinkInput>,
     store: Arc<dyn ResultStore>,
@@ -220,9 +224,11 @@ impl FrontRunQueries {
         definitions
             .iter()
             .try_fold(std::mem::size_of::<Self>() as u64, |n, path| {
-                n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(4)?)?
+                n.checked_add(bincode::serialized_size(path).ok()?.checked_mul(5)?)?
                     .checked_add(
-                        (std::mem::size_of::<Input>() + 16 * std::mem::size_of::<usize>()) as u64,
+                        (std::mem::size_of::<Input>()
+                            + std::mem::size_of::<QueryId>()
+                            + 32 * std::mem::size_of::<usize>()) as u64,
                     )
             })
     }
@@ -274,6 +280,9 @@ impl FrontRunQueries {
 struct Factory(Arc<FrontRunQueries>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if let Some(task) = semantic::create(&self.0, query) {
+            return Ok(task);
+        }
         let (root, completed) = if let Some((batch, roots)) = &self.0.batch
             && query == *batch
         {
@@ -324,6 +333,7 @@ impl QueryFactory for Factory {
 struct GraphEntry {
     node: content::Node,
     content: content::Content,
+    dependencies: Box<[DefId]>,
 }
 struct Task {
     queries: Arc<FrontRunQueries>,
@@ -331,7 +341,7 @@ struct Task {
     root: DefPath,
     checked: bool,
     pending: Vec<DefId>,
-    entries: BTreeMap<DefId, Box<GraphEntry>>,
+    entries: BTreeMap<DefId, Arc<GraphEntry>>,
     waiting: Option<QueryId>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -379,12 +389,15 @@ impl Task {
     }
     fn advance(&mut self, cx: &mut dyn QueryContext) -> Poll<Result<ProductRef, Reference>> {
         if !self.checked {
-            let product = match self.read(cx, self.queries.check.query()) {
+            let Some(check) = self.queries.check.clone() else {
+                return Poll::Ready(Err(self.queries.errors.protocol));
+            };
+            let product = match self.read(cx, check.query()) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
                 Poll::Ready(Ok(product)) => product,
             };
-            let Some(output) = self.queries.check.outcome(product) else {
+            let Some(output) = check.outcome(product) else {
                 return Poll::Ready(Err(self.queries.errors.protocol));
             };
             if output.checked.completion != CheckCompletion::Complete {
@@ -423,7 +436,7 @@ impl Task {
             }
             // Runtime type construction historically demands all declared drop
             // bodies. These are explicit S5 dependencies, never host work.
-            for nominal in &self.queries.runtime.nominals {
+            for nominal in &self.queries.runtime.as_ref().expect("Run runtime").nominals {
                 if let Some((path, _)) = &nominal.finalizer {
                     self.pending.push(DefId::intern(path));
                 }
@@ -436,27 +449,26 @@ impl Task {
                     self.pending.pop();
                     continue;
                 }
-                match self.node(cx, path) {
+                let Some(query) = self.queries.semantic_query(path) else {
+                    return Poll::Ready(Err(self.queries.errors.protocol));
+                };
+                let product = match self.read(cx, query) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(Err(error)) => return Poll::Ready(Err(error)),
-                    Poll::Ready(Ok((node, content, dependencies))) => {
-                        self.pending.pop();
-                        self.pending.extend(
-                            dependencies
-                                .iter()
-                                .filter(|p| !self.entries.contains_key(&DefId::intern(p)))
-                                .map(DefId::intern),
-                        );
-                        let content = match content::Content::new(&self.queries, content) {
-                            Ok(content) => content,
-                            Err(error) => {
-                                return Poll::Ready(Err(self.queries.failure_record(error)));
-                            }
-                        };
-                        self.entries
-                            .insert(id, Box::new(GraphEntry { node, content }));
-                    }
-                }
+                    Poll::Ready(Ok(product)) => product,
+                };
+                let Some(entry) = self.queries.semantic_entry(product) else {
+                    return Poll::Ready(Err(self.queries.errors.protocol));
+                };
+                self.pending.pop();
+                self.pending.extend(
+                    entry
+                        .dependencies
+                        .iter()
+                        .copied()
+                        .filter(|id| !self.entries.contains_key(id)),
+                );
+                self.entries.insert(id, entry);
                 // Canonical input bytes plus graph rows and decoded working bodies
                 // are bounded by this task's retained/scratch admission.
                 if self
@@ -695,13 +707,8 @@ impl Task {
     }
     fn graph_bytes(&self) -> Option<u64> {
         let mut metadata = crate::NativeMetadataWeight::default();
-        metadata.tree::<DefId, Box<GraphEntry>>(self.entries.len());
+        metadata.tree::<DefId, Arc<GraphEntry>>(self.entries.len());
         metadata.flat_vec(&self.pending);
-        for entry in self.entries.values() {
-            metadata.add(std::mem::size_of::<GraphEntry>() + 2 * std::mem::size_of::<usize>());
-            entry.node.weight(&mut metadata);
-            entry.content.weight(&mut metadata);
-        }
         Some(metadata.bytes())
     }
 
@@ -788,7 +795,16 @@ impl Task {
             })
             .map_err(operational)?,
         );
-        let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
+        let checked_runtime = Arc::new(
+            snapshot.checked_runtime(
+                queries
+                    .runtime
+                    .as_ref()
+                    .ok_or(QueryError::NotImplemented)?
+                    .forget
+                    .as_ref(),
+            )?,
+        );
         let Some((batch, roots)) = &queries.batch else {
             return self.complete_one(&self.root, self.query, hashes, checked_runtime, None);
         };
@@ -1045,7 +1061,7 @@ impl Task {
             semantic,
             callees,
             entries,
-            runtime: queries.runtime.clone(),
+            runtime: queries.runtime.clone().ok_or(QueryError::NotImplemented)?,
             checked_runtime,
             _owner: queries.ownership.clone(),
         });
@@ -1297,6 +1313,41 @@ impl QueryEngine {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontRunQueries>, QueryError> {
+        self.front_source_queries_with_inputs(
+            Some(check),
+            front,
+            lower,
+            inputs,
+            weight,
+            allowance,
+            errors,
+        )
+    }
+
+    /// Source semantic products for precomputation, without launch metadata or
+    /// an entry. The caller selects the complete Check separately when needed.
+    pub fn front_semantic_queries(
+        &mut self,
+        front: Arc<FrontBodyQueries>,
+        lower: Arc<FrontLowerQueries>,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontRunQueries>, QueryError> {
+        let inputs = self.front_run_inputs(allowance.bytes())?;
+        self.front_source_queries_with_inputs(None, front, lower, inputs, weight, allowance, errors)
+    }
+
+    fn front_source_queries_with_inputs(
+        &mut self,
+        check: Option<Arc<FrontCheckQueries>>,
+        front: Arc<FrontBodyQueries>,
+        lower: Arc<FrontLowerQueries>,
+        inputs: FrontRunInputs,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontRunQueries>, QueryError> {
         if !Arc::ptr_eq(&inputs.signatures, &self.signature_inputs())
             || !Arc::ptr_eq(&inputs.signatures, &lower.signatures())
         {
@@ -1317,9 +1368,36 @@ impl QueryEngine {
         } = inputs;
         // Zero representation digests match ordinary execution. Compile-time
         // reflection's digest-bearing runtime remains a different producer.
-        let runtime = Arc::new(self.build_runtime_types(views, false)?);
+        let runtime = if check.is_some() {
+            Some(Arc::new(self.build_runtime_types(views, false)?))
+        } else {
+            None
+        };
+        let semantic_ids: BTreeMap<_, _> = inputs
+            .keys()
+            .map(|path| {
+                (
+                    path.clone(),
+                    QueryId {
+                        kind: FRONT_RUN_KIND,
+                        address: hirsel_artifact_store::Address(ContentHash::of_parts(
+                            "hirsel.front.semantic.address.v1",
+                            [
+                                self.environment_value().0.as_slice(),
+                                path.fingerprint().0.as_slice(),
+                            ],
+                        )),
+                    },
+                )
+            })
+            .collect();
+        let semantic_paths = semantic_ids
+            .iter()
+            .map(|(path, query)| (query.address.0, DefId::intern(path)))
+            .collect();
         let ids = source_paths
             .into_iter()
+            .filter(|_| check.is_some())
             .map(|path| {
                 let id = QueryId {
                     kind: FRONT_RUN_KIND,
@@ -1341,6 +1419,9 @@ impl QueryEngine {
             native_roots: Vec::new(),
             inputs,
             ids,
+            semantic_ids,
+            semantic_paths,
+            semantic_completed: Mutex::new(BTreeMap::new()),
             check,
             front: front.clone(),
             lower: lower.clone(),

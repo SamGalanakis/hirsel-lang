@@ -867,13 +867,13 @@ impl Plan {
                 .transpose()?
                 .unwrap_or(0);
         // Each definition can name P, Lower, Evaluate and, when selected,
-        // Run, and native selection adds its Run and definition rows. Growth/
+        // Run and a semantic node; native selection adds its definition rows. Growth/
         // Check, the selected SafeCheck root and the native bootstrap and
         // source roots have separate slots.
         // Reserve the same row bound here and in the runtime constructor so
         // task grants cannot spend the scheduler's bookkeeping allocation.
         let per_definition = 4
-            + usize::from(needs_run)
+            + 2 * usize::from(needs_run)
             + 2 * usize::from(needs_native)
             + usize::from(needs_ownership)
             + usize::from(needs_storage);
@@ -916,9 +916,9 @@ impl Plan {
         // its bootstrap controller to the nested bodies.
         let native_frames = u64::from(needs_native || needs_ownership);
         // Run accumulates the selected semantic closure, the largest retained
-        // root graph, so it holds two of the root shares.
+        // root graph, so it holds two shares; its active semantic node holds one.
         let root_shares = 2
-            + 2 * u64::from(needs_run)
+            + 3 * u64::from(needs_run)
             + u64::from(needs_safe)
             + native_frames
             + u64::from(needs_storage);
