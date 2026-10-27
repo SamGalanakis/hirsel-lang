@@ -259,9 +259,9 @@ impl Drop for Stack {
 /// and `save` stays writable until this fiber is resumed.
 #[inline(always)]
 pub(crate) unsafe fn switch(save: *mut *mut u8, to: *mut u8) {
-    // Called here, not in a helper: an instrumented function that returned after the call
-    // would pop its frame off the resumed fiber's shadow stack.
-    #[cfg(feature = "tsan")]
+    // x86 also has naked ahead handoffs, so its annotation lives in the raw
+    // switch. Elsewhere this inline call leaves no shadow frame to pop later.
+    #[cfg(all(feature = "tsan", not(target_arch = "x86_64")))]
     // SAFETY: the fiber is the one suspended at `to`; flags 0 synchronizes the switch, as
     // the scheduler's handoff does.
     unsafe {
@@ -374,9 +374,36 @@ fn initial_frame(entry: Entry, first: *mut u8, second: *mut u8) -> [u64; 8] {
     ]
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
+pub(crate) use fiber_switch_raw as fiber_switch;
+
+#[cfg(all(target_arch = "x86_64", feature = "tsan"))]
+unsafe extern "C" fn tsan_switch_target(to: *mut u8) -> *mut std::ffi::c_void {
+    #[cfg(test)]
+    TSAN_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    tsan::target(to)
+}
+
+// An ahead handoff jumps here directly. Annotate beneath every caller, with
+// no instrumented Rust frame alive when the TSan fiber changes. The temporary
+// words are removed before the original 64-byte frame is saved.
+#[cfg(all(target_arch = "x86_64", feature = "tsan"))]
 #[unsafe(naked)]
 pub(crate) unsafe extern "C" fn fiber_switch(_save: *mut *mut u8, _to: *mut u8) {
+    core::arch::naked_asm!(
+        "push rdi", "push rsi", "sub rsp, 8",
+        "mov rdi, rsi", "call {target}",
+        "mov rdi, rax", "xor esi, esi", "call {annotate}",
+        "add rsp, 8", "pop rsi", "pop rdi", "jmp {switch}",
+        target = sym tsan_switch_target,
+        annotate = sym tsan::__tsan_switch_to_fiber,
+        switch = sym fiber_switch_raw,
+    )
+}
+
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+pub(crate) unsafe extern "C" fn fiber_switch_raw(_save: *mut *mut u8, _to: *mut u8) {
     core::arch::naked_asm!(
         "push rbp",
         "push rbx",

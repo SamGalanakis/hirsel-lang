@@ -365,12 +365,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         } else if version == 1 {
             (unsafe { (*info).entry }, None)
         } else {
-            #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
+            #[cfg(target_arch = "x86_64")]
             let certificate = unsafe {
                 if version == 6 {
                     cpu_worker::validate_preclaimed(ctx, environment, info.cast())
                 } else if version == 5 {
                     cpu_worker::validate(ctx, environment, info.cast())
+                } else if cfg!(feature = "tsan") {
+                    None
                 } else if version == 4 {
                     host_return::validate_resumable(ctx, environment, info.cast())
                 } else if version == 3 {
@@ -379,7 +381,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
                     native::validate(ctx, environment, info.cast())
                 }
             };
-            #[cfg(any(not(target_arch = "x86_64"), feature = "tsan"))]
+            #[cfg(not(target_arch = "x86_64"))]
             let certificate: Option<native::Certificate> = None;
             (certificate.as_ref().map(|c| c.entry), certificate)
         };
