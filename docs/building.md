@@ -699,6 +699,15 @@ and `--hirsel-replay <tape>` stands alone:
 ./app --hirsel-replay failing.tape
 ```
 
+`--hirsel-trace-events events.jsonl` exports canonical events for both
+`tasks.free@1` and FIFO `tasks.cooperative@1`. Free uses
+`hirsel.free.events@1`: object histories, host-key epochs, outputs, observed
+outcomes, each task's final phase and the public terminal outcome. CPU receipts
+include width, action, count and outcome. The export works with recording,
+replay, or a live run without a tape. Live export without recording discards
+tape bytes and retains the semantic projection. Replay validates every record
+and final phase before publishing the JSONL file.
+
 A compiled executable can select a fresh Ordered execution policy while replaying
 exactly the same host inputs. This supports scheduler diagnosis and tuning without
 recording new effects:

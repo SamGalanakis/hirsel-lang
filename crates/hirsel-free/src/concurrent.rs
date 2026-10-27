@@ -943,6 +943,20 @@ impl Writer<'_, '_> {
         });
         self.observe(Observed::Load(bits));
     }
+
+    pub fn cpu_control(&mut self, width: u32, action: u32, count: u64, outcome: u32) {
+        self.observation(&crate::projection::cpu_request(width, action, count));
+        self.record(Record::Load {
+            op: self.progress.op,
+            bits: u128::from(outcome),
+        });
+        self.observe(Observed::CpuControl {
+            width,
+            action,
+            count,
+            outcome,
+        });
+    }
     pub fn thaw(&mut self, ok: bool) {
         self.record(Record::Thaw {
             op: self.progress.op,

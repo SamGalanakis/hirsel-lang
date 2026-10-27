@@ -2197,6 +2197,8 @@ fn config(
         }
     }
     Ok(Config {
+        cpu_max_workers: world.cpu.as_ref().map(|grant| grant.max_workers),
+        cpu_free: world.tasks_free,
         seal_descriptors,
         seal_sources: program.operations.seal_sources.values().cloned().collect(),
         receipt_sources: program
@@ -2320,6 +2322,9 @@ fn observation(
 /// What a launch grants H's model beyond its entry's handles.
 #[derive(Clone, Debug)]
 pub struct HeapWorld {
+    /// Logical admission only. H never reserves host workers.
+    pub cpu: Option<hirsel_run_schema::CpuGrant>,
+    pub tasks_free: bool,
     /// Shared bounded input stream, followed by EOF, as in SimulationConfig.
     pub stdin: Vec<u8>,
     pub args: Vec<String>,
@@ -2348,6 +2353,8 @@ pub struct HeapWorld {
 impl Default for HeapWorld {
     fn default() -> Self {
         Self {
+            cpu: None,
+            tasks_free: false,
             stdin: vec![],
             args: vec![],
             files: Default::default(),

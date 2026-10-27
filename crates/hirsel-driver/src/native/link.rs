@@ -1316,7 +1316,12 @@ pub fn fixture_run_record(
         stdin: Some(P::StdinBytes.name().into()),
         stdout: (!fixture.deny_output).then(|| P::StdoutBytes.name().into()),
         stderr: (!fixture.deny_output).then(|| P::StderrBytes.name().into()),
-        tasks: Some(P::TasksCooperative.name().into()),
+        tasks: Some(if fixture.tasks_free {
+            P::TasksFree.name().into()
+        } else {
+            P::TasksCooperative.name().into()
+        }),
+        cpu: fixture.cpu.clone(),
         random: Some(P::RandomSplitMix64.name().into()),
         monotonic_clock: fixture
             .monotonic

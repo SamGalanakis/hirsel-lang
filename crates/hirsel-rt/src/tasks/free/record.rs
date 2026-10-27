@@ -151,11 +151,15 @@ pub(crate) struct Sink {
     pub(crate) marks: Vec<usize>,
     file: Option<std::fs::File>,
     durable: bool,
+    discard: bool,
 }
 
 impl hirsel_free::recorder::TapeSink for Sink {
     fn append(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         use std::io::Write;
+        if self.discard {
+            return Ok(());
+        }
         match &mut self.file {
             Some(file) => file.write_all(bytes),
             None => {
@@ -167,6 +171,9 @@ impl hirsel_free::recorder::TapeSink for Sink {
 
     fn barrier(&mut self) -> std::io::Result<()> {
         use std::io::Write;
+        if self.discard {
+            return Ok(());
+        }
         match &mut self.file {
             Some(file) => {
                 file.flush()?;
@@ -724,19 +731,12 @@ pub(crate) fn cpu_control(
     begin(ctx);
     let replay = super::replay::token(ctx);
     let value = if replay.is_some() { 0 } else { live() };
-    let mut request = [0u8; 16];
-    request[..4].copy_from_slice(&width.to_le_bytes());
-    request[4..8].copy_from_slice(&action.to_le_bytes());
-    request[8..].copy_from_slice(&count.to_le_bytes());
-    let value = publish_bounded(ctx, Phase::Done, PHASE.payload(request.len()), |writer| {
+    let value = publish_bounded(ctx, Phase::Done, PHASE.payload(16), |writer| {
         if let Some(writer) = writer {
-            writer.observation(&request);
-            writer.load(u128::from(value));
+            writer.cpu_control(width, action, count, value);
             Ok(value)
         } else if let Some(replay) = &replay {
-            replay.observation(&request)?;
-            u32::try_from(replay.load(0)?)
-                .map_err(|_| Stop::Diverged("CPU outcome exceeds u32".into()))
+            replay.cpu_control(width, action, count)
         } else {
             Ok(value)
         }
@@ -895,6 +895,7 @@ impl Recording {
         file: std::fs::File,
         binding: &[u8],
         durable: bool,
+        observe: bool,
     ) -> std::io::Result<Arc<Self>> {
         Self::with_sink(
             Sink {
@@ -905,6 +906,21 @@ impl Recording {
             binding,
             durable,
             false,
+            observe,
+            None,
+        )
+    }
+
+    pub(crate) fn observed() -> std::io::Result<Arc<Self>> {
+        Self::with_sink(
+            Sink {
+                discard: true,
+                ..Default::default()
+            },
+            b"",
+            false,
+            false,
+            true,
             None,
         )
     }
@@ -914,11 +930,13 @@ impl Recording {
         binding: &[u8],
         durable: bool,
         trace: bool,
+        observe: bool,
         metrics: Option<Arc<hirsel_free::concurrent::Metrics>>,
     ) -> std::io::Result<Arc<Self>> {
-        let production = sink.file.is_some();
-        let observer = (production && std::env::var_os(crate::free_replay::Report::VAR).is_some())
-            .then(|| Arc::new(hirsel_free::concurrent::Observer::default()));
+        let production = sink.file.is_some() || sink.discard;
+        let observer = (observe
+            || production && std::env::var_os(crate::free_replay::Report::VAR).is_some())
+        .then(|| Arc::new(hirsel_free::concurrent::Observer::default()));
         let mut recorder = Recorder::new(
             sink,
             binding,
@@ -959,6 +977,7 @@ impl Recording {
             binding,
             durable,
             true,
+            false,
             Some(Arc::new(trap)),
         )
         .unwrap()

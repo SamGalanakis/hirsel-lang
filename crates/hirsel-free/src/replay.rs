@@ -685,6 +685,33 @@ impl Cursor {
         Ok(bits)
     }
 
+    pub fn cpu_control(
+        &mut self,
+        op: u64,
+        width: u32,
+        action: u32,
+        count: u64,
+    ) -> Result<u32, Diverged> {
+        if self.observation(op)? != crate::projection::cpu_request(width, action, count) {
+            return Err(Diverged("CPU control request differs".into()));
+        }
+        let bits = self.substitute(op, "CPU outcome", |r| match *r {
+            Record::Load { bits, .. } => Some(bits),
+            _ => None,
+        })?;
+        let outcome =
+            u32::try_from(bits).map_err(|_| Diverged("CPU outcome exceeds u32".into()))?;
+        self.stage(|| {
+            Event::Observed(Observed::CpuControl {
+                width,
+                action,
+                count,
+                outcome,
+            })
+        });
+        Ok(outcome)
+    }
+
     pub fn await_any(&mut self, op: u64) -> Result<u64, Diverged> {
         let index = self.substitute(op, "await_any member", |r| match *r {
             Record::AwaitAny { index, .. } => Some(index),
@@ -1006,6 +1033,17 @@ impl Replayer {
 
     pub fn load(&mut self, task: &[u32], op: u64) -> Result<u128, Diverged> {
         self.cursor(task)?.load(op)
+    }
+
+    pub fn cpu_control(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        width: u32,
+        action: u32,
+        count: u64,
+    ) -> Result<u32, Diverged> {
+        self.cursor(task)?.cpu_control(op, width, action, count)
     }
 
     pub fn await_any(&mut self, task: &[u32], op: u64) -> Result<u64, Diverged> {

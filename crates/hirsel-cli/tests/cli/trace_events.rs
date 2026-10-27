@@ -22,8 +22,9 @@ fn trace_events_refuses_non_ordered_execution_before_program_output_or_trace_cre
             .unwrap();
         assert_ne!(output.status.code(), Some(0), "{output:?}");
         assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("canonical trace events require the FIFO cooperative task provider"),
+            String::from_utf8_lossy(&output.stderr).contains(
+                "canonical trace events require a qualified Free or FIFO cooperative task provider"
+            ),
             "{output:?}"
         );
         assert!(output.stdout.is_empty());

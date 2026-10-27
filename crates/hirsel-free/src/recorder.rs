@@ -212,6 +212,36 @@ impl<S: TapeSink> Recorder<S> {
         );
     }
 
+    /// CPU control retains the existing observation/load wire representation.
+    pub fn cpu_control(
+        &mut self,
+        task: &[u32],
+        op: u64,
+        width: u32,
+        action: u32,
+        count: u64,
+        outcome: u32,
+    ) {
+        self.observation(
+            task,
+            op,
+            &crate::projection::cpu_request(width, action, count),
+        );
+        self.stage(
+            task,
+            Some(Record::Load {
+                op,
+                bits: u128::from(outcome),
+            }),
+            Event::Observed(Observed::CpuControl {
+                width,
+                action,
+                count,
+                outcome,
+            }),
+        );
+    }
+
     pub fn await_any(&mut self, task: &[u32], op: u64, index: u64) {
         self.stage(
             task,

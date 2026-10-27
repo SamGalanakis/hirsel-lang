@@ -13,9 +13,24 @@ use crate::phase::Progress;
 use crate::record::ObjectId;
 use std::collections::BTreeMap;
 
+pub(crate) fn cpu_request(width: u32, action: u32, count: u64) -> [u8; 16] {
+    let mut request = [0u8; 16];
+    request[..4].copy_from_slice(&width.to_le_bytes());
+    request[4..8].copy_from_slice(&action.to_le_bytes());
+    request[8..].copy_from_slice(&count.to_le_bytes());
+    request
+}
+
 /// An observed outcome a tape substitutes.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Observed {
+    /// A CPU receipt binds the request as well as its substituted outcome.
+    CpuControl {
+        width: u32,
+        action: u32,
+        count: u64,
+        outcome: u32,
+    },
     /// The cancellation a check observed.
     Cancel(Option<u32>),
     /// Whether a `scope_until` deadline expired.

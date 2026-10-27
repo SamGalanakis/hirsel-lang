@@ -386,6 +386,25 @@ impl Session {
         }
     }
 
+    /// The admitted CPU request and its scalar outcome, without host placement.
+    pub fn cpu_control(
+        &mut self,
+        path: &[u32],
+        width: u32,
+        action: u32,
+        count: u64,
+        live: u32,
+    ) -> Result<u32, Diverged> {
+        let op = self.op(path);
+        match &mut self.side {
+            Side::Live(recorder) => {
+                recorder.cpu_control(path, op, width, action, count, live);
+                Ok(live)
+            }
+            Side::Replay(replayer) => replayer.cpu_control(path, op, width, action, count),
+        }
+    }
+
     /// A deadline scope's exit outcome: record only Expired, or substitute it.
     pub fn expired(&mut self, path: &[u32], live: bool) -> Result<bool, Diverged> {
         let op = self.op(path);

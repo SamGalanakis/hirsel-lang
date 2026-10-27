@@ -106,6 +106,7 @@ struct Slot {
 
 #[derive(Clone)]
 pub(super) struct Task {
+    cpu_scoped: bool,
     generation: u32,
     stack: Vec<Activity>,
     failures: Vec<ObservedFailure>,
@@ -144,6 +145,7 @@ pub(super) struct Task {
 impl Task {
     fn new(generation: u32, scope: Option<u32>, path: Vec<u32>, canceled: Option<u32>) -> Task {
         Task {
+            cpu_scoped: false,
             generation,
             stack: Vec::new(),
             failures: Vec::new(),
@@ -186,6 +188,7 @@ struct Scope {
 
 #[derive(Clone)]
 pub(super) struct Tasks {
+    cpu: Option<u32>,
     tasks: Vec<Option<Task>>,
     scopes: Vec<Option<Scope>>,
     generation: u32,
@@ -228,6 +231,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
         .collect::<Vec<_>>()
         .join(".");
     [
+        "$intrinsic.CpuMapScoped",
         "$intrinsic.TaskScopeEnter",
         "$intrinsic.TaskScopeEnterUntil",
         "$intrinsic.TaskScopeExit",
@@ -275,6 +279,7 @@ pub(super) fn operation(id: &hirsel_core_contract::OperationId) -> Option<&'stat
 impl Tasks {
     fn new() -> Tasks {
         Tasks {
+            cpu: None,
             tasks: vec![Some(Task::new(1, None, Vec::new(), None))],
             scopes: Vec::new(),
             generation: 1,
@@ -696,6 +701,77 @@ impl<S: Stage> Machine<'_, S> {
             self.timer_choice()?;
         }
         match name {
+            "$intrinsic.CpuMapScoped" => {
+                let width = self.task_word(f, &Self::task_argument(&arguments, 1)?)? as u32;
+                let action = self.task_word(f, &Self::task_argument(&arguments, 2)?)? as u32;
+                let count = self.task_word(f, &Self::task_argument(&arguments, 3)?)?;
+                let shielded = self.shielded(f);
+                let grant = self.config.cpu_max_workers;
+                let free = self.config.cpu_free;
+                let scheduler = self.scheduler();
+                let current = scheduler.current;
+                let member = scheduler.task(current)?.cpu_scoped;
+                let canceled = scheduler.canceled(shielded);
+                let status = match action {
+                    0 | 4 => {
+                        if !matches!(width, 1 | 4 | 8 | 16) {
+                            1
+                        } else if grant.is_none() {
+                            2
+                        } else if member {
+                            5
+                        } else if !free && action != 4 {
+                            11
+                        } else if let Some(cause) = canceled {
+                            16 + cause
+                        } else if grant.is_some_and(|max| width > max) {
+                            4
+                        } else if scheduler.cpu.is_some() {
+                            3
+                        } else {
+                            scheduler.cpu = Some(width);
+                            scheduler.task(current)?.cpu_scoped = true;
+                            0
+                        }
+                    }
+                    1 => {
+                        scheduler.cpu = None;
+                        scheduler.task(current)?.cpu_scoped = false;
+                        canceled.map_or(0, |cause| 16 + cause)
+                    }
+                    2 | 3 | 5 => {
+                        if scheduler.cpu != Some(width) {
+                            return fail(V::Malformed, "CPU receipt without an admitted batch");
+                        }
+                        if (action == 2 && count > u64::from(width) * 2)
+                            || (action != 2 && count >= u64::from(width) * 2)
+                        {
+                            6
+                        } else {
+                            canceled.map_or(0, |cause| 16 + cause)
+                        }
+                    }
+                    _ => return fail(V::Malformed, "unknown CPU control action"),
+                };
+                if action != 5 || free {
+                    self.task_yield()?;
+                }
+                let result = site
+                    .result
+                    .ok_or_else(|| err(V::Malformed, "CPU control without a result"))?;
+                self.task_return(
+                    f,
+                    &arguments,
+                    Some((
+                        result,
+                        Val::Bits {
+                            scalar: ScalarKind::U32,
+                            bits: u128::from(status),
+                        },
+                    )),
+                    normal,
+                )
+            }
             "$intrinsic.ChannelOpen"
             | "sender.dup"
             | "$intrinsic.ChannelSend"
@@ -815,6 +891,7 @@ impl<S: Stage> Machine<'_, S> {
                 parent.spawned += 1;
                 let generation = s.fresh_generation();
                 let mut task = Task::new(generation, Some(scope), path, canceled);
+                task.cpu_scoped = s.task(s.current)?.cpu_scoped;
                 task.main = Some(main_layout);
                 task.entry_site = actual;
                 task.stack.push(Activity::Frame(Box::new(frame)));

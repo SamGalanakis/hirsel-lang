@@ -4,6 +4,8 @@
 use super::*;
 use hirsel_free::session::Session;
 
+pub use crate::trace_events::free::canonical_events;
+
 /// Typed host state for one production replay. It never opens a live adapter.
 pub struct Codec {
     handles: handles::Handles,

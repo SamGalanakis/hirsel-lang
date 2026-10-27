@@ -27,6 +27,9 @@ impl Log {
 pub(crate) struct Trace(Vec<u8>);
 
 impl Trace {
+    pub(crate) fn free(projection: &hirsel_free::projection::Projection) -> Result<Self, String> {
+        crate::trace_events::free::canonical_events(projection).map(Self)
+    }
     /// # Safety
     /// Admission's home thread, after run_root returned, before abandonment
     /// or destruction. The run remains live, including when workers linger.

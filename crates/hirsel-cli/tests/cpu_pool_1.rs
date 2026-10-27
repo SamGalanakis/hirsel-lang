@@ -28,3 +28,9 @@ fn native_job_result_cleanup_terminal_every_byte_cut_replays_previous_prefix() {
 fn free_typed_preparation_prefixes_release_each_row_root() {
     typed_preparation_prefix_census(1);
 }
+
+include!("support/cpu_pool/canonical.rs");
+#[test]
+fn free_cpu_canonical_receipts_agree_across_emitters_and_replay() {
+    cpu_free_canonical_receipts(1);
+}

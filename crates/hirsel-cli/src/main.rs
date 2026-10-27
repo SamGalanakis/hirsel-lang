@@ -67,7 +67,7 @@ Run a source entry; the default engine is the interpreter.
   --replay <tape>     Replay recorded effects without live grants
   --max-steps         Interpreter budget: unsigned integer or unbounded
   --cores <n>         Positive core count; incompatible with --simulation
-  --trace-events <jsonl> Native canonical Ordered events; requires qualified executor
+  --trace-events <jsonl> Native canonical Free or Ordered events; requires qualified executor
   --trace-ownership <json> Print where each resource was created, moved and dropped,
                       and write the complete lineage as JSON; with --native,
                       admitted grants, recording and replay use the native tracer

@@ -3,8 +3,10 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod free;
+
 pub(crate) const REQUIRES_ORDERED: &str =
-    "canonical trace events require the FIFO cooperative task provider";
+    "canonical trace events require a qualified Free or FIFO cooperative task provider";
 
 /// Select an observer anywhere in the runtime prefix, preserving the first
 /// application word and explicit delimiter as permanent parsing boundaries.

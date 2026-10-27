@@ -362,6 +362,9 @@ fn same_options(a: &Options, b: &Options) -> bool {
 /// Deterministic providers selected explicitly by a semantic fixture, never a host grant.
 #[derive(Clone, Debug)]
 pub struct Fixture {
+    /// Closed CPU batches use the same explicit grant in every engine.
+    pub cpu: Option<hirsel_run_schema::CpuGrant>,
+    pub tasks_free: bool,
     pub args: Vec<String>,
     /// Plain bytes followed by EOF, shared with SimulationConfig. No readiness script.
     pub stdin: Vec<u8>,
@@ -403,6 +406,8 @@ pub struct Fixture {
 impl Default for Fixture {
     fn default() -> Self {
         Self {
+            cpu: None,
+            tasks_free: false,
             args: vec![],
             stdin: vec![],
             files: Default::default(),
@@ -428,6 +433,8 @@ impl Default for Fixture {
 impl From<&Fixture> for hirsel_engine::SimulationConfig {
     fn from(fixture: &Fixture) -> Self {
         let mut config = Self {
+            cpu: fixture.cpu.clone(),
+            tasks_free: fixture.tasks_free,
             args: fixture.args.clone(),
             stdin: fixture.stdin.clone(),
             files: fixture.files.clone(),
@@ -490,6 +497,8 @@ pub fn differential_in(
     fixture: &Fixture,
 ) -> Vec<(String, Outcome)> {
     let world = super::HeapWorld {
+        cpu: fixture.cpu.clone(),
+        tasks_free: fixture.tasks_free,
         stdin: fixture.stdin.clone(),
         args: fixture.args.clone(),
         files: fixture.files.clone(),

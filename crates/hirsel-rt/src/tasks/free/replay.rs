@@ -973,6 +973,10 @@ impl Token {
         self.diverged(|task| task.cursor.load(task.op))
     }
 
+    pub(super) fn cpu_control(&self, width: u32, action: u32, count: u64) -> Stopped<u32> {
+        self.diverged(|task| task.cursor.cpu_control(task.op, width, action, count))
+    }
+
     pub(super) fn cancel(&self, _live: Option<u32>) -> Stopped<Option<u32>> {
         Ok(self.with(|task| task.cursor.cancel_check(task.op)))
     }

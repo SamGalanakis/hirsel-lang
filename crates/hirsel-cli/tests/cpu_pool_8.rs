@@ -1,4 +1,9 @@
 hirsel_guard::install!();
+include!("support/cpu_pool/canonical.rs");
+#[test]
+fn free_cpu_canonical_receipts_agree_across_emitters_and_replay() {
+    cpu_free_canonical_receipts(8);
+}
 include!("support/cpu_pool/physical.rs");
 #[test]
 fn fresh_cpu_pool_has_physical_width_8() {

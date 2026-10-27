@@ -1865,7 +1865,7 @@ pub(crate) unsafe fn execute(
     let trace_destination = options
         .trace_events
         .as_ref()
-        .map(|path| crate::trace_events::pin(path, ordered_enabled))
+        .map(|path| crate::trace_events::pin(path, ordered_enabled || production_free))
         .transpose()?;
     let seed = launch_config.test_seed;
     if !(1..=RESULT_MAX).contains(&result_size) || (program.return_kind != 1 && result_size < 4) {
@@ -1880,6 +1880,9 @@ pub(crate) unsafe fn execute(
         .map(|(name, file)| (*name, file))
         .collect();
     let mut free_projection = if production_free {
+        if let Some(path) = &options.trace_events {
+            crate::free_replay::Report::check_input(path)?;
+        }
         let grants = production_io
             .as_ref()
             .map_or_else(Vec::new, |(io, _, _)| io.mount_pins());
@@ -2120,6 +2123,7 @@ pub(crate) unsafe fn execute(
                 &admitted,
                 tape.as_deref(),
                 &output_grants,
+                trace_destination.is_some(),
             )?;
         } else {
             // Attach the header after physical startup, before root publication.
@@ -2140,7 +2144,7 @@ pub(crate) unsafe fn execute(
                 .ok_or("tasks.free@1 requires a Free phase tape")?;
             free_session = Some(crate::free_launch::Session::replay(
                 &bytes,
-                free_projection.is_some(),
+                free_projection.is_some() || trace_destination.is_some(),
             )?);
         } else if io.free_tape.is_some() {
             return Err("Free phase tape requires tasks.free@1".into());
@@ -2838,7 +2842,7 @@ pub(crate) unsafe fn execute(
             }
         }
     }
-    if trace_destination.is_some() {
+    if trace_destination.is_some() && ordered_enabled {
         crate::tasks::ordered::events::enable(ctx);
         let roots = entry.roots();
         crate::tasks::ordered::events::initial_host(
@@ -2991,9 +2995,13 @@ pub(crate) unsafe fn execute(
     };
     let detached = pending > 0;
     // Copy only fully validated, quiescent evidence before any row/stack teardown.
-    let trace = trace_destination.as_ref().map(|_| unsafe {
-        crate::tasks::ordered::events::Trace::capture((*ctx).run_ptr(), pending)
-    });
+    let mut trace = trace_destination
+        .as_ref()
+        .filter(|_| ordered_enabled)
+        .map(|_| unsafe {
+            crate::tasks::ordered::events::Trace::capture((*ctx).run_ptr(), pending)
+                .map_err(str::to_owned)
+        });
     let result = match &ran {
         Ok(_) => {
             unsafe { (*ctx).run_ref() }
@@ -3101,6 +3109,13 @@ pub(crate) unsafe fn execute(
     }
     if let Some(session) = &free_session {
         session.report_recording(&mut free_projection)?;
+        if trace_destination.is_some() && production_free {
+            trace = Some(if pending != 0 {
+                Err("canonical trace has running workers".into())
+            } else {
+                session.canonical_trace()
+            });
+        }
     }
     if !detached {
         crate::free::finish(unsafe { &mut *ctx }, &outcome);
@@ -3297,7 +3312,7 @@ pub(crate) unsafe fn execute(
         return Err(error);
     }
     if let (Some(destination), Some(trace)) = (trace_destination, trace) {
-        let trace = trace.map_err(str::to_owned)?;
+        let trace = trace?;
         if let Some(io) = &ordered_live {
             io.with_mount_pins(|grants| trace.publish(destination, grants, &output_grants))?;
         } else {

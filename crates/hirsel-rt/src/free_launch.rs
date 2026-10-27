@@ -17,6 +17,7 @@ pub(crate) enum Session {
         driver: Arc<replay::Replay>,
         end: Option<String>,
         namespace_coupled: bool,
+        projection: std::sync::Mutex<Option<hirsel_free::projection::Projection>>,
     },
 }
 
@@ -51,11 +52,21 @@ impl Session {
         admitted: &hirsel_run_config::AdmittedRun,
         path: Option<&std::path::Path>,
         outputs: &[(&str, &std::fs::File)],
+        observe: bool,
     ) -> Result<Option<Self>, String> {
         use hirsel_run_schema::RecordingLevel;
         let level = crate::host_launch::recording_level(admitted.run(), path.is_some())?;
         match (level, path) {
-            (RecordingLevel::None, _) => Ok(None),
+            (RecordingLevel::None, _) => {
+                if observe {
+                    Ok(Some(Self::Recording {
+                        recorder: record::Recording::observed().map_err(|e| e.to_string())?,
+                        namespace_coupled: io.namespace_coupled(),
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
             (_, Some(path)) => {
                 let (file, header, _) = crate::host_launch::header(io, admitted, path, outputs)?;
                 let namespace_coupled = io.namespace_coupled();
@@ -63,7 +74,7 @@ impl Session {
                 crate::ABI_VERSION.encode(&mut binding);
                 header.encode(&mut binding);
                 namespace_coupled.encode(&mut binding);
-                record::Recording::open(file, &binding, level == RecordingLevel::Durable)
+                record::Recording::open(file, &binding, level == RecordingLevel::Durable, observe)
                     .map(|recorder| Self::Recording {
                         recorder,
                         namespace_coupled,
@@ -92,6 +103,7 @@ impl Session {
             driver,
             end: tape.end.map(|e| e.outcome),
             namespace_coupled,
+            projection: Default::default(),
         })
     }
 
@@ -156,16 +168,36 @@ impl Session {
         &self,
         report: &mut Option<crate::free_replay::Report>,
     ) -> Result<Option<Terminal>, String> {
-        let Self::Replay { driver, end, .. } = self else {
+        let Self::Replay {
+            driver,
+            end,
+            projection: saved,
+            ..
+        } = self
+        else {
             return Ok(None);
         };
         // This is the same strict consume-every-record/progress-at-cut check
         // used by the runtime replay proofs, before restoring the public outcome.
         let projection = driver.check().map_err(|e| e.to_string())?;
         if let Some(report) = report {
-            report.write(&projection.ok_or("Free projection report of an unobserved replay")?)?;
+            report.write(
+                projection
+                    .as_ref()
+                    .ok_or("Free projection report of an unobserved replay")?,
+            )?;
         }
+        *saved.lock().unwrap() = projection;
         end.as_deref().map(terminal).transpose()
+    }
+
+    pub(crate) fn canonical_trace(&self) -> Result<crate::tasks::ordered::events::Trace, String> {
+        let projection = match self {
+            Self::Recording { recorder, .. } => recorder.projection(),
+            Self::Replay { projection, .. } => projection.lock().unwrap().clone(),
+        }
+        .ok_or("missing complete Free canonical evidence")?;
+        crate::tasks::ordered::events::Trace::free(&projection)
     }
 }
 
