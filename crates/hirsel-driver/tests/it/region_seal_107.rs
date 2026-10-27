@@ -50,7 +50,6 @@ fn sealed_heap_107_runs_on_four_engines_and_replays() {
                 failures.push((configuration, outcome));
             }
         }
-        assert!(failures.is_empty(), "{failures:#?}");
         let replay = native::real_io_replay_in(
             &validated,
             &run.entry,
@@ -60,6 +59,7 @@ fn sealed_heap_107_runs_on_four_engines_and_replays() {
             Default::default(),
             &native::Fixture::default(),
         );
+        assert!(failures.is_empty(), "{failures:#?}; replay: {replay:?}");
         assert!(
             matches!(replay, native::Outcome::Agree),
             "replay: {replay:?}"

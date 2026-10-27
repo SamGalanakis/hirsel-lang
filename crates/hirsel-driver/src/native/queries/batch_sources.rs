@@ -121,8 +121,8 @@ mod tests {
                 &ready,
                 &loaded.entry,
                 &crate::native::Sites::new(validated.snapshot()),
-            )
-            .unwrap();
+            );
+            let run = run.unwrap();
             assert_eq!(run.observation.exit_code, Some(0));
             assert!(run.observation.failures.is_empty(), "{:?}", run.observation);
         });

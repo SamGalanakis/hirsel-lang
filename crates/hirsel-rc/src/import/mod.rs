@@ -469,6 +469,28 @@ impl Lowered {
                 .iter()
                 .map(|(key, expected)| (key.clone(), expected.source())),
         );
+        // Reviewed library events are declarations of the selected original
+        // request even when this caller uses the plain RC import API.
+        for id in self.instances.ids() {
+            let key = &self.instances.view(id).key;
+            let path = key.definition();
+            if !self.instances.roles[id.index()].is_library()
+                || (!path.is_core("arena.seal") && !path.is_core("region.with"))
+            {
+                continue;
+            }
+            if let Ok(expected) = crate::library::sealed_region::source_expectation(
+                program,
+                path,
+                self.instances.actuals[id.index()].arguments.clone(),
+            ) && expected.witness().instance == key.digest()
+            {
+                registry
+                    .seal_sources
+                    .entry((path.clone(), key.digest()))
+                    .or_insert_with(|| expected.source());
+            }
+        }
         registry
     }
 }

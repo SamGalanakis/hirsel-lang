@@ -97,9 +97,22 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 what: what.into(),
             })?;
         if let Some(contract) = &abi.receipts {
-            if !matches!(site.callee, Callee::Direct(_))
-                || abi.environment
-                || !contract.captures.is_empty()
+            // A source-selected capture-free callback may require the Arena's
+            // existing inventory carrier without appending any metadata words.
+            let ordinary_bound = matches!(site.callee, Callee::Bound { .. })
+                && contract.parameters.is_empty()
+                && contract.result.is_none()
+                && contract.captures.is_empty()
+                && contract.inventory.iter().all(|grant| {
+                    matches!(
+                        grant,
+                        hirsel_lir::sealed_payload_source::ReceiptGrant::Parameter(_)
+                    )
+                });
+            if !ordinary_bound
+                && (!matches!(site.callee, Callee::Direct(_))
+                    || abi.environment
+                    || !contract.captures.is_empty())
             {
                 return self
                     .unsupported("receipt calls require a direct entry without capture transport");
