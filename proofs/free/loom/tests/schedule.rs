@@ -141,3 +141,15 @@ fn a_wake_racing_completion_never_resurrects_a_task() {
         assert!(!state.start());
     });
 }
+
+#[test]
+fn first_publication_racing_a_thief_publishes_initialized_ring_storage() {
+    hirsel_free_loom::sync::model(|| {
+        let (mut owner, thief) = queue::local::<u32, 4>();
+        let thread = loom::thread::spawn(move || thief.steal_half());
+        assert!(owner.push(7).is_empty());
+        let mut taken = owner.drain();
+        taken.extend(thread.join().unwrap());
+        assert_eq!(taken, [7]);
+    });
+}
