@@ -739,6 +739,40 @@ impl HostLibrary {
             self.handles.remove(id);
         }
     }
+    fn cpu_receipt(&mut self, request: hirsel_interp::library::CpuControl) -> Result<(), Error> {
+        if self.free.is_some() {
+            return Ok(());
+        }
+        let hirsel_interp::library::CpuControl {
+            width,
+            action,
+            count,
+        } = request;
+        if self.io.adapter().wants_issuer() {
+            let task = self.library.task_path();
+            self.io.adapter().issuer(&task);
+        }
+        let result = (|| match self.io.adapter().cpu_control(width, action, count, None)? {
+            Some(outcome) => Ok(outcome),
+            None => {
+                let outcome = self
+                    .library
+                    .cpu_live_outcome(request)
+                    .map_err(|_| hirsel_rt::io::AdapterError::InvalidCompletion)?;
+                self.io
+                    .adapter()
+                    .cpu_control(width, action, count, Some(outcome))?;
+                Ok(outcome)
+            }
+        })();
+        let outcome = result.map_err(|error: hirsel_rt::io::AdapterError| {
+            let message = format!("{error:?}");
+            self.refused.get_or_insert(message.clone());
+            Error::Unavailable(format!("host CPU receipt: {message}"))
+        })?;
+        self.library.supply_cpu_outcome(request, outcome)
+    }
+
     /// Every host request goes through here. A provider that would block parks the
     /// task; any other adapter error is a refusal (a replay divergence or host fault).
     fn host(&mut self, request: R) -> Result<C, Error> {
@@ -2837,6 +2871,9 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
             return self.runner_poll(token, cx);
         }
         let Some(wait) = self.waits.get(&token) else {
+            if let Some(request) = self.library.cpu_pending_request(token)? {
+                self.cpu_receipt(request)?;
+            }
             return self.library.poll(token, cx);
         };
         let canceled = self.library.cancellation().is_some() && self.io.cancellable(token);
@@ -2974,6 +3011,10 @@ impl hirsel_interp::OperationsAdapter for HostLibrary {
         let route = operation.index >> HOST_ROUTE_SHIFT;
         operation.index &= (1 << HOST_ROUTE_SHIFT) - 1;
         let name = operation.name;
+        if name == "cpu.map_scoped" {
+            let request = self.library.cpu_admission_request(call.arguments)?;
+            self.cpu_receipt(request)?;
+        }
         if name == "iter.next"
             && hirsel_interp::library::walk::directory(&call.arguments[0])
                 .is_some_and(|directory| self.id(directory).is_ok())

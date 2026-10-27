@@ -23,6 +23,7 @@ pub use launch::{
 
 mod callbacks;
 mod cpu;
+pub use cpu::CpuControl;
 pub mod race;
 mod root_trace;
 mod sealed;

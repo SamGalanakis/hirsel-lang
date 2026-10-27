@@ -14,6 +14,14 @@ use hirsel_free::phase::Phase;
 use hirsel_types::BuiltinType;
 use std::collections::VecDeque;
 
+/// An exact CPU receipt request, independent of the physical worker lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CpuControl {
+    pub width: u32,
+    pub action: u32,
+    pub count: u64,
+}
+
 enum Stage {
     Scope,
     Prepare,
@@ -75,19 +83,52 @@ fn refused(status: u32) -> OperationResult {
 }
 
 impl Library {
-    /// Match cpu_scoped.rs's request and refusal precedence. Replay supplies the
-    /// recorded status without consulting physical capacity or starting workers.
-    fn cpu_control(
-        &mut self,
-        width: u32,
-        action: u32,
-        count: u64,
-        context: &OperationContext<'_>,
-    ) -> Result<Result<u32, OperationResult>, Error> {
-        if let super::free::Enter::Park(park) = self.free_enter(Phase::Done, context)? {
-            return Ok(Err(park));
-        }
-        let live = match action {
+    /// Validate the admission operands before a host adapter consumes its receipt.
+    pub fn cpu_admission_request(&self, arguments: &[Value]) -> Result<CpuControl, Error> {
+        self.simulation.id(arg(arguments, 0)?, "Tasks")?;
+        Ok(CpuControl {
+            width: int(arg(arguments, 1)?)?.bits() as u32,
+            action: if self.cpu_certified { 4 } else { 0 },
+            count: 0,
+        })
+    }
+
+    /// The next control in a parked CPU continuation, before it mutates any state.
+    pub fn cpu_pending_request(&self, token: u64) -> Result<Option<CpuControl>, Error> {
+        let Some(batch) = self.cpu_waits.get(&token) else {
+            return Ok(None);
+        };
+        let (action, count) = match batch.stage {
+            Stage::Receipt => (
+                2,
+                collection::len(batch.jobs.as_ref().ok_or_else(|| invalid("CPU jobs"))?)?,
+            ),
+            Stage::Preclaim
+                if batch.next as u64
+                    != collection::len(
+                        batch.jobs.as_ref().ok_or_else(|| invalid("CPU jobs"))?,
+                    )? =>
+            {
+                (5, batch.next as u64)
+            }
+            Stage::Leave => (1, 0),
+            _ => return Ok(None),
+        };
+        Ok(Some(CpuControl {
+            width: batch.width,
+            action,
+            count,
+        }))
+    }
+
+    /// Logical admission for live interpreted launches. Replay substitutes its receipt.
+    pub fn cpu_live_outcome(&self, request: CpuControl) -> Result<u32, Error> {
+        let CpuControl {
+            width,
+            action,
+            count,
+        } = request;
+        Ok(match action {
             0 | 4 => {
                 if !matches!(width, 1 | 4 | 8 | 16) {
                     1
@@ -124,6 +165,39 @@ impl Library {
                 }
             }
             _ => return Err(invalid("unknown interpreter CPU control")),
+        })
+    }
+
+    /// Bind one host receipt to its exact continuation request.
+    pub fn supply_cpu_outcome(&mut self, request: CpuControl, outcome: u32) -> Result<(), Error> {
+        if self.cpu_supplied.is_some() || !matches!(outcome, 0..=11 | 16..=19) {
+            return Err(invalid("invalid or duplicate CPU receipt"));
+        }
+        self.cpu_supplied = Some((request, outcome));
+        Ok(())
+    }
+
+    /// Match cpu_scoped.rs's request and refusal precedence. Replay supplies the
+    /// recorded status without consulting physical capacity or starting workers.
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        context: &OperationContext<'_>,
+    ) -> Result<Result<u32, OperationResult>, Error> {
+        if let super::free::Enter::Park(park) = self.free_enter(Phase::Done, context)? {
+            return Ok(Err(park));
+        }
+        let request = CpuControl {
+            width,
+            action,
+            count,
+        };
+        let live = match self.cpu_supplied.take() {
+            Some((expected, outcome)) if expected == request => outcome,
+            Some(_) => return Err(invalid("CPU receipt request mismatch")),
+            None => self.cpu_live_outcome(request)?,
         };
         let path = self.tasks.path();
         let status = match &mut self.free {

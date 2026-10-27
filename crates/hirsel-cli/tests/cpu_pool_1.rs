@@ -46,3 +46,8 @@ include!("support/cpu_pool/interpreter.rs");
 fn cpu_interpreter_matches_native_phases_and_strict_replay() {
     cpu_interpreter_native_phases(1);
 }
+
+#[test]
+fn cpu_interpreter_consumes_ordered_native_receipts() {
+    cpu_interpreter_ordered_receipts(1);
+}
