@@ -13,11 +13,20 @@ fn batch_entries_match_individual_launch_bindings_and_share_checked_runtime() {
             "const A:u8=comptime 7u8;\npub fn main()->u8{A}\npub fn alternative()->u8{A+1u8}\n",
         )
         .unwrap();
-        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"batch","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        std::fs::write(
+            directory.path().join("library.hir"),
+            "pub fn other()->u8{9u8}\n",
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("library.json"), r#"{"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"library.hir","module":[]}],"dependencies":[]}"#).unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"batch","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[{"manifest":"library.json","package":{"name":"library","version":"1"},"expose":[]}],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let main = COMPILER.load_program(&manifest).unwrap().entry;
         let mut alternative = main.clone();
         alternative.0.name = "alternative".into();
-        let mut roots = vec![main, alternative];
+        let mut library = main.clone();
+        library.0.package.name = "library".into();
+        library.0.name = "other".into();
+        let mut roots = vec![main, alternative, library];
         roots.sort();
         for jobs in [1, 2] {
             let mut session = Session::open_configured(
