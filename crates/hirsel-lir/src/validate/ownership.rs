@@ -440,9 +440,18 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
             .iter()
             .enumerate()
             .map(|(s, slot)| {
-                let entered = matches!(slot.kind, SlotKind::Parameter(_) | SlotKind::Capture(_));
+                let entered = matches!(
+                    slot.kind,
+                    SlotKind::Parameter(_) | SlotKind::Capture(_) | SlotKind::ReceiptParameter(_)
+                );
                 let versions = match slot.kind {
                     SlotKind::Capture(ordinal) => unit.captures.get(ordinal as usize),
+                    SlotKind::ReceiptParameter(ordinal) => unit
+                        .tables
+                        .receipt_entry
+                        .as_ref()
+                        .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal))
+                        .map(|p| &p.version),
                     _ => facts
                         .parameters
                         .iter()
@@ -726,6 +735,11 @@ impl<S: Stage> Walker<'_, '_, S> {
                             self.still_placed(site, &st, address)
                         }
                         _ => {}
+                    }
+                }
+                if let Some(receipts) = &site_data.receipts {
+                    for receipt in receipts.inputs() {
+                        self.borrow(site, &st, &cr, receipt);
                     }
                 }
                 if let Some(rejected) = site_data.pretransfer_failure {
@@ -1272,7 +1286,10 @@ impl<S: Stage> Walker<'_, '_, S> {
             let slot = &unit.slots[s];
             match (passing(id), slot.kind) {
                 (Some(Passing::Mut | Passing::Borrow), _)
-                | (_, SlotKind::Capture(_) | SlotKind::ReturnSlot) => {}
+                | (
+                    _,
+                    SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptParameter(_),
+                ) => {}
                 _ => {
                     if self.cx.owns_type(slot.ty) && !self.empty(id, state) {
                         self.err(site, K::LeakedStorage(id));
@@ -1549,7 +1566,10 @@ impl<S: Stage> Walker<'_, '_, S> {
     }
 
     fn borrowed_storage(&mut self, site: Site, slot: SlotId) {
-        if self
+        if matches!(
+            self.cx.unit.slots[slot.index()].kind,
+            SlotKind::ReceiptParameter(_)
+        ) || self
             .facts
             .parameters
             .iter()

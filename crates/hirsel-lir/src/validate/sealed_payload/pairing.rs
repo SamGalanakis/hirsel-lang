@@ -13,7 +13,7 @@ enum Origin {
     Parameter(BlockId, usize),
 }
 
-pub(super) struct Pairing<'a, S> {
+pub(in crate::validate) struct Pairing<'a, S> {
     unit: &'a LirUnit<S>,
     origins: Vec<Origin>,
     incoming: Vec<Vec<EdgeId>>,
@@ -22,8 +22,17 @@ pub(super) struct Pairing<'a, S> {
 impl<'a, S> Pairing<'a, S> {
     /// Called only after the common reference-bounds check. These facts never
     /// turn an unknown entry/capture/call receipt into a proved producer.
-    pub(super) fn new(unit: &'a LirUnit<S>) -> Self {
+    pub(in crate::validate) fn new(unit: &'a LirUnit<S>) -> Self {
         let mut origins = vec![Origin::Unknown; unit.values.len()];
+        // The boundary checker has bound these selectors and complete profiles
+        // to independent source. Versions name the incoming slot snapshot.
+        if let Some(entry) = &unit.tables.receipt_entry {
+            for binding in &entry.parameters {
+                if let Some(&ordinary) = unit.parameters.get(binding.source as usize) {
+                    origins[binding.version.index()] = Origin::Receipt(ordinary);
+                }
+            }
+        }
         for (block, row) in unit.blocks.iter().enumerate() {
             for (ordinal, value) in row
                 .parameters
@@ -116,7 +125,7 @@ impl<'a, S> Pairing<'a, S> {
         }
     }
 
-    pub(super) fn paired(&self, value: ValueId, receipt: ValueId) -> bool {
+    pub(in crate::validate) fn paired(&self, value: ValueId, receipt: ValueId) -> bool {
         // Build just the demanded relational obligations, following the same
         // iterative worklist pattern as the other SSA validator facts. No native
         // recursion and no all-values Cartesian product are needed.

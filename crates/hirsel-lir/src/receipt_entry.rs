@@ -95,6 +95,26 @@ impl ReceiptEntry {
         {
             return Err("receipt entry coverage differs from its contract");
         }
+        let slots: BTreeSet<_> = self
+            .parameters
+            .iter()
+            .chain(&self.captures)
+            .map(|p| p.slot)
+            .chain(self.result)
+            .collect();
+        if slots.len()
+            != self.parameters.len() + self.captures.len() + usize::from(self.result.is_some())
+            || unit.slots.iter().enumerate().any(|(id, slot)| {
+                matches!(
+                    slot.kind,
+                    SlotKind::ReceiptParameter(_)
+                        | SlotKind::ReceiptCapture(_)
+                        | SlotKind::ReceiptResult
+                ) && !slots.contains(&SlotId(id as u32))
+            })
+        {
+            return Err("receipt entry slot namespace differs from its complete bindings");
+        }
         let mut versions = BTreeSet::new();
         for (binding, parameter) in self.parameters.iter().zip(&contract.parameters) {
             if binding.source != parameter.source {

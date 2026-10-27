@@ -807,3 +807,11 @@ match the current entry and ABI contract. Native output schema 8 retains these
 reads and rechecks their complete content without restoring a Value, so a newly
 required boundary invalidates an ordinary cached output. Receipt entry/call
 custody and executable transport remain refused.
+
+C validator revision 30 checks borrowed data receipt entries and direct or
+code-bound calls before Ready. Independent current declarations bind each
+original selector, complete profile, ordinary layout and metadata root. Entry
+slots start initialized with version-only names; immutable loans govern reads,
+and call companions must describe the same ordinary SSA snapshot. Retirement,
+mutation, capture/task transport, inventory and receipt results remain refused.
+Ready, H and both backends still refuse executable receipt ABI transport.

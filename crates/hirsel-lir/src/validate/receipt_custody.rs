@@ -51,7 +51,10 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
         if unit.types[slot.ty.index()].repr == ValueRepr::PayloadReceipt
             && !matches!(
                 slot.kind,
-                SlotKind::Local | SlotKind::Temporary | SlotKind::Displaced
+                SlotKind::Local
+                    | SlotKind::Temporary
+                    | SlotKind::Displaced
+                    | SlotKind::ReceiptParameter(_)
             )
         {
             reject(Site::UNIT, "private receipt slot is not local custody");
@@ -91,6 +94,26 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
         {
             let site = Site::at(block, position as u32);
             match *inst {
+                Inst::BeginLoan {
+                    address,
+                    mutable: true,
+                    ..
+                } if unit.types[unit.addresses[address.index()].ty.index()].repr
+                    == ValueRepr::PayloadReceipt =>
+                {
+                    reject(
+                        site,
+                        "receipt metadata cannot be mutably borrowed without writeback custody",
+                    );
+                }
+                Inst::StorageLive { slot } | Inst::StorageDead { slot, .. }
+                    if matches!(unit.slots[slot.index()].kind, SlotKind::ReceiptParameter(_)) =>
+                {
+                    reject(
+                        site,
+                        "borrowed receipt entry storage cannot be retired or reinitialized",
+                    );
+                }
                 Inst::PayloadReceipt { value, inputs, .. } => {
                     if metadata(value)
                         || inputs
@@ -105,14 +128,14 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                 Inst::Read {
                     result, address, ..
                 } if metadata(result) => {
-                    if !local_address(cx, address) {
+                    if !metadata_address(cx, address, true) {
                         reject(site, "private receipt read is not a whole local slot");
                     }
                 }
                 Inst::Store { value, address, .. } | Inst::Replace { value, address, .. }
                     if metadata(value) =>
                 {
-                    if !local_address(cx, address) {
+                    if !metadata_address(cx, address, false) {
                         reject(site, "private receipt write is not a whole local slot");
                     }
                 }
@@ -171,7 +194,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     }
 }
 
-fn local_address<S>(cx: &Cx<'_, S>, mut address: AddressId) -> bool {
+fn metadata_address<S>(cx: &Cx<'_, S>, mut address: AddressId, read: bool) -> bool {
     for _ in 0..cx.unit.addresses.len() {
         let row = &cx.unit.addresses[address.index()];
         if row.projection.len != 0 {
@@ -183,7 +206,11 @@ fn local_address<S>(cx: &Cx<'_, S>, mut address: AddressId) -> bool {
                 return matches!(
                     cx.unit.slots[slot.index()].kind,
                     SlotKind::Local | SlotKind::Temporary | SlotKind::Displaced
-                );
+                ) || read
+                    && matches!(
+                        cx.unit.slots[slot.index()].kind,
+                        SlotKind::ReceiptParameter(_)
+                    );
             }
             AddressBase::Value(_) => return false,
         }

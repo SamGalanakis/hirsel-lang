@@ -4,7 +4,7 @@ use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::*;
 use crate::sealed_payload::*;
 use crate::stage::Stage;
-mod pairing;
+pub(super) mod pairing;
 
 pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     let unit = cx.unit;

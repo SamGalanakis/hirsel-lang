@@ -65,7 +65,7 @@ pub fn check_receipt_contract(
     Ok(())
 }
 
-/// Executable receipt transport is not connected yet. Structural ABI validation
+/// Ready/H/backend receipt transport is not connected yet. Structural ABI validation
 /// alone cannot authorize dropping carriers or mint original-source evidence.
 /// Ordinary rows retain their existing implementation in C, H and both emitters.
 pub fn check_implemented_transport(abi: &FnAbi) -> Result<(), &'static str> {

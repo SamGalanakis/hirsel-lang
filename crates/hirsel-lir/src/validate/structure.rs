@@ -694,6 +694,11 @@ impl<S: Stage> Checker<'_, '_, S> {
         for &p in unit.parameters.iter().chain(&unit.captures) {
             self.define(p, Def::Entry, Site::UNIT);
         }
+        if let Some(entry) = &unit.tables.receipt_entry {
+            for version in entry.versions() {
+                self.define(version, Def::Entry, Site::UNIT);
+            }
+        }
         for (b, block) in unit.blocks.iter().enumerate() {
             let b = BlockId(b as u32);
             for (j, &p) in block
@@ -3693,6 +3698,11 @@ impl<S: Stage> Checker<'_, '_, S> {
                 facts.version[value.index()] = Some(slot);
             }
         }
+        if let Some(entry) = &unit.tables.receipt_entry {
+            for binding in entry.parameters.iter().chain(&entry.captures) {
+                facts.version[binding.version.index()] = Some(binding.slot);
+            }
+        }
         for (s, slot) in unit.slots.iter().enumerate() {
             if let SlotKind::Capture(ordinal) = slot.kind
                 && let Some(&value) = unit.captures.get(ordinal as usize)
@@ -5062,6 +5072,9 @@ pub(super) fn terminator_operands<S>(cx: &Cx<'_, S>, term: &Terminator) -> Vec<(
                 if let ArgumentValue::Value(v) = arg.value {
                     out.push((v, Usage::Operand));
                 }
+            }
+            if let Some(receipts) = &site.receipts {
+                out.extend(receipts.inputs().map(|v| (v, Usage::Operand)));
             }
             out
         }

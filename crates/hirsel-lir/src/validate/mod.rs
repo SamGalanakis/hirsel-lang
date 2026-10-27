@@ -57,6 +57,7 @@ mod flow;
 mod holes;
 mod ownership;
 mod ready;
+mod receipt_boundary;
 mod receipt_custody;
 mod scoped_transport;
 mod sealed;
@@ -665,32 +666,10 @@ fn check_with_context<S: Stage>(
             }];
         }
     }
-    if let Some(entry) = &unit.tables.receipt_entry {
-        let checked = inputs
-            .layouts
-            .fn_abis
-            .get(unit.header.abi.0 as usize)
-            .ok_or("receipt entry lacks its ABI")
-            .and_then(|abi| entry.check(abi, unit, inputs.layouts));
-        let error = checked
-            .err()
-            .unwrap_or("receipt entry requires independent source and custody validation");
+    if let Err(error) = receipt_boundary::entry(unit, inputs) {
         return vec![Violation {
             site: Site::UNIT,
-            kind: ViolationKind::Schema(error.into()),
-        }];
-    }
-    if unit.slots.iter().any(|slot| {
-        matches!(
-            slot.kind,
-            crate::ir::SlotKind::ReceiptParameter(_)
-                | crate::ir::SlotKind::ReceiptCapture(_)
-                | crate::ir::SlotKind::ReceiptResult
-        )
-    }) {
-        return vec![Violation {
-            site: Site::UNIT,
-            kind: ViolationKind::Schema("receipt slots lack an entry contract".into()),
+            kind: ViolationKind::Schema(error),
         }];
     }
     for call in &unit.tables.calls {
@@ -707,6 +686,7 @@ fn check_with_context<S: Stage>(
     let (_, abis) = crate::objects::references(unit);
     for id in abis {
         if let Some(abi) = inputs.layouts.fn_abis.get(id.0 as usize)
+            && S::KIND == StageKind::Ready
             && let Err(error) = crate::abi::check_implemented_transport(abi)
         {
             return vec![Violation {
@@ -829,6 +809,7 @@ fn check_with_context<S: Stage>(
         sealed::check(&cx, &facts, &mut report);
         sealed_payload::check(&cx, &mut report);
         receipt_custody::check(&cx, &mut report);
+        receipt_boundary::calls(&cx, &mut report);
         ownership::check(&cx, &facts, &mut report);
         holes::check(&cx, &facts, &mut report);
         aliasing::check(&cx, &facts, &mut report);
