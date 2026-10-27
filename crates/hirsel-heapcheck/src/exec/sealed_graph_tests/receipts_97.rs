@@ -572,3 +572,91 @@ fn h_receipt_source_operands_reject_a_changed_constructor_before_snapshot_public
         .write_bytes(16, &11u64.to_le_bytes());
     m.exec(&mut f, &instruction).unwrap();
 }
+
+#[test]
+fn h_historical_payload_charge_survives_physical_elision_without_keeping_holders() {
+    for full in [false, true] {
+        let (x, c, layout, result) = setup(full);
+        let mut ops = NoOperations;
+        let mut m = Machine::new(&x.p, &c, &mut ops);
+        let (mut f, grant) = prepare(&mut m, 100);
+        let ptr = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
+        root(&mut m, &mut f, Val::Ptr(ptr));
+        m.seal_allocations.insert(
+            ptr.alloc,
+            (0, x.p.units[0].tables.source_anchors[0].clone()),
+        );
+        let control = snapshot(&mut m, &mut f, result);
+        let saved = m.receipt_control(control, layout).unwrap().clone();
+        let descriptor = &x.p.units[0].tables.seal_descriptors[2];
+        let charge = |m: &mut Machine<'_, Rc>| {
+            m.receipt_occurrences(
+                &saved,
+                descriptor,
+                0,
+                &mut std::collections::BTreeSet::new(),
+                &mut BTreeMap::new(),
+            )
+            .unwrap()
+        };
+        assert_eq!(charge(&mut m), Some(16));
+        release(&mut m, &mut f, ValueId(4), x.lists[1]);
+        assert_eq!(m.ledger.get(ptr.alloc).state, AllocState::Dead);
+        let allocations = m.ledger.counters.allocations;
+        assert_eq!(charge(&mut m), Some(16));
+        assert_eq!(m.ledger.get(ptr.alloc).state, AllocState::Dead);
+        assert_eq!(m.ledger.counters.allocations, allocations);
+        assert_eq!(m.receipt_control(control, layout).unwrap(), &saved);
+        recount(&mut m, &f);
+        release(&mut m, &mut f, result, layout);
+        m.exit_region(&mut f, 0).unwrap();
+        m.ledger.free(grant.alloc).unwrap();
+        m.audit().unwrap();
+    }
+}
+
+#[test]
+fn h_historical_charge_still_counts_repeated_heap_occurrences() {
+    let mut x = fixture();
+    let c = config(&mut x.p, 1, &[], false);
+    let mut ops = NoOperations;
+    let mut m = Machine::new(&x.p, &c, &mut ops);
+    let (mut f, _) = prepare(&mut m, 100);
+    let ptr = byte_list(&mut m, &x, true, 3, false, 2);
+    let descriptor = &x.p.units[0].tables.seal_descriptors[1];
+    let saved = m
+        .receipt_snapshot(descriptor.root_type.clone(), Val::Ptr(ptr))
+        .unwrap();
+    let mut shared = BTreeMap::new();
+    assert_eq!(
+        m.receipt_occurrences(
+            &saved,
+            descriptor,
+            0,
+            &mut std::collections::BTreeSet::new(),
+            &mut shared
+        )
+        .unwrap(),
+        Some(6)
+    );
+    assert!(shared.is_empty());
+    // Corrupting the later physical payload cannot rewrite a recorded source
+    // snapshot. The normal physical seal proof still inspects current cells.
+    m.ledger
+        .get_mut(ptr.alloc)
+        .extent
+        .write_bytes(0, &0u64.to_le_bytes());
+    assert_eq!(
+        m.receipt_occurrences(
+            &saved,
+            descriptor,
+            0,
+            &mut std::collections::BTreeSet::new(),
+            &mut shared
+        )
+        .unwrap(),
+        Some(6)
+    );
+    assert_eq!(m.scan_scalar(ptr, 8).unwrap(), 0);
+    f.values[4] = None;
+}

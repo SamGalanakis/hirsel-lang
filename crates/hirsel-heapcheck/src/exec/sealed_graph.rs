@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 pub(super) struct Entry {
     value: Val,
     descriptor: SealDescriptor,
+    snapshot: super::receipts::SnapshotValue,
     events: Vec<(usize, SourceAnchor)>,
 }
 
@@ -280,6 +281,7 @@ impl<S: Stage> Machine<'_, S> {
         } else {
             None
         };
+        let snapshot = self.receipt_snapshot(descriptor.root_type.clone(), Val::Ptr(ptr))?;
         let entries = self.seal_inventory.entry(region).or_default();
         if entries.contains_key(&ptr.alloc) && old != Some(ptr.alloc) {
             return fail(
@@ -295,6 +297,7 @@ impl<S: Stage> Machine<'_, S> {
             Entry {
                 value: Val::Ptr(ptr),
                 descriptor,
+                snapshot,
                 events,
             },
         );
@@ -303,7 +306,7 @@ impl<S: Stage> Machine<'_, S> {
 
     /// Tree charge over logical projection, with arena allocations visited once
     /// across inventory and root. A repeated heap allocation is visited again.
-    fn seal_occurrences(
+    pub(super) fn seal_occurrences(
         &self,
         descriptor: &SealDescriptor,
         value: &Val,
@@ -680,9 +683,9 @@ impl<S: Stage> Machine<'_, S> {
         let mut charge = Some(0u64);
         for entry in entries.values() {
             charge = charge
-                .zip(self.seal_occurrences(
+                .zip(self.receipt_occurrences(
+                    &entry.snapshot,
                     &entry.descriptor,
-                    &entry.value,
                     region,
                     &mut arena_seen,
                     &mut shared,

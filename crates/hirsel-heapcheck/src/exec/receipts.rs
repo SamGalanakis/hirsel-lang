@@ -8,11 +8,24 @@ use hirsel_lir::sealed_payload_source::{PayloadProducer, SourcePayload};
 pub(super) struct SnapshotValue {
     root: NativeType,
     value: Val,
-    cells: BTreeMap<AllocId, (u32, Option<LayoutId>, Extent)>,
+    cells: BTreeMap<AllocId, SnapshotAllocation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SnapshotAllocation {
+    generation: u32,
+    layout: Option<LayoutId>,
+    owner: Owner,
+    shared: bool,
+    image: Extent,
 }
 
 impl<S: Stage> Machine<'_, S> {
-    fn receipt_snapshot(&self, root: NativeType, mut value: Val) -> Checked<SnapshotValue> {
+    pub(super) fn receipt_snapshot(
+        &self,
+        root: NativeType,
+        mut value: Val,
+    ) -> Checked<SnapshotValue> {
         self.check_val(&value)?;
         fn normalize(image: &mut Extent) {
             for cell in image.cells.values_mut() {
@@ -55,9 +68,67 @@ impl<S: Stage> Machine<'_, S> {
                     pending.push(*ptr);
                 }
             }
-            cells.insert(ptr.alloc, (ptr.generation, allocation.layout, image));
+            cells.insert(
+                ptr.alloc,
+                SnapshotAllocation {
+                    generation: ptr.generation,
+                    layout: allocation.layout,
+                    owner: allocation.owner,
+                    shared: matches!(allocation.count, Some(Count::Root(_))),
+                    image,
+                },
+            );
         }
         Ok(SnapshotValue { root, value, cells })
+    }
+
+    /// Recount historical semantic cells in a private ledger image. No source
+    /// storage is revived, no holders are acquired, and the real ledger is
+    /// restored before returning an error or a charge.
+    pub(super) fn receipt_occurrences(
+        &mut self,
+        snapshot: &SnapshotValue,
+        descriptor: &hirsel_lir::sealed::SealDescriptor,
+        region: usize,
+        arena_seen: &mut std::collections::BTreeSet<AllocId>,
+        shared: &mut BTreeMap<Ptr, u64>,
+    ) -> Checked<Option<u64>> {
+        if snapshot.root != descriptor.root_type {
+            return fail(
+                V::TypeConfusion,
+                "snapshot charge has another semantic root",
+            );
+        }
+        let mut historical = self.ledger.clone();
+        let mut seen = arena_seen.clone();
+        for (&id, saved) in &snapshot.cells {
+            let row = historical.get_mut(id);
+            row.generation = saved.generation;
+            row.state = AllocState::Live;
+            row.layout = saved.layout;
+            row.owner = saved.owner;
+            row.count = saved.shared.then_some(Count::Root(1));
+            row.extent = saved.image.clone();
+            row.size = row.extent.len();
+            if saved.owner == Owner::Region(region) {
+                seen.insert(id);
+            }
+        }
+        // Each arena allocation owns only its own heap edges. A nested arena
+        // block has a separate, possibly newer, inventory snapshot.
+        if let Val::Ptr(root) = snapshot.value
+            && snapshot
+                .cells
+                .get(&root.alloc)
+                .is_some_and(|saved| saved.owner == Owner::Region(region))
+        {
+            seen.remove(&root.alloc);
+        }
+        let physical = std::mem::replace(&mut self.ledger, historical);
+        let charge = self.seal_occurrences(descriptor, &snapshot.value, region, &mut seen, shared);
+        self.ledger = physical;
+        arena_seen.extend(seen);
+        charge
     }
 
     pub(super) fn receipt_control(
