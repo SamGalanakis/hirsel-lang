@@ -26,6 +26,11 @@ fn sealed_task_unique_list_122_runs_on_four_engines_and_replays() {
     run_sealed_program("MEM-4-sealed-task-unique-list-run.hir");
 }
 
+#[test]
+fn sealed_arena_child_charge_121_runs_on_four_engines_and_replays() {
+    run_sealed_program("MEM-4-sealed-arena-child-charge-run.hir");
+}
+
 fn run_sealed_program(name: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

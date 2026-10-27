@@ -671,7 +671,12 @@ impl<'a> FnEmitter<'_, 'a, '_> {
         // A bounded arena is charged before the allocation (MEM-6).
         if self.tracking() {
             let bytes = self.construction_charge(site)?;
-            self.charge(token, bytes, site.anchor, failure)?;
+            let values = self
+                .pool(site.fields, &self.unit.pools.fields)?
+                .iter()
+                .map(|field| field.value)
+                .collect::<Vec<_>>();
+            self.charge_with_values(token, bytes, site.anchor, failure, values)?;
         }
         // A flat immortal owner's copy may read its capacity rounded to 16, as a region's.
         let capacity = if flat {
@@ -700,12 +705,13 @@ impl<'a> FnEmitter<'_, 'a, '_> {
 
     /// Charge `bytes` to the arena record `region`: fail when they exceed its budget, else
     /// lower it (MEM-6).
-    fn charge(
+    fn charge_with_values(
         &mut self,
         region: Value,
         bytes: u64,
         anchor: SourceAnchorId,
         failure: FailureId,
+        values: Vec<ValueId>,
     ) -> Emitted {
         if !self.tracking() || bytes == 0 {
             return Ok(());
@@ -717,7 +723,7 @@ impl<'a> FnEmitter<'_, 'a, '_> {
             .b
             .ins()
             .icmp(IntCC::UnsignedGreaterThan, bytes, remaining);
-        let exhausted = self.exhausted_block(region, anchor, failure)?;
+        let exhausted = self.exhausted_block_with_values(region, anchor, failure, values)?;
         self.branch_to(over, exhausted)?;
         let left = self.b.ins().isub(remaining, bytes);
         self.store_at(left, region, offset);

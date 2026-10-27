@@ -631,7 +631,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         // A bounded arena is charged before the bump (MEM-6).
         if self.tracking() {
             let bytes = self.construction_charge(site)?;
-            self.charge(token, bytes, site.anchor, failure)?;
+            self.charge_construction(token, bytes, site, failure)?;
         }
         // A flat immortal owner's copy may read its capacity rounded to 16, as a region's.
         let capacity = if flat {

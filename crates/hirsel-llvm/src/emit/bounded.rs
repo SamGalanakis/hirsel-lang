@@ -38,6 +38,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted<BasicBlock<'m>> {
+        self.exhausted_block_with_values(region, anchor, failure, &[])
+    }
+
+    fn exhausted_block_with_values(
+        &mut self,
+        region: Value<'m>,
+        anchor: SourceAnchorId,
+        failure: FailureId,
+        values: &[ValueId],
+    ) -> Emitted<BasicBlock<'m>> {
         let edge = self.failure_edge(failure)?;
         let here = self.builder.current();
         let block = self.module.append_block(self.function);
@@ -49,6 +59,34 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             exhausted,
             &[self.context, region, kind, rule, site, operation_site],
         );
+        for &value in values.iter().rev() {
+            let ty = self.value_type(value)?;
+            if self.unit.values[value.index()].holding != Holding::Owned
+                || self.layout(ty.layout)?.drop.is_empty()
+            {
+                continue;
+            }
+            let place = self.stack(ty.layout)?;
+            self.store(self.value_shape(value)?, self.get(value)?, place);
+            let descriptor = self.descriptor(ty.layout)?;
+            let mask = self.module.const_zero(self.module.ptr_type());
+            let continuation = self
+                .prologue
+                .alloca(self.module.array_type(self.module.int_type(64), 4), 8);
+            let finalize = self.runtime(RuntimeEntry::Finalize)?;
+            self.builder.call(
+                finalize,
+                &[
+                    self.context,
+                    descriptor,
+                    place.ptr,
+                    mask,
+                    continuation,
+                    site,
+                    operation_site,
+                ],
+            );
+        }
         let dispose = self.pool(edge.dispose, &self.unit.pools.values)?;
         if !dispose.is_empty() {
             let entry = self.runtime(RuntimeEntry::Dispose)?;
@@ -63,12 +101,28 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
 
     /// Charge `bytes` to the arena record `region` before an arena construction: fail when
     /// they exceed its budget, else lower it.
-    pub(super) fn charge(
+    pub(super) fn charge_construction(
+        &mut self,
+        region: Value<'m>,
+        bytes: u64,
+        site: &ConstructSite,
+        failure: FailureId,
+    ) -> Emitted {
+        let values = self
+            .pool(site.fields, &self.unit.pools.fields)?
+            .iter()
+            .map(|field| field.value)
+            .collect::<Vec<_>>();
+        self.charge_with_values(region, bytes, site.anchor, failure, &values)
+    }
+
+    fn charge_with_values(
         &mut self,
         region: Value<'m>,
         bytes: u64,
         anchor: SourceAnchorId,
         failure: FailureId,
+        values: &[ValueId],
     ) -> Emitted {
         if !self.tracking() || bytes == 0 {
             return Ok(());
@@ -81,7 +135,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let remaining = self.builder.load(word, address, 8);
         let bytes = self.const_u64(bytes);
         let over = self.builder.icmp(IntPredicate::Ugt, bytes, remaining);
-        let exhausted = self.exhausted_block(region, anchor, failure)?;
+        let exhausted = self.exhausted_block_with_values(region, anchor, failure, values)?;
         let fits = self.module.append_block(self.function);
         self.builder.cold_cond_br(over, exhausted, fits);
         self.builder.position(fits);

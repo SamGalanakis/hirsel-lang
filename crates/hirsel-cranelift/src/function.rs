@@ -115,6 +115,7 @@ enum Deferred {
         region: Value,
         site: u64,
         failure: FailureId,
+        values: Vec<ValueId>,
     },
 }
 
@@ -1640,6 +1641,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                 region,
                 site,
                 failure,
+                values,
             } => {
                 self.b.switch_to_block(block);
                 self.ahead_barrier()?;
@@ -1650,6 +1652,33 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     RuntimeEntry::ArenaExhausted,
                     &[context, region, kind, rule, site, operation_site],
                 )?;
+                for value in values.into_iter().rev() {
+                    let ty = self.value_type(value)?;
+                    if self.unit.values[value.index()].holding != Holding::Owned
+                        || self.layout(ty.layout)?.drop.is_empty()
+                    {
+                        continue;
+                    }
+                    let place = self.stack(ty.layout)?;
+                    let shape = self.value_shape(value)?;
+                    let value = self.get(value)?;
+                    self.store(shape, value, place)?;
+                    let descriptor = self.descriptor_value(ty.layout)?;
+                    let mask = self.b.ins().iconst(PTR, 0);
+                    let (continuation, _) = self.stack_bytes(32, 8);
+                    self.rt1(
+                        RuntimeEntry::Finalize,
+                        &[
+                            context,
+                            descriptor,
+                            place.ptr,
+                            mask,
+                            continuation,
+                            site,
+                            operation_site,
+                        ],
+                    )?;
+                }
                 let edge = self.failure_edge(failure)?;
                 self.dispose_tokens(edge)?;
                 self.jump(edge.cleanup)
@@ -1704,6 +1733,16 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
         anchor: SourceAnchorId,
         failure: FailureId,
     ) -> Emitted<Block> {
+        self.exhausted_block_with_values(region, anchor, failure, Vec::new())
+    }
+
+    pub(crate) fn exhausted_block_with_values(
+        &mut self,
+        region: Value,
+        anchor: SourceAnchorId,
+        failure: FailureId,
+        values: Vec<ValueId>,
+    ) -> Emitted<Block> {
         self.failure_edge(failure)?;
         let site = self.anchor_code(anchor)?;
         let block = self.b.create_block();
@@ -1713,6 +1752,7 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
             region,
             site,
             failure,
+            values,
         });
         Ok(block)
     }

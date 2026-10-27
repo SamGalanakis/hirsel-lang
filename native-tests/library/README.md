@@ -22,6 +22,10 @@ refuses two u64 elements, while capacities 16 and 17 preserve both elements.
 record/replay on all four engines. Its explicit, live construction receipts
 pair both the original Arena destination and every heap child; physical guard
 cleanup retains the child credits until seal or exit.
+`MEM-4-sealed-arena-child-charge-run.hir` checks the same child custody under
+bounded admission: capacities 7, 8 and 15 refuse, while capacity 16 preserves
+the nested element. Rejected construction drops its taken children before
+entering the caller's failure cleanup.
 Original source declarations and ordered child receipts remain mandatory.
 Captured closures, held environments, tasks, additional mutation recipes and
 fully elided payload custody remain unsupported on this path.

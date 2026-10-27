@@ -129,6 +129,7 @@ fn returning(normal: Option<EdgeId>) -> Checked<EdgeId> {
 #[derive(Clone, Debug)]
 enum After {
     Next,
+    Exhausted,
     Operation { normal: Option<EdgeId> },
     Reset { result: ValueId, token: TokenId },
     RegionExit { region: usize },
@@ -3128,7 +3129,7 @@ impl<'p, S: Stage> Machine<'p, S> {
 
     /// MEM-6: a bounded arena's charge exceeded its budget. Record its
     /// `OutOfSpace` at the edge's site and take the edge.
-    fn exhaust(&mut self, f: &mut Frame, failure: FailureId, region: usize) -> Checked<Control> {
+    fn record_exhaustion(&mut self, f: &Frame, failure: FailureId, region: usize) -> Checked<()> {
         let u = self.unit(f.unit);
         let anchor = u
             .tables
@@ -3141,8 +3142,48 @@ impl<'p, S: Stage> Machine<'p, S> {
         if let Some(budget) = &mut self.ledger.regions[region].budget {
             budget.exhausted = Some(index);
         }
+        Ok(())
+    }
+
+    fn exhaust(&mut self, f: &mut Frame, failure: FailureId, region: usize) -> Checked<Control> {
+        self.record_exhaustion(f, failure, region)?;
         self.unwind(f, failure)?;
         Ok(Control::Continue)
+    }
+
+    fn exhaust_construction(
+        &mut self,
+        f: &mut Frame,
+        failure: FailureId,
+        region: usize,
+        site: &ConstructSite,
+    ) -> Checked<Control> {
+        self.record_exhaustion(f, failure, region)?;
+        let fields = self.pool(site.fields, &self.unit(f.unit).pools.fields)?;
+        let mut work = Vec::new();
+        for field in fields {
+            if self.unit(f.unit).values[field.value.index()].holding != Holding::Owned {
+                continue;
+            }
+            let layout = self.value_type(f.unit, field.value)?.layout;
+            let moved = self.take_owned(f, field.value, "rejected construction")?;
+            let temp = self.temporary(layout)?;
+            self.write_value(temp, layout, moved)?;
+            work.push(Work::Death {
+                alloc: temp.alloc,
+                raw: None,
+            });
+            work.push(Work::DropAt {
+                at: temp,
+                layout,
+                mask: None,
+            });
+        }
+        if work.is_empty() {
+            self.unwind(f, failure)?;
+            return Ok(Control::Continue);
+        }
+        Ok(self.drain(f, work, After::Exhausted, Some(failure)))
     }
 
     /// Dispose a failure edge's tokens and enter its cleanup.
@@ -5534,7 +5575,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 if let Some(region) = self.bounded_region(f, site.placement)? {
                     let bytes = self.construct_charge(f, site, layout)?;
                     if !self.charge(region, bytes) {
-                        return self.exhaust(f, failure, region);
+                        return self.exhaust_construction(f, failure, region, site);
                     }
                 }
                 let val = self.construct(f, site, None, layout)?;
@@ -9966,6 +10007,16 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "drain finished under a frame that is not waiting",
             );
         };
+        if matches!(after, After::Exhausted) {
+            self.unwind(
+                &mut f,
+                failure.ok_or_else(|| {
+                    err(V::Malformed, "construction cleanup without failure edge")
+                })?,
+            )?;
+            self.stack.push(Activity::Frame(f));
+            return Ok(());
+        }
         if let After::Operation { normal } = after {
             if d.failed || normal.is_none() {
                 self.take_failure(
@@ -9984,7 +10035,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         let site = self.site(&f);
         let result: Checked<()> = (|| {
             match after {
-                After::Operation { .. } => unreachable!(),
+                After::Operation { .. } | After::Exhausted => unreachable!(),
                 After::Next => {}
                 After::Reset { result, token } => {
                     if d.failed {
