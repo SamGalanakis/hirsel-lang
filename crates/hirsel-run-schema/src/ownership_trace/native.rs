@@ -6,7 +6,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -168,6 +168,19 @@ fn owner(
     environment: Option<&Owner>,
     location: u64,
 ) -> Result<Owner, Error> {
+    if location >> 32 == u64::from(u32::MAX) {
+        return Ok(Owner {
+            task: Some(TaskPath::default()),
+            storage: Storage::Object {
+                name: "native.parallel".into(),
+                id: frame,
+                item: 0,
+            },
+            path: vec![super::Projection::Field {
+                field: location as u32,
+            }],
+        });
+    }
     if location >> 32 == 6 {
         let mut owner = environment
             .cloned()
@@ -551,7 +564,10 @@ fn decode(
                         )
                     };
                 let parent = frames.iter().rev().nth(1).map(|frame| frame.id);
-                if calls.is_none() && (token >> 32 > 1 || recipient >> 32 > 1) {
+                let local = |location: u64| {
+                    matches!(location >> 32, 0 | 1) || location >> 32 == u64::from(u32::MAX)
+                };
+                if calls.is_none() && (!local(token) || !local(recipient)) {
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
                 let from = projected_owner(

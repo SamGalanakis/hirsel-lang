@@ -42,16 +42,19 @@ hirsel run app.hir --native --backend llvm --trace-ownership /tmp/llvm.json
 hirsel run app.hir --native --backend cranelift --trace-ownership /tmp/clif.json
 ```
 
-Native coverage currently includes local leaf resources and closed direct calls
-without owned inputs or results. Nested ownership, task transport, captures,
-owned parameters and results refuse before launch. Native tracing currently
+Native coverage includes statically nested resources, their finalizers and
+failure cleanup, owned direct-call parameters and results, checked once captures,
+named arena callbacks, and parallel SSA moves including swaps. Swaps capture all
+sources before replacing any destination, so equal payloads retain their distinct
+identities. Tasks, channels and unsupported dynamic storage refuse before launch.
+Native tracing currently
 requires a grant-free run without recording or other native launch options.
 Interpreted test tracing runs one default schedule; native tests, benchmarks,
 blessing, JSON test reports and custom schedules are not supported by this flag.
 `run --simulation` also refuses the flag.
 
 The current adapters track resources. General unique and owned-value coverage,
-compiler-pass integration and an independent RPC admission witness are still
-in development. Native and interpreted storage moves may differ; logical
+and an independent RPC admission witness are still in development. The compiler
+checks each traced pass against the original marker inventory. Native and interpreted storage moves may differ; logical
 resource creations and drops can be compared across engines. Ownership JSON is
 a diagnostic sidecar, separate from the capability recording used for replay.

@@ -9,6 +9,7 @@ use crate::stage::{Ready, ValidatedUnit};
 use std::collections::BTreeSet;
 
 mod calls;
+mod edges;
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
@@ -21,7 +22,8 @@ const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 pub struct NativeLocation {
     /// 0 = SSA, 1 = slot, 2/3 = outgoing/incoming argument,
     /// 4/5 = outgoing/incoming result, 6 = capture slot, 7 = checked static
-    /// address path, 8+field = constructed SSA field. Relations name logical frames.
+    /// address path, 8+field = constructed SSA field, u32::MAX = temporary
+    /// parallel-edge custody. Relations name logical frames.
     pub kind: u32,
     pub index: u32,
 }
@@ -565,16 +567,6 @@ impl LeafPlan {
                 .zip(parameters.iter().copied())
                 .filter(|&(_, to)| owned(to))
                 .collect::<Vec<_>>();
-            if transfers.iter().any(|&(from, to)| {
-                transfers
-                    .iter()
-                    .any(|&(other, _)| other == to && other != from)
-            }) {
-                return Err(
-                    "native ownership tracing: parallel owned edge cycle needs temporary custody"
-                        .into(),
-                );
-            }
             for (from, to) in transfers {
                 if !owned(from) || layout(from) != layout(to) {
                     return Err("ownership edge changes owned representation".into());
@@ -598,12 +590,16 @@ impl LeafPlan {
                 .map(|o| (o.point, markers[&o.marker.id][0]))
                 .collect()
         };
-        Ok(Self {
+        let mut prepared = Self {
             plan,
             markers,
             commits,
             codes: None,
-        })
+        };
+        if !source_only {
+            edges::stage(&mut prepared)?;
+        }
+        Ok(prepared)
     }
 
     /// Consume a plan transported from an earlier stage. Independent Ready
@@ -848,12 +844,14 @@ impl LeafPlan {
         if covered.len() != expected.plan.observations.len() {
             return Err("ownership plan omits a Ready transition".into());
         }
-        Ok(Self {
+        let mut prepared = Self {
             plan: plan.clone(),
             markers,
             commits,
             codes: None,
-        })
+        };
+        edges::stage(&mut prepared)?;
+        Ok(prepared)
     }
 
     pub fn plan(&self) -> &Plan {
@@ -1323,6 +1321,24 @@ impl LeafPlan {
         }
         let value = if marker.token.kind == 0 {
             ValueId(marker.token.index)
+        } else if marker.token.kind == edges::TEMPORARY {
+            let logical = self
+                .markers
+                .iter()
+                .find_map(|(id, markers)| {
+                    markers.iter().any(|at| at.id == marker.id).then_some(*id)
+                })
+                .ok_or("ownership temporary has no original marker")?;
+            let original = self
+                .plan
+                .observations
+                .iter()
+                .find(|row| row.marker.id == logical)
+                .ok_or("ownership temporary lost its original edge")?;
+            let Location::Value(value) = original.marker.token else {
+                return Err("ownership temporary has no original SSA source".into());
+            };
+            value
         } else {
             match *point {
                 Point::Entry => *unit

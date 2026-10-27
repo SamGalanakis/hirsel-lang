@@ -1218,3 +1218,112 @@ fn native_ownership_empty_callable_moves_need_static_evidence_and_empty_storage(
         Error::RetainedEnvironment(1)
     );
 }
+
+#[test]
+fn native_parallel_cycles_and_chains_preserve_equal_resource_identities() {
+    use hirsel_run_schema::ownership_trace::Storage;
+    for targets in [[1, 0], [1, 2]] {
+        let (_, original) = fixture();
+        let template = original[&[7; 32]][&0].clone();
+        let temporary = |index| (u64::from(u32::MAX) << 32) | index;
+        let operations = [
+            (0, 0, 0),
+            (0, 1, 1),
+            (1, 0, temporary(0)),
+            (1, 1, temporary(1)),
+            (1, temporary(0), targets[0]),
+            (1, temporary(1), targets[1]),
+            (2, targets[1], targets[1]),
+            (2, targets[0], targets[0]),
+        ];
+        let mut metadata = BTreeMap::new();
+        let mut rows = vec![Row::Enter {
+            task: 0,
+            frame: 1,
+            unit: [7; 32],
+        }];
+        for (marker, (action, token, owner)) in operations.into_iter().enumerate() {
+            let marker = marker as u32;
+            metadata.insert(
+                marker,
+                Metadata {
+                    action,
+                    token,
+                    owner,
+                    ..template.clone()
+                },
+            );
+            rows.push(Row::Event {
+                task: 0,
+                frame: 1,
+                marker,
+                action,
+                token,
+                owner,
+                site: 42,
+                layout: 7,
+            });
+        }
+        rows.push(Row::Leave { task: 0, frame: 1 });
+        let units = Units::from([([7; 32], metadata)]);
+        let log = Log {
+            version: VERSION,
+            program: [49; 32],
+            row_count: rows.len() as u64,
+            rows,
+            complete: true,
+        };
+        let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+        let analysis = trace.analyze([49; 32], 100).unwrap();
+        assert_eq!(
+            (analysis.created, analysis.dropped, analysis.live.len()),
+            (2, 2, 0)
+        );
+        let drops: Vec<_> = trace
+            .events
+            .iter()
+            .filter_map(|event| match &event.action {
+                Action::Drop { token, owner } => Some((token.sequence, owner.storage.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            drops,
+            vec![
+                (
+                    1,
+                    Storage::Value {
+                        frame: 1,
+                        value: targets[1] as u32
+                    }
+                ),
+                (
+                    0,
+                    Storage::Value {
+                        frame: 1,
+                        value: targets[0] as u32
+                    }
+                ),
+            ]
+        );
+        let mut incomplete = log.clone();
+        incomplete.rows.remove(3);
+        incomplete.row_count -= 1;
+        assert!(decode_leaf(&incomplete, [49; 32], &units, 100).is_err());
+        let mut reordered = log.clone();
+        reordered.rows.swap(4, 5);
+        assert!(decode_leaf(&reordered, [49; 32], &units, 100).is_err());
+        let mut forged = log.clone();
+        let Row::Event { token, .. } = &mut forged.rows[5] else {
+            unreachable!()
+        };
+        *token = temporary(99);
+        assert!(decode_leaf(&forged, [49; 32], &units, 100).is_err());
+        let mut old = log;
+        old.version = 5;
+        assert_eq!(
+            decode_leaf(&old, [49; 32], &units, 100).unwrap_err(),
+            Error::Binding
+        );
+    }
+}

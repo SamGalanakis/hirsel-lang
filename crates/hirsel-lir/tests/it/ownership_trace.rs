@@ -4208,3 +4208,82 @@ fn ownership_trace_compound_resource_covers_parent_children_and_rejects_a_parent
     let missing_plan = Plan::new(&missing, output.observations);
     assert!(check(&missing, &missing_plan).is_err());
 }
+
+#[test]
+fn ownership_trace_parallel_edge_cycles_preserve_logical_markers_and_stage_all_sources() {
+    use hirsel_lir::stage::Ready;
+    let mut t = Lir::<Ready>::new(&[(Passing::Take, l::BLK), (Passing::Take, l::BLK)], None);
+    let a = t.owned(l::BLK);
+    let b = t.owned(l::BLK);
+    t.param(a);
+    t.param(b);
+    let x = t.owned(l::BLK);
+    let y = t.owned(l::BLK);
+    let body = t.builder.block(BlockKind::Body, &[x, y]);
+    let left = t.owned(l::BLK);
+    let right = t.owned(l::BLK);
+    let done = t.builder.block(BlockKind::Body, &[left, right]);
+    let entry = t.builder.edge(body, &[a, b]);
+    t.builder.term(ENTRY, Terminator::Jump(entry));
+    t.branch(body, (body, &[y, x]), (done, &[x, y]));
+    t.release(done, left, &[right]);
+    t.release(done, right, &[]);
+    t.builder.ret(done, None);
+    let (raw, table, _) = t.finish();
+    let cycle = match raw.terminators[body.index()] {
+        Terminator::Branch { yes, .. } => yes,
+        _ => unreachable!(),
+    };
+    let unit = checked_native_fixture(raw, &table);
+    let expected = native::LeafPlan::prepare(&unit, &table).unwrap();
+    let original = expected.plan().clone();
+    let relocated = native::LeafPlan::from_relocated(&unit, &table, &original).unwrap();
+    assert_eq!(relocated.plan(), &original);
+    let markers: Vec<_> = relocated.at_point(Point::Edge(cycle)).collect();
+    assert_eq!(markers.len(), 4);
+    assert!(
+        markers[..2]
+            .iter()
+            .all(|marker| marker.owner.kind == u32::MAX && marker.token.kind == 0)
+    );
+    assert!(
+        markers[2..]
+            .iter()
+            .all(|marker| marker.token.kind == u32::MAX && marker.owner.kind == 0)
+    );
+    assert_eq!(markers[0].token.index, y.0);
+    assert_eq!(markers[1].token.index, x.0);
+    assert_eq!(markers[2].owner.index, x.0);
+    assert_eq!(markers[3].owner.index, y.0);
+    let max = original
+        .observations
+        .iter()
+        .map(|row| row.marker.id.0)
+        .max()
+        .unwrap();
+    assert!(markers.iter().all(|marker| marker.id.0 > max));
+    assert_eq!(
+        markers
+            .iter()
+            .map(|marker| marker.id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4
+    );
+    let mut missing = original.clone();
+    let at = missing
+        .observations
+        .iter()
+        .position(|row| row.point == Point::Edge(cycle))
+        .unwrap();
+    missing.observations.remove(at);
+    assert!(native::LeafPlan::from_relocated(&unit, &table, &missing).is_err());
+    let mut forged = original;
+    let row = forged
+        .observations
+        .iter_mut()
+        .find(|row| row.point == Point::Edge(cycle))
+        .unwrap();
+    row.marker.owner = row.marker.token;
+    assert!(native::LeafPlan::from_relocated(&unit, &table, &forged).is_err());
+}
