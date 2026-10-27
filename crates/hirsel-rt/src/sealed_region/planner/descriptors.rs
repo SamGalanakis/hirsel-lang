@@ -13,7 +13,10 @@ pub(in crate::sealed_region) struct Edge {
     pub slice: bool,
 }
 
-pub(in crate::sealed_region) unsafe fn layout<'a>(ctx: *mut TaskCtx, index: u32) -> Result<&'a Layout, Error> {
+pub(in crate::sealed_region) unsafe fn layout<'a>(
+    ctx: *mut TaskCtx,
+    index: u32,
+) -> Result<&'a Layout, Error> {
     if index >= unsafe { (*ctx).heap_ref().layout_count() } {
         return Err(Error::Descriptor);
     }
