@@ -798,3 +798,12 @@ custody with the ordinary holder, slot, reaching-version and loan machinery.
 Metadata cannot enter a language aggregate, ordinary ABI or user operation.
 Entry, call, capture and task receipt transport still require their independent
 source and boundary proofs. Ready and both engines retain those refusals.
+
+C validator revision 29 reads `OperationDeclarations::receipt_source` for the
+selected entry, including an unavailable observation. The source declaration
+binds the original body, aware request, V observation, implementation revision,
+complete contract and every original port profile. A present declaration must
+match the current entry and ABI contract. Native output schema 8 retains these
+reads and rechecks their complete content without restoring a Value, so a newly
+required boundary invalidates an ordinary cached output. Receipt entry/call
+custody and executable transport remain refused.

@@ -41,6 +41,14 @@ pub(super) fn bind_pretransfer(
         .collect()
 }
 impl OperationDeclarations for InstanceOperations<'_> {
+    fn receipt_source(
+        &self,
+        definition: &DefPath,
+        instance: ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::ReceiptSource> {
+        self.declarations.receipt_source(definition, instance)
+    }
+
     fn seal_source_witness(
         &self,
         definition: &DefPath,

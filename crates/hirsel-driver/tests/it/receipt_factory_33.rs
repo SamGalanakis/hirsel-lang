@@ -917,3 +917,124 @@ pub fn main()->u64 {
         );
     });
 }
+
+#[test]
+fn source_factory_publishes_only_rechecked_receipt_requests_to_c_declarations() {
+    use hirsel_lir::operation::OperationDeclarations;
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let mut r=arena.with(fn(a:Arena)->Region[u64] {
+    let root=7u64
+    arena.seal(take a,take root)
+  })
+  region.with(mut r,fn(root:u64)->u64 {root})
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let mut graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar profiles")
+        })
+        .unwrap();
+        let declarations = graph
+            .declarations(
+                &front,
+                [root(&front, &path)],
+                &mut |_, _, _| panic!("scalar profiles"),
+                &(),
+            )
+            .unwrap();
+        let mut published = 0;
+        for request in &graph.requests {
+            let expected = request.receipt_source().unwrap();
+            if let Some(expected) = expected {
+                let actual = declarations
+                    .receipt_source(&expected.original.definition, expected.instance)
+                    .unwrap();
+                assert_eq!(actual, expected);
+                assert_eq!(actual.profiles.len(), request.profiles().len());
+                assert_ne!(actual.instance, actual.original.instance);
+                assert!(
+                    declarations
+                        .receipt_source(&actual.original.definition, actual.original.instance)
+                        .is_none()
+                );
+                assert!(
+                    declarations
+                        .receipt_source(&DefPath::core("unrelated"), actual.instance)
+                        .is_none()
+                );
+                published += 1;
+            }
+        }
+        assert!(published > 0);
+        let mut simulated = Simulated {
+            front: &front,
+            unavailable: true,
+            redirect: None,
+            signature_override: None,
+        };
+        assert!(matches!(
+            graph.declarations(
+                &simulated,
+                [root(&front, &path)],
+                &mut |_, _, _| Ok(vec![]),
+                &()
+            ),
+            Err(SourceError::Unsupported("simulated unknown source"))
+        ));
+        simulated.unavailable = false;
+        graph.requests.swap(0, 1);
+        assert!(matches!(
+            graph.declarations(
+                &simulated,
+                [root(&front, &path)],
+                &mut |_, _, _| Ok(vec![]),
+                &()
+            ),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+    });
+}
+
+#[test]
+fn source_factory_receipt_declarations_refuse_an_older_v_source_selection() {
+    with_compiler_stack(|| {
+        let text = "pub fn main()->Region[u64] { arena.with(fn(a:Arena)->Region[u64] { let x=7u64; arena.seal(take a,take x) }) }";
+        let (reader, path) = source(text);
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("scalar profiles")
+        })
+        .unwrap();
+        let (current, _) = source(&text.replace("7u64", "11u64"));
+        let current = Front::new(&current);
+        assert!(matches!(
+            graph.declarations(
+                &current,
+                [root(&current, &path)],
+                &mut |_, _, _| panic!("scalar profiles"),
+                &()
+            ),
+            Err(SourceError::Malformed(
+                "receipt graph differs from current original observations"
+            ))
+        ));
+        let current_graph = named_graph(&current, [root(&current, &path)], &mut |_, _, _| {
+            panic!("scalar profiles")
+        })
+        .unwrap();
+        current_graph
+            .declarations(
+                &current,
+                [root(&current, &path)],
+                &mut |_, _, _| panic!("scalar profiles"),
+                &(),
+            )
+            .unwrap();
+    });
+}

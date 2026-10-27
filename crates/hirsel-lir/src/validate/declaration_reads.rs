@@ -1,5 +1,6 @@
 //! Independent declaration observations made by C, replayed without a Value.
 use crate::operation::{NativeType, OperationArgument, OperationDeclarations};
+use crate::sealed_payload_source::ReceiptSource;
 use crate::{FnAbi, LayoutTable, TargetSpec, layout::LayoutError};
 use hirsel_core_contract::OperationId;
 use hirsel_syntax::{ContentHash, DefPath};
@@ -44,6 +45,37 @@ hirsel_codec::snapshot_struct!(SealedRead {
     instance,
     witness
 });
+
+#[derive(Clone, Debug)]
+struct ReceiptRead {
+    definition: DefPath,
+    instance: ContentHash,
+    output: Option<ReceiptSource>,
+}
+hirsel_codec::snapshot_struct!(ReceiptRead {
+    definition,
+    instance,
+    output
+});
+
+fn receipt_read(
+    declarations: &dyn OperationDeclarations,
+    definition: &DefPath,
+    instance: ContentHash,
+) -> Option<ReceiptRead> {
+    let output = declarations.receipt_source(definition, instance);
+    if let Some(source) = &output {
+        source.check_structure().ok()?;
+        if source.original.definition != *definition || source.instance != instance {
+            return None;
+        }
+    }
+    Some(ReceiptRead {
+        definition: definition.clone(),
+        instance,
+        output,
+    })
+}
 
 #[derive(Clone, Debug)]
 struct DescriptorRead {
@@ -200,6 +232,7 @@ pub(super) struct Reads {
     unavailable_payloads: Vec<(DefPath, ContentHash)>,
     sealed: Vec<SealedRead>,
     descriptors: Vec<DescriptorRead>,
+    receipts: Vec<ReceiptRead>,
 }
 hirsel_codec::snapshot_struct!(Reads {
     invocation_required,
@@ -211,7 +244,8 @@ hirsel_codec::snapshot_struct!(Reads {
     unavailable_events,
     unavailable_payloads,
     sealed,
-    descriptors
+    descriptors,
+    receipts
 });
 
 fn invocation_identity(rows: Option<&[crate::invocations::ReferenceInvocation]>) -> ContentHash {
@@ -241,7 +275,10 @@ impl Reads {
         declarations: &dyn OperationDeclarations,
         target: &TargetSpec,
     ) -> bool {
-        self.sealed.iter().all(|read| {
+        self.receipts.iter().all(|read| {
+            receipt_read(declarations, &read.definition, read.instance)
+                .is_some_and(|current| current.output == read.output)
+        }) && self.sealed.iter().all(|read| {
             source_read(declarations, &read.definition, read.instance)
                 .is_some_and(|current| current.witness == read.witness)
         }) && self
@@ -303,6 +340,7 @@ struct Observations {
     unavailable_events: BTreeSet<(DefPath, ContentHash)>,
     unavailable_payloads: BTreeSet<(DefPath, ContentHash)>,
     pretransfer: bool,
+    receipts: BTreeMap<(DefPath, ContentHash), Option<ReceiptSource>>,
 }
 pub(super) struct Observed<'a> {
     declarations: &'a (dyn OperationDeclarations + Sync),
@@ -322,6 +360,14 @@ impl<'a> Observed<'a> {
         target: &TargetSpec,
     ) -> Option<Reads> {
         let reads = self.reads.lock().unwrap_or_else(|e| e.into_inner());
+        let receipts = reads
+            .receipts
+            .iter()
+            .map(|((definition, instance), output)| {
+                let read = receipt_read(self.declarations, definition, *instance)?;
+                (read.output == *output).then_some(read)
+            })
+            .collect::<Option<Vec<_>>>()?;
         let mut sealed = Vec::new();
         let available = reads
             .available_events
@@ -384,6 +430,7 @@ impl<'a> Observed<'a> {
             None
         };
         Some(Reads {
+            receipts,
             sealed,
             descriptors,
             unavailable_events: reads.unavailable_events.iter().cloned().collect(),
@@ -440,6 +487,16 @@ impl Observed<'_> {
     }
 }
 impl OperationDeclarations for Observed<'_> {
+    fn receipt_source(&self, definition: &DefPath, instance: ContentHash) -> Option<ReceiptSource> {
+        let output = self.declarations.receipt_source(definition, instance);
+        self.reads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .receipts
+            .insert((definition.clone(), instance), output.clone());
+        output
+    }
+
     fn seal_source_witness(
         &self,
         definition: &DefPath,
@@ -590,5 +647,123 @@ impl OperationDeclarations for Observed<'_> {
         target: &TargetSpec,
     ) -> Result<(FnAbi, LayoutTable), LayoutError> {
         self.declarations.derive(operation, arguments, target)
+    }
+}
+
+#[cfg(test)]
+mod receipt_tests {
+    use super::*;
+    use crate::invocations::ReferenceBody;
+    use crate::sealed_payload_source::*;
+
+    struct Declarations(Option<ReceiptSource>);
+    impl OperationDeclarations for Declarations {
+        fn receipt_source(&self, _: &DefPath, _: ContentHash) -> Option<ReceiptSource> {
+            self.0.clone()
+        }
+        fn derive(
+            &self,
+            _: &OperationId,
+            _: &[OperationArgument],
+            _: &TargetSpec,
+        ) -> Result<(FnAbi, LayoutTable), LayoutError> {
+            Err(LayoutError::Invalid("no operations".into()))
+        }
+    }
+    fn source() -> ReceiptSource {
+        let profile = ClosedStorageProfile {
+            schema: ClosedStorageProfile::SCHEMA,
+            root: ClosedStorageType {
+                ty: NativeType::Tuple(vec![]),
+                source_type: ContentHash::of_bytes(b"original Unit"),
+            },
+            functions: vec![],
+        };
+        ReceiptSource {
+            original: ReferenceBody {
+                definition: DefPath::core("receipt-test"),
+                instance: ContentHash::of_bytes(b"original base"),
+                body: 0,
+            },
+            instance: ContentHash::of_bytes(b"aware request"),
+            source: ContentHash::of_bytes(b"V source"),
+            implementation_revision: ContentHash::of_bytes(b"source revision"),
+            contract: ReceiptContract::new(
+                vec![],
+                Some(ReceiptResult {
+                    ty: ReceiptType {
+                        source_type: profile.root.source_type,
+                        profile: profile.content().unwrap(),
+                    },
+                }),
+                vec![],
+                vec![],
+            )
+            .unwrap(),
+            profiles: vec![ReceiptProfile {
+                port: ReceiptPort::Result,
+                profile,
+            }],
+        }
+    }
+    #[test]
+    fn receipt_reads_replay_every_original_observation_and_complete_port_profile() {
+        let source = source();
+        source.check_structure().unwrap();
+        let declarations = Declarations(Some(source.clone()));
+        let observed = Observed::new(&declarations);
+        assert_eq!(
+            observed.receipt_source(&source.original.definition, source.instance),
+            Some(source.clone())
+        );
+        let target = TargetSpec::x86_64_unknown_linux_gnu();
+        let table = LayoutTable::new(&target);
+        let reads = observed.finish(&table, &table, &target).unwrap();
+        let bytes = hirsel_codec::to_text(&reads);
+        let reads: Reads = hirsel_codec::from_text(&bytes).unwrap();
+        assert!(reads.matches(&declarations, &target));
+        assert!(!reads.matches(&Declarations(None), &target));
+        for mutation in 0..8 {
+            let mut changed = source.clone();
+            let other = ContentHash::of_bytes(b"changed source observation");
+            match mutation {
+                0 => changed.source = other,
+                1 => changed.implementation_revision = other,
+                2 => changed.original.instance = other,
+                3 => changed.original.body += 1,
+                4 => changed.original.definition = DefPath::core("other"),
+                5 => changed.instance = other,
+                6 => changed.profiles.push(ReceiptProfile {
+                    port: ReceiptPort::Capture(0),
+                    profile: changed.profiles[0].profile.clone(),
+                }),
+                7 => {
+                    changed.profiles[0].profile.root.source_type = other;
+                    changed.contract.result.as_mut().unwrap().ty = ReceiptType {
+                        source_type: other,
+                        profile: changed.profiles[0].profile.content().unwrap(),
+                    };
+                    changed.contract =
+                        ReceiptContract::new(vec![], changed.contract.result, vec![], vec![])
+                            .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            changed.check_structure().unwrap();
+            assert!(
+                !reads.matches(&Declarations(Some(changed)), &target),
+                "mutation {mutation}"
+            );
+        }
+        let absent = Declarations(None);
+        let observed = Observed::new(&absent);
+        assert!(
+            observed
+                .receipt_source(&source.original.definition, source.instance)
+                .is_none()
+        );
+        let reads = observed.finish(&table, &table, &target).unwrap();
+        assert!(reads.matches(&absent, &target));
+        assert!(!reads.matches(&declarations, &target));
     }
 }

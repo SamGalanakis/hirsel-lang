@@ -96,3 +96,5 @@ pub mod provider;
 pub mod selection;
 
 pub mod factory;
+
+pub mod declarations;

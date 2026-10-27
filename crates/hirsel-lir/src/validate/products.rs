@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 const RECEIPT: Domain = Domain {
     kind: 0x4300_0001,
-    schema: 7,
+    schema: 8,
 };
 const VALUE_BODY: Domain = Domain {
     kind: 0x4300_0002,

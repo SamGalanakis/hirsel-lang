@@ -300,6 +300,7 @@ impl NamedGraph {
                         || before.context_key() != after.context_key()
                         || before.aware_key() != after.aware_key()
                         || before.declaration() != after.declaration()
+                        || before.profiles() != after.profiles()
                 })
         {
             return Err(SourceError::Malformed(

@@ -122,6 +122,17 @@ snapshot_enum!(BuiltinType {
 /// Independently supplied operation declarations. Implementations derive from
 /// the declaration and actuals, never from the candidate unit or its call ABI.
 pub trait OperationDeclarations {
+    /// Receipt demand and complete original port profiles, reconstructed from
+    /// the current V source selection before native restoration. Neither an ABI
+    /// contract nor a candidate instance key supplies this declaration.
+    fn receipt_source(
+        &self,
+        _: &DefPath,
+        _: hirsel_syntax::ContentHash,
+    ) -> Option<crate::sealed_payload_source::ReceiptSource> {
+        None
+    }
+
     /// Current original-source identity supplied by the actual source query
     /// owner, not derived from a candidate LIR header or producer reference.
     fn seal_source_witness(

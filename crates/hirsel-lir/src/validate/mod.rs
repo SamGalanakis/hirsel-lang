@@ -643,6 +643,28 @@ fn check_with_context<S: Stage>(
             })
             .collect();
     }
+    // Read independently even when unavailable. Native output replay must
+    // notice a newly demanded source boundary instead of reusing an ordinary
+    // entry whose ABI silently omitted every companion.
+    if let Some(source) = inputs
+        .operations
+        .receipt_source(&unit.header.definition, unit.header.instance)
+    {
+        let abi = &inputs.layouts.fn_abis[unit.header.abi.0 as usize];
+        let error = source.check_structure().err().or_else(|| {
+            (source.original.definition != unit.header.definition
+                || source.instance != unit.header.instance
+                || source.implementation_revision != unit.header.implementation_revision
+                || abi.receipts.as_ref() != Some(&source.contract))
+            .then_some("receipt source differs from the selected entry or complete ABI contract")
+        });
+        if let Some(error) = error {
+            return vec![Violation {
+                site: Site::UNIT,
+                kind: ViolationKind::Schema(error.into()),
+            }];
+        }
+    }
     if let Some(entry) = &unit.tables.receipt_entry {
         let checked = inputs
             .layouts

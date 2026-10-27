@@ -270,3 +270,13 @@ unit selection and every exported function's definition again.
 provider, worker count, retention, lowering and total hold budget through reloads.
 `Session::open(entry, Verify)` keeps the ordinary Resident defaults. A configured
 Compiler is Clone: clones share the selected provider and create separate engines.
+
+`native::receipt_source::factory::NamedGraph::declarations` publishes receipt
+source declarations only after reconstructing the graph against the caller's
+current original roots and V provider. It retains complete profiles under the
+aware request identity and preserves ordinary operation, source, descriptor and
+invocation queries through its supplied declaration provider. Create a fresh
+view for each current source selection, including native cache replay.
+`queries::InstanceOperations` forwards these inputs without substituting a
+candidate ABI or its source ordinals. This supplies independent C data; entry,
+call, capture and task custody still require their executable proofs.

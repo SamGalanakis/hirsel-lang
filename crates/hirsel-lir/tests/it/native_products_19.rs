@@ -793,3 +793,118 @@ fn native_products_19_unavailable_source_reads_replay_without_promoting_empty_in
         .unwrap();
     assert!(output.is_none());
 }
+
+#[test]
+fn native_products_19_receipt_declaration_absence_is_replayed_and_new_demand_refuses() {
+    use hirsel_lir::operation::{OperationArgument, OperationDeclarations};
+    use hirsel_lir::sealed_payload_source::*;
+    struct Declarations(Option<ReceiptSource>);
+    impl OperationDeclarations for Declarations {
+        fn receipt_source(
+            &self,
+            _: &hirsel_syntax::DefPath,
+            _: hirsel_syntax::ContentHash,
+        ) -> Option<ReceiptSource> {
+            self.0.clone()
+        }
+        fn derive(
+            &self,
+            _: &hirsel_core_contract::OperationId,
+            _: &[OperationArgument],
+            _: &hirsel_lir::TargetSpec,
+        ) -> Result<(hirsel_lir::FnAbi, hirsel_lir::LayoutTable), hirsel_lir::layout::LayoutError>
+        {
+            Err(hirsel_lir::layout::LayoutError::Invalid(
+                "no operations".into(),
+            ))
+        }
+    }
+    let mut fixture = Lir::<Value>::new(&[], None);
+    fixture.builder.ret(ENTRY, None);
+    let (unit, table, manifest) = fixture.finish();
+    let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+    let ordinary = Declarations(None);
+    let inputs = Inputs {
+        memo: Default::default(),
+        target: &target,
+        layouts: &table,
+        manifest: &manifest,
+        operations: &ordinary,
+        discharge: None,
+    };
+    let environment = NativeEnvironment {
+        target: &target,
+        manifest: &manifest,
+        operations: &ordinary,
+        discharge: None,
+    };
+    let directory = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("receipt-source-replay-85-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    let store = hirsel_artifact_store::Store::new(directory.clone());
+    let cache = NativeCache::new(Arc::new(store.clone()), Some(store.clone()));
+    let subject = hash("receipt declaration observation");
+    let policy = hash("receipt declaration policy");
+    cache
+        .validate_and_publish(subject, policy, unit.clone(), &inputs, &[], b"ordinary")
+        .unwrap()
+        .1
+        .expect("ordinary C output");
+    drop(cache);
+    let cache = NativeCache::new(Arc::new(store.clone()), Some(store));
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &environment)
+            .is_some()
+    );
+    let source = ReceiptSource {
+        original: hirsel_lir::invocations::ReferenceBody {
+            definition: unit.header.definition.clone(),
+            instance: hash("original base"),
+            body: 0,
+        },
+        instance: unit.header.instance,
+        source: hash("current V output"),
+        implementation_revision: unit.header.implementation_revision,
+        contract: ReceiptContract::new(vec![], None, vec![], vec![ReceiptGrant::CallerDestination])
+            .unwrap(),
+        profiles: vec![],
+    };
+    source.check_structure().unwrap();
+    // An independent provider now requires a receipt boundary. Old ordinary
+    // output cannot survive merely because no candidate call/entry claims it.
+    let demanded = Declarations(Some(source.clone()));
+    let changed = NativeEnvironment {
+        operations: &demanded,
+        ..environment
+    };
+    assert!(
+        cache
+            .lookup(subject, policy, StageKind::Value, &changed)
+            .is_none()
+    );
+    for mutation in 0..4 {
+        let mut source = source.clone();
+        match mutation {
+            0 => (),
+            1 => source.instance = hash("another aware request"),
+            2 => source.original.definition = path("another owner"),
+            3 => source.implementation_revision = hash("another revision"),
+            _ => unreachable!(),
+        }
+        let declarations = Declarations(Some(source));
+        let changed = Inputs {
+            memo: Default::default(),
+            operations: &declarations,
+            ..inputs
+        };
+        let errors = hirsel_lir::validate::check_scoped_transport(&unit, &changed);
+        assert!(
+            errors.iter().any(|e| matches!(&e.kind,
+            hirsel_lir::validate::ViolationKind::Schema(text)
+                if text.contains("receipt source differs"))),
+            "{errors:?}"
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
