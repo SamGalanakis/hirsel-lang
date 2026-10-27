@@ -9,7 +9,8 @@ fn sealed_owner_moves_and_repeated_root_loans_keep_one_lifetime_on_reference_and
         directory.path().join("main.hir"),
         r#"
 pub fn main()->Result[(),u64] {
- let first=arena.with(fn(a:Arena)->Region[u64]{arena.seal(take a,7u64)})
+ let first=arena.with(fn(a:Arena)->Region[u64]{let root=7u64
+arena.seal(take a,take root)})
  let mut second=take first
  let a=region.with(mut second,fn(root:u64)->u64{root})
  let b=region.with(mut second,fn(root:u64)->u64{root})
@@ -21,6 +22,12 @@ pub fn main()->Result[(),u64] {
     .unwrap();
     let path = directory.path().join("hirsel.json");
     std::fs::write(&path,r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+    let accepted = hirsel_driver::check_path(&path).unwrap();
+    assert_eq!(
+        accepted.completion,
+        hirsel_engine::CheckCompletion::Complete,
+        "{accepted:?}"
+    );
     let mut traces = Vec::new();
     for checked in [false, true] {
         let result = run_resources_on_host(
@@ -66,7 +73,8 @@ fn native_sealed_scalar_owner_has_one_lifetime_on_four_engines() {
     super::ownership_owned_call_49::source_calls(
         r#"
 pub fn main()->Result[(),u64] {
- let first=arena.with(fn(a:Arena)->Region[u64]{arena.seal(take a,7u64)})
+ let first=arena.with(fn(a:Arena)->Region[u64]{let root=7u64
+arena.seal(take a,take root)})
  let mut second=take first
  let a=region.with(mut second,fn(root:u64)->u64{root})
  let b=region.with(mut second,fn(root:u64)->u64{root})

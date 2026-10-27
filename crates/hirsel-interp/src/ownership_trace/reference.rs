@@ -382,6 +382,7 @@ impl Resources {
             return Err(error);
         }
         let complete = self.spawns.is_empty()
+            && self.seals.is_empty()
             && completed
             && self.frames.is_empty()
             && self.releases.is_empty()
@@ -1610,6 +1611,13 @@ impl Observer for Resources {
         sources: &SourceMap,
     ) {
         if self.error.is_some() {
+            return;
+        }
+        if let Some(id) = self.frames.last().map(|state| state.id)
+            && self.seals.remove(&id).is_some()
+            && !matches!(ending, crate::resources::Ending::Failed)
+        {
+            self.unsupported("seal frame returned without observed publication");
             return;
         }
         self.mutex_retiring(frame);
