@@ -349,9 +349,15 @@ static bool chunkAhead(Loop &L, DominatorTree &DT) {
   IRBuilder<> B(Outer);
   Value *Spent = B.CreateSub(Quota, B.getInt64(K), "ahead.chunk.remaining");
   Quota->setIncomingValue(Quota->getBasicBlockIndex(FastLatch), Spent);
-  Value *Room = B.CreateICmpUGT(Quota, B.getInt64(K));
-  Value *Remaining = B.CreateSub(Limit, Index);
-  Value *Bounded = B.CreateAnd(B.CreateICmpULT(Index, Limit),
+  // The original checkpoint may diverge before the source bound is read.
+  // As in LoopUnrollRuntime.cpp:847-860, speculative guards must not turn
+  // a not-yet-observed poison into immediate branch UB.
+  Value *GuardQuota = B.CreateFreeze(Quota, "ahead.quota");
+  Value *GuardIndex = B.CreateFreeze(Index, "ahead.index");
+  Value *GuardLimit = B.CreateFreeze(Limit, "ahead.limit");
+  Value *Room = B.CreateICmpUGT(GuardQuota, B.getInt64(K));
+  Value *Remaining = B.CreateSub(GuardLimit, GuardIndex);
+  Value *Bounded = B.CreateAnd(B.CreateICmpULT(GuardIndex, GuardLimit),
                               B.CreateICmpUGT(Remaining, B.getInt64(K)));
   B.CreateCondBr(B.CreateAnd(Room, Bounded, "ahead.chunk.room"), FastH, H);
   auto Force = [&](BasicBlock *Original, BasicBlock *Successor) {
