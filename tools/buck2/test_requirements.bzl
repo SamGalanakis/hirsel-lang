@@ -5,6 +5,7 @@ CPUs and focus mode; measured memory and CPU class remain authoritative.
 """
 
 EXACT_TEST_CPUS = {
+    "gate-langarena": 16,  # quick checksums include Matmul::T16
     "hirsel-cli-test-cpu_matmul_4": 4,
     "hirsel-cli-test-cpu_matmul_8": 8,
     "hirsel-cli-test-cpu_matmul_16": 16,
