@@ -15,7 +15,7 @@ fn batch_entries_match_individual_launch_bindings_and_share_checked_runtime() {
         .unwrap();
         std::fs::write(
             directory.path().join("library.hir"),
-            "pub fn other()->u8{9u8}\n",
+            "pub fn other()->u8{9u8}\npub fn separate()->u8{11u8}\n",
         )
         .unwrap();
         std::fs::write(directory.path().join("library.json"), r#"{"schema":1,"package":{"name":"library","version":"1"},"sources":[{"path":"library.hir","module":[]}],"dependencies":[]}"#).unwrap();

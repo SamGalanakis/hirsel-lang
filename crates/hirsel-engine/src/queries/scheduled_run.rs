@@ -405,7 +405,11 @@ impl Task {
             // Legacy served_entries selects every eligible source entry in the
             // launch package, even when the root never references it.
             for (path, input) in &self.queries.inputs {
-                if path.0.package == self.root.0.package
+                let launch_package = path.0.package == self.root.0.package
+                    || self.queries.batch.as_ref().is_some_and(|(_, roots)| {
+                        roots.iter().any(|root| root.0.package == path.0.package)
+                    });
+                if launch_package
                     && input.source
                     && crate::admission::entry_roots(
                         self.queries.lower.signatures().types(),
