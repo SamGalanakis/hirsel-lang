@@ -292,6 +292,7 @@ fn replace_local_content_33_v_rejects_forged_mutation_acceptance() {
         let lowered = erased.lower_to_tir(&named("probe")).unwrap();
         let mut forged = lowered.value.as_ref().clone();
         forged.signature_hash = signature.fingerprint;
+        forged.inferred_unique = signature.metadata.inferred_unique.clone();
         let body = &mut forged.bodies[forged.entry.0 as usize];
         let source = body.parameters[1];
         body.locals[source.0 as usize].ty = related;
