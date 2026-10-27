@@ -175,6 +175,7 @@ class FreshStdCounts(unittest.TestCase):
                     self.assertFalse(Path(env['HIRSEL_PRODUCTS']).exists())
                     Path(command[command.index('-o') + 1]).write_text(
                         f'{count};;instructions:u;99;100.00;;\n{count + 100};;instructions;99;100.00;;\n')
+                    Path(command[command.index('-c') + 2]).write_text('0')
                     return Mock(returncode=0)
                 with patch.dict(fresh.__globals__, FRESH_BASELINE=baseline), \
                         patch.dict(os.environ, HIRSEL_VERIFY_CACHE='trust', LD_PRELOAD='/poison.so'), \
@@ -191,6 +192,34 @@ class FreshStdCounts(unittest.TestCase):
                     patch('subprocess.run', side_effect=subprocess.CalledProcessError(137, ['compiler'])), \
                     self.assertRaises(subprocess.CalledProcessError):
                 fresh(Path(__file__))
+
+    def test_signalled_child_reports_its_wait_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            status = Path(directory) / 'status'
+            child = subprocess.run([sys.executable, '-c', COUNTS['FRESH_CHILD'], str(status),
+                                    sys.executable, '-c',
+                                    'import os, signal; os.kill(os.getpid(), signal.SIGKILL)'])
+            self.assertEqual(child.returncode, 137)
+            self.assertEqual(status.read_text(), '-9')
+
+    def test_masked_or_missing_compiler_completion_rejects_partial_counters(self):
+        fresh = COUNTS['fresh_std']
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / 'budget.json'
+            baseline.write_text(json.dumps(dict(counter='instructions:u', jobs=1,
+                                               instructions=10000, reason='Control')))
+            for status in ('-9', None):
+                def measure(command, **kwargs):
+                    Path(command[command.index('-o') + 1]).write_text(
+                        '1;;instructions:u;99;100.00;;\n2;;instructions;99;100.00;;\n')
+                    if status is not None:
+                        Path(command[command.index('-c') + 2]).write_text(status)
+                    return Mock(returncode=0)
+                with self.subTest(status=status), \
+                        patch.dict(fresh.__globals__, FRESH_BASELINE=baseline), \
+                        patch('subprocess.run', side_effect=measure), \
+                        self.assertRaisesRegex(ValueError, 'did not complete'):
+                    fresh(Path(__file__))
 
 
 if __name__ == '__main__':

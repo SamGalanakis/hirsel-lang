@@ -17,6 +17,7 @@ import re
 import resource
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -26,6 +27,12 @@ MARKER = 'PERF_COUNTS_RECORD '
 COLUMNS = 'case\tIr\tfunction'
 TOTAL = '<total>'
 FRESH_BASELINE = ROOT / 'tools/perf-fresh-std.json'
+FRESH_CHILD = '''import subprocess, sys
+result = subprocess.run(sys.argv[2:]).returncode
+with open(sys.argv[1], 'w') as status:
+    status.write(str(result))
+raise SystemExit(result if result >= 0 else 128 - result)
+'''
 
 
 def perf_instructions(text):
@@ -71,10 +78,16 @@ def fresh_std(hirsel=None):
         scratch = Path(directory)
         env['HIRSEL_PRODUCTS'] = str(scratch / 'absent-products')
         counters = scratch / 'perf.csv'
+        compiler_status = scratch / 'compiler.status'
         command = [ROOT / 'tools/capped', '--timeout', '120', 'prlimit', '--cpu=60:60', '--',
                    'perf', 'stat', '-x', ';', '-o', counters, '-e', 'instructions:u,instructions', '--',
+                   sys.executable, '-c', FRESH_CHILD, compiler_status,
                    hirsel, 'check', ROOT / 'stdlib/std@1/hirsel.json']
         subprocess.run([str(x) for x in command], cwd=ROOT, env=env, check=True)
+        # perf can return success for a signalled child. Count only a compiler
+        # whose actual wait status was successful, even if perf masks it.
+        if not compiler_status.is_file() or compiler_status.read_text() != '0':
+            raise ValueError('fresh std compiler did not complete successfully')
         counts = perf_instructions(counters.read_text())
     before, after = baseline['instructions'], counts['instructions:u']
     print(f'fresh std: {before:,} -> {after:,} instructions:u ({100 * (after - before) / before:+.3f}%); '
