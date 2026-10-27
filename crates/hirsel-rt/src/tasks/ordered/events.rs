@@ -172,6 +172,12 @@ pub(super) struct CanonicalEvent {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum CanonicalOutcome {
+    CpuControl {
+        width: u32,
+        action: u32,
+        count: u64,
+        outcome: u32,
+    },
     HostRequest(host_requests::HostRequestValue),
     HostAccess {
         mode: crate::io_keys::Mode,

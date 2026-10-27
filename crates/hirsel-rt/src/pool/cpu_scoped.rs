@@ -340,6 +340,10 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
 }
 
 unsafe fn migrate(ctx: *mut TaskCtx) {
+    if crate::tasks::ordered::engine::on(ctx) {
+        unsafe { crate::stop::check(ctx, crate::tasks::ordered::engine::migrate(ctx)) };
+        return;
+    }
     let run = unsafe { (*ctx).run_ptr() };
     let key = crate::tasks::running_key(ctx);
     let owner = crate::tasks::dispatch_owner(ctx);
@@ -427,7 +431,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
     if action > 2 {
         crate::fault("invalid scoped CPU action");
     }
-    let result = crate::tasks::free::record::cpu_control(ctx, width, action, count, || unsafe {
+    let live = || unsafe {
         match action {
             0 => {
                 if !matches!(width, 1 | 4 | 8 | 16) {
@@ -491,7 +495,12 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
             }
             _ => unreachable!(),
         }
-    });
+    };
+    let result = if crate::tasks::ordered::engine::on(ctx) {
+        crate::tasks::ordered::cpu::control(ctx, width, action, count, live)
+    } else {
+        crate::tasks::free::record::cpu_control(ctx, width, action, count, live)
+    };
     let value = unsafe { crate::stop::check(ctx, result) };
     if action == 2 && count == 0 && value == 0 && unsafe { (*ctx).run_ref().cpu_probe.is_some() } {
         let execs = super::execs(ctx);
@@ -579,6 +588,46 @@ mod tests {
                     assert!(!crate::tasks::cpu_scoped(ctx));
                     assert!(workers(super::super::execs(ctx)).is_empty());
                 }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn ordered_caller_migrates_on_its_saved_head_and_retires_each_control_once() {
+        let mut run = crate::host::BodyRun::new(1, false);
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |ctx| unsafe {
+                crate::tasks::ordered::engine::enable(
+                    ctx,
+                    crate::ordered::Policy::admit(&Default::default(), None),
+                );
+            },
+            |ctx| unsafe {
+                let _role = crate::tasks::role::Guard::new(ctx);
+                let original = std::thread::current().id();
+                for _ in 0..2 {
+                    let result = crate::tasks::ordered::cpu::control(ctx, 1, 0, 0, || {
+                        enter(ctx, 1).unwrap();
+                        0
+                    });
+                    assert_eq!(result, Ok(0));
+                    assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
+                    assert_ne!(std::thread::current().id(), original);
+                    assert_eq!(enter(ctx, 1), Err(Refusal::NestedPool));
+                    let result = crate::tasks::ordered::cpu::control(ctx, 1, 1, 0, || {
+                        leave(ctx);
+                        0
+                    });
+                    assert_eq!(result, Ok(0));
+                    assert_eq!(std::thread::current().id(), original);
+                    assert!(!crate::tasks::cpu_scoped(ctx));
+                    assert!(workers(super::super::execs(ctx)).is_empty());
+                }
+                crate::stop::check(ctx, crate::tasks::ordered::engine::root_end(ctx, 0));
                 crate::STATUS_OK
             },
         );

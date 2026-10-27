@@ -48,6 +48,7 @@ fn every_real_request_obeys_claim_cut_at_widths_one_and_eight() {
                             request,
                             Request::Ready { .. }
                                 | Request::Schedule { .. }
+                                | Request::CpuControl { .. }
                                 | Request::ProcessTime { .. }
                                 | Request::ProcessSettle { .. }
                         ) {

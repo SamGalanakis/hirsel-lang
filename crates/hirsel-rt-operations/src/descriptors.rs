@@ -313,7 +313,7 @@ pub const OPS: &[OpDescriptor] = &[
         footprint: &[Read(CancelState), Write(TaskTree)],
         visibility: Visibility::External,
         phases: Phases::Single,
-        note: "fresh bounded CPU admission and drain; Ordered refuses; replay starts no workers",
+        note: "fresh bounded CPU admission and drain; Ordered refusal retires at head; replay starts no workers",
     },
     // Stores and edges with no outcome.
     op(

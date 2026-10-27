@@ -123,6 +123,12 @@ pub(crate) fn render_request(request: &Request) -> Option<String> {
         },
         Request::Stopped => "stopped".into(),
         Request::Schedule { count, choice } => format!("schedule {count} {choice}"),
+        Request::CpuControl {
+            width,
+            action,
+            count,
+            outcome,
+        } => format!("cpu_control {width} {action} {count} {outcome}"),
         Request::ProcessTime { from, to } => format!("process_time {from} {to}"),
         Request::ProcessSettle { canceled } => format!(
             "process_settle {}",
@@ -572,6 +578,12 @@ pub(crate) fn parse_request(words: &[&str]) -> Result<Option<Request>, String> {
         ["process_time", from, to] => Request::ProcessTime {
             from: number(from)?,
             to: number(to)?,
+        },
+        ["cpu_control", width, action, count, outcome] => Request::CpuControl {
+            width: width.parse().map_err(|_| "invalid CPU width")?,
+            action: action.parse().map_err(|_| "invalid CPU action")?,
+            count: count.parse().map_err(|_| "invalid CPU count")?,
+            outcome: outcome.parse().map_err(|_| "invalid CPU outcome")?,
         },
         ["schedule", count, choice] => Request::Schedule {
             count: number(count)?,

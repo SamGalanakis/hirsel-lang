@@ -636,6 +636,37 @@ impl Adapter for SimIo {
     fn cancellable(&self, token: u64) -> bool {
         self.waits.rows_of(token).is_none_or(|row| !row.committed)
     }
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        if value.is_some() {
+            return Err(AdapterError::InvalidCompletion);
+        }
+        match self.tape.get(self.position)? {
+            Some(Event {
+                request:
+                    Request::CpuControl {
+                        width: w,
+                        action: a,
+                        count: n,
+                        outcome,
+                    },
+                completion: Completion::Ready,
+                fault: None,
+                resources: None,
+            }) if (*w, *a, *n) == (width, action, count) => {
+                let outcome = *outcome;
+                self.position += 1;
+                Ok(Some(outcome))
+            }
+            Some(_) => Err(AdapterError::ReplayMismatch(self.position)),
+            None => Err(AdapterError::MissingInput(self.position)),
+        }
+    }
     /// The recorded choice among `count` runnable tasks: the next event is a `schedule` of
     /// as many candidates, whatever the policy chose (the trace is authoritative, DET-1).
     fn schedule(&mut self, count: u64, _choice: u64) -> Result<u64, AdapterError> {

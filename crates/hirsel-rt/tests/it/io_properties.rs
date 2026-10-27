@@ -136,7 +136,7 @@ fn every_request_has_an_explicit_cancellation_classification() {
             Request::CallReturn(_) => false,
             Request::Stopped => false,
             Request::Ready { .. } => false,
-            Request::Schedule { .. } => false,
+            Request::Schedule { .. } | Request::CpuControl { .. } => false,
         };
         assert_eq!(
             hirsel_rt::io_checks::cancel(&mut Classification, &request, 3).unwrap(),

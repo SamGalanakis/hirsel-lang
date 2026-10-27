@@ -306,6 +306,15 @@ impl Adapter for HomeAdapter {
         self.with(|adapter| adapter.cancellable(_token))
     }
 
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        self.with(|adapter| adapter.cpu_control(width, action, count, value))
+    }
     fn schedule(&mut self, _count: u64, choice: u64) -> Result<u64, AdapterError> {
         self.with(|adapter| adapter.schedule(_count, choice))
     }

@@ -100,6 +100,17 @@ impl Adapter for CalleeIo {
     fn cancellable(&self, token: u64) -> bool {
         self.io.borrow().cancellable(token)
     }
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        self.io
+            .borrow_mut()
+            .cpu_control(width, action, count, value)
+    }
     fn schedule(&mut self, count: u64, choice: u64) -> Result<u64, AdapterError> {
         self.io.borrow_mut().schedule(count, choice)
     }

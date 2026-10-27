@@ -330,6 +330,7 @@ impl Registry {
             | R::EnvNarrow { .. }
             | R::Ready { .. }
             | R::Schedule { .. }
+            | R::CpuControl { .. }
             | R::ProcessTime { .. }
             | R::ProcessSettle { .. } => {}
             R::Print { stdout: h, .. } | R::PrintStderr { stderr: h, .. } => {

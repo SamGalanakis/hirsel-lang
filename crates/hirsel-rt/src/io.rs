@@ -646,6 +646,13 @@ pub enum Request {
         count: u64,
         choice: u64,
     },
+    /// Scoped CPU admission/drain receipt, not a capability request.
+    CpuControl {
+        width: u32,
+        action: u32,
+        count: u64,
+        outcome: u32,
+    },
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ClockError {
@@ -1687,6 +1694,7 @@ impl State {
         match request {
             R::Ready { .. }
             | R::Schedule { .. }
+            | R::CpuControl { .. }
             | R::ProcessTime { .. }
             | R::ProcessSettle { .. } => Err(AdapterError::InvalidCompletion),
             R::MonotonicClock { io } | R::WallClock { io } => {
@@ -2651,6 +2659,17 @@ pub trait Adapter {
     /// Whether the request parked under `token` has committed no effect yet.
     fn cancellable(&self, _token: u64) -> bool {
         true
+    }
+    /// None probes replay without starting workers. A live adapter returns None;
+    /// a replay consumes the bound receipt. Some records the live outcome once.
+    fn cpu_control(
+        &mut self,
+        _width: u32,
+        _action: u32,
+        _count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        Ok(value)
     }
     /// A seeded scheduler's choice among runnable candidates; replay supplies the recorded choice.
     fn schedule(&mut self, _count: u64, choice: u64) -> Result<u64, AdapterError> {

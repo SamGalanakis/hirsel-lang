@@ -940,7 +940,7 @@ impl<J: Journal> Journaled<J> {
         // A scheduling input (a ready wait, a seeded schedule choice) belongs to no request.
         let ready = matches!(
             event.request,
-            Request::Ready { .. } | Request::Schedule { .. }
+            Request::Ready { .. } | Request::Schedule { .. } | Request::CpuControl { .. }
         );
         let id = if ready { None } else { self.current };
         self.journal.event(id, event)?;

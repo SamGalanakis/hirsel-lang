@@ -182,6 +182,7 @@ pub fn replay_interpreter_with_fixture(
                 }
                 Request::Ready { .. }
                 | Request::Schedule { .. }
+                | Request::CpuControl { .. }
                 | Request::ProcessTime { .. }
                 | Request::ProcessSettle { .. } => {
                     panic!("the interpreter oracle runs no cooperative host scheduler")

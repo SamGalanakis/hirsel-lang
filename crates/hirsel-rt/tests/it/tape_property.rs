@@ -249,7 +249,8 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
         RunnerCancel { key: digest, cause: n as u32 },
         RunnerPoll { key: digest, cancel: (n % 2 != 0).then_some(n as u32) },
         Ready { wait: n.wrapping_add(30), points: n.wrapping_add(20) },
-        Schedule { count: n.wrapping_add(2), choice: n % 2 };
+        Schedule { count: n.wrapping_add(2), choice: n % 2 },
+        CpuControl { width: n as u32, action: (n % 3) as u32, count: n, outcome: (n % 32) as u32 };
         RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
             runner: if n == 0 { String::new() } else { format!("{text}#runner") },
             form: if n % 2 == 0 { CallForm::Compute } else { CallForm::Call },

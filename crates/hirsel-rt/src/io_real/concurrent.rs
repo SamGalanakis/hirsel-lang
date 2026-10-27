@@ -60,6 +60,19 @@ impl ConcurrentIo {
             before_path: None,
         }
     }
+    pub(crate) fn cpu_control(
+        &self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        self.core
+            .lock()
+            .unwrap()
+            .cpu_control(width, action, count, value)
+    }
+
     /// Snapshot history for diagnostics; free-mode recording owns its creator-qualified tape.
     pub fn tape(&self) -> Vec<Event> {
         self.core.lock().unwrap().tape.clone()
@@ -133,6 +146,7 @@ impl ConcurrentIo {
             request,
             Request::Ready { .. }
                 | Request::Schedule { .. }
+                | Request::CpuControl { .. }
                 | Request::ProcessTime { .. }
                 | Request::ProcessSettle { .. }
         ) {
@@ -325,6 +339,7 @@ impl ConcurrentAdapter for ConcurrentIo {
             request,
             Request::Ready { .. }
                 | Request::Schedule { .. }
+                | Request::CpuControl { .. }
                 | Request::ProcessTime { .. }
                 | Request::ProcessSettle { .. }
         ) {

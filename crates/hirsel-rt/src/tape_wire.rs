@@ -429,7 +429,8 @@ wire_enum!(crate::io::Request {
     114 => OpenAppend{ directory, path },
     116 => RunnerPoll{ key, cancel },
     117 => ProcessTime{ from, to },
-    118 => ProcessSettle{ canceled }
+    118 => ProcessSettle{ canceled },
+    119 => CpuControl{ width, action, count, outcome }
 } retired { 60 => "retired eager read_dir recording; re-record with streaming file.read_dir", 59 => "retired Request::Walk recording; re-record with streaming file.walk" });
 
 wire_enum!(crate::io::ClockError {

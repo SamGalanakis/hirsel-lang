@@ -186,6 +186,7 @@ fn native_signal_abi_replays_idle_arrivals_errors_and_cancellation_without_a_sou
                     let mut run = crate::host::BodyRun::new(width, false);
                     run.free = true;
                     unsafe { run.use_physical_dispatch() };
+                    let control = run.control();
                     let outcome = run.run(
                         move |ctx| unsafe {
                             install.root(ctx);
@@ -202,7 +203,18 @@ fn native_signal_abi_replays_idle_arrivals_errors_and_cancellation_without_a_sou
                         matches!(outcome.ended, Err(Stop::Blocked(_))),
                         "{outcome:?}"
                     );
-                    assert_eq!(outcome.pending, 0);
+                    // A terminal cut can reach home before the root's idle
+                    // callback retires. Observe reclamation, not that race.
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while control.status().reclamation_pending != 0 {
+                        assert!(
+                            std::time::Instant::now() < until,
+                            "finite signal replay did not retire"
+                        );
+                        std::thread::yield_now();
+                    }
+                    assert_eq!(control.status().reclamation_pending, 0);
+                    assert_eq!(control.status().lost_permits, 0);
                     assert_eq!(replay.finish().unwrap(), projection);
                 }
             }

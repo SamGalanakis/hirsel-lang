@@ -122,7 +122,7 @@ impl View {
                     text.split_once(" -> ").ok_or("event has no completion")?;
                 let origin = if matches!(
                     event.request,
-                    Request::Ready { .. } | Request::Schedule { .. }
+                    Request::Ready { .. } | Request::Schedule { .. } | Request::CpuControl { .. }
                 ) {
                     "core"
                 } else {
@@ -537,6 +537,34 @@ mod tests {
     }
     fn document(bytes: &[u8]) -> Value {
         serde_json::from_str(&View::parse("fixture", bytes).unwrap().normalized()).unwrap()
+    }
+
+    #[test]
+    fn cpu_refusal_receipt_is_core_input_without_a_capability_or_committed_bytes() {
+        let mut bytes = vec![];
+        let mut writer = launch::RecordingWriter::new(&mut bytes, &fixture_header()).unwrap();
+        writer
+            .append(&Event {
+                request: Request::CpuControl {
+                    width: 4,
+                    action: 0,
+                    count: 0,
+                    outcome: 9,
+                },
+                completion: Completion::Ready,
+                fault: None,
+                resources: None,
+            })
+            .unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+        let view = document(&bytes);
+        let event = &view["events"][0];
+        assert_eq!(view["complete"], true);
+        assert_eq!(event["origin"], "core");
+        assert_eq!(event["request"], "cpu_control 4 0 0 9");
+        assert!(event["durable_anchor"].is_null());
+        assert!(event["accepted_bytes"].is_null());
     }
 
     #[test]

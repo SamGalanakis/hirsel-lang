@@ -100,6 +100,16 @@ struct OrderedHome {
 }
 
 impl Adapter for OrderedHome {
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        self.io.cpu_control(width, action, count, value)
+    }
+
     fn preflight(&self, request: &Request) -> Result<Option<Completion>, AdapterError> {
         crate::io_concurrent::ConcurrentAdapter::preflight(&*self.io, request)
     }
@@ -265,6 +275,15 @@ impl<A: Adapter> Adapter for Shared<A> {
     }
     fn cancellable(&self, token: u64) -> bool {
         self.0.borrow().cancellable(token)
+    }
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        self.0.borrow_mut().cpu_control(width, action, count, value)
     }
     fn schedule(&mut self, count: u64, choice: u64) -> Result<u64, AdapterError> {
         self.0.borrow_mut().schedule(count, choice)

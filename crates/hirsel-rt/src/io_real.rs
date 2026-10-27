@@ -631,6 +631,7 @@ impl<S: Streams> RealCore<S> {
                 event.request,
                 Request::Ready { .. }
                     | Request::Schedule { .. }
+                    | Request::CpuControl { .. }
                     | Request::ProcessTime { .. }
                     | Request::ProcessSettle { .. }
             ) {
@@ -1301,6 +1302,28 @@ impl<S: Streams> Adapter for RealCore<S> {
         self.cooperative
             .as_ref()
             .is_none_or(|(readiness, _)| readiness.cancellable(token))
+    }
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        value: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        if let Some(outcome) = value {
+            self.record(Event {
+                request: Request::CpuControl {
+                    width,
+                    action,
+                    count,
+                    outcome,
+                },
+                completion: Completion::Ready,
+                fault: None,
+                resources: None,
+            })?;
+        }
+        Ok(value)
     }
     fn schedule(&mut self, count: u64, choice: u64) -> Result<u64, AdapterError> {
         self.record(Event {

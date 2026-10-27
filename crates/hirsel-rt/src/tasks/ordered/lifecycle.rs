@@ -220,14 +220,18 @@ pub(crate) unsafe fn spawn_certified(
             handle(index, generation) as usize as *mut u8,
         );
     }
-    let wide = unsafe {
-        (*ctx)
-            .run_ref()
-            .control
-            .width
-            .load(std::sync::atomic::Ordering::Acquire)
-            > 1
-    };
+    // Scoped children already have an addressed worker. Keep their ordinary
+    // saved frame rather than advertising a private prefix to the global queue.
+    let scoped = cpu_scoped(ctx);
+    let wide = !scoped
+        && unsafe {
+            (*ctx)
+                .run_ref()
+                .control
+                .width
+                .load(std::sync::atomic::Ordering::Acquire)
+                > 1
+        };
     let alternate = ahead_entry.filter(|_| wide && engine::with_driver(ctx, |d| d.private_enabled));
     let mut task = Task::new(generation, child, Some(scope as u32), path, None);
     task.code = Some((alternate.unwrap_or(code), environment, operation_site));
@@ -235,6 +239,7 @@ pub(crate) unsafe fn spawn_certified(
         unsafe { (*child).ahead = Some(Box::new(super::ahead::Local::new(true))) };
     }
     task.stack = Some(stack);
+    inherit_cpu(ctx, &mut task);
     // SAFETY: no notification has published this owned environment yet.
     let captures = unsafe {
         crate::ordered::capture::scan(
