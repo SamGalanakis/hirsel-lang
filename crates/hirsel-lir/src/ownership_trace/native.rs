@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 mod calls;
 mod edges;
+mod runtime_calls;
+use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
@@ -48,6 +50,7 @@ pub struct LeafPlan {
     markers: BTreeMap<MarkerId, Vec<NativeMarker>>,
     commits: Vec<(Point, NativeMarker)>,
     codes: Option<Vec<calls::Code>>,
+    empty_codes: Vec<bool>,
 }
 impl LeafPlan {
     pub fn prepare(unit: &ValidatedUnit<Ready>, layouts: &LayoutTable) -> Result<Self, String> {
@@ -82,7 +85,13 @@ impl LeafPlan {
         source_only: bool,
         program: bool,
     ) -> Result<Self, String> {
-        let owned = |v: ValueId| unit.values[v.index()].holding == Holding::Owned;
+        let owned = |v: ValueId| {
+            unit.values[v.index()].holding == Holding::Owned
+                && !resource_free_handle(
+                    layouts,
+                    unit.types[unit.values[v.index()].ty.index()].layout,
+                )
+        };
         let layout = |v: ValueId| unit.types[unit.values[v.index()].ty.index()].layout;
         if unit.captures.iter().any(|&v| owned(v)) {
             return Err(
@@ -135,7 +144,9 @@ impl LeafPlan {
                 && !aggregate_move
             {
                 return Err(format!(
-                    "native ownership tracing: nested ownership at {point:?}"
+                    "native ownership tracing: nested ownership in {} at {point:?}: {kind:?}, layout {layout:?} {:?}",
+                    unit.header.definition,
+                    layouts.layout(layout)
                 ));
             }
             let id = MarkerId(
@@ -201,11 +212,14 @@ impl LeafPlan {
                         Location::Value(value),
                         layout(value),
                     )?;
-                } else if layouts
-                    .fn_abis
-                    .get(unit.header.abi.0 as usize)
-                    .and_then(|abi| abi.parameters.get(parameter))
-                    .is_some_and(|formal| formal.convention == hirsel_core_contract::Passing::Take)
+                } else if !resource_free_handle(layouts, layout(value))
+                    && layouts
+                        .fn_abis
+                        .get(unit.header.abi.0 as usize)
+                        .and_then(|abi| abi.parameters.get(parameter))
+                        .is_some_and(|formal| {
+                            formal.convention == hirsel_core_contract::Passing::Take
+                        })
                     && layouts
                         .layout(layout(value))
                         .is_some_and(|record| !record.drop.is_empty() || record.finalizer.is_some())
@@ -365,6 +379,18 @@ impl LeafPlan {
                             layout,
                         )?;
                     }
+                    Inst::Drop { address, .. }
+                        if resource_free_handle(
+                            layouts,
+                            unit.types[unit.addresses[address.index()].ty.index()].layout,
+                        ) || plain(
+                            layouts,
+                            unit.types[unit.addresses[address.index()].ty.index()].layout,
+                            0,
+                        ) =>
+                    {
+                        ()
+                    }
                     Inst::Drop {
                         address, if_live, ..
                     } => {
@@ -465,6 +491,10 @@ impl LeafPlan {
             match unit.terminators[b.index()] {
                 Terminator::Call { call, normal, .. } => {
                     let call = &unit.tables.calls[call.index()];
+                    if matches!(call.callee, Callee::Operation(_)) {
+                        runtime_call(unit, layouts, call, None, None)?;
+                        continue;
+                    }
                     let once = call.callee.value().is_some()
                         && layouts.fn_abis.get(call.abi.0 as usize).is_some_and(|abi| {
                             abi.environment
@@ -473,7 +503,13 @@ impl LeafPlan {
                     if (!matches!(call.callee, Callee::Direct(_)) && !once)
                         || call.pretransfer_failure.is_some()
                     {
-                        return Err("native ownership tracing: mutable or indirect call transport is not implemented".into());
+                        return Err(format!(
+                            "native ownership tracing: mutable or indirect call transport is not implemented in {} block {}: {:?}, pretransfer failure {}",
+                            unit.header.definition,
+                            b.0,
+                            call.callee,
+                            call.pretransfer_failure.is_some()
+                        ));
                     }
                     if once {
                         let view = call
@@ -509,12 +545,23 @@ impl LeafPlan {
                         .unwrap_or(&[])
                     {
                         match argument.value {
-                            ArgumentValue::Address { .. } => return Err("native ownership tracing: mutable or indirect call transport is not implemented".into()),
+                            ArgumentValue::Address { .. } => {
+                                return Err(format!(
+                                    "native ownership tracing: mutable or indirect call transport is not implemented in {} block {} parameter {}",
+                                    unit.header.definition, b.0, argument.parameter
+                                ));
+                            }
                             ArgumentValue::Value(value) if owned(value) => {
                                 if argument.passing != hirsel_core_contract::Passing::Take {
                                     return Err("native ownership tracing: owned call transport is not implemented".into());
                                 }
-                                push(Point::CallEntered(b), Kind::Move, Location::Value(value), Location::Parameter(argument.parameter), layout(value))?;
+                                push(
+                                    Point::CallEntered(b),
+                                    Kind::Move,
+                                    Location::Value(value),
+                                    Location::Parameter(argument.parameter),
+                                    layout(value),
+                                )?;
                             }
                             _ => (),
                         }
@@ -595,6 +642,7 @@ impl LeafPlan {
             markers,
             commits,
             codes: None,
+            empty_codes: Vec::new(),
         };
         if !source_only {
             edges::stage(&mut prepared)?;
@@ -849,6 +897,7 @@ impl LeafPlan {
             markers,
             commits,
             codes: None,
+            empty_codes: Vec::new(),
         };
         edges::stage(&mut prepared)?;
         Ok(prepared)
@@ -986,7 +1035,7 @@ impl LeafPlan {
 pub fn local_calls(
     units: &[&ValidatedUnit<Ready>],
 ) -> Result<BTreeMap<[u8; 32], std::collections::BTreeSet<[u8; 32]>>, String> {
-    let mut calls = local_call_sites(units)?;
+    let mut calls = call_targets(units)?;
     for unit in units {
         let body = unit.unit();
         let sites = calls
@@ -1000,7 +1049,17 @@ pub fn local_calls(
     }
     Ok(calls
         .into_iter()
-        .map(|(unit, sites)| (unit, sites.into_values().collect()))
+        .map(|(unit, sites)| (unit, sites.into_values().flatten().collect()))
+        .collect())
+}
+
+/// Complete physical callees, including implicit finalizers and runtime callbacks.
+pub fn physical_calls(
+    units: &[&ValidatedUnit<Ready>],
+) -> Result<BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>, String> {
+    Ok(call_targets(units)?
+        .into_iter()
+        .map(|(unit, sites)| (unit, sites.into_values().flatten().collect()))
         .collect())
 }
 
@@ -1009,6 +1068,27 @@ pub fn local_calls(
 pub fn local_call_sites(
     units: &[&ValidatedUnit<Ready>],
 ) -> Result<BTreeMap<[u8; 32], BTreeMap<BlockId, [u8; 32]>>, String> {
+    Ok(call_targets(units)?
+        .into_iter()
+        .map(|(unit, sites)| {
+            (
+                unit,
+                sites
+                    .into_iter()
+                    .filter_map(|(block, targets)| {
+                        let [target] = targets.as_slice() else {
+                            return None;
+                        };
+                        Some((block, *target))
+                    })
+                    .collect(),
+            )
+        })
+        .collect())
+}
+fn call_targets(
+    units: &[&ValidatedUnit<Ready>],
+) -> Result<BTreeMap<[u8; 32], BTreeMap<BlockId, Vec<[u8; 32]>>>, String> {
     let mut symbols = BTreeMap::new();
     for unit in units {
         let body = unit.unit();
@@ -1034,7 +1114,7 @@ pub fn local_call_sites(
         }
         Ok(target.0)
     };
-    let codes = calls::closed(units)?;
+    let codes = calls::closed_runtime(units)?;
     let mut calls = BTreeMap::new();
     for (index, unit) in units.iter().enumerate() {
         let body = unit.unit();
@@ -1061,24 +1141,65 @@ pub fn local_call_sites(
             let Terminator::Call { call, .. } = terminator else {
                 continue;
             };
-            let (symbol, abi) = match body.tables.calls[call.index()].callee {
+            let choices = match body.tables.calls[call.index()].callee {
                 Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
-                    (&body.tables.symbols[symbol.index()], None)
+                    vec![(&body.tables.symbols[symbol.index()], None)]
                 }
                 Callee::Indirect(value) => {
-                    let calls::Code::Known(target) = &codes[value.index()] else {
+                    let Some(targets) = codes[value.index()].targets() else {
                         return Err(
                             "native ownership tracing: unresolved diagnostic callable target"
                                 .into(),
                         );
                     };
-                    (&target.symbol, target.abi)
+                    targets
+                        .iter()
+                        .map(|target| (&target.symbol, target.abi))
+                        .collect()
                 }
                 Callee::Operation(_) => {
-                    return Err("native ownership tracing: operation call target".into());
+                    // A runtime callback re-enters a checked language body.
+                    // Keep that exact code edge for the decoder even though
+                    // the runtime call itself has no language frame.
+                    let call = &body.tables.calls[call.index()];
+                    let mut callbacks = call
+                        .arguments
+                        .get(&body.pools.call_arguments)
+                        .ok_or("ownership runtime call arguments are absent")?
+                        .iter()
+                        .filter_map(|argument| match argument.value {
+                            ArgumentValue::Value(value)
+                                if body.types[body.values[value.index()].ty.index()].repr
+                                    == ValueRepr::Callable =>
+                            {
+                                Some(value)
+                            }
+                            _ => None,
+                        });
+                    let Some(value) = callbacks.next() else {
+                        continue;
+                    };
+                    if callbacks.next().is_some() {
+                        return Err(
+                            "native ownership tracing: multiple runtime callback targets".into(),
+                        );
+                    }
+                    let Some(targets) = codes[value.index()].targets() else {
+                        return Err("native ownership tracing: unresolved runtime callable".into());
+                    };
+                    targets
+                        .iter()
+                        .map(|target| (&target.symbol, target.abi))
+                        .collect()
                 }
             };
-            targets.insert(BlockId(block as u32), resolve(symbol, abi)?);
+            targets.insert(
+                BlockId(block as u32),
+                choices
+                    .into_iter()
+                    .map(|(symbol, abi)| resolve(symbol, abi))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
         }
         calls.insert(body.digest().0, targets);
     }
@@ -1136,7 +1257,7 @@ fn plain(table: &LayoutTable, id: LayoutId, depth: usize) -> bool {
     let Some(record) = table.layout(id) else {
         return false;
     };
-    if depth > table.layouts.len() {
+    if depth > table.layouts.len() || record.finalizer.is_some() {
         return false;
     }
     match record.kind {
@@ -1149,6 +1270,14 @@ fn plain(table: &LayoutTable, id: LayoutId, depth: usize) -> bool {
             .fields
             .iter()
             .all(|f| plain(table, f.layout, depth + 1)),
+        LayoutKind::Variant | LayoutKind::Packed => record.tag.as_ref().is_some_and(|tag| {
+            tag.variants.iter().all(|variant| {
+                variant
+                    .fields
+                    .iter()
+                    .all(|f| plain(table, f.layout, depth + 1))
+            })
+        }),
         LayoutKind::Inline { element, .. }
         | LayoutKind::Simd { element, .. }
         | LayoutKind::Sequence { element } => plain(table, element, depth + 1),
@@ -1213,7 +1342,8 @@ impl Request<'_> {
         layouts: &LayoutTable,
     ) -> Result<BTreeMap<ContentHash, LeafPlan>, String> {
         local_calls(units)?;
-        let codes = calls::closed(units)?;
+        let codes = calls::closed_runtime(units)?;
+        let empty = runtime_calls::empty_callables(units, layouts, &codes);
         if let Self::Relocated(plans) = self
             && plans.len() != units.len()
         {
@@ -1232,7 +1362,19 @@ impl Request<'_> {
                         .ok_or("ownership emission is missing a transported plan")?,
                 )?,
             };
+            for call in &body.tables.calls {
+                if matches!(call.callee, Callee::Operation(_)) {
+                    runtime_call(
+                        body,
+                        layouts,
+                        call,
+                        Some(&codes[index]),
+                        Some(&empty[index]),
+                    )?;
+                }
+            }
             plan.codes = Some(codes[index].clone());
+            plan.empty_codes = empty[index].clone();
             if prepared.insert(body.header.instance, plan).is_some() {
                 return Err("ownership emission has duplicate instance identities".into());
             }
@@ -1312,7 +1454,7 @@ impl LeafPlan {
             .iter()
             .find(|(_, marker)| marker.id == id)
             .ok_or("ownership marker has no committed operation")?;
-        if marker.kind != 1
+        if !matches!(marker.kind, 1 | 3)
             || !layouts
                 .layout(marker.layout)
                 .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }))
@@ -1366,20 +1508,26 @@ impl LeafPlan {
                 _ => return Err("ownership callable has no exact code operand".into()),
             }
         };
+        if self.empty_codes.get(value.index()) == Some(&true) {
+            return Ok(true);
+        }
         let codes = self
             .codes
             .as_ref()
             .ok_or("ownership callable needs the complete checked code graph")?;
-        let calls::Code::Known(target) = &codes[value.index()] else {
-            return Err("ownership callable has unresolved environment identity".into());
-        };
-        match target.environment {
-            None => Ok(true),
-            Some(environment) => layouts
-                .layout(environment)
-                .map(|record| record.drop.is_empty() && record.finalizer.is_none())
-                .ok_or_else(|| "ownership callable environment layout is absent".into()),
-        }
+        let targets = codes[value.index()]
+            .targets()
+            .ok_or("ownership callable has unresolved environment identity")?;
+        targets.iter().try_fold(true, |empty, target| {
+            Ok(empty
+                && match target.environment {
+                    None => true,
+                    Some(environment) => layouts
+                        .layout(environment)
+                        .map(|record| record.drop.is_empty() && record.finalizer.is_none())
+                        .ok_or("ownership callable environment layout is absent")?,
+                })
+        })
     }
 
     /// Exact statically nested leaf Resource cells of the callable released by this marker.
@@ -1415,9 +1563,24 @@ impl LeafPlan {
             }
         }
         let value = released.ok_or("ownership cleanup has no release")?;
+        if self.empty_codes.get(value.index()) == Some(&true) {
+            return Ok((value, Vec::new()));
+        }
         let codes = self.codes.clone().unwrap_or_else(|| calls::discover(unit));
-        let calls::Code::Known(target) = &codes[value.index()] else {
-            return Err("ownership cleanup has unresolved callable identity".into());
+        let targets = codes[value.index()]
+            .targets()
+            .ok_or("ownership cleanup has unresolved callable identity")?;
+        if targets.iter().all(|target| {
+            target.environment.is_none_or(|environment| {
+                layouts
+                    .layout(environment)
+                    .is_some_and(|record| record.drop.is_empty() && record.finalizer.is_none())
+            })
+        }) {
+            return Ok((value, Vec::new()));
+        }
+        let [target] = targets else {
+            return Err("ownership cleanup has ambiguous callable environment".into());
         };
         let Some(environment) = target.environment else {
             return Ok((value, Vec::new()));

@@ -15,9 +15,41 @@ pub(super) struct Target {
 pub(super) enum Code {
     Pending,
     Known(Target),
+    Finite(Vec<Target>),
     Dynamic,
 }
 impl Code {
+    pub(super) fn targets(&self) -> Option<&[Target]> {
+        match self {
+            Self::Known(target) => Some(std::slice::from_ref(target)),
+            Self::Finite(targets) => Some(targets),
+            _ => None,
+        }
+    }
+    fn merge(&self, other: &Self, finite: bool) -> Self {
+        if !finite {
+            return self.join(other);
+        }
+        match (self, other) {
+            (Self::Pending, x) | (x, Self::Pending) => x.clone(),
+            _ => match (self.targets(), other.targets()) {
+                (Some(left), Some(right)) => {
+                    let mut targets = left.to_vec();
+                    for target in right {
+                        if !targets.contains(target) {
+                            targets.push(target.clone());
+                        }
+                    }
+                    if targets.len() == 1 {
+                        Self::Known(targets.pop().unwrap())
+                    } else {
+                        Self::Finite(targets)
+                    }
+                }
+                _ => Self::Dynamic,
+            },
+        }
+    }
     pub(super) fn join(&self, other: &Self) -> Self {
         match (self, other) {
             (Self::Pending, x) | (x, Self::Pending) => x.clone(),
@@ -43,9 +75,9 @@ fn whole<S>(u: &LirUnit<S>, mut address: AddressId) -> Option<SlotId> {
 /// Each identity widens at most twice, pending -> known -> dynamic. The
 /// worklist converges on cycles without an iteration or specialization cap.
 pub(super) fn discover<S>(u: &LirUnit<S>) -> Vec<Code> {
-    discover_seeded(u, &[])
+    discover_seeded(u, &[], false)
 }
-fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code]) -> Vec<Code> {
+fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code], finite: bool) -> Vec<Code> {
     let mut inputs = vec![Vec::new(); u.values.len()];
     let mut constants = vec![Code::Dynamic; u.values.len()];
     let mutable: BTreeSet<_> = u
@@ -155,7 +187,7 @@ fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code]) -> Vec<Code> {
         let code = inputs[at]
             .iter()
             .fold(constants[at].clone(), |code, source| {
-                code.join(&codes[source.index()])
+                code.merge(&codes[source.index()], finite)
             });
         if codes[at] != code {
             codes[at] = code;
@@ -170,12 +202,21 @@ fn discover_seeded<S>(u: &LirUnit<S>, seeds: &[Code]) -> Vec<Code> {
 }
 
 /// Parameter, capture and return equations over the complete checked diagnostic
-/// closure. Like local discovery, every seed widens at most twice. No source
-/// spelling, callable layout equality or runtime row selects a code identity.
-pub(super) fn closed(units: &[&ValidatedUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
-    solve(&units.iter().map(|unit| unit.unit()).collect::<Vec<_>>())
+/// closure. Each seed widens within the finite set of checked code identities,
+/// or becomes Dynamic. Source spelling, callable layout equality and runtime
+/// rows cannot select a code identity.
+/// A genuinely unbound input remains Dynamic and poisons every dependent use.
+pub(super) fn closed_runtime(units: &[&ValidatedUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
+    solve_mode(
+        &units.iter().map(|unit| unit.unit()).collect::<Vec<_>>(),
+        true,
+    )
 }
+#[cfg(test)]
 fn solve(units: &[&LirUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
+    solve_mode(units, false)
+}
+fn solve_mode(units: &[&LirUnit<Ready>], finite: bool) -> Result<Vec<Vec<Code>>, String> {
     let mut symbols = BTreeMap::new();
     for (index, unit) in units.iter().enumerate() {
         let body = *unit;
@@ -203,7 +244,7 @@ fn solve(units: &[&LirUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
         let codes = units
             .iter()
             .zip(&seeds)
-            .map(|(unit, seeds)| discover_seeded(unit, seeds))
+            .map(|(unit, seeds)| discover_seeded(unit, seeds, finite))
             .collect::<Vec<_>>();
         let mut changed = false;
         let mut merge = |unit: usize, value: ValueId, code: &Code| -> Result<(), String> {
@@ -211,7 +252,7 @@ fn solve(units: &[&LirUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
                 .get_mut(unit)
                 .and_then(|values| values.get_mut(value.index()))
                 .ok_or("native ownership tracing: callable binding is absent")?;
-            let next = seed.join(code);
+            let next = seed.merge(code, finite);
             if *seed != next {
                 *seed = next;
                 changed = true;
@@ -268,44 +309,50 @@ fn solve(units: &[&LirUnit<Ready>]) -> Result<Vec<Vec<Code>>, String> {
                     continue;
                 };
                 let call = &body.tables.calls[call.index()];
-                let target = match call.callee {
+                let targets = match call.callee {
                     Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => {
-                        resolve(&body.tables.symbols[symbol.index()])?
+                        vec![resolve(&body.tables.symbols[symbol.index()])?]
                     }
-                    Callee::Indirect(value) => match &codes[index][value.index()] {
-                        Code::Known(target) => resolve(&target.symbol)?,
-                        Code::Pending | Code::Dynamic => continue,
+                    Callee::Indirect(value) => match codes[index][value.index()].targets() {
+                        Some(targets) => targets
+                            .iter()
+                            .map(|target| resolve(&target.symbol))
+                            .collect::<Result<Vec<_>, _>>()?,
+                        None => continue,
                     },
                     Callee::Operation(_) => continue,
                 };
-                let callee = units[target];
-                for argument in call
-                    .arguments
-                    .get(&body.pools.call_arguments)
-                    .ok_or("native ownership tracing: missing diagnostic arguments")?
-                {
-                    let formal = *callee
-                        .parameters
-                        .get(argument.parameter as usize)
-                        .ok_or("native ownership tracing: diagnostic parameter arity differs")?;
-                    let code = match argument.value {
-                        ArgumentValue::Value(value) => &codes[index][value.index()],
-                        // Mutable writeback needs a separate interprocedural
-                        // storage proof. It never inherits a guessed identity.
-                        ArgumentValue::Address { .. } => &Code::Dynamic,
-                    };
-                    merge(target, formal, code)?;
-                }
-                if let Some(result) = call.result {
-                    let result_code = callee
-                        .terminators
-                        .iter()
-                        .filter_map(|term| match *term {
-                            Terminator::Return(Some(value)) => Some(&codes[target][value.index()]),
-                            _ => None,
-                        })
-                        .fold(Code::Pending, |joined, code| joined.join(code));
-                    merge(index, result, &result_code)?;
+                for target in targets {
+                    let callee = units[target];
+                    for argument in call
+                        .arguments
+                        .get(&body.pools.call_arguments)
+                        .ok_or("native ownership tracing: missing diagnostic arguments")?
+                    {
+                        let formal = *callee.parameters.get(argument.parameter as usize).ok_or(
+                            "native ownership tracing: diagnostic parameter arity differs",
+                        )?;
+                        let code = match argument.value {
+                            ArgumentValue::Value(value) => &codes[index][value.index()],
+                            // Mutable writeback needs a separate interprocedural
+                            // storage proof. It never inherits a guessed identity.
+                            ArgumentValue::Address { .. } => &Code::Dynamic,
+                        };
+                        merge(target, formal, code)?;
+                    }
+                    if let Some(result) = call.result {
+                        let result_code = callee
+                            .terminators
+                            .iter()
+                            .filter_map(|term| match *term {
+                                Terminator::Return(Some(value)) => {
+                                    Some(&codes[target][value.index()])
+                                }
+                                _ => None,
+                            })
+                            .fold(Code::Pending, |joined, code| joined.merge(code, finite));
+                        merge(index, result, &result_code)?;
+                    }
                 }
             }
         }

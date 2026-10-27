@@ -1506,6 +1506,45 @@ fn native_task_missing_rebind_and_stale_generation_never_relabel_owners() {
 }
 
 #[test]
+fn native_ownership_empty_runtime_capture_cannot_hide_a_live_destination() {
+    let (mut log, mut units) = fixture();
+    let mut metadata = units[&[7; 32]][&1].clone();
+    metadata.empty_environment = true;
+    metadata.token = 6u64 << 32;
+    metadata.owner = 0;
+    units.get_mut(&[7; 32]).unwrap().insert(6, metadata);
+    let event = Row::Event {
+        task: 0,
+        frame: 1,
+        marker: 6,
+        action: 1,
+        token: 6u64 << 32,
+        owner: 0,
+        site: 42,
+        layout: 7,
+    };
+    log.rows.insert(1, event);
+    log.row_count += 1;
+    let calls = LocalCalls::new();
+    assert!(decode_local_calls(&log, [49; 32], &units, &calls, 100).is_ok());
+    log.rows.swap(1, 2);
+    assert_eq!(
+        decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap_err(),
+        Error::RetainedEnvironment(6)
+    );
+    units
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&6)
+        .unwrap()
+        .empty_environment = false;
+    assert!(matches!(
+        decode_local_calls(&log, [49; 32], &units, &calls, 100),
+        Err(Error::InvalidLocation(_))
+    ));
+}
+
+#[test]
 fn native_ownership_operation_stamps_preserve_task_local_ordinals_and_refuse_gaps() {
     let (mut log, units) = fixture();
     log.rows.insert(

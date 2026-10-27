@@ -46,12 +46,16 @@ Native coverage includes statically nested resources, their finalizers and
 failure cleanup, owned direct-call parameters and results, checked once captures,
 named arena callbacks, and parallel SSA moves including swaps. Swaps capture all
 sources before replacing any destination, so equal payloads retain their distinct
-identities. Tasks, channels and unsupported dynamic storage refuse before launch.
+identities. Resources created and dropped inside a child task are supported
+when its callback captures and result carry no tracked resources. The compiler
+proves callback emptiness from the complete checked code and capture graph;
+unknown callbacks and Resource-bearing task inputs or results refuse before launch.
 The runtime sidecar binds each created task's generation and canonical path,
-so interleaved frames and reused scheduler slots remain distinct. Compiler
-transport for owned task inputs and channel payloads is still in development.
-Native tracing currently requires a grant-free run without recording or other
-native launch options.
+so interleaved frames and reused scheduler slots remain distinct. Channel
+payloads and unsupported dynamic storage still refuse before launch.
+Native launches accept the validated grants, arguments and recording or replay
+selected for the ordinary program. The diagnostic runtime must be available;
+the default runtime archive contains no ownership hooks.
 Interpreted test tracing runs one default schedule; native tests, benchmarks,
 blessing, JSON test reports and custom schedules are not supported by this flag.
 `run --simulation` also refuses the flag.

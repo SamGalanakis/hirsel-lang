@@ -116,10 +116,7 @@ pub(crate) fn emit_relocated(
         hirsel_lir::ownership_trace::native::local_call_sites(selected).map_err(failed)?;
     // Runtime frames include implicit finalizers as well as ordinary calls.
     // Source classification cannot remove a physical target from decoding.
-    let calls = call_sites
-        .iter()
-        .map(|(unit, sites)| (*unit, sites.values().copied().collect()))
-        .collect();
+    let calls = hirsel_lir::ownership_trace::native::physical_calls(selected).map_err(failed)?;
     let mut units = BTreeMap::new();
     for unit in selected {
         let original = plans
@@ -215,12 +212,18 @@ pub(crate) fn emit_relocated(
                     let hirsel_lir::ownership_trace::Point::CallEntered(block) = row.point else {
                         return Err(failed("Alias is not an entered call"));
                     };
-                    Some(
-                        *call_sites
-                            .get(&body.digest().0)
-                            .and_then(|sites| sites.get(&block))
-                            .ok_or_else(|| failed("Alias has no exact checked callee"))?,
-                    )
+                    let target = call_sites
+                        .get(&body.digest().0)
+                        .and_then(|sites| sites.get(&block))
+                        .copied();
+                    if target.is_none()
+                        && !plan
+                            .empty_environment(body, inputs.layouts, marker.id)
+                            .map_err(failed)?
+                    {
+                        return Err(failed("Alias has no exact checked callee"));
+                    }
+                    target
                 } else {
                     None
                 },

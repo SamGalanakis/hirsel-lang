@@ -86,6 +86,9 @@ fn closed_callable_equations_preserve_parameters_returns_and_reject_conflicting_
     assert_eq!(codes[1][formal.index()], Code::Dynamic);
     assert_eq!(codes[0][result.index()], Code::Dynamic);
     assert_eq!(codes[3][other_result.index()], Code::Dynamic);
+    let finite = solve_mode(&[&caller, &identity, &target, &other], true).unwrap();
+    assert_eq!(finite[1][formal.index()].targets().unwrap().len(), 2);
+    assert_eq!(finite[0][result.index()], finite[1][formal.index()]);
     assert!(solve(&[&caller, &identity]).is_ok());
     assert!(
         solve(&[&caller])
@@ -121,6 +124,10 @@ fn closed_callable_equations_do_not_let_one_known_caller_mask_an_unbound_root() 
     assert_eq!(codes[2][parameter.index()], Code::Dynamic);
     assert_eq!(codes[1][formal.index()], Code::Dynamic);
     assert_eq!(codes[0][ValueId(1).index()], Code::Dynamic);
+    let finite = solve_mode(&[&caller, &identity, &unknown], true).unwrap();
+    assert_eq!(finite[2][parameter.index()], Code::Dynamic);
+    assert_eq!(finite[1][formal.index()], Code::Dynamic);
+    assert_eq!(finite[0][ValueId(1).index()], Code::Dynamic);
 }
 
 #[test]

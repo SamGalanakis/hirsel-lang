@@ -622,6 +622,24 @@ fn decode(
                 {
                     return Err(Error::InvalidMarker(marker));
                 }
+                if expected.empty_environment && expected.callee.is_none() {
+                    let at = projected_owner(
+                        task,
+                        frame,
+                        parent,
+                        current.environment.as_ref(),
+                        target,
+                        expected.owner_path.as_ref(),
+                    )?;
+                    if tracker.inventory().owners.keys().any(|owner| {
+                        owner.task == at.task
+                            && owner.storage == at.storage
+                            && owner.path.starts_with(&at.path)
+                    }) {
+                        return Err(Error::RetainedEnvironment(marker));
+                    }
+                    continue;
+                }
                 let expected_callee = expected.callee.ok_or(Error::InvalidMarker(marker))?;
                 if !calls
                     .and_then(|calls| calls.get(&current.unit))
@@ -704,6 +722,41 @@ fn decode(
                 };
                 if calls.is_none() && (!local(token) || !local(recipient)) {
                     return Err(Error::InvalidLocation(token.max(recipient)));
+                }
+                // A checked resource-free runtime callback starts without a
+                // tracked parent environment. Its callable shell may still
+                // move out of a physical capture; that move carries no token.
+                let absent_capture = |location: u64, path: Option<&LocationPath>| {
+                    current.environment.is_none()
+                        && (location >> 32 == 6
+                            || (location >> 32 == 7
+                                && path.is_some_and(|path| path.root >> 32 == 6)))
+                };
+                if action == 1
+                    && expected.empty_environment
+                    && (absent_capture(token, token_path) || absent_capture(recipient, owner_path))
+                {
+                    for (location, path) in [(token, token_path), (recipient, owner_path)] {
+                        if absent_capture(location, path) {
+                            continue;
+                        }
+                        let root = projected_owner(
+                            task,
+                            frame,
+                            parent,
+                            current.environment.as_ref(),
+                            location,
+                            path,
+                        )?;
+                        if tracker.inventory().owners.keys().any(|owner| {
+                            owner.task == root.task
+                                && owner.storage == root.storage
+                                && owner.path.starts_with(&root.path)
+                        }) {
+                            return Err(Error::RetainedEnvironment(marker));
+                        }
+                    }
+                    continue;
                 }
                 let from = projected_owner(
                     task,
