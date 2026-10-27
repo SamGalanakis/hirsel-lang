@@ -3,7 +3,7 @@ use std::process::{Command, Stdio};
 
 pub fn emitted_access_control(object: &[u8]) {
     let mut child = Command::new("python3")
-        .args(["-c", include_str!("native_tsan.py")])
+        .args(["-c", include_str!("control.py")])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

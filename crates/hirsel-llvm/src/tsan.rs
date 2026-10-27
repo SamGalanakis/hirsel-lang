@@ -1,5 +1,5 @@
 #[cfg(test)]
-#[path = "../../../tools/tests/native_tsan.rs"]
+#[path = "../../../tools/tests/fixtures/native_tsan/control.rs"]
 mod control;
 
 use hirsel_lir::{emission::Manifested, stage::ObjectSymbolKind};
