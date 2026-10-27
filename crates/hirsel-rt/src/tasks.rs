@@ -2165,6 +2165,9 @@ pub(crate) fn gate_leave(ctx: *mut TaskCtx, gate: u32, outermost: bool) {
 
 /// `serial` gate `gate`'s version: the outermost entries and leaves so far.
 pub(crate) fn gate_version(ctx: *mut TaskCtx, gate: u32) -> u64 {
+    // This probe can run between foreign_enter and callback_context, before
+    // the callback takes a permit. Never retain the role while it waits.
+    let _role = unsafe { role::Guard::new(ctx) };
     role::with_role(ctx, |t| t.gate(gate).version)
 }
 

@@ -385,7 +385,7 @@ pub unsafe fn enable_worker_metrics(
 /// `serial` gate `gate`'s version in `ctx`'s run: its outermost entries and leaves so far.
 ///
 /// # Safety
-/// `ctx` is a live context of a run whose code no thread is running.
+/// `ctx` belongs to the current task, or no thread is running the run's code.
 pub unsafe fn gate_version(ctx: *mut TaskCtx, gate: u32) -> u64 {
     crate::tasks::gate_version(ctx, gate)
 }

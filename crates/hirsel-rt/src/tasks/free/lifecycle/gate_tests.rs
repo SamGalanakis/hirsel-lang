@@ -247,6 +247,15 @@ unsafe fn gapped_callbacks_body(
         );
         assert!(flag.load(Ordering::Acquire));
         assert_eq!(crate::foreign::gate_version(ctx, 7), 3);
+        let acquisitions = role::thread_acquisitions();
+        {
+            let _role = role::Guard::new(ctx);
+        }
+        assert_eq!(
+            role::thread_acquisitions(),
+            acquisitions + 1,
+            "version probe must release the role before callback permit admission"
+        );
         assert_eq!(hirsel_rt_v2_callback_context(), ctx);
         if replay {
             let _role = role::Guard::new(ctx);
