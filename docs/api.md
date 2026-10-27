@@ -17598,13 +17598,13 @@ References: [`core@1/List`](#def-core_401_2fList), [`core@1/u64`](#def-core_401_
 
 <a id="def-std_401_2ftest_2fproperty"></a>
 
-- `@track_caller pub fn test.property[T](t: Test, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()`
+- `@track_caller pub fn test.property[T]( t: Test, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String ) -> ()`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/Test`](#def-core_401_2fTest), [`std@1/test/Source`](#def-std_401_2ftest_2fSource), [`std@1/test/bool`](#def-std_401_2ftest_2fbool)
 
 <a id="def-std_401_2ftest_2fproperty_5fcases"></a>
 
-- `@track_caller pub fn test.property_cases[T](t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String) -> ()`
+- `@track_caller pub fn test.property_cases[T]( t: Test, cases: u64, gen: fn(mut Source) -> T, law: fn(T) -> bool uses {}, show: fn(T) -> String ) -> ()`
 
 References: [`core@1/String`](#def-core_401_2fString), [`core@1/Test`](#def-core_401_2fTest), [`core@1/u64`](#def-core_401_2fu64), [`std@1/test/Source`](#def-std_401_2ftest_2fSource), [`std@1/test/bool`](#def-std_401_2ftest_2fbool)
 
