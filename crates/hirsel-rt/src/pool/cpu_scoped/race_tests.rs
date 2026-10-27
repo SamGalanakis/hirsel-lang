@@ -7,6 +7,42 @@ use std::time::{Duration, Instant};
 const WIDTH: u32 = 4;
 const NONE: [u64; 2] = [0; 2];
 
+#[cfg(all(feature = "tsan", target_arch = "x86_64"))]
+#[test]
+fn tsan_direct_switch_covers_naked_cpu_handoff() {
+    isolated(
+        std::any::type_name_of_val(&tsan_direct_switch_covers_naked_cpu_handoff),
+        || {
+            struct Ping {
+                idle: *mut u8,
+                saved: *mut u8,
+                entered: bool,
+            }
+            unsafe extern "C" fn entry(pointer: *mut u8, _: *mut u8) -> ! {
+                let ping = pointer.cast::<Ping>();
+                unsafe {
+                    (*ping).entered = true;
+                    crate::fiber::fiber_switch(&raw mut (*ping).saved, (*ping).idle);
+                }
+                unreachable!("the completed control is never resumed")
+            }
+            let stack = crate::fiber::Stack::new();
+            let mut ping = Ping {
+                idle: std::ptr::null_mut(),
+                saved: std::ptr::null_mut(),
+                entered: false,
+            };
+            let before = crate::fiber::TSAN_SWITCHES.load(SeqCst);
+            unsafe {
+                let start = stack.prepare(entry, (&raw mut ping).cast(), std::ptr::null_mut());
+                crate::fiber::fiber_switch(&raw mut ping.idle, start);
+            }
+            assert!(ping.entered);
+            assert_eq!(crate::fiber::TSAN_SWITCHES.load(SeqCst) - before, 2);
+        },
+    );
+}
+
 #[derive(Clone, Copy)]
 enum Schedule {
     CancelQueued,
