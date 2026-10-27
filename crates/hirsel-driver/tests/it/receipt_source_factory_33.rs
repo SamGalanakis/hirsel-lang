@@ -8,13 +8,7 @@ use std::sync::Arc;
 
 const SOURCE: &str = "fn id[T](take value:T)->T {take value}\npub fn main()->u64 {7u64}";
 
-fn engine(
-    verify: Verify,
-) -> (
-    QueryEngine,
-    Arc<dyn store::ResultStore>,
-    hirsel_syntax::DefPath,
-) {
+fn engine(verify: Verify) -> (NativeOriginalReader, hirsel_syntax::DefPath) {
     let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
@@ -26,22 +20,31 @@ fn engine(
     engine.parse_file(file, &default_context()).unwrap();
     let mut id = entry_path(&default_context());
     id.0.name = "id".into();
-    (engine, store, id)
+    let facts = crate::native_front_fixture::products(&mut engine, &[id.clone()]).unwrap();
+    let reader = facts
+        .original_context
+        .reader(
+            facts.originals.iter().map(|product| (**product).clone()),
+            store,
+        )
+        .unwrap();
+    (reader, id)
 }
 
 #[test]
 fn actual_v_observation_preserves_original_modes_and_releases_the_body() {
     with_compiler_stack(|| {
-        let (mut engine, store, path) = engine(Verify::On);
-        let signature = engine.item_signature(&path).unwrap().value;
-        let reader = engine
-            .native_original_reader(&[path.clone()], store)
+        let (reader, path) = engine(Verify::On);
+        let signature = reader
+            .signatures()
+            .signature(hirsel_syntax::DefId::intern(&path))
+            .unwrap()
             .unwrap();
         let original = reader.read(&path).unwrap();
         let output = original.output().expect("actual V output");
         let source = output.observation_identity();
         let revision = original.implementation_revision();
-        let types = engine.types().clone();
+        let types = reader.signatures().types().clone();
         let definition = original.definition();
         let body = definition.entry;
         let scope = definition.bodies[body.0 as usize].parameter_scope;
@@ -86,7 +89,6 @@ fn actual_v_observation_preserves_original_modes_and_releases_the_body() {
         );
         drop(original);
         drop(reader);
-        drop(engine);
         assert!(
             weak.upgrade().is_none(),
             "compact observations retain no source body"
@@ -99,13 +101,14 @@ fn actual_v_observation_preserves_original_modes_and_releases_the_body() {
 #[test]
 fn a_wrong_declaration_or_derived_native_key_cannot_select_original_source() {
     with_compiler_stack(|| {
-        let (mut engine, store, path) = engine(Verify::On);
-        let signature = engine.item_signature(&path).unwrap().value;
-        let reader = engine
-            .native_original_reader(&[path.clone()], store)
+        let (reader, path) = engine(Verify::On);
+        let signature = reader
+            .signatures()
+            .signature(hirsel_syntax::DefId::intern(&path))
+            .unwrap()
             .unwrap();
         let original = reader.read(&path).unwrap();
-        let types = engine.types();
+        let types = reader.signatures().types();
         let body = original.definition().entry;
         let actuals = Actuals {
             binder: Some(original.definition().bodies[body.0 as usize].parameter_scope),
@@ -156,14 +159,15 @@ fn a_wrong_declaration_or_derived_native_key_cannot_select_original_source() {
 #[test]
 fn unavailable_v_output_is_not_an_expected_empty_source_observation() {
     with_compiler_stack(|| {
-        let (mut engine, store, path) = engine(Verify::Off);
-        let signature = engine.item_signature(&path).unwrap().value;
-        let reader = engine
-            .native_original_reader(&[path.clone()], store)
+        let (reader, path) = engine(Verify::Off);
+        let signature = reader
+            .signatures()
+            .signature(hirsel_syntax::DefId::intern(&path))
+            .unwrap()
             .unwrap();
         let original = reader.read(&path).unwrap();
         assert!(original.output().is_none());
-        let types = engine.types();
+        let types = reader.signatures().types();
         let body = original.definition().entry;
         let actuals = Actuals {
             binder: Some(original.definition().bodies[body.0 as usize].parameter_scope),
