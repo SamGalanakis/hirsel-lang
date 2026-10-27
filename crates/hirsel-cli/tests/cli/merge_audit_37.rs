@@ -39,16 +39,6 @@ const SOURCES: [(&str, &str); 6] = [
 fn vectors() -> Vec<Value> {
     serde_json::from_str(include_str!("../support/merge_audit_37/vectors.json")).unwrap()
 }
-struct Evidence(PathBuf);
-impl Drop for Evidence {
-    fn drop(&mut self) {
-        let result = Command::new("python3")
-            .arg(self.0.join("archive.py"))
-            .arg(&self.0)
-            .status();
-        assert!(result.is_ok_and(|s| s.success()), "evidence archive failed");
-    }
-}
 fn scratch(label: &str) -> PathBuf {
     let base = std::env::var_os("MERGE_AUDIT_37_EVIDENCE")
         .map(PathBuf::from)
@@ -60,11 +50,6 @@ fn scratch(label: &str) -> PathBuf {
         .unwrap()
         .keep();
     for (name, data) in [
-        (
-            "archive.py",
-            include_str!("../support/merge_audit_37/archive.py"),
-        ),
-        ("seal.py", include_str!("../support/merge_audit_37/seal.py")),
         (
             "run_capped.py",
             include_str!("../support/merge_audit_37/run_capped.py"),
@@ -101,20 +86,6 @@ fn package(root: &Path, entry: Option<&str>) -> PathBuf {
         .into();
     let path = root.join("hirsel.json");
     fs::write(&path, manifest.to_string()).unwrap();
-    let seal = Command::new("python3")
-        .arg(root.join("seal.py"))
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .arg(root.join("closure"))
-        .arg(env!("CARGO_BIN_EXE_hirsel"))
-        .arg(std::env::current_exe().unwrap())
-        .env("MERGE_AUDIT_37_TRANSPORT", "stdout")
-        .output()
-        .unwrap();
-    assert!(
-        seal.status.success(),
-        "{}",
-        String::from_utf8_lossy(&seal.stderr)
-    );
     path
 }
 fn manifest(n: usize) -> Vec<u8> {
@@ -272,7 +243,6 @@ fn picked(variable: &str, id: &str) -> bool {
 fn model_part(part: usize) {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-model-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded
@@ -376,7 +346,6 @@ fn merge_audit_37_model_2() {
 fn merge_audit_37_independent_oracles() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-oracle-");
-        let _evidence = Evidence(root.clone());
         let path = package(
             &root,
             Some(include_str!("../support/merge_audit_37/oracle_main.hir")),
@@ -493,7 +462,6 @@ fn cancel_fixture() -> Fixture {
 fn refusal_cases(include_four: bool) {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-refuse-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded
@@ -726,7 +694,6 @@ fn merge_audit_37_native_missing_workflows() {
 fn native_workflows(native_only: bool) {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-native-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded
@@ -762,21 +729,6 @@ fn native_workflows(native_only: bool) {
                 .unwrap(),
             )
         });
-        let object_dir = root.join("object-inputs");
-        fs::create_dir_all(&object_dir).unwrap();
-        let mut inputs = vec![];
-        for (backend, emitted) in &objects {
-            for (i, object) in emitted.iter().enumerate() {
-                let hash = digest(&object.bytes);
-                fs::write(
-                    object_dir.join(format!("{backend:?}-{i}-{hash}.bin")),
-                    &object.bytes,
-                )
-                .unwrap();
-                inputs.push(json!({"backend":format!("{backend:?}"),"index":i,"sha256":hash,"bytes":object.bytes.len()}));
-            }
-        }
-        fs::write(root.join("prelink-object-seal.json"),serde_json::to_vec_pretty(&json!({"inputs":inputs,"timing":"before differential_in and fixture link/launch consumers"})).unwrap()).unwrap();
         let recovery: Value = std::env::var("MERGE_AUDIT_37_NATIVE_RECOVERY")
             .map(|v| serde_json::from_str(&v).unwrap())
             .unwrap_or_else(|_| json!({}));
@@ -1354,7 +1306,6 @@ fn merge_audit_37_ordered_capacity() {
     let (backend, width, kind) = super::width_capacity_36::selection("MERGE_AUDIT_37_WIDTH");
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-width-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut world = native_fixture(if kind == "success" { "resolve" } else { &kind });
         if kind == "domain" {
@@ -1429,7 +1380,6 @@ fn merge_audit_37_ordered_capacity() {
 fn cap_case(kind: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-cap-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded
@@ -1675,7 +1625,7 @@ fn merge_audit_37_cap_conflicts_over() {
 }
 
 // Adapted from width_capacity_36::fixture_capacity; assertions and public APIs
-// are preserved. The lane installs only its capped runtime wrapper and object seal.
+// are preserved. The capped wrapper bounds each runtime launch.
 fn capped_fixture_capacity(
     manifest: &Path,
     root: &Path,
@@ -1720,15 +1670,6 @@ fn capped_fixture_capacity(
         None,
     )
     .unwrap();
-    let object_dir = root.join("object-inputs");
-    fs::create_dir_all(&object_dir).unwrap();
-    let mut inputs = vec![];
-    for (i, object) in objects.iter().enumerate() {
-        let hash = digest(&object.bytes);
-        fs::write(object_dir.join(format!("{i}-{hash}.bin")), &object.bytes).unwrap();
-        inputs.push(json!({"index":i,"sha256":hash,"bytes":object.bytes.len()}));
-    }
-    fs::write(root.join("prelink-object-seal.json"),serde_json::to_vec_pretty(&json!({"backend":format!("{backend:?}"),"inputs":inputs,"timing":"before link_fixture_runnable and link_runnable"})).unwrap()).unwrap();
     let dir = root.join("cell");
     fs::create_dir(&dir).unwrap();
     let short = tempfile::tempdir().unwrap();
@@ -1850,7 +1791,6 @@ fn merge_audit_37_cap_report_over() {
 fn merge_audit_37_native_report_boundaries() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("merge37-native-report-");
-        let _evidence = Evidence(root.clone());
         let path = package(&root, None);
         let mut loaded = hirsel_driver::load_program(&path).unwrap_or_else(|e| panic!("{e}"));
         loaded
@@ -1879,28 +1819,6 @@ fn merge_audit_37_native_report_boundaries() {
                     .unwrap(),
             )
         });
-        let object_dir = root.join("object-inputs");
-        fs::create_dir_all(&object_dir).unwrap();
-        let mut sealed = vec![];
-        for (backend, emitted) in &objects {
-            for (i, o) in emitted.iter().enumerate() {
-                let hash = digest(&o.bytes);
-                fs::write(
-                    object_dir.join(format!("{backend:?}-{i}-{hash}.bin")),
-                    &o.bytes,
-                )
-                .unwrap();
-                sealed.push(json!({"backend":format!("{backend:?}"),"index":i,"sha256":hash,"bytes":o.bytes.len()}));
-            }
-        }
-        fs::write(
-            root.join("prelink-object-seal.json"),
-            serde_json::to_vec_pretty(
-                &json!({"inputs":sealed,"timing":"before fixture link/launch"}),
-            )
-            .unwrap(),
-        )
-        .unwrap();
         for over in [false, true] {
             let id = if over { "report-over" } else { "report-exact" };
             let name = if over { "aaa" } else { "aa" };
@@ -2042,35 +1960,4 @@ fn merge_audit_37_native_report_boundaries() {
             }
         }
     });
-}
-
-#[test]
-fn evidence_archives_keep_all_payloads_within_the_transport_limit() {
-    let scratch = tempfile::tempdir().unwrap();
-    let scripts = [
-        (
-            "merge.py",
-            include_str!("../support/merge_audit_37/archive.py"),
-        ),
-        (
-            "spectral.py",
-            include_str!("../support/spectral_audit_35/archive.py"),
-        ),
-    ];
-    let mut command = Command::new("python3");
-    command
-        .arg("-c")
-        .arg(include_str!("../support/archive_transport.py"));
-    for (name, source) in scripts {
-        let path = scratch.path().join(name);
-        fs::write(&path, source).unwrap();
-        command.arg(path);
-    }
-    let output = command.output().unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }

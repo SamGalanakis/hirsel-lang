@@ -1312,3 +1312,28 @@ fn spectral_audit_35_unrounded_vector_controls() {
         );
     });
 }
+
+#[test]
+fn evidence_archive_preserves_spectral_payloads_within_the_transport_limit() {
+    let scratch = tempfile::tempdir().unwrap();
+    let scripts = [(
+        "spectral.py",
+        include_str!("../support/spectral_audit_35/archive.py"),
+    )];
+    let mut command = Command::new("python3");
+    command
+        .arg("-c")
+        .arg(include_str!("../support/archive_transport.py"));
+    for (name, source) in scripts {
+        let path = scratch.path().join(name);
+        fs::write(&path, source).unwrap();
+        command.arg(path);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
