@@ -693,7 +693,15 @@ impl Plan {
             .ok_or_else(|| {
                 ToolError::Runtime("compiler Lower continuation exceeds admission".into())
             })?;
-        let root_retained = growth_slack.min(check_slack).min(root_bound);
+        // A receipt captures headers from Check's partition before installing
+        // its root. Leave room for those headers instead of promising the
+        // entire partition to the root continuation as well.
+        let check_continuation = if needs_receipt {
+            check_slack / 2
+        } else {
+            check_slack
+        };
+        let root_retained = growth_slack.min(check_continuation).min(root_bound);
         if root_retained == 0 {
             return Err(ToolError::Runtime(
                 "compiler root continuation exceeds admission".into(),
