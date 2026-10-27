@@ -228,6 +228,8 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
     `skips` are exact case names every
     run skips except the full gate's (`-c hirsel.full=true`).
     """
+    if name in ["hirsel-cli-test-cpu_pool_4", "hirsel-cli-test-cpu_pool_8"] and read_root_config("hirsel", "native_tsan", "false") == "true":
+        runtime_archives = ":hirsel-rt-tsan-archives"
     if package_name == "hirsel-rt" and read_root_config("hirsel", "ownership_trace", "false") == "true":
         features = features + ["ownership-trace"]
     harness = name + "-harness"

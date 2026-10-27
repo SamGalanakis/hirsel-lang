@@ -884,7 +884,7 @@ range, including narrowed loads/stores and negative offsets, and refuses
 uncovered memory instructions. The emitter controls call the generated code
 from an unsanitized C harness: disjoint cells pass; shared cells must exit 66
 with a race report. These controls do not substitute for a production job-claim
-mutant. Instrumented pool fixtures use 300,000 loop iterations and retain the
+mutant. Instrumented pool fixtures use 3,000,000 loop iterations and retain the
 same switch-free overlap assertion and probe cap. The x86 fiber switch annotates both ordinary fibers and naked CPU ahead
 handoffs; only CPU ahead certificates are enabled in this sanitizer mode.
 Each policy/emitter pool cell must independently establish overlap.

@@ -73,7 +73,7 @@ fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
     let root = scratch.path();
     let source = include_str!("physical.hir");
     let iterations = if cfg!(feature = "native-tsan") {
-        300_000u64
+        3_000_000u64
     } else if width == 1 {
         3_000_000u64
     } else {
