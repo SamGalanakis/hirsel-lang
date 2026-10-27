@@ -34,10 +34,9 @@ pub(in crate::native) fn capture(
             if instances
                 .receipt_lexical_matches(id, request, layouts)
                 .map_err(|e| format!("batch lexical receipt: {e:?}"))?
+                && selected.replace(id).is_some()
             {
-                if selected.replace(id).is_some() {
-                    return Err("ambiguous batch source receipt".into());
-                }
+                return Err("ambiguous batch source receipt".into());
             }
         }
         let id = selected.ok_or("batch source receipt has no lexical implementation")?;
