@@ -558,7 +558,9 @@ impl Task {
                         Poll::Ready(Ok(product)) => product,
                     };
                     let Some(output) = queries.front.outcome(product.record) else {
-                        return Poll::Ready(Err(queries.errors.protocol));
+                        return Poll::Ready(Err(queries.failure_record(operational(format!(
+                            "source body product for {path} is unavailable after materialization"
+                        )))));
                     };
                     output
                 }
