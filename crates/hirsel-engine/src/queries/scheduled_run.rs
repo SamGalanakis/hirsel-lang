@@ -29,6 +29,12 @@ use hirsel_types::{SignatureKind, SignatureRef};
 use std::{sync::Mutex, task::Poll};
 
 pub const FRONT_RUN_KIND: u32 = 0x4600_0010;
+pub const FRONT_RUN_BATCH_KIND: u32 = 0x4600_001e;
+const BATCH_OUTPUT: Domain = Domain {
+    kind: 0x4600_001f,
+    schema: 1,
+};
+pub type FrontRunBatchOutput = BTreeMap<DefPath, Arc<FrontRunOutput>>;
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0011,
     schema: 1,
@@ -74,6 +80,8 @@ impl FrontRunInputs {
 /// One immutable input namespace, shared across selected Run roots. Each task
 /// waits for the ordered source transaction before reading semantic products.
 pub struct FrontRunQueries {
+    batch: Option<(QueryId, Vec<DefPath>)>,
+    completed_batch: Mutex<Option<(ProductRef, Arc<FrontRunBatchOutput>)>>,
     export_hashes: bool,
     native_roots: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
@@ -100,6 +108,53 @@ struct Ownership {
     _allowance: MemoryReservation,
 }
 impl FrontRunQueries {
+    /// One source closure and canonical hash pass for a bounded set of launches.
+    /// Each entry still has its own semantic revision, reach and callable facts.
+    pub fn with_batch_roots(
+        mut self: Arc<Self>,
+        roots: Vec<DefPath>,
+    ) -> Result<Arc<Self>, QueryError> {
+        if roots.is_empty() {
+            return Err(operational("empty Run batch"));
+        }
+        self = self.with_source_roots(roots)?;
+        let this = Arc::get_mut(&mut self)
+            .ok_or_else(|| operational("batch requires an unshared Run view"))?;
+        let roots = this.native_roots.clone();
+        let bytes = serde_json::to_vec(&roots).map_err(|error| operational(error.to_string()))?;
+        let charge = (bytes.len() as u64)
+            .checked_add((roots.len() * std::mem::size_of::<DefPath>()) as u64)
+            .ok_or_else(|| operational("Run batch inventory overflow"))?;
+        let remaining = this
+            .retention
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        *remaining = remaining
+            .checked_sub(charge)
+            .ok_or_else(|| operational("Run batch roots exceed admission"))?;
+        let query = QueryId {
+            kind: FRONT_RUN_BATCH_KIND,
+            address: hirsel_artifact_store::Address(ContentHash::of_parts(
+                "hirsel.front.run.batch.v1",
+                [this.ids[&roots[0]].address.0.0.as_slice(), bytes.as_slice()],
+            )),
+        };
+        this.batch = Some((query, roots));
+        Ok(self)
+    }
+    pub fn batch_query(&self) -> Option<QueryId> {
+        self.batch.as_ref().map(|(query, _)| *query)
+    }
+    pub fn batch_roots(&self) -> Option<&[DefPath]> {
+        self.batch.as_ref().map(|(_, roots)| roots.as_slice())
+    }
+    pub fn batch_outcome(&self, product: ProductRef) -> Option<Arc<FrontRunBatchOutput>> {
+        self.completed_batch
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .and_then(|(selected, output)| (*selected == product).then(|| output.clone()))
+    }
     /// Select LANG-6 hashes for an immutable package closure. Ordinary execution
     /// does not retain this diagnostic map.
     pub fn with_definition_hashes(
@@ -219,19 +274,34 @@ impl FrontRunQueries {
 struct Factory(Arc<FrontRunQueries>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
-        let root = self
-            .0
-            .ids
-            .iter()
-            .find_map(|(path, id)| (*id == query).then(|| path.clone()))
-            .ok_or(self.0.errors.protocol)?;
-        let completed = self
-            .0
-            .completed
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&query.address.0)
-            .map(|(product, _)| *product);
+        let (root, completed) = if let Some((batch, roots)) = &self.0.batch
+            && query == *batch
+        {
+            (
+                roots[0].clone(),
+                self.0
+                    .completed_batch
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_ref()
+                    .map(|(product, _)| *product),
+            )
+        } else {
+            let root = self
+                .0
+                .ids
+                .iter()
+                .find_map(|(path, id)| (*id == query).then(|| path.clone()))
+                .ok_or(self.0.errors.protocol)?;
+            let completed = self
+                .0
+                .completed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(&query.address.0)
+                .map(|(product, _)| *product);
+            (root, completed)
+        };
         // A root's potentially retained graph is admitted before any work.
         let mut retention = self.0.retention.lock().unwrap_or_else(|e| e.into_inner());
         let bytes = FrontRunQueries::output_bytes(self.0.weight).ok_or(self.0.errors.resource)?;
@@ -705,14 +775,127 @@ impl Task {
             .iter()
             .map(|(id, entry)| (id.path().clone(), entry.content.references()))
             .collect();
-        let hashes =
+        let hashes = Arc::new(
             hirsel_proof_export::definition_hashes_loading(snapshot.types(), &referenced, |path| {
                 self.entries[&DefId::intern(path)]
                     .content
                     .load(queries, path, decode_allowance)
                     .map_err(|error| format!("{error:?}"))
             })
-            .map_err(operational)?;
+            .map_err(operational)?,
+        );
+        let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
+        let Some((batch, roots)) = &queries.batch else {
+            return self.complete_one(&self.root, self.query, hashes, checked_runtime);
+        };
+        if self.query != *batch {
+            return Err(operational("batch Run requires its batch root"));
+        }
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.arc(&checked_runtime);
+        for paths in [
+            &checked_runtime.noalloc,
+            &checked_runtime.noalloc_drop,
+            &checked_runtime.flat,
+        ] {
+            weight.tree::<DefPath, ()>(paths.len());
+            for path in paths {
+                weight.path(path);
+            }
+        }
+        weight.map(&checked_runtime.operations, |weight, path, _| {
+            weight.path(path)
+        });
+        if let Some(path) = &checked_runtime.arena_with {
+            weight.path(path);
+        }
+        weight.tree::<DefPath, Arc<FrontRunOutput>>(roots.len());
+        weight.tree::<ContentHash, (ProductRef, Arc<FrontRunOutput>)>(roots.len());
+        weight.add(std::mem::size_of::<FrontRunBatchOutput>() + 2 * std::mem::size_of::<usize>());
+        let result = (|| {
+            let mut products = Vec::with_capacity(roots.len());
+            let mut outputs = BTreeMap::new();
+            for root in roots {
+                let product = self.complete_one(
+                    root,
+                    queries.ids[root],
+                    hashes.clone(),
+                    checked_runtime.clone(),
+                )?;
+                let output = queries
+                    .outcome(product)
+                    .ok_or_else(|| operational("batch entry output disappeared"))?;
+                weight.path(root);
+                weight.arc(&output);
+                weight.path(&output.entry);
+                weight.program_revision(&output.revision);
+                weight.code_reach(&output.code);
+                weight.foreign_use(&output.foreign);
+                weight.callees(&output.callees);
+                weight.map(&output.entries, |weight, name, (facts, _)| {
+                    weight.add(name.capacity());
+                    weight.code_reach(&facts.reach);
+                });
+                output.semantic.metadata_weight(&mut weight);
+                if weight.bytes() > queries.weight.retained {
+                    return Err(operational("Run batch outputs exceed retained admission"));
+                }
+                products.push((
+                    product.address.0.0,
+                    product.action.0.0,
+                    product.record.domain.kind,
+                    product.record.domain.schema,
+                    product.record.output.0.0,
+                    product.record.len,
+                ));
+                outputs.insert(root.clone(), output);
+            }
+            let bytes = queries
+                .records
+                .encode(&queries.anchors, &products)
+                .ok_or_else(|| operational("Run batch metadata encoding failed"))?;
+            let record = queries
+                .store
+                .put_content(BATCH_OUTPUT, &bytes)
+                .ok_or(QueryError::NotImplemented)?;
+            let action = hirsel_artifact_store::Action(ContentHash::of_parts(
+                "hirsel.front.run.batch.action.v1",
+                [batch.address.0.0.as_slice(), record.output.0.0.as_slice()],
+            ));
+            let product = ProductRef {
+                address: batch.address,
+                action,
+                record,
+            };
+            queries
+                .store
+                .associate_product(product.address, product.action, product.record);
+            *queries
+                .completed_batch
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some((product, Arc::new(outputs)));
+            Ok(product)
+        })();
+        if result.is_err() {
+            let mut completed = queries
+                .completed
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            for root in roots {
+                completed.remove(&queries.ids[root].address.0);
+            }
+        }
+        result
+    }
+    fn complete_one(
+        &self,
+        root: &DefPath,
+        query: QueryId,
+        hashes: Arc<BTreeMap<DefPath, ContentHash>>,
+        checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
+    ) -> Result<ProductRef, QueryError> {
+        let queries = &self.queries;
+        let snapshot = queries.lower.signatures();
         let unsafe_operations: BTreeSet<_> = hirsel_types::core_roles::intrinsic_roles()
             .into_iter()
             .filter(|(_, role)| *role == hirsel_types::core_roles::Intrinsic::UnsafeOperation)
@@ -760,7 +943,7 @@ impl Task {
                 },
             )))
         };
-        let program = self.program(&self.root)?;
+        let program = self.program(root)?;
         let mut callees = BTreeMap::new();
         for path in &program.definitions {
             let Some(content) = self
@@ -789,7 +972,7 @@ impl Task {
         let mut entries = BTreeMap::new();
         for (path, input) in &queries.inputs {
             if input.source
-                && path.0.package == self.root.0.package
+                && path.0.package == root.0.package
                 && let Some(facts) = facts(path)?
             {
                 entries.insert(path.to_string(), facts);
@@ -799,9 +982,9 @@ impl Task {
         // PROG-4: C called outside a deterministic wrapper makes every run of
         // this entry unrecordable, as the checked package decides it.
         let unreplayable = !queries.check.unsafe_ffi().is_empty() && !foreign.unmodeled.is_empty();
-        let revision = program.revision(&self.root)?;
-        let code = reach(&self.root)?;
-        let semantic_program = if queries.native_roots.is_empty() {
+        let revision = program.revision(root)?;
+        let code = reach(root)?;
+        let semantic_program = if queries.native_roots.is_empty() || queries.batch.is_some() {
             program.clone()
         } else {
             self.program_from(queries.native_roots.clone())?
@@ -828,17 +1011,16 @@ impl Task {
             queries.foreign_links.clone(),
             unreplayable,
         ));
-        let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
         let mut hash_bytes = crate::NativeMetadataWeight::default();
         let definition_hashes = if queries.export_hashes {
             hash_bytes.map(&hashes, |weight, path, _| weight.path(path));
-            Some(Arc::new(hashes))
+            Some(hashes.clone())
         } else {
             None
         };
         let output = Arc::new(FrontRunOutput {
             definition_hashes,
-            entry: self.root.clone(),
+            entry: root.clone(),
             revision,
             code,
             foreign,
@@ -879,13 +1061,10 @@ impl Task {
             .ok_or(QueryError::NotImplemented)?;
         let action = hirsel_artifact_store::Action(ContentHash::of_parts(
             "hirsel.front.run.action.v1",
-            [
-                self.query.address.0.0.as_slice(),
-                record.output.0.0.as_slice(),
-            ],
+            [query.address.0.0.as_slice(), record.output.0.0.as_slice()],
         ));
         let product = ProductRef {
-            address: self.query.address,
+            address: query.address,
             action,
             record,
         };
@@ -896,7 +1075,7 @@ impl Task {
             .completed
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(self.query.address.0, (product, output));
+            .insert(query.address.0, (product, output));
         Ok(product)
     }
 }
@@ -1138,6 +1317,8 @@ impl QueryEngine {
             })
             .collect();
         Ok(Arc::new(FrontRunQueries {
+            batch: None,
+            completed_batch: Mutex::new(None),
             export_hashes: false,
             native_roots: Vec::new(),
             inputs,

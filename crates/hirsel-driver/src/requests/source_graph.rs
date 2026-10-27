@@ -194,7 +194,14 @@ impl GraphProducts for SourceProducts {
                 *lowering == self.lowering && self.receipt.is_some()
             }
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => true,
-            CompileOperation::Tir { .. } => self.run.is_some(),
+            CompileOperation::Tir { .. } => self
+                .run
+                .as_ref()
+                .is_some_and(|run| run.batch_query().is_none()),
+            CompileOperation::TirBatch { definitions } => self
+                .run
+                .as_ref()
+                .is_some_and(|run| run.batch_roots() == Some(definitions.as_slice())),
             CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
             CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
                 self.export.is_some()
@@ -255,6 +262,12 @@ impl GraphProducts for SourceProducts {
                     .query(),
             ],
             CompileOperation::Inspect { .. } | CompileOperation::RecomputeCounts { .. } => vec![],
+            CompileOperation::TirBatch { .. } => vec![
+                self.run
+                    .as_ref()
+                    .and_then(|run| run.batch_query())
+                    .ok_or_else(|| uninstalled())?,
+            ],
             CompileOperation::Tir { definition } => {
                 let entry = definition
                     .as_ref()
@@ -516,6 +529,23 @@ impl GraphProducts for SourceProducts {
                                 products,
                             }
                         }
+                        CompileOperation::TirBatch { .. } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            if selected.is_none_or(|query| query.address != product.address) {
+                                return Err(uninstalled());
+                            }
+                            let entries = run
+                                .as_ref()
+                                .and_then(|run| run.batch_outcome(*product))
+                                .ok_or_else(|| uninstalled())?;
+                            CompileResult::TirBatch(Arc::new(super::TirBatchExecution {
+                                entries,
+                                lower: lower.clone(),
+                                owner: Arc::new(()),
+                            }))
+                        }
                         CompileOperation::Tir { .. } => {
                             let [product] = products else {
                                 return Err(ToolError::Runtime(
@@ -684,6 +714,7 @@ impl Plan {
         needs_receipt: bool,
         needs_export: bool,
         needs_storage: bool,
+        needs_batch: bool,
         footprint: FrontInputFootprint,
         run_input_bytes: u64,
         native_catalogue_bytes: u64,
@@ -849,6 +880,7 @@ impl Plan {
             + usize::from(needs_safe)
             + usize::from(needs_export)
             + usize::from(needs_storage)
+            + usize::from(needs_batch)
             + 2 * usize::from(needs_native || needs_ownership);
         let inventory = definitions
             .len()
@@ -980,6 +1012,7 @@ pub(super) fn install(
         CompileOperation::Check { lowering }
         | CompileOperation::CheckedProducts { lowering, .. } => (*lowering, false),
         CompileOperation::Tir { .. }
+        | CompileOperation::TirBatch { .. }
         | CompileOperation::Hashes { .. }
         | CompileOperation::NativeOwnership(_)
         | CompileOperation::NativeSources { .. }
@@ -1170,6 +1203,7 @@ pub(super) fn install(
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             artifacts,
             matches!(request.operation, CompileOperation::NativeSources { .. }),
+            matches!(request.operation, CompileOperation::TirBatch { .. }),
             footprint,
             run_input_bytes,
             native_catalogue_bytes,
@@ -1589,6 +1623,14 @@ pub(super) fn install(
         drop(run);
         None
     };
+    if let CompileOperation::TirBatch { definitions } = &request.operation {
+        run = Some(
+            run.take()
+                .ok_or_else(|| uninstalled())?
+                .with_batch_roots(definitions.clone())
+                .map_err(&query_error)?,
+        );
+    }
     let hash_selection = if let CompileOperation::Hashes { package } = &request.operation {
         let selected = package.as_ref().unwrap_or(&root_package);
         let roots = definitions
@@ -1847,6 +1889,9 @@ pub(super) fn install(
             }
         }
     }
+    if let Some(query) = run.as_ref().and_then(|run| run.batch_query()) {
+        inventory.insert((query.kind, query.address.0));
+    }
     if inventory.len() > plan.query_capacity {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
@@ -1895,6 +1940,11 @@ pub(super) fn install(
         runtime
             .register(hirsel_engine::FRONT_RUN_KIND, run.factory())
             .map_err(registration)?;
+        if run.batch_query().is_some() {
+            runtime
+                .register(hirsel_engine::FRONT_RUN_BATCH_KIND, run.factory())
+                .map_err(registration)?;
+        }
     }
     if let Some(safe) = &safe {
         runtime

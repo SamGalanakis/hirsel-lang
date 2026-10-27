@@ -99,6 +99,9 @@ impl CompileOutput {
                 let execution = Arc::make_mut(execution);
                 execution.sources = execution.sources.clone().retain_owner(owner.clone());
             }
+            CompileResult::TirBatch(batch) => {
+                Arc::make_mut(batch).owner = owner.clone();
+            }
             CompileResult::Inspect(inspection) => {
                 Arc::make_mut(inspection).owner = owner.clone();
             }
@@ -128,6 +131,7 @@ pub enum CompileResult {
     },
     RecomputeCounts(Vec<(DefPath, hirsel_engine::QueryKind, u64)>),
     Tir(Arc<TirExecution>),
+    TirBatch(Arc<TirBatchExecution>),
     Native(Arc<NativeExecution>),
     Ownership(Arc<super::OwnershipExecution>),
     NativeObjects(Arc<NativeObjectOutput>),
@@ -147,6 +151,26 @@ pub trait TirProducts: Send + Sync {
         actuals: &[GenericArgument],
     ) -> Result<Option<DefPath>, QueryError>;
 }
+/// Completed independently bound entry products from one source-closure pass.
+#[derive(Clone)]
+pub struct TirBatchExecution {
+    pub(super) entries: Arc<hirsel_engine::FrontRunBatchOutput>,
+    pub(super) lower: Arc<hirsel_engine::FrontLowerQueries>,
+    pub(super) owner: Arc<dyn Send + Sync>,
+}
+impl TirBatchExecution {
+    pub fn entry(&self, path: &DefPath) -> Result<Arc<TirExecution>, ToolError> {
+        let facts = self
+            .entries
+            .get(path)
+            .ok_or_else(|| ToolError::Runtime("entry is outside the selected TIR batch".into()))?;
+        let mut execution = super::tir_products::materialize(facts.clone(), self.lower.clone())?;
+        let selected = Arc::make_mut(&mut execution);
+        selected.sources = selected.sources.clone().retain_owner(self.owner.clone());
+        Ok(execution)
+    }
+}
+
 /// The selected TIR root and the immutable closure needed to execute it. The
 /// runtime contains the exact type, private-view and checked-H metadata for
 /// this snapshot; semantic revision remains independent of native artifacts.

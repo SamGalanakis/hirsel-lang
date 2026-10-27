@@ -16,6 +16,36 @@ pub struct NativeSemanticProgram {
     foreign_unreplayable: bool,
 }
 impl NativeSemanticProgram {
+    pub(crate) fn metadata_weight(&self, weight: &mut crate::NativeMetadataWeight) {
+        weight.add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>());
+        weight.vec(&self.program.nodes, |weight, node| {
+            weight.add(node.identity.capacity());
+            weight.vec(&node.content, |weight, bytes| weight.flat_vec(bytes));
+            weight.vec(&node.dependencies, |weight, name| {
+                weight.add(name.capacity())
+            });
+        });
+        weight.tree::<DefPath, ()>(self.program.definitions.len());
+        for path in &self.program.definitions {
+            weight.path(path);
+        }
+        weight.map(&self.program.uses, |weight, path, uses| {
+            weight.path(path);
+            weight.tree::<DefPath, ()>(uses.len());
+            for path in uses {
+                weight.path(path);
+            }
+        });
+        weight.map(&self.escapes, |weight, path, _| weight.path(path));
+        weight.map(&self.sources, |weight, path, _| weight.path(path));
+        weight.map(&self.foreign_threads, |weight, package, _| {
+            weight.add(package.name.capacity() + package.version.capacity());
+        });
+        weight.vec(&self.foreign_links, |weight, link| match link {
+            crate::LinkInput::Library(name) => weight.add(name.capacity()),
+            crate::LinkInput::File(path) => weight.add(path.capacity()),
+        });
+    }
     pub(crate) fn definitions(&self) -> &std::collections::BTreeSet<DefPath> {
         &self.program.definitions
     }

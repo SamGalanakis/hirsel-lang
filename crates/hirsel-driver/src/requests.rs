@@ -28,7 +28,8 @@ mod source_graph;
 mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
-    NativeExecution, NativeObjectOutput, NativeObservation, RequestWork, TirExecution, TirProducts,
+    NativeExecution, NativeObjectOutput, NativeObservation, RequestWork, TirBatchExecution,
+    TirExecution, TirProducts,
 };
 pub use ownership_selection::{OwnershipExecution, OwnershipObjects};
 pub use selector::{CompilerRequests, RequestLimits};
@@ -77,6 +78,10 @@ pub enum CompileOperation {
     /// None selects the declared launch entry using the observed manifest.
     Tir {
         definition: Option<DefPath>,
+    },
+    /// One checked source closure serving these independently bound entries.
+    TirBatch {
+        definitions: Vec<DefPath>,
     },
     NativeBuild(NativeRequest),
     NativeRun(NativeRequest),
