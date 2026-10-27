@@ -146,7 +146,9 @@ promise permitting allocation; a callable permitting allocation cannot establish
 use the same root mode relation, with exact cleanup promises for the declared
 field layout. Copy captures may
 weaken only root uniqueness from Unique to Aliased, matching the authority
-checker's capture type while leaving the source operand's type intact. Aliased
+checker's capture type while leaving the source operand's type intact. Local
+capture storage also retains lost nested uniqueness in the child's flow state;
+its physical type cannot restore an exportable receipt. Aliased
 sources cannot establish Unique captures; all other type structure, modes,
 brands, placement and cleanup promises remain equal. Taken captures require exact types. Borrowed and mutable capture slots use the
 root receiving-value relation: parent flow independently proves their current

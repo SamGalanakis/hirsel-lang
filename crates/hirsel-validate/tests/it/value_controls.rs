@@ -1384,3 +1384,65 @@ fn nested_unique_mutable_calls_weaken_only_root_receipts() {
         }
     }
 }
+
+#[test]
+fn copied_nested_unique_captures_retain_lost_receipts_in_the_child() {
+    for (exported, once) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut f = Fixture::unit();
+        let mut bytes = ty(TypeKind::Primitive(Primitive::Bytes));
+        bytes.modes.uniqueness = Uniqueness::Unique;
+        let bytes = f.definition.types.push(bytes);
+        let kind = TypeKind::Tuple(vec![bytes].into());
+        let source = param(&mut f, kind.clone());
+        let mut child = Fixture::unit();
+        child.definition.types = f.definition.types.clone();
+        let capture = child.slot(kind, Storage::Capture);
+        if exported {
+            child.body().result = child.body().places[capture as usize].ty;
+            child.body().blocks[0].terminator = Terminator::Return {
+                value: operand(capture, if once { UseKind::Take } else { UseKind::Copy }),
+                cleanup: CleanupId(0),
+            };
+        }
+        if once && !exported {
+            let cleanup = child.cleanup(vec![drop(capture)]);
+            child.body().blocks[0].terminator = ret(0, cleanup);
+        }
+        let result = child.body().result;
+        f.definition.types = child.definition.types;
+        f.definition.bodies.push(child.definition.bodies.remove(0));
+        let closure = f.slot(
+            TypeKind::Function(fn_type(vec![], result)),
+            Storage::Temporary,
+        );
+        if once {
+            row(&mut f, closure, |t| {
+                t.modes.multiplicity = Multiplicity::Once
+            });
+        }
+        f.assign(
+            closure,
+            Rvalue::Closure {
+                context: CaptureContext::OwningScoped,
+                body: BodyId(1),
+                captures: vec![copy(source)],
+                destination: Destination::Inferred,
+            },
+            0,
+        );
+        let cleanup = f.cleanup(vec![drop(closure)]);
+        f.body().blocks[0].terminator = ret(0, cleanup);
+        owner_signature(&mut f, PassingMode::Borrow);
+        if exported {
+            assert!(
+                f.kinds().contains(&ViolationKind::TypeMismatch {
+                    entity: "value modes"
+                }),
+                "{:?}",
+                f.kinds()
+            );
+        } else {
+            f.valid();
+        }
+    }
+}

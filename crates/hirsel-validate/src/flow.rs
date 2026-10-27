@@ -1300,6 +1300,10 @@ impl Model {
         {
             let root = self.roots[local];
             state.crossing_parts[local] = capture.crossing.clone();
+            if capture.nested_shared {
+                state.shared.set(local, true);
+                state.nested_shared.set(local, true);
+            }
             if capture.crossing.get(&[]) == Some(true) {
                 state.must.set_fact(local, MustFacts::SENDABLE, true);
             }
@@ -5235,6 +5239,17 @@ impl Checker<'_> {
                                 let index = model.mapping[operand.place.0 as usize];
                                 let inactive = self.inactive_variant_payload(operand.place);
                                 super::flow_origins::CapturedOrigin {
+                                    nested_shared: state.nested_shared[self.body.places
+                                        [operand.place.0 as usize]
+                                        .root
+                                        .0
+                                        as usize]
+                                        || operand.usage == UseKind::Copy
+                                            && !self.flat_value(operand.place)
+                                            && !super::handle_root(
+                                                self.t,
+                                                self.place_type(operand.place),
+                                            ),
                                     crossing: self.operand_crossing_parts(state, operand),
                                     contract_readonly: matches!(
                                         operand.usage,

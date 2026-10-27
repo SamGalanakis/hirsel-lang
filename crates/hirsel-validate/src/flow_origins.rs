@@ -726,6 +726,7 @@ fn fresh_bindings(body: &Body, block: u32) -> impl Iterator<Item = Origin> + '_ 
 /// Re-entering a callable does not execute a fresh outer binding introduction.
 #[derive(Clone, Default, Eq, PartialEq)]
 pub(super) struct CapturedOrigin {
+    pub nested_shared: bool,
     pub crossing: super::flow::crossing::Parts,
     pub contract_readonly: bool,
     pub tags: super::flow::tags::Parts,
@@ -740,6 +741,7 @@ pub(super) fn join_captures(target: &mut Vec<CapturedOrigin>, incoming: &[Captur
     let old = target.clone();
     for (a, b) in target.iter_mut().zip(incoming) {
         a.crossing.join(&b.crossing);
+        a.nested_shared |= b.nested_shared;
         a.contract_readonly |= b.contract_readonly;
         a.environment.join(&b.environment);
         super::flow::tags::join_parts(&mut a.tags, &b.tags);

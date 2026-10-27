@@ -668,6 +668,14 @@ impl Checker<'_> {
             return false;
         };
         let place = &self.body.places[destination.0 as usize];
+        if let Rvalue::Closure { body, captures, .. } = &self.body.rvalues[value.0 as usize] {
+            return self.definition.bodies[body.0 as usize]
+                .locals
+                .iter()
+                .filter(|local| local.storage == Storage::Capture)
+                .zip(captures)
+                .any(|(local, _)| local.ty == expected);
+        }
         matches!(self.body.rvalues[value.0 as usize], Rvalue::Use(_))
             && place.projection.is_empty()
             && place.ty == expected
