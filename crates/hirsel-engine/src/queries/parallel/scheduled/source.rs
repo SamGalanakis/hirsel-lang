@@ -31,15 +31,13 @@ impl crate::snapshot::DeclarationSiblings for SiblingArchives {
                 let text = self.sources.file(owner).ok_or_else(refusal)?.text();
                 // Structural validation also checks that every span uses this
                 // item's anchor. Resolve its file/base once for the whole tree.
-                if owner != file
-                    || !syntax.structurally_valid(|span| {
-                        text.get(
-                            base.saturating_add(span.start) as usize
-                                ..base.saturating_add(span.end) as usize,
-                        )
-                        .is_some()
-                    })
-                {
+                if !syntax.structurally_valid(|span| {
+                    text.get(
+                        base.saturating_add(span.start) as usize
+                            ..base.saturating_add(span.end) as usize,
+                    )
+                    .is_some()
+                }) {
                     return Err(refusal());
                 }
                 syntax.occurrence = occurrence;
