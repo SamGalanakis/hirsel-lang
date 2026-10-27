@@ -4576,3 +4576,33 @@ fn ownership_resource_selection_is_immutable_and_reproved_by_native_requests() {
         }
     }
 }
+
+#[test]
+fn ownership_resource_selection_ignores_data_release_but_refuses_hidden_resource_payloads() {
+    let mut t = Lir::<hirsel_lir::stage::Ready>::new(&[(Passing::Take, l::BLK)], None);
+    let data = t.owned(l::BLK);
+    t.param(data);
+    let failure = t.fails();
+    t.release_with(ENTRY, data, failure);
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let plan = Plan::selected(unit.unit(), Selection::Resources, vec![]);
+    let prepared = native::LeafPlan::from_relocated(&unit, &table, &plan).unwrap();
+    assert_eq!(prepared.markers().count(), 0);
+
+    // Returning a counted Resource-bearing block is valid ordinary LIR. Its
+    // empty diagnostic plan must still fail the independent coverage check.
+    let mut t =
+        Lir::<hirsel_lir::stage::Ready>::new(&[(Passing::Take, l::RESBLK)], Some(l::RESBLK));
+    let resource = t.owned(l::RESBLK);
+    t.param(resource);
+    t.builder.ret(ENTRY, Some(resource));
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    let missing = Plan::selected(unit.unit(), Selection::Resources, vec![]);
+    assert!(
+        native::LeafPlan::from_relocated(&unit, &table, &missing).is_err(),
+        "a counted block can hide Resource descendants"
+    );
+}

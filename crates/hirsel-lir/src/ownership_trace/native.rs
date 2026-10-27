@@ -414,6 +414,11 @@ impl LeafPlan {
                             layout(value),
                         )?;
                     }
+                    Inst::Release { value, .. }
+                        if !selection.tracks_layout(layouts, layout(value)) =>
+                    {
+                        ()
+                    }
                     Inst::Release { value, .. } if owned(value) => {
                         push(
                             before,
@@ -973,7 +978,14 @@ impl LeafPlan {
             commits.extend(points.into_iter().map(|point| (point, native)));
         }
         if covered.len() != expected.plan.observations.len() {
-            return Err("ownership plan omits a Ready transition".into());
+            return Err(format!(
+                "ownership plan omits a Ready transition: {:?}",
+                expected
+                    .plan
+                    .observations
+                    .iter()
+                    .find(|row| !covered.contains(&row.marker.id))
+            ));
         }
         let mut prepared = Self {
             plan: plan.clone(),
