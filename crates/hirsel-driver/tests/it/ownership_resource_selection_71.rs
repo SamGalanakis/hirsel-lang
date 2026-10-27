@@ -17,3 +17,22 @@ pub fn main()->Result[(),u64] {
         2,
     );
 }
+
+#[test]
+fn source_resource_selection_keeps_scalar_loop_replacement_out_of_resource_lineage() {
+    super::ownership_owned_call_49::source_calls(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main()->Result[(),()] {
+ let mut i=0u64
+ while i<8u64 {
+  let token=Token()
+  i=i+1u64
+ }
+ Ok(())
+}
+"#,
+        8,
+    );
+}

@@ -377,6 +377,12 @@ impl LeafPlan {
                             layout(value),
                         )?;
                     }
+                    Inst::Replace { address, value, .. }
+                        if !owned(value)
+                            && (!selection.tracks_layout(
+                                layouts,
+                                unit.types[unit.addresses[address.index()].ty.index()].layout,
+                            ) || plain(layouts, layout(value), 0)) => {}
                     Inst::Replace {
                         address,
                         value,
