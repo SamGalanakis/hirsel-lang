@@ -7,6 +7,7 @@ mod constants;
 mod dependencies;
 mod depth;
 mod evidence;
+mod inputs;
 mod reads;
 mod registration;
 mod stored;
@@ -19,6 +20,7 @@ use constants::Constants;
 use dependencies::Dependencies;
 use evidence::Evidence;
 use hirsel_tir::{DefinitionRef, Materialized, MaterializedRef};
+use inputs::Inputs;
 pub use registration::{
     FRONT_REGISTRATION_KIND, FrontRegistrationOutput, FrontRegistrationQueries,
 };
@@ -330,7 +332,7 @@ impl FrontLowerOutput {
     }
 }
 pub struct FrontLowerQueries {
-    inputs: BTreeMap<DefPath, Input>,
+    inputs: Inputs,
     paths: BTreeMap<(u32, ContentHash), DefId>,
     /// Implementation hashes of the opaque types a lowered body can read the
     /// private representation of: its LayoutBody inputs.
@@ -1815,14 +1817,14 @@ impl QueryEngine {
             .filter(|s| s.enabled())
             .ok_or_else(refusal)?;
         let lowering = self.adapters.lowering.clone().ok_or_else(refusal)?;
-        let mut inputs = BTreeMap::new();
+        let mut inputs = Vec::with_capacity(definitions.len());
         for path in definitions {
             if front.query(path).is_none() {
                 return Err(refusal());
             }
             let syntax = self.snapshot(path)?;
-            inputs.insert(
-                path.clone(),
+            inputs.push((
+                DefId::intern(path),
                 Input {
                     lower: match front.registration(path) {
                         Some(accepted) => {
@@ -1847,7 +1849,14 @@ impl QueryEngine {
                     implementation: syntax.text_hash,
                     site: syntax.item.name_span,
                 },
-            );
+            ));
+        }
+        let inputs = Inputs::new(inputs);
+        if inputs
+            .retained_bytes()
+            .is_none_or(|bytes| bytes > input_bytes)
+        {
+            return Err(refusal());
         }
         let snapshot = self.signature_inputs();
         let packages: std::collections::BTreeSet<_> =

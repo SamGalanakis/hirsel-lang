@@ -1,9 +1,10 @@
 //! Request-private std filesystem spooling. No durable index, cache lookup or
 //! verifier capability is created. BTree/atomic admission stays in the parent.
 use super::*;
+#[cfg(not(unix))]
+use std::io::{Read, Write};
 use std::{
     fs,
-    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -15,13 +16,14 @@ impl Drop for Root {
 }
 fn index_bytes(entries: usize) -> u64 {
     let mut weight = crate::NativeMetadataWeight::default();
-    weight.tree::<ContentHash, (Reference, PathBuf)>(entries);
+    weight.tree::<ContentHash, (Reference, u64)>(entries);
     weight.bytes()
 }
 struct Files {
     disk: u64,
     metadata: u64,
-    entries: BTreeMap<ContentHash, (Reference, PathBuf)>,
+    entries: BTreeMap<ContentHash, (Reference, u64)>,
+    spool: fs::File,
 }
 pub(super) struct ScratchStore {
     selected: Arc<dyn ResultStore>,
@@ -61,6 +63,14 @@ impl ScratchStore {
         }
         builder.create(&path)?;
         let root = Arc::new(Root(path));
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let spool = options.open(root.0.join("contents"))?;
         let metadata = ENTRY_CHARGE
             .saturating_add(root.0.capacity() as u64)
             .saturating_add(index_bytes(0));
@@ -79,6 +89,7 @@ impl ScratchStore {
                 disk: 0,
                 metadata,
                 entries: BTreeMap::new(),
+                spool,
             }),
         })
     }
@@ -130,43 +141,22 @@ impl ResultStore for ScratchStore {
         if expected.len > self.disk_limit.saturating_sub(files.disk) {
             return None;
         }
-        let name: String = expected
-            .output
-            .0
-            .0
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        let path = self.root.0.join(name);
-        // Spool entries own a BTree slot and a path buffer, not a payload
-        // allocation. Charge the same Rust-node bound as other native metadata.
+        // One append-only private file owns the payloads. Exact ranges and
+        // content hashes isolate records; no per-record path is retained.
         let metadata = index_bytes(files.entries.len().checked_add(1)?)
-            .checked_sub(index_bytes(files.entries.len()))?
-            .checked_add(path.capacity() as u64)?;
+            .checked_sub(index_bytes(files.entries.len()))?;
         if !self.admission.charge(metadata) {
             return None;
         }
-        let write = || -> std::io::Result<()> {
-            let mut options = fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&path)?;
-            file.write_all(bytes)?;
-            // These files are transient, not crash-durable artifacts.
-            file.flush()
-        };
-        if write().is_err() {
-            let _ = fs::remove_file(&path);
+        let offset = files.disk;
+        if write_at(&files.spool, bytes, offset).is_err() {
+            let _ = files.spool.set_len(offset);
             self.admission.release(metadata);
             return None;
         }
         files.disk += expected.len;
         files.metadata += metadata;
-        files.entries.insert(expected.output.0, (expected, path));
+        files.entries.insert(expected.output.0, (expected, offset));
         drop(files);
         // A successful cache put is still evictable. The current request owns
         // its transport independently of later durable/cache reclamation.
@@ -175,11 +165,14 @@ impl ResultStore for ScratchStore {
     }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
         let files = self.files.lock().unwrap_or_else(|e| e.into_inner());
-        let Some((actual, path)) = files.entries.get(&reference.output.0) else {
+        let Some((actual, offset)) = files.entries.get(&reference.output.0) else {
             drop(files);
             return self.selected.get_content(reference);
         };
         if *actual != reference {
+            return None;
+        }
+        if files.spool.metadata().ok()?.len() != files.disk {
             return None;
         }
         // Serialize allocation of the temporary Vec/Arc conversion. Afterwards
@@ -191,11 +184,7 @@ impl ResultStore for ScratchStore {
         }
         let read = || -> Option<Bytes> {
             let mut value = vec![0; usize::try_from(reference.len).ok()?];
-            let mut file = fs::File::open(path).ok()?;
-            file.read_exact(&mut value).ok()?;
-            if file.read(&mut [0; 1]).ok()? != 0 {
-                return None;
-            }
+            read_at(&files.spool, &mut value, *offset).ok()?;
             if reference.domain.reference(&value)? != reference {
                 return None;
             }
@@ -213,6 +202,37 @@ impl ResultStore for ScratchStore {
             bytes: retained,
         });
         Some(value.unwrap().retain_owner(owner))
+    }
+}
+
+// Rust std FileExt supplies retry/short-I/O handling without reopening or
+// changing a shared cursor. Non-Unix hosts serialize their cursor under Files.
+fn write_at(file: &fs::File, bytes: &[u8], offset: u64) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.write_all_at(bytes, offset)
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::{Seek, SeekFrom};
+        let mut file = file;
+        file.seek(SeekFrom::Start(offset))?;
+        file.write_all(bytes)
+    }
+}
+fn read_at(file: &fs::File, bytes: &mut [u8], offset: u64) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        file.read_exact_at(bytes, offset)
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::{Seek, SeekFrom};
+        let mut file = file;
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(bytes)
     }
 }
 
@@ -323,19 +343,26 @@ mod tests {
             .sum();
         assert_eq!(disk, 64 << 10);
         // Files are untrusted bytes, never acceptance authority.
-        let name: String = first
-            .output
-            .0
-            .0
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        fs::write(directory.join(name), b"truncated").unwrap();
+        let spool = fs::OpenOptions::new()
+            .write(true)
+            .open(directory.join("contents"))
+            .unwrap();
+        write_at(&spool, b"corrupted", 0).unwrap();
         let before = request.retained_bytes();
         assert!(request.get_content(first).is_none());
         assert_eq!(request.retained_bytes(), before);
         let held = request.get_content(second).unwrap();
         assert_eq!(&*held, &vec![2; 32 << 10]);
+        spool.set_len((64 << 10) - 1).unwrap();
+        assert!(
+            request.get_content(second).is_none(),
+            "truncated last record"
+        );
+        assert_eq!(
+            &*held,
+            &vec![2; 32 << 10],
+            "held bytes survive spool damage"
+        );
         assert!(request.retained_bytes() <= ram);
         assert!(request.put_content(domain(), &vec![3; 128 << 10]).is_none());
         assert!(request.retained_bytes() <= ram);

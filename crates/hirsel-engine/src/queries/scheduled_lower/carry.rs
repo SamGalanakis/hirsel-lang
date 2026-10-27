@@ -105,7 +105,7 @@ impl FrontLowerQueries {
     pub(super) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         match *read {
             ReadKey::ExecutedBody(id) => Some(memos::optional(
-                self.inputs.get(id.path()).map(|input| input.implementation),
+                self.inputs.get_id(id).map(|input| input.implementation),
             )),
             ReadKey::LayoutBody(id) => Some(memos::optional(self.layouts.get(&id).copied())),
             _ => self.front.observe(owner, read),
