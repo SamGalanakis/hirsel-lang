@@ -66,7 +66,8 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
         let offset = alloc::sequence_elements_offset(align);
         let count = alloc::payload(old).cast::<u64>().read();
         // Empty static literals need no extent metadata read.
-        let bytes = if count == 0 && (*old).domain() == alloc::DOMAIN_STATIC {
+        let empty_static = count == 0 && (*old).domain() == alloc::DOMAIN_STATIC;
+        let bytes = if empty_static {
             offset
         } else {
             (*ctx).heap_ref().capacity(old)
@@ -109,7 +110,7 @@ unsafe fn plan(ctx: *mut TaskCtx, request: &Growth) -> Option<(HeapPlan, u64, u6
         Some((
             HeapPlan {
                 old,
-                keep,
+                keep: if empty_static { 0 } else { keep },
                 elements: Some((offset, request.element_size)),
                 detach,
             },
@@ -276,6 +277,9 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
             plan.keep as usize,
         );
         if let Some((offset, size)) = plan.elements {
+            if plan.keep == 0 {
+                alloc::payload(fresh).cast::<u64>().write(0);
+            }
             let slots = alloc::sequence_slots((*ctx).heap_ref(), fresh, offset, size);
             alloc::set_sequence_capacity(fresh, slots);
         }
@@ -298,4 +302,63 @@ pub(in crate::tasks::ordered::ahead) unsafe fn serve(
         finish(native, fresh, ACCEPTED);
     }
     Ok(true)
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_static_growth_reads_only_the_literal_count_before_detaching() {
+        let outcome = crate::host::BodyRun::new(1, false).run(
+            |_| {},
+            |ctx| unsafe {
+                let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+                let mapping = libc::mmap(
+                    std::ptr::null_mut(),
+                    page * 2,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                );
+                assert_ne!(mapping, libc::MAP_FAILED);
+                assert_eq!(
+                    libc::mprotect(mapping.cast::<u8>().add(page).cast(), page, libc::PROT_NONE),
+                    0
+                );
+                let old = mapping.cast::<u8>().add(page - 16).cast::<Header>();
+                old.write(Header {
+                    count: crate::COUNT_IMMORTAL,
+                    descriptor: alloc::KIND_STATIC << alloc::KIND_SHIFT,
+                });
+                alloc::payload(old).cast::<u64>().write(0);
+                let request = Growth {
+                    version: VERSION,
+                    kind: GROW_SEQUENCE,
+                    ordinal: 0,
+                    block: old,
+                    region: std::ptr::null_mut(),
+                    index: 0,
+                    flags: 0,
+                    extent: 0,
+                    align: 0,
+                    keep: 0,
+                    element_size: 8,
+                    element_align: 64,
+                    capacity: 4,
+                };
+                let (plan, extent, align) = plan(ctx, &request).unwrap();
+                assert!(plan.detach);
+                assert_eq!(
+                    plan.keep, 0,
+                    "an empty literal lends no capacity or elements to copy"
+                );
+                assert_eq!((extent, align), (96, 64));
+                assert_eq!(libc::munmap(mapping, page * 2), 0);
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+    }
 }
