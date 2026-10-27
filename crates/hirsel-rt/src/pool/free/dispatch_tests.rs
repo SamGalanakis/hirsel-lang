@@ -711,3 +711,75 @@ fn a_late_token_wake_routes_a_saved_compact_frame_off_its_last_worker() {
         );
     }
 }
+
+fn scoped_publication_at_park(after_lock: bool) {
+    let execs = topology(1);
+    let scoped = Exec::new(Kind::Scoped(0), std::ptr::null_mut(), false);
+    let owner = Owner::Compute(Arc::as_ptr(&scoped).expose_provenance());
+    let addressed = segment(&execs, 23);
+    addressed.frame.placement.set_owner(owner_word(owner));
+    // A scoped executor must leave ordinary ready work for its ordinary owner.
+    publish(&execs, segment(&execs, 19), false, false);
+    assert!(next(&execs, &scoped).is_none());
+    if after_lock {
+        let mut inbox = scoped.inbox.lock().unwrap();
+        assert!(inbox.posts.is_empty());
+        std::thread::scope(|scope| {
+            let (started, ready) = std::sync::mpsc::channel();
+            let execs = &execs;
+            let publisher = scope.spawn(move || {
+                started.send(()).unwrap();
+                publish(execs, addressed, false, false);
+            });
+            ready.recv_timeout(Duration::from_secs(5)).unwrap();
+            // The publisher cannot pass the final predicate lock until wait
+            // atomically subscribes and releases it, as in Exec::take/serve.
+            while inbox.posts.is_empty() {
+                let (guard, timeout) = scoped
+                    .bell
+                    .wait_timeout(inbox, Duration::from_secs(5))
+                    .unwrap();
+                inbox = guard;
+                assert!(!timeout.timed_out(), "addressed CPU post lost at park");
+            }
+            drop(inbox);
+            publisher.join().unwrap();
+        });
+    } else {
+        // A notification sent before the receiver waits must survive as an
+        // inbox entry even though its condition-variable wake is not retained.
+        publish(&execs, addressed, false, false);
+    }
+    let Post::Saved(saved) = scoped.take().0 else {
+        panic!("addressed CPU continuation")
+    };
+    assert_eq!(start(saved).task, 23);
+    assert!(scoped.inbox.lock().unwrap().posts.is_empty());
+    assert!(next(&execs, &scoped).is_none());
+    let ordinary = execs.compute.lock().unwrap().active[0].clone();
+    assert_eq!(start(next(&execs, &ordinary).unwrap()).task, 19);
+    assert_eq!(
+        execs.dispatch.get().unwrap().queued.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(
+        execs
+            .dispatch
+            .get()
+            .unwrap()
+            .count
+            .live
+            .load(Ordering::Acquire),
+        0
+    );
+}
+
+#[test]
+fn scoped_addressed_post_before_park_preserves_the_only_claim() {
+    scoped_publication_at_park(false);
+}
+
+#[test]
+fn scoped_addressed_post_during_park_cannot_lose_its_wakeup() {
+    scoped_publication_at_park(true);
+}
