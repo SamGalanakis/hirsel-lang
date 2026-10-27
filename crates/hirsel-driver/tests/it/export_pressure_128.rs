@@ -29,7 +29,7 @@ fn pressure(reclaim_idle: bool) {
         )
         .unwrap();
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"export_pressure","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
-        let budget = ProcessBudget::new(384 << 20);
+        let budget = ProcessBudget::new(768 << 20);
         let config = CompileConfig {
             store: Arc::new(MemStore::default()),
             jobs: hirsel_intern::jobs::Jobs::new(1),
@@ -42,7 +42,7 @@ fn pressure(reclaim_idle: bool) {
                 config.clone(),
                 budget.clone(),
                 RequestLimits {
-                    runtime_bytes: 64 << 20,
+                    runtime_bytes: 160 << 20,
                     snapshot_bytes: 32 << 20,
                     transport_bytes: 8 << 20,
                 },
@@ -64,7 +64,7 @@ fn pressure(reclaim_idle: bool) {
             config,
             budget.clone(),
             RequestLimits {
-                runtime_bytes: 96 << 20,
+                runtime_bytes: 192 << 20,
                 snapshot_bytes: 64 << 20,
                 transport_bytes: 16 << 20,
             },
