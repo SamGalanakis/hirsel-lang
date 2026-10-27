@@ -2954,8 +2954,6 @@ pub(crate) unsafe extern "C" fn ahead_suspended(
 /// # Safety
 /// `ctx` is live and `index` is the running child.
 unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
-    #[cfg(feature = "ownership-trace")]
-    crate::ownership_trace::task_end(ctx);
     if ordered::engine::on(ctx) {
         unsafe { ordered::lifecycle::complete(ctx, index, status) }
     }
@@ -2964,6 +2962,8 @@ unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     }
     // This fiber is abandoned at the departure, so nothing it owns may still be live then.
     let next = unsafe { crate::stop::check(ctx, completed(ctx, index, status)) };
+    #[cfg(feature = "ownership-trace")]
+    crate::ownership_trace::task_end(ctx);
     // SAFETY: the context is live; this fiber is never resumed.
     unsafe { depart_to(ctx, next) }
 }

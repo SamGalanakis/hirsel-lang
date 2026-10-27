@@ -791,6 +791,8 @@ pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
         engine::head_effect(ctx, "task.end", effect)
     };
     let (_, progress) = unsafe { crate::stop::check(ctx, effect) };
+    #[cfg(feature = "ownership-trace")]
+    crate::ownership_trace::task_end(ctx);
     let task = engine::current(ctx);
     engine::with_driver(ctx, |driver| {
         if progress == Progress::Poll {

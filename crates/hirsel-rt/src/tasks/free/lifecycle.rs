@@ -361,6 +361,8 @@ pub(super) unsafe fn completion(ctx: *mut TaskCtx, index: u32, status: u8) -> St
     // distinct op even when its rest released no roots. This keeps ordinals
     // independent of count races and admits cleanup/failures before the join.
     super::record::end(ctx, effect)?;
+    #[cfg(feature = "ownership-trace")]
+    crate::ownership_trace::task_end(unsafe { &*ctx });
     drop(cancellations);
     drop(path);
     if let Some(metrics) = &unsafe { (*ctx).run_ref() }.worker_metrics {
