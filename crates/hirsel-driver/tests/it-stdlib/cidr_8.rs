@@ -166,9 +166,51 @@ fn every_width_masks_host_bits_roundtrips_and_membership() {
     eprintln!("cidr-8: 486 prefix cases, 1944 per-bit membership comparisons");
 }
 
+fn execute_overlap_vectors(source: &str, cases: usize) {
+    with_compiler_stack(|| {
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/std_source/main.hir");
+        let mut program = crate::source_std::load_program_source(&path, Some(source)).unwrap();
+        program
+            .check_for_execution()
+            .unwrap_or_else(|error| panic!("{error}\n{source}"));
+        let config = RunConfiguration {
+            entry: program.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        for seed in 0..cases as u64 {
+            let simulation = SimulationConfig {
+                test_seed: seed,
+                ..Default::default()
+            };
+            let run =
+                run_observed_snapshot(&mut program.engine, &config, simulation.clone()).unwrap();
+            assert!(
+                matches!(
+                    run.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+                ),
+                "pair {seed}: {:?}\n{source}",
+                run.outcome
+            );
+            let checked = run_observed_checked(&mut program.engine, &config, simulation).unwrap();
+            assert!(
+                matches!(
+                    checked.outcome,
+                    Ok(RunOutcome::Returned(hirsel_run_schema::Returned::Ok))
+                ),
+                "pair {seed}: {:?}\n{source}",
+                checked.outcome
+            );
+        }
+    });
+}
+
 #[test]
 fn generated_overlap_symmetry_and_containment() {
     let mut count = 0;
+    let mut vectors = String::new();
     for len in [4, 16] {
         for seed in 0..32 {
             let a: Vec<u8> = (0..len).map(|i| (seed * 17 + i * 53) as u8).collect();
@@ -176,20 +218,27 @@ fn generated_overlap_symmetry_and_containment() {
             let bw = seed * 13 % (len * 8 + 1);
             for b in [a.clone(), masked(&a, bw), vec![0; len], vec![255; len]] {
                 let expected = contains(&a, aw.min(bw), &b);
-                let body = format!(
-                    "let Ok(a) = std@1/cidr.from_addr({}, {aw}) else {{ return Error(()) }}\n\
-                     let Ok(b) = std@1/cidr.from_addr({}, {bw}) else {{ return Error(()) }}\n\
-                     core@1/test.check(t, std@1/cidr.overlaps(a, b) == {expected})\n\
-                     core@1/test.check(t, std@1/cidr.overlaps(b, a) == {expected})\n\
-                     core@1/test.check(t, std@1/cidr.overlaps(a, b) == (std@1/cidr.contains(a, std@1/cidr.addr(b)) || std@1/cidr.contains(b, std@1/cidr.addr(a))))\n",
+                vectors += &format!(
+                    "({}, {aw}, {}, {bw}, {expected}),\n",
                     literal(&a),
                     literal(&b)
                 );
-                execute(&body);
                 count += 1;
             }
         }
     }
+    let source = format!(
+        "pub fn main(t: Test) -> Result[(), ()] {{\n\
+         let vectors: List[(IpAddr, i64, IpAddr, i64, bool)] = [{vectors}]\n\
+         let (ip_a, aw, ip_b, bw, expected) = vectors[core@1/test.seed(t)]\n\
+         let Ok(a) = std@1/cidr.from_addr(ip_a, aw) else {{ return Error(()) }}\n\
+         let Ok(b) = std@1/cidr.from_addr(ip_b, bw) else {{ return Error(()) }}\n\
+         core@1/test.check(t, std@1/cidr.overlaps(a, b) == expected)\n\
+         core@1/test.check(t, std@1/cidr.overlaps(b, a) == expected)\n\
+         core@1/test.check(t, std@1/cidr.overlaps(a, b) == (std@1/cidr.contains(a, std@1/cidr.addr(b)) || std@1/cidr.contains(b, std@1/cidr.addr(a))))\n\
+         Ok(())\n}}"
+    );
+    execute_overlap_vectors(&source, count);
     assert_eq!(count, 256);
     eprintln!("cidr-8: 256 generated prefix pairs, symmetry and containment checked");
 }
