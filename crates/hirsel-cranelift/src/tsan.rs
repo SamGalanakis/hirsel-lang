@@ -15,24 +15,35 @@ use hirsel_lir::stage::ObjectSymbolKind;
 
 impl Emitter<'_> {
     pub(crate) fn instrument_thread(&mut self, function: &mut ir::Function) -> Emitted {
+        let name = |raw: &'static str| {
+            if self.inputs.unit.is_some_and(|inputs| inputs.alternate) {
+                hirsel_core_contract::tsan::bridge(raw).expect("known TSan callback")
+            } else {
+                raw
+            }
+        };
+        let reads = name("__tsan_read_range");
+        let writes = name("__tsan_write_range");
+        let entry_name = name("__tsan_func_entry");
+        let exit_name = name("__tsan_func_exit");
         let mut signature = self.module.make_signature();
         signature
             .params
             .extend([AbiParam::new(PTR), AbiParam::new(PTR)]);
         let mut imports = Vec::new();
-        for name in ["__tsan_read_range", "__tsan_write_range"] {
+        for name in [reads, writes] {
             self.manifested
                 .import(name, ObjectSymbolKind::Runtime, None);
             let id = self.import_function(name, &signature)?;
             imports.push(self.module.declare_func_in_func(id, function));
         }
         signature.params.pop();
-        let entry = self.import_function("__tsan_func_entry", &signature)?;
+        let entry = self.import_function(entry_name, &signature)?;
         let entry = self.module.declare_func_in_func(entry, function);
         signature.params.clear();
-        let exit = self.import_function("__tsan_func_exit", &signature)?;
+        let exit = self.import_function(exit_name, &signature)?;
         let exit = self.module.declare_func_in_func(exit, function);
-        for name in ["__tsan_func_entry", "__tsan_func_exit"] {
+        for name in [entry_name, exit_name] {
             self.manifested
                 .import(name, ObjectSymbolKind::Runtime, None);
         }

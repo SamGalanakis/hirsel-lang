@@ -55,6 +55,12 @@ pub(crate) fn manifest(manifested: &mut Manifested) {
     }
 }
 
+pub(crate) fn manifest_bridges(manifested: &mut Manifested) {
+    for &(bridge, _) in hirsel_core_contract::tsan::CALLBACKS {
+        manifested.import(bridge, ObjectSymbolKind::Runtime, None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::control;

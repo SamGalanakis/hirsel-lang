@@ -9,6 +9,7 @@ hirsel_guard::install!();
 pub mod depth;
 pub mod handle_scan;
 pub mod snapshot;
+pub mod tsan;
 use hirsel_syntax::{ContentHash, DefPath, PassingMode};
 
 /// Declared parameter convention (OWN-1/2/3), hashable for manifest and ABI keys.

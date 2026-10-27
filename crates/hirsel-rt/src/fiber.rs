@@ -292,7 +292,7 @@ mod tsan {
         fn __tsan_get_current_fiber() -> *mut c_void;
         fn __tsan_create_fiber(flags: u32) -> *mut c_void;
         fn __tsan_destroy_fiber(fiber: *mut c_void);
-        pub(super) fn __tsan_switch_to_fiber(fiber: *mut c_void, flags: u32);
+        pub(crate) fn __tsan_switch_to_fiber(fiber: *mut c_void, flags: u32);
     }
 
     /// Each range's low address: its high address and its fiber, for the stack mappings and for
@@ -375,11 +375,14 @@ fn initial_frame(entry: Entry, first: *mut u8, second: *mut u8) -> [u64; 8] {
 }
 
 #[cfg(all(target_arch = "x86_64", feature = "tsan"))]
-unsafe extern "C" fn tsan_switch_target(to: *mut u8) -> *mut std::ffi::c_void {
+pub(crate) unsafe extern "C" fn tsan_switch_target(to: *mut u8) -> *mut std::ffi::c_void {
     #[cfg(test)]
     TSAN_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tsan::target(to)
 }
+
+#[cfg(all(target_arch = "x86_64", feature = "tsan"))]
+pub(crate) use tsan::__tsan_switch_to_fiber as tsan_switch_to_fiber;
 
 // An ahead handoff jumps here directly. Annotate beneath every caller, with
 // no instrumented Rust frame alive when the TSan fiber changes. The temporary
@@ -392,18 +395,19 @@ pub(crate) unsafe extern "C" fn fiber_switch(_save: *mut *mut u8, _to: *mut u8) 
         "mov rdi, rsi", "call {target}",
         "mov rdi, rax", "xor esi, esi", "call {annotate}",
         "add rsp, 8", "pop rsi", "pop rdi", "jmp {switch}",
-        target = sym tsan_switch_target,
-        annotate = sym tsan::__tsan_switch_to_fiber,
+        target = sym crate::tsan_callbacks::hirsel_tsan_switch_target,
+        annotate = sym crate::tsan_callbacks::hirsel_tsan_switch_to_fiber,
         switch = sym fiber_switch_raw,
     )
 }
 
 #[cfg(target_arch = "x86_64")]
 macro_rules! x86_switch {
-    ($name:ident) => {
+    ($name:ident, $update:literal) => {
         #[unsafe(naked)]
         pub(crate) unsafe extern "C" fn $name(_save: *mut *mut u8, _to: *mut u8) {
             core::arch::naked_asm!(
+                $update,
                 "push rbp",
                 "push rbx",
                 "push r12",
@@ -430,9 +434,25 @@ macro_rules! x86_switch {
     };
 }
 #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
-x86_switch!(fiber_switch);
+x86_switch!(fiber_switch, "");
 #[cfg(all(target_arch = "x86_64", feature = "tsan"))]
-x86_switch!(fiber_switch_raw);
+x86_switch!(
+    fiber_switch_raw,
+    "
+    mov r11, qword ptr fs:[hirsel_tsan_idle@TPOFF]
+    test r11, r11
+    je 3f
+    cmp rdi, r11
+    jne 2f
+    mov byte ptr fs:[hirsel_tsan_private@TPOFF], 1
+    jmp 3f
+    2:
+    cmp rsi, [r11]
+    jne 3f
+    mov byte ptr fs:[hirsel_tsan_private@TPOFF], 0
+    3:
+"
+);
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]

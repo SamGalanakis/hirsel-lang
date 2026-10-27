@@ -454,6 +454,28 @@ impl<'context> Module<'context> {
         self.run_passes("function(tsan)", machine)
     }
 
+    /// Ahead code calls only fixed private-stack bridges. Unknown callbacks
+    /// keep their names so independent certification still refuses them.
+    #[cfg(feature = "native-tsan")]
+    pub(crate) fn bridge_thread_callbacks(&self) {
+        // SAFETY: names and functions belong to this live module. LLVM copies
+        // the supplied replacement name before this call returns.
+        unsafe {
+            let mut function = LLVMGetFirstFunction(self.raw);
+            while !function.is_null() {
+                let mut length = 0;
+                let name = LLVMGetValueName2(function, &mut length);
+                let name = std::slice::from_raw_parts(name.cast::<u8>(), length);
+                if let Ok(name) = std::str::from_utf8(name)
+                    && let Some(bridge) = hirsel_core_contract::tsan::bridge(name)
+                {
+                    LLVMSetValueName2(function, bridge.as_ptr().cast(), bridge.len());
+                }
+                function = LLVMGetNextFunction(function);
+            }
+        }
+    }
+
     /// Runs a new-pass-manager pipeline such as `default<O3>`.
     pub(crate) fn run_passes(&self, pipeline: &str, machine: &TargetMachine) -> Result<(), String> {
         if matches!(pipeline, "default<O2>" | "default<O3>") {

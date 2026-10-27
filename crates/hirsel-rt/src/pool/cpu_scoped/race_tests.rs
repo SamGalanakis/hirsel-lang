@@ -13,15 +13,23 @@ fn tsan_direct_switch_covers_naked_cpu_handoff() {
     isolated(
         std::any::type_name_of_val(&tsan_direct_switch_covers_naked_cpu_handoff),
         || {
+            #[derive(Debug)]
             struct Ping {
                 idle: *mut u8,
                 saved: *mut u8,
                 entered: bool,
+                callback: [u64; 6],
+                result: u64,
+                private_sp: u64,
             }
             unsafe extern "C" fn entry(pointer: *mut u8, _: *mut u8) -> ! {
                 let ping = pointer.cast::<Ping>();
                 unsafe {
                     (*ping).entered = true;
+                    let marker = 0u64;
+                    (*ping).private_sp = (&raw const marker) as u64;
+                    (*ping).result =
+                        crate::tsan_callbacks::tests::probe((*ping).callback.as_mut_ptr());
                     crate::fiber::fiber_switch(&raw mut (*ping).saved, (*ping).idle);
                 }
                 unreachable!("the completed control is never resumed")
@@ -31,13 +39,26 @@ fn tsan_direct_switch_covers_naked_cpu_handoff() {
                 idle: std::ptr::null_mut(),
                 saved: std::ptr::null_mut(),
                 entered: false,
+                callback: [0; 6],
+                result: 0,
+                private_sp: 0,
             };
             let before = crate::fiber::TSAN_SWITCHES.load(SeqCst);
             unsafe {
                 let start = stack.prepare(entry, (&raw mut ping).cast(), std::ptr::null_mut());
+                crate::tsan_callbacks::bind(&raw mut ping.idle);
                 crate::fiber::fiber_switch(&raw mut ping.idle, start);
+                crate::tsan_callbacks::clear();
             }
             assert!(ping.entered);
+            assert_eq!(ping.result, 0x123456789abcdef0);
+            assert_eq!(&ping.callback[1..], &[11, 22, 33, 44, 55]);
+            let native_sp = (&raw const ping) as u64;
+            assert!(
+                native_sp.abs_diff(ping.callback[0]) < 65536,
+                "callback must run on native idle: {native_sp:x} {ping:?}"
+            );
+            assert!(ping.private_sp.abs_diff(ping.callback[0]) > 65536);
             assert_eq!(crate::fiber::TSAN_SWITCHES.load(SeqCst) - before, 2);
         },
     );

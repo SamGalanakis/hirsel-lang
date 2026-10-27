@@ -19,6 +19,11 @@ pub(super) fn helper_identity() -> ContentHash {
             hirsel_rt::AHEAD_CPU_ALLOCATION_HELPERS,
             hirsel_rt::AHEAD_CPU_HANDOFF_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
+            if hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN {
+                hirsel_rt::TSAN_CALLBACK_BRIDGES
+            } else {
+                &[]
+            },
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
         ],
@@ -182,6 +187,9 @@ pub(in crate::native) fn unknown_machine_calls(
         }
         ObjectSymbolKind::Runtime => {
             !prefix_runtime.contains(&s.name)
+                && !((hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN)
+                    && hirsel_core_contract::tsan::private_stack_bytes(&s.name)
+                        .is_some_and(|bytes| bytes <= 64))
                 && !matches!(
                     s.name.as_str(),
                     "hirsel_rt_v2_ahead_state"

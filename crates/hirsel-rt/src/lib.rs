@@ -84,6 +84,10 @@ pub mod copy;
 pub mod count;
 pub mod failure;
 mod fiber;
+#[cfg(all(feature = "tsan", target_arch = "x86_64", target_os = "linux"))]
+mod tsan_callbacks;
+/// Exact implementation bound into diagnostic private-stack certificates.
+pub const TSAN_CALLBACK_BRIDGES: &[u8] = include_bytes!("tsan_callbacks.rs");
 pub mod finalize;
 pub mod foreign;
 mod free;

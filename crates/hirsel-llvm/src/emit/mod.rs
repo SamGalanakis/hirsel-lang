@@ -227,6 +227,8 @@ fn optimize_and_emit(
 ) -> Result<Vec<u8>, CodegenError> {
     optimize(module, machine, opt, verify)?;
     if retain_function_symbols {
+        #[cfg(feature = "native-tsan")]
+        module.bridge_thread_callbacks();
         module.retain_local_function_symbols();
     }
     module
@@ -961,7 +963,12 @@ fn lower<T>(
             debug.finalize();
         }
         #[cfg(feature = "native-tsan")]
-        crate::tsan::manifest(&mut manifested);
+        {
+            crate::tsan::manifest(&mut manifested);
+            if inputs.alternate {
+                crate::tsan::manifest_bridges(&mut manifested);
+            }
+        }
         (finish(&module, &machine)?, profile.debug.then_some(plan))
     };
     let (finished, plan) = finished;
