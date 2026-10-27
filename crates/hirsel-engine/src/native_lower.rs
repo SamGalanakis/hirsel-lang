@@ -543,3 +543,74 @@ fn source_transport(message: &str) -> QueryError {
         message: message.into(),
     })
 }
+
+impl QueryEngine {
+    /// Revalidate an admitted native snapshot into a reader with private V storage.
+    /// This also supports callers whose ordinary compilation retains no products.
+    pub(crate) fn native_snapshot_reader(
+        &mut self,
+        input: &crate::NativeInput,
+    ) -> Result<NativeOriginalReader, QueryError> {
+        if self.verify != Verify::On {
+            return Err(source_transport("sealed source snapshots require V"));
+        }
+        let cache = Arc::new(hirsel_validate::VerifierCache::default());
+        let anchors = Arc::new(NativeRecordContext::capture(self));
+        let signatures = self.signature_snapshot();
+        let policy = self.source_verification_policy();
+        let mut selected = BTreeMap::new();
+        for (path, definition) in &input.definitions {
+            let view = signatures.validation(&path.0.package);
+            let (report, _, _, evidence) = hirsel_validate::validate_definition(
+                definition,
+                input.types.clone(),
+                |anchor| anchors.record_owner(anchor),
+                view,
+                policy,
+                Some(cache.as_ref()),
+            );
+            if !report.violations.is_empty() {
+                return Err(source_transport(&format!(
+                    "sealed source snapshot validation: {:?}",
+                    report.violations
+                )));
+            }
+            let output = cache
+                .definition_output_from_evidence(
+                    definition,
+                    input.types.clone(),
+                    policy,
+                    view,
+                    &evidence.ok_or_else(|| {
+                        source_transport("sealed source snapshot lacks V evidence")
+                    })?,
+                )
+                .ok_or_else(|| source_transport("sealed source snapshot lacks V output"))?;
+            selected.insert(
+                path.clone(),
+                Selected {
+                    output,
+                    implementation_revision: input.source_owners[path].implementation_revision,
+                    signature: input.signatures[path].fingerprint,
+                },
+            );
+        }
+        let store: Arc<dyn crate::store::ResultStore> = Arc::new(crate::store::MemStore::default());
+        Ok(NativeOriginalReader {
+            owner: None,
+            verified: NativeLowerReader {
+                anchors,
+                signatures,
+                cache: Some(cache),
+                policy,
+                selected,
+                instances: Arc::new(input.instance_bodies.clone()),
+            },
+            ordinary: BTreeMap::new(),
+            records: crate::NativeRecords::new(input.types.clone(), store.clone()),
+            store,
+            verify: self.verify,
+            reuse: true,
+        })
+    }
+}

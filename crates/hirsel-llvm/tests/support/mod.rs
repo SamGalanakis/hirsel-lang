@@ -296,6 +296,8 @@ impl Schema {
             header,
             structural: BTreeMap::new(),
             declarations: hirsel_layout::operation::OperationRegistry {
+                seal_sources: Default::default(),
+                receipt_sources: Default::default(),
                 types: self.types.store.clone(),
                 owners: self.owners.clone(),
                 type_declarations: self

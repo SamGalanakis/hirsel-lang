@@ -646,7 +646,13 @@ pub fn build(
         .map_err(|e| NativeError::new(StageName::Manifest, e))?;
     let program = adapt::program(validated);
     drop(plan);
-    let mut ready = build_program(&program, manifest, options)?;
+    let mut ready = build_program_source(
+        &program,
+        manifest,
+        options,
+        &[],
+        validated.original_reader(),
+    )?;
     let _plan = (
         timings::interval(Interval::Plan),
         timings::phase(Phase::Plan),
@@ -670,10 +676,20 @@ pub(super) fn build_program_roots(
     options: &Options,
     roots: &[hirsel_rc::library::Request],
 ) -> Result<ReadyProgram, NativeError> {
+    build_program_source(program, manifest, options, roots, None)
+}
+
+fn build_program_source(
+    program: &Program,
+    manifest: Manifest,
+    options: &Options,
+    roots: &[hirsel_rc::library::Request],
+    reader: Option<&hirsel_engine::NativeOriginalReader>,
+) -> Result<ReadyProgram, NativeError> {
     let _interval = timings::interval(Interval::Units);
     let target = &options.target;
     let import = timings::phase(Phase::Import);
-    let mut lowered = hirsel_rc::import::lower_with_roots(
+    let mut lowered = hirsel_rc::import::lower_with_sources(
         program,
         target,
         &hirsel_rc::flat_walk::Options {
@@ -682,6 +698,9 @@ pub(super) fn build_program_roots(
         &options.discharge,
         options.scoped_specialization,
         roots,
+        &mut |instances, layouts| {
+            super::queries::batch_sources::capture(reader, program, instances, layouts)
+        },
     )
     .map_err(|e| NativeError::new(StageName::Import, e.to_string()))?;
     let discharged = timed(Phase::LirValidate, || {
@@ -693,6 +712,27 @@ pub(super) fn build_program_roots(
     })
     .map_err(|e| NativeError::new(StageName::Import, e))?;
     let operations = lowered.operation_registry(program);
+    let entries = lowered
+        .unit_origins
+        .iter()
+        .enumerate()
+        .filter_map(|(index, id)| {
+            (lowered.instances.roles[id.index()] == hirsel_rc::instance::InstanceRole::Function)
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let guard_demand = hirsel_rc::seal_demand::Demand::analyze(&lowered.units, &entries)
+        .map_err(|e| NativeError::new(StageName::Import, e))?;
+    let guards = lowered
+        .units
+        .iter()
+        .enumerate()
+        .map(|(index, unit)| {
+            let original = hirsel_rc::seal_demand::equations::LocalDemandEquations::extract(unit)?;
+            guard_demand.for_unit(index, &original)
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|e| NativeError::new(StageName::Import, e))?;
     let value_units = std::mem::take(&mut lowered.units);
     let ahead_environments = hirsel_lir::ahead::environments(&value_units);
     hirsel_intern::memory::checkpoint("global Value complete");
@@ -711,14 +751,18 @@ pub(super) fn build_program_roots(
     let validation = hirsel_lir::validate::ValidationContext::new(&inputs);
     preflight(&validation)?;
     let finalizers = Finalizers::planned(instances, table);
-    let tasks = value_units.into_iter().zip(&lowered.unit_origins).collect();
+    let tasks = value_units
+        .into_iter()
+        .zip(&lowered.unit_origins)
+        .zip(guards)
+        .collect();
     // Inspection and heap builds use the same complete per-unit pipeline as object
     // builds. With one worker map runs inline; no stage collects whole-program RC.
     let units = hirsel_intern::jobs::map(
         hirsel_intern::jobs::Jobs::ONE,
         tasks,
-        |(unit, _)| unit.instructions.len() as u64,
-        |(unit, &id)| {
+        |((unit, _), _)| unit.instructions.len() as u64,
+        |((unit, &id), guard)| {
             let inputs = Inputs {
                 memo: Default::default(),
                 discharge: Some(&lowered.native_discharge),
@@ -727,15 +771,16 @@ pub(super) fn build_program_roots(
                 layouts: table,
                 manifest: &manifest,
             };
-            lower_unit(
-                unit,
-                id,
-                options,
-                instances,
-                &finalizers,
-                &inputs,
-                &validation,
-            )
+            let facts = LocalRcFacts {
+                placement: hirsel_rc::placement::Options::for_instance(
+                    options.regions,
+                    instances,
+                    id,
+                ),
+                proofs: Proofs::for_instance(instances, id),
+                guard: Some(guard),
+            };
+            lower_local_unit(unit, options, &facts, &finalizers, &inputs, &validation)
         },
     )
     .into_iter()

@@ -10,6 +10,7 @@ pub(super) type Sources = BTreeMap<(DefPath, ContentHash), SourceExpectation>;
 pub(super) fn current(
     provider: &dyn SelectionProvider,
     graph: &NamedGraph,
+    program: &hirsel_rc::instance::Program,
     selected: impl Fn(&hirsel_layout::instance::InstanceKey) -> bool,
 ) -> Result<Sources, String> {
     let mut sources = BTreeMap::new();
@@ -57,6 +58,36 @@ pub(super) fn current(
             })
             .map_err(|e| format!("inventory original expectation: {e:?}"))?;
         sources.insert((key.definition().clone(), key.digest()), expected);
+    }
+    for operation in &graph.operations {
+        let path = &operation.operation.definition;
+        if !path.is_core("arena.seal") && !path.is_core("region.with") {
+            continue;
+        }
+        let context = &graph.contexts[operation.caller.index()];
+        let call = &context.source.demand().projection().calls()[&operation.block];
+        let hirsel_tir::Callee::Definition { arguments, .. } = &call.callee else {
+            return Err("sealed original operation".into());
+        };
+        let arguments = arguments
+            .iter()
+            .map(|arg| match arg {
+                hirsel_types::GenericArgument::Type(ty) => hirsel_rc::instance::substitute(
+                    provider.types(),
+                    &memo,
+                    *ty,
+                    &context.input.actuals,
+                    true,
+                )
+                .map(hirsel_types::GenericArgument::Type)
+                .map_err(|e| format!("sealed original actual: {e:?}")),
+                _ => Err("sealed original non-type actual".into()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let expected =
+            hirsel_rc::library::sealed_region::source_expectation(program, path, arguments)
+                .map_err(|e| e.to_string())?;
+        sources.insert((path.clone(), expected.witness().instance), expected);
     }
     Ok(sources)
 }

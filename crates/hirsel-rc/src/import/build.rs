@@ -169,6 +169,13 @@ impl Importer<'_> {
             .layouts
             .with_caller_site(abi)
             .map_err(|e| PassError::Layout(request.path.clone(), e))?;
+        let abi = if let Some(source) = &request.receipt {
+            self.layouts
+                .receipt_fn_abi(abi, &source.contract)
+                .map_err(|e| PassError::Layout(request.path.clone(), e))?
+        } else {
+            abi
+        };
         let symbol = Symbol {
             kind: SymbolKind::Function,
             definition: request.path.clone(),

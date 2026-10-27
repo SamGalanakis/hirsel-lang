@@ -2153,7 +2153,12 @@ pub struct HeapRun {
     pub counters: Counters,
 }
 
-fn config(inject: Option<u64>, kind: &super::link::LaunchKind, world: &HeapWorld) -> Config {
+fn config(
+    program: &ReadyProgram,
+    inject: Option<u64>,
+    kind: &super::link::LaunchKind,
+    world: &HeapWorld,
+) -> Config {
     let default = Config::default();
     // A raised interpreter budget raises H's instruction limit by the same factor.
     let interpreter = hirsel_interp::Limits::default()
@@ -2163,6 +2168,13 @@ fn config(inject: Option<u64>, kind: &super::link::LaunchKind, world: &HeapWorld
         (default.step_limit.saturating_mul(steps) / interpreter).max(default.step_limit)
     });
     Config {
+        seal_sources: program.operations.seal_sources.values().cloned().collect(),
+        receipt_sources: program
+            .operations
+            .receipt_sources
+            .values()
+            .cloned()
+            .collect(),
         inject,
         step_limit,
         context_handles: match kind {
@@ -2368,7 +2380,13 @@ pub fn run_heap_in(
         world,
     )?;
     io.positions = positions(program, sites);
-    let run = hirsel_heapcheck::run_ready(&heap, entry, &args, &mut io, &config(None, kind, world));
+    let run = hirsel_heapcheck::run_ready(
+        &heap,
+        entry,
+        &args,
+        &mut io,
+        &config(program, None, kind, world),
+    );
     let audit = run
         .result
         .as_ref()
@@ -2442,7 +2460,7 @@ pub fn heap_campaign_in(
         entry,
         &args,
         &mut || Box::new(io.clone()),
-        &config(None, kind, world),
+        &config(program, None, kind, world),
     );
     if let Some((site, v)) = campaign.first_violation() {
         return Err(violation(entry, v, site));

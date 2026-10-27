@@ -29,11 +29,10 @@ pub fn emit(
             "inventory source belongs to another instance",
         ));
     }
-    if !unit.tables.seal_payloads.is_empty()
-        || unit
-            .instructions
-            .iter()
-            .any(|i| matches!(i, Inst::ArenaInventory { .. }))
+    if unit
+        .instructions
+        .iter()
+        .any(|i| matches!(i, Inst::ArenaInventory { .. }))
     {
         return Err(SourceError::Malformed("inventory was already imported"));
     }
@@ -120,8 +119,6 @@ pub fn emit(
                 "inventory payload layout differs from source",
             ));
         }
-        let shape = SealDescriptorId(unit.tables.seal_descriptors.len() as u32);
-        unit.tables.seal_descriptors.push(descriptor);
         let site = &unit.tables.constructs[construct.index()];
         let values = site
             .fields
@@ -135,13 +132,43 @@ pub fn emit(
                 "inventory source operand arity differs",
             ));
         }
-        unit.tables.seal_payloads.push(PayloadTable {
-            descriptor: shape,
-            bindings: vec![PayloadBinding {
-                recipe: payload.recipe.clone(),
-                values,
-            }],
-        });
+        let existing = unit
+            .tables
+            .seal_payloads
+            .iter()
+            .filter_map(|table| {
+                table
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.recipe == payload.recipe)
+                    .map(|binding| (table.descriptor, binding))
+            })
+            .collect::<Vec<_>>();
+        let shape = match existing.as_slice() {
+            [(shape, binding)]
+                if binding.values == values
+                    && unit.tables.seal_descriptors[shape.index()] == descriptor =>
+            {
+                *shape
+            }
+            [] => {
+                let shape = SealDescriptorId(unit.tables.seal_descriptors.len() as u32);
+                unit.tables.seal_descriptors.push(descriptor);
+                unit.tables.seal_payloads.push(PayloadTable {
+                    descriptor: shape,
+                    bindings: vec![PayloadBinding {
+                        recipe: payload.recipe.clone(),
+                        values,
+                    }],
+                });
+                shape
+            }
+            _ => {
+                return Err(SourceError::Malformed(
+                    "imported receipt differs from original inventory",
+                ));
+            }
+        };
         let Some(events) = events.get(&payload.recipe.source) else {
             continue;
         };

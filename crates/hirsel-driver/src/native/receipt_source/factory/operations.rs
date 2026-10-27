@@ -36,6 +36,13 @@ pub(super) fn expand(
                 ..Default::default()
             },
         ))
+    } else if path.is_core("failure.check") {
+        Some((
+            0,
+            2,
+            vec![UseKind::Borrow, UseKind::Borrow],
+            ExternalDemand::default(),
+        ))
     } else if path.is_core("list.push") {
         Some((
             1,

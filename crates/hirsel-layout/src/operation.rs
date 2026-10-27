@@ -188,6 +188,14 @@ fn empty_function(result: TypeId) -> FunctionType {
 /// Trusted input, supplied alongside the manifest rather than inside a unit.
 #[derive(Clone, Debug)]
 pub struct OperationRegistry {
+    pub seal_sources: BTreeMap<
+        (hirsel_syntax::DefPath, hirsel_syntax::ContentHash),
+        hirsel_lir::sealed_payload_source::SourceSeal,
+    >,
+    pub receipt_sources: BTreeMap<
+        (hirsel_syntax::DefPath, hirsel_syntax::ContentHash),
+        hirsel_lir::sealed_payload_source::ReceiptSource,
+    >,
     pub pretransfer_adapters: Vec<hirsel_lir::pretransfer::AdapterReference>,
     /// Actuals come from the independent materialized primitive plan.
     pub pretransfer_actuals: Vec<(
@@ -207,6 +215,74 @@ pub struct OperationRegistry {
 }
 
 impl OperationDeclarations for OperationRegistry {
+    fn receipt_source(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::ReceiptSource> {
+        self.receipt_sources
+            .get(&(definition.clone(), instance))
+            .cloned()
+    }
+    fn seal_source_witness(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<hirsel_lir::sealed_payload_source::SealSourceWitness> {
+        self.seal_sources
+            .get(&(definition.clone(), instance))
+            .map(|source| source.witness.clone())
+    }
+    fn seal_events(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourceEvent>> {
+        self.seal_sources
+            .get(&(definition.clone(), instance))
+            .map(|source| source.events.clone())
+    }
+    fn seal_payloads(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+    ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
+        self.seal_sources
+            .get(&(definition.clone(), instance))
+            .map(|source| source.payloads.clone())
+    }
+    fn seal_descriptor_for_source(
+        &self,
+        definition: &hirsel_syntax::DefPath,
+        instance: hirsel_syntax::ContentHash,
+        root: &NativeType,
+        table: &hirsel_lir::LayoutTable,
+        target: &hirsel_lir::TargetSpec,
+    ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError> {
+        let selected = self
+            .seal_sources
+            .get(&(definition.clone(), instance))
+            .is_some_and(|source| {
+                source.events.iter().any(|event| &event.root_type == root)
+                    || source.payloads.iter().any(|payload| {
+                        &payload.root_type == root
+                            || payload.recipe.inputs.iter().any(|input| &input.ty == root)
+                    })
+            })
+            || self
+                .receipt_sources
+                .get(&(definition.clone(), instance))
+                .is_some_and(|source| {
+                    source.profiles.iter().any(|profile| {
+                        &profile.profile.root.ty == root && profile.profile.functions.is_empty()
+                    })
+                });
+        if !selected {
+            return Err(LayoutError::Invalid("sealed source is not selected".into()));
+        }
+        self.seal_descriptor(root, table, target)
+    }
+
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
         &self.pretransfer_adapters
     }

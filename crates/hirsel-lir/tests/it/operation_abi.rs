@@ -200,6 +200,8 @@ fn network() -> (OperationRegistry, OperationId, OperationId) {
         result,
     );
     let mut registry = OperationRegistry {
+        seal_sources: Default::default(),
+        receipt_sources: Default::default(),
         pretransfer_adapters: Vec::new(),
         pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),
@@ -476,6 +478,8 @@ fn a_type_generic_operation_cannot_use_another_instances_abi() {
     );
     let operation = id(&s);
     let registry = OperationRegistry {
+        seal_sources: Default::default(),
+        receipt_sources: Default::default(),
         pretransfer_adapters: Vec::new(),
         pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),

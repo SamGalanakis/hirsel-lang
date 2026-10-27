@@ -194,17 +194,16 @@ impl SourceInput {
                 ));
             }
         }
-        if body
-            .rvalues
-            .iter()
-            .any(|r| matches!(r, Rvalue::Closure { .. }))
-        {
+        if body.rvalues.iter().any(|r| {
+            matches!(r, Rvalue::Closure { captures, .. }
+            if !expanded_calls || !captures.is_empty())
+        }) {
             return Err(SourceError::Unsupported(
                 "source witness needs closed held code instances",
             ));
         }
         let anchors = hirsel_tir::source_anchors(&self.definition);
-        let payloads = payloads(
+        let mut payloads = payloads(
             &Context {
                 body,
                 body_id: hirsel_tir::BodyId(key.body()),
@@ -214,6 +213,10 @@ impl SourceInput {
             },
             substitute,
         )?;
+        if expanded_calls {
+            // Capture-free callback code has no language allocation or held payload.
+            payloads.retain(|payload| !matches!(payload.root_type, NativeType::Function(_)));
+        }
         let mut events = Vec::new();
         for payload in &payloads {
             if matches!(
@@ -276,6 +279,28 @@ impl SourceInput {
 }
 
 impl SourceExpectation {
+    pub(crate) fn reviewed_event(
+        source: ContentHash,
+        revision: ContentHash,
+        key: &InstanceKey,
+        event: SourceEvent,
+    ) -> Self {
+        let events = vec![event];
+        Self {
+            body: 0,
+            witness: SealSourceWitness::from_expectations(
+                source,
+                key.definition().clone(),
+                revision,
+                key.digest(),
+                &events,
+                &[],
+            ),
+            events,
+            payloads: vec![],
+        }
+    }
+
     pub fn witness(&self) -> &SealSourceWitness {
         &self.witness
     }

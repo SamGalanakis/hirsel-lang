@@ -221,18 +221,17 @@ pub fn receipt_source(
             "seal receipt declaration differs from its reviewed operation".into(),
         ));
     }
-    let request = super::Request::operation(
-        program,
-        usize::MAX,
-        &path,
-        vec![GenericArgument::Type(root)],
-    )?;
+    let actuals = crate::instance::Actuals {
+        binder: Some(super::binder(&path)),
+        arguments: vec![GenericArgument::Type(root)],
+        outer: vec![],
+    };
     // The ordinary key contains complete original actuals. No layout or
     // candidate header can choose another root for the independent declaration.
     let expected = hirsel_layout::instance::InstanceKey::new(
         &path,
         0,
-        &request.actuals.key_binders(),
+        &actuals.key_binders(),
         &program.types,
         None,
         None,
@@ -296,4 +295,74 @@ pub fn receipt_source(
         .check_structure()
         .map_err(|error| PassError::Malformed(error.into()))?;
     Ok(source)
+}
+
+/// Expected semantic transition from the reviewed operation and its original actuals.
+pub fn source_expectation(
+    program: &crate::instance::Program,
+    path: &hirsel_syntax::DefPath,
+    arguments: Vec<GenericArgument>,
+) -> Result<crate::sealed_source::SourceExpectation, PassError> {
+    let kind = if path.is_core("arena.seal") {
+        hirsel_lir::sealed::SourceEventKind::Seal
+    } else if path.is_core("region.with") {
+        hirsel_lir::sealed::SourceEventKind::BorrowRoot
+    } else {
+        return Err(PassError::Malformed(
+            "unknown sealed library transition".into(),
+        ));
+    };
+    let request = super::Request::operation(program, usize::MAX, path, arguments)?;
+    let signature = program
+        .signatures
+        .get(path)
+        .ok_or_else(|| PassError::Malformed("sealed library declaration missing".into()))?;
+    if program
+        .operations
+        .get(path)
+        .is_none_or(|operation| operation.declaration_digest != signature.fingerprint)
+    {
+        return Err(PassError::Malformed(
+            "sealed library declaration differs".into(),
+        ));
+    }
+    let key = hirsel_layout::instance::InstanceKey::new(
+        path,
+        0,
+        &request.actuals.key_binders(),
+        &program.types,
+        None,
+        None,
+    )
+    .map_err(|e| crate::instance::InstanceError::Key(path.clone(), e))?;
+    let [GenericArgument::Type(root), ..] = request.actuals.arguments.as_slice() else {
+        return Err(PassError::Malformed("sealed library root actual".into()));
+    };
+    let native = hirsel_layout::operation::collect_arguments(
+        &program.types,
+        &[GenericArgument::Type(*root)],
+    )
+    .map_err(|e| PassError::Layout(path.clone(), e))?;
+    let [OperationArgument::Type(root_type)] = native.as_slice() else {
+        return Err(PassError::Malformed("sealed library root type".into()));
+    };
+    Ok(crate::sealed_source::SourceExpectation::reviewed_event(
+        signature.fingerprint,
+        super::revision(path),
+        &key,
+        hirsel_lir::sealed::SourceEvent {
+            anchor: SourceAnchor {
+                body: 0,
+                block: 0,
+                statement: 0,
+                site: SiteRange {
+                    source: 0,
+                    start: 0,
+                    end: 0,
+                },
+            },
+            kind,
+            root_type: root_type.clone(),
+        },
+    ))
 }

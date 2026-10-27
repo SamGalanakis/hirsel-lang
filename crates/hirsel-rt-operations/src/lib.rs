@@ -67,6 +67,8 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "shared.freeze"
             | "shared.thaw"
             | "shared.with"
+            | "arena.seal"
+            | "region.with"
             | "arena.with"
             | "arena.bounded"
             | "copy_to"

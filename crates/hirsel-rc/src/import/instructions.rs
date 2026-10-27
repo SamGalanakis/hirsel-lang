@@ -1263,6 +1263,7 @@ impl Importer<'_> {
             construct,
             failure,
         });
+        self.construct_receipt(result, construct)?;
         Ok(result)
     }
 

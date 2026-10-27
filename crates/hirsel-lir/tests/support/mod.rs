@@ -39,6 +39,8 @@ pub fn ty() -> hirsel_types::testing::Types {
 /// An operation registry over this test thread's session interner.
 pub fn registry() -> hirsel_layout::operation::OperationRegistry {
     hirsel_layout::operation::OperationRegistry {
+        seal_sources: Default::default(),
+        receipt_sources: Default::default(),
         pretransfer_adapters: Vec::new(),
         pretransfer_actuals: Vec::new(),
         invocation_bodies: Vec::new(),
@@ -634,6 +636,8 @@ impl<S: Stage> Lir<S> {
             declaration_digest: signature.fingerprint,
         };
         self.operations = hirsel_layout::operation::OperationRegistry {
+            seal_sources: Default::default(),
+            receipt_sources: Default::default(),
             pretransfer_adapters: Vec::new(),
             pretransfer_actuals: Vec::new(),
             invocation_bodies: Vec::new(),

@@ -46,6 +46,11 @@ pub trait Layouts {
         callable: TypeId,
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError>;
+    fn receipt_fn_abi(
+        &mut self,
+        base: FnAbiId,
+        contract: &hirsel_lir::sealed_payload_source::ReceiptContract,
+    ) -> Result<FnAbiId, LayoutError>;
     fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError>;
     fn with_scoped_contract(
         &mut self,
@@ -98,6 +103,13 @@ impl Layouts for LayoutBuilder<'_> {
         shape: CallableShape,
     ) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::fn_abi(self, types, callable, shape)
+    }
+    fn receipt_fn_abi(
+        &mut self,
+        base: FnAbiId,
+        contract: &hirsel_lir::sealed_payload_source::ReceiptContract,
+    ) -> Result<FnAbiId, LayoutError> {
+        LayoutBuilder::receipt_fn_abi(self, base, contract)
     }
     fn with_caller_site(&mut self, base: FnAbiId) -> Result<FnAbiId, LayoutError> {
         LayoutBuilder::with_caller_site(self, base)

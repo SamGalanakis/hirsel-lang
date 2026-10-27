@@ -56,12 +56,17 @@ pub struct NativeInput {
 }
 /// Construction is private to successful revalidation, including current source stages.
 pub struct ValidatedNativeInput {
+    originals: Option<crate::NativeOriginalReader>,
     input: NativeInput,
     verify: Verify,
     semantic: NativeSemanticProgram,
     storage_reads: hirsel_validate::storage::StorageReads,
 }
 impl ValidatedNativeInput {
+    pub fn original_reader(&self) -> Option<&crate::NativeOriginalReader> {
+        self.originals.as_ref()
+    }
+
     pub fn storage_proof_reads(&self) -> &hirsel_validate::storage::StorageReads {
         &self.storage_reads
     }
@@ -539,7 +544,17 @@ impl QueryEngine {
             input.foreign_links.clone(),
             input.foreign_unreplayable,
         );
+        let has_seal = input.definitions.values().any(|definition| definition.bodies.iter().any(|body|
+            body.blocks.iter().any(|block| matches!(&block.terminator,
+                hirsel_tir::Terminator::Call { callee: hirsel_tir::Callee::Definition { path, .. }, .. }
+                    if path.is_core("arena.seal") || path.is_core("region.with")))));
+        let originals = if has_seal {
+            Some(self.native_snapshot_reader(&input)?)
+        } else {
+            None
+        };
         Ok(ValidatedNativeInput {
+            originals,
             input,
             verify: self.verify,
             semantic,

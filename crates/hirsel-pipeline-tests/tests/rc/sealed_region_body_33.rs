@@ -80,8 +80,8 @@ fn check_read_body(
     )));
     let path = DefPath::core("region.with");
     assert!(
-        hirsel_rc::library::body_index(&path).is_none(),
-        "public activation is separate"
+        hirsel_rc::library::body_index(&path).is_some(),
+        "sealed library body is registered"
     );
     let target = target();
     let registry = program.operation_registry();
@@ -187,7 +187,7 @@ fn check_seal_body(source: &str, root_kind: TypeKind, root_type: NativeType) {
     let program = compile(source);
     let root = program.types.intern(Type::with_kind(root_kind));
     let path = DefPath::core("arena.seal");
-    assert!(hirsel_rc::library::body_index(&path).is_none());
+    assert!(hirsel_rc::library::body_index(&path).is_some());
     let target = target();
     let registry = program.operation_registry();
     let mut layouts = LayoutBuilder::new(&target, &registry.owners);
@@ -395,7 +395,7 @@ fn sealed_heap_body_95_keeps_take_receipts_until_the_seal_transaction_finishes()
         arguments: vec![GenericArgument::Type(scalar)].into(),
     }));
     let path = DefPath::core("arena.seal");
-    assert!(hirsel_rc::library::body_index(&path).is_none());
+    assert!(hirsel_rc::library::body_index(&path).is_some());
     let target = target();
     let registry = program.operation_registry();
     let mut layouts = LayoutBuilder::new(&target, &registry.owners);
@@ -412,9 +412,12 @@ fn sealed_heap_body_95_keeps_take_receipts_until_the_seal_transaction_finishes()
         hirsel_rc::library::sealed_region::receipt_source(&program, root, &instances.view(id).key)
             .unwrap();
     let profile = source.profiles[0].profile.clone();
-    instances.abis[id.index()] = layouts
-        .receipt_fn_abi(instances.abis[id.index()], &source.contract)
-        .unwrap();
+    assert_eq!(
+        layouts.table().fn_abis[instances.abis[id.index()].0 as usize]
+            .receipts
+            .as_ref(),
+        Some(&source.contract)
+    );
     let instance = instances.view(id).key.digest();
     let declarations = ReadDeclarations {
         registry: registry.clone(),

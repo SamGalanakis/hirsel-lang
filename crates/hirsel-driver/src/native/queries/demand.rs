@@ -322,10 +322,12 @@ impl DemandInstances {
             let provider = source
                 .receipt_provider()
                 .ok_or("inventory original source unavailable")?;
-            self.seal_inventory
-                .extend(super::seal_inventory::current(&provider, &graph, |key| {
-                    inventory_keys.contains(&(key.definition().clone(), key.digest()))
-                })?);
+            self.seal_inventory.extend(super::seal_inventory::current(
+                &provider,
+                &graph,
+                &source.declarations().program,
+                |key| inventory_keys.contains(&(key.definition().clone(), key.digest())),
+            )?);
             self.receipt_sources.extend(sources);
         }
         Ok(())
@@ -635,7 +637,11 @@ impl DemandInstances {
             let provider = engine
                 .receipt_provider()
                 .ok_or("receipt roots require current original source")?;
-            let (graph, sources) = super::receipt_requests::reconstruct(&provider, inputs.clone())?;
+            let (graph, sources) = super::receipt_requests::reconstruct(
+                &provider,
+                inputs.clone(),
+                &engine.declarations().program,
+            )?;
             let reference = self.put(
                 super::receipt_requests::ROOTS,
                 &super::receipt_requests::encode(engine, &self.records, &inputs)?,
@@ -857,6 +863,7 @@ impl DemandInstances {
             self.seal_inventory.extend(super::seal_inventory::current(
                 &provider,
                 graph,
+                &inputs.declarations().program,
                 |selected| selected == &key.instance,
             )?);
             let mut matching = Vec::new();
@@ -1061,6 +1068,12 @@ impl DemandInstances {
             }
         }
         self.imports += 1;
+        if let Some(expected) = self
+            .seal_inventory
+            .get(&(key.instance.definition().clone(), key.instance.digest()))
+        {
+            instances.bind_payload_sources(id, expected.payloads().to_vec());
+        }
         let imported = hirsel_rc::import::import_instance(
             &inputs.declarations().program,
             &mut instances,
@@ -1183,6 +1196,7 @@ impl DemandInstances {
         let imported_unit = if let Some(expected) = self
             .seal_inventory
             .get(&(key.instance.definition().clone(), key.instance.digest()))
+            .filter(|_| !instances.roles[id.index()].is_library())
         {
             let declarations =
                 super::seal_inventory::declarations(operations.clone(), &self.seal_inventory);

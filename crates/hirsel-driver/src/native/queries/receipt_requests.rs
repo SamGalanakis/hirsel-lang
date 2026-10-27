@@ -96,12 +96,13 @@ pub(super) fn current(
     let provider = source
         .receipt_provider()
         .ok_or("current receipt source provider unavailable")?;
-    reconstruct(&provider, roots)
+    reconstruct(&provider, roots, &source.declarations().program)
 }
 
 pub(super) fn reconstruct(
     provider: &dyn SelectionProvider,
     roots: Vec<NamedInput>,
+    program: &hirsel_rc::instance::Program,
 ) -> Result<(NamedGraph, Sources), String> {
     let mut cases = |_: &hirsel_rc::sealed_source::SourceCallableEntry, _, _| {
         Err(hirsel_rc::sealed_source::SourceError::Unsupported(
@@ -130,6 +131,41 @@ pub(super) fn reconstruct(
                 actual,
             );
         }
+    }
+    for operation in &graph.operations {
+        if !operation.operation.definition.is_core("arena.seal") {
+            continue;
+        }
+        let context = &graph.contexts[operation.caller.index()];
+        let call = &context.source.demand().projection().calls()[&operation.block];
+        let hirsel_tir::Callee::Definition { path, arguments } = &call.callee else {
+            return Err("reviewed seal lacks original actuals".into());
+        };
+        let [hirsel_types::GenericArgument::Type(root)] = arguments.as_slice() else {
+            return Err("reviewed seal root actual".into());
+        };
+        let root = hirsel_rc::instance::substitute(
+            provider.types(),
+            &hirsel_types::TypeMemo::default(),
+            *root,
+            &context.input.actuals,
+            true,
+        )
+        .map_err(|e| format!("reviewed seal actual: {e:?}"))?;
+        let request = hirsel_rc::library::Request::operation(
+            program,
+            usize::MAX,
+            path,
+            vec![hirsel_types::GenericArgument::Type(root)],
+        )
+        .map_err(|e| format!("reviewed seal declaration: {e:?}"))?;
+        let Some(source) = request.receipt else {
+            continue;
+        };
+        sources.insert(
+            (source.original.definition.clone(), source.instance),
+            source,
+        );
     }
     Ok((graph, sources))
 }

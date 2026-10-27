@@ -218,7 +218,7 @@ pub(super) fn original_with_ready_observer(
         ),
     ] {
         let definition = (body.path)();
-        assert!(hirsel_rc::library::body_index(&definition).is_none());
+        assert!(hirsel_rc::library::body_index(&definition).is_some());
         let request = Request::operation(&program, usize::MAX, &definition, args).unwrap();
         let id = hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
         selected.push((definition.clone(), instances.view(id).key.digest(), event));
@@ -281,6 +281,7 @@ pub(super) fn original_with_ready_observer(
         })
         .collect();
     let mut lowered = hirsel_rc::import::Lowered {
+        source: Default::default(),
         instances,
         units,
         table,

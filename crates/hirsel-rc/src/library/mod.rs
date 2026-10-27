@@ -178,6 +178,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &value::FORWARD,
     // views (lib-views): none; its cursor protocols are runtime primitives.
     &iter::NEXT,
+    &sealed_region::SEAL,
+    &sealed_region::WITH,
 ];
 
 /// Operation calls a family lowers inline at import. Called before the
@@ -281,7 +283,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 37;
+pub const REVISION: u32 = 38;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {
@@ -309,6 +311,7 @@ pub struct Request {
     /// A step thunk's environment layout.
     pub environment: Option<LayoutId>,
     pub finalizer: bool,
+    pub receipt: Option<hirsel_lir::sealed_payload_source::ReceiptSource>,
 }
 
 impl Request {
@@ -344,7 +347,28 @@ impl Request {
             &actuals,
         )
         .map_err(|e| InstanceError::Substitution(path.clone(), e))?;
+        let receipt = if path.is_core("arena.seal") {
+            let [GenericArgument::Type(root)] = actuals.arguments.as_slice() else {
+                return Err(InstanceError::Malformed("seal root actual".into()));
+            };
+            let key = InstanceKey::new(path, 0, &actuals.key_binders(), &program.types, None, None)
+                .map_err(|e| InstanceError::Key(path.clone(), e))?;
+            let kind = &program.types.row(*root).kind;
+            if matches!(kind, TypeKind::Primitive(_))
+                || matches!(kind, TypeKind::Tuple(parts) if parts.is_empty())
+            {
+                None
+            } else {
+                Some(
+                    sealed_region::receipt_source(program, *root, &key)
+                        .map_err(|e| InstanceError::Malformed(e.to_string()))?,
+                )
+            }
+        } else {
+            None
+        };
         Ok(Self {
+            receipt,
             body,
             path: path.clone(),
             actuals,
@@ -377,6 +401,7 @@ impl Request {
         callable: TypeId,
     ) -> Self {
         Self {
+            receipt: None,
             body,
             path: path.clone(),
             actuals: Actuals {
@@ -496,6 +521,7 @@ pub fn instantiate(
         Vec::new(),
         false,
     );
+    let receipt = request.receipt;
     let (id, _) = instances.push(
         layouts,
         view,
@@ -508,6 +534,12 @@ pub fn instantiate(
         request.shape,
         request.environment,
     )?;
+    if let Some(source) = receipt {
+        instances.abis[id.index()] = layouts
+            .receipt_fn_abi(instances.abis[id.index()], &source.contract)
+            .map_err(|e| InstanceError::Layout(request.path.clone(), e))?;
+        instances.register_library_receipt(id, source);
+    }
     Ok(id)
 }
 

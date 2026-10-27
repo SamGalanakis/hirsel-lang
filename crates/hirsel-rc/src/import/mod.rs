@@ -32,6 +32,8 @@
 //! licensed SEM-1 integer operator as a wrapping `IntArith`. Projection paths
 //! mark only their licensed bounds/tag guards unchecked. Plans name original
 //! TIR `(body, block, statement)` sites and canonical places.
+mod payload_receipts;
+
 use crate::PassError;
 use crate::instance::{Actuals, InstanceError, InstanceId, Instances, Program, substitute};
 use crate::library::builder::Layouts as _;
@@ -95,6 +97,7 @@ fn malformed<T>(what: impl Into<String>) -> R<T> {
 /// published sites, one Value unit per instance, and the layout table the
 /// units name.
 pub struct Lowered {
+    pub source: SourceData,
     pub instances: Instances,
     pub plans: Vec<Option<LoopPlan>>,
     pub declined: Vec<(InstanceId, Declined)>,
@@ -190,6 +193,33 @@ pub fn lower_with_roots(
     scoped_specialization: bool,
     roots: &[crate::library::Request],
 ) -> Result<Lowered, LowerError> {
+    lower_with_sources(
+        program,
+        target,
+        flat_walk,
+        discharge,
+        scoped_specialization,
+        roots,
+        &mut |_, _| Ok(Default::default()),
+    )
+}
+
+#[derive(Default)]
+pub struct SourceData {
+    pub expectations: BTreeMap<(DefPath, ContentHash), crate::sealed_source::SourceExpectation>,
+    pub receipts:
+        BTreeMap<(DefPath, ContentHash), hirsel_lir::sealed_payload_source::ReceiptSource>,
+}
+
+pub fn lower_with_sources(
+    program: &Program,
+    target: &TargetSpec,
+    flat_walk: &crate::flat_walk::Options,
+    discharge: &Discharge,
+    scoped_specialization: bool,
+    roots: &[crate::library::Request],
+    source: &mut impl FnMut(&mut Instances, &mut LayoutBuilder<'_>) -> Result<SourceData, String>,
+) -> Result<Lowered, LowerError> {
     hirsel_intern::timings::count(hirsel_intern::timings::Count::NativeAppendExpand);
     // Source calls retain their admissions, targets and failure ordering.
     // Building an append result directly in its consumer would change all
@@ -206,6 +236,15 @@ pub fn lower_with_roots(
         crate::library::instantiate(&mut layouts, &mut instances, root.clone())
             .map_err(LowerError::Instance)?;
     }
+    let source = source(&mut instances, &mut layouts)
+        .map_err(|e| LowerError::Instance(InstanceError::Malformed(e)))?;
+    let mut source_registry = program.operation_registry();
+    source_registry.receipt_sources = source.receipts.clone();
+    source_registry.seal_sources = source
+        .expectations
+        .iter()
+        .map(|(key, expected)| (key.clone(), expected.source()))
+        .collect();
     let mut plans = Vec::new();
     let mut declined = Vec::new();
     let mut units = Vec::new();
@@ -217,7 +256,28 @@ pub fn lower_with_roots(
         next += 1;
         let definition = instances.view(id).key.definition().clone();
         let sites = discharge.sites(&definition);
-        let imported = import_instance(program, &mut instances, id, sites, &mut layouts)?;
+        let key = (definition.clone(), instances.view(id).key.digest());
+        if let Some(expected) = source.expectations.get(&key) {
+            instances.bind_payload_sources(id, expected.payloads().to_vec());
+        }
+        let mut imported = import_instance(program, &mut instances, id, sites, &mut layouts)?;
+        if !instances.roles[id.index()].is_library()
+            && let Some(expected) = source.expectations.get(&key)
+        {
+            imported.unit = crate::sealed_source::inventory::emit(
+                imported.unit,
+                expected,
+                &source_registry,
+                layouts.table(),
+                target,
+            )
+            .map_err(|e| {
+                LowerError::Import(
+                    id,
+                    PassError::Unsupported(format!("source inventory: {e:?}")),
+                )
+            })?;
+        }
         plans.push(imported.plan);
         declined.extend(imported.declined.into_iter().map(|d| (id, d)));
         if let Some(reference) = imported.discharged {
@@ -255,6 +315,7 @@ pub fn lower_with_roots(
         })
         .collect();
     let mut lowered = Lowered {
+        source,
         instances,
         plans,
         declined,
@@ -392,13 +453,23 @@ impl Lowered {
         &self,
         program: &Program,
     ) -> hirsel_layout::operation::OperationRegistry {
-        invocation_registry(
+        let mut registry = invocation_registry(
             program,
             &self.instances,
             &self.semantic_owners,
             &self.units,
             &self.unit_origins,
-        )
+        );
+        registry
+            .receipt_sources
+            .extend(self.source.receipts.clone());
+        registry.seal_sources.extend(
+            self.source
+                .expectations
+                .iter()
+                .map(|(key, expected)| (key.clone(), expected.source())),
+        );
+        registry
     }
 }
 

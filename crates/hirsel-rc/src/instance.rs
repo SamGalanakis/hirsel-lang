@@ -116,6 +116,8 @@ impl Program {
             })
             .collect();
         hirsel_layout::operation::OperationRegistry {
+            seal_sources: Default::default(),
+            receipt_sources: Default::default(),
             pretransfer_adapters: Vec::new(),
             pretransfer_actuals: Vec::new(),
             invocation_bodies: Vec::new(),
@@ -284,6 +286,7 @@ pub struct Instances {
     pub elided: HashMap<InstanceId, std::collections::HashSet<hirsel_tir::LocalId>>,
     selection_reads: std::sync::Mutex<std::collections::BTreeSet<SelectionRead>>,
     by_key: HashMap<InstanceKey, InstanceId>,
+    payload_sources: HashMap<InstanceId, Vec<hirsel_lir::sealed_payload_source::SourcePayload>>,
     receipt_sources: HashMap<InstanceId, hirsel_lir::sealed_payload_source::ReceiptSource>,
     lexical_keys: HashMap<InstanceId, InstanceKey>,
     function_entries: BTreeMap<DefPath, BodyId>,
@@ -316,6 +319,7 @@ impl Instances {
             elided: HashMap::new(),
             selection_reads: Default::default(),
             by_key: HashMap::new(),
+            payload_sources: HashMap::new(),
             receipt_sources: HashMap::new(),
             lexical_keys: HashMap::new(),
             function_entries: BTreeMap::new(),
@@ -649,6 +653,29 @@ impl Instances {
         self.by_key.insert(key, id);
         self.receipt_sources.insert(id, source);
         Ok(())
+    }
+
+    pub fn bind_payload_sources(
+        &mut self,
+        id: InstanceId,
+        payloads: Vec<hirsel_lir::sealed_payload_source::SourcePayload>,
+    ) {
+        self.payload_sources.insert(id, payloads);
+    }
+
+    pub(crate) fn payload_sources(
+        &self,
+        id: InstanceId,
+    ) -> &[hirsel_lir::sealed_payload_source::SourcePayload] {
+        self.payload_sources.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    pub(crate) fn register_library_receipt(
+        &mut self,
+        id: InstanceId,
+        source: hirsel_lir::sealed_payload_source::ReceiptSource,
+    ) {
+        self.receipt_sources.insert(id, source);
     }
 
     /// Source callable of a proof owner, never an appended Value-unit index.
