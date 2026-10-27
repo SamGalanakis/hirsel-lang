@@ -237,6 +237,7 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
             graph.recheck(&provider, roots, &mut cases).unwrap();
             let mut owned = 0;
             let mut closed_entries = 0;
+            let mut projected = 0;
             for (request, context) in graph.requests.iter().zip(&graph.contexts) {
                 let Some(source) = request.receipt_source().unwrap() else {
                     continue;
@@ -272,6 +273,18 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     original.output().unwrap().observation_identity(),
                     original.implementation_revision(),
                     original.definition().clone(),
+                )
+                .with_nominals(
+                    input
+                        .signatures
+                        .iter()
+                        .filter(|(_, signature)| {
+                            matches!(signature.kind, hirsel_types::SignatureKind::Type(_))
+                        })
+                        .map(|(path, signature)| {
+                            (hirsel_syntax::DefId::intern(path), signature.clone())
+                        })
+                        .collect(),
                 );
                 let substitute = |ty| {
                     hirsel_rc::instance::substitute(
@@ -286,6 +299,25 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                 source_input
                     .check_closed_environments(request, &input.types, &mut { substitute })
                     .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+                let parameters = request
+                    .declaration()
+                    .entry()
+                    .parameters()
+                    .iter()
+                    .map(|p| p.ordinal)
+                    .collect::<Vec<_>>();
+                let expected = source_input
+                    .derive_request(request, &input.types, &parameters, substitute)
+                    .unwrap_or_else(|error| {
+                        panic!("{name}: {:?}: {error:?}", request.ordinary_key())
+                    });
+                assert_eq!(expected.environments().len(), request.closures().len());
+                expected.source().check().unwrap();
+                for environment in expected.environments() {
+                    projected += environment.payload().recipe.inputs.iter().filter(|input|
+                        matches!(&input.producer, hirsel_lir::sealed_payload_source::PayloadProducer::Projected { path, .. } if !path.is_empty())
+                    ).count();
+                }
                 closed_entries += request.closures().len();
                 // Reopening only the parent cannot authorize changed child captures.
                 if let Some(environment) = request
@@ -313,6 +345,10 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     );
                 }
             }
+            assert!(
+                projected > 0,
+                "{name} has no original projected capture paths"
+            );
             assert!(owned > 0, "{name} has no demanded owning capture");
             assert!(
                 closed_entries > 0,

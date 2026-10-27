@@ -35,6 +35,18 @@ pub enum PayloadProducer {
     Construct(SourceAnchor),
     Closure(SourceAnchor),
     Call(SourceAnchor),
+    Projected {
+        root: Box<PayloadProducer>,
+        path: Vec<PayloadProjection>,
+    },
+}
+
+/// Original logical path. Index identity follows its own reaching producer.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum PayloadProjection {
+    Field(u32),
+    Index(Box<PayloadProducer>),
+    VariantField { variant: u32, field: u32 },
 }
 
 /// The original TIR place and its independently reconstructed reaching producer.
@@ -80,7 +92,8 @@ pub struct SourcePayload {
 }
 
 snapshot_enum!(PayloadLiteral { Unit, Bool(value), Integer(value), F32(bits), F64(bits), String(value), Bytes(value) });
-snapshot_enum!(PayloadProducer { Parameter(ordinal), Capture(slot), Literal(value), Construct(source), Closure(source), Call(source) });
+snapshot_enum!(PayloadProducer { Parameter(ordinal), Capture(slot), Literal(value), Construct(source), Closure(source), Call(source), Projected { root, path } });
+snapshot_enum!(PayloadProjection { Field(ordinal), Index(producer), VariantField { variant, field } });
 snapshot_struct!(PayloadOperand {
     place,
     ty,

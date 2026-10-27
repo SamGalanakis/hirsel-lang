@@ -5,6 +5,7 @@ use crate::ir::*;
 use crate::sealed_payload::*;
 use crate::stage::Stage;
 pub(super) mod pairing;
+mod projection;
 
 pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     let unit = cx.unit;
@@ -23,6 +24,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
     let pairs = pairing::Pairing::new(unit);
     let mut observed = vec![];
     let origins = producers(unit, &cx.layouts.0.fn_abis[unit.header.abi.0 as usize]);
+    let projections = projection::Projections::new(unit);
     for inst in &unit.instructions {
         let Inst::PayloadReceipt {
             value,
@@ -169,7 +171,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                         "semantic payload input is not an original site operand",
                     );
                 }
-                if origins[value.index()] != vec![source.producer.clone()] {
+                if !projections.matches(value, &source.producer, &origins) {
                     reject(report, "semantic payload operand producer lineage differs");
                 }
                 match cx.operations.seal_descriptor_for_source(

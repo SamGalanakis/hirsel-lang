@@ -753,17 +753,18 @@ mod nonpayload_closure_tests {
         assert_eq!(accepted.events()[0].anchor.statement, 2);
         accepted.source().check().unwrap();
         required.payload_locals.insert(4);
-        assert_eq!(
-            derive(&required).err(),
-            Some(SourceError::Unsupported(
-                "projected payload producer needs source path transport"
-            ))
-        );
-        assert_eq!(
-            source.derive(&key, &types, &[0, 1, 2], Ok).err(),
-            Some(SourceError::Unsupported(
-                "projected payload producer needs source path transport"
-            ))
-        );
+        for expected in [
+            derive(&required).unwrap(),
+            source.derive(&key, &types, &[0, 1, 2], Ok).unwrap(),
+        ] {
+            let projected = &expected.payloads()[1].recipe.inputs[0].producer;
+            assert_eq!(
+                projected,
+                &PayloadProducer::Projected {
+                    root: Box::new(PayloadProducer::Parameter(1)),
+                    path: vec![PayloadProjection::Field(0)],
+                }
+            );
+        }
     }
 }

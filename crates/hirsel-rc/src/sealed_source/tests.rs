@@ -788,3 +788,196 @@ fn source_nominal_121_classifies_current_representations_and_refuses_missing_dec
         );
     }
 }
+
+#[test]
+fn semantic_source_147_projected_aliases_keep_path_and_index_producers() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let variant = types.intern(Type::with_kind(TypeKind::Variant(
+        vec![
+            hirsel_types::Variant {
+                name: "A".into(),
+                fields: vec![].into(),
+            },
+            hirsel_types::Variant {
+                name: "B".into(),
+                fields: vec![].into(),
+            },
+            hirsel_types::Variant {
+                name: "C".into(),
+                fields: vec![].into(),
+            },
+            hirsel_types::Variant {
+                name: "D".into(),
+                fields: vec![(None, scalar), (None, scalar)].into(),
+            },
+        ]
+        .into(),
+    )));
+    let list = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(variant)].into(),
+    }));
+    let root = types.intern(Type::with_kind(TypeKind::Tuple(
+        vec![list, list, list].into(),
+    )));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+    let mut original = body(&[root, scalar, variant, scalar, tuple], 2);
+    original.places.push(Place {
+        root: LocalId(0),
+        projection: vec![Projection::Field(2), Projection::Index(LocalId(1))].into(),
+        ty: variant,
+        loan: None,
+        binding: None,
+    });
+    original.places.push(Place {
+        root: LocalId(2),
+        projection: vec![Projection::VariantField {
+            variant: 3,
+            field: 1,
+        }]
+        .into(),
+        ty: scalar,
+        loan: None,
+        binding: None,
+    });
+    assign(&mut original, 2, Rvalue::Use(operand(5)));
+    assign(&mut original, 3, Rvalue::Use(operand(6)));
+    assign(
+        &mut original,
+        4,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(3),
+            }],
+            destination: Destination::Heap,
+        },
+    );
+    let expected = PayloadProducer::Projected {
+        root: Box::new(PayloadProducer::Parameter(8)),
+        path: vec![
+            PayloadProjection::Field(2),
+            PayloadProjection::Index(Box::new(PayloadProducer::Parameter(9))),
+            PayloadProjection::VariantField {
+                variant: 3,
+                field: 1,
+            },
+        ],
+    };
+    let recipes = extract(&types, &original, &[8, 9]).unwrap();
+    assert_eq!(recipes[0].recipe.inputs[0].producer, expected);
+    let text = hirsel_codec::to_text(&expected);
+    assert_eq!(
+        hirsel_codec::from_text::<PayloadProducer>(&text).unwrap(),
+        expected
+    );
+    original.places[5].projection =
+        vec![Projection::Field(1), Projection::Index(LocalId(1))].into();
+    assert_ne!(
+        extract(&types, &original, &[8, 9]).unwrap()[0]
+            .recipe
+            .inputs[0]
+            .producer,
+        expected
+    );
+    assign(&mut original, 1, Rvalue::Constant(Constant::Integer(0)));
+    assert!(
+        extract(&types, &original, &[8, 9]).is_err(),
+        "ambiguous index source"
+    );
+}
+
+#[test]
+fn semantic_source_147_projected_writes_invalidate_the_whole_source() {
+    let types = TypeInterner::new(None);
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(vec![scalar].into())));
+    let mut original = body(&[tuple, tuple], 1);
+    original.places.push(Place {
+        root: LocalId(0),
+        projection: vec![Projection::Field(0)].into(),
+        ty: scalar,
+        loan: None,
+        binding: None,
+    });
+    assign(&mut original, 2, Rvalue::Constant(Constant::Integer(1)));
+    assign(
+        &mut original,
+        1,
+        Rvalue::Construct {
+            constructor: Constructor::Tuple,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(0),
+            }],
+            destination: Destination::Heap,
+        },
+    );
+    assert_eq!(
+        extract(&types, &original, &[0]).err(),
+        Some(SourceError::Unsupported(
+            "payload operand needs reaching source alternatives"
+        ))
+    );
+}
+
+#[test]
+fn semantic_source_147_projected_construction_cannot_disappear_from_original_inventory() {
+    let types = TypeInterner::new(None);
+    let arena = types.intern(Type::with_kind(TypeKind::Named {
+        definition: hirsel_syntax::DefId::intern(&hirsel_syntax::DefPath::core("Arena")),
+        arguments: vec![].into(),
+    }));
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let list = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::List,
+        arguments: vec![GenericArgument::Type(scalar)].into(),
+    }));
+    let wrapper = types.intern(Type::with_kind(TypeKind::Tuple(vec![list].into())));
+    let mut original = body(&[arena, scalar, wrapper, list], 3);
+    let origin = hirsel_types::Origin {
+        root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
+            hirsel_types::ParamId(0),
+        )),
+        fields: Default::default(),
+    };
+    original.places[0].binding = Some(origin.clone());
+    original.places.push(Place {
+        root: LocalId(2),
+        projection: vec![Projection::Field(0)].into(),
+        ty: list,
+        loan: None,
+        binding: None,
+    });
+    assign(
+        &mut original,
+        4,
+        Rvalue::Construct {
+            constructor: Constructor::Sequence,
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(1),
+            }],
+            destination: Destination::Arena(origin),
+        },
+    );
+    assert_eq!(
+        extract(&types, &original, &[0, 1, 2]).err(),
+        Some(SourceError::Unsupported(
+            "projected payload construction needs source destination transport"
+        ))
+    );
+    let InstructionKind::Assign { destination, .. } = &mut original.blocks[0].instructions[0].kind
+    else {
+        unreachable!()
+    };
+    *destination = PlaceId(3);
+    let accepted = extract(&types, &original, &[0, 1, 2]).unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert!(
+        matches!(&accepted[0].recipe.operation, PayloadOperation::Allocate {
+        destination: PayloadDestination::Arena(arena) } if arena.producer == PayloadProducer::Parameter(0))
+    );
+}

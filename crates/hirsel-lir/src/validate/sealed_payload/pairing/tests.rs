@@ -248,3 +248,190 @@ fn a_self_supporting_cycle_or_alias_cycle_is_not_a_producer() {
     });
     assert!(!Pairing::new(&u).paired(v, r));
 }
+
+#[test]
+fn projected_payload_147_checks_each_field_variant_index_and_root() {
+    use super::super::projection::Projections;
+    use crate::sealed_payload_source::{PayloadProducer as P, PayloadProjection as Q};
+    let mut u = unit();
+    let root = value(&mut u);
+    let index = value(&mut u);
+    let other_index = value(&mut u);
+    let result = value(&mut u);
+    let alias = value(&mut u);
+    u.parameters = vec![root, index, other_index];
+    let projection = PoolRange::push(
+        &mut u.pools.projections,
+        [
+            ProjectionStep::Field(2),
+            ProjectionStep::Index(index),
+            ProjectionStep::VariantField {
+                variant: 1,
+                field: 0,
+            },
+        ],
+    );
+    u.addresses.push(AddressInfo {
+        base: AddressBase::Value(root),
+        source_place: None,
+        unchecked: vec![],
+        projection,
+        ty: LirTypeId(0),
+    });
+    u.instructions.extend([
+        Inst::Read {
+            result,
+            address: AddressId(0),
+            reaching: root,
+            mode: ReadMode::Bits,
+        },
+        Inst::CopyValue {
+            result: alias,
+            value: result,
+        },
+    ]);
+    let mut whole = vec![vec![]; u.values.len()];
+    whole[root.index()] = vec![P::Parameter(3)];
+    whole[index.index()] = vec![P::Parameter(4)];
+    whole[other_index.index()] = vec![P::Parameter(5)];
+    let wanted = P::Projected {
+        root: Box::new(P::Parameter(3)),
+        path: vec![
+            Q::Field(2),
+            Q::Index(Box::new(P::Parameter(4))),
+            Q::VariantField {
+                variant: 1,
+                field: 0,
+            },
+        ],
+    };
+    assert!(Projections::new(&u).matches(alias, &wanted, &whole));
+    assert!(!Projections::new(&u).matches(root, &wanted, &whole));
+    assert!(!Projections::new(&u).matches(alias, &P::Parameter(3), &whole));
+    for step in [ProjectionStep::Field(1), ProjectionStep::Payload] {
+        u.pools.projections[0] = step;
+        assert!(!Projections::new(&u).matches(alias, &wanted, &whole));
+    }
+    u.pools.projections[0] = ProjectionStep::Field(2);
+    u.pools.projections[1] = ProjectionStep::Index(other_index);
+    assert!(!Projections::new(&u).matches(alias, &wanted, &whole));
+    u.pools.projections[1] = ProjectionStep::Index(index);
+    u.pools.projections[2] = ProjectionStep::VariantField {
+        variant: 0,
+        field: 0,
+    };
+    assert!(!Projections::new(&u).matches(alias, &wanted, &whole));
+    u.pools.projections[2] = ProjectionStep::VariantField {
+        variant: 1,
+        field: 0,
+    };
+    whole[root.index()] = vec![P::Parameter(6)];
+    assert!(!Projections::new(&u).matches(alias, &wanted, &whole));
+}
+
+#[test]
+fn projected_payload_147_composes_reads_and_requires_grounded_joins() {
+    use super::super::projection::Projections;
+    use crate::sealed_payload_source::{PayloadProducer as P, PayloadProjection as Q};
+    let mut u = unit();
+    let root = value(&mut u);
+    let field = value(&mut u);
+    let result = value(&mut u);
+    let joined = value(&mut u);
+    u.parameters = vec![root];
+    for (base, step) in [
+        (root, ProjectionStep::Payload),
+        (field, ProjectionStep::Field(2)),
+    ] {
+        let projection = PoolRange::push(&mut u.pools.projections, [step]);
+        u.addresses.push(AddressInfo {
+            base: AddressBase::Value(base),
+            source_place: None,
+            unchecked: vec![],
+            projection,
+            ty: LirTypeId(0),
+        });
+    }
+    u.instructions.extend([
+        Inst::Read {
+            result: field,
+            address: AddressId(0),
+            reaching: root,
+            mode: ReadMode::Bits,
+        },
+        Inst::Read {
+            result,
+            address: AddressId(1),
+            reaching: field,
+            mode: ReadMode::Bits,
+        },
+    ]);
+    let join = block(&mut u, &[joined]);
+    edge(&mut u, join, &[result]);
+    edge(&mut u, join, &[joined]);
+    let mut whole = vec![vec![]; u.values.len()];
+    whole[root.index()] = vec![P::Parameter(0)];
+    let wanted = P::Projected {
+        root: Box::new(P::Parameter(0)),
+        path: vec![Q::Field(0), Q::Field(2)],
+    };
+    assert!(Projections::new(&u).matches(joined, &wanted, &whole));
+    let first = u.tables.edges[0].arguments.start as usize;
+    u.pools.values[first] = field;
+    assert!(!Projections::new(&u).matches(joined, &wanted, &whole));
+    u.pools.values[first] = joined;
+    assert!(!Projections::new(&u).matches(joined, &wanted, &whole));
+}
+
+#[test]
+fn projected_payload_147_requires_every_root_and_index_predecessor_even_with_equal_origin_sets() {
+    use super::super::projection::Projections;
+    use crate::sealed_payload_source::{PayloadProducer as P, PayloadProjection as Q};
+    let mut u = unit();
+    let root = value(&mut u);
+    let index = value(&mut u);
+    let unknown = value(&mut u);
+    let joined_root = value(&mut u);
+    let joined_index = value(&mut u);
+    let result = value(&mut u);
+    u.parameters = vec![root, index];
+    let join = block(&mut u, &[joined_root, joined_index]);
+    edge(&mut u, join, &[root, index]);
+    let projection = PoolRange::push(
+        &mut u.pools.projections,
+        [ProjectionStep::Index(joined_index)],
+    );
+    u.addresses.push(AddressInfo {
+        base: AddressBase::Value(joined_root),
+        source_place: None,
+        unchecked: vec![],
+        projection,
+        ty: LirTypeId(0),
+    });
+    u.instructions.push(Inst::Read {
+        result,
+        address: AddressId(0),
+        reaching: joined_root,
+        mode: ReadMode::Bits,
+    });
+    let mut whole = vec![vec![]; u.values.len()];
+    for v in [root, joined_root] {
+        whole[v.index()] = vec![P::Parameter(0)];
+    }
+    for v in [index, joined_index] {
+        whole[v.index()] = vec![P::Parameter(1)];
+    }
+    let wanted = P::Projected {
+        root: Box::new(P::Parameter(0)),
+        path: vec![Q::Index(Box::new(P::Parameter(1)))],
+    };
+    assert!(Projections::new(&u).matches(result, &wanted, &whole));
+    edge(&mut u, join, &[root, unknown]);
+    assert!(!Projections::new(&u).matches(result, &wanted, &whole));
+    let second = u.tables.edges[1].arguments.start as usize;
+    u.pools.values[second] = unknown;
+    u.pools.values[second + 1] = index;
+    assert!(!Projections::new(&u).matches(result, &wanted, &whole));
+    u.pools.values[second] = root;
+    assert!(Projections::new(&u).matches(result, &wanted, &whole));
+}

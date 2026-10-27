@@ -1518,3 +1518,113 @@ fn ready_heap_seal_95_requires_a_live_same_snapshot_take_companion() {
         .ty = NativeType::Primitive(hirsel_lir::operation::Primitive::U64);
     assert!(!checked_raw(unit, &table, &manifest, &wrong_source).is_empty());
 }
+
+#[test]
+fn semantic_payload_147_public_c_checks_projected_producer_without_whole_root_substitution() {
+    use hirsel_lir::sealed_payload_source::{PayloadProducer as P, PayloadProjection as Q};
+    let (mut t, mut declarations, root) = payload_fixture();
+    let types = support::session();
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let tuple = types.intern(Type::with_kind(TypeKind::Tuple(
+        vec![scalar, scalar].into(),
+    )));
+    let target = TargetSpec::x86_64_unknown_linux_gnu();
+    let owners = Owners::default();
+    let mut layouts = LayoutBuilder::new(&target, &owners);
+    let tuple = layouts.layout(&types, tuple).unwrap();
+    let extra = layouts.finish();
+    let offset = t.table.layouts.len() as u32;
+    let scalar_layout = t.builder.unit.tables.seal_descriptors[0].root_layout;
+    let scalars: Vec<_> = extra
+        .layouts
+        .iter()
+        .map(|layout| {
+            matches!(
+                layout.kind,
+                hirsel_lir::layout_types::LayoutKind::Scalar(ScalarKind::U64)
+            )
+        })
+        .collect();
+    for mut layout in extra.layouts {
+        layout.for_each_reference_mut(&mut |id| {
+            if scalars[id.0 as usize] {
+                *id = scalar_layout;
+            } else {
+                id.0 += offset;
+            }
+        });
+        t.table.layouts.push(layout);
+    }
+    let tuple = LayoutId(tuple.0 + offset);
+    let old = t.builder.unit.header.abi.0 as usize;
+    let returned = t.table.fn_abis[old].result.as_ref().unwrap().layout;
+    let abi = t.abi(
+        &[(Passing::Take, support::l::ARENA), (Passing::Take, tuple)],
+        Some(returned),
+    );
+    t.builder.unit.header.abi = abi;
+    let wrapper = t.value_as(ValueRepr::Aggregate, tuple, Holding::Plain);
+    t.builder.unit.parameters[1] = wrapper;
+    let expected = P::Projected {
+        root: Box::new(P::Parameter(1)),
+        path: vec![Q::Field(1)],
+    };
+    declarations.payloads.as_mut().unwrap()[0].recipe.inputs[0].producer = expected.clone();
+    t.builder.unit.tables.seal_payloads[0].bindings[0]
+        .recipe
+        .inputs[0]
+        .producer = expected;
+    let (mut unit, table, manifest) = t.finish();
+    let projection = PoolRange::push(&mut unit.pools.projections, [ProjectionStep::Field(1)]);
+    let address = AddressId(unit.addresses.len() as u32);
+    unit.addresses.push(AddressInfo {
+        base: AddressBase::Value(wrapper),
+        source_place: None,
+        unchecked: vec![],
+        projection,
+        ty: unit.values[root.index()].ty,
+    });
+    let mut failure = unit.tables.failures[0].clone();
+    let edge = unit.tables.edges[failure.cleanup.index()].clone();
+    failure.cleanup = EdgeId(unit.tables.edges.len() as u32);
+    unit.tables.edges.push(edge);
+    let preparation_failure = FailureId(unit.tables.failures.len() as u32);
+    unit.tables.failures.push(failure);
+    let at = unit.blocks[unit.entry.index()].instructions.start as usize;
+    unit.instructions.splice(
+        at..at,
+        [
+            Inst::Address {
+                address,
+                failure: preparation_failure,
+            },
+            Inst::Read {
+                result: root,
+                address,
+                reaching: wrapper,
+                mode: ReadMode::Bits,
+            },
+        ],
+    );
+    for (id, block) in unit.blocks.iter_mut().enumerate() {
+        if BlockId(id as u32) == unit.entry {
+            block.instructions.len += 2;
+        } else if block.instructions.start as usize >= at {
+            block.instructions.start += 2;
+        }
+    }
+    let accepted = checked_raw(unit.clone(), &table, &manifest, &declarations);
+    assert!(accepted.is_empty(), "{accepted:#?}");
+    unit.pools.projections[projection.start as usize] = ProjectionStep::Field(0);
+    sealed_rejection(
+        &checked_raw(unit.clone(), &table, &manifest, &declarations),
+        "operand producer lineage differs",
+    );
+    unit.pools.projections[projection.start as usize] = ProjectionStep::Field(1);
+    declarations.payloads.as_mut().unwrap()[0].recipe.inputs[0].producer = P::Parameter(1);
+    unit.tables.seal_payloads[0].bindings[0].recipe.inputs[0].producer = P::Parameter(1);
+    sealed_rejection(
+        &checked_raw(unit, &table, &manifest, &declarations),
+        "operand producer lineage differs",
+    );
+}

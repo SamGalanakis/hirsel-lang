@@ -66,11 +66,6 @@ impl Context<'_> {
     }
     fn local(&self, place: PlaceId) -> Result<usize, SourceError> {
         let place = self.place(place)?;
-        if !place.projection.is_empty() {
-            return Err(SourceError::Unsupported(
-                "projected payload producer needs source path transport",
-            ));
-        }
         let local = place.root.0 as usize;
         if local >= self.body.locals.len() {
             return Err(SourceError::Malformed("source local"));
@@ -171,46 +166,104 @@ fn producer(
     definitions: &[Vec<Definition>],
     place: PlaceId,
 ) -> Result<PayloadProducer, SourceError> {
-    let mut local = context.local(place)?;
-    let mut visited = BTreeSet::new();
-    loop {
-        if !visited.insert(local) {
-            return Err(SourceError::Unsupported("cyclic source value transport"));
-        }
-        let [definition] = definitions[local].as_slice() else {
-            return Err(SourceError::Unsupported(
-                "payload operand needs reaching source alternatives",
-            ));
-        };
-        return Ok(match definition {
-            Definition::Parameter(ordinal) => PayloadProducer::Parameter(*ordinal),
-            Definition::Capture(slot) => PayloadProducer::Capture(*slot),
-            Definition::Call(source) => PayloadProducer::Call(source.clone()),
-            Definition::Value(index, source) => match &context.body.rvalues[*index] {
-                Rvalue::Constant(value) => PayloadProducer::Literal(literal(value)),
-                Rvalue::Construct { .. } => PayloadProducer::Construct(source.clone()),
-                Rvalue::Closure { .. } => PayloadProducer::Closure(source.clone()),
-                Rvalue::Use(operand) => {
-                    local = context.local(operand.place)?;
-                    continue;
-                }
-                _ => {
-                    return Err(SourceError::Unsupported(
-                        "payload operand source expression",
-                    ));
-                }
-            },
-            Definition::Unknown => {
-                return Err(SourceError::Unsupported("mutated payload source value"));
+    producer_path(
+        context,
+        definitions,
+        context.local(place)?,
+        context.place(place)?.projection.clone(),
+        &mut BTreeSet::new(),
+    )
+}
+
+fn producer_path(
+    context: &Context<'_>,
+    definitions: &[Vec<Definition>],
+    mut local: usize,
+    mut projection: hirsel_types::SharedPath<hirsel_tir::Projection>,
+    active: &mut BTreeSet<usize>,
+) -> Result<PayloadProducer, SourceError> {
+    let mut visited = vec![];
+    let mut path = vec![];
+    let result = (|| {
+        loop {
+            if !active.insert(local) {
+                return Err(SourceError::Unsupported("cyclic source value transport"));
             }
-        });
+            visited.push(local);
+            let mut prefix = projection
+                .iter()
+                .map(|step| {
+                    Ok(match *step {
+                        hirsel_tir::Projection::Field(field) => PayloadProjection::Field(field),
+                        hirsel_tir::Projection::VariantField { variant, field } => {
+                            PayloadProjection::VariantField { variant, field }
+                        }
+                        hirsel_tir::Projection::Index(index) => {
+                            let index = index.0 as usize;
+                            if index >= definitions.len() {
+                                return Err(SourceError::Malformed("source index local"));
+                            }
+                            PayloadProjection::Index(Box::new(producer_path(
+                                context,
+                                definitions,
+                                index,
+                                Default::default(),
+                                active,
+                            )?))
+                        }
+                    })
+                })
+                .collect::<Result<Vec<_>, SourceError>>()?;
+            prefix.append(&mut path);
+            path = prefix;
+            let [definition] = definitions[local].as_slice() else {
+                return Err(SourceError::Unsupported(
+                    "payload operand needs reaching source alternatives",
+                ));
+            };
+            let root = match definition {
+                Definition::Parameter(ordinal) => PayloadProducer::Parameter(*ordinal),
+                Definition::Capture(slot) => PayloadProducer::Capture(*slot),
+                Definition::Call(source) => PayloadProducer::Call(source.clone()),
+                Definition::Value(index, source) => match &context.body.rvalues[*index] {
+                    Rvalue::Constant(value) => PayloadProducer::Literal(literal(value)),
+                    Rvalue::Construct { .. } => PayloadProducer::Construct(source.clone()),
+                    Rvalue::Closure { .. } => PayloadProducer::Closure(source.clone()),
+                    Rvalue::Use(operand) => {
+                        local = context.local(operand.place)?;
+                        projection = context.place(operand.place)?.projection.clone();
+                        continue;
+                    }
+                    _ => {
+                        return Err(SourceError::Unsupported(
+                            "payload operand source expression",
+                        ));
+                    }
+                },
+                Definition::Unknown => {
+                    return Err(SourceError::Unsupported("mutated payload source value"));
+                }
+            };
+            return Ok(if path.is_empty() {
+                root
+            } else {
+                PayloadProducer::Projected {
+                    root: Box::new(root),
+                    path,
+                }
+            });
+        }
+    })();
+    for local in visited {
+        active.remove(&local);
     }
+    result
 }
 
 /// Derive original typed constructor/capture leaves. No receiving lifetime can
 /// retag Constant String/Bytes as an allocation: constants have no Destination.
-/// Mutable CFG joins and source projections remain explicit missing cells until
-/// their independently checked reaching/path representations are linked.
+/// Mutable CFG joins remain unavailable. Logical projection paths retain their
+/// original root and independently resolved index producers.
 pub fn payloads(
     context: &Context<'_>,
     substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
@@ -257,10 +310,20 @@ fn payloads_selected(
                         .get(index)
                         .ok_or(SourceError::Malformed("source rvalue"))?;
                     let local = context.local(destination)?;
+                    let demanded =
+                        matches!(rvalue, Rvalue::Construct { .. } | Rvalue::Closure { .. })
+                            && include(local as u32, rvalue);
+                    if !context.place(destination)?.projection.is_empty() {
+                        definitions[local].push(Definition::Unknown);
+                        if demanded {
+                            return Err(SourceError::Unsupported(
+                                "projected payload construction needs source destination transport",
+                            ));
+                        }
+                        continue;
+                    }
                     definitions[local].push(Definition::Value(index, source.clone()));
-                    if matches!(rvalue, Rvalue::Construct { .. } | Rvalue::Closure { .. })
-                        && include(local as u32, rvalue)
-                    {
+                    if demanded {
                         constructions.push((destination, rvalue, source));
                     }
                 }
@@ -303,11 +366,17 @@ fn payloads_selected(
             }
             if let Some(returned) = returns {
                 let local = context.local(returned.destination)?;
-                definitions[local].push(Definition::Call(context.anchor(
-                    block_id,
-                    block.instructions.len(),
-                    block.span,
-                )));
+                definitions[local].push(
+                    if context.place(returned.destination)?.projection.is_empty() {
+                        Definition::Call(context.anchor(
+                            block_id,
+                            block.instructions.len(),
+                            block.span,
+                        ))
+                    } else {
+                        Definition::Unknown
+                    },
+                );
             }
         }
     }
