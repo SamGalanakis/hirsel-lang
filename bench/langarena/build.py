@@ -43,6 +43,7 @@ def generate():
     (directory / 'registry.hir').write_text(registry)
     sources = [dict(path='../main.hir', module=[]),
                dict(path='../harness.hir', module=['harness']),
+               dict(path='../cpu_harness.hir', module=['cpu_harness']),
                dict(path='registry.hir', module=['registry'])]
     sources += [dict(path=f'../{module}.hir', module=[module]) for module in modules]
     manifest = dict(schema=1, package=dict(name='langarena', version='1'),
@@ -51,7 +52,10 @@ def generate():
                                        package=dict(name='std', version='1'), expose=[])])
     path = directory / 'hirsel.json'
     path.write_text(json.dumps(manifest, indent=2) + '\n')
-    grants = dict(io=dict(stdout='stdout.bytes@1', monotonic_clock='clock.monotonic.ns@1',
+    grants = dict(io=dict(tasks='tasks.free@1',
+                          cpu=dict(provider='cpu.scoped@1', max_workers=16, max_domains=1,
+                                   max_physical_bytes=1073741824, max_batch_bytes=16777216),
+                          stdout='stdout.bytes@1', monotonic_clock='clock.monotonic.ns@1',
                           wall_clock='clock.wall.unix_ns@1',
                           dirs=[dict(path='', host=str(ROOT), access='read')]), args=[])
     (directory / 'grants.json').write_text(json.dumps(grants, indent=2) + '\n')

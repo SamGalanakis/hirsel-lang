@@ -1,7 +1,4 @@
 // langarena: Matmul::Single
-// langarena-blocked: Matmul::T4 | CPU parallel row execution with a fixed four-thread pool; in-run tasks share one cooperative run token
-// langarena-blocked: Matmul::T8 | CPU parallel row execution with a fixed eight-thread pool; in-run tasks share one cooperative run token
-// langarena-blocked: Matmul::T16 | CPU parallel row execution with a fixed sixteen-thread pool; in-run tasks share one cooperative run token
 // Port: rust/src/benchmarks/matmul.rs:9-65, 112-170 (3c9f84d).
 type Matrix = List[List[f64]]
 

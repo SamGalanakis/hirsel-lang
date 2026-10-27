@@ -1,0 +1,199 @@
+hirsel_guard::install!();
+use std::{fs, process::Command};
+
+fn checked(output: std::process::Output) {
+    assert!(
+        output.status.success(),
+        "{:?}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+#[test]
+fn refusal_does_not_invoke_callbacks_and_retired_shared_results_replay() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(
+        root.join("main.hir"),
+        include_str!("support/cpu_pool/refusals.hir"),
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_semantics","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "max_workers":1,"max_domains":1,"max_physical_bytes":268435456u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+    let cli = env!("CARGO_BIN_EXE_hirsel");
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            Command::new(cli)
+                .args(["build", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let tape = root.join(format!("{backend}.tape"));
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(&grants)
+                .arg("--hirsel-record")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-replay")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn aggregate_jobs_keep_cleanup_ownership_until_mapper_admission() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(
+        root.join("main.hir"),
+        include_str!("support/cpu_pool/aggregate.hir"),
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_aggregate","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "max_workers":1,"max_domains":1,"max_physical_bytes":268435456u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+    let cli = env!("CARGO_BIN_EXE_hirsel");
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            Command::new(cli)
+                .args(["build", "--validate-stages", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(&grants)
+                .output()
+                .unwrap(),
+        );
+    }
+}
+
+#[test]
+fn canceled_and_failed_batches_drain_before_recorded_return_or_reentry() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let grants = root.join("grants.json");
+    fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "max_workers":1,"max_domains":1,"max_physical_bytes":268435456u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
+    for (name, source) in [
+        ("canceled", include_str!("support/cpu_pool/canceled.hir")),
+        ("failed", include_str!("support/cpu_pool/failed.hir")),
+    ] {
+        fs::write(root.join("main.hir"), source).unwrap();
+        let manifest = root.join("hirsel.json");
+        fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_lifetime","version":"1"},
+            "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+        let executable = root.join(name);
+        checked(
+            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .args(["build", "--validate-stages", "--backend", "llvm"])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let tape = root.join(format!("{name}.tape"));
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(&grants)
+                .arg("--hirsel-record")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-replay")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+    }
+}
+#[test]
+fn physical_refusal_consumes_callbacks_without_invoking_them_and_replays() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(
+        root.join("main.hir"),
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let denied = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
+    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
+  failure.check(denied == Error(ResourceLimit()), Bounds())
+  Ok(())
+}
+"#,
+    )
+    .unwrap();
+    let manifest = root.join("hirsel.json");
+    fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_resources","version":"1"},
+        "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
+    let grants = root.join("grants.json");
+    fs::write(
+        &grants,
+        serde_json::json!({"io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "max_workers":1,"max_domains":1,"max_physical_bytes":1,"max_batch_bytes":8388608}}})
+        .to_string(),
+    )
+    .unwrap();
+    for backend in ["llvm", "cranelift"] {
+        let executable = root.join(backend);
+        checked(
+            Command::new(env!("CARGO_BIN_EXE_hirsel"))
+                .args(["build", "--backend", backend])
+                .arg(&manifest)
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap(),
+        );
+        let tape = root.join(format!("{backend}.tape"));
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-grants")
+                .arg(&grants)
+                .arg("--hirsel-record")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+        checked(
+            Command::new(&executable)
+                .arg("--hirsel-replay")
+                .arg(&tape)
+                .output()
+                .unwrap(),
+        );
+    }
+}

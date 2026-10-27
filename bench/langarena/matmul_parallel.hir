@@ -1,0 +1,121 @@
+// langarena: Matmul::T4
+// langarena: Matmul::T8
+// langarena: Matmul::T16
+// Port: LangArena rust/src/benchmarks/matmul.rs (3c9f84d), MIT.
+// Each step creates and joins a fresh CPU pool. The j/k order matches Single.
+type Matrix = List[List[f64]]
+type Job {
+  a: Shared[Matrix],
+  bt: Shared[Matrix],
+  first: u64,
+  end: u64,
+  output: unique Matrix,
+}
+type State {
+  width: u32,
+  a: Shared[Matrix],
+  b: Shared[Matrix],
+  value_out: u32,
+}
+
+fn matgen(n: u64) -> unique Matrix {
+  let tmp: f64 = 1.0 / float.from_int(n * n)
+  let mut out: Matrix = []
+  for i in 0u64..n {
+    let x: f64 = float.from_int(i)
+    let mut row: List[f64] = []
+    for j in 0u64..n {
+      let y: f64 = float.from_int(j)
+      list.push(mut row, tmp * (x - y) * (x + y))
+    }
+    list.push(mut out, take row)
+  }
+  take out
+}
+
+fn step(tasks: Tasks, take initial_state: State, iteration: u64) -> Result[State, String] {
+  let State(width: width, a: input_a, b: input_b, value_out: old_value) = take initial_state
+  let rows: Result[List[Shared[Matrix]], CpuPoolError] = core@1/cpu.map_scoped(
+    tasks,
+    width,
+    fn() -> List[unique Job] uses {} {
+      let bt = shared.with(
+        input_b,
+        fn(matrix: Matrix) -> Shared[Matrix] uses {} {
+          let n = list.len(matrix)
+          let mut transposed: Matrix = []
+          for j in 0u64..n {
+            let mut column: List[f64] = []
+            for i in 0u64..n {
+              list.push(mut column, matrix[i][j])
+            }
+            list.push(mut transposed, take column)
+          }
+          shared.freeze(take transposed)
+        }
+      )
+      let n = shared.with(input_a, fn(matrix: Matrix) -> u64 uses {} { list.len(matrix) })
+      let w: u64 = int.widen(width)
+      let mut jobs: List[unique Job] = []
+      for q in 0u64..w {
+        let first = q * n / w
+        let end = (q + 1) * n / w
+        let mut output: Matrix = []
+        for _ in first..end {
+          let mut row: List[f64] = []
+          for _ in 0u64..n { list.push(mut row, 0.0) }
+          list.push(mut output, take row)
+        }
+        list.push(mut jobs, Job(a: copy input_a, bt: copy bt, first: first, end: end, output: take output))
+      }
+      take jobs
+    },
+    fn(take job: unique Job) -> Shared[Matrix] uses {} {
+      let Job(a: moved_a, bt: moved_bt, first: moved_first, end: moved_end, output: moved_output) = take job
+      let mut output = take moved_output
+      for i in moved_first..moved_end {
+        let n = list.len(output[i - moved_first])
+        for j in 0u64..n {
+          let sum = shared.with(moved_a, fn(a: Matrix) -> f64 uses {} {
+            shared.with(moved_bt, fn(bt: Matrix) -> f64 uses {} {
+              let row = a[i]
+              let column = bt[j]
+              let mut total: f64 = 0.0
+              for k in 0u64..n { total += row[k] * column[k] }
+              total
+            })
+          })
+          output[i - moved_first][j] = sum
+        }
+      }
+      shared.freeze(take output)
+    }
+  )
+  let chunks = match take rows {
+    Ok(value) => take value,
+    Error(_) => { return Error("CPU batch refused") },
+  }
+  let mut c: Matrix = []
+  for chunk in take chunks {
+    let Ok(chunk_rows) = shared.thaw(take chunk) else { return Error("CPU result unexpectedly aliased") }
+    for row in take chunk_rows { list.push(mut c, take row) }
+  }
+  let n = list.len(c)
+  let value_out = int.wrapping_add(old_value, harness.hash_float(c[n / 2][n / 2]))
+  Ok(State(width: width, a: take input_a, b: take input_b, value_out: value_out))
+}
+fn checksum(s: State) -> u32 { s.value_out }
+
+pub fn execute(rt: Io, name: String, config: harness.Config) -> Result[harness.Report, String] {
+  let tasks = match io.tasks(rt) { Ok(tasks) => tasks, Error(_) => { return Error("CPU Tasks grant required") } }
+  let width: u32 = if name == "Matmul::T4" { 4 } else if name == "Matmul::T8" { 8 } else { 16 }
+  let n = harness.number(config, "n")
+  let iterations = harness.number(config, "iterations")
+  let warmup = match map.get(config, "warmup_iterations") {
+    Some(_) => harness.number(config, "warmup_iterations"),
+    None() => if iterations / 5 > 0 { iterations / 5 } else { 1 },
+  }
+  cpu_harness.measure(rt, tasks, iterations, warmup, int.narrow(harness.number(config, "checksum")),
+    State( width: width, a: shared.freeze(matgen(n)), b: shared.freeze(matgen(n)), value_out: 0),
+    step, checksum)
+}

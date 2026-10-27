@@ -1,0 +1,15 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  task.scope(tasks, fn(scope: Scope) -> () {
+    let child = task.async(scope, fn() -> bool {
+      let batch_outcome = core@1/cpu.map_scoped(tasks, 1,
+        fn() -> List[u64] uses {} { [1] },
+        fn(take job: u64) -> u64 uses {} { let mut x = job; for i in 0u64..100000u64 { x = int.wrapping_add(x, i) }; x })
+      match batch_outcome { Error(Canceled(_)) => true, _ => false }
+    })
+    task.cancel(scope, child)
+    let outcome = task.await(scope, take child)
+    failure.check(outcome, Bounds())
+  })
+  Ok(())
+}

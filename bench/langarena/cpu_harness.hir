@@ -1,0 +1,24 @@
+// Task-aware LangArena timing. Warmup mutates the same state as measurement.
+fn invalid[E](take error: E) -> String {
+  "invalid configuration or host I/O"
+}
+pub fn measure[S](
+  rt: Io,
+  tasks: Tasks,
+  iterations: u64,
+  warmup: u64,
+  expected: u32,
+  take initial: S,
+  step: fn(Tasks, take S, u64) -> Result[S, String],
+  checksum: fn(S) -> u32
+) -> Result[harness.Report, String] {
+  let mut state = take initial
+  for i in 0u64..warmup { state = step(tasks, take state, i)? }
+  let c = io.monotonic_clock(rt) ? invalid
+  let start = clock.monotonic(c) ? invalid
+  for i in 0u64..iterations { state = step(tasks, take state, i)? }
+  let end = clock.monotonic(c) ? invalid
+  let ns: f64 = float.from_int(instant.ticks(end) - instant.ticks(start))
+  Ok(harness.Report(seconds: ns / 1000000000.0, actual: checksum(state),
+    expected: expected))
+}

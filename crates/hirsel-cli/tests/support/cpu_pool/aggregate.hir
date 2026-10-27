@@ -1,0 +1,22 @@
+type Job { input: Shared[List[u64]], output: unique List[u64] }
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  let rows: Result[List[Shared[List[u64]]], CpuPoolError] = core@1/cpu.map_scoped(tasks, 1,
+    fn() -> List[unique Job] uses {} {
+      let input = shared.freeze([7u64, 11u64])
+      [Job(input: copy input, output: [0u64]), Job(input: copy input, output: [1u64])]
+    },
+    fn(take job: unique Job) -> Shared[List[u64]] uses {} {
+      let Job(input: moved_input, output: moved_output) = take job
+      let mut output = take moved_output
+      let sum = shared.with(moved_input, fn(xs: List[u64]) -> u64 uses {} { xs[0] + xs[1] })
+      output[0] += sum
+      shared.freeze(take output)
+    })
+  let values = take rows?Pool
+  let first = shared.with(values[0], fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+  let second = shared.with(values[1], fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+  failure.check(first == 18 && second == 19, Bounds())
+  Ok(())
+}

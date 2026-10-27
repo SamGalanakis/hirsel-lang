@@ -1,0 +1,18 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let caught = task.isolate(tasks, fn() -> () {
+    let batch = core@1/cpu.map_scoped(tasks, 1,
+      fn() -> List[u64] uses {} { [1, 2] },
+      fn(take job: u64) -> Shared[List[u64]] uses {} {
+        failure.check(job != 1, Bounds())
+        shared.freeze([job])
+      })
+    failure.check(false, Arithmetic())
+  })
+  failure.check(match caught { Error(_) => true, _ => false }, Arithmetic())
+  let after = core@1/cpu.map_scoped(tasks, 1,
+    fn() -> List[u64] uses {} { [7] },
+    fn(take job: u64) -> u64 uses {} { job + 1 })
+  failure.check(after == Ok([8]), Arithmetic())
+  Ok(())
+}

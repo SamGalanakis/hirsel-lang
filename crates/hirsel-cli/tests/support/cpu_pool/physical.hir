@@ -1,0 +1,20 @@
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let outputs = core@1/cpu.map_scoped(tasks, WIDTH,
+    fn() -> List[u64] uses {} {
+      let mut jobs: List[u64] = []
+      for q in 0u64..WIDTH64 { list.push(mut jobs, q + 1) }
+      take jobs
+    },
+    fn(take job: u64) -> u64 uses {} {
+      let mut x = job
+      for i in 0u64..3000000u64 {
+        x = int.wrapping_add(int.wrapping_mul(x, 6364136223846793005u64), i)
+        x = x ^ (x >> 29u64)
+      }
+      x
+    }) ? Pool
+  failure.check(outputs == EXPECTED, Bounds())
+  Ok(())
+}

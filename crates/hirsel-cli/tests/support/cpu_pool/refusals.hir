@@ -1,0 +1,27 @@
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let invalid = core@1/cpu.map_scoped(tasks, 2u32,
+    fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
+    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
+  failure.check(invalid == Error(InvalidWidth()), Bounds())
+  let unavailable = core@1/cpu.map_scoped(tasks, 4u32,
+    fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
+    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
+  failure.check(unavailable == Error(WidthUnavailable()), Bounds())
+  let oversized = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [1, 2, 3] },
+    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
+  failure.check(oversized == Error(BatchTooLarge()), Bounds())
+  let empty = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [] },
+    fn(take job: u64) -> u64 uses {} { failure.check(false, Bounds()); job })
+  failure.check(empty == Ok([]), Bounds())
+  let outputs = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [11, 22] },
+    fn(take job: u64) -> Shared[List[u64]] uses {} { shared.freeze([job, job + 1]) })
+  let Ok(values) = take outputs else { failure.check(false, Bounds()); return Ok(()) }
+  let first = shared.with(values[0], fn(xs: List[u64]) -> u64 uses {} { xs[1] })
+  let second = shared.with(values[1], fn(xs: List[u64]) -> u64 uses {} { xs[1] })
+  failure.check(first == 12 && second == 23, Bounds())
+  Ok(())
+}
