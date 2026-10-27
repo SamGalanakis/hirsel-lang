@@ -52,6 +52,57 @@ impl CompilerRequests {
         selected.host_toolchain = true;
         selected
     }
+    /// Execute a fresh immutable request, including declaration export's source-only discovery.
+    pub fn execute(
+        &mut self,
+        path: &std::path::Path,
+        operation: CompileOperation,
+    ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
+        hirsel_engine::with_compiler_stack(|| self.execute_on_stack(path, operation))
+    }
+    fn execute_on_stack(
+        &mut self,
+        path: &std::path::Path,
+        operation: CompileOperation,
+    ) -> Result<Arc<CompileOutput>, hirsel_engine::ToolError> {
+        use hirsel_engine::{
+            requests::{OutputReadiness, RequestEngine, observe_inputs},
+            runtime::QueryRuntime,
+        };
+        let (loaded, inputs) =
+            observe_inputs(self.input_limits(), self.capture_attempts(), |inputs| {
+                if matches!(operation, CompileOperation::DataAbi) {
+                    self.compiler.load_export_package_inputs(path, inputs)
+                } else {
+                    self.compiler.load_check_package_inputs(path, inputs, true)
+                }
+            })
+            .map_err(|_| {
+                hirsel_engine::ToolError::Runtime(
+                    "compiler inputs kept changing during discovery".into(),
+                )
+            })?;
+        drop(loaded?);
+        let mut selected = self.select(&CompileRequest {
+            path: path.to_path_buf(),
+            inputs,
+            operation,
+        })?;
+        let completed = {
+            let mut runtime = selected
+                .runtime
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let request = runtime.request(&selected.roots);
+            runtime.wait(request)
+        }
+        .map_err(|reference| {
+            selected.output.failed(reference).unwrap_or_else(|| {
+                hirsel_engine::ToolError::Runtime("compiler request diagnostics unavailable".into())
+            })
+        })?;
+        selected.output.ready(&completed)
+    }
     pub fn input_limits(&self) -> InputLimits {
         InputLimits {
             bytes: usize::try_from(self.limits.snapshot_bytes.min(16 << 20)).unwrap_or(usize::MAX),

@@ -134,37 +134,41 @@ pub fn export_data_abi(
     target: TargetSpec,
     header: bool,
 ) -> Result<Result<String, NativeError>, ToolError> {
-    hirsel_engine::with_compiler_stack(|| {
-        let mut loaded = crate::COMPILER
-            .with_verify(hirsel_engine::Verify::On)
-            .load_export_package(source)?;
-        loaded.check_for_execution()?;
-        let engine = &mut loaded.engine;
-        let input = engine
-            .export_native_input()
-            .map_err(|error| ToolError::Query {
-                error,
-                phase: engine.unavailable,
-                sources: engine.sources.clone(),
-            })?;
-        let validated = match engine.import_native_input(input) {
-            Ok(input) => input,
+    let compiler = crate::COMPILER;
+    let mut requests =
+        crate::requests::CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let output = requests.execute(source, crate::requests::CompileOperation::DataAbi)?;
+    let crate::requests::CompileResult::NativeSources(facts) = &output.result else {
+        return Err(ToolError::Runtime(
+            "data ABI request returned another operation".into(),
+        ));
+    };
+    let declarations =
+        match super::queries::declarations::NativeDeclarations::from_front(facts.clone()) {
+            Ok(declarations) => declarations,
             Err(error) => {
                 return Ok(Err(NativeError::new(
                     StageName::Manifest,
-                    format!("the native snapshot: {error:?}"),
+                    format!("native source declarations: {error:?}"),
                 )));
             }
         };
-        let source = super::root_source::LinkSource::snapshot(&validated);
-        Ok(super::c_abi::data_abi(&source, &target).map(|abi| {
-            if header {
-                abi.header()
-            } else {
-                abi.descriptor()
-            }
-        }))
-    })
+    Ok(super::c_abi::data_abi(
+        &declarations.program.types,
+        &declarations.program.signatures,
+        declarations
+            .sources
+            .iter()
+            .map(|(path, source)| (path, source.representation.as_ref())),
+        &target,
+    )
+    .map(|abi| {
+        if header {
+            abi.header()
+        } else {
+            abi.descriptor()
+        }
+    }))
 }
 
 /// Build with an explicit LIR validation policy. Harnesses use `EveryStage`.

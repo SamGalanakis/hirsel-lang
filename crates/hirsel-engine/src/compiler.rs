@@ -251,6 +251,23 @@ impl Compiler {
             crate::package::EntrySelection::Export,
         )
     }
+    /// Observe declaration exports before foreign link artifacts are produced.
+    pub fn load_export_package_inputs(
+        &self,
+        path: &Path,
+        inputs: &dyn crate::loader_inputs::LoaderInputs,
+    ) -> Result<LoadedProgram, ToolError> {
+        crate::package::load_program_inputs(
+            self,
+            path,
+            inputs,
+            crate::package::Loading {
+                replacement: None,
+                entry_selection: crate::package::EntrySelection::Export,
+                parse_sources: true,
+            },
+        )
+    }
     /// Load sources for checking, accepting a package with no launch entry.
     pub fn load_check_package(&self, path: &Path) -> Result<LoadedProgram, ToolError> {
         crate::package::load_program_source(self, path, None, crate::package::EntrySelection::Check)

@@ -64,22 +64,23 @@ pub struct DataAbi {
 
 /// Collect the program's published types. Generic declarations are not published: C has
 /// no instantiation to name.
-pub(crate) fn data_abi(
-    source: &super::root_source::LinkSource<'_>,
+pub(crate) fn data_abi<'a>(
+    types: &hirsel_types::TypeInterner,
+    signatures: &std::collections::BTreeMap<hirsel_syntax::DefPath, hirsel_types::SignatureRef>,
+    representations: impl IntoIterator<
+        Item = (
+            &'a hirsel_syntax::DefPath,
+            Option<&'a hirsel_engine::RepresentationRecord>,
+        ),
+    >,
     target: &TargetSpec,
 ) -> Result<DataAbi, NativeError> {
     let error = |message: String| NativeError::new(StageName::Import, message);
     let mut declared = hirsel_layout::layout::Owners::default();
-    for (path, record) in source.representations {
-        super::adapt::add_owner(
-            &mut declared,
-            path,
-            &source.signatures[path],
-            record.as_ref(),
-        );
+    for (path, record) in representations {
+        super::adapt::add_owner(&mut declared, path, &signatures[path], record);
     }
-    let types = source.types;
-    let owners = hirsel_rc::library::owners(types, source.signatures).over(&declared);
+    let owners = hirsel_rc::library::owners(types, signatures).over(&declared);
     let mut layouts = LayoutBuilder::new(target, &owners);
     let mut found = Vec::new();
     for (definition, owner) in &owners.nominals {

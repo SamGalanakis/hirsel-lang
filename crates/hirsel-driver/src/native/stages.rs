@@ -342,7 +342,15 @@ impl ReadyProgram {
             .collect::<Result<_, _>>()?;
         self.foreign_links = input.foreign_links.clone();
         if !self.foreign_links.is_empty() {
-            self.data_abi = Some(super::c_abi::data_abi(input, &self.target)?);
+            self.data_abi = Some(super::c_abi::data_abi(
+                input.types,
+                input.signatures,
+                input
+                    .representations
+                    .iter()
+                    .map(|(path, record)| (path, record.as_ref())),
+                &self.target,
+            )?);
         }
         self.foreign_unreplayable = input.foreign_unreplayable;
         self.foreign_dispatch = super::foreign::dispatch(input);

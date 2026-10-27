@@ -149,6 +149,7 @@ struct Expansion {
 }
 
 struct SourceProducts {
+    declaration_export: bool,
     hash_selection: Option<(Option<hirsel_syntax::PackageId>, DefPath)>,
     native_sources: Option<(Vec<DefPath>, Arc<hirsel_engine::FrontNativeQueries>)>,
     expansion: Option<Arc<Expansion>>,
@@ -181,10 +182,14 @@ impl GraphProducts for SourceProducts {
                 .hash_selection
                 .as_ref()
                 .is_some_and(|(selected, _)| package == selected),
-            CompileOperation::NativeSources { roots } => self
-                .native_sources
-                .as_ref()
-                .is_some_and(|(selected, _)| selected == roots),
+            CompileOperation::DataAbi => self.declaration_export && self.native_sources.is_some(),
+            CompileOperation::NativeSources { roots } => {
+                !self.declaration_export
+                    && self
+                        .native_sources
+                        .as_ref()
+                        .is_some_and(|(selected, _)| selected == roots)
+            }
             CompileOperation::CheckedProducts { lowering, .. } => {
                 *lowering == self.lowering && self.receipt.is_some()
             }
@@ -241,7 +246,7 @@ impl GraphProducts for SourceProducts {
                     .and_then(|run| run.query(&self.hash_selection.as_ref()?.1))
                     .ok_or_else(|| uninstalled())?,
             ],
-            CompileOperation::NativeSources { .. } => vec![
+            CompileOperation::NativeSources { .. } | CompileOperation::DataAbi => vec![
                 self.native_sources
                     .as_ref()
                     .ok_or_else(|| uninstalled())?
@@ -454,7 +459,7 @@ impl GraphProducts for SourceProducts {
                                     .ok_or_else(|| uninstalled())?,
                             )
                         }
-                        CompileOperation::NativeSources { .. } => {
+                        CompileOperation::NativeSources { .. } | CompileOperation::DataAbi => {
                             let [product] = products else {
                                 return Err(uninstalled());
                             };
@@ -987,7 +992,8 @@ pub(super) fn install(
         CompileOperation::Tir { .. }
         | CompileOperation::Hashes { .. }
         | CompileOperation::NativeOwnership(_)
-        | CompileOperation::NativeSources { .. } => (LoweringPolicy::Reachable, true),
+        | CompileOperation::NativeSources { .. }
+        | CompileOperation::DataAbi => (LoweringPolicy::Reachable, true),
         CompileOperation::SafeCheck => (config.lowering, true),
         CompileOperation::Expand => (LoweringPolicy::Comptime, false),
         // The oracle export reads the check and TIR of every reachable body.
@@ -1040,13 +1046,19 @@ pub(super) fn install(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .take();
-    let loaded = match prior_index {
-        Some(index) => selected_compiler.load_check_package_inputs_with_source_index(
-            &request.path,
-            &request.inputs,
-            index,
-        ),
-        None => selected_compiler.load_check_package_inputs(&request.path, &request.inputs, true),
+    let loaded = if matches!(request.operation, CompileOperation::DataAbi) {
+        selected_compiler.load_export_package_inputs(&request.path, &request.inputs)
+    } else {
+        match prior_index {
+            Some(index) => selected_compiler.load_check_package_inputs_with_source_index(
+                &request.path,
+                &request.inputs,
+                index,
+            ),
+            None => {
+                selected_compiler.load_check_package_inputs(&request.path, &request.inputs, true)
+            }
+        }
     };
     let mut program = match loaded {
         Ok(program) => program,
@@ -1093,7 +1105,9 @@ pub(super) fn install(
         };
         let native_catalogue = if matches!(
             request.operation,
-            CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+            CompileOperation::NativeOwnership(_)
+                | CompileOperation::NativeSources { .. }
+                | CompileOperation::DataAbi
         ) && !generated
         {
             match program
@@ -1144,7 +1158,9 @@ pub(super) fn install(
             matches!(&request.operation, CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) if native.evidence.is_some()),
             matches!(
                 request.operation,
-                CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+                CompileOperation::NativeOwnership(_)
+                    | CompileOperation::NativeSources { .. }
+                    | CompileOperation::DataAbi
             ),
             matches!(
                 request.operation,
@@ -1263,7 +1279,9 @@ pub(super) fn install(
         }
         if matches!(
             request.operation,
-            CompileOperation::NativeOwnership(_) | CompileOperation::NativeSources { .. }
+            CompileOperation::NativeOwnership(_)
+                | CompileOperation::NativeSources { .. }
+                | CompileOperation::DataAbi
         ) {
             native_catalogue = Some(
                 match program
@@ -1658,7 +1676,12 @@ pub(super) fn install(
     } else {
         None
     };
-    let native_sources = if let CompileOperation::NativeSources { roots } = &request.operation {
+    let source_roots = match &request.operation {
+        CompileOperation::NativeSources { roots } => Some(roots.as_slice()),
+        CompileOperation::DataAbi => Some(&[][..]),
+        _ => None,
+    };
+    let native_sources = if let Some(roots) = source_roots {
         let entry = roots
             .first()
             .cloned()
@@ -1690,7 +1713,7 @@ pub(super) fn install(
             .front_native_queries(
                 hirsel_engine::FrontNativePlan {
                     entry,
-                    roots: roots.clone(),
+                    roots: roots.to_vec(),
                     run: run.take().ok_or_else(|| uninstalled())?,
                     definitions: catalogue,
                 },
@@ -1701,7 +1724,7 @@ pub(super) fn install(
                 errors,
             )
             .map_err(&query_error)?;
-        Some((roots.clone(), source))
+        Some((roots.to_vec(), source))
     } else {
         None
     };
@@ -1862,6 +1885,7 @@ pub(super) fn install(
         *source_index.lock().unwrap_or_else(|e| e.into_inner()) = state;
     }
     let products = Arc::new(SourceProducts {
+        declaration_export: matches!(request.operation, CompileOperation::DataAbi),
         hash_selection,
         native_sources,
         expansion,

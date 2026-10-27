@@ -81,6 +81,8 @@ pub enum CompileOperation {
     NativeRun(NativeRequest),
     /// Explicit source-selected Value-to-Ready ownership diagnostics.
     NativeOwnership(OwnershipRequest),
+    /// Checked C declaration exports before foreign object inputs exist.
+    DataAbi,
     /// Checked source inventory and original Lower products, before native import.
     NativeSources {
         roots: Vec<DefPath>,
