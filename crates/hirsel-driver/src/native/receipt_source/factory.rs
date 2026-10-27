@@ -377,6 +377,7 @@ pub fn named_graph(
             let call = &context.source.demand().projection().calls()[&block];
             let operation = operations::expand(provider, call)?;
             let mut read_owner = None;
+            let mut task_scope = None;
             let scope = match operation {
                 Some((operation, operations::Demand::External(demand))) => {
                     calls.insert(
@@ -405,6 +406,15 @@ pub fn named_graph(
                         block,
                         operation,
                     });
+                    Some(callback)
+                }
+                Some((operation, operations::Demand::TaskCallback { callback, scoped })) => {
+                    operations.push(OperationObservation {
+                        caller: id,
+                        block,
+                        operation,
+                    });
+                    task_scope = Some(scoped);
                     Some(callback)
                 }
                 None => None,
@@ -471,6 +481,12 @@ pub fn named_graph(
                 Expansion::RegionRead {
                     owner,
                     callback,
+                    targets: targets.clone(),
+                }
+            } else if let (Some(callback), Some(scoped)) = (scope, task_scope) {
+                Expansion::TaskCallback {
+                    callback,
+                    scoped,
                     targets: targets.clone(),
                 }
             } else if let Some(callback) = scope {

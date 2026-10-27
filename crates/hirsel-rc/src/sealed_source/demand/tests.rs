@@ -734,3 +734,73 @@ fn sealed_read_result_demand_reaches_owner_without_inventing_a_grant() {
         vec![Requirements::default(); 2]
     );
 }
+
+#[test]
+fn task_callback_result_and_captures_keep_demand_without_creating_an_arena_grant() {
+    let t = types();
+    for scoped in [false, true] {
+        let mut callback = if scoped {
+            body(&[t.scalar, t.bytes], 1)
+        } else {
+            body(&[t.bytes], 0)
+        };
+        let capture = u32::from(scoped);
+        callback.locals[capture as usize].storage = Storage::Capture;
+        ret(&mut callback, capture);
+        let mut source = body(&[t.arena, t.callable, t.bytes], 2);
+        call(
+            &mut source,
+            &[(0, UseKind::Borrow), (1, UseKind::Take)],
+            Some(2),
+        );
+        let mut sink = source.clone();
+        call(&mut sink, &[(0, UseKind::Take), (2, UseKind::Take)], None);
+        source.blocks.push(sink.blocks.remove(0));
+        let mut caller = input(&source);
+        caller.calls.insert(
+            0,
+            CallDemand::TaskCallback {
+                callback: 1,
+                scoped,
+                targets: vec![1],
+            },
+        );
+        caller.calls.insert(1, seal());
+        let requirements = analyze(&[caller, input(&callback)]).unwrap();
+        assert!(
+            requirements[0]
+                .payload_locals
+                .is_superset(&BTreeSet::from([1, 2]))
+        );
+        assert_eq!(requirements[1].payload_locals, BTreeSet::from([capture]));
+        assert!(requirements[1].result);
+        assert!(requirements[1].inventory_locals.is_empty());
+        if scoped {
+            assert!(!requirements[1].payload_locals.contains(&0));
+        }
+        for targets in [vec![], vec![2]] {
+            let mut caller = input(&source);
+            caller.calls.insert(
+                0,
+                CallDemand::TaskCallback {
+                    callback: 1,
+                    scoped,
+                    targets,
+                },
+            );
+            caller.calls.insert(1, seal());
+            assert!(analyze(&[caller, input(&callback)]).is_err());
+        }
+        let mut caller = input(&source);
+        caller.calls.insert(
+            0,
+            CallDemand::TaskCallback {
+                callback: 1,
+                scoped: !scoped,
+                targets: vec![1],
+            },
+        );
+        caller.calls.insert(1, seal());
+        assert!(analyze(&[caller, input(&callback)]).is_err());
+    }
+}

@@ -54,7 +54,7 @@ pub fn derive_profile_shape<'a>(
     derive_typed_impl(types, root, lookup, None, true, false)
 }
 
-/// Boundary profiles may contain Arena grants and affine Region handles inside
+/// Boundary profiles may contain capabilities and affine resource handles inside
 /// original result/record/variant types. This view is never payload admission
 /// or ordinary structural validation; Region's payload still supplies the
 /// callable value edges in its profile.
@@ -153,15 +153,26 @@ fn derive_typed_impl<'a>(
                 let SignatureKind::Type(declaration) = &signature.kind else {
                     return Ok(None);
                 };
-                if declaration.resource {
+                if declaration.resource && !boundary_handles {
                     return Ok(None);
                 }
                 // Path has a declared abstract scalar structural view.
                 if boundary_handles && definition.path().is_core("Arena") {
-                    if !arguments.is_empty()
+                    if declaration.resource
+                        || !arguments.is_empty()
                         || !declaration.generics.is_empty()
                         || declaration.representation.is_some()
                         || declaration.capability != Some(CapabilityKind::Scoped)
+                        || signature.definition != *definition
+                    {
+                        return Ok(None);
+                    }
+                    Shape::Leaf
+                } else if boundary_handles && declaration.capability.is_some() {
+                    if declaration.resource
+                        || !arguments.is_empty()
+                        || !declaration.generics.is_empty()
+                        || declaration.representation.is_some()
                         || signature.definition != *definition
                     {
                         return Ok(None);
@@ -244,7 +255,7 @@ fn derive_typed_impl<'a>(
                         };
                         Shape::Sequence(element)
                     }
-                    BuiltinType::Region if boundary_handles => {
+                    BuiltinType::Region | BuiltinType::Task if boundary_handles => {
                         if arguments.len() != 1 {
                             return Ok(None);
                         }

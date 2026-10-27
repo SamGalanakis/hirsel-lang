@@ -32,7 +32,14 @@ pub enum CallDemand {
     /// callback operand carries the scope's internal journal requirement;
     /// it is not a source Arena value or a physical environment recipe.
     ArenaScope { callback: u32, targets: Vec<usize> },
-    /// A reviewed sealed read lends the owner's payload to the callback; it
+    /// Reviewed task callbacks receive either a fresh Scope or no parameter.
+    /// Captures and results retain provenance across the task boundary.
+    TaskCallback {
+        callback: u32,
+        scoped: bool,
+        targets: Vec<usize>,
+    },
+    /// A reviewed Region or Shared read lends the owner's payload to the callback; it
     /// creates no Arena grant and does not transfer the owner's inventory.
     RegionRead {
         owner: u32,
@@ -168,6 +175,9 @@ impl Graph<'_> {
             };
             match expansion {
                 CallDemand::ArenaScope { callback, targets }
+                | CallDemand::TaskCallback {
+                    callback, targets, ..
+                }
                 | CallDemand::RegionRead {
                     callback, targets, ..
                 } => {
@@ -179,17 +189,22 @@ impl Graph<'_> {
                     let callback = actual(*callback)?;
                     for &target in targets {
                         self.target(target)?;
-                        let [grant] = bodies[target].source.parameters.as_slice() else {
-                            return Err(SourceError::Malformed("demand arena callback arity"));
+                        let parameters = bodies[target].source.parameters.as_slice();
+                        let expected = match expansion {
+                            CallDemand::TaskCallback { scoped, .. } => usize::from(*scoped),
+                            _ => 1,
                         };
+                        if parameters.len() != expected {
+                            return Err(SourceError::Malformed("demand arena callback arity"));
+                        }
                         // A demanded grant journal must reach the source scope
                         // call even when the callback has no captured payload.
                         if let CallDemand::RegionRead { owner, .. } = expansion {
-                            let root = self.local(target, *grant, false)?;
+                            let root = self.local(target, parameters[0], false)?;
                             let owner = self.local(body, actual(*owner)?.local, false)?;
                             self.edge(root, owner);
-                        } else {
-                            let grant = self.local(target, *grant, true)?;
+                        } else if matches!(expansion, CallDemand::ArenaScope { .. }) {
+                            let grant = self.local(target, parameters[0], true)?;
                             let scope = self.local(body, callback.local, false)?;
                             self.edge(grant, scope);
                         }

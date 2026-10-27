@@ -118,8 +118,8 @@ fn derive_impl(
     .map_err(SourceError::Malformed)
 }
 
-/// Complete boundary type profile for receipt context identity. Arena is a
-/// scoped grant with no owned callable payload; Region owns the profile of T.
+/// Complete boundary type profile for receipt context identity. Capabilities
+/// have no owned callable payload; resource representations retain their edges.
 /// These handle rules do not authorize either handle inside sealed contents:
 /// payload admission continues to use the resource-free `derive` above.
 pub fn boundary(

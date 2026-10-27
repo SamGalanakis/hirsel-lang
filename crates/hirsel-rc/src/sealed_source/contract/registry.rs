@@ -113,6 +113,11 @@ pub enum Expansion {
         callback: u32,
         targets: Vec<ContextId>,
     },
+    TaskCallback {
+        callback: u32,
+        scoped: bool,
+        targets: Vec<ContextId>,
+    },
     RegionRead {
         owner: u32,
         callback: u32,
@@ -300,6 +305,64 @@ impl Registry {
             ));
         }
         for (&block, expansion) in &mut calls {
+            if let Expansion::TaskCallback {
+                callback,
+                scoped,
+                targets,
+            } = expansion
+            {
+                let call = &source.calls()[&block];
+                let hirsel_tir::Callee::Definition { path, .. } = &call.callee else {
+                    return Err(SourceError::Malformed("receipt task callback identity"));
+                };
+                let expected = if path.is_core("task.scope") {
+                    Some((1, true, hirsel_types::UseKind::Borrow))
+                } else if path.is_core("task.isolate") || path.is_core("task.async") {
+                    Some((1, false, hirsel_types::UseKind::Take))
+                } else {
+                    None
+                };
+                let usage = call
+                    .arguments
+                    .get(callback)
+                    .ok_or(SourceError::Malformed("receipt task callback argument"))?
+                    .usage;
+                let usage = if usage == hirsel_types::UseKind::Copy {
+                    hirsel_types::UseKind::Borrow
+                } else {
+                    usage
+                };
+                if expected != Some((*callback, *scoped, usage))
+                    || call.arguments.len() != 2
+                    || call.environment.is_some()
+                    || targets.is_empty()
+                {
+                    return Err(SourceError::Malformed(
+                        "receipt task callback expansion differs",
+                    ));
+                }
+                targets.sort_unstable();
+                targets.dedup();
+                for target in targets {
+                    let target = self.rows.get(target.0).ok_or(SourceError::Malformed(
+                        "receipt task callback context index",
+                    ))?;
+                    if target.entry.arena_scope_grant().is_some()
+                        || if *scoped {
+                            !matches!(target.entry.parameters(), [p]
+                                if p.passing == hirsel_core_contract::Passing::Borrow
+                                && matches!(&p.ty.ty, hirsel_lir::operation::NativeType::Named(path, args)
+                                    if path.is_core("Scope") && args.is_empty()))
+                        } else {
+                            !target.entry.parameters().is_empty()
+                        }
+                    {
+                        return Err(SourceError::Malformed(
+                            "receipt task callback entry differs",
+                        ));
+                    }
+                }
+            }
             if let Expansion::RegionRead {
                 owner,
                 callback,
@@ -307,15 +370,24 @@ impl Registry {
             } = expansion
             {
                 let call = &source.calls()[&block];
-                if !matches!(&call.callee, hirsel_tir::Callee::Definition { path, .. }
-                    if path.is_core("region.with"))
+                let owner_usage = match &call.callee {
+                    hirsel_tir::Callee::Definition { path, .. } if path.is_core("region.with") => {
+                        Some(hirsel_types::UseKind::Mut)
+                    }
+                    hirsel_tir::Callee::Definition { path, .. } if path.is_core("shared.with") => {
+                        Some(hirsel_types::UseKind::Borrow)
+                    }
+                    _ => None,
+                };
+                if owner_usage.is_none()
                     || *owner != 0
                     || *callback != 1
                     || call.arguments.len() != 2
-                    || !call
-                        .arguments
-                        .get(owner)
-                        .is_some_and(|operand| operand.usage == hirsel_types::UseKind::Mut)
+                    || !call.arguments.get(owner).is_some_and(|operand| {
+                        Some(operand.usage) == owner_usage
+                            || (owner_usage == Some(hirsel_types::UseKind::Borrow)
+                                && operand.usage == hirsel_types::UseKind::Copy)
+                    })
                     || !call.arguments.contains_key(callback)
                     || call.environment.is_some()
                     || targets.is_empty()
@@ -458,6 +530,15 @@ impl Registry {
                         (
                             block,
                             match expansion {
+                                Expansion::TaskCallback {
+                                    callback,
+                                    scoped,
+                                    targets,
+                                } => CallDemand::TaskCallback {
+                                    callback: *callback,
+                                    scoped: *scoped,
+                                    targets: targets.iter().map(|id| id.0).collect(),
+                                },
                                 Expansion::ArenaScope { callback, targets } => {
                                     CallDemand::ArenaScope {
                                         callback: *callback,

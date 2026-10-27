@@ -482,3 +482,134 @@ fn test_capability_has_a_boundary_profile_but_remains_refused_as_sealed_contents
         Err(SourceError::Malformed("boundary Test declaration differs"))
     );
 }
+
+#[test]
+fn capability_boundaries_require_complete_declarations_and_never_admit_payloads() {
+    let types = TypeInterner::new(None);
+    for (name, capability) in [
+        ("Io", CapabilityKind::Global),
+        ("Tasks", CapabilityKind::Global),
+        ("Stdout", CapabilityKind::Global),
+        ("Scope", CapabilityKind::Scoped),
+    ] {
+        let definition = DefId::intern(&DefPath::core(name));
+        let root = types.intern(Type::with_kind(TypeKind::Named {
+            definition,
+            arguments: vec![].into(),
+        }));
+        let wrapper = types.intern(Type::with_kind(TypeKind::Tuple(vec![root].into())));
+        let mut declaration = signature(definition, None, false, false);
+        let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut declaration).kind else {
+            unreachable!()
+        };
+        ty.capability = Some(capability);
+        for root in [root, wrapper] {
+            let accepted = boundary(
+                &types,
+                root,
+                &mut |_| Ok(Some(declaration.clone())),
+                &mut |_| panic!("capability has no owned code"),
+            )
+            .unwrap();
+            assert_eq!(accepted.root, closed_storage_type(&types, root).unwrap());
+            assert!(accepted.functions.is_empty());
+            assert!(
+                derive(
+                    &types,
+                    root,
+                    &mut |_| Ok(Some(declaration.clone())),
+                    &mut |_| Ok(vec![])
+                )
+                .is_err()
+            );
+            assert!(boundary(&types, root, &mut |_| Ok(None), &mut |_| Ok(vec![])).is_err());
+        }
+        for change in 0..5 {
+            let mut forged = (*declaration).clone();
+            let SignatureKind::Type(ty) = &mut forged.kind else {
+                unreachable!()
+            };
+            match change {
+                0 => ty.capability = None,
+                1 => ty.resource = true,
+                2 => ty.representation = Some(scalar(&types)),
+                3 => {
+                    ty.generics = vec![GenericParameter::Type {
+                        name: "T".into(),
+                        bounds: Default::default(),
+                    }]
+                }
+                4 => forged.definition = DefId::intern(&DefPath::core("OtherCapability")),
+                _ => unreachable!(),
+            }
+            let forged = Arc::new(forged);
+            // A represented declaration can expose ordinary scalar storage;
+            // it must not be accepted as an opaque capability leaf.
+            let derived =
+                hirsel_layout::structural::derive_boundary_profile_shape(&types, root, &mut |_| {
+                    Ok(Some(forged.clone()))
+                })
+                .unwrap();
+            assert!(derived.is_none(), "{name}, change {change}");
+        }
+    }
+}
+
+#[test]
+fn resource_and_task_boundaries_keep_callable_edges_without_payload_admission() {
+    let types = TypeInterner::new(None);
+    let callable = function(&types, scalar(&types));
+    let definition = DefId::intern(&DefPath::core("BoundaryResource"));
+    let resource = types.intern(Type::with_kind(TypeKind::Named {
+        definition,
+        arguments: vec![].into(),
+    }));
+    let declaration = signature(definition, Some(callable), true, false);
+    let task = types.intern(Type::with_kind(TypeKind::Builtin {
+        kind: BuiltinType::Task,
+        arguments: vec![GenericArgument::Type(resource)].into(),
+    }));
+    for root in [resource, task] {
+        let accepted = boundary(
+            &types,
+            root,
+            &mut |_| Ok(Some(declaration.clone())),
+            &mut |ty| {
+                assert_eq!(ty, callable);
+                Ok(vec![case(&types, "boundary_resource_code", None)])
+            },
+        )
+        .unwrap();
+        assert_eq!(accepted.functions.len(), 1);
+        assert_eq!(accepted.root, closed_storage_type(&types, root).unwrap());
+        assert!(
+            derive(
+                &types,
+                root,
+                &mut |_| Ok(Some(declaration.clone())),
+                &mut |_| Ok(vec![])
+            )
+            .is_err()
+        );
+        assert!(boundary(&types, root, &mut |_| Ok(None), &mut |_| Ok(vec![])).is_err());
+        assert!(
+            boundary(
+                &types,
+                root,
+                &mut |_| Ok(Some(declaration.clone())),
+                &mut |_| Ok(vec![])
+            )
+            .is_err()
+        );
+    }
+    let opaque = signature(definition, None, true, false);
+    assert!(
+        boundary(
+            &types,
+            resource,
+            &mut |_| Ok(Some(opaque.clone())),
+            &mut |_| Ok(vec![])
+        )
+        .is_err()
+    );
+}

@@ -1038,3 +1038,170 @@ fn source_factory_receipt_declarations_refuse_an_older_v_source_selection() {
             .unwrap();
     });
 }
+
+#[test]
+fn source_factory_expands_reviewed_task_callbacks_without_arena_authority() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main(tasks: Tasks)->u64 {
+  let isolated=task.isolate(tasks,fn()->u64 {7u64})
+  let got=match isolated {Ok(value)=>value, Error(_)=>0u64}
+  task.scope(tasks,fn(s:Scope)->u64 {
+    let child=task.async(s,fn()->u64 {got})
+    task.await(s,take child)
+  })
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("no callable ports")
+        })
+        .unwrap();
+        for name in ["task.isolate", "task.scope", "task.async", "task.await"] {
+            assert!(
+                graph
+                    .operations
+                    .iter()
+                    .any(|op| op.operation.definition.is_core(name))
+            );
+        }
+        assert!(
+            graph.contexts.iter().all(|context| context
+                .source
+                .entry()
+                .arena_scope_grant()
+                .is_none())
+        );
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
+        graph
+            .recheck(&front, [root(&front, &path)], &mut |_, _, _| {
+                panic!("no callable ports")
+            })
+            .unwrap();
+        for name in ["task.isolate", "task.scope", "task.async"] {
+            let original = front.signature(&DefPath::core(name)).unwrap();
+            let mut forged = (*original).clone();
+            let hirsel_types::SignatureKind::Function(function) = &mut forged.kind else {
+                unreachable!()
+            };
+            function.parameters[1].passing = hirsel_types::PassingMode::Mut;
+            let simulated = Simulated {
+                front: &front,
+                unavailable: false,
+                redirect: None,
+                signature_override: Some(Arc::new(forged)),
+            };
+            assert!(matches!(
+                named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+                Err(SourceError::Malformed(
+                    "receipt operation declaration differs from reviewed core"
+                ))
+            ));
+        }
+    });
+}
+
+#[test]
+fn source_factory_expands_the_sealed_task_program_from_original_source() {
+    with_compiler_stack(|| {
+        for name in ["MEM-4-sealed-task-unique-list-run.hir"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../conformance/MEM")
+                .join(name);
+            let (reader, path) = source(&std::fs::read_to_string(path).unwrap());
+            let front = Front::new(&reader);
+            let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+                panic!("no callable ports in {name}")
+            })
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+            assert!(
+                graph
+                    .operations
+                    .iter()
+                    .any(|op| op.operation.definition.is_core("arena.seal"))
+            );
+            assert!(
+                graph
+                    .operations
+                    .iter()
+                    .any(|op| op.operation.definition.is_core("region.with"))
+            );
+            assert!(
+                graph
+                    .requests
+                    .iter()
+                    .any(|request| request.aware_key().is_some())
+            );
+            let _ = graph
+                .declarations(
+                    &front,
+                    [root(&front, &path)],
+                    &mut |_, _, _| panic!("no callable ports"),
+                    &(),
+                )
+                .unwrap();
+        }
+    });
+}
+
+#[test]
+fn source_factory_rechecks_shared_read_and_transfer_declarations() {
+    with_compiler_stack(|| {
+        let (reader, path) = source(
+            r#"
+pub fn main()->u64 {
+  let built:unique Bytes=unique b"abc"
+  let s=shared.freeze(take built)
+  let n=shared.with(s,fn(b:Bytes)->u64 {bytes.len(b)})
+  let ok=match shared.thaw(take s) {Ok(_)=>true,Error(_)=>false}
+  failure.check(ok,Bounds())
+  n
+}
+"#,
+        );
+        let front = Front::new(&reader);
+        let graph = named_graph(&front, [root(&front, &path)], &mut |_, _, _| {
+            panic!("no callable ports")
+        })
+        .unwrap();
+        assert!(
+            graph
+                .requests
+                .iter()
+                .all(|request| request.aware_key().is_none())
+        );
+        for name in ["shared.freeze", "shared.thaw", "shared.with"] {
+            assert!(
+                graph
+                    .operations
+                    .iter()
+                    .any(|op| op.operation.definition.is_core(name))
+            );
+            let original = front.signature(&DefPath::core(name)).unwrap();
+            let mut forged = (*original).clone();
+            let hirsel_types::SignatureKind::Function(function) = &mut forged.kind else {
+                unreachable!()
+            };
+            function.parameters[0].passing = hirsel_types::PassingMode::Mut;
+            let simulated = Simulated {
+                front: &front,
+                unavailable: false,
+                redirect: None,
+                signature_override: Some(Arc::new(forged)),
+            };
+            assert!(matches!(
+                named_graph(&simulated, [root(&front, &path)], &mut |_, _, _| Ok(vec![])),
+                Err(SourceError::Malformed(
+                    "receipt operation declaration differs from reviewed core"
+                ))
+            ));
+        }
+    });
+}

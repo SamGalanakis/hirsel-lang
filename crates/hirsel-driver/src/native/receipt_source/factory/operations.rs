@@ -9,6 +9,7 @@ use hirsel_types::{GenericArgument, UseKind};
 pub(super) enum Demand {
     External(ExternalDemand),
     ArenaScope { callback: u32 },
+    TaskCallback { callback: u32, scoped: bool },
     RegionRead { owner: u32, callback: u32 },
 }
 
@@ -19,8 +20,44 @@ pub(super) fn expand(
     let Callee::Definition { path, arguments } = &call.callee else {
         return Ok(None);
     };
+    let task_callback = if path.is_core("task.scope") {
+        Some((true, UseKind::Borrow))
+    } else if path.is_core("task.isolate") || path.is_core("task.async") {
+        Some((false, UseKind::Take))
+    } else {
+        None
+    };
     let simple = if path.is_core("$intrinsic.heap") {
         Some((0, 0, vec![], ExternalDemand::default()))
+    } else if path.is_core("io.tasks") || path.is_core("io.stdout") {
+        Some((0, 1, vec![UseKind::Borrow], ExternalDemand::default()))
+    } else if path.is_core("out.print") {
+        Some((
+            0,
+            2,
+            vec![UseKind::Borrow, UseKind::Borrow],
+            ExternalDemand::default(),
+        ))
+    } else if path.is_core("shared.freeze") || path.is_core("shared.thaw") {
+        Some((
+            1,
+            1,
+            vec![UseKind::Take],
+            ExternalDemand {
+                result: vec![0],
+                ..Default::default()
+            },
+        ))
+    } else if path.is_core("task.await") {
+        Some((
+            1,
+            2,
+            vec![UseKind::Borrow, UseKind::Take],
+            ExternalDemand {
+                result: vec![1],
+                ..Default::default()
+            },
+        ))
     } else if path.is_core("list.len") {
         Some((1, 1, vec![UseKind::Borrow], ExternalDemand::default()))
     } else if path.is_core("bytes.len") {
@@ -58,8 +95,10 @@ pub(super) fn expand(
     };
     if !path.is_core("arena.seal")
         && !path.is_core("region.with")
+        && !path.is_core("shared.with")
         && hirsel_types::core_roles::arena_scope_callback(path).is_none()
         && simple.is_none()
+        && task_callback.is_none()
     {
         return Ok(None);
     }
@@ -112,16 +151,50 @@ pub(super) fn expand(
             Demand::External(demand),
         )));
     }
-    if path.is_core("region.with") {
+    if let Some((scoped, usage)) = task_callback {
+        if !matches!(arguments.as_slice(), [GenericArgument::Type(_)])
+            || call.environment.is_some()
+            || call.arguments.len() != 2
+            || !call
+                .arguments
+                .get(&0)
+                .is_some_and(|argument| matches!(argument.usage, UseKind::Borrow | UseKind::Copy))
+            || !call.arguments.get(&1).is_some_and(|argument| {
+                argument.usage == usage
+                    || (usage == UseKind::Borrow && argument.usage == UseKind::Copy)
+            })
+            || call.result.is_none()
+        {
+            return Err(SourceError::Malformed(
+                "receipt task callback original call differs",
+            ));
+        }
+        return Ok(Some((
+            OperationId {
+                definition: path.clone(),
+                declaration_digest: reviewed.fingerprint,
+            },
+            Demand::TaskCallback {
+                callback: 1,
+                scoped,
+            },
+        )));
+    }
+    if path.is_core("region.with") || path.is_core("shared.with") {
+        let owner_usage = if path.is_core("region.with") {
+            UseKind::Mut
+        } else {
+            UseKind::Borrow
+        };
         if !matches!(
             arguments.as_slice(),
             [GenericArgument::Type(_), GenericArgument::Type(_)]
         ) || call.environment.is_some()
             || call.arguments.len() != 2
-            || !call
-                .arguments
-                .get(&0)
-                .is_some_and(|value| value.usage == UseKind::Mut)
+            || !call.arguments.get(&0).is_some_and(|value| {
+                value.usage == owner_usage
+                    || (owner_usage == UseKind::Borrow && value.usage == UseKind::Copy)
+            })
             || !call
                 .arguments
                 .get(&1)
