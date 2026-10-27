@@ -14,18 +14,34 @@ pub(crate) struct Block {
     address: usize,
     generation: u64,
     owner: Owner,
+    region: usize,
 }
 
 #[derive(Debug, Default)]
 pub(crate) struct Blocks {
     generation: u64,
     live: BTreeMap<usize, Block>,
+    regions: BTreeMap<usize, Owner>,
 }
 
 impl Blocks {
     /// The checked mapper has exclusive custody of this fresh allocation.
     pub(crate) fn adopt(&mut self, owner: Owner, block: *mut Header) -> Block {
+        self.adopt_in(owner, block, 0)
+    }
+
+    pub(crate) fn region_owned(&self, owner: Owner, region: usize) -> bool {
+        self.regions
+            .get(&region)
+            .is_none_or(|registered| *registered == owner)
+    }
+
+    pub(crate) fn adopt_in(&mut self, owner: Owner, block: *mut Header, region: usize) -> Block {
         assert!(!block.is_null());
+        if region != 0 {
+            assert!(self.region_owned(owner, region), "an ordinal-local region");
+            self.regions.insert(region, owner);
+        }
         let Entry::Vacant(slot) = self.live.entry(block.addr()) else {
             panic!("a CPU block already has an owner");
         };
@@ -37,6 +53,7 @@ impl Blocks {
             address: block.addr(),
             generation: self.generation,
             owner,
+            region,
         };
         slot.insert(block);
         block
@@ -49,6 +66,11 @@ impl Blocks {
 
     pub(crate) fn release(&mut self, pointer: *mut Header) {
         self.live.remove(&pointer.addr());
+    }
+
+    pub(crate) fn release_region(&mut self, region: usize) {
+        self.live.retain(|_, block| block.region != region);
+        self.regions.remove(&region);
     }
 
     /// Unknown roots are borrowed inputs. A registered mapper block must
@@ -71,6 +93,46 @@ impl Blocks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn regional_generations_end_at_exit_and_an_ordinal_cannot_borrow_another_region() {
+        let mut blocks = Blocks::default();
+        let pointer = std::ptr::dangling_mut::<Header>();
+        let owner = Owner {
+            task: (7 << 32) | 3,
+            ordinal: 1,
+        };
+        let region = 128;
+        let old = blocks.adopt_in(owner, pointer, region);
+        assert!(!blocks.region_owned(
+            Owner {
+                ordinal: 2,
+                ..owner
+            },
+            region
+        ));
+        assert!(!blocks.region_owned(
+            Owner {
+                task: owner.task + (1 << 32),
+                ..owner
+            },
+            region
+        ));
+        blocks.release_region(region);
+        assert!(!blocks.valid(&[old]));
+        let next = Owner {
+            ordinal: 2,
+            ..owner
+        };
+        assert!(blocks.region_owned(next, region));
+        let new = blocks.adopt_in(next, pointer, region);
+        assert_ne!(new, old);
+        assert!(!blocks.valid(&[old]));
+        assert!(blocks.valid(&[new]));
+        blocks.release_region(region);
+        blocks.release_region(region);
+        assert!(!blocks.valid(&[new]));
+    }
 
     #[test]
     fn recycled_addresses_and_task_slots_do_not_adopt_an_earlier_generation() {

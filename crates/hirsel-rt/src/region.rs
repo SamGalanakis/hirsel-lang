@@ -11,6 +11,8 @@
 //! place when it is the region's newest reservation). Once published it never moves or grows;
 //! further growth builds a replacement.
 
+pub(crate) mod cpu_ahead;
+
 use std::alloc::{Layout as HostLayout, alloc as host_alloc, dealloc as host_dealloc};
 use std::ptr;
 
@@ -247,6 +249,18 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
     align: u64,
     flags: u32,
 ) -> *mut Header {
+    unsafe { arena_alloc(ctx, region, index, extent, align, flags, false) }
+}
+
+unsafe fn arena_alloc(
+    ctx: *mut TaskCtx,
+    region: *mut Region,
+    index: u32,
+    extent: u64,
+    align: u64,
+    flags: u32,
+    prepared: bool,
+) -> *mut Header {
     unsafe {
         check_request(extent, align);
         let ctx = &mut *ctx;
@@ -274,7 +288,14 @@ pub unsafe extern "C" fn hirsel_rt_v2_arena_alloc(
         } else {
             24
         };
-        let start = reserve_in(ctx, region, prefix + extent + (physical - 8), 8, true);
+        let start = reserve_in_mode(
+            ctx,
+            region,
+            prefix + extent + (physical - 8),
+            8,
+            true,
+            prepared,
+        );
         let payload = start.add(prefix as usize);
         let payload = payload.add(payload.align_offset(physical as usize));
         let block = payload.sub(8).cast::<Header>();
@@ -1000,22 +1021,24 @@ unsafe fn reserve_in(
     align: u64,
     grow: bool,
 ) -> *mut u8 {
-    check_request(extent, align);
-    // SAFETY: caller checked the region is active.
+    unsafe { reserve_in_mode(ctx, region, extent, align, grow, false) }
+}
+
+/// Rust/ Zig arena sizing shared by normal and saved CPU allocation.
+unsafe fn reservation(
+    region: &Region,
+    extent: u64,
+    align: u64,
+    grow: bool,
+) -> Result<*mut u8, u64> {
     unsafe {
-        let record = region;
-        let region = &mut *record;
         let end = segment_end(region);
         if !region.cursor.is_null() {
             let start = region
                 .cursor
                 .wrapping_add(region.cursor.align_offset(align as usize));
-            if (start as usize) <= end as usize && (end as usize - start as usize) as u64 >= extent
-            {
-                region.cursor = advance(start, extent);
-                #[cfg(feature = "memcheck")]
-                memcheck::pool_alloc(region.segment, start, extent as usize);
-                return start;
+            if start.addr() <= end.addr() && (end.addr() - start.addr()) as u64 >= extent {
+                return Ok(start);
             }
         }
         let need = SEGMENT_HEADER as u64 + extent.next_multiple_of(8) + align - 1;
@@ -1026,10 +1049,39 @@ unsafe fn reserve_in(
         } else {
             need
         };
-        crate::alloc::ordered_reserve(ctx, canonical_size(need));
-        let backing = ctx.pool().reserve_cpu_backing(need);
-        if backing.is_err() {
-            crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+        Err(need)
+    }
+}
+
+/// The saved CPU path has already admitted its logical charge and backing.
+unsafe fn reserve_in_mode(
+    ctx: &mut TaskCtx,
+    region: *mut Region,
+    extent: u64,
+    align: u64,
+    grow: bool,
+    prepared: bool,
+) -> *mut u8 {
+    check_request(extent, align);
+    // SAFETY: caller checked the region is active.
+    unsafe {
+        let record = region;
+        let region = &mut *record;
+        let need = match reservation(region, extent, align, grow) {
+            Ok(start) => {
+                region.cursor = advance(start, extent);
+                #[cfg(feature = "memcheck")]
+                memcheck::pool_alloc(region.segment, start, extent as usize);
+                return start;
+            }
+            Err(need) => need,
+        };
+        if !prepared {
+            crate::alloc::ordered_reserve(ctx, canonical_size(need));
+            let backing = ctx.pool().reserve_cpu_backing(need);
+            if backing.is_err() {
+                crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+            }
         }
         // Preflight may migrate. Reborrow the task-local region only after
         // it returns, then take the new worker's pool.
@@ -1330,6 +1382,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_region_exit(
             for owner in owners.values_mut().filter(|owner| owner.region == region) {
                 owner.active = false;
             }
+        }
+        if let Some(cpu) = ctx.heap_ref().meter.cpu.get() {
+            cpu.blocks.lock().unwrap().release_region(region.addr());
         }
         let mut segment = (*region).segment.cast::<Segment>();
         while !segment.is_null() {

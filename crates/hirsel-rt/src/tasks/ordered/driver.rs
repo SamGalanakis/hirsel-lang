@@ -55,6 +55,7 @@ pub(crate) struct Driver {
     pub(super) fuel_grants: BTreeMap<TaskId, u64>,
     pub(super) stretches: BTreeMap<TaskId, crate::budget::stretch::Stretch>,
     pub(super) cpu_batch: Option<super::cpu::Batch>,
+    pub(super) cpu_withdrawal: Option<super::ahead::cpu_withdrawal::Withdrawal>,
     pub(super) spawn_ordinals: BTreeMap<TaskId, u32>,
     pub(super) detaching: BTreeMap<TaskId, u32>,
     pub(super) plain_layouts: BTreeSet<u32>,
@@ -103,6 +104,7 @@ impl Driver {
             fuel_grants: BTreeMap::new(),
             stretches: BTreeMap::new(),
             cpu_batch: None,
+            cpu_withdrawal: None,
             spawn_ordinals: BTreeMap::new(),
             detaching: BTreeMap::new(),
             plain_layouts: BTreeSet::new(),
@@ -157,6 +159,13 @@ impl Driver {
         let order: Vec<_> = std::iter::once(head).chain(frontier.queue()).collect();
         let mut ready = Vec::new();
         for task in order {
+            if self
+                .cpu_withdrawal
+                .as_ref()
+                .is_some_and(|withdrawal| withdrawal.blocks(task))
+            {
+                continue;
+            }
             if self
                 .cpu_batch
                 .as_ref()
@@ -331,6 +340,9 @@ pub(crate) fn after_save(
         unreachable!()
     };
     driver.saved(id, completed);
+    if let Some(withdrawal) = driver.cpu_withdrawal.as_mut() {
+        withdrawal.saved(id);
+    }
     super::lifecycle::after_save(s, task, completed);
     let super::super::Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
@@ -628,6 +640,72 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn younger_cpu_parking_waits_for_the_exact_dispatcher_acknowledgement() {
+        use super::super::super::{Logical, Scheduler, Task, TaskKey, handle};
+        use super::super::ahead::cpu_withdrawal::Withdrawal;
+        for stale in [false, true] {
+            let head = handle(0, 3);
+            let younger = handle(1, 7);
+            let target = if stale { handle(1, 6) } else { younger };
+            let mut s = Scheduler::default();
+            s.tasks = vec![
+                Some(Task::new(3, std::ptr::null_mut(), None, vec![], None)),
+                Some(Task::new(7, std::ptr::null_mut(), Some(0), vec![0], None)),
+            ];
+            let state = Settled {
+                level: 60,
+                limit: 100,
+                fuel: 20,
+            };
+            let mut d = Driver::new(
+                head,
+                Policy::admit(&Default::default(), None),
+                state,
+                Registry::default(),
+            );
+            d.frontier
+                .as_mut()
+                .unwrap()
+                .held
+                .insert(head, Held::empty());
+            d.enqueue(younger, Held::empty());
+            d.execution
+                .insert(younger, Execution::Saving { head_only: true });
+            d.cpu_withdrawal = Some(Withdrawal::new(
+                head,
+                BTreeSet::from([target]),
+                BTreeSet::from([target]),
+            ));
+            assert!(
+                d.select().is_empty(),
+                "a logical pause is not a dispatcher acknowledgement"
+            );
+            assert_eq!(d.frontier.as_ref().unwrap().settled, state);
+            s.logical = Logical::Ordered(d);
+            let ready = after_save(&mut s, 1, false, true, true);
+            if stale {
+                assert!(
+                    ready.is_empty(),
+                    "a recycled slot cannot acknowledge an older owner"
+                );
+            } else {
+                assert_eq!(
+                    ready.iter().map(|(key, _)| *key).collect::<Vec<_>>(),
+                    [TaskKey::from_word(head)]
+                );
+            }
+            let Logical::Ordered(d) = &mut s.logical else {
+                unreachable!()
+            };
+            assert_eq!(d.frontier.as_ref().unwrap().settled, state);
+            assert!(
+                d.select().is_empty(),
+                "saved younger work stays parked during the head retry"
+            );
+        }
     }
 
     /// A private reservation has no published row: physical dispatch finds

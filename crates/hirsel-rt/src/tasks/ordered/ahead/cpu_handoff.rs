@@ -202,8 +202,9 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
 }
 
 /// # Safety
-/// Only a checked CPU alternate calls this helper. The request and its unique
-/// input block remain in that ordinal's saved custody through return.
+/// Only a checked CPU alternate calls this helper. The request, its input
+/// credit and its active region remain in that ordinal's saved custody through
+/// return. Flat shared sequences retain their other holders during detachment.
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
 #[unsafe(no_mangle)]

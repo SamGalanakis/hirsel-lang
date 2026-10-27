@@ -101,6 +101,16 @@ impl Batch {
         self.owners.get(&task).copied().map(|n| n as u64) == Some(ordinal)
     }
 
+    pub(super) fn younger(&self, task: TaskId) -> Vec<TaskId> {
+        let Some(&ordinal) = self.owners.get(&task) else {
+            return Vec::new();
+        };
+        self.owners
+            .iter()
+            .filter_map(|(&owner, &job)| (job > ordinal).then_some(owner))
+            .collect()
+    }
+
     /// The saved call owns this value and its retained roots until retirement.
     /// Publishing transfers its Stretch, so a physical retry cannot append it
     /// again or mistake it for settled budget.

@@ -45,6 +45,29 @@ impl Request {
         assert!(!result.is_null());
         result
     }
+    /// Logical admission is independent of the storage provider. Idle only;
+    /// an admitted charge survives any number of physical backing refusals.
+    pub(super) fn admit(&mut self, ctx: *mut TaskCtx, bytes: u64) -> Stopped<bool> {
+        if self.phase == REQUESTED {
+            self.phase = match super::super::engine::ahead_allocation(ctx, bytes)? {
+                super::super::engine::CpuAllocation::Paused => return Ok(false),
+                super::super::engine::CpuAllocation::Summarized => SUMMARIZED,
+                super::super::engine::CpuAllocation::Settled => CHARGED,
+            };
+        }
+        if self.phase == SUMMARIZED {
+            let task = super::super::engine::current(ctx);
+            if super::super::engine::with_driver(ctx, |d| d.head_ready(task)) {
+                assert!(super::super::engine::host_segment_barrier(ctx)?);
+                self.phase = CHARGED;
+            }
+        }
+        assert!(matches!(self.phase, SUMMARIZED | CHARGED));
+        Ok(true)
+    }
+    pub(super) fn complete(&mut self) {
+        self.phase = IDLE;
+    }
     pub(super) fn pending(&self) -> bool {
         self.phase != IDLE
     }
@@ -105,27 +128,19 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
     let request = unsafe { &mut (*native).allocation };
     assert!(request.pending());
     crate::alloc::check_request(request.extent, request.align);
-    if request.phase == REQUESTED {
-        let bytes = unsafe {
-            crate::alloc::allocation_charge(ctx, request.index, request.extent, request.align)
-        };
-        request.phase = match super::super::engine::ahead_allocation(ctx, bytes)? {
-            super::super::engine::CpuAllocation::Paused => return Ok(false),
-            super::super::engine::CpuAllocation::Summarized => SUMMARIZED,
-            super::super::engine::CpuAllocation::Settled => CHARGED,
-        };
+    let bytes = unsafe {
+        crate::alloc::allocation_charge(ctx, request.index, request.extent, request.align)
+    };
+    if !request.admit(ctx, bytes)? {
+        return Ok(false);
     }
-    if request.phase == SUMMARIZED {
-        let task = super::super::engine::current(ctx);
-        if super::super::engine::with_driver(ctx, |d| d.head_ready(task)) {
-            assert!(super::super::engine::host_segment_barrier(ctx)?);
-            request.phase = CHARGED;
-        }
+    if !super::cpu_withdrawal::acknowledged(ctx) {
+        return Ok(false);
     }
-    assert!(matches!(request.phase, SUMMARIZED | CHARGED));
     if unsafe { crate::alloc::cpu_preflight(ctx, request.index, request.extent, request.align) }
         .is_err()
     {
+        super::cpu_withdrawal::request(ctx);
         return Ok(false);
     }
     // Idle Meter callbacks see no running task. Logical admission already
@@ -141,6 +156,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         )
     };
     unsafe { crate::alloc::cpu_allocation_done(ctx) };
+    super::cpu_withdrawal::release(ctx);
     if let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() } {
         let task = super::super::engine::current(ctx);
         let owner = super::super::engine::with_driver(ctx, |driver| {

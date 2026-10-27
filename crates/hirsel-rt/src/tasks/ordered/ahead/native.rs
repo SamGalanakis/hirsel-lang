@@ -429,6 +429,12 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
             super::host_return::flush_logical(ctx, native);
             let run = (*ctx).run_ptr();
             let mut pause = (*run).control.stopped().is_some();
+            pause |= (*ctx)
+                .ahead
+                .as_ref()
+                .unwrap()
+                .withdraw_requested
+                .load(Ordering::Acquire);
             if !returned && !pause && (*native).pending_refill && !private(ctx) {
                 match super::super::engine::ahead_refill(ctx) {
                     Ok(ready) => {
@@ -497,7 +503,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                         };
                 }
             }
-            if !pause && (*native).allocation.pending() {
+            if !pause && (*native).growth.is_null() && (*native).allocation.pending() {
                 match super::cpu_allocation::serve(ctx, native) {
                     Ok(ready) => pause = !ready,
                     Err(stop) => {
@@ -563,6 +569,12 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                         .as_ref()
                         .unwrap()
                         .save_requested
+                        .load(Ordering::Acquire)
+                    && !(*ctx)
+                        .ahead
+                        .as_ref()
+                        .unwrap()
+                        .withdraw_requested
                         .load(Ordering::Acquire)
                     && !(*native).pending_refill
                     && !(*native).allocation.pending()

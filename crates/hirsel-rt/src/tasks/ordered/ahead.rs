@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 pub(crate) mod cpu_allocation;
 pub mod cpu_handoff;
+pub(crate) mod cpu_withdrawal;
 pub(crate) mod cpu_worker;
 pub(crate) mod host_return;
 pub(crate) mod native;
@@ -25,6 +26,7 @@ pub(crate) const MAX_RESERVATIONS: usize = 8;
 pub(crate) struct Local {
     pub(crate) admitted: AtomicBool,
     pub(crate) save_requested: AtomicBool,
+    pub(crate) withdraw_requested: AtomicBool,
     grant: Cell<u64>,
     fuel: Cell<u64>,
     custody: Cell<Custody>,
@@ -36,6 +38,7 @@ impl Local {
         Self {
             admitted: AtomicBool::new(admitted),
             save_requested: AtomicBool::new(false),
+            withdraw_requested: AtomicBool::new(false),
             grant: Cell::new(0),
             fuel: Cell::new(0),
             custody: Cell::new(Custody::Logical),
