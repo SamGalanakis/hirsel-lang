@@ -605,7 +605,7 @@ impl QueryEngine {
             .map(|row| row.cloned().map_err(Clone::clone))
     }
 
-    fn unmarked_signature(&self, d: DefId) -> Option<Result<SignatureRef, QueryError>> {
+    pub(crate) fn unmarked_signature(&self, d: DefId) -> Option<Result<SignatureRef, QueryError>> {
         let current = self.signature_memo_source(d)?;
         if !current.consistent
             || self.graph.is_dirty(&current.memo.key)

@@ -878,6 +878,46 @@ impl EncodedWriter {
 }
 
 impl QueryEngine {
+    /// Observe only declared structure before private inference settles. The
+    /// producer's own body proof changes inferred_unique, which the declared
+    /// projection removes. Every other read and the complete record binding
+    /// still validate; this never adopts a full Signature or a private proof.
+    pub(super) fn load_declared_signature_value(&mut self, path: &DefPath) -> Option<ContentHash> {
+        if !self.s1.is_empty() {
+            return None;
+        }
+        let marker = (path.clone(), QueryKind::PrivateInference);
+        if !self.active.insert(marker.clone()) {
+            return None;
+        }
+        let result = (|| {
+            let key = self.store_key(path, QueryKind::Signature)?;
+            let store = self.result_store.clone()?;
+            let entry = StoredEntry::load(&*store, &key);
+            let id = DefId::intern(path);
+            for variant in entry.variants {
+                if variant.inputs != key.1 || !variant.valid(&key) {
+                    continue;
+                }
+                if variant.reads.iter().any(|(read, value)| {
+                    !matches!(read, ReadKey::PrivateSummary(owner) if *owner == id)
+                        && self.observe(path, read) != Some(*value)
+                }) {
+                    continue;
+                }
+                let variant = variant.resolve(&*store, &key)?;
+                let record: SignatureRecord = self.decode_record(&variant.payload)?;
+                let output = record.output.ok()?;
+                if output.value.definition == id {
+                    return memos::declared_signature_value(&self.types, &output.value);
+                }
+            }
+            None
+        })();
+        self.active.remove(&marker);
+        result
+    }
+
     pub(super) fn load_signature(
         &mut self,
         path: &DefPath,

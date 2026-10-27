@@ -458,6 +458,17 @@ impl QueryEngine {
             .map(|e| e.namespace)
     }
 
+    fn observed_signature(&self, id: DefId) -> Option<hirsel_types::SignatureRef> {
+        let (environment, limits, inputs) = self.environment_seen.as_ref()?;
+        if environment != &self.environment
+            || *limits != self.comptime_limits
+            || *inputs != self.build_inputs_revision()
+        {
+            return None;
+        }
+        self.unmarked_signature(id)?.ok()
+    }
+
     /// The value `owner` observes for `read` now.
     pub(crate) fn observe(&mut self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         Some(match *read {
@@ -472,15 +483,19 @@ impl QueryEngine {
                 }
                 private_summary_value(&self.restored_private_summary(d).unwrap_or_default())
             }
-            ReadKey::DeclaredSignature(d) => {
-                let signature = self
-                    .current_snapshot_signature(d)
-                    .or_else(|| self.signature(d).ok())?;
-                declared_signature_value(&self.types, &signature)?
-            }
+            ReadKey::DeclaredSignature(d) => self
+                .current_snapshot_signature(d)
+                .or_else(|| self.observed_signature(d))
+                .and_then(|signature| declared_signature_value(&self.types, &signature))
+                .or_else(|| self.load_declared_signature_value(d.path()))
+                .or_else(|| {
+                    let signature = self.signature(d).ok()?;
+                    declared_signature_value(&self.types, &signature)
+                })?,
             ReadKey::Signature(d) | ReadKey::ExecutedSignature(d) => {
                 let signature = self
                     .current_snapshot_signature(d)
+                    .or_else(|| self.observed_signature(d))
                     .or_else(|| self.signature(d).ok());
                 signature_value(signature.map(|s| s.fingerprint))
             }

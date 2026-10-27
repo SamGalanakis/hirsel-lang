@@ -583,3 +583,66 @@ pub fn main() -> u8 { 0u8 }
         drop(reservation);
     });
 }
+
+#[test]
+fn cross_module_declared_reads_reuse_proofs_before_private_headers_are_demanded() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"cross_private","version":"1"},"sources":[{"path":"a.hir","module":["a"]},{"path":"b.hir","module":["b"]}],"dependencies":[],"entry":{"module":["a"],"name":"main"}}"#).unwrap();
+        let a = "fn left()->u8{b.right()}\nfn value()->u8{1u8}\npub fn main()->u8{left()}\n";
+        std::fs::write(
+            directory.path().join("b.hir"),
+            "fn right()->u8{a.value()}\n",
+        )
+        .unwrap();
+        let store = Arc::new(MemStore::default());
+        let budget = ProcessBudget::new(512 << 20);
+        for (source, a_count, b_count) in [
+            (a.to_owned(), 1, 1),
+            (a.to_owned(), 0, 0),
+            (a.replace("1u8", "2u8"), 1, 0),
+            (a.replace("value()->u8{1u8}", "value()->u64{1u64}"), 1, 1),
+        ] {
+            std::fs::write(directory.path().join("a.hir"), source).unwrap();
+            let mut program = COMPILER
+                .with_config(CompileConfig {
+                    store: store.clone(),
+                    hold_bytes: 0,
+                    ..Default::default()
+                })
+                .with_owned_engines()
+                .load_program(&manifest)
+                .unwrap();
+            let reservation = program
+                .engine
+                .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+                .unwrap();
+            for (module, name, expected) in [
+                ("a", "left", a_count),
+                ("a", "value", a_count),
+                ("b", "right", b_count),
+            ] {
+                let mut path = program.entry.clone();
+                path.0.modules = vec![module.into()];
+                path.0.name = name.into();
+                assert_eq!(
+                    program
+                        .engine
+                        .recompute_count(&path, QueryKind::PrivateInference),
+                    expected,
+                    "{path}"
+                );
+                if a_count == 0 && b_count == 0 {
+                    assert_eq!(
+                        program.engine.recompute_count(&path, QueryKind::Signature),
+                        0,
+                        "{path}"
+                    );
+                }
+            }
+            drop(reservation);
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}
