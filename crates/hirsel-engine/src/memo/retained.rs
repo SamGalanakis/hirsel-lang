@@ -213,16 +213,19 @@ pub(crate) struct Weight<'a> {
 }
 pub(crate) trait NameAllocationSet: Send + Sync {
     fn first(&mut self, identity: usize) -> bool;
+    fn epoch(&self) -> hirsel_types::ReadAllocationEpoch;
 }
 pub(crate) struct NameAllocations<const N: usize = 32768> {
     slots: [usize; N],
     overflow: u64,
+    epoch: hirsel_types::ReadAllocationEpoch,
 }
 impl<const N: usize> Default for NameAllocations<N> {
     fn default() -> Self {
         Self {
             slots: [0; N],
             overflow: 0,
+            epoch: Default::default(),
         }
     }
 }
@@ -235,6 +238,9 @@ impl<const N: usize> NameAllocations<N> {
     }
 }
 impl<const N: usize> NameAllocationSet for NameAllocations<N> {
+    fn epoch(&self) -> hirsel_types::ReadAllocationEpoch {
+        self.epoch
+    }
     fn first(&mut self, identity: usize) -> bool {
         debug_assert!(N.is_power_of_two());
         let start = ((identity >> 4) ^ (identity >> 19)) & (N - 1);
@@ -265,14 +271,7 @@ impl Weight<'_> {
             } else {
                 bytes
             };
-            if let Some(seen) = &mut self.source_names {
-                if !seen.first(identity) {
-                    continue;
-                }
-                self.add(bytes);
-            } else {
-                self.allocation(identity, bytes);
-            }
+            self.allocation(identity, bytes);
         }
     }
     /// Serde recreates every serialized Arc occurrence. Sequence decoding may
@@ -393,8 +392,20 @@ impl Weight<'_> {
                 segments,
                 output,
             } => {
-                self.read_name_allocations(context.retained_allocations());
-                self.read_name_allocations(segments.retained_allocations());
+                if self
+                    .source_names
+                    .as_ref()
+                    .is_none_or(|seen| context.first_in(seen.epoch()))
+                {
+                    self.read_name_allocations(context.retained_allocations());
+                }
+                if self
+                    .source_names
+                    .as_ref()
+                    .is_none_or(|seen| segments.first_in(seen.epoch()))
+                {
+                    self.read_name_allocations(segments.retained_allocations());
+                }
                 if let Some(package) = package {
                     self.package(package);
                 }
@@ -410,8 +421,20 @@ impl Weight<'_> {
                 result,
                 manifest: _,
             } => {
-                self.read_name_allocations(context.retained_allocations());
-                self.read_name_allocations(segments.retained_allocations());
+                if self
+                    .source_names
+                    .as_ref()
+                    .is_none_or(|seen| context.first_in(seen.epoch()))
+                {
+                    self.read_name_allocations(context.retained_allocations());
+                }
+                if self
+                    .source_names
+                    .as_ref()
+                    .is_none_or(|seen| segments.first_in(seen.epoch()))
+                {
+                    self.read_name_allocations(segments.retained_allocations());
+                }
                 if let Some(package) = package {
                     self.package(package);
                 }
@@ -433,7 +456,13 @@ impl Weight<'_> {
                 manifest: _,
                 exposed: _,
             } => {
-                self.read_name_allocations(context.retained_allocations());
+                if self
+                    .source_names
+                    .as_ref()
+                    .is_none_or(|seen| context.first_in(seen.epoch()))
+                {
+                    self.read_name_allocations(context.retained_allocations());
+                }
                 self.add(head.capacity());
             }
             // Definition identities are owned by the session interner.
@@ -453,7 +482,13 @@ impl Weight<'_> {
     }
     fn shared_dependency(&mut self, read: &hirsel_types::SharedRead) {
         let (identity, bytes) = read.retained_allocation();
-        if self.shared_allocation(identity, bytes) {
+        let first = if let Some(seen) = &self.source_names {
+            read.first_in(seen.epoch())
+        } else {
+            self.first(identity)
+        };
+        if first {
+            self.add(bytes);
             self.dependency(read);
         }
     }

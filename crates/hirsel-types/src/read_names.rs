@@ -4,12 +4,67 @@ use crate::*;
 use std::{
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
+    num::NonZeroU64,
     ops::Deref,
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{
+        Arc, Mutex, OnceLock, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
+/// One retained-allocation inspection. Epochs never repeat; exhaustion falls
+/// back to charging every occurrence. Concurrent inspections may overcharge
+/// when their marks interleave, but can never omit a first observation.
+#[derive(Clone, Copy)]
+pub struct ReadAllocationEpoch(Option<NonZeroU64>);
+impl Default for ReadAllocationEpoch {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self(
+            NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                next.checked_add(1)
+            })
+            .ok()
+            .and_then(NonZeroU64::new),
+        )
+    }
+}
+struct Marked<T> {
+    value: T,
+    inspected: AtomicU64,
+}
+impl<T> Marked<T> {
+    fn first(&self, epoch: ReadAllocationEpoch) -> bool {
+        epoch
+            .0
+            .is_none_or(|epoch| self.inspected.swap(epoch.get(), Ordering::Relaxed) != epoch.get())
+    }
+}
+impl<T> Deref for Marked<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+impl<T: PartialEq> PartialEq for Marked<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+impl<T: Eq> Eq for Marked<T> {}
+impl<T: std::fmt::Debug> std::fmt::Debug for Marked<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.value.fmt(formatter)
+    }
+}
+impl<T: serde::Serialize> serde::Serialize for Marked<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(serializer)
+    }
+}
+
 struct Names<T> {
-    entries: HashMap<u64, Vec<Weak<T>>>,
+    entries: HashMap<u64, Vec<Weak<Marked<T>>>>,
     rows: usize,
     recent: VecDeque<u64>,
 }
@@ -18,7 +73,7 @@ impl<T: Eq + Hash> NamePool<T> {
     const fn new() -> Self {
         Self(OnceLock::new())
     }
-    fn intern(&self, value: T) -> Arc<T> {
+    fn intern(&self, value: T) -> Arc<Marked<T>> {
         let mut hasher = DefaultHasher::new();
         value.hash(&mut hasher);
         let hash = hasher.finish();
@@ -40,7 +95,7 @@ impl<T: Eq + Hash> NamePool<T> {
                 let Some(candidate) = weak.upgrade() else {
                     return false;
                 };
-                if *candidate == value {
+                if candidate.value == value {
                     found = Some(candidate);
                 }
                 true
@@ -61,7 +116,10 @@ impl<T: Eq + Hash> NamePool<T> {
             }
         }
         names.recent.push_back(hash);
-        let value = Arc::new(value);
+        let value = Arc::new(Marked {
+            value,
+            inspected: AtomicU64::new(0),
+        });
         names
             .entries
             .entry(hash)
@@ -81,7 +139,7 @@ fn arc_bytes<T>(value: &T) -> usize {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct ReadContext(Arc<FileContext>);
+pub struct ReadContext(Arc<Marked<FileContext>>);
 impl From<FileContext> for ReadContext {
     fn from(value: FileContext) -> Self {
         static CONTEXTS: NamePool<FileContext> = NamePool::new();
@@ -89,6 +147,9 @@ impl From<FileContext> for ReadContext {
     }
 }
 impl ReadContext {
+    pub fn first_in(&self, epoch: ReadAllocationEpoch) -> bool {
+        self.0.first(epoch)
+    }
     pub fn retained_allocations(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         let context = &*self.0;
         [
@@ -143,7 +204,7 @@ impl<'de> serde::Deserialize<'de> for ReadContext {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct ReadSegments(Arc<Vec<String>>);
+pub struct ReadSegments(Arc<Marked<Vec<String>>>);
 impl From<Vec<String>> for ReadSegments {
     fn from(value: Vec<String>) -> Self {
         static SEGMENTS: NamePool<Vec<String>> = NamePool::new();
@@ -151,6 +212,9 @@ impl From<Vec<String>> for ReadSegments {
     }
 }
 impl ReadSegments {
+    pub fn first_in(&self, epoch: ReadAllocationEpoch) -> bool {
+        self.0.first(epoch)
+    }
     pub fn retained_allocations(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
         [
             (Arc::as_ptr(&self.0) as usize, arc_bytes(&*self.0)),
@@ -326,8 +390,11 @@ impl DependencyRead {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub struct SharedRead(Arc<DependencyRead>);
+pub struct SharedRead(Arc<Marked<DependencyRead>>);
 impl SharedRead {
+    pub fn first_in(&self, epoch: ReadAllocationEpoch) -> bool {
+        self.0.first(epoch)
+    }
     pub fn retained_allocation(&self) -> (usize, usize) {
         (Arc::as_ptr(&self.0) as usize, arc_bytes(&*self.0))
     }
@@ -362,6 +429,24 @@ impl<'de> serde::Deserialize<'de> for SharedRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allocation_epochs_charge_each_first_visit_and_concurrent_interference_conservatively() {
+        let value = Marked {
+            value: (),
+            inspected: AtomicU64::new(0),
+        };
+        let a = ReadAllocationEpoch::default();
+        let b = ReadAllocationEpoch::default();
+        assert!(value.first(a));
+        assert!(!value.first(a));
+        assert!(value.first(b));
+        assert!(value.first(a));
+        assert!(value.first(b));
+        assert!(!value.first(b));
+        assert!(value.first(ReadAllocationEpoch(None)));
+        assert!(value.first(ReadAllocationEpoch(None)));
+    }
 
     #[test]
     fn bounded_weak_index_replaces_one_old_bucket_and_keeps_nearby_matches() {
