@@ -73,7 +73,7 @@ fn setup(full: bool) -> (Fixture, Config, LayoutId, ValueId) {
         arena_no_drop: false,
         tracked: true,
         constructor: ConstructorKind::Sequence,
-        layout: x.lists[1],
+        layout: x.payloads[1],
         destination: DestinationClass::Heap,
         placement: Some(Placement::Fixed(StorageOwner::Heap(TaskDomainId(0)))),
         fields,
@@ -728,5 +728,50 @@ fn h_empty_internal_receipt_entry_107_needs_current_source_but_no_incoming_holde
             V::Malformed,
             "mutation {mutation}"
         );
+    }
+}
+
+#[test]
+fn h_heap_receipt_107_requires_the_sequence_payload_layout() {
+    for substitute_pointer_layout in [false, true] {
+        let (mut x, c, _, result) = setup(false);
+        if substitute_pointer_layout {
+            x.p.units[0].tables.constructs[0].layout = x.lists[1];
+        }
+        let mut ops = NoOperations;
+        let mut m = Machine::new(&x.p, &c, &mut ops);
+        let (mut f, _) = prepare(&mut m, 100);
+        let ptr = nums(&mut m, false, x.payloads[1], &[11, 12], 1);
+        root(&mut m, &mut f, Val::Ptr(ptr));
+        m.seal_allocations.insert(
+            ptr.alloc,
+            (0, x.p.units[0].tables.source_anchors[0].clone()),
+        );
+        for (index, bits) in [11u128, 12].into_iter().enumerate() {
+            m.define_fresh(
+                &mut f,
+                ValueId(result.0 + index as u32 + 1),
+                Val::Bits {
+                    scalar: ScalarKind::U64,
+                    bits,
+                },
+            )
+            .unwrap();
+        }
+        let outcome = m.exec(
+            &mut f,
+            &Inst::PayloadReceipt {
+                result,
+                value: ValueId(4),
+                shape: SealDescriptorId(2),
+                binding: PayloadBindingId(0),
+                inputs: PoolRange::new(0, 2),
+            },
+        );
+        if substitute_pointer_layout {
+            assert_eq!(outcome.err().unwrap().kind, V::TypeConfusion);
+        } else {
+            outcome.unwrap();
+        }
     }
 }

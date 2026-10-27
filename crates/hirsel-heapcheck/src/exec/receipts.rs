@@ -331,8 +331,7 @@ impl<S: Stage> Machine<'_, S> {
         ) || !matches!(
             site.destination,
             DestinationClass::Heap | DestinationClass::Inferred
-        ) || site.layout != layout
-        {
+        ) {
             return fail(
                 V::Malformed,
                 "receipt needs its original ordinary heap construction",
@@ -351,7 +350,8 @@ impl<S: Stage> Machine<'_, S> {
                 "H receipt needs sequence construction correspondence",
             );
         };
-        if site.constructor != ConstructorKind::Sequence
+        if site.layout != *payload
+            || site.constructor != ConstructorKind::Sequence
             || ptr.offset != 0
             || self.ledger.check(*ptr)?.layout != Some(*payload)
         {
