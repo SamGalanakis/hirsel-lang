@@ -3,10 +3,12 @@ use super::*;
 mod content;
 mod proof_export;
 mod semantic;
+mod source_products;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
 pub use proof_export::{
     FrontBuiltProof, FrontPreparedProof, FrontProofExport, FrontProofInput, FrontProofText,
 };
+pub use source_products::FrontSourceProducts;
 /// Metadata consumed by interpreter/H/native hosts. No mutable query engine,
 /// body cache or native Value reconstruction is available through this output.
 pub struct FrontRunOutput {
@@ -84,6 +86,7 @@ pub struct FrontRunQueries {
     batch: Option<(QueryId, Vec<DefPath>)>,
     completed_batch: Mutex<Option<(ProductRef, Arc<FrontRunBatchOutput>)>>,
     export_hashes: bool,
+    source_products: bool,
     native_roots: Vec<DefPath>,
     inputs: BTreeMap<DefPath, Input>,
     ids: BTreeMap<DefPath, QueryId>,
@@ -334,6 +337,7 @@ struct GraphEntry {
     node: content::Node,
     content: content::Content,
     dependencies: Box<[DefId]>,
+    source: Option<source_products::Packed>,
 }
 struct Task {
     queries: Arc<FrontRunQueries>,
@@ -503,7 +507,17 @@ impl Task {
         &mut self,
         cx: &mut dyn QueryContext,
         path: &DefPath,
-    ) -> Poll<Result<(content::Node, DefinitionContent, BTreeSet<DefPath>), Reference>> {
+    ) -> Poll<
+        Result<
+            (
+                content::Node,
+                DefinitionContent,
+                BTreeSet<DefPath>,
+                Option<source_products::Body>,
+            ),
+            Reference,
+        >,
+    > {
         let queries = self.queries.clone();
         let Some(input) = queries.inputs.get(path) else {
             return Poll::Ready(Err(queries.failure_record(operational(format!(
@@ -512,6 +526,7 @@ impl Task {
         };
         let mut dependencies = input.dependencies.clone();
         let mut tir = None;
+        let mut source_products = None;
         let mut generated_tokens = None;
         if input.source {
             let Some(id) = queries.front.query(path) else {
@@ -599,6 +614,21 @@ impl Task {
                 extend_reads(&mut dependencies, &output.reads, |key| {
                     queries.front.lookup_definition(key)
                 });
+                if queries.source_products {
+                    source_products = Some(source_products::Body {
+                        products: crate::native_audit::SourceAuditProducts {
+                            audit: crate::SourceAudit::completed(
+                                queries.lower.signatures().types(),
+                                &input.owner_signature,
+                                analyzed.value.typed.syntax.text_hash,
+                                &analyzed.value,
+                                None,
+                            ),
+                            materialized: output.materialized,
+                        },
+                        constant: None,
+                    });
+                }
                 tir = Some(output.output.value);
                 if matches!(&input.signature.kind, SignatureKind::Const {generics, ..} if generics.is_empty())
                 {
@@ -621,6 +651,9 @@ impl Task {
                         Ok(value) => value,
                         Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
                     };
+                    if let Some(products) = &mut source_products {
+                        products.constant = Some(value.clone());
+                    }
                     let mut pending = vec![&value.root];
                     while let Some(value) = pending.pop() {
                         match &value.kind {
@@ -703,7 +736,7 @@ impl Task {
             Ok(node) => node,
             Err(error) => return Poll::Ready(Err(queries.failure_record(error))),
         };
-        Poll::Ready(Ok((node, content, all_dependencies)))
+        Poll::Ready(Ok((node, content, all_dependencies, source_products)))
     }
     fn graph_bytes(&self) -> Option<u64> {
         let mut metadata = crate::NativeMetadataWeight::default();
@@ -1418,10 +1451,12 @@ impl QueryEngine {
                 (path, id)
             })
             .collect();
+        let source_products = check.is_none();
         Ok(Arc::new(FrontRunQueries {
             batch: None,
             completed_batch: Mutex::new(None),
             export_hashes: false,
+            source_products,
             native_roots: Vec::new(),
             inputs,
             ids,

@@ -90,8 +90,8 @@ impl QueryTask for SemanticTask {
                     return QueryPoll::Waiting(self.node.waiting.into_iter().collect());
                 }
                 Poll::Ready(Err(error)) => Err(error),
-                Poll::Ready(Ok((node, content, dependencies))) => self
-                    .complete(node, content, dependencies)
+                Poll::Ready(Ok((node, content, dependencies, source))) => self
+                    .complete(node, content, dependencies, source)
                     .map_err(|error| self.node.queries.failure_record(error)),
             }
         };
@@ -108,9 +108,14 @@ impl SemanticTask {
         node: content::Node,
         content: DefinitionContent,
         dependencies: BTreeSet<DefPath>,
+        source: Option<source_products::Body>,
     ) -> Result<ProductRef, QueryError> {
         let queries = &self.node.queries;
+        let source = source
+            .map(|source| source_products::Packed::new(queries, source))
+            .transpose()?;
         let entry = Arc::new(GraphEntry {
+            source,
             node,
             content: content::Content::new(queries, content)?,
             dependencies: dependencies
@@ -135,6 +140,7 @@ impl SemanticTask {
             node.content,
             node.dependencies,
             entry.content.references(),
+            entry.source.as_ref(),
         ))
         .map_err(|error| operational(error.to_string()))?;
         if bytes.len() as u64 > queries.weight.scratch {

@@ -212,7 +212,11 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         let mut source = (0..32)
             .map(|n| format!("pub fn value_{n}()->u64 {{{n}u64}}\n"))
             .collect::<String>();
-        source.push_str("fn invalid()->u64 {true}\n");
+        source = source.replace(
+            "pub fn value_0()->u64 {0u64}",
+            "pub fn value_0()->u64 {ANSWER}",
+        );
+        source.push_str("pub fn square(n:u64)->u64 {n*n}\nconst ANSWER:u64=comptime square(7u64)\nfn invalid()->u64 {true}\n");
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
         let mut program = COMPILER
             .with_config(CompileConfig {
@@ -273,6 +277,13 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
             .into_iter()
             .find(|node| node.identity == path.to_string())
             .unwrap();
+        let expected_audit = program.engine.source_audit(&path).unwrap();
+        let answer = paths
+            .iter()
+            .find(|path| path.0.name == "ANSWER")
+            .unwrap()
+            .clone();
+        let expected_constant = program.engine.materialize_value(&answer).unwrap();
         let queries = paths
             .iter()
             .filter(|path| path.0.name.starts_with("value_"))
@@ -302,6 +313,30 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
         assert_eq!(actual.content, expected.content);
         assert_eq!(actual.dependencies, expected.dependencies);
         assert!(run.outcome(product).is_none());
+        let bytes = run.source_product_bytes(product).unwrap().unwrap();
+        assert!(
+            run.source_products_with_allowance(product, budget.reserve(bytes - 1).unwrap())
+                .is_err()
+        );
+        let products = run
+            .source_products_with_allowance(product, budget.reserve(bytes).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(products.audit(), &expected_audit);
+        assert!(products.constant().is_none());
+        drop(products);
+        let request = runtime.request(&[run.semantic_query(&answer).unwrap()]);
+        let answer_product = runtime.wait(request).unwrap()[0];
+        let bytes = run.source_product_bytes(answer_product).unwrap().unwrap();
+        let products = run
+            .source_products_with_allowance(answer_product, budget.reserve(bytes).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(products.constant().unwrap()).unwrap(),
+            serde_json::to_value(&expected_constant).unwrap()
+        );
+        drop(products);
         // Their 32 four-MiB continuation grants cannot all fit this existing
         // 64-MiB working grant plus its existing 128-MiB worker stack. Completed node outputs have their own reservation.
         for query in queries {
