@@ -256,7 +256,7 @@ pub(super) fn requests(n: u64) -> Vec<Request> {
             value_bytes: n % 257, retained_count: (n % 1025) as u32,
             pieces: vec![hirsel_rt::io::CpuPiece { credit: 0, fuel: n, net: n as i64, envelope: vec![(n, 1)] }],
             level: n, limit: u64::MAX, fuel: u64::MAX, stop: None,
-        });
+        }),
         RunnerCall(Box::new(hirsel_run_schema::RunnerRequest {
             runner: if n == 0 { String::new() } else { format!("{text}#runner") },
             form: if n % 2 == 0 { CallForm::Compute } else { CallForm::Call },
