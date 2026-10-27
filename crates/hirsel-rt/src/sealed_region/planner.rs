@@ -14,7 +14,7 @@ use crate::alloc::{Header, payload};
 use crate::{Layout, TaskCtx};
 use std::collections::BTreeMap;
 
-mod descriptors;
+pub(in crate::sealed_region) mod descriptors;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {

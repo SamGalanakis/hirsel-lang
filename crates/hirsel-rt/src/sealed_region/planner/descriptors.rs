@@ -6,14 +6,14 @@ use super::*;
 use hirsel_core_contract::handle_scan::*;
 use std::collections::BTreeSet;
 
-pub(super) struct Edge {
+pub(in crate::sealed_region) struct Edge {
     pub offset: usize,
     pub payload: Option<u32>,
     pub shared: bool,
     pub slice: bool,
 }
 
-pub(super) unsafe fn layout<'a>(ctx: *mut TaskCtx, index: u32) -> Result<&'a Layout, Error> {
+pub(in crate::sealed_region) unsafe fn layout<'a>(ctx: *mut TaskCtx, index: u32) -> Result<&'a Layout, Error> {
     if index >= unsafe { (*ctx).heap_ref().layout_count() } {
         return Err(Error::Descriptor);
     }
@@ -62,7 +62,7 @@ fn range(offset: usize, size: usize, extent: usize) -> Result<(), Error> {
     }
 }
 
-pub(super) unsafe fn edges(
+pub(in crate::sealed_region) unsafe fn edges(
     ctx: *mut TaskCtx,
     index: u32,
     source: *mut u8,

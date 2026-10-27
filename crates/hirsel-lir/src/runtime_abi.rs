@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 82;
+pub const ABI_VERSION: u32 = 83;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -613,6 +613,7 @@ pub enum RuntimeEntry {
     OrderedStdinRead,
     OrderedWatchNext,
     CpuMapScoped,
+    ReceiptConstruct,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -684,7 +685,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 110] = [
+    pub const ALL: [RuntimeEntry; 111] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -795,6 +796,7 @@ impl RuntimeEntry {
         Self::OrderedStdinRead,
         Self::OrderedWatchNext,
         Self::CpuMapScoped,
+        Self::ReceiptConstruct,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -881,6 +883,20 @@ impl RuntimeEntry {
                 "hirsel_rt_v2_receipt_region_exit",
                 U8,
                 const { &[CTX, p("guard", ptr(N::Void, 1)), ANCHOR, OPERATION_SITE] },
+            ),
+            Self::ReceiptConstruct => (
+                "hirsel_rt_v2_receipt_construct",
+                ptr(N::Void, 1),
+                const {
+                    &[
+                        CTX,
+                        LAYOUT,
+                        p("value", cptr(N::Void)),
+                        p("kind", U8),
+                        p("inputs", ptr(N::Void, 2)),
+                        p("input_count", U64),
+                    ]
+                },
             ),
             Self::ReceiptBits => (
                 "hirsel_rt_v2_receipt_bits",
@@ -1739,4 +1755,5 @@ snapshot_enum!(RuntimeEntry {
     OrderedStdinRead,
     OrderedWatchNext,
     CpuMapScoped,
+    ReceiptConstruct,
 });

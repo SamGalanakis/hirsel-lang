@@ -170,3 +170,8 @@ pub(crate) mod seal_bits_tests;
 
 #[cfg(test)]
 mod guard_tests;
+
+mod construct;
+
+#[cfg(test)]
+mod construct_tests;

@@ -896,7 +896,14 @@ impl FnEmitter<'_, '_, '_> {
                 failure,
                 origin,
             } => self.seal_arena(result, grant, root, shape, failure, origin),
-            Inst::PayloadReceipt { .. } | Inst::ArenaInventory { .. } => {
+            Inst::PayloadReceipt {
+                result,
+                value,
+                shape,
+                binding,
+                inputs,
+            } => self.payload_receipt(result, value, shape, binding, inputs),
+            Inst::ArenaInventory { .. } => {
                 self.unsupported("sealed storage emission is not linked")
             }
             Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {

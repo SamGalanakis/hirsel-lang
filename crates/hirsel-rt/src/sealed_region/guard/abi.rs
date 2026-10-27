@@ -6,7 +6,7 @@ use crate::sealed_region::{Charge, SealError, into_native_owner};
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 
-unsafe fn metadata_run(ctx: *mut TaskCtx) -> MetadataRun {
+pub(super) unsafe fn metadata_run(ctx: *mut TaskCtx) -> MetadataRun {
     unsafe { &*ctx }
         .run_ref()
         .sealed_owners
@@ -207,3 +207,5 @@ unsafe fn prepare(
 
 #[cfg(all(test, feature = "diagnostic"))]
 mod tests;
+
+mod construct;

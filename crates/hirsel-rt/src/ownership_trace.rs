@@ -9,7 +9,7 @@ use hirsel_run_schema::ownership_trace::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-pub const ABI_VERSION: u32 = 83;
+pub const ABI_VERSION: u32 = 84;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 

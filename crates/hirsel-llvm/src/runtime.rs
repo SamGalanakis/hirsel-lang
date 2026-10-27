@@ -69,6 +69,7 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         | R::SealedRelease
         | R::ReceiptRegionEnter
         | R::ReceiptRegionExit
+        | R::ReceiptConstruct
         | R::ReceiptBits
         | R::SealPrepareCommit => (MemoryEffects::ReadWrite, false, &[]),
         // Failure bookkeeping can allocate/deallocate, hence memory(readwrite)

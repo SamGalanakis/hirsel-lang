@@ -163,3 +163,8 @@ mod sealed_tests;
 
 #[cfg(test)]
 pub(crate) mod seal_bits_tests;
+
+mod construct;
+
+#[cfg(test)]
+mod construct_tests;
