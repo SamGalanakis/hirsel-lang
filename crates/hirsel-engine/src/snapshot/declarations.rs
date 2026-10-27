@@ -315,6 +315,13 @@ fn lanes(hash: ContentHash) -> [u64; 4] {
 }
 
 impl DeclarationIndex {
+    pub(crate) fn into_source_carry(mut self) -> Self {
+        self.files.clear();
+        self.anchors = HashMap::new();
+        self.frozen = OnceLock::new();
+        self.frozen_rows = OnceLock::new();
+        self
+    }
     /// Index `file`'s items again after `affected` definitions changed:
     /// `items` holds every definition's candidates in occurrence order.
     pub(crate) fn update(

@@ -9,7 +9,7 @@ pub(crate) fn retained_syntax_bytes(syntax: &ast::ItemSyntax) -> u64 {
     weight.syntax(syntax);
     weight.bytes
 }
-impl Weight {
+impl Weight<'_> {
     fn ast_path(&mut self, path: &ast::Path) {
         let ast::Path { package, segments } = path;
         if let Some(package) = package {

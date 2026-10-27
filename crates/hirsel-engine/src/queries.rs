@@ -188,9 +188,9 @@ pub struct DependencyReads {
     pub signatures: Vec<SignatureDependency>,
     pub failed_signatures: Vec<DefPath>,
     pub failed_signature_keys: Vec<(DefPath, Option<ContentHash>)>,
-    pub lookups: Vec<(DefPath, bool)>,
-    pub manifest_lookups: Vec<hirsel_types::DependencyRead>,
-    pub resolver: Arc<hirsel_types::SharedPath<hirsel_resolve::DependencyRead>>,
+    pub lookups: Vec<(hirsel_types::ReadPath, bool)>,
+    pub manifest_lookups: Vec<hirsel_types::SharedRead>,
+    pub resolver: Arc<hirsel_types::SharedPath<hirsel_types::SharedRead>>,
     /// Other items' name sites a result cites, as read (`cite_name`).
     pub citations: Vec<(DefPath, Option<Span>)>,
 }
@@ -320,7 +320,7 @@ pub struct QueryEngine {
     pub(crate) types: Arc<hirsel_types::TypeInterner>,
     /// The session's structural memo over `types`.
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
-    private_summary_reads: hirsel_syntax::DefMap<Arc<Reads>>,
+    private_summary_reads: BTreeMap<DefId, Arc<Reads>>,
     private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
     private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
     private_summary_revision: Option<crate::memo::Revision>,
@@ -2565,23 +2565,27 @@ impl SignatureProvider for Recorder<'_> {
         path: &hirsel_syntax::Path,
     ) -> hirsel_types::LookupOutput {
         let result = self.engine.lookup(context, path);
-        self.reads
-            .manifest_lookups
-            .push(hirsel_types::DependencyRead::ProviderLookup {
-                context: context.clone(),
+        self.reads.manifest_lookups.push(
+            hirsel_types::DependencyRead::ProviderLookup {
+                context: (context.clone()).into(),
                 package: path.package.clone(),
-                segments: path
+                segments: (path
                     .segments
                     .iter()
                     .map(|s| s.as_str().to_owned())
-                    .collect(),
-                output: result.clone(),
-            });
+                    .collect::<Vec<_>>())
+                .into(),
+                output: (result.clone()).into(),
+            }
+            .shared(),
+        );
         if let Err(QueryError::Operational(error)) = &result.result {
             self.reads.operational_failure = Some(error.clone());
         }
         if let Some(path) = lookup_path(context, path) {
-            self.reads.lookups.push((path, result.result.is_ok()));
+            self.reads
+                .lookups
+                .push((path.into(), result.result.is_ok()));
         }
         result
     }

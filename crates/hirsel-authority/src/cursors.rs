@@ -259,10 +259,13 @@ pub fn refine_cursor_plan(
             return Ok(Some(std::sync::Arc::clone(signature)));
         }
         let value = provider.signature(definition);
-        reads.push(DependencyRead::Signature {
-            definition,
-            fingerprint: value.as_ref().ok().map(|s| s.fingerprint),
-        });
+        reads.push(
+            DependencyRead::Signature {
+                definition,
+                fingerprint: value.as_ref().ok().map(|s| s.fingerprint),
+            }
+            .shared(),
+        );
         let signature = value?;
         dependencies.insert(definition, signature.clone());
         Ok(Some(signature))

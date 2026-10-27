@@ -1279,7 +1279,7 @@ impl QueryEngine {
             if let Some(reads) = self.dependency_reads(&path, QueryKind::Signature) {
                 dependencies.extend(reads.signatures.iter().map(|d| d.definition.path().clone()));
                 for read in reads.resolver.iter().chain(&reads.manifest_lookups) {
-                    match read {
+                    match read.as_ref() {
                         hirsel_types::DependencyRead::Signature { definition, .. } => {
                             dependencies.insert(definition.path().clone());
                         }
@@ -1287,11 +1287,11 @@ impl QueryEngine {
                             result: Ok(definition),
                             ..
                         } => {
-                            dependencies.insert(definition.clone());
+                            dependencies.insert(definition.as_ref().clone());
                         }
                         hirsel_types::DependencyRead::ProviderLookup { output, .. } => {
                             if let Ok(definition) = &output.result {
-                                dependencies.insert(definition.clone());
+                                dependencies.insert(definition.as_ref().clone());
                             }
                         }
                         _ => {}

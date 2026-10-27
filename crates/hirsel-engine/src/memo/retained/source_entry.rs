@@ -4,7 +4,7 @@
 use super::{Weight, arc_bytes, retained_signature_payload_bytes};
 use hirsel_types::{ContextualName, Resolution, ResolvedName};
 
-impl Weight {
+impl Weight<'_> {
     fn resolution(&mut self, value: &Resolution) {
         let Resolution {
             reads,
@@ -85,8 +85,71 @@ pub(crate) fn retained_signature_entry_bytes(
     if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
         return None;
     }
+    signature_entry_bytes(entry, false, false, None)
+}
+
+pub(crate) fn source_shared_products(
+    entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
+) -> bool {
+    std::sync::Arc::strong_count(entry) == 1
+        && std::sync::Arc::weak_count(entry) == 0
+        && entry.products.representation.is_none()
+        && entry.products.mode_archive.is_none()
+        && entry.products.mode_diagnostics.is_empty()
+}
+pub(crate) fn source_shared_products_bytes() -> u64 {
+    std::alloc::Layout::new::<[usize; 2]>()
+        .extend(std::alloc::Layout::new::<crate::PhaseProducts>())
+        .expect("allocated Arc layout")
+        .0
+        .pad_to_align()
+        .size() as u64
+}
+
+pub(crate) fn source_signature_head_bytes(
+    entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
+    names: &mut dyn super::NameAllocationSet,
+) -> Option<u64> {
+    if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
+        return None;
+    }
+    signature_entry_bytes(entry, true, source_shared_products(entry), Some(names))
+}
+
+/// Diagnostic components of the same conservative source-head bound.
+pub(crate) fn source_signature_head_components(
+    entry: &crate::queries::Entry<hirsel_types::SignatureRef>,
+) -> [u64; 4] {
+    let mut names = super::NameAllocations::<64>::default();
     let mut weight = Weight {
         count_shared_repeats: true,
+        source_names: Some(&mut names),
+        ..Default::default()
+    };
+    weight.reads(&entry.memo.reads);
+    let reads = weight.bytes;
+    weight.detail(&entry.detail);
+    let detail = weight.bytes - reads;
+    let mut value = 0;
+    let mut dependencies =
+        (entry.covered.capacity() * size_of::<hirsel_types::SignatureDependency>()) as u64;
+    if let Ok(output) = &entry.memo.value {
+        value = retained_signature_payload_bytes(&output.value);
+        dependencies += (output.dependencies.capacity()
+            * size_of::<hirsel_types::SignatureDependency>()) as u64;
+    }
+    [reads, detail, value, dependencies]
+}
+
+fn signature_entry_bytes(
+    entry: &crate::queries::Entry<hirsel_types::SignatureRef>,
+    head: bool,
+    shared_products: bool,
+    names: Option<&mut dyn super::NameAllocationSet>,
+) -> Option<u64> {
+    let mut weight = Weight {
+        count_shared_repeats: true,
+        source_names: names,
         ..Default::default()
     };
     weight.add(arc_bytes(entry));
@@ -104,8 +167,12 @@ pub(crate) fn retained_signature_entry_bytes(
     if let Some(receipt) = &entry.acceptance {
         weight.bytes = weight.bytes.checked_add(receipt.retained_bytes()?)?;
     }
-    weight.add(arc_bytes(&*entry.products));
-    if let Some(resolution) = &entry.products.resolution {
+    if !shared_products {
+        weight.add(arc_bytes(&*entry.products));
+    }
+    if let Some(resolution) = &entry.products.resolution
+        && !head
+    {
         weight.resolver_snapshot(resolution);
     }
     if let Some(owner) = &entry.products.representation {
@@ -211,15 +278,19 @@ mod tests {
             ..Default::default()
         };
         let reads = Arc::make_mut(&mut resolution.reads);
-        reads.push(DependencyRead::ModuleHead {
-            context: hirsel_syntax::FileContext {
-                package: path.0.package.clone(),
-                modules: path.0.modules.clone(),
-            },
-            head: "missing_module".into(),
-            manifest: Default::default(),
-            exposed: false,
-        });
+        reads.push(
+            DependencyRead::ModuleHead {
+                context: (hirsel_syntax::FileContext {
+                    package: path.0.package.clone(),
+                    modules: path.0.modules.clone(),
+                })
+                .into(),
+                head: "missing_module".into(),
+                manifest: Default::default(),
+                exposed: false,
+            }
+            .shared(),
+        );
         ResolverSnapshot {
             syntax: Arc::new(ItemSyntax {
                 item: Item {
@@ -280,6 +351,9 @@ mod tests {
         let owner = DefId::intern(&path);
         let symbol = hirsel_intern::Symbol::intern("entry");
         for width in [1, 4, 16] {
+            // Warm only the process-owned weak index. Its strong name payload
+            // is still created and released inside the measured region.
+            drop(snapshot(width, &path, symbol));
             let mut graph = crate::memo::MemoGraph::default();
             let base = graph.adopt_value(
                 crate::memo::MemoKey::new(QueryKind::Signature, owner),

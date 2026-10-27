@@ -287,11 +287,13 @@ fn nonrecursive_lookup_failures_are_recorded() {
     let (out, reads) = f.finish(root);
     assert_eq!(reads, vec![path.clone()]);
     assert_eq!(out.checked.diagnostics.len(), 1);
-    assert!(out.checked.value.resolution.reads.iter().any(|read| read
-        == &DependencyRead::Signature {
+    assert!(out.checked.value.resolution.reads.iter().any(|read| {
+        read == &DependencyRead::Signature {
             definition: hirsel_syntax::DefId::intern(&path),
-            fingerprint: None
-        }));
+            fingerprint: None,
+        }
+        .shared()
+    }));
     assert!(out.checked.dependencies.is_empty());
 }
 

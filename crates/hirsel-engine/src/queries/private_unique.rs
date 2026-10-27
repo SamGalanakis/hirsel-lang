@@ -82,10 +82,7 @@ impl QueryEngine {
                 if let Some(entry) = self.signatures.get(&id).cloned()
                     && let Ok(output) = entry.result()
                 {
-                    if summary == previous
-                        && output.value.metadata.inferred_unique == summary
-                        && self.memo_valid(id.path(), &entry, entry.memo.text)
-                    {
+                    if summary == previous && output.value.metadata.inferred_unique == summary {
                         continue;
                     }
                     if entry.products.signature_persisted {

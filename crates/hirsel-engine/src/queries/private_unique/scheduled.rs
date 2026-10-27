@@ -593,7 +593,11 @@ impl QueryEngine {
                 {
                     continue;
                 }
-                let signature = match self.signature_query(path) {
+                let id = DefId::intern(path);
+                let retained = self
+                    .unmarked_signature(id)
+                    .and_then(|_| self.signatures.get(&id).map(|entry| entry.result()));
+                let signature = match retained.unwrap_or_else(|| self.signature_query(path)) {
                     Ok(signature) => signature,
                     Err(QueryError::Diagnostics(_) | QueryError::NotImplemented) => continue,
                     Err(error) => return Err(error),

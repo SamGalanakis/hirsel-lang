@@ -363,7 +363,7 @@ fn recursive_header_uses_own_syntax_without_a_failed_signature_read() {
                 .contains(&(ty, ResolvedName::Definition(own("Value"))))
         );
         let self_read = output.reads.iter().any(|read| matches!(
-            read, DependencyRead::Signature { definition, .. } if definition.path() == &own("Value")
+            (read).as_ref(), DependencyRead::Signature { definition, .. } if definition.path() == &own("Value")
         ));
         assert_eq!(self_read, matches!(view, ResolveView::Item));
         assert_eq!(
@@ -412,11 +412,13 @@ fn recursive_header_retains_other_declarations_failed_signature_reads() {
     );
     clean(&output);
     assert_eq!(fake.reads, vec![own("Other")]);
-    assert!(output.reads.iter().any(|read| read
-        == &DependencyRead::Signature {
+    assert!(output.reads.iter().any(|read| {
+        read == &DependencyRead::Signature {
             definition: DefId::intern(&own("Other")),
             fingerprint: None,
-        }));
+        }
+        .shared()
+    }));
 }
 
 #[test]
@@ -466,7 +468,7 @@ fn loop_source_paths_resolve_without_operation_signature_reads() {
                     .contains(&(NameSite::Item, ResolvedName::Definition(own(name)),))
             );
             assert!(output.reads.iter().any(|read| matches!(
-                read,
+                (read).as_ref(),
                 DependencyRead::Lookup { result: Ok(path), .. } if path == &own(name)
             )));
         }
@@ -645,7 +647,7 @@ fn unresolved_ambiguous_and_private_uses_have_rule_and_use_span() {
         output
             .reads
             .iter()
-            .filter(|r| matches!(r, DependencyRead::Lookup { result: Err(_), .. }))
+            .filter(|r| matches!((r).as_ref(), DependencyRead::Lookup { result: Err(_), .. }))
             .count(),
         3
     );
@@ -699,12 +701,14 @@ fn successful_and_failed_signature_reads_and_failed_name_reads_survive_rejection
         output.query.value.dependencies,
         vec![own("good"), own("unavailable")]
     );
-    assert!(output.reads.iter().any(|read| read
-        == &DependencyRead::Signature {
+    assert!(output.reads.iter().any(|read| {
+        read == &DependencyRead::Signature {
             definition: hirsel_syntax::DefId::intern(&own("unavailable")),
-            fingerprint: None
-        }));
-    assert!(output.reads.iter().any(|r| matches!(r,DependencyRead::Lookup { segments,result: Err(LookupError::Missing),manifest,.. } if segments == &["missing"] && *manifest == index.revision)));
+            fingerprint: None,
+        }
+        .shared()
+    }));
+    assert!(output.reads.iter().any(|r| matches!((r).as_ref(),DependencyRead::Lookup { segments,result: Err(LookupError::Missing),manifest,.. } if segments == &["missing"] && *manifest == index.revision)));
     assert_eq!(fake.reads.len(), 2);
 }
 
@@ -841,7 +845,7 @@ fn failed_provider_diagnostics_are_silent_for_reservations_and_emitted_once_at_u
             .reads
             .iter()
             .filter(|r| matches!(
-                r,
+                (r).as_ref(),
                 DependencyRead::Lookup {
                     result: Err(LookupError::Provider(_)),
                     ..

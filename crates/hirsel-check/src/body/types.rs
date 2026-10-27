@@ -9,10 +9,13 @@ impl Checker<'_, '_> {
             return Ok(s.clone());
         }
         let result = self.provider.signature(definition);
-        std::sync::Arc::make_mut(&mut self.body.resolution.reads).push(DependencyRead::Signature {
-            definition,
-            fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
-        });
+        std::sync::Arc::make_mut(&mut self.body.resolution.reads).push(
+            DependencyRead::Signature {
+                definition,
+                fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
+            }
+            .shared(),
+        );
         match result {
             Ok(s) => {
                 self.dependencies.insert(definition, s.fingerprint);
@@ -2135,11 +2138,12 @@ impl Checker<'_, '_> {
             let concat_available = lookup.result.is_ok();
             std::sync::Arc::make_mut(&mut self.body.resolution.reads).push(
                 DependencyRead::ProviderLookup {
-                    context: self.input.context.clone(),
+                    context: (self.input.context.clone()).into(),
                     package: path.package,
-                    segments: vec!["string".into(), "concat".into()],
-                    output: lookup,
-                },
+                    segments: (vec!["string".into(), "concat".into()]).into(),
+                    output: (lookup).into(),
+                }
+                .shared(),
             );
             if strings != [true, true] {
                 diagnostic.notes.push("convert the non-String operand explicitly to String first; f-string holes do not implicitly format arbitrary types".into());

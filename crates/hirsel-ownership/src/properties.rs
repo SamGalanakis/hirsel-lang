@@ -20,7 +20,7 @@ pub(super) struct Signatures<'q> {
     /// Flow can reach nested declarations that classification did not need.
     /// Its memo reads through the same recording Reader as classification.
     flow_memo: RefCell<ContextMemo<'q>>,
-    diagnostic_lookups: RefCell<Vec<DependencyRead>>,
+    diagnostic_lookups: RefCell<Vec<hirsel_types::SharedRead>>,
 }
 impl<'q> Signatures<'q> {
     pub(super) fn type_memo(&self) -> &TypeMemo {
@@ -52,26 +52,29 @@ impl<'q> Signatures<'q> {
     pub fn read(
         &mut self,
         definition: DefId,
-        reads: &mut SharedPath<DependencyRead>,
+        reads: &mut SharedPath<hirsel_types::SharedRead>,
     ) -> Result<SignatureRef, QueryError> {
         let result = self.reader.borrow_mut().read(definition);
         self.record(reads);
         result
     }
     /// Record the first reads made since the last call, the memo's included.
-    pub fn record(&mut self, reads: &mut SharedPath<DependencyRead>) {
+    pub fn record(&mut self, reads: &mut SharedPath<hirsel_types::SharedRead>) {
         reads.extend(self.diagnostic_lookups.borrow_mut().drain(..));
         for (definition, result) in self.reader.borrow_mut().take_pending() {
-            reads.push(DependencyRead::Signature {
-                definition,
-                fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
-            });
+            reads.push(
+                DependencyRead::Signature {
+                    definition,
+                    fingerprint: result.as_ref().ok().map(|s| s.fingerprint),
+                }
+                .shared(),
+            );
         }
     }
     /// A proof or comparison through the query's memo, its reads recorded.
     pub fn prove<T>(
         &mut self,
-        reads: &mut SharedPath<DependencyRead>,
+        reads: &mut SharedPath<hirsel_types::SharedRead>,
         proof: impl FnOnce(&mut ContextMemo<'q>) -> Result<T, QueryError>,
     ) -> Result<T, QueryError> {
         let hits = self.memo.hits();
@@ -104,14 +107,15 @@ impl<'q> Signatures<'q> {
         };
         let output = self.reader.borrow_mut().provider().lookup(&context, &path);
         let available = matches!(output.result, Err(QueryError::NotImplemented));
-        self.diagnostic_lookups
-            .borrow_mut()
-            .push(DependencyRead::ProviderLookup {
-                context,
+        self.diagnostic_lookups.borrow_mut().push(
+            DependencyRead::ProviderLookup {
+                context: (context).into(),
                 package: path.package,
-                segments,
-                output,
-            });
+                segments: (segments).into(),
+                output: (output).into(),
+            }
+            .shared(),
+        );
         available
     }
     pub fn unique_failure(&self, path: &DefPath, claim: UniqueClaim) -> Option<UniqueFailure> {
@@ -481,7 +485,7 @@ fn physical_layout(
     layouts: &mut Layouts,
     t: &TypeInterner,
     ty: TypeId,
-    reads: &mut SharedPath<DependencyRead>,
+    reads: &mut SharedPath<hirsel_types::SharedRead>,
     signatures: &mut Signatures,
 ) -> Result<TypeKind, QueryError> {
     if let Some(kind) = layouts.get(&ty) {

@@ -179,7 +179,7 @@ impl memos::ReadSource for FrozenReadSource<'_> {
     fn namespace(
         &mut self,
         context: &FileContext,
-        result: &Result<DefPath, hirsel_types::LookupError>,
+        result: &Result<hirsel_types::ReadPath, hirsel_types::LookupError>,
     ) -> Option<hirsel_resolve::Namespace> {
         self.declarations
             .index(context.package.clone())
@@ -470,23 +470,27 @@ impl SignatureProvider for WorkerRecorder<'_> {
         path: &hirsel_syntax::Path,
     ) -> hirsel_types::LookupOutput {
         let output = self.provider.lookup(context, path);
-        self.detail
-            .manifest_lookups
-            .push(hirsel_types::DependencyRead::ProviderLookup {
-                context: context.clone(),
+        self.detail.manifest_lookups.push(
+            hirsel_types::DependencyRead::ProviderLookup {
+                context: (context.clone()).into(),
                 package: path.package.clone(),
-                segments: path
+                segments: (path
                     .segments
                     .iter()
                     .map(|s| s.as_str().to_owned())
-                    .collect(),
-                output: output.clone(),
-            });
+                    .collect::<Vec<_>>())
+                .into(),
+                output: (output.clone()).into(),
+            }
+            .shared(),
+        );
         if let Err(QueryError::Operational(error)) = &output.result {
             self.detail.operational_failure = Some(error.clone());
         }
         if let Some(path) = lookup_path(context, path) {
-            self.detail.lookups.push((path, output.result.is_ok()));
+            self.detail
+                .lookups
+                .push((path.into(), output.result.is_ok()));
         }
         output
     }

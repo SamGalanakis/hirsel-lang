@@ -26,7 +26,9 @@ mod crossing;
 pub use crossing::*;
 mod generics;
 pub use generics::*;
+mod read_names;
 mod resolution;
+pub use read_names::*;
 pub use resolution::*;
 mod authority;
 mod iteration;
@@ -952,7 +954,7 @@ pub enum ResolvedName {
 pub struct Resolution {
     /// Phase snapshots and memo evidence share the completed read log.
     /// A later phase shares the immutable prefix and appends its own read nodes.
-    pub reads: std::sync::Arc<SharedPath<DependencyRead>>,
+    pub reads: std::sync::Arc<SharedPath<SharedRead>>,
     pub contextual: Vec<(NameSite, ContextualName)>,
     pub paths: Vec<(NameSite, ResolvedName)>,
     pub local_functions: Vec<(hirsel_syntax::StmtId, LocalId)>,

@@ -1,5 +1,5 @@
-//! Source-only carry across admitted requests. Move original anchors, syntax,
-//! header memos and reverse reads; never retain a LoadedProgram, body memo or
+//! Source-only carry across admitted requests. Move original anchors, body-free
+//! heads, private proofs and reverse reads; never retain a LoadedProgram, body memo or
 //! an S1 coordinator. A fresh engine supplies the current adapters and policy.
 use super::*;
 use crate::runtime::MemoryReservation;
@@ -7,10 +7,13 @@ use crate::runtime::MemoryReservation;
 pub struct SourceIndexState {
     sources: SourceMap,
     indexed_sources: BTreeMap<FileId, (FileContext, QueryEnvironment)>,
-    items: BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
     builtins: BTreeMap<DefPath, hirsel_types::SignatureRef>,
     syntax_keys: BTreeMap<(DefPath, QueryKind), ContentHash>,
     signatures: Table<hirsel_types::SignatureRef>,
+    private_summary_reads: BTreeMap<DefId, Arc<Reads>>,
+    private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
+    private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
+    private_summary_revision: Option<crate::Revision>,
     graph: MemoGraph,
     front_changes: frontier::FrontTracker,
     inputs: hirsel_syntax::DefMap<memos::DefInputs>,
@@ -58,6 +61,9 @@ impl QueryEngine {
             || !self.generated.is_empty()
             || !self.staged_constants.is_empty()
             || !self.staged_values.is_empty()
+            || self.private_summary_active
+            || self.private_summary_failure.is_some()
+            || !self.private_signature_publications.is_empty()
         {
             return Err(invalid());
         }
@@ -76,6 +82,28 @@ impl QueryEngine {
             &mut weight,
             self.signatures.capacity(),
         );
+        hash::<DefId, hirsel_types::UniqueSummary>(&mut weight, self.private_summaries.capacity());
+        for summary in self.private_summaries.values() {
+            weight.flat_vec(&summary.preserves_unique);
+            weight.flat_vec(&summary.results);
+            weight.flat_vec(&summary.nonretaining);
+        }
+        weight.map(&self.private_unique_failures, |w, _, failures| {
+            w.vec(failures, |w, failure| w.add(failure.message.capacity()));
+        });
+        weight.tree::<DefId, Arc<Reads>>(self.private_summary_reads.len());
+        let mut previous: Option<&Arc<Reads>> = None;
+        for reads in self.private_summary_reads.values() {
+            // Module proofs share receipts and sort together by DefPath. Any
+            // nonadjacent sharing is conservatively charged more than once.
+            if previous.is_none_or(|prior| !Arc::ptr_eq(prior, reads)) {
+                weight.arc(reads);
+                for (_, bytes) in reads.allocations() {
+                    weight.add(bytes);
+                }
+            }
+            previous = Some(reads);
+        }
         hash::<DefId, memos::DefInputs>(&mut weight, self.inputs.capacity());
         for value in self.inputs.values() {
             weight.add(value.retained_bytes());
@@ -106,26 +134,40 @@ impl QueryEngine {
         }
         // One prospective source-owner decoration covers its envelope and COW
         // file metadata; original detached views keep their own reservations.
+        let mut names = crate::memo::retained::NameAllocations::<32768>::default();
+        let shared_products = self
+            .signatures
+            .values()
+            .any(crate::memo::retained::source_shared_products);
         let mut total = weight
             .bytes()
+            .checked_add(if shared_products {
+                crate::memo::retained::source_shared_products_bytes()
+            } else {
+                0
+            })
+            .ok_or_else(invalid)?
             .checked_add(self.sources.retained_payload_bytes())
             .ok_or_else(invalid)?
             .checked_add(self.sources.retained_snapshot_metadata_bytes())
             .ok_or_else(invalid)?
-            .checked_add(self.indexed_syntax_bytes().ok_or_else(invalid)?)
-            .ok_or_else(invalid)?
             .checked_add(
-                self.source_signature_entry_payload_bytes()
+                self.signatures
+                    .values()
+                    .try_fold(0u64, |bytes, entry| {
+                        bytes.checked_add(crate::memo::retained::source_signature_head_bytes(
+                            entry, &mut names,
+                        )?)
+                    })
                     .ok_or_else(invalid)?,
             )
             .ok_or_else(invalid)?
-            .checked_add(
-                self.declarations
-                    .retained_payload_bytes()
-                    .ok_or_else(invalid)?,
-            )
+            .checked_add(self.declarations.source_carry_bytes())
             .ok_or_else(invalid)?
-            .checked_add(self.catalog.retained_payload_bytes())
+            .checked_add(
+                self.catalog
+                    .source_carry_bytes(&self.items, &self.indexed_sources),
+            )
             .ok_or_else(invalid)?
             .checked_add(self.types.retained_local_bytes())
             .ok_or_else(invalid)?
@@ -139,6 +181,45 @@ impl QueryEngine {
                     signature,
                 ))
                 .ok_or_else(invalid)?;
+        }
+        if hirsel_intern::memory::metered() {
+            let mut headers = if shared_products {
+                crate::memo::retained::source_shared_products_bytes()
+            } else {
+                0
+            };
+            let mut parts = [0u64; 4];
+            let mut names = crate::memo::retained::NameAllocations::<32768>::default();
+            for entry in self.signatures.values() {
+                headers += crate::memo::retained::source_signature_head_bytes(entry, &mut names)
+                    .ok_or_else(invalid)?;
+                for (total, bytes) in
+                    parts
+                        .iter_mut()
+                        .zip(crate::memo::retained::source_signature_head_components(
+                            entry,
+                        ))
+                {
+                    *total += bytes;
+                }
+            }
+            eprintln!("source carry allocation tracker: {:?}", names.stats());
+            eprintln!(
+                "source carry bound: metadata={} source={} headers={} header-reads={} header-detail={} header-values={} header-dependencies={} declarations={} catalog={} types={} graph={}",
+                weight.bytes(),
+                self.sources.retained_payload_bytes()
+                    + self.sources.retained_snapshot_metadata_bytes(),
+                headers,
+                parts[0],
+                parts[1],
+                parts[2],
+                parts[3],
+                self.declarations.source_carry_bytes(),
+                self.catalog
+                    .source_carry_bytes(&self.items, &self.indexed_sources),
+                self.types.retained_local_bytes(),
+                self.graph.retained_bytes().ok_or_else(invalid)?,
+            );
         }
         Ok(total)
     }
@@ -154,25 +235,66 @@ impl QueryEngine {
         if allowance.bytes() < required {
             return Err(invalid());
         }
+        let catalog = self
+            .catalog
+            .source_carry(&self.sources, &self.items, &self.indexed_sources);
+        let shared_products = Arc::new(PhaseProducts {
+            signature_persisted: true,
+            ..Default::default()
+        });
+        let signatures = std::mem::take(&mut self.signatures)
+            .into_iter()
+            .map(|(id, entry)| {
+                let share = crate::memo::retained::source_shared_products(&entry);
+                if entry.products.resolution.is_none() && !share {
+                    return (id, entry);
+                }
+                // Like a lazy durable Signature, this projection owns no resolver
+                // syntax. It cannot replace the complete stored publication.
+                let projected = Entry {
+                    memo: entry.memo.clone(),
+                    detail: entry.detail.clone(),
+                    products: if share {
+                        shared_products.clone()
+                    } else {
+                        Arc::new(PhaseProducts {
+                            signature_persisted: true,
+                            resolution: None,
+                            ..(*entry.products).clone()
+                        })
+                    },
+                    covered: entry.covered.clone(),
+                    depth: entry.depth.clone(),
+                    acceptance: entry.acceptance.clone(),
+                    verification: Default::default(),
+                    selections: entry.selections.clone(),
+                    consistent: entry.consistent,
+                };
+                (id, Arc::new(projected))
+            })
+            .collect();
         let allowance = Arc::new(allowance);
         let sources = std::mem::take(&mut self.sources).replace_owner(allowance.clone());
         let state = SourceIndexState {
             sources,
             indexed_sources: std::mem::take(&mut self.indexed_sources),
-            items: std::mem::take(&mut self.items),
             builtins: std::mem::take(&mut self.builtins),
             syntax_keys: std::mem::take(&mut self.syntax_keys),
-            signatures: std::mem::take(&mut self.signatures),
+            signatures,
+            private_summary_reads: std::mem::take(&mut self.private_summary_reads),
+            private_summaries: std::mem::take(&mut self.private_summaries),
+            private_unique_failures: std::mem::take(&mut self.private_unique_failures),
+            private_summary_revision: self.private_summary_revision,
             graph: std::mem::take(&mut self.graph),
             front_changes: std::mem::take(&mut self.front_changes),
             inputs: std::mem::take(&mut self.inputs),
             environment_seen: self.environment_seen.take(),
             published_manifest: self.published_manifest,
             vanished: std::mem::take(&mut self.vanished),
-            declarations: std::mem::take(&mut self.declarations),
+            declarations: std::mem::take(&mut self.declarations).into_source_carry(),
             package_manifests: std::mem::take(&mut self.package_manifests),
             types: self.types.clone(),
-            catalog: std::mem::take(&mut self.catalog),
+            catalog,
             compiler: self.store_identity,
             snapshot_epoch: self.snapshot_epoch,
             snapshot_inputs_revision: self.snapshot_inputs_revision,
@@ -209,10 +331,13 @@ impl SourceIndexState {
         let Self {
             sources,
             indexed_sources,
-            items,
             builtins,
             syntax_keys,
             signatures,
+            private_summary_reads,
+            private_summaries,
+            private_unique_failures,
+            private_summary_revision,
             graph,
             front_changes,
             inputs,
@@ -230,10 +355,13 @@ impl SourceIndexState {
         } = self;
         engine.sources = sources;
         engine.indexed_sources = indexed_sources;
-        engine.items = items;
         engine.builtins = builtins;
         engine.syntax_keys = syntax_keys;
         engine.signatures = signatures;
+        engine.private_summary_reads = private_summary_reads;
+        engine.private_summaries = private_summaries;
+        engine.private_unique_failures = private_unique_failures;
+        engine.private_summary_revision = private_summary_revision;
         engine.graph = graph;
         engine.graph.reset_stats();
         engine.front_changes = front_changes;
@@ -418,7 +546,8 @@ mod tests {
                     .unwrap();
                 let mut fresh = engine(&[]);
                 state.restore(&mut fresh).ok().unwrap();
-                assert_eq!(fresh.items[&paths[0]][0].anchor, anchor);
+                assert!(fresh.items.is_empty());
+                assert_eq!(fresh.catalog.anchor(&paths[0], 0), Some(anchor));
                 assert!(Arc::ptr_eq(
                     &header,
                     &fresh.signatures[&DefId::intern(&paths[0])]
@@ -436,6 +565,86 @@ mod tests {
                 drop(fresh);
                 assert_eq!(budget.reserved(), 0);
             }
+        });
+    }
+    #[test]
+    fn source_carry_drops_syntax_products_and_restores_private_proofs_with_exact_reads() {
+        crate::with_compiler_stack(|| {
+            let mut prior = QueryEngine::new(environment(), crate::phases::engine_only_adapters());
+            let context = default_context();
+            let body = (0..256)
+                .map(|i| format!("let x{i} = {i}u64;\n"))
+                .collect::<String>();
+            let file = prior
+                .sources
+                .add("private.hir", format!("fn value()->u64{{{body}0u64}}\n"))
+                .unwrap();
+            let parsed = prior.parse_file(file, &context).unwrap();
+            let syntax = parsed.value.items[0].clone();
+            let path = syntax.item.definition.clone();
+            let id = DefId::intern(&path);
+            let anchor = syntax.anchor;
+            let weak = Arc::downgrade(&syntax);
+            let text = prior.cited_value(&path);
+            let reads = Arc::new(Reads::from_vec(vec![(ReadKey::CitedText(id), text)]).unwrap());
+            prior.private_summary_reads.insert(id, reads.clone());
+            prior.private_summaries.insert(
+                id,
+                hirsel_types::UniqueSummary {
+                    preserves_unique: vec![hirsel_types::ParamId(0)],
+                    results: vec![],
+                    ..Default::default()
+                },
+            );
+            prior.private_unique_failures.insert(
+                id,
+                vec![hirsel_types::UniqueFailure {
+                    claim: hirsel_types::UniqueClaim::Parameter(hirsel_types::ParamId(0)),
+                    span: syntax.item.name_span,
+                    message: "exact failure provenance".into(),
+                }],
+            );
+            // A header's resolver product is another independent route to the
+            // complete expression arena. Neither route may survive the carry.
+            let signature = engine(&[path.clone()]).signatures.remove(&id).unwrap();
+            let mut signature = Arc::try_unwrap(signature).ok().unwrap();
+            signature.products = Arc::new(PhaseProducts {
+                resolution: Some(crate::ResolverSnapshot {
+                    syntax: syntax.clone(),
+                    output: output(hirsel_types::Resolution::default()),
+                }),
+                ..Default::default()
+            });
+            prior.signatures.insert(id, Arc::new(signature));
+            drop(syntax);
+            drop(parsed);
+            let required = prior.source_index_bytes().unwrap();
+            assert!(required < prior.indexed_syntax_bytes().unwrap());
+            let budget = ProcessBudget::new(required);
+            let carry = prior
+                .into_source_index(budget.reserve(required).unwrap())
+                .unwrap();
+            assert!(
+                weak.upgrade().is_none(),
+                "all syntax owners must be released"
+            );
+            let mut fresh = QueryEngine::new(environment(), crate::phases::engine_only_adapters());
+            carry.restore(&mut fresh).ok().unwrap();
+            assert!(fresh.items.is_empty());
+            assert_eq!(fresh.catalog.anchor(&path, 0), Some(anchor));
+            assert!(fresh.signatures[&id].products.resolution.is_none());
+            assert_eq!(
+                fresh.private_summaries[&id].preserves_unique,
+                [hirsel_types::ParamId(0)]
+            );
+            assert_eq!(fresh.private_unique_failures[&id][0].span.anchor, anchor);
+            assert!(Arc::ptr_eq(&fresh.private_summary_reads[&id], &reads));
+            assert_eq!(fresh.observe(&path, &ReadKey::CitedText(id)), Some(text));
+            fresh.materialize(&path).unwrap();
+            assert_eq!(fresh.items[&path][0].anchor, anchor);
+            assert!(fresh.items[&path][0].tree.expressions.len() > 256);
+            drop(fresh);
+            assert_eq!(budget.reserved(), 0);
         });
     }
     #[test]

@@ -156,15 +156,17 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         reads: std::sync::Arc::new(
             vec![
                 DependencyRead::ProviderLookup {
-                    context,
+                    context: (context).into(),
                     package: None,
-                    segments: vec!["absent".into()],
-                    output: lookup.clone(),
-                },
+                    segments: (vec!["absent".into()]).into(),
+                    output: (lookup.clone()).into(),
+                }
+                .shared(),
                 DependencyRead::Signature {
                     definition: hirsel_syntax::DefId::intern(&path("absent")),
                     fingerprint: None,
-                },
+                }
+                .shared(),
             ]
             .into(),
         ),
@@ -205,10 +207,13 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         "resolution clone copied dependency evidence"
     );
     let mut edited = cloned;
-    std::sync::Arc::make_mut(&mut edited.reads).push(DependencyRead::Signature {
-        definition: hirsel_syntax::DefId::intern(&path("later")),
-        fingerprint: None,
-    });
+    std::sync::Arc::make_mut(&mut edited.reads).push(
+        DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&path("later")),
+            fingerprint: None,
+        }
+        .shared(),
+    );
     assert_eq!(
         resolution.reads.len(),
         2,
@@ -219,7 +224,7 @@ fn resolution_preserves_all_lookup_channels_and_nominal_roles() {
         serde_json::to_vec(&resolution.reads).unwrap(),
         serde_json::to_vec(resolution.reads.as_ref()).unwrap()
     );
-    let decoded: std::sync::Arc<SharedPath<DependencyRead>> =
+    let decoded: std::sync::Arc<SharedPath<SharedRead>> =
         serde_json::from_slice(&serde_json::to_vec(&resolution.reads).unwrap()).unwrap();
     assert_eq!(decoded, resolution.reads);
     assert!(lookup.result.is_err());
@@ -2045,26 +2050,34 @@ fn an_unrelated_borrow_accepts_structural_payloads_in_the_actual_environment() {
 fn appended_resolution_reads_share_prior_lookup_payloads_and_keep_ordered_bytes() {
     let mut resolution = Resolution::default();
     for i in 0..32 {
-        std::sync::Arc::make_mut(&mut resolution.reads).push(DependencyRead::ProviderLookup {
-            context: FileContext {
-                package: path("owner").0.package,
-                modules: vec!["nested".repeat(16)],
-            },
-            package: None,
-            segments: vec![format!("missing_{i}").repeat(16)],
-            output: LookupOutput {
-                manifest: ContentHash::of_bytes(b"selected"),
-                result: Err(QueryError::NotImplemented),
-            },
-        });
+        std::sync::Arc::make_mut(&mut resolution.reads).push(
+            DependencyRead::ProviderLookup {
+                context: (FileContext {
+                    package: path("owner").0.package,
+                    modules: vec!["nested".repeat(16)],
+                })
+                .into(),
+                package: None,
+                segments: (vec![format!("missing_{i}").repeat(16)]).into(),
+                output: (LookupOutput {
+                    manifest: ContentHash::of_bytes(b"selected"),
+                    result: Err(QueryError::NotImplemented),
+                })
+                .into(),
+            }
+            .shared(),
+        );
     }
     let original_bytes = serde_json::to_vec(&resolution.reads).unwrap();
-    let original_first = &resolution.reads[0] as *const DependencyRead;
+    let original_first = &resolution.reads[0] as *const SharedRead;
     let mut branch = resolution.clone();
-    std::sync::Arc::make_mut(&mut branch.reads).push(DependencyRead::Signature {
-        definition: hirsel_syntax::DefId::intern(&path("later")),
-        fingerprint: None,
-    });
+    std::sync::Arc::make_mut(&mut branch.reads).push(
+        DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&path("later")),
+            fingerprint: None,
+        }
+        .shared(),
+    );
     assert_eq!(resolution.reads.len(), 32);
     assert_eq!(branch.reads.len(), 33);
     assert_eq!(

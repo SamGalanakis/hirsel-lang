@@ -624,7 +624,7 @@ fn failed_provider_reads_survive_rejection_and_manifest_changes_invalidate_on_co
     let reads = engine
         .dependency_reads(&path("a"), QueryKind::Resolve)
         .unwrap();
-    assert_eq!(reads.lookups, vec![(path("missing"), false)]);
+    assert_eq!(reads.lookups, vec![(path("missing").into(), false)]);
     assert_eq!(reads.failed_signatures, vec![path("missing")]);
     assert!(engine.resolve_definition(&path("a")).is_err());
     assert_eq!(engine.recompute_count(&path("a"), QueryKind::Resolve), 1);
@@ -634,7 +634,7 @@ fn failed_provider_reads_survive_rejection_and_manifest_changes_invalidate_on_co
     let reads = engine
         .dependency_reads(&path("a"), QueryKind::Resolve)
         .unwrap();
-    assert_eq!(reads.lookups, vec![(path("missing"), true)]);
+    assert_eq!(reads.lookups, vec![(path("missing").into(), true)]);
     assert_eq!(*reads.signatures[0].definition.path(), path("missing"));
 }
 #[test]
@@ -1299,4 +1299,85 @@ fn compact_release_does_not_retry_an_unavailable_phase_through_an_old_checked_bo
             "retention must not reenter a stopped body query"
         );
     });
+}
+
+mod read_names_wire {
+    use hirsel_syntax::{ContentHash, DefPath, FileContext};
+    use hirsel_types::*;
+    #[derive(serde::Serialize, Debug)]
+    enum WrittenRead {
+        ProviderLookup {
+            context: FileContext,
+            package: Option<hirsel_syntax::PackageId>,
+            segments: Vec<String>,
+            output: LookupOutput,
+        },
+        Lookup {
+            context: FileContext,
+            package: Option<hirsel_syntax::PackageId>,
+            segments: Vec<String>,
+            manifest: ContentHash,
+            result: Result<DefPath, LookupError>,
+        },
+        ModuleHead {
+            context: FileContext,
+            head: String,
+            manifest: ContentHash,
+            exposed: bool,
+        },
+    }
+
+    #[test]
+    fn interned_read_names_preserve_structural_json_bincode_and_lookup_failures() {
+        let path = DefPath::core("read_names.value");
+        let context = FileContext {
+            package: path.0.package.clone(),
+            modules: vec!["nested".into()],
+        };
+        let segments = vec!["nested".into(), "value".into()];
+        let manifest = ContentHash::of_bytes(b"selected manifest");
+        let output = LookupOutput {
+            manifest,
+            result: Ok(path.clone()),
+        };
+        let mut written = vec![WrittenRead::ProviderLookup {
+            context: context.clone(),
+            package: None,
+            segments: segments.clone(),
+            output,
+        }];
+        for result in [
+            Ok(path.clone()),
+            Err(LookupError::Missing),
+            Err(LookupError::MissingMember(vec![path.clone()])),
+            Err(LookupError::Invisible(path.clone())),
+        ] {
+            written.push(WrittenRead::Lookup {
+                context: context.clone(),
+                package: Some(path.0.package.clone()),
+                segments: segments.clone(),
+                manifest,
+                result,
+            });
+        }
+        written.push(WrittenRead::ModuleHead {
+            context,
+            head: "nested".into(),
+            manifest,
+            exposed: false,
+        });
+        for read in written {
+            let bytes = bincode::serialize(&read).unwrap();
+            let compact: DependencyRead = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(bincode::serialize(&compact).unwrap(), bytes);
+            assert_eq!(format!("{compact:?}"), format!("{read:?}"));
+            assert_eq!(
+                serde_json::to_value(&compact).unwrap(),
+                serde_json::to_value(&read).unwrap()
+            );
+            let shared: SharedRead = bincode::deserialize(&bytes).unwrap();
+            assert_eq!(bincode::serialize(&shared).unwrap(), bytes);
+            assert_eq!(format!("{shared:?}"), format!("{read:?}"));
+        }
+    }
 }

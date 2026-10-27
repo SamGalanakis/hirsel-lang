@@ -53,21 +53,33 @@ mod expected_tests {
 // Negative lookups observe accessible repair candidates through their canonical
 // Reads, not through this stamp. Keeping it here makes equal products differ
 // when the same package moves between root and dependency positions.
-fn canonical_reads(reads: &mut [hirsel_types::DependencyRead]) {
+fn canonical_reads(reads: &mut [hirsel_types::SharedRead]) {
     use hirsel_types::DependencyRead;
     for read in reads {
-        let manifest = match read {
+        let manifest = match read.as_ref() {
             DependencyRead::Signature { .. } => continue,
             DependencyRead::Lookup { manifest, .. }
             | DependencyRead::ModuleHead { manifest, .. } => manifest,
-            DependencyRead::ProviderLookup { output, .. } => &mut output.manifest,
+            DependencyRead::ProviderLookup { output, .. } => &output.manifest,
         };
-        *manifest = ContentHash::default();
+        if *manifest == ContentHash::default() {
+            continue;
+        }
+        let mut canonical = (**read).clone();
+        match &mut canonical {
+            DependencyRead::Signature { .. } => unreachable!(),
+            DependencyRead::Lookup { manifest, .. }
+            | DependencyRead::ModuleHead { manifest, .. } => *manifest = ContentHash::default(),
+            DependencyRead::ProviderLookup { output, .. } => {
+                output.manifest = ContentHash::default()
+            }
+        }
+        *read = canonical.shared();
     }
 }
 // Canonicalization owns a serialization copy; live phase snapshots keep their
 // shared prefixes and their original provenance fields unchanged.
-fn canonical_read_log(reads: &mut Arc<hirsel_types::SharedPath<hirsel_types::DependencyRead>>) {
+fn canonical_read_log(reads: &mut Arc<hirsel_types::SharedPath<hirsel_types::SharedRead>>) {
     let mut canonical = reads.iter().cloned().collect::<Vec<_>>();
     canonical_reads(&mut canonical);
     *reads = Arc::new(canonical.into());

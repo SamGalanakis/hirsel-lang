@@ -9,7 +9,7 @@ use std::{alloc::Layout, collections::BTreeMap, sync::Arc};
 /// are excluded: their original reservation owners must outlive the snapshot.
 /// Allocator size classes and temporary visitor storage are not retained input.
 #[derive(Default)]
-pub struct NativeMetadataWeight(Weight);
+pub struct NativeMetadataWeight(Weight<'static>);
 impl NativeMetadataWeight {
     pub fn bytes(&self) -> u64 {
         self.0.bytes

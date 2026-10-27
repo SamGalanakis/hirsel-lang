@@ -573,7 +573,8 @@ mod tests {
                 let read = DependencyRead::Signature {
                     definition: DefId::intern(&path),
                     fingerprint,
-                };
+                }
+                .shared();
                 let json = format!(
                     "{{\"Signature\":{{\"definition\":{},\"fingerprint\":{}}}}}",
                     serde_json::to_string(&path).unwrap(),
@@ -591,11 +592,11 @@ mod tests {
                 };
                 let decode = || {
                     assert_eq!(
-                        serde_json::from_slice::<DependencyRead>(&json).unwrap(),
+                        serde_json::from_slice::<hirsel_types::SharedRead>(&json).unwrap(),
                         read
                     );
                     assert_eq!(
-                        bincode::deserialize::<DependencyRead>(&binary).unwrap(),
+                        bincode::deserialize::<hirsel_types::SharedRead>(&binary).unwrap(),
                         read
                     );
                 };
@@ -605,7 +606,7 @@ mod tests {
                 with_def_numbering(&mut numbering, encode);
                 assert!(numbering.ids().is_empty());
                 with_def_source(std::sync::Arc::new(NoDefinitions), decode);
-                let DependencyRead::Signature { definition, .. } = read.clone() else {
+                let DependencyRead::Signature { definition, .. } = read.as_ref() else {
                     unreachable!()
                 };
                 assert!(std::ptr::eq(definition.path(), DefId::intern(&path).path()));

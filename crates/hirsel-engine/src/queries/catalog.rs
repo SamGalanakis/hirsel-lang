@@ -207,6 +207,107 @@ impl Catalog {
         );
         weight.bytes()
     }
+    /// Body-free carry over materialized sources, preserving every candidate's
+    /// original anchor and occurrence. Reuse the ordinary lazy-source path.
+    pub(super) fn source_carry(
+        &self,
+        sources: &SourceMap,
+        items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+        indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
+    ) -> Self {
+        let mut carry = self.clone();
+        for (file, (context, _)) in indexed {
+            carry.files.insert(*file, context.clone());
+        }
+        for (path, syntaxes) in items {
+            let previous = carry.candidates.remove(path).unwrap_or_default();
+            let mut candidates = Vec::with_capacity(previous.len() + syntaxes.len());
+            candidates.extend(previous);
+            for syntax in syntaxes {
+                let (file, base) = sources.anchor(syntax.anchor).expect("indexed anchor");
+                candidates.push(Candidate {
+                    head: DeclarationHead::capture(sources, syntax),
+                    file,
+                    base,
+                    facts: SourceFacts::capture(syntax),
+                    lexical: LexicalShape::capture(syntax),
+                    occurrence: syntax.occurrence,
+                });
+            }
+            candidates.sort_by_key(|c| c.occurrence);
+            carry.candidates.insert(path.clone(), candidates);
+        }
+        carry
+    }
+
+    /// Bound the prospective body-free catalog without constructing it. The
+    /// two maps can share keys; charging both is a conservative upper bound.
+    pub(super) fn source_carry_bytes(
+        &self,
+        items: &BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
+        indexed: &BTreeMap<FileId, (FileContext, QueryEnvironment)>,
+    ) -> u64 {
+        let mut weight = crate::NativeMetadataWeight::default();
+        weight.add(self.retained_payload_bytes() as usize);
+        weight.map(indexed, |w, _, (context, _)| {
+            w.add(context.package.name.capacity());
+            w.add(context.package.version.capacity());
+            w.vec(&context.modules, |w, module| w.add(module.capacity()));
+        });
+        weight.map(items, |w, path, syntaxes| {
+            w.path(path);
+            // Existing candidate vectors are charged above; with_capacity in
+            // source_carry allocates exactly the combined candidate count.
+            w.add(syntaxes.len().saturating_mul(size_of::<Candidate>()));
+            for syntax in syntaxes {
+                // SourceFacts captures only these sparse expression/site lists.
+                let expressions = syntax
+                    .tree
+                    .expressions
+                    .iter()
+                    .filter(|e| matches!(e.kind, hirsel_syntax::ExprKind::Comptime(_)))
+                    .count();
+                if expressions != 0 {
+                    w.add(
+                        expressions
+                            .next_power_of_two()
+                            .max(4)
+                            .saturating_mul(size_of::<(u32, u32, u32)>()),
+                    );
+                }
+                let associations = syntax.item.attributes.len();
+                if associations != 0 {
+                    w.add(
+                        associations
+                            .next_power_of_two()
+                            .max(4)
+                            .saturating_mul(size_of::<(u8, u32, u32)>()),
+                    );
+                }
+                if let ItemKind::Type {
+                    body: hirsel_syntax::TypeBody::Variants(arms),
+                    ..
+                } = &syntax.item.kind
+                {
+                    if !arms.is_empty() {
+                        // arm_names grows a Vec of (String, Span); collect may
+                        // reuse that allocation for the smaller fact tuples.
+                        w.add(
+                            arms.len()
+                                .next_power_of_two()
+                                .max(4)
+                                .saturating_mul(size_of::<(String, Span)>()),
+                        );
+                    }
+                    for arm in arms {
+                        w.add(arm.name.as_str().len());
+                    }
+                }
+            }
+        });
+        weight.bytes()
+    }
+
     pub(super) fn input_bytes(&self) -> Option<u64> {
         let mut n = std::mem::size_of::<Self>() as u64;
         for candidates in self.candidates.values() {

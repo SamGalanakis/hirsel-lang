@@ -7,20 +7,20 @@ use hirsel_syntax::PackageId;
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
 pub enum DependencyRead {
     ProviderLookup {
-        context: FileContext,
+        context: ReadContext,
         package: Option<PackageId>,
-        segments: Vec<String>,
-        output: LookupOutput,
+        segments: ReadSegments,
+        output: ReadLookupOutput,
     },
     Lookup {
-        context: FileContext,
+        context: ReadContext,
         package: Option<PackageId>,
-        segments: Vec<String>,
+        segments: ReadSegments,
         manifest: ContentHash,
-        result: Result<DefPath, LookupError>,
+        result: Result<ReadPath, LookupError>,
     },
     ModuleHead {
-        context: FileContext,
+        context: ReadContext,
         head: String,
         manifest: ContentHash,
         exposed: bool,

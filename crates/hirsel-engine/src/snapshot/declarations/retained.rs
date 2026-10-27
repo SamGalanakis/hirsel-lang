@@ -133,6 +133,17 @@ impl Declarations {
     }
 }
 impl DeclarationIndex {
+    pub(crate) fn source_carry_bytes(&self) -> u64 {
+        let mut weight = Weight::default();
+        weight.map(&self.rows, |w, _, value| row(w, value));
+        hash::<std::path::PathBuf, BTreeSet<FileId>>(&mut weight, self.paths.capacity());
+        for (path, values) in &self.paths {
+            weight.add(path.capacity());
+            weight.tree::<FileId, ()>(values.len());
+        }
+        weight.add(self.inputs.retained_payload_bytes() as usize);
+        weight.bytes()
+    }
     /// Complete existing declaration/index backing, including already frozen
     /// rows and materialized sites. Inspection performs no lazy initialization.
     /// Source text and type/session interners remain separate components.

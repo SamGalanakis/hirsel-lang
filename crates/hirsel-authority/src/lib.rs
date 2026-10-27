@@ -62,7 +62,7 @@ pub struct AuthorityOutput {
     pub diagnostics: Vec<Diagnostic>,
     pub dependencies: Vec<SignatureDependency>,
     /// Every provider attempt, including failed reads, survives rejection.
-    pub reads: Vec<DependencyRead>,
+    pub reads: Vec<hirsel_types::SharedRead>,
     /// Operational/unavailable provider failures prevent publication as accepted.
     pub failure: Option<QueryError>,
 }

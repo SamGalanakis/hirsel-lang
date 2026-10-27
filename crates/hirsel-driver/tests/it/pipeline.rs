@@ -206,7 +206,7 @@ fn real_phases_edit_body_signature_failed_read_and_recovery_on_compiler_thread()
     let reads = engine
         .dependency_reads(&path("b"), QueryKind::Resolve)
         .unwrap();
-    assert!(reads.manifest_lookups.iter().any(|r| matches!(r,hirsel_types::DependencyRead::ProviderLookup { output, .. } if output.result.is_err())));
+    assert!(reads.manifest_lookups.iter().any(|r| matches!((r).as_ref(),hirsel_types::DependencyRead::ProviderLookup { output, .. } if output.result.is_err())));
     edit(&mut engine, signature);
     check_all(&mut engine);
     equal_fresh(&mut engine, signature);

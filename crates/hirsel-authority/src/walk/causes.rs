@@ -262,16 +262,20 @@ impl Checker<'_> {
             };
             let output = self.reader.borrow_mut().provider().lookup(&context, &path);
             let available = matches!(output.result, Err(QueryError::NotImplemented));
-            self.out.reads.push(DependencyRead::ProviderLookup {
-                context,
-                package: path.package,
-                segments: path
-                    .segments
-                    .iter()
-                    .map(|s| s.as_str().to_owned())
-                    .collect(),
-                output,
-            });
+            self.out.reads.push(
+                DependencyRead::ProviderLookup {
+                    context: (context).into(),
+                    package: path.package,
+                    segments: (path
+                        .segments
+                        .iter()
+                        .map(|s| s.as_str().to_owned())
+                        .collect::<Vec<_>>())
+                    .into(),
+                    output: (output).into(),
+                }
+                .shared(),
+            );
             if available {
                 return Some(name);
             }

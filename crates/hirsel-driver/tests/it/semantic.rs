@@ -33,7 +33,7 @@ fn real_signature_reads_only_headers_and_real_resolver_retains_failed_reads_on_c
         .unwrap();
     assert!(!reads.resolver.is_empty());
     assert!(reads.resolver.iter().any(|r| matches!(
-        r,
+        (r).as_ref(),
         hirsel_resolve::DependencyRead::Lookup { result: Err(_), .. }
     )));
     assert!(
@@ -406,7 +406,7 @@ fn header_views_retain_the_original_syntax_and_exclude_execution_reads_on_compil
             .unwrap();
         assert!(std::sync::Arc::ptr_eq(&original, &header.syntax));
         assert!(!header.reads.iter().any(|read| matches!(
-            read,
+            (read).as_ref(),
             hirsel_types::DependencyRead::Lookup { segments, .. }
                 | hirsel_types::DependencyRead::ProviderLookup { segments, .. }
                 if segments.iter().any(|name| name == "missing")

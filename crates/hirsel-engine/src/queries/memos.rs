@@ -129,10 +129,12 @@ fn diagnostics_value(parts: &mut Vec<Vec<u8>>, diagnostics: &[Diagnostic]) {
     }
 }
 /// The observed value of a provider lookup; a frozen provider records the same.
-pub(crate) fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHash {
+pub(crate) fn provider_value<P: std::borrow::Borrow<DefPath>>(
+    result: &Result<P, QueryError>,
+) -> ContentHash {
     let mut parts = vec![];
     match result {
-        Ok(path) => parts.push(path.fingerprint().0.to_vec()),
+        Ok(path) => parts.push(path.borrow().fingerprint().0.to_vec()),
         Err(QueryError::NotImplemented) => parts.push(b"absent".to_vec()),
         Err(QueryError::Operational(f)) => {
             parts.push(b"operational".to_vec());
@@ -148,14 +150,14 @@ pub(crate) fn provider_value(result: &Result<DefPath, QueryError>) -> ContentHas
         parts.iter().map(Vec::as_slice),
     )
 }
-fn missing_lookup(result: &Result<DefPath, LookupError>) -> bool {
+fn missing_lookup<P>(result: &Result<P, LookupError>) -> bool {
     matches!(
         result,
         Err(LookupError::Missing | LookupError::MissingMember(_))
     )
 }
-pub(crate) fn manifest_value(
-    result: &Result<DefPath, LookupError>,
+pub(crate) fn manifest_value<P: std::borrow::Borrow<DefPath>>(
+    result: &Result<P, LookupError>,
     namespace: Option<hirsel_resolve::Namespace>,
 ) -> ContentHash {
     let mut parts: Vec<Vec<u8>> = vec![];
@@ -167,7 +169,7 @@ pub(crate) fn manifest_value(
     match result {
         Ok(path) => {
             parts.push(b"ok".to_vec());
-            parts.push(path.fingerprint().0.to_vec());
+            parts.push(path.borrow().fingerprint().0.to_vec());
             parts.push(format!("{namespace:?}").into_bytes());
         }
         Err(LookupError::Missing) => parts.push(b"missing".to_vec()),
@@ -201,7 +203,7 @@ pub(crate) trait ReadSource {
     fn namespace(
         &mut self,
         context: &FileContext,
-        result: &Result<DefPath, LookupError>,
+        result: &Result<hirsel_types::ReadPath, LookupError>,
     ) -> Option<hirsel_resolve::Namespace>;
     fn lookup_candidates(
         &mut self,
@@ -235,7 +237,7 @@ pub(crate) fn complete_reads(
         reads.record(ReadKey::FailedSignature(def(path)), optional(*key));
     }
     for read in detail.manifest_lookups.iter().chain(detail.resolver.iter()) {
-        match read {
+        match read.as_ref() {
             hirsel_types::DependencyRead::ProviderLookup {
                 context,
                 package,
@@ -330,7 +332,7 @@ impl ReadSource for QueryEngine {
     fn namespace(
         &mut self,
         context: &FileContext,
-        result: &Result<DefPath, LookupError>,
+        result: &Result<hirsel_types::ReadPath, LookupError>,
     ) -> Option<hirsel_resolve::Namespace> {
         self.lookup_namespace(context, result)
     }
@@ -447,14 +449,14 @@ impl QueryEngine {
         complete_reads(owner, detail, observed, self)
     }
 
-    fn lookup_namespace(
+    fn lookup_namespace<P: std::borrow::Borrow<DefPath>>(
         &mut self,
         context: &FileContext,
-        result: &Result<DefPath, LookupError>,
+        result: &Result<P, LookupError>,
     ) -> Option<hirsel_resolve::Namespace> {
         let path = result.as_ref().ok()?;
         self.manifest_index(&context.package)?
-            .entry(path)
+            .entry(path.borrow())
             .map(|e| e.namespace)
     }
 

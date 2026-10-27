@@ -1683,32 +1683,32 @@ impl Normalizer<'_, '_> {
         // Header paths without a TypeExprId (dictionary alias initializers,
         // brands and authority names) still have exact manifest lookup reads.
         // Reuse them before provider lookup, which cannot expand exposed heads.
-        let resolved = self
-            .input
-            .resolution
-            .reads
-            .iter()
-            .rev()
-            .find_map(|read| match read {
-                DependencyRead::Lookup {
-                    context,
-                    package,
-                    segments,
-                    result: Ok(definition),
-                    ..
-                } if context == self.input.context
-                    && package == &p.package
-                    && segments
-                        .iter()
-                        .map(String::as_str)
-                        .eq(p.segments.iter().map(|s| s.as_str())) =>
-                {
-                    Some(definition.clone())
-                }
-                _ => None,
-            });
+        let resolved =
+            self.input
+                .resolution
+                .reads
+                .iter()
+                .rev()
+                .find_map(|read| match read.as_ref() {
+                    DependencyRead::Lookup {
+                        context,
+                        package,
+                        segments,
+                        result: Ok(definition),
+                        ..
+                    } if context == self.input.context
+                        && package == &p.package
+                        && segments
+                            .iter()
+                            .map(String::as_str)
+                            .eq(p.segments.iter().map(|s| s.as_str())) =>
+                    {
+                        Some(definition.clone())
+                    }
+                    _ => None,
+                });
         if let Some(definition) = resolved {
-            return Ok(definition);
+            return Ok(definition.as_ref().clone());
         }
         self.provider.lookup(self.input.context, p).result
     }

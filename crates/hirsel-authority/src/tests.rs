@@ -199,18 +199,23 @@ fn every_repeated_generic_occurrence_is_checked_before_weakening() {
 #[test]
 fn provider_failures_are_preserved_outside_the_result() {
     let mut f = Fixture::new();
-    std::sync::Arc::make_mut(&mut f.body.resolution.reads).push(DependencyRead::ProviderLookup {
-        context: hirsel_syntax::FileContext {
-            package: path("owner").0.package,
-            modules: vec![],
-        },
-        package: None,
-        segments: vec!["earlier".repeat(128)],
-        output: LookupOutput {
-            manifest: Default::default(),
-            result: Err(QueryError::NotImplemented),
-        },
-    });
+    std::sync::Arc::make_mut(&mut f.body.resolution.reads).push(
+        DependencyRead::ProviderLookup {
+            context: (hirsel_syntax::FileContext {
+                package: path("owner").0.package,
+                modules: vec![],
+            })
+            .into(),
+            package: None,
+            segments: (vec!["earlier".repeat(128)]).into(),
+            output: (LookupOutput {
+                manifest: Default::default(),
+                result: Err(QueryError::NotImplemented),
+            })
+            .into(),
+        }
+        .shared(),
+    );
     let prior_reads = f.body.resolution.reads.clone();
     let missing = f.ty(TypeKind::Named {
         definition: DefId::intern(&path("Missing")),
@@ -232,10 +237,15 @@ fn provider_failures_are_preserved_outside_the_result() {
         "authority copied H lookup payloads when appending its failed reads"
     );
     assert!(matches!(out.failure, Some(QueryError::Operational(_))));
-    assert!(out.reads.contains(&DependencyRead::Signature {
-        definition: hirsel_syntax::DefId::intern(&path("Missing")),
-        fingerprint: None
-    }));
+    assert!(
+        out.reads.contains(
+            &DependencyRead::Signature {
+                definition: hirsel_syntax::DefId::intern(&path("Missing")),
+                fingerprint: None
+            }
+            .shared()
+        )
+    );
 }
 proptest! {
     #[test]

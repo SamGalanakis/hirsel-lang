@@ -1743,7 +1743,7 @@ mod tests {
 }
 
 /// Definition manifest assigns module identity independently of file layout (PROG-1/5; issue #4).
-#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct FileContext {
     pub package: PackageId,
     pub modules: Vec<String>,

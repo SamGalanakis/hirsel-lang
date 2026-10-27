@@ -317,16 +317,20 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             Err(LookupError::Missing | LookupError::MissingMember(_))
         ) {
             let lookup = self.provider.lookup(&self.context, path);
-            std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::ProviderLookup {
-                context: self.context.clone(),
-                package: path.package.clone(),
-                segments: path
-                    .segments
-                    .iter()
-                    .map(|s| s.as_str().to_owned())
-                    .collect(),
-                output: lookup.clone(),
-            });
+            std::sync::Arc::make_mut(&mut self.output.reads).push(
+                DependencyRead::ProviderLookup {
+                    context: (self.context.clone()).into(),
+                    package: path.package.clone(),
+                    segments: (path
+                        .segments
+                        .iter()
+                        .map(|s| s.as_str().to_owned())
+                        .collect::<Vec<_>>())
+                    .into(),
+                    output: (lookup.clone()).into(),
+                }
+                .shared(),
+            );
             match lookup.result {
                 Ok(definition) => {
                     // Provider-only declarations must belong to the selected
@@ -345,13 +349,16 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 Err(ty::QueryError::Operational(e)) => self.output.operational_failure = Some(e),
             }
         }
-        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::Lookup {
-            context: self.context.clone(),
-            package: path.package.clone(),
-            segments,
-            manifest: self.index.revision,
-            result: result.clone(),
-        });
+        std::sync::Arc::make_mut(&mut self.output.reads).push(
+            DependencyRead::Lookup {
+                context: (self.context.clone()).into(),
+                package: path.package.clone(),
+                segments: (segments).into(),
+                manifest: self.index.revision,
+                result: (result.clone()).map(Into::into),
+            }
+            .shared(),
+        );
         if let Ok(definition) = &result {
             self.output
                 .query
@@ -656,10 +663,13 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
                 None
             }
         };
-        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::Signature {
-            definition: id,
-            fingerprint: signature.as_ref().map(|s| s.fingerprint),
-        });
+        std::sync::Arc::make_mut(&mut self.output.reads).push(
+            DependencyRead::Signature {
+                definition: id,
+                fingerprint: signature.as_ref().map(|s| s.fingerprint),
+            }
+            .shared(),
+        );
         self.output
             .query
             .value
@@ -3287,12 +3297,15 @@ impl<'a, P: SignatureProvider + ?Sized> Resolver<'a, P> {
             return false;
         };
         let exposed = self.index.has_head(&self.context, &head);
-        std::sync::Arc::make_mut(&mut self.output.reads).push(DependencyRead::ModuleHead {
-            context: self.context.clone(),
-            head,
-            manifest: self.index.revision,
-            exposed,
-        });
+        std::sync::Arc::make_mut(&mut self.output.reads).push(
+            DependencyRead::ModuleHead {
+                context: (self.context.clone()).into(),
+                head,
+                manifest: self.index.revision,
+                exposed,
+            }
+            .shared(),
+        );
         exposed
     }
     fn call(

@@ -3,7 +3,10 @@
 mod signature;
 mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;
-pub(crate) use source_entry::retained_signature_entry_bytes;
+pub(crate) use source_entry::{
+    retained_signature_entry_bytes, source_shared_products, source_shared_products_bytes,
+    source_signature_head_bytes, source_signature_head_components,
+};
 mod syntax;
 #[cfg(test)]
 mod type_storage;
@@ -201,13 +204,77 @@ pub(super) fn arc_bytes<T: ?Sized>(value: &T) -> usize {
 }
 
 #[derive(Default)]
-pub(crate) struct Weight {
+pub(crate) struct Weight<'a> {
     pub(crate) bytes: u64,
     shared: HashSet<usize>,
     count_shared_repeats: bool,
     decode_vectors: bool,
+    source_names: Option<&'a mut dyn NameAllocationSet>,
 }
-impl Weight {
+pub(crate) trait NameAllocationSet: Send + Sync {
+    fn first(&mut self, identity: usize) -> bool;
+}
+pub(crate) struct NameAllocations<const N: usize = 32768> {
+    slots: [usize; N],
+    overflow: u64,
+}
+impl<const N: usize> Default for NameAllocations<N> {
+    fn default() -> Self {
+        Self {
+            slots: [0; N],
+            overflow: 0,
+        }
+    }
+}
+impl<const N: usize> NameAllocations<N> {
+    pub(crate) fn stats(&self) -> (usize, u64) {
+        (
+            self.slots.iter().filter(|slot| **slot != 0).count(),
+            self.overflow,
+        )
+    }
+}
+impl<const N: usize> NameAllocationSet for NameAllocations<N> {
+    fn first(&mut self, identity: usize) -> bool {
+        debug_assert!(N.is_power_of_two());
+        let start = ((identity >> 4) ^ (identity >> 19)) & (N - 1);
+        for offset in 0..N.min(64) {
+            let slot = &mut self.slots[(start + offset) & (N - 1)];
+            if *slot == identity {
+                return false;
+            }
+            if *slot == 0 {
+                *slot = identity;
+                return true;
+            }
+        }
+        // A full or clustered tracker charges unknown allocations again.
+        // Bound inspection work as well as its allocation-free scratch space.
+        self.overflow = self.overflow.saturating_add(1);
+        true
+    }
+}
+impl Weight<'_> {
+    fn read_name_allocations(&mut self, allocations: impl IntoIterator<Item = (usize, usize)>) {
+        for (identity, bytes) in allocations {
+            if bytes == 0 {
+                continue;
+            }
+            let bytes = if self.decode_vectors {
+                bytes.saturating_mul(2)
+            } else {
+                bytes
+            };
+            if let Some(seen) = &mut self.source_names {
+                if !seen.first(identity) {
+                    continue;
+                }
+                self.add(bytes);
+            } else {
+                self.allocation(identity, bytes);
+            }
+        }
+    }
     /// Serde recreates every serialized Arc occurrence. Sequence decoding may
     /// grow from its cautious initial capacity; doubling the producing Vec's
     /// capacity covers that geometric growth without relying on wire length.
@@ -304,10 +371,6 @@ impl Weight {
         self.add(package.name.capacity());
         self.add(package.version.capacity());
     }
-    fn context(&mut self, context: &hirsel_syntax::FileContext) {
-        self.package(&context.package);
-        self.vec(&context.modules, |w, part| w.add(part.capacity()));
-    }
     pub(crate) fn error(&mut self, error: &hirsel_types::QueryError) {
         match error {
             hirsel_types::QueryError::Operational(failure) => self.failure(failure),
@@ -323,20 +386,20 @@ impl Weight {
     }
     fn dependency(&mut self, read: &hirsel_types::DependencyRead) {
         use hirsel_types::{DependencyRead, LookupError};
-        match read {
+        match read.as_ref() {
             DependencyRead::ProviderLookup {
                 context,
                 package,
                 segments,
                 output,
             } => {
-                self.context(context);
+                self.read_name_allocations(context.retained_allocations());
+                self.read_name_allocations(segments.retained_allocations());
                 if let Some(package) = package {
                     self.package(package);
                 }
-                self.vec(segments, |w, segment| w.add(segment.capacity()));
                 match &output.result {
-                    Ok(path) => self.def_path(path),
+                    Ok(_) => (),
                     Err(error) => self.error(error),
                 }
             }
@@ -347,13 +410,14 @@ impl Weight {
                 result,
                 manifest: _,
             } => {
-                self.context(context);
+                self.read_name_allocations(context.retained_allocations());
+                self.read_name_allocations(segments.retained_allocations());
                 if let Some(package) = package {
                     self.package(package);
                 }
-                self.vec(segments, |w, segment| w.add(segment.capacity()));
                 match result {
-                    Ok(path) | Err(LookupError::Invisible(path)) => self.def_path(path),
+                    Ok(_) => (),
+                    Err(LookupError::Invisible(path)) => self.def_path(path),
                     Err(LookupError::MissingMember(paths) | LookupError::Ambiguous(paths)) => {
                         self.vec(paths, Weight::def_path)
                     }
@@ -369,25 +433,40 @@ impl Weight {
                 manifest: _,
                 exposed: _,
             } => {
-                self.context(context);
+                self.read_name_allocations(context.retained_allocations());
                 self.add(head.capacity());
             }
             // Definition identities are owned by the session interner.
             DependencyRead::Signature { .. } => (),
         }
     }
-    fn read_log(&mut self, value: &std::sync::Arc<SharedPath<hirsel_types::DependencyRead>>) {
-        if !self.first(std::sync::Arc::as_ptr(value) as usize) {
+    fn shared_allocation(&mut self, identity: usize, bytes: usize) -> bool {
+        if let Some(seen) = &mut self.source_names {
+            if !seen.first(identity) {
+                return false;
+            }
+            self.add(bytes);
+            true
+        } else {
+            self.allocation(identity, bytes)
+        }
+    }
+    fn shared_dependency(&mut self, read: &hirsel_types::SharedRead) {
+        let (identity, bytes) = read.retained_allocation();
+        if self.shared_allocation(identity, bytes) {
+            self.dependency(read);
+        }
+    }
+    fn read_log(&mut self, value: &std::sync::Arc<SharedPath<hirsel_types::SharedRead>>) {
+        if !self.shared_allocation(std::sync::Arc::as_ptr(value) as usize, arc_bytes(&**value)) {
             return;
         }
-        self.add(arc_bytes(&**value));
         let mut path = &**value;
         while let Some(identity) = path.node_identity() {
-            if !self.first(identity) {
+            if !self.shared_allocation(identity, path.node_allocation_bytes()) {
                 break;
             }
-            self.add(path.node_allocation_bytes());
-            self.dependency(path.last().unwrap());
+            self.shared_dependency(path.last().unwrap());
             path = path.prefix().unwrap();
         }
     }
@@ -408,8 +487,8 @@ impl Weight {
         self.flat_vec(signatures);
         self.vec(failed_signatures, Weight::def_path);
         self.vec(failed_signature_keys, |w, (path, _)| w.def_path(path));
-        self.vec(lookups, |w, (path, _)| w.def_path(path));
-        self.vec(manifest_lookups, Weight::dependency);
+        self.flat_vec(lookups);
+        self.vec(manifest_lookups, Weight::shared_dependency);
         self.read_log(resolver);
         self.vec(citations, |w, (path, _)| w.def_path(path));
     }
@@ -954,14 +1033,12 @@ mod tests {
             consistent: true,
         };
         let base = retained_lower_entry_bytes(&entry, None);
-        entry
-            .detail
-            .manifest_lookups
-            .push(hirsel_types::DependencyRead::ProviderLookup {
-                context: crate::default_context(),
+        entry.detail.manifest_lookups.push(
+            hirsel_types::DependencyRead::ProviderLookup {
+                context: (crate::default_context()).into(),
                 package: None,
-                segments: vec!["missing".repeat(4096)],
-                output: hirsel_types::LookupOutput {
+                segments: (vec!["missing".repeat(4096)]).into(),
+                output: (hirsel_types::LookupOutput {
                     manifest: Default::default(),
                     result: Err(hirsel_types::QueryError::Operational(
                         hirsel_types::OperationalFailure {
@@ -969,8 +1046,11 @@ mod tests {
                             message: "failure".repeat(4096),
                         },
                     )),
-                },
-            });
+                })
+                .into(),
+            }
+            .shared(),
+        );
         let failed = retained_lower_entry_bytes(&entry, None);
         assert!(
             failed > base + 50_000,
@@ -981,6 +1061,7 @@ mod tests {
                 definition: hirsel_syntax::DefId::intern(&DefPath::core("dependency")),
                 fingerprint: None,
             }
+            .shared()
         }));
         assert!(retained_lower_entry_bytes(&entry, None) > failed);
         let no_depth = retained_lower_entry_bytes(&entry, None);
@@ -994,32 +1075,72 @@ mod tests {
     }
 
     #[test]
+    fn source_allocation_tracker_overflow_charges_again_and_shared_logs_keep_their_prefix() {
+        let mut small = NameAllocations::<2>::default();
+        assert!(small.first(16));
+        assert!(small.first(48));
+        assert!(small.first(80));
+        assert!(!small.first(16));
+        assert!(!small.first(48));
+        assert!(small.first(80));
+
+        let read = hirsel_types::DependencyRead::Signature {
+            definition: hirsel_syntax::DefId::intern(&DefPath::core("shared.source.read")),
+            fingerprint: None,
+        }
+        .shared();
+        let first = std::sync::Arc::new(SharedPath::from(vec![read]));
+        let same_nodes = std::sync::Arc::new((*first).clone());
+        let mut seen = NameAllocations::<64>::default();
+        let mut weight = Weight {
+            count_shared_repeats: true,
+            source_names: Some(&mut seen),
+            ..Default::default()
+        };
+        weight.read_log(&first);
+        let before = weight.bytes;
+        weight.read_log(&same_nodes);
+        assert_eq!(weight.bytes, before + arc_bytes(&*same_nodes) as u64);
+        weight.read_log(&first);
+        assert_eq!(weight.bytes, before + arc_bytes(&*same_nodes) as u64);
+    }
+
+    #[test]
     fn read_log_weight_counts_shared_prefix_payloads_once_and_new_nodes_in_full() {
         use hirsel_types::DependencyRead;
         use std::sync::Arc;
-        let original: SharedPath<_> = vec![DependencyRead::ProviderLookup {
-            context: crate::default_context(),
-            package: None,
-            segments: vec!["missing".repeat(4096)],
-            output: hirsel_types::LookupOutput {
-                manifest: Default::default(),
-                result: Err(hirsel_types::QueryError::NotImplemented),
-            },
-        }]
+        let original: SharedPath<_> = vec![
+            DependencyRead::ProviderLookup {
+                context: (crate::default_context()).into(),
+                package: None,
+                segments: (vec!["missing".repeat(4096)]).into(),
+                output: (hirsel_types::LookupOutput {
+                    manifest: Default::default(),
+                    result: Err(hirsel_types::QueryError::NotImplemented),
+                })
+                .into(),
+            }
+            .shared(),
+        ]
         .into();
         let original = Arc::new(original);
         let mut branch = (*original).clone();
-        branch.push(DependencyRead::Signature {
-            definition: hirsel_syntax::DefId::intern(&DefPath::core("callee")),
-            fingerprint: None,
-        });
+        branch.push(
+            DependencyRead::Signature {
+                definition: hirsel_syntax::DefId::intern(&DefPath::core("callee")),
+                fingerprint: None,
+            }
+            .shared(),
+        );
         let branch = Arc::new(branch);
         let mut weight = Weight::default();
         weight.read_log(&original);
         let first = weight.bytes;
         assert!(first > 28_000);
         weight.read_log(&branch);
-        let expected_delta = arc_bytes(&*branch) + branch.node_allocation_bytes();
+        let expected_delta = arc_bytes(&*branch)
+            + branch.node_allocation_bytes()
+            + branch.last().unwrap().retained_allocation().1;
         assert_eq!(weight.bytes, first + expected_delta as u64);
         weight.read_log(&original);
         weight.read_log(&branch);
@@ -1028,7 +1149,9 @@ mod tests {
         independent.read_log(&branch);
         assert_eq!(
             independent.bytes,
-            first + branch.node_allocation_bytes() as u64
+            first
+                + branch.node_allocation_bytes() as u64
+                + branch.last().unwrap().retained_allocation().1 as u64
         );
     }
 
@@ -1062,18 +1185,20 @@ mod tests {
         let read = DependencyRead::Signature {
             definition: hirsel_syntax::DefId::intern(&path),
             fingerprint: None,
-        };
+        }
+        .shared();
         let mut weight = Weight::default();
         weight.dependency(&read);
         assert_eq!(weight.bytes, 0);
-        // The vector still owns and charges its reserved inline enum rows.
+        // Charge the reserved handles and the complete shared observation.
         let mut reads = Vec::with_capacity(8);
         let capacity = reads.capacity();
+        let observation_bytes = read.retained_allocation().1;
         reads.push(read);
-        weight.vec(&reads, Weight::dependency);
+        weight.vec(&reads, Weight::shared_dependency);
         assert_eq!(
             weight.bytes,
-            (capacity * size_of::<DependencyRead>()) as u64
+            (capacity * size_of::<hirsel_types::SharedRead>() + observation_bytes) as u64
         );
         // A lookup's owned result path remains a separate allocation.
         weight.def_path(&path);
