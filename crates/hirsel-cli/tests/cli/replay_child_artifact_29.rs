@@ -7,6 +7,22 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+#[allow(dead_code)]
+#[path = "../../../hirsel-rt/tests/support/tape.rs"]
+mod tape;
+
+fn write_recording(path: &Path, record: &hirsel_rt::launch::Recording) {
+    let header = hirsel_rt::launch::Recording {
+        events: vec![],
+        ..record.clone()
+    };
+    let mut writer =
+        hirsel_rt::launch::RecordingWriter::new(fs::File::create(path).unwrap(), &header).unwrap();
+    for event in &record.events {
+        writer.append(event).unwrap();
+    }
+    writer.finish().unwrap();
+}
 
 const SOURCE: &str = r#"pub type AppError = Grant(GrantError) | File(FileError) | Proc(ProcessError) | Output(OutputError) | Arg(ArgError)
 pub fn main(rt: Io, args: Args) -> Result[(), AppError] {
@@ -211,11 +227,7 @@ fn child_artifact_native_tapes_replay_in_all_four_engines() {
                 );
                 // Inspection preserves the additive tag, including an empty read at EOF.
                 fs::write(tape.with_extension("events.txt"), format!("{record:#?}")).unwrap();
-                let text = hirsel_rt::launch::render_recording(&record).unwrap();
-                assert_eq!(
-                    hirsel_rt::launch::parse_recording(&text).unwrap().events,
-                    record.events
-                );
+                assert_eq!(tape::recording(&record), record);
                 fs::rename(&data, fixture.path("unavailable")).unwrap();
                 fixture.replay(&tape, &output);
                 let mut tampered = record.clone();
@@ -231,11 +243,7 @@ fn child_artifact_native_tapes_replay_in_all_four_engines() {
                     .unwrap();
                 bytes[0] ^= 1;
                 let bad = fixture.path("tampered.tape");
-                fs::write(
-                    &bad,
-                    hirsel_rt::launch::render_recording(&tampered).unwrap(),
-                )
-                .unwrap();
+                write_recording(&bad, &tampered);
                 fixture.refused(&bad, "ReplayMismatch");
                 // An effect cannot be relabelled as a host file input.
                 let mut forged = record.clone();
@@ -245,7 +253,7 @@ fn child_artifact_native_tapes_replay_in_all_four_engines() {
                     .find(|e| matches!(e.request, Request::Print { .. }))
                     .unwrap();
                 event.completion = Completion::FileInput(FileInput::Size(0));
-                fs::write(&bad, hirsel_rt::launch::render_recording(&forged).unwrap()).unwrap();
+                write_recording(&bad, &forged);
                 fixture.refused(&bad, "InvalidCompletion");
                 assert!(!data.exists());
                 fs::rename(fixture.path("unavailable"), &data).unwrap();
