@@ -1076,3 +1076,50 @@ fn sequence_elements_start_where_the_layout_places_them() {
         hirsel_lir::layout::SEQUENCE_CAPACITY_OFFSET
     );
 }
+
+#[test]
+#[cfg(not(feature = "system-allocator"))]
+fn exit_collects_remote_returns_but_still_reports_live_owners() {
+    use hirsel_rt::context::{hirsel_rt_v2_worker_create, hirsel_rt_v2_worker_retire};
+
+    let layout = leaf(0);
+    for extent in [16, 8192] {
+        for owner_is_home in [true, false] {
+            for leak in [false, true] {
+                let root = Ctx::diagnostic();
+                let descriptor = index(root.0, layout);
+                // SAFETY: these contexts share one run and are used serially;
+                // the retiring worker owns no running task or release work.
+                unsafe {
+                    let other = hirsel_rt_v2_worker_create(root.0);
+                    let owner = if owner_is_home { root.0 } else { other };
+                    let block = hirsel_rt_v2_alloc(owner, descriptor, extent, 8, DOMAIN_HEAP, 0);
+                    if leak {
+                        let _live =
+                            hirsel_rt_v2_alloc(owner, descriptor, extent, 8, DOMAIN_HEAP, 0);
+                    }
+                    if owner_is_home {
+                        assert_eq!(
+                            hirsel_rt_v2_release(other, block, descriptor, ptr::null(), 0, 0),
+                            0
+                        );
+                        hirsel_rt_v2_worker_retire(other);
+                    } else {
+                        hirsel_rt_v2_worker_retire(other);
+                        assert_eq!(
+                            hirsel_rt_v2_release(root.0, block, descriptor, ptr::null(), 0, 0),
+                            0
+                        );
+                    }
+                    let mut audit = Audit::default();
+                    hirsel_rt_v2_task_exit(root.0, &mut audit);
+                    assert_eq!(
+                        audit.live_blocks,
+                        u64::from(leak),
+                        "extent={extent} owner_is_home={owner_is_home} leak={leak}"
+                    );
+                }
+            }
+        }
+    }
+}
