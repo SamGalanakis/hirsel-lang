@@ -17,6 +17,7 @@ mod native_routing;
 mod native_selection;
 mod native_sources;
 mod output;
+mod proof_export;
 mod ownership_admission;
 mod ownership_bootstrap;
 mod ownership_selection;

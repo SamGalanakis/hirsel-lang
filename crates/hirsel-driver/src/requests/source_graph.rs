@@ -136,13 +136,6 @@ impl CheckedReceipt {
     }
 }
 
-/// PS9 capture over the conditional Run view of an Artifacts request, with the
-/// output bytes its canonical text may occupy.
-struct ArtifactsExport {
-    capture: Arc<hirsel_engine::FrontProofExport>,
-    output: MemoryReservation,
-}
-
 struct Expansion {
     text: Arc<str>,
     _allowance: MemoryReservation,
@@ -162,7 +155,7 @@ struct SourceProducts {
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     receipt: Option<Arc<CheckedReceipt>>,
-    export: Option<Arc<ArtifactsExport>>,
+    export: Option<Arc<super::proof_export::ProofExport>>,
     front: Arc<FrontBodyQueries>,
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
@@ -231,10 +224,11 @@ impl GraphProducts for SourceProducts {
             CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
                 vec![self.native.as_ref().ok_or_else(|| uninstalled())?.query()]
             }
-            CompileOperation::SafeCheck
-            | CompileOperation::Artifacts { native: false }
-            | CompileOperation::ExportTir => {
+            CompileOperation::SafeCheck => {
                 vec![self.safe.as_ref().ok_or_else(|| uninstalled())?.query()]
+            }
+            CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
+                vec![self.export.as_ref().ok_or_else(|| uninstalled())?.query()]
             }
             CompileOperation::Check { lowering }
             | CompileOperation::CheckedProducts { lowering, .. }
@@ -391,37 +385,10 @@ impl GraphProducts for SourceProducts {
                             if selected.is_none_or(|selected| selected.address != product.address) {
                                 return Err(uninstalled());
                             }
-                            let (checked, run) = safe
+                            let (checked, tir) = export
                                 .as_ref()
                                 .ok_or_else(|| uninstalled())?
-                                .settled(*product)?;
-                            // A rejected or incomplete check never demanded Run;
-                            // completed_artifacts then publishes diagnostics only.
-                            let tir = match run {
-                                Some(run) => {
-                                    let export = export.as_ref().ok_or_else(|| uninstalled())?;
-                                    export
-                                        .capture
-                                        .input(run)
-                                        .map_err(|error| format!("{error:?}"))
-                                        .and_then(|input| {
-                                            let limit = usize::try_from(export.output.bytes())
-                                                .unwrap_or(usize::MAX);
-                                            hirsel_proof_export::encode_with_output_limit(
-                                                &hirsel_proof_export::build(&input),
-                                                &input.locator,
-                                                limit,
-                                            )
-                                            .map(String::into_bytes)
-                                            .ok_or_else(|| {
-                                                format!(
-                                                    "proof export exceeds its {limit} admitted output bytes"
-                                                )
-                                            })
-                                        })
-                                }
-                                None => Err("check was not accepted".into()),
-                            };
+                                .outcome(*product)?;
                             if matches!(operation, CompileOperation::ExportTir) {
                                 if checked.diagnostics.iter().any(|diagnostic| {
                                     diagnostic.severity == hirsel_diag::Severity::Error
@@ -704,6 +671,7 @@ impl Plan {
         needs_ownership: bool,
         needs_safe: bool,
         needs_receipt: bool,
+        needs_export: bool,
         footprint: FrontInputFootprint,
         run_input_bytes: u64,
         native_catalogue_bytes: u64,
@@ -797,7 +765,7 @@ impl Plan {
         // and input rows (20MB), so a receipt leaves the front a sixteenth.
         let front_slack = if needs_ownership {
             slack * 83 / 96
-        } else if needs_receipt {
+        } else if needs_receipt || needs_export {
             slack / 16
         } else {
             slack / 4
@@ -809,7 +777,7 @@ impl Plan {
         // grant is the smaller continuation bound), so Lower keeps a sixteenth.
         let lower_slack = if needs_ownership {
             slack / 12
-        } else if needs_receipt {
+        } else if needs_receipt || needs_export {
             slack / 16
         } else if needs_run {
             slack / 3
@@ -821,7 +789,7 @@ impl Plan {
         // (2MB for full std), so Growth keeps that thirty-second too.
         let growth_slack = if needs_ownership {
             slack / 48
-        } else if needs_receipt {
+        } else if needs_receipt || needs_export {
             slack / 32
         } else {
             slack / 8
@@ -830,7 +798,7 @@ impl Plan {
         // receipt needs just its captured headers from this partition.
         let check_slack = if needs_ownership {
             slack / 48
-        } else if needs_receipt {
+        } else if needs_receipt || needs_export {
             slack / 32
         } else if needs_run {
             slack / 8
@@ -864,7 +832,10 @@ impl Plan {
             + usize::from(needs_run)
             + 2 * usize::from(needs_native)
             + usize::from(needs_ownership);
-        let roots = 2 + usize::from(needs_safe) + 2 * usize::from(needs_native || needs_ownership);
+        let roots = 2
+            + usize::from(needs_safe)
+            + usize::from(needs_export)
+            + 2 * usize::from(needs_native || needs_ownership);
         let inventory = definitions
             .len()
             .checked_mul(per_definition)
@@ -960,7 +931,7 @@ impl Plan {
             run: MemoryWeight {
                 // Run accumulates the selected semantic closure, so it uses
                 // its two root shares rather than one Lower body.
-                retained: (run_slack / 4).min(2 * root_bound),
+                retained: (run_slack / if needs_export { 16 } else { 4 }).min(2 * root_bound),
                 scratch,
                 stack: 0,
             },
@@ -1179,6 +1150,7 @@ pub(super) fn install(
                     | CompileOperation::ExportTir
             ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
+            artifacts,
             footprint,
             run_input_bytes,
             native_catalogue_bytes,
@@ -1502,17 +1474,26 @@ pub(super) fn install(
     } else {
         None
     };
-    // PS9 headers, source metadata and the encoded text share the Run
-    // partition; their constructors and the encoder refuse bytes beyond these
-    // splits. Building the Export from its input is not yet admitted.
+    // PS9 source metadata and its staged construction share the existing Run
+    // partition. Run retains only the compact semantic graph; export admits
+    // actual input, tables and text before each stage allocates.
     let export_allowance = if artifacts {
         let headers = program
             .engine
             .front_checked_signatures_bytes(&front)
             .map_err(&query_error)?;
         let headers = run.split(headers).ok_or_else(|| uninstalled())?;
-        let export = run.split(run.bytes() / 4).ok_or_else(|| uninstalled())?;
-        let output = run.split(run.bytes() / 4).ok_or_else(|| uninstalled())?;
+        let available = run
+            .bytes()
+            .checked_sub(
+                run_inputs
+                    .as_ref()
+                    .ok_or_else(|| uninstalled())?
+                    .input_bytes(),
+            )
+            .ok_or_else(|| uninstalled())?;
+        let export = run.split(available / 16).ok_or_else(|| uninstalled())?;
+        let output = run.split(available * 3 / 4).ok_or_else(|| uninstalled())?;
         Some((headers, export, output))
     } else {
         None
@@ -1596,10 +1577,7 @@ pub(super) fn install(
             )
             .map_err(&query_error)?;
         run = Some(export.run().clone());
-        export_products = Some(Arc::new(ArtifactsExport {
-            capture: export,
-            output,
-        }));
+        export_products = Some((export, output));
     }
     let safe = safe_allowance
         .map(|allowance| {
@@ -1613,6 +1591,15 @@ pub(super) fn install(
             )
         })
         .transpose()?;
+    let export_products = export_products.map(|(capture, allowance)| {
+        super::proof_export::ProofExport::new(
+            safe.as_ref().unwrap().clone(),
+            capture,
+            allowance,
+            store.clone(),
+            errors,
+        )
+    });
     let native = if let Some(footprint) = &plan.native {
         let (native_request, purpose) = match &request.operation {
             CompileOperation::NativeBuild(request) => {
@@ -1767,6 +1754,7 @@ pub(super) fn install(
         Some(growth.query()),
         Some(check.query()),
         safe.as_ref().map(|safe| safe.query()),
+        export_products.as_ref().map(|export| export.query()),
     ]
     .into_iter()
     .flatten()
@@ -1846,6 +1834,11 @@ pub(super) fn install(
     if let Some(safe) = &safe {
         runtime
             .register(super::safe_check::KIND, safe.factory())
+            .map_err(registration)?;
+    }
+    if let Some(export) = &export_products {
+        runtime
+            .register(super::proof_export::KIND, export.factory())
             .map_err(registration)?;
     }
     let (input_operations, input_bytes) = request.inputs.read_work();
