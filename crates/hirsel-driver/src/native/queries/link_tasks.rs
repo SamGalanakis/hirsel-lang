@@ -31,6 +31,27 @@ pub trait NativeLinkExecutor: Send + Sync {
 pub enum CodegenPartition {
     PerInstance,
     WholeModule,
+    Seeded(u64),
+}
+impl CodegenPartition {
+    pub(super) fn modules(
+        self,
+        units: &[CodegenKey],
+    ) -> Result<Vec<crate::native::object_queries::whole::WholeCodegenKey>, String> {
+        let assignments = match self {
+            Self::WholeModule => vec![0; units.len()],
+            Self::Seeded(seed) => crate::native::Partition::Random(seed).assign(units.len()),
+            Self::PerInstance => return Err("per-instance emission has no grouped modules".into()),
+        };
+        let mut groups = BTreeMap::<usize, Vec<CodegenKey>>::new();
+        for (unit, group) in units.iter().zip(assignments) {
+            groups.entry(group).or_default().push(unit.clone());
+        }
+        groups
+            .into_values()
+            .map(crate::native::object_queries::whole::WholeCodegenKey::new)
+            .collect()
+    }
 }
 pub struct LinkExecution<'a> {
     pub key: &'a LinkKey,
@@ -99,6 +120,7 @@ fn product(query: QueryId, record: Reference) -> ProductRef {
 /// Immutable request plans plus the root producer's completed ordinary output.
 /// Native/C checks remain in the selected task-local producers.
 pub struct LinkTasks {
+    pub(super) execution: Option<Arc<super::execution::ExecutionTasks>>,
     root: Arc<NativeRootTasks>,
     plans: BTreeMap<ContentHash, Arc<Plan>>,
     requests: BTreeMap<Id, Arc<Request>>,
@@ -227,12 +249,11 @@ impl LinkTasks {
                 CodegenPartition::PerInstance => {
                     input.fragments.iter().map(CodegenKey::query_id).collect()
                 }
-                CodegenPartition::WholeModule => vec![
-                    crate::native::object_queries::whole::WholeCodegenKey::new(
-                        input.fragments.clone(),
-                    )?
-                    .query_id(),
-                ],
+                partition => partition
+                    .modules(&input.fragments)?
+                    .iter()
+                    .map(|key| key.query_id())
+                    .collect(),
             };
             let plan = Arc::new(Plan {
                 input,
@@ -264,6 +285,7 @@ impl LinkTasks {
             return Err("Link manifest reads exceed declared scratch allowance".into());
         }
         Ok(Arc::new(Self {
+            execution: None,
             root,
             plans,
             requests,
@@ -474,6 +496,12 @@ impl ObjectTaskSnapshot for LinkTasks {
     fn link_dependencies(&self, manifest: ProductRef) -> Result<LinkDependencies, Reference> {
         let (plan, _, _) = self.manifest(manifest).map_err(|e| self.failure(&e))?;
         Ok(LinkDependencies {
+            execution: self
+                .execution
+                .as_ref()
+                .map(|_| super::execution::ExecutionTasks::objects_id(&plan.input.fragments[0]))
+                .into_iter()
+                .collect(),
             fragments: plan.fragments.clone(),
             native_reads: plan.ready.clone(),
             static_manifest: plan.static_input,
@@ -510,6 +538,11 @@ impl ObjectTaskSnapshot for LinkTasks {
             expected.extend(&plan.foreign);
             expected.push(plan.launch_input);
             expected.extend(&plan.ready);
+            let execution_query = self
+                .execution
+                .as_ref()
+                .map(|_| super::execution::ExecutionTasks::objects_id(&plan.input.fragments[0]));
+            expected.extend(execution_query);
             if settled.len() != expected.len() + 1
                 || settled[1..]
                     .iter()
@@ -518,7 +551,8 @@ impl ObjectTaskSnapshot for LinkTasks {
             {
                 return Err("Link producer received a different settled dependency scope".into());
             }
-            let reads = &settled[settled.len() - plan.ready.len()..];
+            let end = settled.len() - usize::from(execution_query.is_some());
+            let reads = &settled[end - plan.ready.len()..end];
             let native = SettledProducts::new(self.root.native.snapshot.clone(), reads)?;
             let (mut link, _) = self.root.products(root_ref, reads)?;
             let readies = reads
@@ -535,6 +569,16 @@ impl ObjectTaskSnapshot for LinkTasks {
                 return Err("native Link observation dependency scope changed".into());
             }
             let snapshot = self.root.native.snapshot.store.clone();
+            let execution_objects = if let Some(execution) = &self.execution {
+                let objects = execution.objects_from_reference(settled.last().unwrap().record)?;
+                execution.with_program(|program| {
+                    crate::native::ahead::check_objects(program, &objects)
+                        .map_err(|e| e.to_string())
+                })?;
+                objects
+            } else {
+                Vec::new()
+            };
             Ok(Box::new(
                 ObjectQueries::new(
                     snapshot,
@@ -545,6 +589,8 @@ impl ObjectTaskSnapshot for LinkTasks {
                         if key.address() != plan.input.key.address() {
                             return Err("native Link executor key changed".into());
                         }
+                        let mut objects = objects.to_vec();
+                        objects.extend(execution_objects.iter().cloned());
                         plan.input.executor.link(
                             &mut link,
                             LinkExecution {
@@ -552,7 +598,7 @@ impl ObjectTaskSnapshot for LinkTasks {
                                 inputs,
                                 root: &root,
                                 ready: &readies,
-                                objects,
+                                objects: &objects,
                             },
                         )
                     },

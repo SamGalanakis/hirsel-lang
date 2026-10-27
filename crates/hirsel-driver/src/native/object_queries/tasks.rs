@@ -65,6 +65,7 @@ impl ObjectTaskRequest {
 /// Preserve archive/foreign order. Fragment order is canonicalized by Link.
 #[derive(Clone, Debug)]
 pub struct LinkDependencies {
+    pub execution: Vec<QueryId>,
     pub fragments: Vec<QueryId>,
     /// Native metadata consumed by Link assembly, read explicitly even on a
     /// Link hit. These products convey no proof; the native view re-admits C.
@@ -83,6 +84,9 @@ pub trait ObjectTaskSnapshot: Send + Sync {
     fn store(&self) -> &dyn ResultStore;
     /// Bounded metadata lookup only: no dependency execution or decoding bodies.
     fn request(&self, id: QueryId) -> Result<ObjectTaskRequest, Reference>;
+    fn execution_query(&self) -> Option<QueryId> {
+        None
+    }
     fn ready_descriptor(&self, product: ProductRef) -> Result<ReadyProduct, Reference>;
     /// Resolve each optimizer read's registered native query kind and address.
     fn optimizer_query(&self, product: ProductRef) -> Result<QueryId, Reference>;
@@ -177,6 +181,13 @@ fn read(cx: &mut dyn QueryContext, ids: &[QueryId]) -> Result<Vec<ProductRef>, Q
 impl<S: ObjectTaskSnapshot> ObjectTask<S> {
     fn compute(&self, cx: &mut dyn QueryContext) -> Result<ProductRef, QueryPoll> {
         let failed = QueryPoll::Failed;
+        if matches!(
+            self.request,
+            ObjectTaskRequest::Codegen { .. } | ObjectTaskRequest::WholeCodegen { .. }
+        ) && let Some(query) = self.snapshot.execution_query()
+        {
+            read(cx, &[query])?;
+        }
         let product = match &self.request {
             ObjectTaskRequest::WholeCodegen { key, .. } => {
                 let ids = key
@@ -253,6 +264,7 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                 ids.extend(&deps.foreign_inputs);
                 ids.push(deps.launch_manifest);
                 ids.extend(&deps.native_reads);
+                ids.extend(&deps.execution);
                 let outputs = read(cx, &ids)?;
                 let n = deps.fragments.len();
                 let fragments = outputs[..n]
@@ -277,6 +289,10 @@ impl<S: ObjectTaskSnapshot> ObjectTask<S> {
                     .map(|p| resolve(*p))
                     .collect::<Result<_, _>>()?;
                 let inputs = LinkInputs {
+                    execution: outputs[outputs.len() - deps.execution.len()..]
+                        .iter()
+                        .map(|p| p.record)
+                        .collect(),
                     fragments,
                     static_manifest,
                     runtime_archives,

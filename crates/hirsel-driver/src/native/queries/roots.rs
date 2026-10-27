@@ -1,7 +1,4 @@
 //! Descriptor-only root publication and linker assembly over actual C outputs.
-#[path = "cpu.rs"]
-mod cpu;
-
 use super::{
     instance::STATICS_FINALIZERS_DOMAIN,
     local::{FinalizerRows, StaticRows, UnitEmissionContext, read_statics},
@@ -335,15 +332,13 @@ impl RootProducts {
             .emission
             .debug
             .then(|| self.source.profiles());
-        let opt = self.inner.snapshot.emission.opt;
-        self.with_program_context(root, products, Some(objects), |program| {
+        self.with_execution_context(root, products, |program| {
             crate::native::check_runtime_calls(program).map_err(|e| e.to_string())?;
             let registry = hirsel_lir::descriptor_registry::DescriptorRegistry::new(
                 &program.table,
                 &program.finalizers,
             );
             let mut objects = objects.to_vec();
-            cpu::emit(program, backend, &mut objects, opt)?;
             objects.push(
                 crate::native::emit_glue(program, backend, &registry).map_err(|e| e.to_string())?,
             );
@@ -355,6 +350,32 @@ impl RootProducts {
             }
             use_objects(program, &objects)
         })
+    }
+
+    /// Explicit body demand for execution certificates and the final native linker.
+    /// Ordinary root metadata consumers retain the body-free projection.
+    pub fn with_execution_context<R>(
+        &mut self,
+        root: &Arc<NativeRootProduct>,
+        products: &[Arc<ReadyProduct>],
+        use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
+    ) -> Result<R, String> {
+        if let Some(execution) = self.inner.snapshot.execution.get().cloned() {
+            let units = self.inner.with_ready(products, |units, _| {
+                Ok(units.iter().map(|u| (*u).clone()).collect::<Vec<_>>())
+            })?;
+            self.with_link_context(root, products, |program| {
+                if program.table != execution.binding.table {
+                    return Err("execution Link binding differs".into());
+                }
+                let mut program = program.clone();
+                program.units = units;
+                program.ahead_environments = execution.environments.clone();
+                use_context(&program)
+            })
+        } else {
+            self.with_link_context(root, products, use_context)
+        }
     }
 
     /// A new task-local linker view of already selected outputs. Cloning this
@@ -644,22 +665,9 @@ impl NativeRoots for RootProducts {
         products: &[Arc<ReadyProduct>],
         use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
     ) -> Result<R, String> {
-        self.with_program_context(root, products, None, use_context)
-    }
-}
-
-impl RootProducts {
-    fn with_program_context<R>(
-        &mut self,
-        root: &Arc<NativeRootProduct>,
-        products: &[Arc<ReadyProduct>],
-        cpu_objects: Option<&[hirsel_lir::stage::ObjectArtifact]>,
-        use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
-    ) -> Result<R, String> {
         self.admitted_root(root)?;
         let snapshot = self.inner.snapshot.clone();
-        if products.len() != root.instances.len() || !snapshot.emission.inline_instances.is_empty()
-        {
+        if products.len() != root.instances.len() {
             return Err("link selection or optimizer dependency closure is incomplete".into());
         }
         let mut selected = BTreeMap::new();
@@ -749,7 +757,15 @@ impl RootProducts {
             {
                 return Err("mixed native semantic owner origins".into());
             }
-            if self.source.functions().get(key.instance.definition()) == Some(&key.instance.body())
+            if key.instance
+                == *snapshot
+                    .instances
+                    .admitted(key, &environment)?
+                    .0
+                    .ready_source
+                    .origin()
+                && self.source.functions().get(key.instance.definition())
+                    == Some(&key.instance.body())
                 && functions
                     .insert(summary.definition.clone(), summary.instance)
                     .is_some()
@@ -837,20 +853,7 @@ impl RootProducts {
                 }
             }
         }
-        let cpu_units = if let Some(objects) = cpu_objects {
-            cpu::materialize(
-                self,
-                root,
-                &selected,
-                &summaries,
-                &binding,
-                &operations,
-                objects,
-            )?
-        } else {
-            Vec::new()
-        };
-        with_link_assembly_units(
+        with_link_assembly(
             &snapshot,
             &self.source,
             LinkAssembly {
@@ -863,7 +866,6 @@ impl RootProducts {
                 keys,
                 statics: statics.into_values().collect(),
             },
-            cpu_units,
             use_context,
         )
     }
@@ -885,16 +887,6 @@ pub(super) fn with_link_assembly<R>(
     snapshot: &NativeSnapshot,
     source: &NativeLinkSource,
     assembly: LinkAssembly,
-    use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
-) -> Result<R, String> {
-    with_link_assembly_units(snapshot, source, assembly, Vec::new(), use_context)
-}
-
-fn with_link_assembly_units<R>(
-    snapshot: &NativeSnapshot,
-    source: &NativeLinkSource,
-    assembly: LinkAssembly,
-    units: Vec<hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>>,
     use_context: impl FnOnce(&crate::native::ReadyProgram) -> Result<R, String>,
 ) -> Result<R, String> {
     let LinkAssembly {
@@ -933,10 +925,8 @@ fn with_link_assembly_units<R>(
         table,
         keys,
         manifest: snapshot.manifest.clone(),
-        ahead_environments: hirsel_lir::ahead::environments(
-            &units.iter().map(|u| u.unit().clone()).collect::<Vec<_>>(),
-        ),
-        units,
+        units: vec![],
+        ahead_environments: BTreeMap::new(),
         summaries,
         inline_instances: BTreeSet::new(),
         callbacks,

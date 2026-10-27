@@ -91,6 +91,7 @@ pub mod free_driver;
 /// Engine-facing production Free replay using the native host codec.
 pub use tasks::free::host::engine as free_replay;
 pub use tasks::ordered::ahead::cpu_handoff;
+mod ahead_trace;
 #[cfg(feature = "diagnostic")]
 mod compact_trace;
 mod free_launch;

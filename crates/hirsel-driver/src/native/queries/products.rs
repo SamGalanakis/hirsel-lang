@@ -85,6 +85,7 @@ impl EmissionOptions {
 /// Owned immutable dependency inputs shared by task-local product views. The
 /// only shared mutable state is C's own acceptance map, never a query controller.
 pub struct NativeSnapshot {
+    pub(super) execution: std::sync::OnceLock<Arc<super::execution::ExecutionProduct>>,
     pub(super) store: Arc<dyn ResultStore>,
     pub(super) instances: DemandInstances,
     pub(super) arena: SettledArenaGraph,
@@ -204,6 +205,7 @@ impl NativeSnapshot {
             .iter()
             .any(|(_, output)| output.seal_demand.has_seal());
         Ok(Arc::new(Self {
+            execution: Default::default(),
             native: super::ready::ReadyQueries::validator(&store),
             store,
             instances,
@@ -305,13 +307,6 @@ pub struct DemandProducts {
     pub(super) selected: BTreeMap<ContentHash, ProductRef>,
 }
 impl DemandProducts {
-    pub(super) fn materialized(&mut self) {
-        self.ready_materializations += 1;
-        self.snapshot
-            .materializations
-            .fetch_add(1, Ordering::Relaxed);
-    }
-
     pub fn new(snapshot: Arc<NativeSnapshot>) -> Self {
         Self {
             local: LocalReadyQueries::with_validator(
@@ -381,6 +376,9 @@ impl SettledProducts {
     }
 }
 impl NativeProducts for SettledProducts {
+    fn execution_read(&self) -> Option<ProductRef> {
+        self.inner.execution_read()
+    }
     fn instance(&mut self, _: &InstanceAddress) -> Result<Arc<InstanceProduct>, String> {
         Err("instance is not an object task's direct dependency".into())
     }
@@ -435,6 +433,9 @@ impl NativeProducts for SettledProducts {
     }
 }
 impl NativeProducts for DemandProducts {
+    fn execution_read(&self) -> Option<ProductRef> {
+        self.snapshot.execution.get().map(|p| p.product)
+    }
     fn instance(&mut self, key: &InstanceAddress) -> Result<Arc<InstanceProduct>, String> {
         self.snapshot
             .instances
@@ -553,7 +554,11 @@ impl NativeProducts for DemandProducts {
             .iter()
             .map(|(closure, _)| closure)
             .collect::<Vec<_>>();
-        let binding = Binding::new(environment.target, &closures)?;
+        let binding = if let Some(execution) = snapshot.execution.get() {
+            execution.binding.clone()
+        } else {
+            Binding::new(environment.target, &closures)?
+        };
         let selected_operations = super::instance_operations::InstanceOperations {
             inventory: None,
             receipts: None,
@@ -610,8 +615,8 @@ impl NativeProducts for DemandProducts {
         let keys = hirsel_lir::LayoutKeys::new(&binding.table);
         let index = hirsel_lir::LayoutIndex::new(&binding.table);
         let emit = EmitInputs {
-            ahead: None,
-            continuation: None,
+            ahead: snapshot.execution.get().map(|e| &e.ahead),
+            continuation: snapshot.execution.get().map(|e| &e.continuation),
             alternate: false,
             index: Some(&index),
             input: &snapshot.emission.input,

@@ -221,6 +221,7 @@ impl LayoutClosure {
 
 /// One temporary table for selected products, owned by a with_ready callback.
 /// The maps have this binding's lifetime, never a second publication owner.
+#[derive(Clone)]
 pub struct Binding {
     pub table: LayoutTable,
     layouts: BTreeMap<ContentHash, LayoutId>,

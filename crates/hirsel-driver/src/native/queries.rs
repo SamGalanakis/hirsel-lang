@@ -7,6 +7,7 @@ use hirsel_syntax::ContentHash;
 use std::sync::Arc;
 pub mod arena;
 pub mod discharge;
+pub mod execution;
 pub mod graph;
 pub mod seal_demand;
 
@@ -15,6 +16,19 @@ pub const ARENA_CANDIDATES_KIND: u32 = 0x4e00_0002;
 pub const ARENA_CHOSEN_KIND: u32 = 0x4e00_0003;
 pub const READY_KIND: u32 = 0x4e00_0004;
 pub const ROOT_KIND: u32 = 0x4e00_0005;
+pub(super) fn instance_query(
+    key: &InstanceAddress,
+    product: ProductRef,
+) -> hirsel_engine::runtime::QueryId {
+    hirsel_engine::runtime::QueryId {
+        kind: if product.address == key.address(instance::CALLABLE_VALUE_KIND) {
+            instance::CALLABLE_VALUE_KIND
+        } else {
+            INSTANCE_KIND
+        },
+        address: product.address,
+    }
+}
 
 /// Source root selection is independent of the discovered native instance
 /// closure. Source GEN-5 still demands its complete required root set.
@@ -295,6 +309,9 @@ pub struct ReadyProduct {
 /// Statically dispatched access; a completed read may not block a worker on a
 /// dependent worker. The admitted runtime owns dependency continuations.
 pub trait NativeProducts {
+    fn execution_read(&self) -> Option<ProductRef> {
+        None
+    }
     fn instance(&mut self, key: &InstanceAddress) -> Result<Arc<InstanceProduct>, String>;
     fn arena_summary(&mut self, key: &ComponentKey) -> Result<Arc<ArenaSummary>, String>;
     fn ready(&mut self, key: &InstanceAddress) -> Result<Arc<ReadyProduct>, String>;

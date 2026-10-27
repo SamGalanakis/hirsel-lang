@@ -28,7 +28,7 @@ use std::{
 
 // Preserve the real directory provider and its validator capabilities while
 // reporting the I/O error that its ordinary Option publication seam omits.
-struct DiagnosedStore(store::DirStore);
+pub(crate) struct DiagnosedStore(pub(crate) store::DirStore);
 impl ResultStore for DiagnosedStore {
     fn local_product_store(&self) -> Option<hirsel_artifact_store::Store> {
         self.0.local_product_store()

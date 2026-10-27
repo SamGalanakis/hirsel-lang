@@ -193,6 +193,7 @@ pub(crate) fn take(s: &mut Scheduler, index: u32) -> Task {
                 .fuel_points(fuel);
         }
         local.adopt(reserved.task.generation, pc, fuel);
+        crate::ahead_trace::adopted(index, reserved.task.generation, pc);
         local.admitted.store(true, Ordering::Release);
     }
     *reserved.task

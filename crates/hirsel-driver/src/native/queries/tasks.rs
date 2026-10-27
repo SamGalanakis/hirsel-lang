@@ -163,7 +163,7 @@ impl NativeTasks {
             ))
         };
         for (key, output) in &inputs {
-            let q = query(INSTANCE_KIND, output.product.product);
+            let q = instance_query(key, output.product.product);
             requests.insert(
                 id(q),
                 Arc::new(Request {
@@ -175,10 +175,10 @@ impl NativeTasks {
             );
             let mut reads = BTreeMap::new();
             for member in std::iter::once(owner(key)).chain(output.callees.iter().cloned()) {
-                let (_, input) = by_owner
+                let (member_key, input) = by_owner
                     .get(&member)
                     .ok_or("missing Ready instance dependency")?;
-                let q = query(INSTANCE_KIND, input.product.product);
+                let q = instance_query(member_key, input.product.product);
                 reads.insert(id(q), (q, input.product.product.record));
                 let component = components
                     .get(&(true, member))
@@ -203,7 +203,7 @@ impl NativeTasks {
                 let (_, input) = by_owner
                     .get(&owner(member))
                     .ok_or("missing component instance")?;
-                let q = query(INSTANCE_KIND, input.product.product);
+                let q = instance_query(member, input.product.product);
                 reads.insert(id(q), (q, input.product.product.record));
                 for callee in &input.callees {
                     let component = components
@@ -397,6 +397,7 @@ impl QueryTask for NativeTask {
 /// Source-led Codegen tasks sharing this exact native snapshot. Link/root
 /// manifests are a separate producer and are deliberately not registered here.
 pub struct CodegenTasks {
+    pub(super) execution: Option<QueryId>,
     native: Arc<NativeTasks>,
     requests: BTreeMap<Id, CodegenKey>,
     whole: BTreeMap<Id, crate::native::object_queries::whole::WholeCodegenKey>,
@@ -461,6 +462,7 @@ impl CodegenTasks {
             }
         }
         Ok(Arc::new(Self {
+            execution: None,
             native,
             requests,
             whole: whole_requests,
@@ -476,6 +478,9 @@ fn no_link(
     Err("Link is not registered in the Codegen snapshot".into())
 }
 impl ObjectTaskSnapshot for CodegenTasks {
+    fn execution_query(&self) -> Option<QueryId> {
+        self.execution
+    }
     fn store(&self) -> &dyn ResultStore {
         self.native.snapshot.store.as_ref()
     }

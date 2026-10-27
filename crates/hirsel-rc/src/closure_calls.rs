@@ -495,8 +495,26 @@ fn rewrite_seeded_instance(
 
 /// Existing code-target specialization without scoped capture elimination.
 pub fn specialize(lowered: &mut Lowered) -> Specializations {
-    let originals = lowered.units.clone();
-    let op_free = crate::spawn::op_free(&originals, &lowered.table);
+    let keys = lowered
+        .instances
+        .ids()
+        .take(lowered.units.len())
+        .map(|id| lowered.instances.view(id).key.clone())
+        .collect::<Vec<_>>();
+    specialize_units(&mut lowered.units, &lowered.table, &keys)
+}
+
+/// Apply the same bounded callable rewrite to a complete, independently admitted
+/// Value closure. Keys name the original proof owners in unit order.
+pub fn specialize_units(
+    units: &mut Vec<LirUnit<Value>>,
+    table: &hirsel_lir::LayoutTable,
+    original_keys: &[hirsel_layout::instance::InstanceKey],
+) -> Specializations {
+    assert_eq!(units.len(), original_keys.len());
+
+    let originals = units.clone();
+    let op_free = crate::spawn::op_free(&originals, table);
     let entries: HashMap<_, _> = originals
         .iter()
         .enumerate()
@@ -508,7 +526,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                     instance: Some(u.header.instance),
                 },
                 CallableEntry {
-                    key: lowered.instances.view(InstanceId(i as u32)).key.clone(),
+                    key: original_keys[i].clone(),
                     abi: u.header.abi,
                     origin: u.header.origin,
                     op_free: op_free.get(&Symbol {
@@ -536,7 +554,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
         .collect::<HashMap<_, _>>();
     let mut origins: Vec<_> = (0..originals.len()).map(|i| InstanceId(i as u32)).collect();
     let mut keys: Vec<_> = (0..originals.len())
-        .map(|i| lowered.instances.view(InstanceId(i as u32)).key.clone())
+        .map(|i| original_keys[i].clone())
         .collect();
     let mut inline = BTreeSet::new();
     let mut counts = vec![0; originals.len()];
@@ -544,18 +562,18 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
     let mut seeds = vec![Vec::new(); originals.len()];
     let mut spawn_flags = vec![0; originals.len()];
     let mut at = 0;
-    while at < lowered.units.len() {
-        let codes = discover(&lowered.units[at], &entries, &seeds[at]);
+    while at < units.len() {
+        let codes = discover(&units[at], &entries, &seeds[at]);
         // task.async wraps its known callable in task_main's owned environment.
         // Carry only the code identity through that capture; the environment,
         // move mask, result slot and holding cleanup remain the original ones.
         // This is ordinary Bound-call specialization, not ahead eligibility:
         // an op-free recursive target still needs a separate physical proof.
-        for closure in 0..lowered.units[at].tables.closures.len() {
-            let site = &lowered.units[at].tables.closures[closure];
+        for closure in 0..units[at].tables.closures.len() {
+            let site = &units[at].tables.closures[closure];
             let Some(code) = site.code else { continue };
             let Some(&original) =
-                originals_index.get(&lowered.units[at].tables.symbols[code.symbol.index()])
+                originals_index.get(&units[at].tables.symbols[code.symbol.index()])
             else {
                 continue;
             };
@@ -565,7 +583,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
             }
             let Some(capture) = site
                 .captures
-                .get(&lowered.units[at].pools.captures)
+                .get(&units[at].pools.captures)
                 .and_then(|cs| cs.first())
             else {
                 continue;
@@ -576,26 +594,23 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
             let Some(&value) = source.captures.first() else {
                 continue;
             };
-            let request = TaskCaptureRequest::new(
-                &lowered.instances.view(InstanceId(original as u32)).key,
-                target.clone(),
-            )
-            .expect("independently selected task_main capture");
+            let request = TaskCaptureRequest::new(&original_keys[original], target.clone())
+                .expect("independently selected task_main capture");
             let digest = request.key.digest();
             let key = (original, digest);
             let specialized = if let Some(&i) = cache.get(&key) {
                 i
             } else {
                 if counts[original] >= MAX_PER_FUNCTION
-                    || lowered.units.len() - originals.len() >= MAX_SPECIALIZATIONS
+                    || units.len() - originals.len() >= MAX_SPECIALIZATIONS
                 {
                     continue;
                 }
                 counts[original] += 1;
-                let i = lowered.units.len();
+                let i = units.len();
                 let mut u = source.clone();
                 u.header.instance = digest;
-                lowered.units.push(u);
+                units.push(u);
                 origins.push(InstanceId(original as u32));
                 keys.push(request.key.clone());
                 seeds.push(vec![(value, target.clone())]);
@@ -607,16 +622,16 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
             let target = Symbol {
                 kind: SymbolKind::Function,
                 definition: source.header.definition.clone(),
-                instance: Some(lowered.units[specialized].header.instance),
+                instance: Some(units[specialized].header.instance),
             };
-            let u = &mut lowered.units[at];
+            let u = &mut units[at];
             let symbol = symbol(u, &target);
             u.tables.closures[closure].code.as_mut().unwrap().symbol = symbol;
         }
-        let mut unit = lowered.units[at].clone();
+        let mut unit = units[at].clone();
         let direct = rewrite_seeded_instance(
             &mut unit,
-            &lowered.table,
+            table,
             &entries,
             &seeds[at].clone(),
             spawn_flags[at],
@@ -633,15 +648,15 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
                     return true;
                 }
                 if counts[original] >= MAX_PER_FUNCTION
-                    || lowered.units.len() - originals.len() >= MAX_SPECIALIZATIONS
+                    || units.len() - originals.len() >= MAX_SPECIALIZATIONS
                 {
                     return false;
                 }
                 counts[original] += 1;
-                let i = lowered.units.len();
+                let i = units.len();
                 let mut u = source.clone();
                 u.header.instance = digest;
-                lowered.units.push(u);
+                units.push(u);
                 origins.push(InstanceId(original as u32));
                 keys.push(request.key.clone());
                 seeds.push(
@@ -658,7 +673,7 @@ pub fn specialize(lowered: &mut Lowered) -> Specializations {
             },
         );
         inline.extend(direct);
-        lowered.units[at] = unit;
+        units[at] = unit;
         at += 1;
     }
     Specializations {

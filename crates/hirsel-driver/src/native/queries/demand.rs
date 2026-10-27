@@ -1365,3 +1365,5 @@ impl DemandInstances {
 
 #[cfg(test)]
 mod receipt_closure_tests;
+
+pub(super) mod callable;

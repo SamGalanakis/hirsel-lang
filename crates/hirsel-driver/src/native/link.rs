@@ -1068,12 +1068,12 @@ pub fn partition_backend_objects_with_jobs(
     .into_iter()
     .collect::<Result<Vec<_>, _>>()
     .and_then(|mut objects| {
-        objects.extend(super::ahead::objects(program, backend, opt, registry)?);
-        objects.extend(super::continuation::objects(
+        objects.extend(super::queries::execution::objects(
             program,
             backend,
             opt,
             measurement,
+            registry,
         )?);
         objects.push(super::emit::emit_glue(program, backend, registry)?);
         if let Some(sources) = sources {

@@ -50,6 +50,7 @@ fn fixture(store: Arc<dyn ResultStore>) -> LinkedProduct {
         linker_options: ContentHash::of_bytes(b"fixture linker"),
     };
     let inputs = LinkInputs {
+        execution: vec![],
         fragments: vec![],
         static_manifest: manifest,
         runtime_archives: vec![],

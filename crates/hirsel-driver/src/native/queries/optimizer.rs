@@ -10,6 +10,7 @@ pub type Function = hirsel_rc::arena_credit::equations::Function;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TemplateFacts {
     pub small: bool,
+    pub execution: bool,
     pub library: bool,
     pub references: Vec<Function>,
 }
@@ -21,7 +22,28 @@ impl TemplateFacts {
             .collect::<Vec<_>>();
         references.sort();
         references.dedup();
+        let execution = unit.header.definition.is_core("$native.task_main")
+            || unit.header.definition.is_core("$native.cpu_worker")
+            || unit.tables.calls.iter().any(|call| match call.callee {
+                Callee::Operation(op) => !matches!(
+                    crate::native::continuation::classify(
+                        &unit.tables.operations[op.index()].definition
+                    ),
+                    Some(hirsel_lir::continuation::CalleeClass::Local)
+                ),
+                Callee::Direct(symbol) | Callee::Bound { code: symbol, .. } => matches!(
+                    crate::native::continuation::classify(
+                        &unit.tables.symbols[symbol.index()].definition
+                    ),
+                    Some(
+                        hirsel_lir::continuation::CalleeClass::Boundary
+                            | hirsel_lir::continuation::CalleeClass::Unknown
+                    )
+                ),
+                _ => true,
+            });
         Self {
+            execution,
             small: unit.instructions.len() <= crate::native::link::SMALL_UNIT_INSTRUCTIONS,
             library: unit.header.origin == UnitOrigin::Library,
             references,

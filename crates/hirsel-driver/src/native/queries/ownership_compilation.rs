@@ -91,6 +91,8 @@ impl OwnershipCompilation {
         let mut factories = Vec::new();
         for kind in [
             INSTANCE_KIND,
+            super::instance::CALLABLE_VALUE_KIND,
+            super::instance_tasks::CALLABLE_GRAPH_KIND,
             super::instance_tasks::INSTANCE_INPUT_KIND,
             super::instance_tasks::DISCOVERY_KIND,
         ] {

@@ -78,6 +78,7 @@ fn object() -> ObjectArtifact {
 }
 fn inputs(store: &dyn ResultStore, fragments: Vec<FragmentProduct>) -> LinkInputs {
     LinkInputs {
+        execution: vec![],
         fragments,
         static_manifest: input(store, "statics"),
         runtime_archives: vec![input(store, "runtime")],
@@ -781,6 +782,7 @@ fn task_snapshot(
         request,
         ready,
         link: LinkDependencies {
+            execution: vec![],
             fragments: vec![],
             native_reads: vec![],
             static_manifest: query(result),
@@ -929,6 +931,7 @@ fn link_task_waits_for_manifest_then_all_fragments_and_runtime_inputs() {
         result,
     );
     Arc::get_mut(&mut snapshot).unwrap().link = LinkDependencies {
+        execution: vec![],
         fragments: vec![QueryId {
             kind: super::tasks::CODEGEN_KIND,
             address: fragment.product.address,

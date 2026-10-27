@@ -42,6 +42,7 @@ pub struct LinkKey {
 
 #[derive(Clone, Debug)]
 pub struct LinkInputs {
+    pub execution: Vec<Reference>,
     pub fragments: Vec<FragmentProduct>,
     pub static_manifest: Reference,
     /// Archive and foreign order is semantically significant, unlike fragments.
@@ -232,10 +233,11 @@ where
         // a descriptor. No Value or Ready decoding is needed to decide this hit.
         let selected = self.native.codegen_units(&key.owner, &key.backend)?;
         let ready = selected.first().ok_or("Codegen omitted its owner")?;
-        let optimizer = selected[1..]
+        let mut optimizer = selected[1..]
             .iter()
             .map(|ready| ready.product)
             .collect::<Vec<_>>();
+        optimizer.extend(self.native.execution_read());
         codegen_checked(
             self.store.as_ref(),
             key,
@@ -482,6 +484,7 @@ fn link_checked(
     reads.extend(&inputs.runtime_archives);
     reads.extend(&inputs.foreign_inputs);
     reads.push(inputs.launch_manifest);
+    reads.extend(&inputs.execution);
     for read in &reads {
         require(store, *read)?;
     }

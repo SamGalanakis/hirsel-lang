@@ -7,6 +7,7 @@ use hirsel_type_analysis::logical::{Logical, LogicalNominal, Resolved, Scope, ty
 use hirsel_types::{Primitive, SignatureKind, TypeId, TypeKind};
 use std::collections::BTreeMap;
 
+#[derive(Clone)]
 pub(crate) struct Report {
     pub declarations: String,
     /// The nodes `declarations` defines, for a launcher Cranelift emits.

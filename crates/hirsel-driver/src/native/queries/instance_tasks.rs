@@ -52,6 +52,7 @@ pub struct InstanceTasks {
     roots: Vec<InstanceAddress>,
     discovery: QueryId,
     completed: OnceLock<ProductRef>,
+    callables: OnceLock<(ProductRef, super::demand::callable::Scope)>,
     weight: MemoryWeight,
     allowance: Arc<MemoryReservation>,
     fallback: Reference,
@@ -143,6 +144,7 @@ impl InstanceTasks {
                 charged: metadata.bytes(),
             }),
             completed: OnceLock::new(),
+            callables: OnceLock::new(),
             weight,
             allowance: Arc::new(allowance),
             fallback,
@@ -392,6 +394,12 @@ impl InstanceTasks {
         if self.completed.get() != Some(&settled) {
             return Err("source operation inputs require settled native discovery".into());
         }
+        if let Some((_, scope)) = self.callables.get() {
+            return Ok(scope.operations.clone());
+        }
+        self.current_operations()
+    }
+    fn current_operations(&self) -> Result<hirsel_layout::operation::OperationRegistry, String> {
         let entries = self.entries();
         let mut source = self.current_source()?;
         let mut registry = self.source.declarations.program.operation_registry();
@@ -441,6 +449,13 @@ impl InstanceTasks {
         if self.completed.get() != Some(&settled) {
             return Err("native discovery is not settled at this output".into());
         }
+        let mut products = self.original_products()?;
+        if let Some((_, scope)) = self.callables.get() {
+            products.use_callable_scope(scope);
+        }
+        Ok(products)
+    }
+    fn original_products(&self) -> Result<DemandInstances, String> {
         let mut products = self.producer();
         let entries = self.entries();
         for entry in &entries {
@@ -463,6 +478,9 @@ impl InstanceTasks {
     ) -> Result<Vec<(InstanceAddress, Arc<DiscoveredInstance>)>, String> {
         if self.completed.get() != Some(&settled) {
             return Err("native discovery has not completed".into());
+        }
+        if let Some((_, scope)) = self.callables.get() {
+            return Ok(scope.outputs.clone());
         }
         let mut outputs = self
             .entries()
@@ -505,6 +523,13 @@ impl InstanceTaskFactory {
 }
 impl QueryFactory for InstanceTaskFactory {
     fn create(&self, id: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
+        if id == self.tasks.callable_id() || id.kind == super::instance::CALLABLE_VALUE_KIND {
+            return Ok(Box::new(CallableTask {
+                tasks: self.tasks.clone(),
+                id,
+                terminal: None,
+            }));
+        }
         if id == self.tasks.discovery {
             return Ok(Box::new(DiscoveryTask {
                 tasks: self.tasks.clone(),
@@ -766,15 +791,17 @@ impl QueryTask for DiscoveryTask {
                 self.terminal = Some(Ok(product));
                 finish(Ok(product))
             }
-            Ok(None) => QueryPoll::Waiting(
+            Ok(None) => QueryPoll::Waiting(if self.frontier.is_empty() {
+                vec![self.tasks.callable_id()]
+            } else {
                 self.frontier
                     .iter()
                     .map(|address| QueryId {
                         kind: INSTANCE_KIND,
                         address: Address(*address),
                     })
-                    .collect(),
-            ),
+                    .collect()
+            }),
             Err(error) => {
                 self.terminal = Some(Err(error));
                 finish(Err(error))
@@ -841,6 +868,32 @@ impl DiscoveryTask {
         if !self.frontier.is_empty() {
             return Ok(None);
         }
+        let needs_callable = self.tasks.entries().iter().any(|entry| {
+            entry
+                .output
+                .get()
+                .is_some_and(|out| out.templates.execution)
+        });
+        if needs_callable {
+            match cx.read(self.tasks.callable_id()) {
+                Poll::Pending => return Ok(None),
+                Poll::Ready(Err(error)) => return Err(error),
+                Poll::Ready(Ok(product))
+                    if self
+                        .tasks
+                        .callables
+                        .get()
+                        .is_some_and(|(selected, _)| *selected == product) =>
+                {
+                    ()
+                }
+                _ => {
+                    return Err(self
+                        .tasks
+                        .failure("callable graph returned another product"));
+                }
+            }
+        }
         let result = (|| {
             // A source definition's licensed sites may span several bodies.
             // Only the complete fixed point can prove none were missed.
@@ -882,6 +935,170 @@ impl DiscoveryTask {
             Ok(Some(product))
         })();
         result.map_err(|e: String| self.tasks.failure(&e))
+    }
+}
+
+pub const CALLABLE_GRAPH_KIND: u32 = 0x4e00_0033;
+impl InstanceTasks {
+    fn callable_id(&self) -> QueryId {
+        QueryId {
+            kind: CALLABLE_GRAPH_KIND,
+            address: Address(ContentHash::of_parts(
+                "hirsel.native.callable-graph-address.v1",
+                [self.discovery.address.0.0.as_slice()],
+            )),
+        }
+    }
+    fn callable_scope(&self) -> Result<ProductRef, String> {
+        if let Some((product, _)) = self.callables.get() {
+            return Ok(*product);
+        }
+        let mut products = self.original_products()?;
+        let operations = self.current_operations()?;
+        let manifest = self.source.declarations.manifest()?;
+        let mut source = self.current_source()?;
+        let mut scope = products.specialize_callables(
+            &self.options,
+            &manifest,
+            operations,
+            |key, operations| {
+                if source
+                    .declarations()
+                    .sources
+                    .contains_key(key.instance.definition())
+                {
+                    let symbol = hirsel_lir::ir::Symbol {
+                        kind: hirsel_lir::ir::SymbolKind::Function,
+                        definition: key.instance.definition().clone(),
+                        instance: Some(key.instance.digest()),
+                    };
+                    let (evidence, _) = source.source_invocations(
+                        key.instance.definition(),
+                        &symbol,
+                        hirsel_tir::BodyId(key.instance.body()),
+                    )?;
+                    operations
+                        .invocations
+                        .insert(evidence.body.definition.clone(), evidence.invocations);
+                    operations.invocation_bodies.retain(|row| {
+                        row.definition != evidence.body.definition
+                            || row.instance != evidence.body.instance
+                    });
+                    operations.invocation_bodies.push(evidence.body);
+                }
+                Ok(())
+            },
+        )?;
+        {
+            let mut registry = self.registry.lock().unwrap_or_else(|e| e.into_inner());
+            registry.charged = registry
+                .charged
+                .checked_add(scope.retained_bytes())
+                .filter(|bytes| *bytes <= self.allowance.bytes())
+                .ok_or("callable graph metadata exceeds retained allowance")?;
+        }
+        let rows = scope
+            .outputs
+            .iter()
+            .map(|(key, output)| (key.instance.encoding(), output.product.product.record))
+            .collect::<Vec<_>>();
+        let product = self.put(
+            self.callable_id(),
+            &serde_json::to_vec(&rows).map_err(|e| e.to_string())?,
+        )?;
+        self.callables
+            .set((product, scope))
+            .map_err(|_| "callable graph published twice")?;
+        Ok(product)
+    }
+}
+struct CallableTask {
+    tasks: Arc<InstanceTasks>,
+    id: QueryId,
+    terminal: Option<Result<ProductRef, Reference>>,
+}
+impl QueryTask for CallableTask {
+    fn id(&self) -> QueryId {
+        self.id
+    }
+    fn weight(&self) -> MemoryWeight {
+        self.tasks.weight
+    }
+    fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
+        if let Some(result) = self.terminal {
+            return finish(result);
+        }
+        let mut waiting = Vec::new();
+        if self.id == self.tasks.callable_id() {
+            for entry in self.tasks.entries() {
+                let query = instance_id(&entry.key);
+                match cx.read(query) {
+                    Poll::Pending => waiting.push(query),
+                    Poll::Ready(Err(error)) => {
+                        self.terminal = Some(Err(error));
+                        return finish(Err(error));
+                    }
+                    Poll::Ready(Ok(product))
+                        if entry
+                            .output
+                            .get()
+                            .is_some_and(|o| o.product.product == product) =>
+                    {
+                        ()
+                    }
+                    _ => {
+                        let error = self.tasks.failure("callable original output differs");
+                        self.terminal = Some(Err(error));
+                        return finish(Err(error));
+                    }
+                }
+            }
+            if !waiting.is_empty() {
+                return QueryPoll::Waiting(waiting);
+            }
+            let result = self
+                .tasks
+                .callable_scope()
+                .map_err(|e| self.tasks.failure(&e));
+            self.terminal = Some(result);
+            finish(result)
+        } else {
+            let query = self.tasks.callable_id();
+            match cx.read(query) {
+                Poll::Pending => return QueryPoll::Waiting(vec![query]),
+                Poll::Ready(Err(error)) => {
+                    self.terminal = Some(Err(error));
+                    return finish(Err(error));
+                }
+                Poll::Ready(Ok(product))
+                    if self
+                        .tasks
+                        .callables
+                        .get()
+                        .is_some_and(|(p, _)| *p == product) =>
+                {
+                    ()
+                }
+                _ => {
+                    let error = self.tasks.failure("callable alias has another graph");
+                    self.terminal = Some(Err(error));
+                    return finish(Err(error));
+                }
+            }
+            let result = self
+                .tasks
+                .callables
+                .get()
+                .unwrap()
+                .1
+                .outputs
+                .iter()
+                .find(|(_, o)| o.product.product.address == self.id.address)
+                .map(|(_, o)| o.product.product)
+                .ok_or_else(|| self.tasks.failure("unregistered callable Value alias"));
+            self.terminal = Some(result);
+            finish(result)
+        }
     }
 }
 

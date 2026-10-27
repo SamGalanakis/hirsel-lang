@@ -56,10 +56,7 @@ impl NativeRootTasks {
             .into_iter()
             .map(|(key, result)| {
                 (
-                    QueryId {
-                        kind: INSTANCE_KIND,
-                        address: key.address(INSTANCE_KIND),
-                    },
+                    instance_query(&key, result.product.product),
                     result.product.product.record,
                 )
             })

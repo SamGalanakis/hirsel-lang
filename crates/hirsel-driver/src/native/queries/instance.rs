@@ -14,7 +14,7 @@ pub const INSTANCE_RECORD_DOMAIN: Domain = Domain {
 };
 pub const INSTANCE_DISCOVERY_DOMAIN: Domain = Domain {
     kind: 0x4e00_0011,
-    schema: 10,
+    schema: 11,
 };
 pub const STATICS_FINALIZERS_DOMAIN: Domain = Domain {
     kind: 0x4e00_0012,
@@ -82,6 +82,9 @@ impl InstanceQueries {
     pub fn new(store: Arc<dyn ResultStore>) -> Self {
         let native = Self::validator(&store);
         Self::with_validator(store, native)
+    }
+    pub(super) fn callable(&self) -> Self {
+        Self::with_phase(self.store.clone(), self.native.clone(), Phase::Callable)
     }
     pub fn new_callable(store: Arc<dyn ResultStore>) -> Self {
         let native = Self::validator(&store);

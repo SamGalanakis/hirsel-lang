@@ -153,6 +153,7 @@ impl std::error::Error for NativeError {}
 
 /// A whole program at Ready: every unit sealed by the Ready validator against
 /// this table, target, manifest and input.
+#[derive(Clone)]
 pub struct ReadyProgram {
     /// Planned provenance: source definitions (including derived forms) name their
     /// source owner; library instances name the common semantic runtime bundle.

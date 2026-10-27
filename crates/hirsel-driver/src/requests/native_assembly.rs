@@ -57,6 +57,8 @@ pub(super) struct NativeAssemblyPlan {
 
 pub(super) const KINDS: &[u32] = &[
     INSTANCE_KIND,
+    crate::native::queries::instance::CALLABLE_VALUE_KIND,
+    instance_tasks::CALLABLE_GRAPH_KIND,
     instance_tasks::INSTANCE_INPUT_KIND,
     instance_tasks::DISCOVERY_KIND,
     ARENA_CANDIDATES_KIND,
@@ -70,6 +72,8 @@ pub(super) const KINDS: &[u32] = &[
     object_queries::LINK_KIND,
     link_tasks::LINK_INPUT_KIND,
     link_tasks::LINK_MANIFEST_KIND,
+    crate::native::queries::execution::EXECUTION_KIND,
+    crate::native::queries::execution::EXECUTION_OBJECTS_KIND,
 ];
 
 pub(super) struct NativeAssembly {

@@ -18,7 +18,7 @@ impl WholeCodegenKey {
     pub fn new(mut units: Vec<CodegenKey>) -> Result<Self, String> {
         units.sort_by(|a, b| a.owner.canonical_cmp(&b.owner));
         let first = units.first().ok_or("whole-module Codegen has no owners")?;
-        if first.backend != "llvm"
+        if !matches!(first.backend.as_str(), "llvm" | "cranelift")
             || units.windows(2).any(|pair| pair[0].owner == pair[1].owner)
             || units.iter().any(|unit| {
                 unit.backend != first.backend
@@ -30,7 +30,7 @@ impl WholeCodegenKey {
                     || unit.owner.policy != first.owner.policy
             })
         {
-            return Err("whole-module Codegen needs unique owners of one LLVM profile".into());
+            return Err("grouped Codegen needs unique owners of one backend profile".into());
         }
         Ok(Self {
             units: units.into(),
@@ -90,6 +90,7 @@ pub(super) fn codegen<N: NativeProducts, L>(
             ready.unit_summary,
         ]);
     }
+    reads.extend(queries.native.execution_read().map(|p| p.record));
     let summaries = selected
         .iter()
         .map(|ready| ready.unit_summary)
@@ -135,15 +136,17 @@ pub(super) fn codegen<N: NativeProducts, L>(
                 if selected.iter().any(|ready| ready.debug != debug) {
                     return Err("whole-module debug settings differ".into());
                 }
-                hirsel_llvm::emit_object_profile(
-                    units,
-                    inputs,
-                    hirsel_lir::debug::Profile {
-                        debug,
-                        sources: None,
-                    },
-                )
-                .map_err(|e| e.to_string())
+                let profile = hirsel_lir::debug::Profile {
+                    debug,
+                    sources: None,
+                };
+                match key.units[0].backend.as_str() {
+                    "llvm" => hirsel_llvm::emit_object_profile(units, inputs, profile)
+                        .map_err(|e| e.to_string()),
+                    "cranelift" => hirsel_cranelift::emit_object_profile(units, inputs, profile)
+                        .map_err(|e| e.to_string()),
+                    _ => Err("unknown grouped Codegen backend".into()),
+                }
             })
         },
     )

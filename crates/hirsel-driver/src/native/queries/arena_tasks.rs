@@ -334,15 +334,12 @@ impl ArenaTask {
         let mut waiting = Vec::new();
         if let Some(index) = self.index {
             for member in &plan.queries.component_keys[index].members {
-                let query = QueryId {
-                    kind: INSTANCE_KIND,
-                    address: member.address(INSTANCE_KIND),
-                };
+                let expected = plan.instances[&member.address(INSTANCE_KIND).0];
+                let query = instance_query(member, expected);
                 match cx.read(query) {
                     Poll::Pending => waiting.push(query),
                     Poll::Ready(Err(error)) => return Err(error),
-                    Poll::Ready(Ok(product))
-                        if plan.instances.get(&query.address.0) == Some(&product) => {}
+                    Poll::Ready(Ok(product)) if expected == product => {}
                     _ => return Err(fail("arena member differs from discovered instance".into())),
                 }
             }

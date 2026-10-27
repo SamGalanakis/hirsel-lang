@@ -202,6 +202,8 @@ impl CompilationTasks {
         let mut factories = Vec::new();
         for kind in [
             INSTANCE_KIND,
+            super::instance::CALLABLE_VALUE_KIND,
+            super::instance_tasks::CALLABLE_GRAPH_KIND,
             super::instance_tasks::INSTANCE_INPUT_KIND,
             super::instance_tasks::DISCOVERY_KIND,
         ] {
@@ -223,6 +225,8 @@ impl CompilationTasks {
             LINK_KIND,
             LINK_INPUT_KIND,
             LINK_MANIFEST_KIND,
+            super::execution::EXECUTION_KIND,
+            super::execution::EXECUTION_OBJECTS_KIND,
         ] {
             factories.push((kind, compilation.clone()));
         }
@@ -247,6 +251,9 @@ impl CompilationTasks {
         } else {
             0
         };
+        let needs_execution = completed
+            .iter()
+            .any(|(_, output)| output.templates.execution);
         let owners = completed
             .iter()
             .map(|(key, _)| key.clone())
@@ -315,14 +322,13 @@ impl CompilationTasks {
                     }
                     codegen.extend(fragments.iter().cloned());
                 }
-                super::link_tasks::CodegenPartition::WholeModule => {
-                    let key = crate::native::object_queries::whole::WholeCodegenKey::new(
-                        fragments.clone(),
-                    )?;
-                    if self.emit_only {
-                        links.push(key.query_id());
+                partition => {
+                    for key in partition.modules(&fragments)? {
+                        if self.emit_only {
+                            links.push(key.query_id());
+                        }
+                        whole_codegen.push(key);
                     }
-                    whole_codegen.push(key);
                 }
             }
             if self.emit_only {
@@ -343,12 +349,33 @@ impl CompilationTasks {
                 weight: self.weight,
             });
         }
+        let execution_keys = self
+            .backends
+            .iter()
+            .filter(|_| needs_execution)
+            .map(|backend| CodegenKey {
+                owner: owners[0].clone(),
+                backend: backend.backend.clone(),
+                backend_version: backend.backend_version,
+                target_features: backend.target_features,
+                profile_options: backend.profile_options,
+                runtime_abi: backend.runtime_abi,
+            })
+            .collect::<Vec<_>>();
+        let mut execution =
+            super::execution::ExecutionTasks::new(roots.clone(), &execution_keys, self.weight);
+        let execution_bytes = Arc::get_mut(&mut execution)
+            .unwrap()
+            .retained_dispatch_bytes();
         let mut objects =
             CodegenTasks::with_whole_modules(native.clone(), codegen, whole_codegen, self.weight)?;
+        Arc::get_mut(&mut objects).unwrap().execution =
+            needs_execution.then(|| execution.query_id());
         let object_bytes = Arc::get_mut(&mut objects)
             .unwrap()
             .retained_dispatch_bytes();
         let mut link = LinkTasks::new(roots.clone(), plans, self.weight)?;
+        Arc::get_mut(&mut link).unwrap().execution = needs_execution.then(|| execution.clone());
         let link_bytes = Arc::get_mut(&mut link).unwrap().retained_dispatch_bytes();
         let mut copied = hirsel_engine::NativeMetadataWeight::default();
         // Fixed controller/factory envelopes plus every owned variable buffer.
@@ -373,6 +400,7 @@ impl CompilationTasks {
             .saturating_add(snapshot_bytes)
             .saturating_add(native_bytes)
             .saturating_add(roots.retained_dispatch_bytes())
+            .saturating_add(execution_bytes)
             .saturating_add(object_bytes)
             .saturating_add(link_bytes)
             .saturating_add(copied.bytes());
@@ -400,6 +428,10 @@ impl CompilationTasks {
             (LINK_INPUT_KIND, leaf.clone()),
             (LINK_MANIFEST_KIND, leaf),
         ]);
+        let execution_factory: Arc<dyn QueryFactory> =
+            Arc::new(super::execution::Factory(execution));
+        factories.insert(super::execution::EXECUTION_KIND, execution_factory.clone());
+        factories.insert(super::execution::EXECUTION_OBJECTS_KIND, execution_factory);
         if let Some((key, factory)) = native.guard_factory() {
             factories.insert(key.kind, factory);
         }

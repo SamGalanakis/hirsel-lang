@@ -30,6 +30,8 @@ const FAILURE: Domain = Domain {
 };
 pub(super) const KINDS: &[u32] = &[
     queries::INSTANCE_KIND,
+    queries::instance::CALLABLE_VALUE_KIND,
+    queries::instance_tasks::CALLABLE_GRAPH_KIND,
     queries::instance_tasks::INSTANCE_INPUT_KIND,
     queries::instance_tasks::DISCOVERY_KIND,
     queries::ARENA_CANDIDATES_KIND,

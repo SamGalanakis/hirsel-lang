@@ -35,86 +35,6 @@ pub fn plan(program: &ReadyProgram) -> AheadPlan {
     )
 }
 
-/// One owner for each alternate definition and immutable root record, independent
-/// of ordinary partitions, cached unit hits, and installed standard images.
-pub(super) fn objects(
-    program: &ReadyProgram,
-    backend: super::emit::Backend,
-    opt: hirsel_lir::emission::OptLevel,
-    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
-) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
-    let plan = plan(program);
-    objects_with_plan(program, backend, opt, registry, &plan)
-}
-
-pub(super) fn objects_with_plan(
-    program: &ReadyProgram,
-    backend: super::emit::Backend,
-    opt: hirsel_lir::emission::OptLevel,
-    registry: &hirsel_lir::descriptor_registry::DescriptorRegistry,
-    plan: &AheadPlan,
-) -> Result<Vec<hirsel_lir::stage::ObjectArtifact>, NativeError> {
-    if plan.roots.is_empty() {
-        return Ok(Vec::new());
-    }
-    let all: Vec<_> = program.units.iter().collect();
-    let units: Vec<_> = all
-        .into_iter()
-        .filter(|u| plan.bodies.contains_key(&u.unit().header.instance))
-        .collect();
-    let plans = super::continuation::plans(program);
-    let inputs = inputs(program, &plan, &plans, opt);
-    let failed = |message: String| NativeError::new(StageName::Emission, message);
-    let emitted = match backend {
-        super::emit::Backend::Llvm => {
-            hirsel_llvm::emit_ahead_object(&units, &inputs).map_err(|e| e.to_string())
-        }
-        super::emit::Backend::Cranelift => {
-            hirsel_cranelift::emit_ahead_object(&units, &inputs).map_err(|e| e.to_string())
-        }
-    };
-    let (mut object, frames) = emitted.map_err(failed)?;
-    let frames: BTreeMap<_, _> = plan
-        .bodies
-        .keys()
-        .filter_map(|id| Some((*id, body_frame(&plan, &plans, *id, &frames)?)))
-        .collect();
-    // Backend-created memcpy/division/outlined helpers have no private-work
-    // summary. Refuse publication even if their ordinary use is permitted.
-    let machine_helpers = unknown_machine_calls(&object, &plan, &plans, program);
-    let bounds: BTreeMap<_, _> = plan
-        .roots
-        .iter()
-        .filter_map(|(id, root)| {
-            if machine_helpers {
-                return None;
-            }
-            let [startup, getter, handoff, depth] = super::continuation::AHEAD_HELPER_BYTES;
-            hirsel_lir::ahead::stack_bound_with_depth(
-                &root.graph,
-                &frames,
-                startup,
-                getter,
-                root.handoff_bytes(handoff),
-                depth,
-            )
-            .map(|n| (*id, n))
-        })
-        .collect();
-    let mut metadata = hirsel_cranelift::emit_ahead_metadata(&inputs, &plan, &bounds, registry)
-        .map_err(|e| failed(e.to_string()))?;
-    let evidence = hirsel_lir::ahead::MachineEvidence {
-        plan: plan.identity,
-        object: ContentHash::of_bytes(&object.bytes),
-        options: object.reproducibility.options,
-        frames: frames.into_iter().collect(),
-        bounds: bounds.into_iter().collect(),
-    };
-    object.ahead = Some(evidence.clone());
-    metadata.ahead = Some(evidence);
-    Ok(vec![object, metadata])
-}
-
 /// Whether a body's ahead code also has its resumable state-0 alternate.
 fn resumable(plans: &ContinuationPlans, id: ContentHash) -> bool {
     plans
@@ -124,7 +44,7 @@ fn resumable(plans: &ContinuationPlans, id: ContentHash) -> bool {
 
 /// A body's final frame: the larger of its alternates', since a root enters
 /// either. A resumable body without both final frames has none.
-fn body_frame(
+pub(in crate::native) fn body_frame(
     plan: &AheadPlan,
     plans: &ContinuationPlans,
     id: ContentHash,
@@ -142,7 +62,7 @@ fn body_frame(
     Some(ordinary.max(resumed))
 }
 
-fn inputs<'a>(
+pub(in crate::native) fn inputs<'a>(
     program: &'a ReadyProgram,
     plan: &'a AheadPlan,
     plans: &'a ContinuationPlans,
@@ -171,7 +91,7 @@ fn inputs<'a>(
         verify_backend: program.validation == super::stages::Validation::EveryStage,
     }
 }
-fn unknown_machine_calls(
+pub(in crate::native) fn unknown_machine_calls(
     object: &hirsel_lir::stage::ObjectArtifact,
     plan: &AheadPlan,
     plans: &ContinuationPlans,

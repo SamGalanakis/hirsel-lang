@@ -2463,6 +2463,13 @@ pub(crate) unsafe fn execute(
         Err(error) => return Err(error.to_string()),
     };
     let report_failures = observation.is_none();
+    if let Some(path) = std::env::var_os("HIRSEL_RT_AHEAD_TRACE") {
+        match prepare_tool_file(std::path::Path::new(&path)) {
+            Ok(file) => crate::ahead_trace::open(file),
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+
     #[cfg(feature = "diagnostic")]
     if let Some(path) = std::env::var_os("HIRSEL_RT_TRACE_ROOTS") {
         match prepare_tool_file(std::path::Path::new(&path)) {
