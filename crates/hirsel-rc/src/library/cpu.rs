@@ -74,8 +74,8 @@ fn direct(
     b.call(Callee::Direct(symbol), vec![], target.abi, arguments, loans)
 }
 
-/// Each worker consumes at most two jobs. Its mapper is borrowed from one
-/// immutable Shared root, exactly as shared.with lends its frozen value.
+/// Each task owns one input job. Its mapper is borrowed from one immutable
+/// Shared root, exactly as shared.with lends its frozen value.
 fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let job = cx.type_actual(0)?;
     let result = cx.type_actual(1)?;
@@ -109,7 +109,8 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let jobs = b.capture(1, fields[1].layout)?;
     let tasks = b.capture(2, fields[2].layout)?;
     let width = b.capture(3, fields[3].layout)?;
-    let live = b.capture(4, fields[4].layout)?;
+    let ordinal = b.capture(4, fields[4].layout)?;
+    let live = b.capture(5, fields[5].layout)?;
     b.ed.unit.tables.init_flags.push(InitFlag {
         path: PoolRange::EMPTY,
         value: live.value,
@@ -118,7 +119,7 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     });
     let input = b.take(jobs.address)?;
     let old = b.read_bits(live.address)?;
-    let cleared = b.value(fields[4].layout, Holding::Plain);
+    let cleared = b.value(fields[5].layout, Holding::Plain);
     b.push(Inst::UpdateMask {
         result: cleared,
         mask: old,
@@ -131,7 +132,7 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let (cursor_slot, cursor_address) = local(&mut b, cursor)?;
     let empty = super::slots::construct(&mut b, result_layout, ConstructorKind::Sequence, &[])?;
     let (out_slot, out_address) = local(&mut b, empty)?;
-    let count = b.u64(2)?;
+    let count = b.u64(1)?;
     b.seq_reserve(out_address, count)?;
     let cursor_version = b.version(cursor_slot);
     let out_version = b.version(out_slot);
@@ -169,8 +170,8 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let item_held = b.held_state();
     let tasks_value = b.read_bits(tasks.address)?;
     let width_value = b.read_bits(width.address)?;
-    let action = b.constant(descriptor_layout, ConstantValue::Integer(2));
-    let zero = b.u64(0)?;
+    let action = b.constant(descriptor_layout, ConstantValue::Integer(3));
+    let job_index = b.read_bits(ordinal.address)?;
     let callee = operation(&mut b, &control);
     let status = b
         .call(
@@ -181,7 +182,7 @@ fn worker(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
                 argument(0, Passing::Borrow, tasks_value),
                 argument(1, Passing::Borrow, width_value),
                 argument(2, Passing::Borrow, action),
-                argument(3, Passing::Borrow, zero),
+                argument(3, Passing::Borrow, job_index),
             ],
             &[],
         )
@@ -304,6 +305,7 @@ fn make_worker(
     jobs: ValueId,
     tasks: ValueId,
     width: ValueId,
+    ordinal: ValueId,
 ) -> ValueId {
     let symbol = b.symbol(code.symbol.clone());
     let captures = PoolRange::push(
@@ -323,6 +325,10 @@ fn make_worker(
             },
             CaptureValue {
                 value: width,
+                usage: CaptureUse::Copy,
+            },
+            CaptureValue {
+                value: ordinal,
                 usage: CaptureUse::Copy,
             },
         ],
@@ -394,6 +400,9 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let (push_result, _) = require(cx, "list.push", result)?;
     let worker_type = parameter(cx.types, spawn.callable, 1)?;
     let path = native_path("cpu_worker");
+    let ordinal_type = cx
+        .types
+        .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
     let environment = cx
         .layouts
         .environment(
@@ -406,6 +415,7 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
                     (list_job, Passing::Take),
                     (tasks_type, Passing::Borrow),
                     (width_type, Passing::Borrow),
+                    (ordinal_type, Passing::Borrow),
                 ],
                 sizes: &[],
                 movable: &[1],
@@ -438,7 +448,6 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let two32 = b.constant(u32_layout, ConstantValue::Integer(2));
     let zero = b.u64(0)?;
     let one = b.u64(1)?;
-    let two = b.u64(2)?;
     let callee = operation(&mut b, &pool);
     let status = b
         .call(
@@ -607,15 +616,9 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     let (cursor_slot, cursor_address) = local(&mut b, cursor)?;
     let empty = super::slots::construct(&mut b, handles_layout, ConstructorKind::Sequence, &[])?;
     let (handles_slot, handles_address) = local(&mut b, empty)?;
-    let width64_layout = b.u64_layout()?;
-    let width64 = b.value(width64_layout, Holding::Plain);
-    b.push(Inst::Convert {
-        result: width64,
-        flag: None,
-        operand: width_value,
-        mode: ConvertMode::Widen,
-    });
-    b.seq_reserve(handles_address, width64)?;
+    // Logical task order is input order, independently of which of the W
+    // physical workers executes each task. Job settlement uses this order.
+    b.seq_reserve(handles_address, count)?;
     let index = local(&mut b, zero)?;
     let spawn_slots = [cursor_slot, handles_slot, index.0];
     let (head, spawn_versions) = merge_block(&mut b, &spawn_slots);
@@ -625,40 +628,15 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
     jump_merge(&mut b, head, &spawn_slots)?;
     at_merge(&mut b, head, &spawn_slots, &spawn_versions);
     let q = b.take(index.1)?;
-    let more = b.compare(BinaryOp::Lt, q, width64)?;
+    let more = b.compare(BinaryOp::Lt, q, count)?;
     b.branch(more, chunk, joined);
     b.at(chunk);
     let empty = super::slots::construct(&mut b, jobs_layout, ConstructorKind::Sequence, &[])?;
     let batch = local(&mut b, empty)?;
-    b.seq_reserve(batch.1, two)?;
-    let first = b.compare(BinaryOp::Lt, q, count)?;
-    let first_yes = b.block(BlockKind::Body, &[]);
-    let append_slots = [cursor_slot, batch.0];
-    let (second, second_versions) = merge_block(&mut b, &append_slots);
-    let first_no = b.block(BlockKind::Body, &[]);
-    b.branch(first, first_yes, first_no);
-    b.at(first_no);
-    jump_merge(&mut b, second, &append_slots)?;
-    b.at(first_yes);
+    b.seq_reserve(batch.1, one)?;
     let item = cursor_next(&mut b, &next_job, cursor_slot, cursor_address)?;
     let value = take_some(&mut b, item, job_option, job_layout)?;
     push_value(&mut b, &push_job, batch, value)?;
-    jump_merge(&mut b, second, &append_slots)?;
-    at_merge(&mut b, second, &append_slots, &second_versions);
-    let padded = b.add(ArithMode::Wrapping, q, width64);
-    let extra = b.compare(BinaryOp::Lt, padded, count)?;
-    let extra_yes = b.block(BlockKind::Body, &[]);
-    let (publish, publish_versions) = merge_block(&mut b, &append_slots);
-    let extra_no = b.block(BlockKind::Body, &[]);
-    b.branch(extra, extra_yes, extra_no);
-    b.at(extra_no);
-    jump_merge(&mut b, publish, &append_slots)?;
-    b.at(extra_yes);
-    let item = cursor_next(&mut b, &next_job, cursor_slot, cursor_address)?;
-    let value = take_some(&mut b, item, job_option, job_layout)?;
-    push_value(&mut b, &push_job, batch, value)?;
-    jump_merge(&mut b, publish, &append_slots)?;
-    at_merge(&mut b, publish, &append_slots, &publish_versions);
     let failure = b.failure(None);
     let root = b.copy(root_address, failure)?;
     let jobs = b.take(batch.1)?;
@@ -672,6 +650,7 @@ fn map(cx: &mut Cx<'_>) -> R<LirUnit<Value>> {
         jobs,
         tasks_value,
         width_value,
+        q,
     );
     let callee = operation(&mut b, &spawn);
     let handle = b

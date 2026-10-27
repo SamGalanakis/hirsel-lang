@@ -161,7 +161,7 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
             CpuWorkerProtocol::derive(&changed, &program.table).is_none(),
             "leave is not a job claim"
         );
-        for field in 0..9 {
+        for field in 0..10 {
             let mut bad = protocol.clone();
             match field {
                 0 => bad.digest = hirsel_syntax::ContentHash::of_bytes(b"changed worker"),
@@ -172,7 +172,8 @@ fn cpu_worker_ownership_protocol_binds_the_shared_loan_job_move_and_result_sink(
                 5 => bad.claim = bad.finish,
                 6 => bad.result = bad.jobs,
                 7 => bad.job_layout = bad.environment,
-                _ => bad.result_layout = bad.environment,
+                8 => bad.result_layout = bad.environment,
+                _ => bad.ordinal = bad.live,
             }
             assert!(!bad.check(worker, &program.table), "changed field {field}");
         }

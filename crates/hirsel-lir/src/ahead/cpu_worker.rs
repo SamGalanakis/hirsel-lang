@@ -104,7 +104,7 @@ pub fn validate_cpu_workers(
             || recipe.live_mask != 1
             || !recipe.source_environment
             || u64::from(recipe.callable_offset) != wrapper.fields[0].offset
-            || u64::from(recipe.live_word_offset) != wrapper.fields[4].offset
+            || u64::from(recipe.live_word_offset) != wrapper.fields[5].offset
             || wrapper.size != SizeSpec::Fixed(u64::from(recipe.wrapper_extent))
             || source.size != SizeSpec::Fixed(u64::from(recipe.source_extent))
             || u64::from(recipe.wrapper_extent) > MAX_IMAGE_BYTES
@@ -268,7 +268,7 @@ pub(super) fn propose(
             .ok_or_else(|| no("unbounded CPU worker environment"))?,
         callable_offset: u32::try_from(wrapper.fields[0].offset)
             .map_err(|_| no("CPU root offset overflow"))?,
-        live_word_offset: u32::try_from(wrapper.fields[4].offset)
+        live_word_offset: u32::try_from(wrapper.fields[5].offset)
             .map_err(|_| no("CPU live offset overflow"))?,
         source_extent: binding
             .environment
@@ -315,6 +315,7 @@ pub struct CpuWorkerProtocol {
     pub shared_mapper: SlotId,
     pub jobs: SlotId,
     pub live: SlotId,
+    pub ordinal: SlotId,
     pub mapper: CallId,
     pub mapper_loan: LoanId,
     pub claim: CallId,
@@ -396,11 +397,12 @@ impl CpuMapperBinding {
             return None;
         }
         let captures = site.captures.get(&map.pools.captures)?;
-        if captures.len() != 4
+        if captures.len() != 5
             || captures[0].usage != CaptureUse::Take
             || captures[1].usage != CaptureUse::Take
             || captures[2].usage != CaptureUse::Copy
             || captures[3].usage != CaptureUse::Copy
+            || captures[4].usage != CaptureUse::Copy
             || super::plan::known_code(map, captures[0].value, &seeds, true)?
                 != callback.header.instance
         {
@@ -498,7 +500,7 @@ impl CpuWorkerProtocol {
         if unit.header.origin != UnitOrigin::Library
             || !unit.header.definition.is_core("$native.cpu_worker")
             || !unit.parameters.is_empty()
-            || unit.captures.len() != 5
+            || unit.captures.len() != 6
         {
             return None;
         }
@@ -516,9 +518,10 @@ impl CpuWorkerProtocol {
         };
         let (shared_mapper, shared_slot) = capture(0)?;
         let (jobs, jobs_slot) = capture(1)?;
-        let (_, tasks_slot) = capture(2)?;
-        let (_, width_slot) = capture(3)?;
-        let (live, live_slot) = capture(4)?;
+        let (tasks, tasks_slot) = capture(2)?;
+        let (width, width_slot) = capture(3)?;
+        let (ordinal, ordinal_slot) = capture(4)?;
+        let (live, live_slot) = capture(5)?;
         let mut flags = unit
             .tables
             .init_flags
@@ -531,15 +534,20 @@ impl CpuWorkerProtocol {
         let environment = flag.environment?;
         let wrapper = table.layout(environment)?;
         if !matches!(&wrapper.kind, LayoutKind::Environment { movable } if movable == &[1])
-            || wrapper.fields.len() != 5
+            || wrapper.fields.len() != 6
             || wrapper.finalizer.is_some()
             || wrapper.fields[0].layout != unit.types[shared_slot.ty.index()].layout
             || wrapper.fields[1].layout != unit.types[jobs_slot.ty.index()].layout
             || wrapper.fields[2].layout != unit.types[tasks_slot.ty.index()].layout
             || wrapper.fields[3].layout != unit.types[width_slot.ty.index()].layout
-            || wrapper.fields[4].layout != unit.types[live_slot.ty.index()].layout
+            || wrapper.fields[4].layout != unit.types[ordinal_slot.ty.index()].layout
+            || wrapper.fields[5].layout != unit.types[live_slot.ty.index()].layout
             || !matches!(
                 table.layout(wrapper.fields[4].layout)?.kind,
+                LayoutKind::Scalar(ScalarKind::U64)
+            )
+            || !matches!(
+                table.layout(wrapper.fields[5].layout)?.kind,
                 LayoutKind::Scalar(ScalarKind::U64)
             )
         {
@@ -699,12 +707,26 @@ impl CpuWorkerProtocol {
                 Callee::Operation(op) => {
                     let definition = &unit.tables.operations.get(op.index())?.definition;
                     let selected = if definition.is_core("$intrinsic.CpuMapScoped") {
-                        if arguments.len() != 4 || ![2, 3].into_iter().all(|parameter| {
-                            arguments.iter().any(|arg| arg.parameter == parameter
-                                && arg.passing == Passing::Borrow
+                        let from_capture = |parameter, slot| {
+                            arguments.iter().any(|arg| {
+                            arg.parameter == parameter && arg.passing == Passing::Borrow
                                 && matches!(arg.value, ArgumentValue::Value(value)
-                                    if integer(unit, value) == Some(if parameter == 2 { 2 } else { 0 })))
-                        }) {
+                                    if unit.instructions.iter().any(|inst| matches!(inst,
+                                        Inst::Read { result, address, mode: ReadMode::Bits, .. }
+                                            if *result == value && whole(unit, *address) == Some(slot))))
+                        })
+                        };
+                        if arguments.len() != 4
+                            || !from_capture(0, tasks)
+                            || !from_capture(1, width)
+                            || !from_capture(3, ordinal)
+                            || !arguments.iter().any(|arg| {
+                                arg.parameter == 2
+                                    && arg.passing == Passing::Borrow
+                                    && matches!(arg.value, ArgumentValue::Value(value)
+                                    if integer(unit, value) == Some(3))
+                            })
+                        {
                             return None;
                         }
                         &mut claim
@@ -793,6 +815,7 @@ impl CpuWorkerProtocol {
             shared_mapper,
             jobs,
             live,
+            ordinal,
             mapper: CallId(mapper_index as u32),
             mapper_loan,
             claim: claim?,
