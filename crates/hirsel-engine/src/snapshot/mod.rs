@@ -862,6 +862,11 @@ mod tests {
         adapters.signature = Some(Arc::new(Header));
         let mut engine = QueryEngine::new(default_environment(), adapters);
         assert!(state.restore(&mut engine).is_ok());
+        assert_eq!(
+            engine.memo_stats().touched,
+            0,
+            "a fresh engine counts only new work"
+        );
         let before = engine.memo_stats().touched;
         let rebuilt = engine.signature_snapshot();
         assert_eq!(

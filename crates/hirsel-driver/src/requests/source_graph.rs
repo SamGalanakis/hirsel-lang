@@ -1529,6 +1529,7 @@ pub(super) fn install(
         hold_bytes: config.hold_bytes,
         store_adoptions: program.engine.store_adoptions(),
         front: program.engine.work_stats(),
+        memo_operations: program.engine.memo_stats().touched,
         input_operations,
         input_bytes,
         ..Default::default()

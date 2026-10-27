@@ -235,6 +235,7 @@ impl SourceIndexState {
         engine.syntax_keys = syntax_keys;
         engine.signatures = signatures;
         engine.graph = graph;
+        engine.graph.reset_stats();
         engine.front_changes = front_changes;
         engine.inputs = inputs;
         engine.environment_seen = environment_seen;

@@ -201,6 +201,12 @@ impl MemoGraph {
     pub fn stats(&self) -> &MemoStats {
         &self.stats
     }
+    /// A source-only handoff starts a fresh engine's physical-work counters.
+    /// Logical stamps, dirty marks and reverse subscriptions remain intact.
+    pub(crate) fn reset_stats(&mut self) {
+        self.stats = MemoStats::default();
+        self.touched_memos = None;
+    }
     /// Start a request's distinct-memo inventory without changing raw counters.
     pub fn begin_touch_tracking(&mut self) {
         self.touched_memos.get_or_insert_with(HashSet::new);
