@@ -4,9 +4,8 @@ mod signature;
 mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;
 pub(crate) use source_entry::{
-    retained_signature_entry_bytes, source_compact_entry, source_compact_output,
-    source_shared_products, source_shared_products_bytes, source_signature_head_bytes,
-    source_signature_head_components,
+    retained_signature_entry_bytes, source_projection, source_shared_products,
+    source_shared_products_bytes, source_signature_head_bytes, source_signature_head_components,
 };
 mod syntax;
 #[cfg(test)]

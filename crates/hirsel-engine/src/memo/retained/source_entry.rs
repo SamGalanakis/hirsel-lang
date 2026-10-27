@@ -85,31 +85,40 @@ pub(crate) fn retained_signature_entry_bytes(
     if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
         return None;
     }
-    signature_entry_bytes(entry, false, false, false, false, None)
+    signature_entry_bytes(entry, None, None)
 }
 
-pub(crate) fn source_compact_entry(
-    entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
-) -> bool {
-    std::sync::Arc::strong_count(entry) == 1 && std::sync::Arc::weak_count(entry) == 0
+pub(crate) struct SourceProjection {
+    pub(crate) compact: bool,
+    pub(crate) compact_output: bool,
+    pub(crate) compact_reads: bool,
+    pub(crate) shared_products: bool,
 }
-pub(crate) fn source_compact_output(
+pub(crate) fn source_projection(
     entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
-) -> bool {
-    source_compact_entry(entry)
-        && entry.memo.value.as_ref().is_ok_and(|output| {
-            std::sync::Arc::strong_count(output) == 1 && std::sync::Arc::weak_count(output) == 0
-        })
+) -> SourceProjection {
+    let compact =
+        std::sync::Arc::strong_count(entry) == 1 && std::sync::Arc::weak_count(entry) == 0;
+    SourceProjection {
+        compact,
+        compact_output: compact
+            && entry.memo.value.as_ref().is_ok_and(|output| {
+                std::sync::Arc::strong_count(output) == 1 && std::sync::Arc::weak_count(output) == 0
+            }),
+        compact_reads: compact
+            && std::sync::Arc::strong_count(&entry.memo.reads) == 1
+            && std::sync::Arc::weak_count(&entry.memo.reads) == 0
+            && entry.reads().flat_backing_bytes().is_some(),
+        shared_products: compact
+            && entry.products.representation.is_none()
+            && entry.products.mode_archive.is_none()
+            && entry.products.mode_diagnostics.is_empty(),
+    }
 }
-
 pub(crate) fn source_shared_products(
     entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
 ) -> bool {
-    std::sync::Arc::strong_count(entry) == 1
-        && std::sync::Arc::weak_count(entry) == 0
-        && entry.products.representation.is_none()
-        && entry.products.mode_archive.is_none()
-        && entry.products.mode_diagnostics.is_empty()
+    source_projection(entry).shared_products
 }
 pub(crate) fn source_shared_products_bytes() -> u64 {
     std::alloc::Layout::new::<[usize; 2]>()
@@ -127,14 +136,7 @@ pub(crate) fn source_signature_head_bytes(
     if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
         return None;
     }
-    signature_entry_bytes(
-        entry,
-        true,
-        source_shared_products(entry),
-        source_compact_entry(entry) || entry.products.resolution.is_some(),
-        source_compact_output(entry),
-        Some(names),
-    )
+    signature_entry_bytes(entry, Some(source_projection(entry)), Some(names))
 }
 
 /// Diagnostic components of the same conservative source-head bound.
@@ -164,19 +166,28 @@ pub(crate) fn source_signature_head_components(
 
 fn signature_entry_bytes(
     entry: &crate::queries::Entry<hirsel_types::SignatureRef>,
-    head: bool,
-    shared_products: bool,
-    projected: bool,
-    compact_output: bool,
+    projection: Option<SourceProjection>,
     names: Option<&mut dyn super::NameAllocationSet>,
 ) -> Option<u64> {
+    let head = projection.is_some();
+    let projected = projection
+        .as_ref()
+        .is_some_and(|p| p.compact || entry.products.resolution.is_some());
+    let compact_output = projection.as_ref().is_some_and(|p| p.compact_output);
+    let compact_reads = projection.as_ref().is_some_and(|p| p.compact_reads);
+    let shared_products = projection.as_ref().is_some_and(|p| p.shared_products);
     let mut weight = Weight {
         count_shared_repeats: true,
         source_names: names,
         ..Default::default()
     };
     weight.add(arc_bytes(entry));
-    weight.reads(&entry.memo.reads);
+    if compact_reads {
+        weight.add(arc_bytes(&*entry.memo.reads));
+        weight.add(entry.reads().flat_backing_bytes()?);
+    } else {
+        weight.reads(&entry.memo.reads);
+    }
     weight.cloned_vectors = projected;
     weight.detail(&entry.detail);
     weight.flat_vec(&entry.covered);

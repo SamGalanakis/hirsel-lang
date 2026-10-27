@@ -252,13 +252,17 @@ impl QueryEngine {
         let signatures = std::mem::take(&mut self.signatures)
             .into_iter()
             .map(|(id, entry)| {
-                let share = crate::memo::retained::source_shared_products(&entry);
-                let compact = crate::memo::retained::source_compact_entry(&entry);
-                let compact_output = crate::memo::retained::source_compact_output(&entry);
+                let projection = crate::memo::retained::source_projection(&entry);
+                let share = projection.shared_products;
+                let compact = projection.compact;
+                let compact_output = projection.compact_output;
                 if entry.products.resolution.is_none() && !compact {
                     return (id, entry);
                 }
                 let mut memo = entry.memo.clone();
+                if projection.compact_reads {
+                    memo.reads = Arc::new(entry.reads().flat_copy());
+                }
                 if compact_output {
                     memo.value = entry
                         .memo
@@ -683,6 +687,21 @@ mod tests {
                     .unwrap();
                 header.detail.signatures = Vec::with_capacity(32768);
                 header.covered = Vec::with_capacity(32768);
+                let exact = (*header.memo.reads).clone();
+                let mut body_reads: Vec<_> = exact.iter().copied().collect();
+                for i in 0..512 {
+                    body_reads.push((
+                        ReadKey::CitedText(DefId::intern(&DefPath::core(&format!(
+                            "unretained_{i}"
+                        )))),
+                        ContentHash::default(),
+                    ));
+                }
+                let complete = Reads::from_vec(body_reads).unwrap();
+                header.memo.reads = Arc::new(exact.share_rows(&complete).unwrap());
+                let prior_read_bytes = header.reads().allocations().next().unwrap().1;
+                let exact_wire = bincode::serialize(header.reads()).unwrap();
+                drop((exact, complete));
                 let mut output = (*header.result().unwrap()).clone();
                 output.dependencies = Vec::with_capacity(32768);
                 let signature = output.value.clone();
@@ -700,6 +719,8 @@ mod tests {
                 let header = &fresh.signatures[&id];
                 assert_eq!(header.detail.signatures.capacity(), 0);
                 assert_eq!(header.covered.capacity(), 0);
+                assert!(header.reads().allocations().next().unwrap().1 < prior_read_bytes);
+                assert_eq!(bincode::serialize(header.reads()).unwrap(), exact_wire);
                 let actual = header.result().unwrap();
                 assert!(Arc::ptr_eq(&actual.value, &signature));
                 if let Some(held) = held {

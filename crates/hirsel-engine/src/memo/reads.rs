@@ -471,6 +471,22 @@ impl Reads {
             indices: (indices.len() != complete.len()).then(|| indices.into()),
         })
     }
+    /// Detach a selected phase from the complete body's backing rows. Exact
+    /// observations, order and encoding stay unchanged.
+    pub(crate) fn flat_copy(&self) -> Self {
+        if self.indices.is_none() {
+            return self.clone();
+        }
+        Self {
+            rows: self.iter().copied().collect::<Vec<_>>().into(),
+            indices: None,
+        }
+    }
+    pub(crate) fn flat_backing_bytes(&self) -> Option<usize> {
+        self.indices
+            .as_ref()
+            .map(|_| 2 * size_of::<usize>() + self.len() * size_of::<(ReadKey, ContentHash)>())
+    }
     /// Actual distinct Arc backing allocations; the containing Reads value is
     /// accounted separately by its owner. This exposes no semantic identity.
     pub(crate) fn allocations(&self) -> impl Iterator<Item = (usize, usize)> {
