@@ -81,6 +81,73 @@ fn with_model(f: &Fixture, run: impl FnOnce(&mut Checker<'_>, &Model, State)) {
     );
 }
 
+#[test]
+fn projected_unique_transfers_keep_current_crossing_evidence() {
+    use crate::support::{Table, fn_type, ty};
+    use hirsel_types::{GenericArgument, Uniqueness};
+
+    for relation in [Relation::global(), Relation::environment()] {
+        let mut f = Fixture::unit();
+        let unit = f.definition.bodies[0].result;
+        let mut callable = ty(TypeKind::Function(fn_type(vec![], unit)));
+        callable.modes.sendability = Sendability::NotSendable;
+        let callable = f.definition.types.push(callable);
+        let mut payload = ty(TypeKind::Builtin {
+            kind: BuiltinType::List,
+            arguments: vec![GenericArgument::Type(callable)].into(),
+        });
+        payload.modes.relation = relation.clone();
+        let payload = f.definition.types.push(payload);
+        let root = f.slot(TypeKind::Tuple(vec![unit, payload].into()), Storage::Local);
+        let projected = PlaceId(f.body().places.len() as u32);
+        f.body().places.push(Place {
+            root: LocalId(root),
+            projection: vec![Projection::Field(1)].into(),
+            ty: payload,
+            loan: None,
+            binding: None,
+        });
+        owner_sig(&mut f, &[]);
+        with_model(&f, |checker, _, initial| {
+            for proof in [None, Some(false), Some(true)] {
+                for usage in [UseKind::Take, UseKind::Copy] {
+                    for shared in [false, true] {
+                        let mut state = initial.clone();
+                        state.shared.set(root as usize, shared);
+                        state.unique_parts[root as usize].set(&[crossing::Part::Field(1)], true);
+                        if let Some(proof) = proof {
+                            state.crossing_parts[root as usize]
+                                .set(&[crossing::Part::Field(1)], proof);
+                        }
+                        if shared {
+                            checker.share_crossing_parts(
+                                &mut state.crossing_parts[root as usize],
+                                PlaceId(root),
+                            );
+                        }
+                        assert!(!state.must[root as usize].has(MustFacts::SENDABLE));
+                        assert!(!state.current_unique[root as usize]);
+                        let value = Operand {
+                            place: projected,
+                            usage,
+                        };
+                        let actual = checker.transferred_type(&state, &value, checker.t);
+                        let modes = &checker.t.row(actual).modes;
+                        let unique = usage == UseKind::Take && !shared;
+                        assert_eq!(modes.uniqueness == Uniqueness::Unique, unique);
+                        assert_eq!(
+                            modes.sendability == Sendability::Sendable,
+                            unique && proof == Some(true),
+                            "{relation:?}, {proof:?}, {usage:?}, shared={shared}"
+                        );
+                        assert_eq!(modes.relation, relation);
+                    }
+                }
+            }
+        });
+    }
+}
+
 fn refresh(model: &Model, state: &mut State) {
     state.cleanup_roots = 0;
     state.live_temporaries = 0;

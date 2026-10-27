@@ -239,7 +239,9 @@ impl Checker<'_> {
         }
         if self.operand_unique(state, value) {
             let unique = self.unique_type(store, ty);
-            if state.must[root].has(MustFacts::SENDABLE) {
+            // Strengthening ownership does not erase the independently proved
+            // crossing receipt of this part, even when its storage row is Local.
+            if state.must[root].has(MustFacts::SENDABLE) || part_proof == Some(true) {
                 let mut row = store.get(unique).unwrap().clone();
                 row.modes.sendability = Sendability::Sendable;
                 return update_type(store, unique, row);
