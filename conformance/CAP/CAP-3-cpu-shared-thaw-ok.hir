@@ -20,3 +20,5 @@ pub fn batch(tasks: Tasks, take frozen: Shared[List[u64]]) -> Result[
     }
   )
 }
+
+pub fn main() {}

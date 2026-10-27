@@ -1,1 +1,1 @@
-{"schema": 1, "package": {"name": "cpu_indirect", "version": "1"}, "sources": [{"path": "CAP-3-cpu-indirect-operation-bad.hir", "module": []}], "dependencies": []}
+{"schema": 1, "package": {"name": "cpu_indirect", "version": "1"}, "sources": [{"path": "CAP-3-cpu-indirect-operation-bad.hir", "module": []}], "dependencies": [], "entry": {"module": [], "name": "main"}}

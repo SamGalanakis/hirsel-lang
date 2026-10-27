@@ -13,3 +13,5 @@ pub fn batch(tasks: Tasks, width: u32) -> Result[List[u64], CpuPoolError] {
     }
   )
 }
+
+pub fn main() {}

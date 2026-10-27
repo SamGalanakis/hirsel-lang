@@ -1,14 +1,1 @@
-{
-  "schema": 1,
-  "package": {
-    "name": "cpu_conformance",
-    "version": "1"
-  },
-  "sources": [
-    {
-      "path": "CAP-3-cpu-external-helper-bad.hir",
-      "module": []
-    }
-  ],
-  "dependencies": []
-}
+{"schema": 1, "package": {"name": "cpu_conformance", "version": "1"}, "sources": [{"path": "CAP-3-cpu-external-helper-bad.hir", "module": []}], "dependencies": [], "entry": {"module": [], "name": "main"}}

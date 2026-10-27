@@ -16,3 +16,5 @@ pub fn batch(tasks: Tasks, take hidden: sendable fn() -> u64 uses {}) -> Result[
     }
   )
 }
+
+pub fn main() {}
