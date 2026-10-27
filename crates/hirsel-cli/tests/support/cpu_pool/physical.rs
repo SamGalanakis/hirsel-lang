@@ -40,7 +40,10 @@ fn overlap(text: &str, width: usize, exclusive: &BTreeSet<usize>) -> bool {
         events.push((start, 1, worker, cpu));
         events.push((end, 0, worker, cpu));
     }
-    assert_eq!(workers.len(), width, "every worker must make CPU progress");
+    if workers.len() != width {
+        eprintln!("every worker must make CPU progress: sampled {workers:?}, expected W{width}");
+        return false;
+    }
     events.sort_unstable();
     let required = exclusive.len().max(1).min(width);
     for (time, enter, worker, cpu) in events {
