@@ -118,3 +118,21 @@ pub fn private_stack_bytes(bridge: &str) -> Option<u64> {
         .any(|&(name, _)| name == bridge)
         .then_some(PRIVATE_STACK_BYTES)
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn private_certification_rejects_raw_unknown_and_stack_argument_callbacks() {
+        use super::*;
+        assert_eq!(private_stack_bytes("hirsel_tsan_read8"), Some(16));
+        for name in [
+            "__tsan_read8",
+            "hirsel_tsan_unknown",
+            "hirsel_tsan_atomic128_compare_exchange_val",
+        ] {
+            assert_eq!(private_stack_bytes(name), None);
+        }
+        assert_eq!(bridge("__tsan_atomic128_compare_exchange_val"), None);
+        assert_eq!(bridge("__tsan_read8"), Some("hirsel_tsan_read8"));
+    }
+}

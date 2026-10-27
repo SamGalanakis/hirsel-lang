@@ -85,7 +85,8 @@ bridge!(
 );
 bridge!(
     hirsel_tsan_switch_to_fiber,
-    crate::fiber::tsan_switch_to_fiber
+    crate::fiber::tsan_switch_to_fiber,
+    ""
 );
 
 #[cfg(test)]

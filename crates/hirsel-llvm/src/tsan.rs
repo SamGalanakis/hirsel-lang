@@ -115,6 +115,24 @@ define void @tsan_mapper(ptr %cell) {
                 let object = hirsel_lir::object::ObjectFile::read(&target, bytes.clone()).unwrap();
                 assert_eq!(object.exports, ["mapper", "tsan_mapper"]);
                 control::emitted_access_control(&bytes);
+                module.bridge_thread_callbacks();
+                let text = module.text();
+                assert!(text.contains("@hirsel_tsan_unaligned_read8"), "{text}");
+                assert!(text.contains("@hirsel_tsan_atomic64_fetch_add"), "{text}");
+                let bytes = module.emit_object(&machine).unwrap();
+                let object = hirsel_lir::object::ObjectFile::read(&target, bytes).unwrap();
+                assert!(
+                    object
+                        .imports
+                        .iter()
+                        .any(|name| name == "hirsel_tsan_unaligned_read8")
+                );
+                assert!(
+                    !object
+                        .imports
+                        .iter()
+                        .any(|name| name.starts_with("__tsan_"))
+                );
             }
         }
     }

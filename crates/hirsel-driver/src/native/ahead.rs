@@ -189,7 +189,7 @@ pub(in crate::native) fn unknown_machine_calls(
             !prefix_runtime.contains(&s.name)
                 && !((hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN)
                     && hirsel_core_contract::tsan::private_stack_bytes(&s.name)
-                        .is_some_and(|bytes| bytes <= 64))
+                        .is_some_and(|bytes| bytes <= super::continuation::AHEAD_HELPER_BYTES[2]))
                 && !matches!(
                     s.name.as_str(),
                     "hirsel_rt_v2_ahead_state"
