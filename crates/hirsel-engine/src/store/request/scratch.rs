@@ -325,7 +325,10 @@ mod tests {
         let reference = request.put_content(domain(), b"selected provider").unwrap();
         assert!(request.retained_bytes() > before);
         drop(selected.take());
-        assert_eq!(&*request.get_content(reference).unwrap(), b"selected provider");
+        assert_eq!(
+            &*request.get_content(reference).unwrap(),
+            b"selected provider"
+        );
         drop(request);
         let request = RequestStore::with_scratch(
             selected.clone(),
@@ -337,7 +340,10 @@ mod tests {
         let reference = request.put_content(domain(), b"selected provider").unwrap();
         // Successful provider publication must not make an evictable cache
         // the only owner of a settled request's original bytes.
-        assert_eq!(&*selected.get_content(reference).unwrap(), b"selected provider");
+        assert_eq!(
+            &*selected.get_content(reference).unwrap(),
+            b"selected provider"
+        );
         drop(selected.take());
         assert!(selected.get_content(reference).is_none());
         assert_eq!(

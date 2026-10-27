@@ -64,7 +64,10 @@ fn public_native_run_binds_and_launches_on_both_backends() {
             .unwrap();
             let _ = std::io::Write::write_fmt(
                 &mut std::io::stderr(),
-                format_args!("native default run {backend:?} completed after {:?}\n", started.elapsed()),
+                format_args!(
+                    "native default run {backend:?} completed after {:?}\n",
+                    started.elapsed()
+                ),
             );
             assert_eq!(outcome.exit_code(), 0, "{backend:?}: {outcome:?}");
             assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
