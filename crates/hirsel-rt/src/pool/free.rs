@@ -490,9 +490,21 @@ pub(crate) unsafe fn own_token(run: *mut RunShared, task: TaskKey) -> Option<Tok
 /// The run's execs are initialized and its physical dispatch is enabled.
 pub(crate) unsafe fn notify(run: *mut RunShared, token: &Token) {
     let execs = unsafe { (*(*run).execs.get()).as_deref().expect("physical dispatch") };
+    notify_frame(execs, token);
+}
+
+fn notify_frame(execs: &Execs, token: &Token) {
     let dispatch = execs.dispatch.get().expect("physical dispatch enabled");
     if let Some(owner) = token.owner {
-        token.frame.placement.set_owner(owner);
+        let owner = route(execs, &token.frame, word_owner(owner));
+        token.frame.placement.set_owner(owner_word(owner));
+    } else if token.frame.placement.left() != 0 {
+        let owner = route(
+            execs,
+            &token.frame,
+            word_owner(token.frame.placement.owner()),
+        );
+        token.frame.placement.set_owner(owner_word(owner));
     }
     if let Some(queued) = token.frame.notification.notify() {
         publish(

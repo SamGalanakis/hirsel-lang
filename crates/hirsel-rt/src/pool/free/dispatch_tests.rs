@@ -660,3 +660,54 @@ fn scoped_workers_take_only_addressed_frames_and_never_ordinary_work() {
         19
     );
 }
+
+#[test]
+fn a_late_token_wake_routes_a_saved_compact_frame_off_its_last_worker() {
+    for owner in [Some(owner_word(Owner::Any)), None] {
+        let mut execs = topology(2);
+        execs.0.migrate = true;
+        let first = exec(&execs, 0);
+        let peer = exec(&execs, 1);
+        let saved = segment(&execs, 19);
+        let frame = saved.frame.clone();
+        assert!(
+            frame
+                .placement
+                .leave(saved.queued.start(), Arc::as_ptr(&first).addr(), || {})
+                .is_none()
+        );
+        let token = Token { frame, owner };
+        notify_frame(&execs, &token);
+        assert!(
+            next(&execs, &first).is_none(),
+            "late wake returned to the old worker"
+        );
+        assert!(
+            first
+                .inbox
+                .lock()
+                .unwrap()
+                .posts
+                .iter()
+                .all(|(post, _)| !matches!(post, Post::Saved(_))),
+            "late wake was addressed to the old worker"
+        );
+        let mut inbox = peer.inbox.lock().unwrap();
+        let at = inbox
+            .posts
+            .iter()
+            .position(|(post, _)| matches!(post, Post::Saved(_)))
+            .expect("late wake did not reach its migration peer");
+        let (Post::Saved(queued), _) = inbox.posts.remove(at).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(queued.queued.start().value().task.slot, 19);
+        assert!(
+            inbox
+                .posts
+                .iter()
+                .all(|(post, _)| !matches!(post, Post::Saved(_))),
+            "late wake duplicated the activation"
+        );
+    }
+}
