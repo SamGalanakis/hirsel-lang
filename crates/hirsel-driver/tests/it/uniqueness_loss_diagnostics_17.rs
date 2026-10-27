@@ -221,14 +221,17 @@ fn uniqueness_loss_diagnostics_17_loop_branch_and_handback() {
                 .count(),
             2
         );
+        let inferred = checked(HANDBACK);
+        assert!(inferred.diagnostics.is_empty(), "{:?}", inferred.diagnostics);
+        let public_handback = HANDBACK.replacen("fn edit", "pub fn edit", 1);
         rejected(
-            HANDBACK,
+            &public_handback,
             "MODE-2",
             "map.remove(mut m,0)",
             &["edit(mut m)"],
             "lost its deep uniqueness",
         );
-        let output = checked(HANDBACK);
+        let output = checked(&public_handback);
         assert!(output.diagnostics[0].notes.iter().any(
             |note| note.contains("@preserves_unique(m)")
                 && note.contains("`edit`")
