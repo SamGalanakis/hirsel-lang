@@ -83,6 +83,47 @@ impl NativeMetadataWeight {
         });
         self.add((len / 5 + 1).saturating_mul(node));
     }
+    /// Pack an owned private map before charging its immutable retained rows.
+    /// Rust alloc's bulk_push fills eleven-key nodes before opening subtrees;
+    /// fix_right_border_of_plentiful redistributes their keys without new nodes.
+    /// See rust-lang/rust b940084d7, btree/append.rs:8-70, map.rs:2544-2554,
+    /// and fix.rs:105-119.
+    /// Repacking here establishes the bound even after arbitrary inserts/removes.
+    pub fn packed_map<K: Ord, V>(
+        &mut self,
+        values: &mut BTreeMap<K, V>,
+        mut visit: impl FnMut(&mut Self, &K, &V),
+    ) {
+        *values = std::mem::take(values).into_iter().collect();
+        if !values.is_empty() {
+            let parts = [
+                Layout::new::<usize>(),
+                Layout::new::<u16>(),
+                Layout::new::<u16>(),
+                Layout::new::<[K; 11]>(),
+                Layout::new::<[V; 11]>(),
+                Layout::new::<[usize; 12]>(),
+            ];
+            let alignment = parts.iter().map(Layout::align).max().unwrap();
+            let bytes = parts.iter().fold(alignment - 1, |n, part| {
+                n.saturating_add(part.size())
+                    .saturating_add(part.align() - 1)
+            });
+            let mut keys = values.len();
+            let mut nodes = 0usize;
+            loop {
+                keys /= 12;
+                nodes = nodes.saturating_add(keys.saturating_add(1));
+                if keys == 0 {
+                    break;
+                }
+            }
+            self.add(nodes.saturating_mul(bytes));
+        }
+        for (key, value) in values.iter() {
+            visit(self, key, value);
+        }
+    }
     pub fn map<K, V>(&mut self, values: &BTreeMap<K, V>, mut visit: impl FnMut(&mut Self, &K, &V)) {
         self.tree::<K, V>(values.len());
         for (key, value) in values {

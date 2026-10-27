@@ -12,10 +12,35 @@ use hirsel_syntax::DefPath;
 use hirsel_types::NameSite;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Root data keeps the reservation of its actual producing graph. Scalar
+/// callers own their snapshot; admitted front products share theirs directly.
+#[derive(Clone)]
+pub enum RootInputs {
+    Owned(Box<NativeSourceRoots>),
+    Front(Arc<hirsel_engine::FrontNativeProducts>),
+}
+impl std::ops::Deref for RootInputs {
+    type Target = NativeSourceRoots;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(roots) => roots,
+            Self::Front(front) => &front.roots,
+        }
+    }
+}
+impl RootInputs {
+    pub(super) fn owned_mut(&mut self) -> Option<&mut NativeSourceRoots> {
+        match self {
+            Self::Owned(roots) => Some(roots),
+            Self::Front(_) => None,
+        }
+    }
+}
+
 /// Compact current inputs for source/instance misses. Required source roots and
 /// GEN-5 remain the engine's policy; native demand does not prune diagnostics.
 pub struct NativeDeclarations {
-    pub roots: NativeSourceRoots,
+    pub roots: RootInputs,
     pub program: Program,
     pub context: DiscoveryContext,
     pub sources: BTreeMap<DefPath, NativeDefinitionProduct>,
@@ -148,6 +173,34 @@ impl NativeDeclarations {
     pub fn from_settled(
         signatures: &hirsel_engine::SignatureSnapshot,
         roots: NativeSourceRoots,
+        products: impl IntoIterator<Item = hirsel_engine::NativeDiscoveryProduct>,
+        statics: hirsel_engine::NativeStaticInputs,
+        extra: InstanceGraph,
+    ) -> Result<Self, QueryError> {
+        Self::assemble(
+            signatures,
+            RootInputs::Owned(Box::new(roots)),
+            products,
+            statics,
+            extra,
+        )
+    }
+
+    /// Share exactly the admitted front root and its original reservation.
+    /// Declaration assembly still validates every selected product independently.
+    pub fn from_front(facts: Arc<hirsel_engine::FrontNativeProducts>) -> Result<Self, QueryError> {
+        Self::assemble(
+            &facts.signatures,
+            RootInputs::Front(facts.clone()),
+            facts.catalogue.iter().map(|product| (**product).clone()),
+            facts.statics.clone(),
+            facts.extra.clone(),
+        )
+    }
+
+    fn assemble(
+        signatures: &hirsel_engine::SignatureSnapshot,
+        roots: RootInputs,
         products: impl IntoIterator<Item = hirsel_engine::NativeDiscoveryProduct>,
         statics: hirsel_engine::NativeStaticInputs,
         extra: InstanceGraph,

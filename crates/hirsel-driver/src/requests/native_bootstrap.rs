@@ -322,14 +322,8 @@ impl NativeBootstrap {
             );
             plan.options.discharge = proofs.discharge.clone();
         }
-        let declarations = NativeDeclarations::from_settled(
-            &facts.signatures,
-            facts.roots.clone(),
-            facts.catalogue.iter().map(|p| (**p).clone()),
-            facts.statics.clone(),
-            facts.extra.clone(),
-        )
-        .map_err(|e| format!("native declarations: {e:?}"))?;
+        let declarations = NativeDeclarations::from_front(facts.clone())
+            .map_err(|e| format!("native declarations: {e:?}"))?;
         let reader = facts
             .original_context
             .reader(

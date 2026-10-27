@@ -256,14 +256,8 @@ impl OwnershipBootstrap {
             .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or("ownership bootstrap plan already consumed")?;
-        let declarations = NativeDeclarations::from_settled(
-            &facts.signatures,
-            facts.roots.clone(),
-            facts.catalogue.iter().map(|p| (**p).clone()),
-            facts.statics.clone(),
-            facts.extra.clone(),
-        )
-        .map_err(|e| format!("ownership native declarations: {e:?}"))?;
+        let declarations = NativeDeclarations::from_front(facts.clone())
+            .map_err(|e| format!("ownership native declarations: {e:?}"))?;
         let input = declarations.program.input.clone();
         let reader = facts
             .original_context

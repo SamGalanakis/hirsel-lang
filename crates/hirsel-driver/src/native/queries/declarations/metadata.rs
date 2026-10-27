@@ -18,7 +18,7 @@ fn requirement(w: &mut Weight, value: &Requirement) {
 }
 impl NativeDeclarations {
     /// Retained allocation bound for this copied, bodyless declaration snapshot.
-    /// Compacts its private CT-5 hash tables before measuring; no source/Value/
+    /// Packs its private ordered maps and CT-5 tables before measuring; no source/Value/
     /// Ready body is demanded. Charge this value for the snapshot's lifetime.
     /// Shared front syntax, signatures, summaries, source maps, V and interned
     /// rows still require their original owners. Mutable memo growth is separate
@@ -38,31 +38,36 @@ impl NativeDeclarations {
         } = self;
         let mut w = Weight::default();
         w.add(size_of::<Self>());
-        w.roots(roots);
+        if let Some(roots) = roots.owned_mut() {
+            w.add(size_of::<hirsel_engine::NativeSourceRoots>() + 2 * size_of::<usize>());
+            w.roots(roots);
+        }
+        // Shared front roots pin the producer reservation through FrontNativeProducts.
+        // Only the new program/context/source maps below are copied ownership.
         w.arc(&program.memo);
-        w.map(&program.definitions, |w, path, _| w.path(path));
-        w.map(&program.signatures, |w, path, _| w.path(path));
-        w.map(&program.revisions, |w, path, _| w.path(path));
-        w.map(&program.binders, |w, path, _| w.path(path));
-        w.map(&program.operations, |w, path, operation| {
+        w.packed_map(&mut program.definitions, |w, path, _| w.path(path));
+        w.packed_map(&mut program.signatures, |w, path, _| w.path(path));
+        w.packed_map(&mut program.revisions, |w, path, _| w.path(path));
+        w.packed_map(&mut program.binders, |w, path, _| w.path(path));
+        w.packed_map(&mut program.operations, |w, path, operation| {
             w.path(path);
             w.path(&operation.definition);
         });
         w.vec(&program.requirements, requirement);
-        w.map(&program.constants, |w, path, value| {
+        w.packed_map(&mut program.constants, |w, path, value| {
             w.path(path);
             w.materialized(value);
         });
-        w.map(&program.owners.nominals, |w, _, value| {
+        w.packed_map(&mut program.owners.nominals, |w, _, value| {
             if let hirsel_layout::layout::OwnerRepresentation::Defined(value) = value {
                 w.representation(value);
             }
         });
-        w.map(&program.owners.containers, |w, _, value| {
+        w.packed_map(&mut program.owners.containers, |w, _, value| {
             w.representation(value)
         });
         w.instance_bodies(&mut program.instance_bodies);
-        w.map(&context.sources, |w, path, source| {
+        w.packed_map(&mut context.sources, |w, path, source| {
             w.path(path);
             w.flat_vec(&source.entry_parameters);
             w.arc(&source.declaration);
@@ -79,15 +84,15 @@ impl NativeDeclarations {
                 w.vec(parameters, |w, p| w.flat_vec(&p.fields))
             });
         });
-        w.map(&context.requirements, |w, path, values| {
+        w.packed_map(&mut context.requirements, |w, path, values| {
             w.path(path);
             w.vec(values, requirement);
         });
-        w.map(sources, |w, path, value| {
+        w.packed_map(sources, |w, path, value| {
             w.path(path);
             w.source(value);
         });
-        w.map(source_anchors, |w, path, anchors| {
+        w.packed_map(source_anchors, |w, path, anchors| {
             w.path(path);
             w.flat_vec(anchors);
         });
