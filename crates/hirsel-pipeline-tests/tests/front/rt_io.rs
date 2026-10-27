@@ -761,8 +761,7 @@ fn file_stream_records_pinned_reads_seek_append_prefixes_and_replays_without_hos
     let tree = real.snapshot().unwrap();
     assert_eq!(tree.files["saved"], b"new");
     let tape = real.tape().to_vec();
-    let encoded = hirsel_rt::launch::render_tape(&tape).unwrap();
-    assert_eq!(hirsel_rt::launch::parse_tape(&encoded).unwrap(), tape);
+    assert_eq!(rt_support::tape::events(&tape), tape);
     let mut sim = SimIo::new(initial.clone(), tape.clone());
     std::fs::remove_file(temp.path().join("saved")).unwrap();
     for event in &tape {
@@ -911,10 +910,7 @@ fn portable_file_errors_round_trip_provider_faults_tapes_and_result_abi() {
     let final_tree = real.snapshot().unwrap();
     assert_eq!(final_tree.files["saved"], b"ab");
     let tape = real.tape().to_vec();
-    assert_eq!(
-        hirsel_rt::launch::parse_tape(&hirsel_rt::launch::render_tape(&tape).unwrap()).unwrap(),
-        tape
-    );
+    assert_eq!(rt_support::tape::events(&tape), tape);
     let mut sim = SimIo::new(initial(), tape.clone());
     for event in &tape {
         assert_eq!(
@@ -1103,8 +1099,7 @@ fn filesystem_breadth_confines_symlinks_and_replays_partial_removal() {
     let final_tree = host.snapshot().unwrap();
     let handles = host.handles().observed();
     let tape = host.tape().to_vec();
-    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    assert_eq!(rt_support::tape::events(&tape), tape);
     drop(host);
     drop(root);
     drop(outside);
@@ -1164,8 +1159,7 @@ fn put_new_and_sync_on_a_host_tree_record_round_trip_as_text_and_replay() {
     );
     real.close_file(file).unwrap().unwrap();
     let tape = real.0.tape().to_vec();
-    let text = hirsel_rt::launch::render_tape(&tape).unwrap();
-    assert_eq!(hirsel_rt::launch::parse_tape(&text).unwrap(), tape);
+    assert_eq!(rt_support::tape::events(&tape), tape);
     let mut sim = SimIo::new(initial(), tape.clone());
     for event in &tape {
         assert_eq!(
