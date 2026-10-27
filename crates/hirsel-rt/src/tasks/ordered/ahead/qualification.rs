@@ -30,15 +30,17 @@ fn unsupported_metadata_refuses_before_scope_or_environment_access() {
     for width in [1, 2, 4] {
         for (version, flags) in [
             (0, 0),
-            (5, 0),
+            (6, 0),
             (1, 1),
             (2, 1),
             (3, 1),
             (4, 1),
+            (5, 1),
             (1, u32::MAX),
         ] {
             let mut run = crate::host::BodyRun::new(width, true);
             unsafe { run.use_physical_dispatch() };
+            let control = run.control();
             let outcome = run.run(
                 |ctx| unsafe {
                     super::super::engine::enable(
@@ -72,7 +74,15 @@ fn unsupported_metadata_refuses_before_scope_or_environment_access() {
                     "unsupported spawn-ahead metadata version or flags".into()
                 )),
             );
-            assert_eq!(outcome.pending, 0);
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while control.status().reclamation_pending != 0 {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "refused metadata reclaims its workers"
+                );
+                std::thread::yield_now();
+            }
+            assert!(control.status().finished);
         }
     }
 }
@@ -280,7 +290,7 @@ fn version_dispatch_does_not_overread_legacy_or_unsupported_prefixes() {
             libc::mprotect(mapping.cast::<u8>().add(page).cast(), page, libc::PROT_NONE),
             0
         );
-        for version in [1, 5] {
+        for version in [1, 6] {
             // The next byte is inaccessible. v1 has exactly its original16
             // bytes; unsupported metadata has only its8-byte dispatch prefix.
             let bytes = if version == 1 { 16 } else { 8 };
