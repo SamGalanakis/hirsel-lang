@@ -431,14 +431,14 @@ fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
                 },
             );
             let output = session
-                .request(requests::CompileOperation::ExportTir)
+                .request(hirsel_driver::requests::CompileOperation::ExportTir)
                 .unwrap();
-            let requests::CompileResult::ExportTir(text) = &output.result else {
+            let hirsel_driver::requests::CompileResult::ExportTir(text) = &output.result else {
                 panic!("expected TIR export");
             };
             text.clone()
         };
-        let mut first = engine(source);
+        let first = engine(source);
         let text = export_source(source);
         let export = first.import_tir(&text).unwrap();
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
@@ -456,7 +456,7 @@ fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
         );
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
         let edited = format!("fn unrelated()->u64{{3}}\n{source}");
-        let mut second = engine(&edited);
+        let second = engine(&edited);
         let export = second
             .import_tir(&export_source(&edited))
             .unwrap()
