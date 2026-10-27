@@ -65,6 +65,9 @@ pub(super) struct Request {
     plan: Reference,
 }
 impl Request {
+    pub(super) fn has_receipt_roots(&self) -> bool {
+        self.receipt_roots.is_some()
+    }
     pub(super) fn source_definition(&self) -> Option<&hirsel_syntax::DefPath> {
         (self.recipe.domain == SOURCE_RECIPE).then_some(&self.key.definition)
     }
@@ -410,7 +413,10 @@ impl DemandInstances {
         Ok(Request {
             key: NamedKey::of(key),
             lexical: NamedKey::of(instances.lexical_key(id)),
-            receipt_roots: instances.receipt_source(id).and(receipt_roots),
+            receipt_roots: (!instances.roles[id.index()].is_library()
+                && instances.roles[id.index()] != hirsel_rc::instance::InstanceRole::Finalizer)
+                .then_some(receipt_roots)
+                .flatten(),
             recipe,
             layouts,
             plan: self.put(
@@ -528,7 +534,7 @@ impl DemandInstances {
             &mut layouts,
         )
         .map_err(|e| format!("native root registration: {e:?}"))?;
-        let requires_receipts = super::receipt_requests::required(engine)?;
+        let requires_receipts = engine.receipt_required();
         let receipt_roots = if requires_receipts {
             let inputs = roots
                 .iter()
@@ -744,7 +750,7 @@ impl DemandInstances {
             .cloned()
             .ok_or("native instance was not discovered")?;
         let receipt_graph = if request.recipe.domain == SOURCE_RECIPE
-            && (request.receipt_roots.is_some() || super::receipt_requests::required(inputs)?)
+            && (request.receipt_roots.is_some() || inputs.receipt_required())
         {
             Some(super::receipt_requests::current(
                 inputs,

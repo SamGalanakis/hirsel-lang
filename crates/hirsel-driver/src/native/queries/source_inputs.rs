@@ -28,6 +28,13 @@ pub trait NativeSourceProvider: NativeRecordSource {
     fn receipt_provider(&self) -> Option<crate::native::receipt_source::provider::Front<'_>> {
         None
     }
+    fn receipt_required(&self) -> bool {
+        self.declarations()
+            .sources
+            .values()
+            .filter_map(|source| source.lower.as_ref())
+            .any(receipt_required)
+    }
     fn query_policy(&self) -> NativeQueryPolicy;
     /// The exact selected V output, including a task-local front Lower binding.
     fn source_output(
@@ -131,6 +138,14 @@ pub trait NativeSourceProvider: NativeRecordSource {
     }
     fn source_observation(&self, path: &DefPath) -> Result<SourceObservation, String>;
     fn original_source(&mut self, path: &DefPath) -> Result<OriginalSource, String>;
+}
+
+fn receipt_required(output: &hirsel_validate::VerifiedDefinitionOutput) -> bool {
+    output.invocations().calls().iter().any(|call| {
+        call.callee
+            .as_ref()
+            .is_some_and(|path| path.is_core("arena.seal") || path.is_core("region.with"))
+    })
 }
 
 /// The front owner resolves its settled descriptor without decoding a body.
@@ -303,6 +318,19 @@ impl NativeSourceProvider for FrozenNativeSource {
     }
     fn verification(&self) -> Verify {
         self.reader().verification()
+    }
+    fn receipt_required(&self) -> bool {
+        self.inputs
+            .declarations
+            .sources
+            .iter()
+            .any(|(path, source)| {
+                self.reader()
+                    .input(path)
+                    .and_then(|(output, _, _, _)| output)
+                    .or(source.lower.as_ref())
+                    .is_some_and(receipt_required)
+            })
     }
     fn query_policy(&self) -> NativeQueryPolicy {
         self.reader().query_policy()

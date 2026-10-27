@@ -41,25 +41,6 @@ pub(super) fn encode(
         .ok_or_else(|| "receipt root encoding failed".into())
 }
 
-pub(super) fn required(source: &impl NativeSourceProvider) -> Result<bool, String> {
-    source
-        .declarations()
-        .context
-        .sources
-        .keys()
-        .try_fold(false, |required, path| {
-            let current = source.source_output(path)?;
-            Ok(required
-                || current.is_some_and(|output| {
-                    output.invocations().calls().iter().any(|call| {
-                        call.callee
-                            .as_ref()
-                            .is_some_and(|p| p.is_core("arena.seal") || p.is_core("region.with"))
-                    })
-                }))
-        })
-}
-
 fn roots(
     source: &impl NativeSourceProvider,
     target: &TargetSpec,

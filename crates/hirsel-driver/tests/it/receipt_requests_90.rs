@@ -33,7 +33,9 @@ fn aware_source_request_forwards_paired_heap_companions_through_rc_and_reuse() {
 
 fn borrowed_request(forward: bool) {
     with_compiler_stack(|| {
-        let store: Arc<dyn ResultStore> = Arc::new(store::MemStore::default());
+        let directory = tempfile::tempdir().unwrap();
+        let store: Arc<dyn ResultStore> =
+            Arc::new(store::DirStore::new(directory.path().join("products")));
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
             .with_result_store(store.clone());
         let file = engine
@@ -70,6 +72,24 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
         let reader = engine
             .native_original_reader(&paths, store.clone())
             .unwrap();
+        let front_context = Arc::new(engine.native_original_context(&paths).unwrap());
+        let records = NativeRecords::new(engine.types().clone(), store.clone());
+        let mut products = std::collections::BTreeMap::new();
+        for path in &paths {
+            let front = Front::new(&reader);
+            let original = front.original(path).unwrap();
+            let bytes = records.encode(&engine, original.definition()).unwrap();
+            products.insert(
+                path.clone(),
+                NativeOriginalProduct {
+                    definition: path.clone(),
+                    implementation_revision: original.implementation_revision(),
+                    signature: original.definition().signature_hash,
+                    body: store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap(),
+                    verified: original.output().cloned(),
+                },
+            );
+        }
         let front = Front::new(&reader);
         let mut inspect = entry_path(&default_context());
         inspect.0.name = "inspect".into();
@@ -145,8 +165,87 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
         );
         drop(front);
         let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
+        if forward {
+            use hirsel_driver::native::queries::instance_tasks::{
+                INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks,
+            };
+            use hirsel_driver::native::queries::source_inputs::NativeFrontLower;
+            use runtime::{
+                MemoryWeight, ProcessBudget, ProductRef, QueryFactory, QueryId, QueryPoll,
+            };
+            let bindings = products
+                .iter()
+                .map(|(path, product)| {
+                    (
+                        path.clone(),
+                        QueryId {
+                            kind: 0x7c90,
+                            address: store::Address(product.body.output.0),
+                        },
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let rows = bindings
+                .iter()
+                .map(|(path, query)| {
+                    (
+                        *query,
+                        ProductRef {
+                            address: query.address,
+                            action: store::Action(query.address.0),
+                            record: products[path].body,
+                        },
+                    )
+                })
+                .collect();
+            let mut delayed = read.clone();
+            delayed.0.name = "read".into();
+            let mut cx = LowerReads {
+                rows,
+                waiting: Some(bindings[&delayed]),
+            };
+            let budget = ProcessBudget::new(64 << 20);
+            let tasks = InstanceTasks::new(
+                inputs.clone(),
+                store.clone(),
+                hirsel_driver::native::Options::new(target.clone()),
+                ContentHash::of_bytes(b"receipt worker source dependencies"),
+                MemoryWeight {
+                    scratch: 16 << 20,
+                    retained: 1 << 20,
+                    stack: 0,
+                },
+                budget.reserve(64 << 20).unwrap(),
+            )
+            .unwrap()
+            .with_front_lower(NativeFrontLower {
+                context: front_context,
+                bindings,
+                products: Arc::new(LowerRows(products)),
+            })
+            .unwrap();
+            let owner = tasks
+                .roots()
+                .iter()
+                .find(|key| key.instance.definition() == &read)
+                .unwrap();
+            let factory = InstanceTaskFactory::new(tasks.clone());
+            let mut task = factory
+                .create(QueryId {
+                    kind: INSTANCE_INPUT_KIND,
+                    address: owner.address(INSTANCE_INPUT_KIND),
+                })
+                .unwrap();
+            assert!(
+                matches!(task.poll(&mut cx), QueryPoll::Waiting(ref waits) if waits == &[cx.waiting.unwrap()])
+            );
+            cx.waiting = None;
+            assert!(matches!(task.poll(&mut cx), QueryPoll::Complete(_)));
+            assert_eq!(tasks.imports.load(std::sync::atomic::Ordering::Relaxed), 0);
+        }
         let mut source = inputs.provider();
-        let options = hirsel_driver::native::Options::new(target.clone());
+        let mut options = hirsel_driver::native::Options::new(target.clone());
+        options.validation = hirsel_driver::native::Validation::Ready;
         let mut demand = DemandInstances::new_from_source(
             &source,
             store.clone(),
@@ -186,7 +285,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
             target: &target,
             operations: operations.as_ref(),
             manifest: &manifest,
-            discharge: None,
+            discharge: Some(&options.discharge),
         };
         let (closure, body) = InstanceQueries::new(store.clone())
             .read(&address, &output.product, &environment)
@@ -214,7 +313,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
             layouts: &binding.table,
             operations: operations.as_ref(),
             manifest: &manifest,
-            discharge: None,
+            discharge: Some(&options.discharge),
         };
         hirsel_lir::validate::validate_value(unit.clone(), &check).unwrap();
         let placed =
@@ -246,6 +345,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
         );
         drop(observe);
         let mut changed = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_types(engine.types().clone())
             .with_result_store(store.clone());
         let file = changed
             .sources
@@ -274,12 +374,13 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
             .native_original_reader(&paths, store.clone())
             .unwrap();
         let changed = NativeInstanceInputs::from_products(declarations, reader).unwrap();
+        let stale = demand
+            .instance_from(&mut changed.provider(), &address, &options)
+            .err()
+            .unwrap();
         assert!(
-            demand
-                .instance_from(&mut changed.provider(), &address, &options)
-                .err()
-                .unwrap()
-                .contains("receipt request changed with current original source")
+            stale.contains("receipt request changed with current original source"),
+            "{stale}"
         );
         assert_eq!(demand.imports, imports);
         // A fresh producer uses only persisted discovery and current original V.
@@ -291,4 +392,34 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
         assert_eq!(replay.product.product, output.product.product);
         assert_eq!(fresh.imports, 0);
     });
+}
+
+struct LowerRows(std::collections::BTreeMap<DefPath, NativeOriginalProduct>);
+impl hirsel_driver::native::queries::source_inputs::NativeLowerProducts for LowerRows {
+    fn lower_product(
+        &self,
+        path: &DefPath,
+        selected: runtime::ProductRef,
+    ) -> Result<NativeOriginalProduct, String> {
+        self.0
+            .get(path)
+            .filter(|product| product.body == selected.record)
+            .cloned()
+            .ok_or_else(|| "unselected test Lower".into())
+    }
+}
+struct LowerReads {
+    rows: Vec<(runtime::QueryId, runtime::ProductRef)>,
+    waiting: Option<runtime::QueryId>,
+}
+impl runtime::QueryContext for LowerReads {
+    fn read(
+        &mut self,
+        query: runtime::QueryId,
+    ) -> std::task::Poll<Result<runtime::ProductRef, store::Reference>> {
+        if self.waiting == Some(query) {
+            return std::task::Poll::Pending;
+        }
+        std::task::Poll::Ready(Ok(self.rows.iter().find(|(id, _)| *id == query).unwrap().1))
+    }
 }

@@ -567,56 +567,78 @@ impl QueryTask for InstanceTask {
         if let Some(result) = self.terminal {
             return finish(result);
         }
-        if self.id.kind == INSTANCE_INPUT_KIND
-            && let Some(front) = &self.tasks.front
-            && let Some(path) = self.entry.request.source_definition()
+        let mut receipt_products = Vec::new();
+        if let Some(front) = &self.tasks.front
+            && let Some(owner) = self.entry.request.source_definition()
+            && (self.id.kind == INSTANCE_INPUT_KIND || self.entry.request.has_receipt_roots())
         {
-            let Some(query) = front.bindings.get(path).copied() else {
-                let error = self
-                    .tasks
-                    .failure("native source has no front Lower dependency");
-                self.terminal = Some(Err(error));
-                return finish(Err(error));
+            let paths = if self.entry.request.has_receipt_roots() {
+                self.tasks
+                    .source
+                    .declarations
+                    .context
+                    .sources
+                    .keys()
+                    .collect::<Vec<_>>()
+            } else {
+                vec![owner]
             };
-            let selected = match cx.read(query) {
-                Poll::Pending => return QueryPoll::Waiting(vec![query]),
-                Poll::Ready(Err(error)) => {
-                    self.terminal = Some(Err(error));
-                    return finish(Err(error));
-                }
-                Poll::Ready(Ok(product)) if product.address == query.address => product,
-                _ => {
+            let mut waiting = Vec::new();
+            for path in paths {
+                let Some(query) = front.bindings.get(path).copied() else {
                     let error = self
                         .tasks
-                        .failure("front Lower returned another query output");
+                        .failure("native source has no front Lower dependency");
                     self.terminal = Some(Err(error));
                     return finish(Err(error));
-                }
-            };
-            let source = if let Some((previous, _)) = self.entry.source.get() {
-                if *previous != selected {
-                    Err("front Lower changed within a native input".into())
-                } else {
-                    Ok(())
-                }
-            } else {
-                front
+                };
+                let selected = match cx.read(query) {
+                    Poll::Pending => {
+                        waiting.push(query);
+                        continue;
+                    }
+                    Poll::Ready(Err(error)) => {
+                        self.terminal = Some(Err(error));
+                        return finish(Err(error));
+                    }
+                    Poll::Ready(Ok(product)) if product.address == query.address => product,
+                    _ => {
+                        let error = self
+                            .tasks
+                            .failure("front Lower returned another query output");
+                        self.terminal = Some(Err(error));
+                        return finish(Err(error));
+                    }
+                };
+                let result = front
                     .products
                     .lower_product(path, selected)
                     .and_then(|product| {
                         if &product.definition != path {
                             return Err("front Lower names another source definition".into());
                         }
-                        self.entry
-                            .source
-                            .set((selected, product))
-                            .map_err(|_| "front Lower completion raced within one task".into())
-                    })
-            };
-            if let Err(message) = source {
-                let error = self.tasks.failure(&message);
-                self.terminal = Some(Err(error));
-                return finish(Err(error));
+                        if path == owner {
+                            if let Some((previous, _)) = self.entry.source.get() {
+                                if *previous != selected {
+                                    return Err("front Lower changed within a native input".into());
+                                }
+                            } else {
+                                self.entry.source.set((selected, product.clone())).map_err(
+                                    |_| "front Lower completion raced within one task".to_owned(),
+                                )?;
+                            }
+                        }
+                        receipt_products.push(product);
+                        Ok(())
+                    });
+                if let Err(message) = result {
+                    let error = self.tasks.failure(&message);
+                    self.terminal = Some(Err(error));
+                    return finish(Err(error));
+                }
+            }
+            if !waiting.is_empty() {
+                return QueryPoll::Waiting(waiting);
             }
         }
         if self.id.kind == INSTANCE_KIND {
@@ -647,9 +669,14 @@ impl QueryTask for InstanceTask {
                     .source
                     .get()
                     .ok_or("native input has no settled front Lower")?;
+                let products = if self.entry.request.has_receipt_roots() {
+                    receipt_products
+                } else {
+                    vec![product.clone()]
+                };
                 self.tasks.source.provider_from_products(
                     &front.context,
-                    [product.clone()],
+                    products,
                     self.tasks.store.clone(),
                 )?
             } else {
