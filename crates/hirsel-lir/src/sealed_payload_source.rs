@@ -12,8 +12,8 @@ pub use profile::{
     ClosedStorageProfile, ClosedStorageType, SourceStorageSelection,
 };
 pub use receipt::{
-    ReceiptCapture, ReceiptContract, ReceiptGrant, ReceiptMode, ReceiptParameter, ReceiptResult,
-    ReceiptType,
+    ReceiptCapture, ReceiptContract, ReceiptGrant, ReceiptMode, ReceiptParameter, ReceiptPort,
+    ReceiptProfile, ReceiptResult, ReceiptSource, ReceiptType,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

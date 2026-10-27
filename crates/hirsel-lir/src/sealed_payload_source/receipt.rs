@@ -3,6 +3,8 @@
 //! source observations, not possession of this record, establish its authority.
 use hirsel_codec::{snapshot_enum, snapshot_struct};
 use hirsel_syntax::ContentHash;
+mod source;
+pub use source::{ReceiptPort, ReceiptProfile, ReceiptSource};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ReceiptMode {

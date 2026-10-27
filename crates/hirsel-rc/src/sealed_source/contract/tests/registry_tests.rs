@@ -787,3 +787,114 @@ fn arena_scope_expansions_refuse_wrong_original_identity_slot_and_grant_entry() 
         )
         .unwrap();
 }
+
+#[test]
+fn solved_requests_retain_complete_original_profiles_after_context_release() {
+    let (types, bytes, scalar, _) = types();
+    let mut fixture = Fixture::named(
+        &types,
+        body(&[bytes, scalar, scalar], 2),
+        &[PassingMode::Borrow, PassingMode::Borrow],
+        "retained_source_profiles",
+        2,
+    );
+    let original = fixture.profiles.clone();
+    let mut registry = Registry::default();
+    let id = register(&mut registry, &fixture, &types);
+    registry
+        .resolve(id, BTreeMap::new(), BTreeMap::new())
+        .unwrap();
+    let requests = registry.solve().unwrap();
+    drop(registry);
+    fixture.profiles.clear();
+    drop(fixture);
+    let request = &requests[id.index()];
+    // Even known-empty boundary demand retains the complete context. Losing
+    // the undemanded scalar port would force a later C provider to infer it
+    // from erased native data or reopen an already released source body.
+    assert!(request.declaration().contract().is_none());
+    assert_eq!(request.profiles(), &original);
+    assert_ne!(
+        request.profiles()[&Port::Parameter(0)].root,
+        request.profiles()[&Port::Parameter(1)].root,
+    );
+    assert_eq!(
+        request.profiles()[&Port::Parameter(1)].root,
+        request.profiles()[&Port::Result].root,
+    );
+}
+
+#[test]
+fn receipt_source_binds_original_and_aware_identities_and_checks_complete_port_profiles() {
+    use hirsel_lir::sealed_payload_source::{ReceiptPort, ReceiptSource};
+    let (types, bytes, scalar, _) = types();
+    let mut source = body(&[bytes, scalar, scalar], 2);
+    call(
+        &mut source,
+        0,
+        &[(0, UseKind::Borrow), (1, UseKind::Borrow)],
+        None,
+    );
+    let fixture = Fixture::named(
+        &types,
+        source,
+        &[PassingMode::Borrow, PassingMode::Borrow],
+        "source_boundary_packet",
+        2,
+    );
+    let mut registry = Registry::default();
+    let id = register(&mut registry, &fixture, &types);
+    registry
+        .resolve(
+            id,
+            BTreeMap::from([(
+                0,
+                Expansion::External(ExternalDemand {
+                    parameters: vec![0, 1],
+                    ..Default::default()
+                }),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    let requests = registry.solve().unwrap();
+    let request = &requests[id.index()];
+    let source = request.receipt_source().unwrap().unwrap();
+    assert_eq!(&source.original, fixture.entry.reference());
+    assert_eq!(source.instance, request.aware_key().unwrap().digest());
+    assert_ne!(source.instance, source.original.instance);
+    assert_eq!(source.source, fixture.entry.source_identity());
+    assert_eq!(
+        source.implementation_revision,
+        fixture.entry.implementation_revision()
+    );
+    assert_eq!(
+        source.profile(ReceiptPort::Result),
+        fixture.profiles.get(&Port::Result)
+    );
+    assert_eq!(source.profiles.len(), fixture.profiles.len());
+    let bytes = hirsel_codec::to_text(&source);
+    let restored: ReceiptSource = hirsel_codec::from_text(&bytes).unwrap();
+    assert_eq!(restored, source);
+    restored.check_structure().unwrap();
+    for mutation in 0..8 {
+        let mut broken = source.clone();
+        match mutation {
+            0 => {
+                broken.profiles.remove(0);
+            }
+            1 => broken.profiles.swap(0, 1),
+            2 => broken.profiles[0].profile.root.source_type = ContentHash([9; 32]),
+            3 => broken.source = ContentHash([0; 32]),
+            4 => broken.instance = ContentHash([0; 32]),
+            5 => broken.original.instance = ContentHash([0; 32]),
+            6 => broken.contract.source_demand = ContentHash([9; 32]),
+            7 => {
+                let wrong = broken.profiles[1].profile.clone();
+                broken.profiles[0].profile = wrong;
+            }
+            _ => unreachable!(),
+        }
+        assert!(broken.check_structure().is_err(), "mutation {mutation}");
+    }
+}

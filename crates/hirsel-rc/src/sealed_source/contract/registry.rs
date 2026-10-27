@@ -157,6 +157,7 @@ pub struct Request {
     context: InstanceKey,
     aware: Option<InstanceKey>,
     declaration: Declaration,
+    profiles: BTreeMap<Port, ClosedStorageProfile>,
 }
 impl Request {
     pub fn ordinary_key(&self) -> &InstanceKey {
@@ -170,6 +171,52 @@ impl Request {
     }
     pub fn declaration(&self) -> &Declaration {
         &self.declaration
+    }
+    /// Complete original port products retained across source-body release.
+    /// Contract hashes cannot reconstruct these types or callable alternatives.
+    /// This is source data; current provider observation and C custody proofs
+    /// remain required before the receipt-aware request is executable.
+    pub fn profiles(&self) -> &BTreeMap<Port, ClosedStorageProfile> {
+        &self.profiles
+    }
+    /// Source-only C input for the independently selected aware request. This
+    /// retains complete port profiles after the original body is released.
+    /// Publication still requires a current source-provider recheck.
+    pub fn receipt_source(
+        &self,
+    ) -> Result<Option<hirsel_lir::sealed_payload_source::ReceiptSource>, SourceError> {
+        use hirsel_lir::sealed_payload_source::{ReceiptPort, ReceiptProfile, ReceiptSource};
+        let Some(contract) = self.declaration.contract() else {
+            return Ok(None);
+        };
+        let entry = self.declaration.entry();
+        let result = ReceiptSource {
+            original: entry.reference().clone(),
+            instance: self
+                .aware
+                .as_ref()
+                .ok_or(SourceError::Malformed(
+                    "receipt source has no aware request",
+                ))?
+                .digest(),
+            source: entry.source_identity(),
+            implementation_revision: entry.implementation_revision(),
+            contract: contract.clone(),
+            profiles: self
+                .profiles
+                .iter()
+                .map(|(port, profile)| ReceiptProfile {
+                    port: match *port {
+                        Port::Parameter(ordinal) => ReceiptPort::Parameter(ordinal),
+                        Port::Result => ReceiptPort::Result,
+                        Port::Capture(ordinal) => ReceiptPort::Capture(ordinal),
+                    },
+                    profile: profile.clone(),
+                })
+                .collect(),
+        };
+        result.check_structure().map_err(SourceError::Malformed)?;
+        Ok(Some(result))
     }
 }
 
@@ -468,6 +515,7 @@ impl Registry {
                     context: row.context.clone(),
                     aware,
                     declaration,
+                    profiles: row.ports.clone(),
                 })
             })
             .collect()

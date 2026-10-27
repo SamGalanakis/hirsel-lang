@@ -725,3 +725,10 @@ access. Unlike the unique edit bodies it carries no unique parameter proof:
 P4 shallow-detaches every shared crossed block before preparing the final slot,
 using existing tracked-arena charge-before-copy detaches. It never warms or
 compacts the map. Callback writebacks survive failure; no key is lent.
+
+Receipt context requests retain every original port's complete closed storage
+profile after source-body release. `Request::receipt_source` exposes the
+source-only `ReceiptSource` declaration, with separate original and aware
+instance identities, the observed source/revision, contract and typed port
+profiles. Structural consistency does not establish a current source/V
+observation or authorize receipt entry, call, capture or task execution.
