@@ -19,6 +19,17 @@ pub(super) fn fixture(
     kind: u8,
     malformed: bool,
 ) -> (LayoutTable, LirUnit<Ready>, FnAbi) {
+    if kind == 4 {
+        let (table, mut unit, mut abi) = super::seal_bits_tests::fixture(target, 4, 0);
+        unit.tables.receipt_entry = None;
+        unit.slots.clear();
+        unit.parameters.clear();
+        abi.receipts = None;
+        abi.key.receipt_contract = None;
+        abi.parameters.pop();
+        abi.parameters[1].convention = hirsel_core_contract::Passing::Mut;
+        return (table, unit, abi);
+    }
     let (mut table, mut unit, mut abi) = super::tests::fixture(target);
     unit.tables.receipt_entry = None;
     unit.slots.clear();
@@ -200,4 +211,36 @@ fn probe(target: &TargetSpec, kind: u8, malformed: bool) -> Vec<u8> {
     f.b.finalize(f.em.module.target_config());
     em.define("probe", id, &mut ctx).unwrap();
     em.module.finish().emit().unwrap()
+}
+
+#[test]
+fn sealed_heap_root_native_read_is_a_nonowning_view_with_sum_23() {
+    const HEAP: &str = r#"
+#include <stdint.h>
+#include <assert.h>
+static uint64_t leaf[4] = {2, 2, 11, 12};
+static void *root = leaf;
+static unsigned seen;
+const void *hirsel_rt_v2_sealed_root(void *ctx, const void *owner) {
+    assert(ctx == (void*)41 && owner == (void*)43);
+    ++seen;
+    return &root;
+}
+extern uint8_t probe(void *, uint64_t, uint64_t, const void *, void *);
+int main(void) {
+    void *output[2] = {0, (void*)103};
+    assert(probe((void*)41, 0, 0, (void*)43, output) == 0);
+    assert(output[0] == leaf && output[1] == (void*)103 && seen == 1);
+    uint64_t *borrowed = output[0];
+    assert(borrowed[0] == 2 && borrowed[2] + borrowed[3] == 23);
+}
+"#;
+    for target in TargetSpec::executed() {
+        super::tests::execute(
+            &target,
+            probe(&target, 4, false),
+            "cranelift-sealed-list-borrow",
+            HEAP,
+        );
+    }
 }

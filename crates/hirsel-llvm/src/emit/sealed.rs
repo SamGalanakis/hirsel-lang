@@ -37,16 +37,16 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         failure: FailureId,
         origin: SourceAnchorId,
     ) -> Emitted {
-        let (status, output) = self.prepare_seal_bits(result, grant, root, shape, origin)?;
+        let (status, output) = self.prepare_seal(result, grant, root, shape, origin)?;
         self.status_guard(status, failure)?;
         let owner = self.builder.load(self.module.ptr_type(), output, 8);
         self.define(result, owner)
     }
 
-    /// The temporary receipt describes the original inline bits, not a heap
-    /// graph inferred from a scan. Nonempty/unsupported scopes still refuse in
-    /// the checked runtime; no inventory is synthesized by this emitter.
-    pub(super) fn prepare_seal_bits(
+    /// Use the original entry companion for heap-bearing roots. Pointer-free
+    /// roots need only a temporary bits snapshot. Neither path reconstructs
+    /// source provenance from addresses or from the release program.
+    pub(super) fn prepare_seal(
         &mut self,
         result: ValueId,
         grant: ValueId,
@@ -57,9 +57,18 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(descriptor) = self.unit.tables.seal_descriptors.get(shape.index()) else {
             return self.invalid("seal descriptor is missing");
         };
-        let layout = match descriptor.bits_root(self.inputs.layouts) {
-            Ok(layout) => layout,
-            Err(error) => return self.unsupported(error),
+        descriptor
+            .check(self.inputs.layouts)
+            .map_err(|what| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what,
+            })?;
+        let bits = descriptor.bits_root(self.inputs.layouts).is_ok();
+        let layout = descriptor.root_layout;
+        let companion = if bits {
+            None
+        } else {
+            Some(self.seal_receipt_slot(root, &descriptor.root_type)?)
         };
         if self.value_type(root)?.layout != layout
             || self.value_type(grant)?.repr != ValueRepr::Arena
@@ -68,7 +77,7 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             || !matches!(self.layout(self.value_type(result)?.layout)?.kind,
                 LayoutKind::SealedRegion { root } if root == layout)
         {
-            return self.invalid("seal operands disagree with their original bits descriptor");
+            return self.invalid("seal operands disagree with their original descriptor");
         }
         let code = self.anchor_code(origin)?;
         let (_, site) = self.failure_sites(code);
@@ -77,18 +86,99 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let image = self.stack(layout)?;
         self.store(self.layout_shape(layout)?, value, image);
         let index = self.descriptor(layout)?;
-        let bits = self.runtime(RuntimeEntry::ReceiptBits)?;
-        let receipt = self.builder.call(bits, &[self.context, index, image.ptr]);
+        let receipt = if let Some(slot) = companion {
+            let place = self.slots[slot.index()].ok_or_else(|| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what: "seal receipt entry slot is unbound".into(),
+            })?;
+            self.load(Shape::Scalar(ScalarKind::Pointer), place)
+        } else {
+            let snapshot = self.runtime(RuntimeEntry::ReceiptBits)?;
+            self.builder
+                .call(snapshot, &[self.context, index, image.ptr])
+        };
         let output = self.prologue.alloca(self.module.ptr_type(), 8);
         let prepare = self.runtime(RuntimeEntry::SealPrepareCommit)?;
         let status = self.builder.call(
             prepare,
             &[self.context, grant, image.ptr, index, receipt, site, output],
         );
-        // Every returned status releases the private snapshot before branching.
-        // This never releases the caller's root or grant on refusal.
-        let release = self.runtime(RuntimeEntry::ReceiptRelease)?;
-        self.builder.call(release, &[receipt]);
+        // Only the bits path acquired a temporary metadata holder. An entry
+        // companion remains in its slot for the ordinary cleanup on either edge.
+        if bits {
+            let release = self.runtime(RuntimeEntry::ReceiptRelease)?;
+            self.builder.call(release, &[receipt]);
+        }
         Ok((status, output))
+    }
+
+    pub(super) fn seal_receipt_slot(
+        &self,
+        mut root: ValueId,
+        root_type: &hirsel_lir::operation::NativeType,
+    ) -> Emitted<hirsel_lir::ir::SlotId> {
+        use hirsel_lir::ir::{AddressBase, Inst};
+        for _ in 0..=self.unit.values.len() {
+            if let Some(entry) = &self.unit.tables.receipt_entry
+                && let Some(binding) = entry.parameters.iter().find(|binding| {
+                    self.unit.parameters.get(binding.source as usize) == Some(&root)
+                })
+            {
+                let slot = &self.unit.slots[binding.slot.index()];
+                let layout = self.lir_type(slot.ty)?.layout;
+                if !matches!(&self.layout(layout)?.kind,
+                    LayoutKind::PayloadReceipt { root } if root == root_type)
+                {
+                    return self.invalid("seal receipt entry describes another root type");
+                }
+                return Ok(binding.slot);
+            }
+            let parent = self.unit.instructions.iter().find_map(|inst| match *inst {
+                Inst::CopyValue { result, value } | Inst::Weaken { result, value }
+                    if result == root =>
+                {
+                    Some(value)
+                }
+                Inst::Read {
+                    result,
+                    reaching,
+                    address,
+                    ..
+                } if result == root
+                    && self.unit.addresses[address.index()].projection.len == 0
+                    && !matches!(
+                        self.unit.addresses[address.index()].base,
+                        AddressBase::Address(_)
+                    ) =>
+                {
+                    Some(reaching)
+                }
+                Inst::Store {
+                    version,
+                    value,
+                    address,
+                }
+                | Inst::Replace {
+                    version,
+                    value,
+                    address,
+                    ..
+                } if version == root
+                    && self.unit.addresses[address.index()].projection.len == 0
+                    && !matches!(
+                        self.unit.addresses[address.index()].base,
+                        AddressBase::Address(_)
+                    ) =>
+                {
+                    Some(value)
+                }
+                _ => None,
+            });
+            match parent {
+                Some(value) => root = value,
+                None => break,
+            }
+        }
+        self.unsupported("heap seal root requires its paired original receipt entry")
     }
 }

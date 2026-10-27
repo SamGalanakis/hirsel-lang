@@ -70,6 +70,149 @@ pub(crate) fn fixture(
     output.passing = ParameterPassing::ExclusiveAddress;
     abi.parameters.push(output);
     unit.header.origin = UnitOrigin::Library;
+    if kind == 4 {
+        use hirsel_lir::operation::{BuiltinType, OperationArgument};
+        use hirsel_lir::sealed_payload_source::*;
+        let mut scalar = table.layouts[1].clone();
+        scalar.kind = LayoutKind::Scalar(ScalarKind::U64);
+        scalar.size = SizeSpec::Fixed(8);
+        scalar.align = 8;
+        scalar.abi.scalars = vec![(0, ScalarKind::U64)];
+        table.layouts.push(scalar.clone()); // 3, scalar
+        let mut sequence = scalar;
+        sequence.kind = LayoutKind::Sequence {
+            element: LayoutId(3),
+        };
+        sequence.size = SizeSpec::Dynamic(vec![
+            SizeTerm::Constant(16),
+            SizeTerm::ReadLength {
+                offset: 0,
+                scalar: ScalarKind::U64,
+            },
+            SizeTerm::Constant(8),
+            SizeTerm::Multiply,
+            SizeTerm::Add,
+        ]);
+        sequence.fields = vec![
+            FieldLayout {
+                ordinal: 0,
+                offset: 0,
+                layout: LayoutId(3),
+                unaligned: false,
+            },
+            FieldLayout {
+                ordinal: 1,
+                offset: 8,
+                layout: LayoutId(3),
+                unaligned: false,
+            },
+        ];
+        sequence.copy = CopyRecipe::NotCopyable;
+        sequence.abi.scalars.clear();
+        table.layouts.push(sequence); // 4, payload
+        let row = &mut table.layouts[1];
+        row.kind = LayoutKind::Block {
+            payload: LayoutId(4),
+        };
+        row.size = SizeSpec::Fixed(8);
+        row.align = 8;
+        row.copy = CopyRecipe::Dup;
+        row.scan = vec![ScanStep::Counted { offset: 0 }];
+        row.drop = vec![DropStep::Release { offset: 0 }];
+        row.abi.scalars = vec![(0, ScalarKind::Pointer)];
+        unit.types[1].repr = ValueRepr::Block;
+        let native = NativeType::Builtin(
+            BuiltinType::List,
+            vec![OperationArgument::Type(NativeType::Primitive(
+                Primitive::U64,
+            ))],
+        );
+        let graph = ShapeGraph {
+            root: 0,
+            nodes: vec![LogicalShape::Sequence(1), LogicalShape::Leaf],
+        };
+        let projection = hirsel_lir::structural_access::AccessPlan::derive(
+            native.clone(),
+            graph.clone(),
+            &table,
+            LayoutId(1),
+        )
+        .unwrap();
+        unit.tables.seal_descriptors[0] = SealDescriptor {
+            root_type: native.clone(),
+            root_layout: LayoutId(1),
+            projection,
+            logical: LogicalStorageGraph {
+                shape: graph,
+                facts: vec![
+                    StorageFact {
+                        bytes: LogicalBytes::Bytes(8),
+                        class: StorageClass::Block,
+                    },
+                    StorageFact {
+                        bytes: LogicalBytes::Bytes(8),
+                        class: StorageClass::Inline,
+                    },
+                ],
+            },
+            access: [1, 3, 4]
+                .into_iter()
+                .map(|id| StorageAccess {
+                    layout: LayoutId(id),
+                    scan: table.layouts[id as usize].scan.clone(),
+                })
+                .collect(),
+        };
+        let mut metadata = table.layouts[3].clone();
+        metadata.kind = LayoutKind::PayloadReceipt { root: native };
+        metadata.drop = vec![DropStep::ReleaseReceipt { offset: 0 }];
+        metadata.copy = CopyRecipe::Dup;
+        metadata.abi.scalars = vec![(0, ScalarKind::Pointer)];
+        table.layouts.push(metadata); // 5
+        unit.types.push(LirType {
+            repr: ValueRepr::PayloadReceipt,
+            layout: LayoutId(5),
+        });
+        unit.values.push(ValueInfo {
+            ty: LirTypeId(3),
+            holding: Holding::Plain,
+        });
+        unit.parameters = vec![ValueId(2), ValueId(1), ValueId(0)];
+        unit.slots.push(SlotInfo {
+            ty: LirTypeId(3),
+            kind: SlotKind::ReceiptParameter(1),
+            scope: ScopeId(0),
+        });
+        let contract = ReceiptContract::new(
+            vec![ReceiptParameter {
+                source: 1,
+                mode: ReceiptMode::Take,
+                ty: ReceiptType {
+                    source_type: unit.header.instance,
+                    profile: unit.header.instance,
+                },
+            }],
+            None,
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let content = contract.content().unwrap();
+        unit.tables.receipt_entry = Some(ReceiptEntry {
+            contract: content,
+            parameters: vec![ReceiptEntrySlot {
+                source: 1,
+                slot: SlotId(0),
+                version: ValueId(3),
+            }],
+            captures: vec![],
+            result: None,
+            environment: None,
+        });
+        abi.parameters[1].convention = hirsel_core_contract::Passing::Take;
+        abi.receipts = Some(contract);
+        abi.key.receipt_contract = Some(content);
+    }
     match malformed {
         1 => table.layouts[1].scan.push(ScanStep::Counted { offset: 0 }),
         2 => table.layouts[1]
@@ -81,6 +224,8 @@ pub(crate) fn fixture(
         6 => table.layouts[0].kind = LayoutKind::Handle,
         7 => unit.tables.seal_descriptors.clear(),
         8 => unit.tables.seal_descriptors[0].access.clear(),
+        9 => unit.tables.receipt_entry = None,
+        10 => unit.tables.receipt_entry.as_mut().unwrap().parameters[0].source = 0,
         _ => (),
     }
     (table, unit, abi)
@@ -201,6 +346,10 @@ fn probe(target: &TargetSpec, kind: u8, malformed: u8) -> Vec<u8> {
         &mut manifested,
     );
     f.builder.position(f.prologue_block);
+    if kind == 4 && malformed < 9 {
+        f.bind_receipt_entry().unwrap();
+    }
+
     f.define(ValueId(2), module.parameter(function, 3)).unwrap();
     let input = Place {
         columns: None,
@@ -211,7 +360,7 @@ fn probe(target: &TargetSpec, kind: u8, malformed: u8) -> Vec<u8> {
     };
     let value = f.load(f.layout_shape(LayoutId(1)).unwrap(), input);
     f.define(ValueId(1), value).unwrap();
-    let read = f.prepare_seal_bits(
+    let read = f.prepare_seal(
         ValueId(0),
         ValueId(2),
         ValueId(1),
@@ -229,4 +378,45 @@ fn probe(target: &TargetSpec, kind: u8, malformed: u8) -> Vec<u8> {
     f.builder.ret(status);
     module.verify().unwrap();
     optimize_and_emit(&module, &machine, OptLevel::None, true, false).unwrap()
+}
+
+const HEAP_HARNESS: &str = r#"
+#include <stdint.h>
+#include <assert.h>
+const uint32_t descriptor_index __asm__("INDEX_SYMBOL") = 7;
+static unsigned prepared;
+static uint8_t failure;
+uint8_t hirsel_rt_v2_seal_prepare_commit(void *ctx, void *grant, const void *image,
+    uint32_t index, const void *receipt, uint64_t site, void **output) {
+    assert(ctx == (void*)41 && grant == (void*)43 && receipt == (void*)45);
+    assert(index == 7 && site == 23);
+    assert(*(const void *const*)image == (void*)101);
+    *output = failure ? 0 : (void*)47;
+    ++prepared; return failure ? 2 : 0;
+}
+extern uint8_t probe(void *, uint64_t, uint64_t, void *, const void *, void **, void *);
+int main(void) {
+    void *input = (void*)101, *owner = (void*)99;
+    assert(probe((void*)41, 19, 23, (void*)43, &input, &owner, (void*)45) == 0);
+    assert(owner == (void*)47 && input == (void*)101 && prepared == 1);
+    failure = 1; owner = (void*)99;
+    assert(probe((void*)41, 19, 23, (void*)43, &input, &owner, (void*)45) == 2);
+    assert(owner == 0 && input == (void*)101 && prepared == 2);
+}
+"#;
+#[test]
+fn seal_heap_native_emission_passes_original_entry_receipt_without_releasing_it() {
+    for target in TargetSpec::executed() {
+        let (table, _, _) = fixture(&target, 4, 0);
+        let keys = hirsel_lir::LayoutKeys::new(&table);
+        let symbol = hirsel_lir::glue::descriptor_index_symbol(&keys.key(LayoutId(1)));
+        let source = HEAP_HARNESS.replace("INDEX_SYMBOL", &symbol);
+        super::tests::execute(&target, probe(&target, 4, 0), "llvm-seal-heap", &source);
+    }
+}
+#[test]
+fn seal_heap_native_emission_refuses_missing_or_unpaired_receipt_before_imports() {
+    for mutation in [9, 10] {
+        probe(&TargetSpec::x86_64_unknown_linux_gnu(), 4, mutation);
+    }
 }
