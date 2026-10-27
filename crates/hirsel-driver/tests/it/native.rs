@@ -2388,3 +2388,40 @@ pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
     assert_eq!(observation.output, b"float aggregates preserved\n");
     assert!(observation.failures.is_empty(), "{observation:?}");
 }
+
+#[test]
+fn inlined_string_map_updates_preserve_prefixes_unicode_and_saved_versions() {
+    let source = r#"
+fn read(m: Map[String, u64], key: String) -> u64 {
+  match map.get(m, key) { Some(value) => value, None => 999 }
+}
+pub fn main(rt: Io, args: Args) -> Result[(), GrantError] {
+  let keys = ["", "a", "aa", "alpha", "alphabet", "α", "β", "a key spanning several complete hash words"]
+  let mut first: Map[String, u64] = map.empty()
+  let mut second: Map[String, u64] = map.empty()
+  let mut ordinal: u64 = 0
+  for key in keys {
+    map.insert(mut first, copy key, ordinal)
+    map.insert(mut second, copy key, ordinal + 100)
+    ordinal += 1
+  }
+  let saved = copy first
+  ordinal = 0
+  for key in keys {
+    failure.check(read(first, key) == ordinal, TextInvariant())
+    map.insert(mut first, copy key, ordinal + 17)
+    failure.check(read(first, key) == ordinal + 17, TextInvariant())
+    failure.check(read(saved, key) == ordinal, TextInvariant())
+    failure.check(read(second, key) == ordinal + 100, TextInvariant())
+    failure.check(map.contains(first, key), TextInvariant())
+    ordinal += 1
+  }
+  failure.check(read(first, "alph") == 999 && !map.contains(first, "alph"), TextInvariant())
+  let _ = out.print(io.stdout(rt)?, "string maps preserved\n")
+  Ok(())
+}
+"#;
+    let observation = agree("string-map-source", source, &topology_matrix(0));
+    assert_eq!(observation.output, b"string maps preserved\n");
+    assert!(observation.failures.is_empty(), "{observation:?}");
+}

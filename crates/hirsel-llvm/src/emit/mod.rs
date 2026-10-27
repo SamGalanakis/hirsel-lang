@@ -714,19 +714,10 @@ fn lower<T>(
                 } else {
                     module.make_weak_odr(function);
                 }
-                let scalar_map = ["map.get", "map.contains", "map.insert", "map.upsert_with"]
+                let inline_map = ["map.get", "map.contains", "map.insert", "map.upsert_with"]
                     .iter()
-                    .any(|name| unit.header.definition.is_core(name))
-                    && abi.parameters.get(1).is_some_and(|parameter| {
-                        inputs
-                            .layouts
-                            .layout(parameter.layout)
-                            .is_some_and(|layout| {
-                                matches!(layout.kind, LayoutKind::Scalar(kind)
-                                if crate::scalar::integer(kind).is_some_and(|(bits, _)| bits <= 64))
-                            })
-                    });
-                let attribute = if scalar_map
+                    .any(|name| unit.header.definition.is_core(name));
+                let attribute = if inline_map
                     || unit.header.definition.is_core("list.push")
                     || unit.header.definition.is_core("$native.list_push_spare")
                     || unit.header.definition.is_core("net.read_into")
