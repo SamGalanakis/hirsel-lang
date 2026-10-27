@@ -451,3 +451,4 @@ pub(crate) fn publish_ready_record(
 mod instance_operations;
 
 mod receipt_requests;
+mod seal_inventory;

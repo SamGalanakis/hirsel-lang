@@ -7,6 +7,7 @@ use hirsel_syntax::{ContentHash, DefPath};
 
 pub(super) struct InstanceOperations<'a> {
     pub declarations: &'a (dyn OperationDeclarations + Sync),
+    pub inventory: Option<&'a super::seal_inventory::Sources>,
     pub receipts: Option<&'a super::receipt_requests::Sources>,
     pub source: Option<(&'a DefPath, ContentHash)>,
     pub all_sources: bool,
@@ -57,21 +58,30 @@ impl OperationDeclarations for InstanceOperations<'_> {
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<hirsel_lir::sealed_payload_source::SealSourceWitness> {
-        self.declarations.seal_source_witness(definition, instance)
+        self.inventory
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+            .map(|source| source.witness().clone())
+            .or_else(|| self.declarations.seal_source_witness(definition, instance))
     }
     fn seal_events(
         &self,
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourceEvent>> {
-        self.declarations.seal_events(definition, instance)
+        self.inventory
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+            .map(|source| source.events().to_vec())
+            .or_else(|| self.declarations.seal_events(definition, instance))
     }
     fn seal_payloads(
         &self,
         definition: &DefPath,
         instance: ContentHash,
     ) -> Option<Vec<hirsel_lir::sealed_payload_source::SourcePayload>> {
-        self.declarations.seal_payloads(definition, instance)
+        self.inventory
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+            .map(|source| source.payloads().to_vec())
+            .or_else(|| self.declarations.seal_payloads(definition, instance))
     }
     fn seal_descriptor(
         &self,
@@ -89,6 +99,28 @@ impl OperationDeclarations for InstanceOperations<'_> {
         table: &LayoutTable,
         target: &TargetSpec,
     ) -> Result<hirsel_lir::sealed::SealDescriptor, LayoutError> {
+        if self
+            .inventory
+            .and_then(|sources| sources.get(&(definition.clone(), instance)))
+            .is_some_and(|expected| {
+                expected.payloads().iter().any(|payload| {
+                    &payload.root_type == source
+                        || payload
+                            .recipe
+                            .inputs
+                            .iter()
+                            .any(|input| &input.ty == source)
+                })
+            })
+        {
+            return self.declarations.seal_descriptor(source, table, target);
+        }
+        if let Ok(descriptor) = self
+            .declarations
+            .seal_descriptor_for_source(definition, instance, source, table, target)
+        {
+            return Ok(descriptor);
+        }
         if let Some(selected) = self
             .receipts
             .and_then(|sources| sources.get(&(definition.clone(), instance)))

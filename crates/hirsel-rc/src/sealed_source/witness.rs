@@ -23,7 +23,7 @@ pub struct SourceInput {
 
 /// Body-free demand data bound to the actual original source observation and
 /// base instance. This is not a ReceiptContract or a V/C acceptance witness.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SourceDemandProjection {
     reference: hirsel_lir::invocations::ReferenceBody,
     source: ContentHash,
@@ -115,9 +115,71 @@ impl SourceInput {
         parameters: &[u32],
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceExpectation, SourceError> {
+        self.derive_body(key, types, parameters, substitute, false)
+    }
+
+    /// Use the current source graph's complete declaration-backed expansion.
+    /// Calls keep their own callee event inventory; this body's constructors
+    /// retain original call-result lineage instead of guessing empty effects.
+    /// This data is still rechecked independently by C at publication/replay.
+    pub fn derive_request(
+        &self,
+        request: &super::contract::registry::Request,
+        types: &TypeInterner,
+        parameters: &[u32],
+        substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+    ) -> Result<SourceExpectation, SourceError> {
+        let base = request.ordinary_key();
+        let current = self.demand_projection(base)?;
+        let observed = request.source();
+        if current.reference() != observed.reference()
+            || current.source_identity() != observed.source_identity()
+            || current.implementation_revision() != observed.implementation_revision()
+            || current.projection() != observed.projection()
+        {
+            return Err(SourceError::Malformed(
+                "inventory request differs from current original source",
+            ));
+        }
+        if !current
+            .projection()
+            .calls()
+            .keys()
+            .eq(request.calls().keys())
+        {
+            return Err(SourceError::Malformed(
+                "inventory request lacks complete call expansion",
+            ));
+        }
+        for expansion in request.calls().values() {
+            if let super::demand::CallDemand::External(external) = expansion
+                && (!external.mutations.is_empty() || !external.retained.is_empty())
+            {
+                return Err(SourceError::Unsupported(
+                    "source witness needs mutation event expansion",
+                ));
+            }
+        }
+        self.derive_body(
+            request.aware_key().unwrap_or(base),
+            types,
+            parameters,
+            substitute,
+            true,
+        )
+    }
+
+    fn derive_body(
+        &self,
+        key: &InstanceKey,
+        types: &TypeInterner,
+        parameters: &[u32],
+        substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+        expanded_calls: bool,
+    ) -> Result<SourceExpectation, SourceError> {
         let body = self.demand_body(key)?;
         for block in &body.blocks {
-            if matches!(block.terminator, Terminator::Call { .. }) {
+            if !expanded_calls && matches!(block.terminator, Terminator::Call { .. }) {
                 return Err(SourceError::Unsupported(
                     "source witness needs reviewed call event expansion",
                 ));
@@ -240,16 +302,25 @@ impl SourceExpectation {
 /// Actual independent provider used by C and by NativeCache observation/recheck.
 /// It delegates ordinary declaration/layout logic without manufacturing missing
 /// source rows, including reviewed library bodies not covered by this subset.
-pub struct SourceDeclarations {
-    registry: hirsel_layout::operation::OperationRegistry,
+pub struct SourceDeclarations<D = hirsel_layout::operation::OperationRegistry> {
+    registry: D,
+    fallback: bool,
     sources: BTreeMap<(DefPath, ContentHash), SourceExpectation>,
 }
 
-impl SourceDeclarations {
-    pub fn new(registry: hirsel_layout::operation::OperationRegistry) -> Self {
+impl<D> SourceDeclarations<D> {
+    pub fn new(registry: D) -> Self {
         Self {
             registry,
+            fallback: false,
             sources: BTreeMap::new(),
+        }
+    }
+    /// Overlay selected original instances, retaining unrelated declarations.
+    pub fn overlay(registry: D) -> Self {
+        Self {
+            fallback: true,
+            ..Self::new(registry)
         }
     }
     pub fn insert(&mut self, source: SourceExpectation) -> Result<(), SourceError> {
@@ -267,7 +338,11 @@ impl SourceDeclarations {
     }
 }
 
-impl OperationDeclarations for SourceDeclarations {
+impl<D: OperationDeclarations> OperationDeclarations for SourceDeclarations<D> {
+    fn receipt_source(&self, definition: &DefPath, instance: ContentHash) -> Option<ReceiptSource> {
+        self.registry.receipt_source(definition, instance)
+    }
+
     fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
         self.registry.pretransfer_adapters()
     }
@@ -320,12 +395,16 @@ impl OperationDeclarations for SourceDeclarations {
                         || payload.recipe.inputs.iter().any(|input| &input.ty == root)
                 }) || source.events.iter().any(|event| &event.root_type == root)
             });
-        if !selected {
-            return Err(hirsel_lir::layout::LayoutError::Invalid(
+        if selected {
+            self.registry.seal_descriptor(root, layouts, target)
+        } else if self.fallback {
+            self.registry
+                .seal_descriptor_for_source(definition, instance, root, layouts, target)
+        } else {
+            Err(hirsel_lir::layout::LayoutError::Invalid(
                 "missing original source storage type".into(),
-            ));
+            ))
         }
-        self.registry.seal_descriptor(root, layouts, target)
     }
 
     fn pretransfer_abi(
@@ -344,11 +423,21 @@ impl OperationDeclarations for SourceDeclarations {
         self.sources
             .get(&(definition.clone(), instance))
             .map(|s| s.witness.clone())
+            .or_else(|| {
+                self.fallback
+                    .then(|| self.registry.seal_source_witness(definition, instance))
+                    .flatten()
+            })
     }
     fn seal_events(&self, definition: &DefPath, instance: ContentHash) -> Option<Vec<SourceEvent>> {
         self.sources
             .get(&(definition.clone(), instance))
             .map(|s| s.events.clone())
+            .or_else(|| {
+                self.fallback
+                    .then(|| self.registry.seal_events(definition, instance))
+                    .flatten()
+            })
     }
     fn seal_payloads(
         &self,
@@ -358,6 +447,11 @@ impl OperationDeclarations for SourceDeclarations {
         self.sources
             .get(&(definition.clone(), instance))
             .map(|s| s.payloads.clone())
+            .or_else(|| {
+                self.fallback
+                    .then(|| self.registry.seal_payloads(definition, instance))
+                    .flatten()
+            })
     }
     fn derive(
         &self,

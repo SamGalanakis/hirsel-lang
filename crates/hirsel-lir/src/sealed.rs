@@ -154,6 +154,25 @@ impl SealDescriptor {
             .chain(self.access.iter().map(|p| p.layout))
     }
 
+    // Access programs form a checked set. Portable binding remaps layout IDs
+    // without changing vector order; reconstruction orders by the new IDs.
+    fn same_association(&self, other: &Self) -> bool {
+        self.root_type == other.root_type
+            && self.root_layout == other.root_layout
+            && self.logical == other.logical
+            && self.projection == other.projection
+            && self
+                .access
+                .iter()
+                .map(|access| (access.layout, &access.scan))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                == other
+                    .access
+                    .iter()
+                    .map(|access| (access.layout, &access.scan))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+    }
+
     /// Source-instance reconstruction includes independently closed environment
     /// alternatives. Candidate case symbols and layouts never authorize them.
     pub fn validate_at(
@@ -168,7 +187,7 @@ impl SealDescriptor {
         let expected = declarations
             .seal_descriptor_for_source(definition, instance, &self.root_type, table, target)
             .map_err(|e| format!("sealed source reconstruction: {e:?}"))?;
-        if &expected != self {
+        if !self.same_association(&expected) {
             return Err("sealed descriptor disagrees with independent source".into());
         }
         Ok(())
@@ -186,7 +205,7 @@ impl SealDescriptor {
         let expected = declarations
             .seal_descriptor(&self.root_type, table, target)
             .map_err(|e| format!("sealed declaration reconstruction: {e:?}"))?;
-        if &expected != self {
+        if !self.same_association(&expected) {
             return Err("sealed descriptor disagrees with independent declarations".into());
         }
         Ok(())

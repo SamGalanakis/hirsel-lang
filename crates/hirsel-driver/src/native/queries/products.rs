@@ -548,6 +548,7 @@ impl NativeProducts for DemandProducts {
             .collect::<Vec<_>>();
         let binding = Binding::new(environment.target, &closures)?;
         let selected_operations = super::instance_operations::InstanceOperations {
+            inventory: None,
             receipts: None,
             declarations: environment.operations,
             source: None,
@@ -555,6 +556,7 @@ impl NativeProducts for DemandProducts {
             pretransfer: Some(adapters),
         };
         let operations = super::instance_operations::InstanceOperations {
+            inventory: None,
             receipts: None,
             declarations: environment.operations,
             source: None,

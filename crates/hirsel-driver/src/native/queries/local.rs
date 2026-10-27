@@ -413,6 +413,7 @@ impl LocalReadyQueries {
         )?;
         let additional_abis = adapters.iter().map(|r| r.abi).collect::<Vec<_>>();
         let operations = super::instance_operations::InstanceOperations {
+            inventory: None,
             receipts: None,
             declarations: environment.operations,
             all_sources: false,

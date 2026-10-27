@@ -898,3 +898,110 @@ fn receipt_source_binds_original_and_aware_identities_and_checks_complete_port_p
         assert!(broken.check_structure().is_err(), "mutation {mutation}");
     }
 }
+
+#[test]
+fn inventory_request_97_rechecks_original_calls_and_uses_the_selected_aware_identity() {
+    let (types, bytes, scalar, _) = types();
+    let mut original = body(&[bytes, scalar], 1);
+    call(&mut original, 0, &[(0, UseKind::Take)], None);
+    let fixture = Fixture::named(
+        &types,
+        original.clone(),
+        &[PassingMode::Take],
+        "inventory_request_97",
+        2,
+    );
+    let mut definition = witness_definition(original);
+    Arc::make_mut(&mut definition).path = DefId::intern(&DefPath::core("inventory_request_97"));
+    Arc::make_mut(&mut definition).signature_hash = ContentHash([3; 32]);
+    let source = SourceInput::capture(
+        ContentHash([1; 32]),
+        ContentHash([2; 32]),
+        definition.clone(),
+    );
+    let mut registry = Registry::default();
+    let id = register(&mut registry, &fixture, &types);
+    assert!(registry.solve().is_err());
+    registry
+        .resolve(
+            id,
+            BTreeMap::from([(
+                0,
+                Expansion::External(ExternalDemand {
+                    parameters: vec![0],
+                    ..Default::default()
+                }),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    let requests = registry.solve().unwrap();
+    let request = &requests[0];
+    assert!(request.aware_key().is_some());
+    let expected = source.derive_request(request, &types, &[0], Ok).unwrap();
+    assert_eq!(
+        expected.witness().instance,
+        request.aware_key().unwrap().digest()
+    );
+    assert!(expected.events().is_empty());
+    expected.source().check().unwrap();
+    let revised = SourceInput::capture(
+        ContentHash([1; 32]),
+        ContentHash([9; 32]),
+        definition.clone(),
+    );
+    assert_eq!(
+        revised.derive_request(request, &types, &[0], Ok).err(),
+        Some(SourceError::Malformed(
+            "inventory request differs from current original source"
+        ))
+    );
+    Arc::make_mut(&mut definition).bodies[0].blocks[0].terminator = Terminator::Unreachable;
+    let changed = SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
+    assert_eq!(
+        changed.derive_request(request, &types, &[0], Ok).err(),
+        Some(SourceError::Malformed(
+            "inventory request differs from current original source"
+        ))
+    );
+}
+
+#[test]
+fn inventory_request_97_keeps_unimplemented_retained_mutation_expansion_unavailable() {
+    let (types, bytes, scalar, _) = types();
+    let mut original = body(&[bytes, scalar], 1);
+    call(&mut original, 0, &[(0, UseKind::Mut)], None);
+    let fixture = Fixture::named(
+        &types,
+        original.clone(),
+        &[PassingMode::Mut],
+        "inventory_mutation_97",
+        2,
+    );
+    let mut definition = witness_definition(original);
+    Arc::make_mut(&mut definition).path = DefId::intern(&DefPath::core("inventory_mutation_97"));
+    Arc::make_mut(&mut definition).signature_hash = ContentHash([3; 32]);
+    let source = SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
+    let mut registry = Registry::default();
+    let id = register(&mut registry, &fixture, &types);
+    registry
+        .resolve(
+            id,
+            BTreeMap::from([(
+                0,
+                Expansion::External(ExternalDemand {
+                    mutations: vec![(0, vec![0])],
+                    ..Default::default()
+                }),
+            )]),
+            BTreeMap::new(),
+        )
+        .unwrap();
+    let requests = registry.solve().unwrap();
+    assert_eq!(
+        source.derive_request(&requests[0], &types, &[0], Ok).err(),
+        Some(SourceError::Unsupported(
+            "source witness needs mutation event expansion"
+        ))
+    );
+}

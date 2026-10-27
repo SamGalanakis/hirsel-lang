@@ -1,0 +1,76 @@
+//! Retain current original inventory independently of restored native recipes.
+use crate::native::receipt_source::{factory::NamedGraph, provider::SelectionProvider};
+use hirsel_lir::operation::OperationDeclarations;
+use hirsel_rc::sealed_source::{SourceDeclarations, SourceExpectation, SourceInput};
+use hirsel_syntax::{ContentHash, DefPath};
+use std::collections::BTreeMap;
+
+pub(super) type Sources = BTreeMap<(DefPath, ContentHash), SourceExpectation>;
+
+pub(super) fn current(
+    provider: &dyn SelectionProvider,
+    graph: &NamedGraph,
+    selected: impl Fn(&hirsel_layout::instance::InstanceKey) -> bool,
+) -> Result<Sources, String> {
+    let mut sources = BTreeMap::new();
+    let memo = hirsel_types::TypeMemo::default();
+    for (request, context) in graph.requests.iter().zip(&graph.contexts) {
+        // Only demanded instances acquire original inventory obligations. An
+        // ordinary source function retains its existing native query contract.
+        let Some(key) = request.aware_key() else {
+            continue;
+        };
+        if !selected(key) {
+            continue;
+        }
+        if request.ordinary_key() != &context.input.base {
+            return Err("inventory context differs from original request".into());
+        }
+        let original = provider
+            .original(key.definition())
+            .map_err(|e| format!("inventory original source: {e:?}"))?;
+        let output = original
+            .output()
+            .ok_or("inventory needs current original V output")?;
+        let source = SourceInput::capture(
+            output.observation_identity(),
+            original.implementation_revision(),
+            original.definition().clone(),
+        );
+        let parameters = request
+            .declaration()
+            .entry()
+            .parameters()
+            .iter()
+            .map(|p| p.ordinal)
+            .collect::<Vec<_>>();
+        let expected = source
+            .derive_request(request, provider.types(), &parameters, |ty| {
+                hirsel_rc::instance::substitute(
+                    provider.types(),
+                    &memo,
+                    ty,
+                    &context.input.actuals,
+                    true,
+                )
+                .map_err(|e| hirsel_rc::sealed_source::SourceError::Type(format!("{e:?}")))
+            })
+            .map_err(|e| format!("inventory original expectation: {e:?}"))?;
+        sources.insert((key.definition().clone(), key.digest()), expected);
+    }
+    Ok(sources)
+}
+
+pub(super) fn declarations<D: OperationDeclarations>(
+    ordinary: D,
+    sources: &Sources,
+) -> SourceDeclarations<D> {
+    let mut declarations = SourceDeclarations::overlay(ordinary);
+    for source in sources.values() {
+        // Each map key is computed from this expectation in current().
+        declarations
+            .insert(source.clone())
+            .expect("unique original inventory instance");
+    }
+    declarations
+}

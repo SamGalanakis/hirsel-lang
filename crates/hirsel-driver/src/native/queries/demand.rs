@@ -170,6 +170,7 @@ pub struct DemandInstances {
     completed: BTreeMap<Vec<u8>, Arc<DiscoveredInstance>>,
     roots: Vec<InstanceAddress>,
     receipt_sources: super::receipt_requests::Sources,
+    seal_inventory: super::seal_inventory::Sources,
     pub imports: u64,
     pub recipe_decodes: u64,
 }
@@ -216,6 +217,7 @@ impl DemandInstances {
             completed: BTreeMap::new(),
             roots: vec![],
             receipt_sources: Default::default(),
+            seal_inventory: Default::default(),
             imports: 0,
             recipe_decodes: 0,
         }
@@ -282,9 +284,9 @@ impl DemandInstances {
         if self.receipt_sources.is_empty() {
             return ordinary;
         }
-        Arc::new(super::receipt_requests::Declarations::new(
-            ordinary,
-            self.receipt_sources.clone(),
+        Arc::new(super::seal_inventory::declarations(
+            super::receipt_requests::Declarations::new(ordinary, self.receipt_sources.clone()),
+            &self.seal_inventory,
         ))
     }
     pub(super) fn recheck_receipts(
@@ -297,14 +299,33 @@ impl DemandInstances {
             .filter_map(|r| r.receipt_roots.map(|root| (root.output.0, root)))
             .collect::<BTreeMap<_, _>>();
         self.receipt_sources.clear();
+        let inventory_keys = self
+            .requests
+            .values()
+            .filter(|request| self.completed.contains_key(&request.key.encoding))
+            .map(|request| {
+                request
+                    .key
+                    .bind()
+                    .map(|key| (key.definition().clone(), key.digest()))
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        self.seal_inventory.clear();
         for roots in roots.into_values() {
-            let (_, sources) = super::receipt_requests::current(
+            let (graph, sources) = super::receipt_requests::current(
                 source,
                 &self.records,
                 self.store.as_ref(),
                 &self.target,
                 Some(roots),
             )?;
+            let provider = source
+                .receipt_provider()
+                .ok_or("inventory original source unavailable")?;
+            self.seal_inventory
+                .extend(super::seal_inventory::current(&provider, &graph, |key| {
+                    inventory_keys.contains(&(key.definition().clone(), key.digest()))
+                })?);
             self.receipt_sources.extend(sources);
         }
         Ok(())
@@ -393,6 +414,7 @@ impl DemandInstances {
             .get(key.instance.encoding())
             .ok_or("native operation scope has no original request")?;
         Ok(super::instance_operations::InstanceOperations {
+            inventory: Some(&self.seal_inventory),
             declarations: environment.operations,
             receipts: Some(&self.receipt_sources),
             all_sources: false,
@@ -829,6 +851,14 @@ impl DemandInstances {
         let lexical = request.lexical.bind()?;
         let selected_receipt = if let Some((graph, sources)) = &receipt_graph {
             self.receipt_sources.extend(sources.clone());
+            let provider = inputs
+                .receipt_provider()
+                .ok_or("inventory original source unavailable")?;
+            self.seal_inventory.extend(super::seal_inventory::current(
+                &provider,
+                graph,
+                |selected| selected == &key.instance,
+            )?);
             let selected = graph
                 .requests
                 .iter()
@@ -890,8 +920,11 @@ impl DemandInstances {
             .map(|reference| reference.adapter.clone())
             .collect::<Vec<_>>();
         let manifest = inputs.declarations().manifest()?;
+        let inventory_operations =
+            super::seal_inventory::declarations(operations.clone(), &self.seal_inventory);
         let current_operations = super::instance_operations::InstanceOperations {
-            declarations: &operations,
+            inventory: Some(&self.seal_inventory),
+            declarations: &inventory_operations,
             receipts: Some(&self.receipt_sources),
             source: None,
             all_sources: true,
@@ -1131,8 +1164,25 @@ impl DemandInstances {
         .map_err(|e| e.to_string())?;
         let ready_source = ReadySourceFacts::for_instance(&instances, id).encode()?;
         let table = layouts.finish();
+        let imported_unit = if let Some(expected) = self
+            .seal_inventory
+            .get(&(key.instance.definition().clone(), key.instance.digest()))
+        {
+            let declarations =
+                super::seal_inventory::declarations(operations.clone(), &self.seal_inventory);
+            hirsel_rc::sealed_source::inventory::emit(
+                imported.unit,
+                expected,
+                &declarations,
+                &table,
+                &self.target,
+            )
+            .map_err(|e| format!("native inventory import: {e:?}"))?
+        } else {
+            imported.unit
+        };
         let mut unit = hirsel_rc::flat_walk::rewrite(
-            imported.unit,
+            imported_unit,
             &table,
             &hirsel_rc::flat_walk::Options {
                 enabled: options.flat_walk,
@@ -1252,8 +1302,11 @@ impl DemandInstances {
             &serde_json::to_vec(&(portable_statics, portable_finalizers))
                 .map_err(|e| e.to_string())?,
         )?;
+        let inventory_operations =
+            super::seal_inventory::declarations(operations.clone(), &self.seal_inventory);
         let current_operations = super::instance_operations::InstanceOperations {
-            declarations: &operations,
+            inventory: Some(&self.seal_inventory),
+            declarations: &inventory_operations,
             receipts: Some(&self.receipt_sources),
             source: None,
             all_sources: true,

@@ -158,8 +158,17 @@ pub struct Request {
     aware: Option<InstanceKey>,
     declaration: Declaration,
     profiles: BTreeMap<Port, ClosedStorageProfile>,
+    source: SourceDemandProjection,
+    calls: BTreeMap<u32, CallDemand>,
 }
 impl Request {
+    pub fn source(&self) -> &SourceDemandProjection {
+        &self.source
+    }
+    pub fn calls(&self) -> &BTreeMap<u32, CallDemand> {
+        &self.calls
+    }
+
     pub fn ordinary_key(&self) -> &InstanceKey {
         &self.ordinary
     }
@@ -500,7 +509,8 @@ impl Registry {
         self.rows
             .iter()
             .zip(declarations)
-            .map(|(row, declaration)| {
+            .enumerate()
+            .map(|(index, (row, declaration))| {
                 let aware = declaration
                     .contract()
                     .map(|contract| -> Result<InstanceKey, SourceError> {
@@ -516,6 +526,8 @@ impl Registry {
                     aware,
                     declaration,
                     profiles: row.ports.clone(),
+                    source: row.source.clone(),
+                    calls: calls[index].clone(),
                 })
             })
             .collect()
