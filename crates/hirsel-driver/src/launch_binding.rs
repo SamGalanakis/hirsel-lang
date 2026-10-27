@@ -50,12 +50,18 @@ impl LaunchSelection {
     /// only binding to the selected source below can admit an execution.
     pub(crate) fn read_for_compilation(launch: HostLaunch<'_>) -> Result<Self, ToolError> {
         let mut selected = Self::read(launch)?;
-        if let HostLaunch::Live { config, .. } = launch {
-            selected.captured = Some(
+        selected.captured = match launch {
+            HostLaunch::Live { config, .. } => Some(
                 CapturedConfig::read(config)
                     .map_err(|error| ToolError::Runtime(error.to_string()))?,
-            );
-        }
+            ),
+            HostLaunch::Callee { run, .. } => Some(CapturedConfig {
+                record: run.record().clone(),
+                template: false,
+                cores: None,
+            }),
+            HostLaunch::Replay(_) => None,
+        };
         Ok(selected)
     }
 
@@ -294,7 +300,10 @@ mod tests {
                 run: &run,
                 record: None,
             };
-            let selected = LaunchSelection::read(launch).unwrap();
+            let selected = LaunchSelection::read_for_compilation(launch).unwrap();
+            let (inputs, fuel) = selected.compiler_inputs().unwrap();
+            assert_eq!(inputs, run.record().inputs);
+            assert!(!fuel);
             assert_eq!(selected.entry().unwrap().to_string(), revision.entry());
             let BoundHostRun::Live(bound) = selected
                 .bind(launch, &types, &signature, &revision, CodeReach::Safe)
