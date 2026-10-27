@@ -27,7 +27,7 @@ pub use annotations::{ANNOTATION_DIGEST_DOMAIN, Anchor, Annotation, annotation_d
 pub use content::{
     CallSite, CallSiteKind, ContentReference, DEFINITION_HASH_DOMAIN, DefinitionContent,
     DefinitionGroup, call_sites, content_references, definition_groups, definition_hashes,
-    group_hashes, references,
+    definition_hashes_loading, group_hashes, references,
 };
 pub use obligations::{
     Detail, Obligation, ObligationId, ObligationKind, Site, SitePosition, projected_places,

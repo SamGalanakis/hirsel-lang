@@ -215,9 +215,24 @@ pub fn definition_groups(
         }
         edges.push(targets);
     }
+    let mut groups = Vec::new();
+    groups_with_edges(
+        &paths,
+        &edges,
+        |path, naming| Ok(encode(types, &contents[path], naming)),
+        |group| groups.push(group),
+    )?;
+    Ok(groups)
+}
+
+fn groups_with_edges(
+    paths: &[&DefPath],
+    edges: &[Vec<usize>],
+    mut encode_member: impl FnMut(&DefPath, Naming) -> Result<(String, Naming), String>,
+    mut emit: impl FnMut(DefinitionGroup),
+) -> Result<BTreeMap<DefPath, ContentHash>, String> {
     let mut hashes = BTreeMap::new();
-    let mut groups = vec![];
-    for component in components(&edges) {
+    for component in components(edges) {
         let members: BTreeMap<DefPath, usize> = component
             .iter()
             .enumerate()
@@ -232,7 +247,7 @@ pub fn definition_groups(
                 group: members.clone(),
                 ..Naming::default()
             };
-            let (text, naming) = encode(types, &contents[path], naming);
+            let (text, naming) = encode_member(path, naming)?;
             if let Some(missing) = naming.missing {
                 return Err(format!("{path} names {missing} before its hash"));
             }
@@ -251,7 +266,7 @@ pub fn definition_groups(
         for (path, hash) in group_paths.iter().zip(&member_hashes) {
             hashes.insert(path.clone(), *hash);
         }
-        groups.push(DefinitionGroup {
+        emit(DefinitionGroup {
             members: order.iter().map(|&m| group_paths[m].clone()).collect(),
             texts: order
                 .iter()
@@ -264,7 +279,7 @@ pub fn definition_groups(
             hashes: order.iter().map(|&m| member_hashes[m]).collect(),
         });
     }
-    Ok(groups)
+    Ok(hashes)
 }
 
 /// The hash of every definition in `contents`, which must hold every
@@ -277,6 +292,46 @@ pub fn definition_hashes(
         .into_iter()
         .flat_map(|group| group.members.into_iter().zip(group.hashes))
         .collect())
+}
+
+/// Hash a closed definition graph while loading at most one content value at a
+/// time. References are captured by the ordinary `references` walker before
+/// bodies are released. Loading must return that same immutable content; its
+/// references are checked again before encoding. Missing or changed data refuses.
+/// The canonical component ordering and hash preimages match `definition_hashes`.
+pub fn definition_hashes_loading(
+    types: &Arc<TypeInterner>,
+    referenced: &BTreeMap<DefPath, Vec<DefPath>>,
+    mut load: impl FnMut(&DefPath) -> Result<DefinitionContent, String>,
+) -> Result<BTreeMap<DefPath, ContentHash>, String> {
+    let paths: Vec<&DefPath> = referenced.keys().collect();
+    let index: BTreeMap<&DefPath, usize> = paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+    let edges = referenced
+        .iter()
+        .map(|(path, references)| {
+            references
+                .iter()
+                .map(|reference| {
+                    index
+                        .get(reference)
+                        .copied()
+                        .ok_or_else(|| format!("{path} names {reference}, which has no content"))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    groups_with_edges(
+        &paths,
+        &edges,
+        |path, naming| {
+            let content = load(path)?;
+            if references(types, &content) != referenced[path] {
+                return Err(format!("{path} content references changed while loading"));
+            }
+            Ok(encode(types, &content, naming))
+        },
+        |_| {},
+    )
 }
 
 /// A reference written in a content text.
@@ -577,6 +632,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn loading_hashes_preserve_recursive_components_and_refuse_changed_dependencies() {
+        use hirsel_syntax::DefId;
+        use hirsel_types::{Signature, SignatureKind, Type};
+        let types = TypeInterner::new(None);
+        let ty = types.intern(Type::unit());
+        let paths: Vec<_> = ["A", "B", "C"].map(DefPath::core).into();
+        let contents: BTreeMap<_, _> = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let reads = match index {
+                    0 => vec![paths[1].clone()],
+                    1 => vec![paths[0].clone(), paths[2].clone()],
+                    _ => vec![],
+                };
+                (
+                    path.clone(),
+                    DefinitionContent::Named {
+                        signature: Arc::new(Signature {
+                            definition: DefId::intern(path),
+                            metadata: Default::default(),
+                            kind: SignatureKind::Const {
+                                ty,
+                                generics: vec![].into(),
+                            },
+                            fingerprint: ContentHash([index as u8; 32]),
+                        }),
+                        source: vec![vec![index as u8; 128]],
+                        reads,
+                    },
+                )
+            })
+            .collect();
+        let referenced: BTreeMap<_, _> = contents
+            .iter()
+            .map(|(path, content)| (path.clone(), references(&types, content)))
+            .collect();
+        let expected = definition_hashes(&types, &contents).unwrap();
+        let mut loaded = BTreeSet::new();
+        let actual = definition_hashes_loading(&types, &referenced, |path| {
+            assert!(loaded.insert(path.clone()));
+            Ok(contents[path].clone())
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(loaded.len(), contents.len());
+        assert!(
+            definition_hashes_loading(&types, &referenced, |_| Err(
+                "missing immutable content".into()
+            ))
+            .is_err()
+        );
+        assert!(
+            definition_hashes_loading(&types, &referenced, |path| {
+                let mut content = contents[path].clone();
+                let DefinitionContent::Named { reads, .. } = &mut content else {
+                    unreachable!()
+                };
+                reads.push(DefPath::core("outside"));
+                Ok(content)
+            })
+            .is_err()
+        );
     }
 
     #[test]
