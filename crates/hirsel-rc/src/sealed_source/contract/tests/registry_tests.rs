@@ -1008,7 +1008,13 @@ fn inventory_request_97_keeps_unimplemented_retained_mutation_expansion_unavaila
 
 #[test]
 fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe() {
-    for duplicate in [false, true] {
+    let mut alternatives = Vec::new();
+    for (duplicate, first_capture, demanded) in [
+        (false, 0, false),
+        (false, 1, false),
+        (false, 0, true),
+        (true, 0, true),
+    ] {
         let (types, bytes, scalar, _) = types();
         let callable = types.intern(Type::with_kind(TypeKind::Function(function(&[], scalar))));
         let mut parent = body(&[bytes, bytes, callable, callable, scalar], 2);
@@ -1018,7 +1024,7 @@ fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe
                 ordinal + 2,
                 Rvalue::Closure {
                     body: BodyId(1),
-                    captures: vec![operand(ordinal)],
+                    captures: vec![operand(ordinal + first_capture)],
                     context: CaptureContext::Scoped,
                     destination: Destination::Heap,
                 },
@@ -1063,7 +1069,7 @@ fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe
                 BTreeMap::from([(
                     0,
                     Expansion::External(ExternalDemand {
-                        parameters: vec![0],
+                        parameters: if demanded { vec![0] } else { vec![] },
                         ..Default::default()
                     }),
                 )]),
@@ -1095,7 +1101,7 @@ fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe
             };
             assert_eq!(
                 environment.payload().recipe.inputs[0].producer,
-                hirsel_lir::sealed_payload_source::PayloadProducer::Parameter(0)
+                hirsel_lir::sealed_payload_source::PayloadProducer::Parameter(first_capture)
             );
             assert_eq!(environment.payload().recipe.inputs[0].capture_slot, Some(0));
             assert_eq!(
@@ -1106,6 +1112,23 @@ fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe
                 expected.payloads().is_empty(),
                 "ordinary callback is not a sealed root payload"
             );
+            if !demanded {
+                alternatives.push(expected);
+            }
         }
     }
+    let mut alternatives = alternatives.into_iter();
+    let a = alternatives.next().unwrap();
+    let b = alternatives.next().unwrap();
+    assert_eq!(a.witness(), b.witness());
+    assert_ne!(a.environments(), b.environments());
+    let mut declarations = crate::sealed_source::SourceDeclarations::new(());
+    declarations.insert(a.clone()).unwrap();
+    declarations.insert(a).unwrap();
+    assert_eq!(
+        declarations.insert(b),
+        Err(SourceError::Malformed(
+            "conflicting original source expectations"
+        ))
+    );
 }

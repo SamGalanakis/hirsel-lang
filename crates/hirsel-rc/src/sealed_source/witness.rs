@@ -424,7 +424,7 @@ impl<D> SourceDeclarations<D> {
     pub fn insert(&mut self, source: SourceExpectation) -> Result<(), SourceError> {
         let key = (source.witness.definition.clone(), source.witness.instance);
         if let Some(old) = self.sources.get(&key) {
-            if old.witness != source.witness {
+            if old.witness != source.witness || old.environments != source.environments {
                 return Err(SourceError::Malformed(
                     "conflicting original source expectations",
                 ));

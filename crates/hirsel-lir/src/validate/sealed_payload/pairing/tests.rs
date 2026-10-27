@@ -77,6 +77,46 @@ fn another_value_or_missing_receipt_producer_cannot_supply_a_snapshot() {
 }
 
 #[test]
+fn capture_entry_pairs_only_its_original_selector_and_preserves_snapshot_versions() {
+    let mut u = unit();
+    let a = value(&mut u);
+    let b = value(&mut u);
+    let ra = value(&mut u);
+    let rb = value(&mut u);
+    let newer = value(&mut u);
+    u.captures = vec![a, b];
+    u.tables.receipt_entry = Some(ReceiptEntry {
+        contract: ContentHash([4; 32]),
+        parameters: vec![],
+        captures: vec![
+            ReceiptEntrySlot {
+                source: 0,
+                slot: SlotId(0),
+                version: ra,
+            },
+            ReceiptEntrySlot {
+                source: 1,
+                slot: SlotId(1),
+                version: rb,
+            },
+        ],
+        result: None,
+        environment: Some(LayoutId(0)),
+    });
+    let facts = Pairing::new(&u);
+    assert!(facts.paired(a, ra));
+    assert!(facts.paired(b, rb));
+    assert!(!facts.paired(a, rb));
+    assert!(!facts.paired(b, ra));
+    assert!(!facts.paired(newer, ra));
+    // An equal numeric parameter selector belongs to a separate namespace.
+    u.parameters = vec![newer];
+    assert!(!Pairing::new(&u).paired(newer, ra));
+    u.tables.receipt_entry.as_mut().unwrap().captures.clear();
+    assert!(!Pairing::new(&u).paired(a, ra));
+}
+
+#[test]
 fn immutable_copy_and_borrow_aliases_keep_pairing_without_aliasing_deep_copy() {
     let mut u = unit();
     let original = value(&mut u);

@@ -32,6 +32,11 @@ impl<'a, S> Pairing<'a, S> {
                     origins[binding.version.index()] = Origin::Receipt(ordinary);
                 }
             }
+            for binding in &entry.captures {
+                if let Some(&ordinary) = unit.captures.get(binding.source as usize) {
+                    origins[binding.version.index()] = Origin::Receipt(ordinary);
+                }
+            }
         }
         for (block, row) in unit.blocks.iter().enumerate() {
             for (ordinal, value) in row
