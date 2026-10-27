@@ -3,6 +3,7 @@
 //! invalidation when a body's proved bits change.
 use super::*;
 use hirsel_types::{SignatureKind, UniqueInference};
+mod scheduled;
 
 impl QueryEngine {
     pub(super) fn attach_private_summary(
@@ -21,46 +22,27 @@ impl QueryEngine {
     }
 
     pub(super) fn observe_private_summary(&self, id: DefId, observed: &mut Observed) {
-        let Some(bodies) = self.private_summary_bodies.get(&id) else {
-            return;
-        };
-        observed.merged.record(
-            crate::memo::ReadKey::NameSet(
-                crate::memo::PackageKey::of(&id.path().0.package),
-                crate::memo::ModuleKey::of(&id.path().0.modules),
-            ),
-            ContentHash::of_parts(
-                "hirsel.private-unique.members",
-                bodies.iter().map(|(p, _)| p.0.name.as_bytes()),
-            ),
-        );
-        for (body, _) in bodies {
-            observed.merged.record(
-                crate::memo::ReadKey::CitedText(DefId::intern(body)),
-                self.citation_source().cited_text(DefId::intern(body)),
-            );
+        if let Some(reads) = self.private_summary_reads.get(&id) {
+            observed.merged.merge(reads);
         }
     }
 
     pub(crate) fn prepare_private_summaries(&mut self) {
         self.note_environment();
-        if self.private_summary_active
-            || self.private_summary_revision == Some(self.graph.revision())
+        if !self.private_summary_active
+            && self.private_summary_revision != Some(self.graph.revision())
         {
-            return;
+            self.standalone_private_inference();
         }
-        let Some(adapter) = self.adapters.modes.clone() else {
-            return;
-        };
-        if !adapter.infers_private_unique() {
-            return;
-        }
-        self.private_summary_active = true;
-        let result = self.compute_private_summaries(adapter);
+    }
+
+    pub(crate) fn publish_private_summaries(
+        &mut self,
+        inferred: hirsel_syntax::DefMap<UniqueInference>,
+    ) {
         // A failed source still gets its ordinary per-definition diagnostics.
         // No failed computation publishes optimistic candidate bits.
         {
-            let inferred = result.unwrap_or_default();
             self.private_unique_failures = inferred
                 .iter()
                 .map(|(id, proof)| (*id, proof.failures.clone()))
@@ -83,6 +65,7 @@ impl QueryEngine {
                     && let Ok(output) = entry.result()
                 {
                     let mut output = (*output).clone();
+                    let signature_changed = output.value.metadata.inferred_unique != summary;
                     let mut signature = (*output.value).clone();
                     signature.metadata.inferred_unique = summary.clone();
                     if let Ok(fingerprint) =
@@ -109,8 +92,9 @@ impl QueryEngine {
                             &observed,
                         );
                         next.covered = entry.covered.clone();
+                        let _ = self.store_signature(id.path(), &next);
                         self.signatures.insert(id, Arc::new(next));
-                        if summary != previous {
+                        if signature_changed || summary != previous {
                             changed.push(id.path().clone());
                         }
                     }
@@ -121,56 +105,5 @@ impl QueryEngine {
                 self.note_signatures(&changed);
             }
         }
-        self.private_summary_active = false;
-        self.private_summary_revision = Some(self.graph.revision());
-    }
-
-    fn compute_private_summaries(
-        &mut self,
-        adapter: Arc<dyn ModesPhase>,
-    ) -> Result<hirsel_syntax::DefMap<UniqueInference>, QueryError> {
-        let mut bodies = Vec::new();
-        for path in self.source_paths() {
-            self.materialize(&path)?;
-            let syntax = self.snapshot(&path)?;
-            if syntax.item.visibility != hirsel_syntax::Visibility::Private
-                || syntax
-                    .item
-                    .attributes
-                    .iter()
-                    .any(|a| a.name.as_str() == "test")
-                || !matches!(&syntax.item.kind, ItemKind::Function { body: Some(_), .. })
-            {
-                continue;
-            }
-            let signature = self.signature_query(&path)?;
-            if !matches!(&signature.value.kind, SignatureKind::Function(f) if f.foreign.is_none()) {
-                continue;
-            }
-            // Earlier source errors must not make unrelated definitions unavailable.
-            if let Ok(checked) = self.check_query(&path) {
-                bodies.push((Arc::new(checked.value.clone()), signature.value.clone()));
-            }
-        }
-        self.private_summary_bodies.clear();
-        for (_, signature) in &bodies {
-            let members = bodies
-                .iter()
-                .filter(|(_, s)| {
-                    hirsel_types::unique_summary::same_module(
-                        s.definition.path(),
-                        signature.definition.path(),
-                    )
-                })
-                .map(|(body, s)| (s.definition.path().clone(), body.syntax.text_hash))
-                .collect();
-            self.private_summary_bodies
-                .insert(signature.definition, members);
-        }
-        let (t, memo) = (self.types.clone(), self.memo.clone());
-        Ok(adapter
-            .infer_unique(&t, &memo, &bodies, self)?
-            .into_iter()
-            .collect())
     }
 }

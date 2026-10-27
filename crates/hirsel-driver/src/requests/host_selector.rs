@@ -98,6 +98,15 @@ impl LoadingAdmission {
     pub fn take_transport(&mut self) -> MemoryReservation {
         self.transport.split(self.transport.bytes()).unwrap()
     }
+    pub fn lend_runtime(&mut self) -> MemoryReservation {
+        self.runtime.split(self.runtime.bytes()).unwrap()
+    }
+    pub fn return_runtime(&mut self, reservation: MemoryReservation) {
+        self.runtime
+            .join(reservation)
+            .ok()
+            .expect("same runtime partition");
+    }
     /// Lend the whole runtime and snapshot charge to work that finishes and
     /// releases it before any final producer takes a partition.
     pub fn lend(&mut self) -> (MemoryReservation, MemoryReservation) {

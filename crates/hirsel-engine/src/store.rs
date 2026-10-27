@@ -168,7 +168,7 @@ pub const TYPE_RECORDS: Domain = hirsel_product_codec::TypeRecords::DOMAIN;
 /// reference (`VariantRef::valid`), or a type record such a payload cites.
 pub fn is_result_content(domain: Domain) -> bool {
     domain == TYPE_RECORDS
-        || domain.schema == 8 && (16..=QueryKind::SemanticBody as u32 + 16).contains(&domain.kind)
+        || domain.schema == 8 && (16..=QueryKind::PrivateInference as u32 + 16).contains(&domain.kind)
 }
 
 /// Whether a store hit is recomputed and compared byte for byte

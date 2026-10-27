@@ -105,6 +105,15 @@ pub(crate) fn optional(hash: Option<ContentHash>) -> ContentHash {
         None => tag("hirsel.read.none", &[]),
     }
 }
+/// Inference reads declared structure without depending on its own outputs.
+pub(crate) fn declared_signature_value(
+    types: &hirsel_types::TypeInterner,
+    signature: &hirsel_types::Signature,
+) -> Option<ContentHash> {
+    let mut declaration = signature.clone();
+    declaration.metadata.inferred_unique = Default::default();
+    hirsel_types::encoding::fingerprint(types, &declaration, &[]).ok()
+}
 /// The observed value of a signature read: its fingerprint, or failure.
 pub(crate) fn signature_value(result: Option<ContentHash>) -> ContentHash {
     result.unwrap_or_else(|| tag("hirsel.read.failed-signature", &[]))
@@ -448,6 +457,12 @@ impl QueryEngine {
     /// The value `owner` observes for `read` now.
     pub(crate) fn observe(&mut self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         Some(match *read {
+            ReadKey::DeclaredSignature(d) => {
+                let signature = self
+                    .current_snapshot_signature(d)
+                    .or_else(|| self.signature(d).ok())?;
+                declared_signature_value(&self.types, &signature)?
+            }
             ReadKey::Signature(d) | ReadKey::ExecutedSignature(d) => {
                 let signature = self
                     .current_snapshot_signature(d)
@@ -515,7 +530,9 @@ impl QueryEngine {
                 .validation(&owner.0.package)
                 .first_heap()
                 .map_or_else(ContentHash::default, |(d, _)| d.path().fingerprint()),
-            ReadKey::NameSet(..) => return None,
+            ReadKey::NameSet(package, module) => {
+                self.declarations.frozen().name_set(package, module)
+            }
         })
     }
 
@@ -670,7 +687,14 @@ impl QueryEngine {
                         read(ReadKey::CitedText(id));
                     }
                     if b.header != n.header {
+                        if hirsel_types::specialization_parts(&path).is_none() {
+                            read(ReadKey::NameSet(
+                                PackageKey::of(&path.0.package),
+                                ModuleKey::of(&path.0.modules),
+                            ));
+                        }
                         read(ReadKey::Signature(id));
+                        read(ReadKey::DeclaredSignature(id));
                         read(ReadKey::FailedSignature(id));
                         read(ReadKey::ExecutedSignature(id));
                         read(ReadKey::Representation(id));
@@ -680,6 +704,7 @@ impl QueryEngine {
                         read(ReadKey::DeclarationCandidates(id));
                         read(ReadKey::CitedText(id));
                         read(ReadKey::Signature(id));
+                        read(ReadKey::DeclaredSignature(id));
                         read(ReadKey::FailedSignature(id));
                     }
                     if b.names != n.names {
@@ -699,6 +724,7 @@ impl QueryEngine {
                     names_changed = true;
                     for k in [
                         ReadKey::Signature(id),
+                        ReadKey::DeclaredSignature(id),
                         ReadKey::FailedSignature(id),
                         ReadKey::ExecutedSignature(id),
                         ReadKey::ExecutedBody(id),
@@ -802,6 +828,7 @@ impl QueryEngine {
                     let d = self.durability_of(&ReadKey::Signature(id));
                     for k in [
                         ReadKey::Signature(id),
+                        ReadKey::DeclaredSignature(id),
                         ReadKey::FailedSignature(id),
                         ReadKey::ExecutedSignature(id),
                     ] {
@@ -854,6 +881,7 @@ impl QueryEngine {
             let d = self.durability_of(&ReadKey::Signature(id));
             for k in [
                 ReadKey::Signature(id),
+                ReadKey::DeclaredSignature(id),
                 ReadKey::FailedSignature(id),
                 ReadKey::ExecutedSignature(id),
                 ReadKey::DeclarationCandidates(id),
@@ -884,6 +912,7 @@ impl QueryEngine {
             let durability = self.durability_of(&ReadKey::DeclarationCandidates(id));
             for k in [
                 ReadKey::Signature(id),
+                ReadKey::DeclaredSignature(id),
                 ReadKey::FailedSignature(id),
                 ReadKey::ExecutedSignature(id),
                 ReadKey::ExecutedBody(id),

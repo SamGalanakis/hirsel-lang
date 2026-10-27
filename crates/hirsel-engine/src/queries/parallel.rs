@@ -74,7 +74,7 @@ pub(crate) enum Product<T> {
     Computed(Stage<T>),
 }
 impl<T> Product<T> {
-    fn result(&self) -> Result<Arc<QueryOutput<T>>, QueryError> {
+    pub(crate) fn result(&self) -> Result<Arc<QueryOutput<T>>, QueryError> {
         match self {
             Self::Hit(entry) => entry.result(),
             Self::Computed(stage) => stage.result.clone(),
@@ -223,6 +223,9 @@ pub(crate) struct Worker<'a> {
 }
 impl Worker<'_> {
     pub(crate) fn run(&self, task: Task) -> Completed {
+        self.run_to(task, false)
+    }
+    pub(crate) fn run_to(&self, task: Task, inference: bool) -> Completed {
         let mut done = Completed {
             index: task.index,
             definition: task.definition.clone(),
@@ -299,7 +302,9 @@ impl Worker<'_> {
                 fingerprint: signature.value.fingerprint,
             });
             let _timing = timings::phase(Phase::Check);
-            timings::count(Count::Definitions);
+            if !inference {
+                timings::count(Count::Definitions);
+            }
             let mut stage = Stage {
                 result: Err(QueryError::NotImplemented),
                 detail: initial,
@@ -349,6 +354,9 @@ impl Worker<'_> {
                 return done;
             }
         };
+        if inference {
+            return done;
+        }
         done.phase = QueryKind::Signature;
         let signature = match task.signature {
             Ok(value) => value,

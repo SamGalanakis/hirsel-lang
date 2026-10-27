@@ -156,6 +156,8 @@ pub enum ReadKey {
     ValidationUniverse(PackageKey),
     /// A representation body consumed by H, without interpreting its code.
     LayoutBody(DefId),
+    /// Normalized declaration structure, before private inference evidence.
+    DeclaredSignature(DefId),
 }
 
 /// The kind of a read, for counters and durability rules.
@@ -176,9 +178,10 @@ pub enum ReadKind {
     Environment,
     ValidationUniverse,
     LayoutBody,
+    DeclaredSignature,
 }
 impl ReadKind {
-    pub const ALL: [ReadKind; 15] = [
+    pub const ALL: [ReadKind; 16] = [
         ReadKind::Signature,
         ReadKind::FailedSignature,
         ReadKind::Lookup,
@@ -194,10 +197,12 @@ impl ReadKind {
         ReadKind::Environment,
         ReadKind::ValidationUniverse,
         ReadKind::LayoutBody,
+        ReadKind::DeclaredSignature,
     ];
     pub fn name(self) -> &'static str {
         match self {
             ReadKind::Signature => "signature",
+            ReadKind::DeclaredSignature => "declared signature",
             ReadKind::FailedSignature => "failed signature",
             ReadKind::Lookup => "lookup",
             ReadKind::NameSet => "name set",
@@ -220,6 +225,7 @@ impl ReadKey {
     pub fn kind(&self) -> ReadKind {
         match self {
             ReadKey::Signature(_) => ReadKind::Signature,
+            ReadKey::DeclaredSignature(_) => ReadKind::DeclaredSignature,
             ReadKey::FailedSignature(_) => ReadKind::FailedSignature,
             ReadKey::Lookup(_) => ReadKind::Lookup,
             ReadKey::NameSet(..) => ReadKind::NameSet,
@@ -240,6 +246,7 @@ impl ReadKey {
     pub fn definition(&self) -> Option<DefId> {
         match *self {
             ReadKey::Signature(d)
+            | ReadKey::DeclaredSignature(d)
             | ReadKey::FailedSignature(d)
             | ReadKey::Representation(d)
             | ReadKey::ExecutedBody(d)
@@ -267,6 +274,7 @@ impl ReadKey {
         let text = |s: &str| 4usize.checked_add(s.len());
         let payload = match *self {
             Self::Signature(d)
+            | Self::DeclaredSignature(d)
             | Self::FailedSignature(d)
             | Self::Representation(d)
             | Self::ExecutedBody(d)
@@ -303,6 +311,7 @@ impl ReadKey {
         out.push(self.kind() as u8);
         match *self {
             ReadKey::Signature(d)
+            | ReadKey::DeclaredSignature(d)
             | ReadKey::FailedSignature(d)
             | ReadKey::Representation(d)
             | ReadKey::ExecutedBody(d)
@@ -650,6 +659,7 @@ fn decode_key(input: &mut &[u8]) -> Option<ReadKey> {
     let kind = *ReadKind::ALL.get(tag as usize)?;
     Some(match kind {
         ReadKind::Signature => ReadKey::Signature(take_def(input)?),
+        ReadKind::DeclaredSignature => ReadKey::DeclaredSignature(take_def(input)?),
         ReadKind::FailedSignature => ReadKey::FailedSignature(take_def(input)?),
         ReadKind::Representation => ReadKey::Representation(take_def(input)?),
         ReadKind::ExecutedBody => ReadKey::ExecutedBody(take_def(input)?),
@@ -1042,6 +1052,7 @@ mod admission_tests {
             ReadKey::Representation(id),
             ReadKey::ExecutedBody(id),
             ReadKey::LayoutBody(id),
+            ReadKey::DeclaredSignature(id),
             ReadKey::ExecutedSignature(id),
             ReadKey::CitedText(id),
             ReadKey::DeclarationCandidates(id),

@@ -319,7 +319,7 @@ pub struct QueryEngine {
     pub(crate) types: Arc<hirsel_types::TypeInterner>,
     /// The session's structural memo over `types`.
     pub(crate) memo: Arc<hirsel_types::TypeMemo>,
-    private_summary_bodies: hirsel_syntax::DefMap<Vec<(DefPath, ContentHash)>>,
+    private_summary_reads: hirsel_syntax::DefMap<Arc<Reads>>,
     private_summaries: hirsel_syntax::DefMap<hirsel_types::UniqueSummary>,
     private_unique_failures: BTreeMap<DefId, Vec<hirsel_types::UniqueFailure>>,
     private_summary_revision: Option<crate::memo::Revision>,
@@ -669,7 +669,7 @@ impl QueryEngine {
             snapshot_inputs_revision: 0,
             types: crate::registry::session_types(),
             memo: Arc::new(hirsel_types::TypeMemo::new()),
-            private_summary_bodies: Default::default(),
+            private_summary_reads: Default::default(),
             private_summaries: Default::default(),
             private_unique_failures: BTreeMap::new(),
             private_summary_revision: None,

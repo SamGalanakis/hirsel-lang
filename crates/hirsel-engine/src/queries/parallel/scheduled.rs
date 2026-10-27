@@ -414,6 +414,10 @@ impl FrontBodyQueries {
     pub(crate) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         use crate::memo::LookupSource;
         Some(match *read {
+            ReadKey::DeclaredSignature(id) => {
+                let signature = self.snapshot.signature(id).and_then(Result::ok)?;
+                memos::declared_signature_value(&self.types, signature)?
+            }
             ReadKey::Signature(id) | ReadKey::ExecutedSignature(id) => memos::signature_value(
                 self.snapshot
                     .signature(id)
@@ -515,7 +519,8 @@ impl FrontBodyQueries {
                 .map_or_else(ContentHash::default, |(id, _)| id.path().fingerprint()),
             // A front product must not execute a dependency to decide a hit.
             // Unknown source/registration facts safely miss this ordinary codec.
-            ReadKey::ExecutedBody(_) | ReadKey::LayoutBody(_) | ReadKey::NameSet(..) => {
+            ReadKey::NameSet(package, module) => self.declarations.name_set(package, module),
+            ReadKey::ExecutedBody(_) | ReadKey::LayoutBody(_) => {
                 return None;
             }
         })

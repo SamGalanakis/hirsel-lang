@@ -984,3 +984,12 @@ recomputes; `available_hold_bytes` exposes the remaining worker allowance.
 Changing retention or the configured allowance updates existing scalar holds.
 Compact read/diagnostic/depth receipts and table/interner storage remain session
 metadata outside the body allowance; caller-owned output Arcs remain in flight.
+
+Private uniqueness inference runs as admitted S5 module queries before front
+snapshots are captured. The Modes adapter retains its existing SCC fixed point.
+Inference products use the ordinary result provider and complete read receipts;
+unchanged inputs reuse facts without resolving or checking bodies. Source
+membership, private body text, lookups, private representations and normalized
+declared signatures are observed inputs. Declared-signature reads exclude
+inferred uniqueness, so the fixed point does not depend on its own output.
+The engine's compact facts also serve requests with persistence disabled.

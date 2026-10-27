@@ -956,6 +956,12 @@ pub(super) fn install(
         return Err(loading.failed(error));
     }
     let launch_entry = program.launch_entry().cloned();
+    let inference = loading.lend_runtime();
+    let inference = match program.engine.prepare_private_inference(inference) {
+        Ok(inference) => inference,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
+    loading.return_runtime(inference);
     // Capturing the footprint and the Run and native inputs can still name a
     // specialization (GEN-6); select again until no new root appears.
     let mut definitions = selected_definitions(&mut program.engine);
@@ -1191,6 +1197,10 @@ pub(super) fn install(
     };
     drop(transport);
     let errors = runtime_errors(store.as_ref())?;
+    let runtime = program
+        .engine
+        .prepare_private_inference(runtime)
+        .map_err(&query_error)?;
     let front = program
         .engine
         .front_body_queries_with_registrations(

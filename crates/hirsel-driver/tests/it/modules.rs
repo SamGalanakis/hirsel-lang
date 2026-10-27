@@ -278,3 +278,4 @@ mod ownership_arena_62;
 mod ownership_arena_named_62;
 mod depth_scope_63;
 mod isolate_admission_69;
+mod private_inference_83;

@@ -176,6 +176,36 @@ struct FrozenRows {
     sites: BTreeMap<DefId, Arc<Row>>,
 }
 impl Declarations {
+    pub(crate) fn name_set(
+        &self,
+        package: crate::memo::PackageKey,
+        module: crate::memo::ModuleKey,
+    ) -> ContentHash {
+        let start = DefPath(hirsel_syntax::ItemPath {
+            package: package.id(),
+            modules: if module.0.as_str().is_empty() {
+                vec![]
+            } else {
+                module.0.as_str().split('.').map(str::to_owned).collect()
+            },
+            name: String::new(),
+        });
+        let first = DefId::intern(&start);
+        // DefId orders by DefPath, so this visits only the selected module.
+        let mut parts = Vec::new();
+        for (id, row) in self.rows.sites.range(first..) {
+            let path = id.path();
+            if path.0.package != start.0.package || path.0.modules != start.0.modules {
+                break;
+            }
+            if hirsel_types::specialization_parts(path).is_some() {
+                continue;
+            }
+            parts.push(path.0.name.as_bytes());
+            parts.push(row.candidates.0.as_slice());
+        }
+        ContentHash::of_parts("hirsel.read.module-names.v2", parts)
+    }
     pub(crate) fn with_archived_siblings(&self, source: Arc<dyn DeclarationSiblings>) -> Arc<Self> {
         Arc::new(Self {
             rows: self.rows.clone(),

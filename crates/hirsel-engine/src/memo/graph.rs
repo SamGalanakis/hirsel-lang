@@ -761,7 +761,7 @@ impl MemoGraph {
 /// The `--timings` count for a dirty mark caused by a read of `kind`.
 pub fn invalidation_count(kind: ReadKind) -> Count {
     match kind {
-        ReadKind::Signature => Count::InvalidatedSignature,
+        ReadKind::Signature | ReadKind::DeclaredSignature => Count::InvalidatedSignature,
         ReadKind::FailedSignature => Count::InvalidatedFailedSignature,
         ReadKind::Lookup => Count::InvalidatedLookup,
         ReadKind::NameSet => Count::InvalidatedNameSet,

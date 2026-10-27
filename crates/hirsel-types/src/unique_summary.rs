@@ -94,7 +94,7 @@ pub struct UniqueFailure {
     pub span: hirsel_span::Span,
     pub message: String,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, Eq, PartialEq)]
 pub struct UniqueInference {
     pub summary: UniqueSummary,
     pub failures: Vec<UniqueFailure>,
