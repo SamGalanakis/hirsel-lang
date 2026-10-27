@@ -715,30 +715,33 @@ impl<'o> LayoutBuilder<'o> {
         let mut scan = Vec::new();
         let mut drop = Vec::new();
         let mut copy = CopyRecipe::Bits;
-        for (field, passing) in record.fields.iter().zip(passing) {
+        let live = (!movable.is_empty()).then(|| record.fields.last().expect("live word").offset);
+        for (ordinal, (field, passing)) in record.fields.iter().zip(passing).enumerate() {
             let child = self.record(field.layout);
-            match passing {
+            let steps = match passing {
                 Passing::Take => {
-                    scan.extend(child.scan.iter().map(|s| shift_scan(s, field.offset)));
                     copy = join_copy(copy, child.copy);
+                    child
+                        .scan
+                        .iter()
+                        .map(|step| shift_scan(step, field.offset))
+                        .collect()
                 }
                 Passing::Borrow => {
                     match borrowed_scan(child, field.offset, &|id| self.record(id)) {
                         Some(steps) => {
-                            // A borrow with no scan/drop distinction is an
-                            // ordinary inline field to the layout checker.
                             if steps
                                 == child
                                     .scan
                                     .iter()
-                                    .map(|s| shift_scan(s, field.offset))
+                                    .map(|step| shift_scan(step, field.offset))
                                     .collect::<Vec<_>>()
                                 && child.drop.is_empty()
                                 && child.finalizer.is_none()
                             {
                                 copy = join_copy(copy, child.copy);
                             }
-                            scan.extend(steps);
+                            steps
                         }
                         None => {
                             return unavailable(
@@ -748,68 +751,52 @@ impl<'o> LayoutBuilder<'o> {
                         }
                     }
                 }
-                Passing::Mut => scan.push(ScanStep::Uncounted {
+                Passing::Mut => vec![ScanStep::Uncounted {
                     offset: field.offset,
-                }),
+                }],
+            };
+            if !steps.is_empty()
+                && let Ok(bit) = movable.binary_search(&(ordinal as u32))
+            {
+                scan.push(ScanStep::ActiveVariant {
+                    tag_offset: live.expect("movable live word"),
+                    form: TagForm::LiveBit { bit: bit as u32 },
+                    variants: vec![(1, steps)],
+                });
+            } else {
+                scan.extend(steps);
             }
         }
-        for (field, passing) in record.fields.iter().zip(passing).rev() {
-            let child = self.record(field.layout);
+        for (ordinal, (field, passing)) in record.fields.iter().zip(passing).enumerate().rev() {
             if *passing != Passing::Take {
                 continue;
             }
-            if child.finalizer.is_some() {
-                drop.push(DropStep::Child {
+            let child = self.record(field.layout);
+            let steps = if child.finalizer.is_some() {
+                vec![DropStep::Child {
                     offset: field.offset,
                     layout: field.layout,
+                }]
+            } else {
+                child
+                    .drop
+                    .iter()
+                    .map(|step| shift_drop(step, field.offset))
+                    .collect::<Vec<_>>()
+            };
+            if !steps.is_empty()
+                && let Ok(bit) = movable.binary_search(&(ordinal as u32))
+            {
+                drop.push(DropStep::ActiveVariant {
+                    tag_offset: live.expect("movable live word"),
+                    form: TagForm::LiveBit { bit: bit as u32 },
+                    variants: vec![(1, steps)],
                 });
             } else {
-                drop.extend(child.drop.iter().map(|d| shift_drop(d, field.offset)));
+                drop.extend(steps);
             }
         }
         if !movable.is_empty() {
-            let offset = record.fields.last().expect("live word").offset;
-            for (bit, &ordinal) in movable.iter().enumerate() {
-                let field = &record.fields[ordinal as usize];
-                let end =
-                    field.offset
-                        + self.record(field.layout).size.storage().ok_or_else(|| {
-                            LayoutError::Invalid("unbounded dynamic capture".into())
-                        })?;
-                let belongs = |at: u64| (field.offset..end).contains(&at);
-                let guarded_scan: Vec<_> = scan
-                    .iter()
-                    .filter(|s| belongs(scan_order(s)))
-                    .cloned()
-                    .collect();
-                scan.retain(|s| !belongs(scan_order(s)));
-                if !guarded_scan.is_empty() {
-                    scan.push(ScanStep::ActiveVariant {
-                        tag_offset: offset,
-                        form: TagForm::LiveBit { bit: bit as u32 },
-                        variants: vec![(1, guarded_scan)],
-                    });
-                }
-                // Keep declaration order in the drop program.
-                let start = drop
-                    .iter()
-                    .position(|d| drop_offset(d).is_some_and(belongs));
-                if let Some(start) = start {
-                    let mut end = start;
-                    while end < drop.len() && drop_offset(&drop[end]).is_some_and(belongs) {
-                        end += 1;
-                    }
-                    let steps: Vec<_> = drop.drain(start..end).collect();
-                    drop.insert(
-                        start,
-                        DropStep::ActiveVariant {
-                            tag_offset: offset,
-                            form: TagForm::LiveBit { bit: bit as u32 },
-                            variants: vec![(1, steps)],
-                        },
-                    );
-                }
-            }
             record.kind = LayoutKind::Environment {
                 movable: movable.to_vec(),
             };
@@ -3581,21 +3568,4 @@ fn flat_tag_size(programs: Vec<(u32, Vec<SizeTerm>)>) -> Result<SizeSpec, Layout
             variants: programs,
         }]),
     })
-}
-
-fn drop_offset(step: &DropStep) -> Option<u64> {
-    match step {
-        DropStep::Release { offset }
-        | DropStep::ReleaseRoot { offset }
-        | DropStep::ReleaseSealed { offset }
-        | DropStep::ReleaseReceipt { offset }
-        | DropStep::Child { offset, .. }
-        | DropStep::Thaw { offset, .. }
-        | DropStep::Environment { offset }
-        | DropStep::CloseHandle { offset }
-        | DropStep::ElementsReverse { offset, .. }
-        | DropStep::RepeatReverse { offset, .. } => Some(*offset),
-        DropStep::ActiveVariant { tag_offset, .. } => Some(*tag_offset),
-        DropStep::Finalize | DropStep::ColumnsReverse(_) => None,
-    }
 }

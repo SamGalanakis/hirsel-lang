@@ -3298,3 +3298,63 @@ fn codec_keys_survive_unrelated_layouts() {
     let (edited, _) = key(&owners(Primitive::U16), &unrelated);
     assert_ne!(base, edited, "the Set's representation is in the key");
 }
+
+#[test]
+fn movable_zero_sized_finalizers_keep_distinct_declaration_guards_at_equal_offsets() {
+    use hirsel_core_contract::Passing;
+    let mut owners = Owners::default();
+    let token = owner(
+        &mut owners,
+        "EmptyToken",
+        OwnerSpec {
+            resource: true,
+            finalizer: true,
+            ..OwnerSpec::default()
+        },
+        |types| types.record(&[]),
+    );
+    let mut types = ty();
+    let token_type = types.named(&token, vec![]);
+    for target in [x86(), TargetSpec::aarch64_unknown_linux_gnu()] {
+        let mut builder = LayoutBuilder::new(&target, &owners);
+        let token = builder.layout(&types.store, token_type).unwrap();
+        assert_eq!(fixed(builder.record(token)), 0);
+        let environment = builder
+            .environment_data(
+                &path("zero_captures"),
+                1,
+                &[(token, Passing::Take), (token, Passing::Take)],
+                &[0, 1],
+            )
+            .unwrap();
+        let table = checked(builder);
+        let record = rec(&table, environment);
+        assert_eq!(record.fields[0].offset, record.fields[1].offset);
+        let live = record.fields[2].offset;
+        let guard = |bit| DropStep::ActiveVariant {
+            tag_offset: live,
+            form: TagForm::LiveBit { bit },
+            variants: vec![(
+                1,
+                vec![DropStep::Child {
+                    offset: 0,
+                    layout: token,
+                }],
+            )],
+        };
+        assert_eq!(record.drop, vec![guard(1), guard(0)]);
+        for removed in 0..2 {
+            let mut missing = table.clone();
+            missing.layouts[environment.0 as usize].drop.remove(removed);
+            rejects(&missing, Obligation::DropOrder);
+        }
+        let mut swapped = table.clone();
+        let DropStep::ActiveVariant { form, .. } =
+            &mut swapped.layouts[environment.0 as usize].drop[0]
+        else {
+            unreachable!()
+        };
+        *form = TagForm::LiveBit { bit: 0 };
+        rejects(&swapped, Obligation::DropOrder);
+    }
+}
