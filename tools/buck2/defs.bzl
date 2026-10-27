@@ -763,6 +763,10 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
     # compile the ownership buffer or double their runtime archive matrix.
     if read_root_config("hirsel", "ownership_trace", "false") == "true":
         variants += [(chosen + ["ownership-trace"], triples) for chosen, triples in variants]
+    else:
+        # The explicit ownership fixtures use this one native diagnostic product.
+        # Keep the default runtime free of hooks and avoid a second feature matrix.
+        variants.append((["ownership-trace"], ["x86_64-unknown-linux-gnu"]))
     for chosen, triples in variants:
         variant = "+".join(chosen) or "default"
         library = "{}-{}".format(name, variant.replace("+", "-"))
