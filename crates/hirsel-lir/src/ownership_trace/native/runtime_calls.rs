@@ -30,6 +30,49 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
     })
 }
 
+// Only a complete program request can additionally prove the callback's code
+// and empty Resource environment. The ordinary callable ABI still checks every
+// data argument; this predicate cannot authorize any Resource transport.
+pub(super) fn data_callback<S>(
+    unit: &LirUnit<S>,
+    layouts: &LayoutTable,
+    selection: Selection,
+    call: &CallSite,
+) -> bool {
+    if selection != Selection::Resources
+        || call.callee.value().is_none()
+        || call.pretransfer_failure.is_some()
+        || !layouts
+            .fn_abis
+            .get(call.abi.0 as usize)
+            .is_some_and(|abi| abi.multiplicity != crate::abi_types::CallMultiplicity::Once)
+    {
+        return false;
+    }
+    let inert = |layout| {
+        !selection.tracks_layout(layouts, layout)
+            || plain(layouts, layout, 0)
+            || resource_free_handle(layouts, layout)
+    };
+    call.result
+        .is_none_or(|value| inert(unit.types[unit.values[value.index()].ty.index()].layout))
+        && call
+            .arguments
+            .get(&unit.pools.call_arguments)
+            .is_some_and(|arguments| {
+                arguments.iter().all(|argument| {
+                    inert(match argument.value {
+                        ArgumentValue::Value(value) => {
+                            unit.types[unit.values[value.index()].ty.index()].layout
+                        }
+                        ArgumentValue::Address { address, .. } => {
+                            unit.types[unit.addresses[address.index()].ty.index()].layout
+                        }
+                    })
+                })
+            })
+}
+
 pub(super) fn spawn_parameter<S>(unit: &LirUnit<S>, call: &CallSite) -> Option<ValueId> {
     let Callee::Operation(operation) = call.callee else {
         return None;
@@ -236,6 +279,77 @@ mod tests {
         }];
         assert!(!resource_free_handle(&table, LayoutId(3)));
     }
+
+    #[test]
+    fn resource_selection_checks_recursive_mutex_payloads_and_keeps_owned_and_channel_custody() {
+        let mut table = LayoutTable::new(&TargetSpec::x86_64_unknown_linux_gnu());
+        table.layouts = vec![
+            record(LayoutKind::Unit),
+            record(LayoutKind::Resource),
+            record(LayoutKind::Variant),
+            record(LayoutKind::Handle),
+            record(LayoutKind::Shared {
+                payload: LayoutId(3),
+            }),
+            record(LayoutKind::Block {
+                payload: LayoutId(0),
+            }),
+        ];
+        table.layouts[2].tag = Some(TagEncoding {
+            offset: 0,
+            form: TagForm::Ordinal,
+            variants: vec![
+                VariantLayout {
+                    ordinal: 0,
+                    fields: vec![],
+                },
+                VariantLayout {
+                    ordinal: 1,
+                    fields: vec![FieldLayout {
+                        ordinal: 0,
+                        offset: 0,
+                        layout: LayoutId(5),
+                        unaligned: false,
+                    }],
+                },
+            ],
+        });
+        table.layouts[3].scan = vec![ScanStep::Handle {
+            offset: 0,
+            kind: HandleKind::Mutex,
+            ty: Some(LayoutId(4)),
+            obtains: Some(LayoutId(2)),
+        }];
+        assert!(!Selection::Resources.tracks_layout(&table, LayoutId(4)));
+        assert!(Selection::Owned.tracks_layout(&table, LayoutId(4)));
+        assert!(!resource_free_handle(&table, LayoutId(3)));
+
+        // A Resource hidden behind the block, or in any variant arm, is tracked.
+        table.layouts[5].kind = LayoutKind::Block {
+            payload: LayoutId(1),
+        };
+        assert!(Selection::Resources.tracks_layout(&table, LayoutId(4)));
+        table.layouts[5].kind = LayoutKind::Block {
+            payload: LayoutId(0),
+        };
+        table.layouts[2].tag.as_mut().unwrap().variants[1].fields[0].layout = LayoutId(1);
+        assert!(Selection::Resources.tracks_layout(&table, LayoutId(4)));
+        table.layouts[2].tag.as_mut().unwrap().variants[1].fields[0].layout = LayoutId(5);
+
+        for kind in [
+            HandleKind::Sender,
+            HandleKind::Receiver,
+            HandleKind::Unknown,
+        ] {
+            table.layouts[3].scan = vec![ScanStep::Handle {
+                offset: 0,
+                kind,
+                ty: Some(LayoutId(4)),
+                obtains: Some(LayoutId(2)),
+            }];
+            assert!(Selection::Resources.tracks_layout(&table, LayoutId(4)));
+        }
+    }
 }
 
 /// Prove resource-free callable environments from checked capture equations.
@@ -269,6 +383,12 @@ pub(super) fn empty_callables(
         let Some(record) = layouts.layout(environment) else {
             return false;
         };
+        // Lowering can retain a data-only aggregate after eliding a lexical
+        // environment. The complete checked layout graph proves its selection
+        // without inventing capture slots on the environment-free callee.
+        if !selection.tracks_layout(layouts, environment) {
+            return true;
+        }
         if record.finalizer.is_some() {
             return false;
         }

@@ -9,6 +9,10 @@ pub(super) fn source_calls(source: &str, created: u64) {
 }
 
 pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) {
+    source_calls_granted(source, created, expected_exit, "{}");
+}
+
+pub(super) fn source_calls_granted(source: &str, created: u64, expected_exit: i32, grants: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("main.hir"), source).unwrap();
@@ -21,7 +25,7 @@ pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) 
                 &manifest,
                 hirsel_driver::HostLaunch::Live {
                     config: hirsel_driver::LaunchConfig::Grants {
-                        input: std::ffi::OsStr::new("{}"),
+                        input: std::ffi::OsStr::new(grants),
                         arguments: None,
                     },
                     record: None,
@@ -126,11 +130,19 @@ pub(super) fn source_calls_exit(source: &str, created: u64, expected_exit: i32) 
                 .emit(backend)
                 .unwrap_or_else(|error| panic!("{backend:?} original plan emission: {error}"));
             let run = execution
-                .launch(
+                .launch_with(
                     &objects,
                     &tools,
                     &directory.path().join(backend.name()),
                     1000,
+                    hirsel_driver::HostLaunch::Live {
+                        config: hirsel_driver::LaunchConfig::Grants {
+                            input: std::ffi::OsStr::new(grants),
+                            arguments: None,
+                        },
+                        record: None,
+                        revocations: None,
+                    },
                 )
                 .unwrap();
             assert_eq!(run.execution.exit, Some(expected_exit));

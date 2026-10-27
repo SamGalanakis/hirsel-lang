@@ -510,6 +510,7 @@ impl LeafPlan {
                     }
                     Inst::ArenaToken { result, .. } if !owned(result) => (),
                     Inst::RegionExit { .. } => (),
+                    Inst::Share { value } if !selection.tracks_layout(layouts, layout(value)) => (),
                     Inst::StorageLive { .. }
                     | Inst::StorageDead { .. }
                     | Inst::EndScope { .. }
@@ -578,7 +579,9 @@ impl LeafPlan {
                             abi.environment
                                 && abi.multiplicity == crate::abi_types::CallMultiplicity::Once
                         });
-                    if (!matches!(call.callee, Callee::Direct(_)) && !once)
+                    let data_callback =
+                        program && runtime_calls::data_callback(unit, layouts, selection, call);
+                    if (!matches!(call.callee, Callee::Direct(_)) && !once && !data_callback)
                         || call.pretransfer_failure.is_some()
                     {
                         return Err(format!(
@@ -626,7 +629,8 @@ impl LeafPlan {
                             ArgumentValue::Address { address, .. } => {
                                 let layout =
                                     unit.types[unit.addresses[address.index()].ty.index()].layout;
-                                if plain(layouts, layout, 0)
+                                if !selection.tracks_layout(layouts, layout)
+                                    || plain(layouts, layout, 0)
                                     || resource_free_handle(layouts, layout)
                                 {
                                     continue;
@@ -1555,6 +1559,14 @@ impl Request<'_> {
                         Some(&codes[index]),
                         Some(&empty[index]),
                     )?;
+                } else if runtime_calls::data_callback(body, layouts, selection, call) {
+                    let value = call
+                        .callee
+                        .value()
+                        .ok_or("data callback has no checked callable")?;
+                    if !empty[index][value.index()] {
+                        return Err("native ownership tracing: callback needs explicit Resource environment custody".into());
+                    }
                 }
             }
             plan.codes = Some(codes[index].clone());

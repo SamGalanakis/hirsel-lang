@@ -26,7 +26,8 @@ impl Selection {
                         | LayoutKind::Iterator { .. }
                 )
                 || (matches!(record.kind, LayoutKind::Handle)
-                    && !resource_free_handle(layouts, layout))
+                    && !resource_free_handle(layouts, layout)
+                    && !data_handle(record))
             {
                 return true;
             }
@@ -34,4 +35,26 @@ impl Selection {
         }
         false
     }
+}
+
+// These handles expose their entire possible payload in the checked layout
+// graph. Following references below also checks private storage, every variant
+// arm and recursive mutex wrappers. Channels still need committed FIFO custody.
+fn data_handle(record: &crate::layout_types::LayoutRecord) -> bool {
+    use crate::layout_types::{HandleKind, ScanStep};
+    !record.scan.is_empty()
+        && record.scan.iter().all(|step| {
+            matches!(
+                step,
+                ScanStep::Handle {
+                    kind: HandleKind::Mutex | HandleKind::Task,
+                    obtains: Some(_),
+                    ..
+                } | ScanStep::Handle {
+                    kind: HandleKind::Scope | HandleKind::Atomic,
+                    obtains: None,
+                    ..
+                }
+            )
+        })
 }

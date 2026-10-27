@@ -54,3 +54,54 @@ pub fn main()->Result[(),u64] {
         2,
     );
 }
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn source_resource_selection_proves_mutex_data_and_owned_task_results_have_no_resource_credit() {
+    super::ownership_owned_call_49::source_calls_granted(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ let board=mutex.create(tasks,unique 7u64)
+ task.scope(tasks,fn(s:Scope) {
+  let child=task.async(s,fn()->String {
+   let token=Token()
+   let value=mutex.with(tasks,board,fn(mut n:unique u64)->u64 uses {} {n})
+   failure.check(value==7u64,Bounds())
+   "ordinary owned result"
+  })
+  let received=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        1,
+        0,
+        r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#,
+    );
+}
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn source_resource_selection_keeps_a_resource_across_a_named_data_callback() {
+    super::ownership_owned_call_49::source_calls_granted(
+        r#"
+resource type Token {}
+drop(x) {}
+fn read(mut n:unique u64)->u64 uses {} {n}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ let board=mutex.create(tasks,unique 7u64)
+ let token=Token()
+ let value=mutex.with(tasks,board,read)
+ failure.check(value==7u64,Bounds())
+ Ok(())
+}
+"#,
+        1,
+        0,
+        r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#,
+    );
+}
