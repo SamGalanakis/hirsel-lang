@@ -177,17 +177,20 @@ fn conditional_handback_uses_selected_current_evidence() {
 
 #[test]
 fn a_unique_sibling_cannot_replace_the_selected_handback_promise() {
-    for (promise, expected) in [
-        ("", Some("MODE-2")),
-        ("@preserves_unique(ys)", Some("MODE-2")),
-        ("@preserves_unique(xs)", None),
-    ] {
-        check(
-            &format!(
-                "{promise}\npub fn keep(mut xs:List[u64],mut ys:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];let mut ys:unique List[u64]=[2];keep(mut xs,mut ys);need(take xs)}}"
-            ),
-            expected,
-        );
+    for public in [false, true] {
+        let visibility = if public { "pub " } else { "" };
+        for (promise, expected) in [
+            ("", Some("MODE-2")),
+            ("@preserves_unique(ys)", Some("MODE-2")),
+            ("@preserves_unique(xs)", None),
+        ] {
+            check(
+                &format!(
+                    "{promise}\n{visibility}fn keep(mut xs:List[u64],mut ys:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];let mut ys:unique List[u64]=[2];keep(mut xs,mut ys);need(take xs)}}"
+                ),
+                if public { expected } else { None },
+            );
+        }
     }
 }
 

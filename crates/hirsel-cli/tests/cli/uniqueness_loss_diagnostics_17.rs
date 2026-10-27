@@ -1,7 +1,7 @@
 //! Text/JSON source ranges agree across module files and UTF-8 prefixes.
 use std::{fs, process::Command};
 
-fn check(source: &str, primary: &str, causes: &[&str], explanation: &str) {
+fn package(source: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let main = "// λ caller\npub fn main() -> Result[(), ()] { helper.probe(); Ok(()) }\n";
     fs::write(dir.path().join("main.hir"), main).unwrap();
@@ -17,6 +17,29 @@ fn check(source: &str, primary: &str, causes: &[&str], explanation: &str) {
         .to_string(),
     )
     .unwrap();
+    dir
+}
+
+fn accepts(source: &str) {
+    let dir = package(source);
+    for json in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
+        command.env("HIRSEL_DAEMON", "off").arg("check");
+        if json {
+            command.arg("--json");
+        }
+        let output = command.arg(dir.path().join("hirsel.json")).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+    }
+}
+
+fn check(source: &str, primary: &str, causes: &[&str], explanation: &str) {
+    let dir = package(source);
+    let manifest = dir.path().join("hirsel.json");
     let run = |json| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_hirsel"));
         command.env("HIRSEL_DAEMON", "off").arg("check");
@@ -84,6 +107,9 @@ fn check(source: &str, primary: &str, causes: &[&str], explanation: &str) {
 
 #[test]
 fn uniqueness_loss_diagnostics_17_multifile_utf8_copied_key_and_handback() {
+    accepts(
+        "// é helper\nfn edit(mut m: Map[u64,u64]) {}\npub fn probe() {\n let mut m: unique Map[u64,u64] = map.empty()\n edit(mut m)\n let _ = map.remove(mut m,0)\n}\n",
+    );
     check(
         "// é helper\npub fn probe() {\n  let prefix = \"λ\"; let key = f\"word\"\n  let mut counts: unique Map[String,u32] = map.empty()\n  map.insert(mut counts, copy key, 1)\n  let _ = map.remove(mut counts,key)\n}\n",
         "map.remove(mut counts,key)",
