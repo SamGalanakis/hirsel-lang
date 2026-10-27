@@ -8,12 +8,13 @@ pub trait CompilerRequestsExt {
 }
 impl CompilerRequestsExt for Compiler {
     fn check_path(&self, path: &Path) -> Result<CheckOutput, ToolError> {
-        let publication = self
-            .configuration()
+        let config = self.configuration();
+        let compiler = self.clone().with_config(config.clone());
+        let publication = config
             .store
             .local_product_store()
             .map(|store| store.request());
-        let output = Session::open_with_compiler(path, self.clone()).check();
+        let output = Session::open_with_compiler(path, compiler).check();
         if output
             .as_ref()
             .is_ok_and(|output| output.completion == hirsel_engine::CheckCompletion::Complete)
