@@ -1,5 +1,5 @@
 // rule: CAP-3
-// expect: reject CAP-3 at line 6
+// expect: reject CAP-3 at line 14
 // twin: CAP/CAP-3-cpu-closed-callback-ok.hir
 fn forbidden(x: u64) -> u64 uses {} {
   x
