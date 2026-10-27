@@ -196,6 +196,7 @@ N fn group.kill(p: Proc, mut g: ChildGroup of p, signal: Signal) -> ()
 
 // CONC-2/3/5/6/7, CLO-3, FAIL-2
 fn cpu.map_scoped[J: sendable + inert, R: sendable + inert](tasks: Tasks, width: u32, take prepare: sendable once fn() -> List[J] uses {}, take map: sendable fn(take job: J) -> R uses {}) -> Result[List[R], CpuPoolError]
+// The CPU operation requires a direct call; it cannot escape as a function value.
 // CPU callbacks require locally visible closures with closed calls. Captures,
 // jobs and results contain no capabilities, resources, synchronization handles,
 // pointers or opaque function values. Immutable Shared reads and thaw are allowed.

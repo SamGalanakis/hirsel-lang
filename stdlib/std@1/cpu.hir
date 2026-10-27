@@ -1,5 +1,6 @@
 /// Errors returned by core cpu.map_scoped. The operation runs preparation once
 /// and maps at most 2 * width owned jobs on exactly 1, 4, 8 or 16 fresh workers.
-/// Both callbacks are closed, sendable and authority-free. Workers join before
+/// Call the operation directly with locally visible callbacks. Both callbacks
+/// are closed, sendable and authority-free. Workers join before
 /// return; results preserve input order. Native replay starts no workers.
 pub type PoolError = CpuPoolError
