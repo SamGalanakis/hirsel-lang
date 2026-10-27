@@ -1021,6 +1021,23 @@ fn generic_loop_matrix_31_incomplete_error_propagation() {
         ] {
             let mut engine = crate::source_std::engine();
             let file = engine.sources.add("main.hir", source.into()).unwrap();
+            let inferred = check_progress(&mut engine, file, &default_context()).unwrap();
+            assert!(
+                inferred
+                    .diagnostics
+                    .iter()
+                    .all(|d| d.severity != hirsel_diag::Severity::Error),
+                "{:?}",
+                inferred.diagnostics
+            );
+            // Private producers prove the omitted uniqueness from their bodies.
+            // Exported twins must still reject every missing written contract.
+            let source = source
+                .replace("fn source(", "pub fn source(")
+                .replace("fn number(", "pub fn number(")
+                .replace("type Problem =", "pub type Problem =");
+            let mut engine = crate::source_std::engine();
+            let file = engine.sources.add("main.hir", source.clone()).unwrap();
             // V must not be the first phase to reject the missing source contract.
             let output = check_progress(&mut engine, file, &default_context());
             let checked=output.expect("incomplete error annotation needs a source diagnostic, not a V operational rejection");
@@ -1036,7 +1053,7 @@ fn generic_loop_matrix_31_incomplete_error_propagation() {
                 "{errors:?}"
             );
             for error in errors {
-                assert_eq!(error.rule.as_str(), "MODE-2");
+                assert_eq!(error.rule.as_str(), "MODE-2", "{error:?}");
                 let site = checked.sources.slice(error.primary).unwrap();
                 assert!(
                     site.starts_with(if original_decode {
