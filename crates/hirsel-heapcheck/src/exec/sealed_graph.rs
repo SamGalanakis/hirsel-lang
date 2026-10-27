@@ -106,6 +106,26 @@ impl<S: Stage> Machine<'_, S> {
                     });
                 }
             }
+            let mut payloads = Vec::new();
+            for table in &unit.tables.seal_payloads {
+                let descriptor = unit
+                    .tables
+                    .seal_descriptors
+                    .get(table.descriptor.index())
+                    .ok_or_else(|| err(V::Malformed, "source payload descriptor is missing"))?;
+                for binding in &table.bindings {
+                    payloads.push(hirsel_lir::sealed_payload_source::SourcePayload {
+                        root_type: descriptor.root_type.clone(),
+                        recipe: binding.recipe.clone(),
+                    });
+                }
+            }
+            if payloads != source.payloads {
+                return fail(
+                    V::Malformed,
+                    "independent source payload correspondence differs",
+                );
+            }
             if observed != source.events {
                 return fail(
                     V::Malformed,

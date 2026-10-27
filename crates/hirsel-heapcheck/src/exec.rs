@@ -31,6 +31,7 @@ mod compare;
 mod flat;
 mod primitive_work;
 mod projection;
+mod receipts;
 mod sealed_drop;
 mod sealed_graph;
 mod sealed_read;
@@ -305,6 +306,7 @@ enum Finished {
 
 pub(crate) struct Machine<'p, S> {
     invocation_events: BTreeMap<u32, Vec<bool>>,
+    receipts: BTreeMap<AllocId, receipts::SnapshotValue>,
     seal_inventory: BTreeMap<usize, BTreeMap<AllocId, sealed_graph::Entry>>,
     seal_allocations: BTreeMap<AllocId, (usize, SourceAnchor)>,
     seal_sources_checked: bool,
@@ -408,6 +410,7 @@ fn tracked(repr: ValueRepr) -> bool {
     matches!(
         repr,
         ValueRepr::Block
+            | ValueRepr::PayloadReceipt
             | ValueRepr::Aggregate
             | ValueRepr::Callable
             | ValueRepr::Handle
@@ -449,6 +452,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             ledger,
             stack: Vec::new(),
             invocation_events: BTreeMap::new(),
+            receipts: BTreeMap::new(),
             seal_inventory: BTreeMap::new(),
             seal_allocations: BTreeMap::new(),
             seal_sources_checked: false,
@@ -2282,10 +2286,21 @@ impl<'p, S: Stage> Machine<'p, S> {
             )
         };
         match repr {
-            ValueRepr::PayloadReceipt => fail(
-                V::Unsupported,
-                "private receipt H cells are not implemented",
-            ),
+            ValueRepr::PayloadReceipt => {
+                if size != self.word || !e.all_init(0, self.word) {
+                    return Err(uninit());
+                }
+                let Some(Cell::Data {
+                    ptr,
+                    counted,
+                    borrow,
+                }) = e.cells.get(&0)
+                else {
+                    return fail(V::ForgedPointer, "receipt bytes are not a private control");
+                };
+                self.check_receipt_cell(*ptr, layout)?;
+                Ok((Val::Ptr(*ptr), *borrow, *counted))
+            }
             ValueRepr::Unit => Ok((Val::Unit, None, false)),
             ValueRepr::Scalar(k) => {
                 if !e.all_init(0, size) {
@@ -2531,6 +2546,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 );
             }
         }
+        if matches!(record.kind, LayoutKind::PayloadReceipt { .. }) {
+            let Val::Ptr(control) = &m.val else {
+                return fail(V::ForgedPointer, "receipt store has no private control");
+            };
+            self.check_receipt_cell(*control, layout)?;
+        }
         match m.val {
             Val::Unit => {}
             Val::Bits { scalar, bits } => {
@@ -2561,6 +2582,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                         | LayoutKind::Opaque { .. }
                         | LayoutKind::Iterator { .. }
                         | LayoutKind::SealedRegion { .. }
+                        | LayoutKind::PayloadReceipt { .. }
                 ) {
                     return fail(
                         V::TypeConfusion,
@@ -3507,6 +3529,12 @@ impl<'p, S: Stage> Machine<'p, S> {
                 "finite count bound does not fit the ABI v2 u32 counter",
             );
         }
+        if self.unit(entry).tables.receipt_entry.is_some() {
+            return fail(
+                V::Malformed,
+                "harness entry has no incoming receipt custody",
+            );
+        }
         self.entry = entry;
         let mut f = self.frame(entry, Role::Entry, None);
         let parameters = &self.unit(entry).parameters;
@@ -3688,8 +3716,14 @@ impl<'p, S: Stage> Machine<'p, S> {
             } => {
                 self.record_seal_inventory(f, arena, allocation, value, shape, previous)?;
             }
-            Inst::PayloadReceipt { .. } => {
-                return fail(V::Unsupported, "sealed storage H adapter is not linked");
+            Inst::PayloadReceipt {
+                result,
+                value,
+                shape,
+                binding,
+                inputs,
+            } => {
+                self.payload_receipt(f, result, value, shape, binding, inputs)?;
             }
             Inst::BorrowSealedRoot {
                 result,
@@ -8366,6 +8400,7 @@ impl<'p, S: Stage> Machine<'p, S> {
         }
         new.operation = operation;
         new.destination = site.destination.clone();
+        self.bind_receipt_call(f, &mut new, site)?;
         let mut bound = vec![false; cu.parameters.len()];
         let mut by_address = vec![None; cu.parameters.len()];
         let mut written = Vec::new();
@@ -10025,6 +10060,7 @@ impl<'p, S: Stage> Machine<'p, S> {
                 DropStep::Release { offset: at }
                 | DropStep::ReleaseRoot { offset: at }
                 | DropStep::ReleaseSealed { offset: at }
+                | DropStep::ReleaseReceipt { offset: at }
                 | DropStep::Environment { offset: at }
                 | DropStep::CloseHandle { offset: at } => self.record(*id).ok().is_some_and(|r| {
                     r.drop.iter().any(|candidate| match (step, candidate) {
@@ -10190,11 +10226,10 @@ impl<'p, S: Stage> Machine<'p, S> {
                             self.release_sealed(base.at(offset), owner_layout, &mut d.work)?;
                         }
                     }
-                    DropStep::ReleaseReceipt { .. } => {
-                        return fail(
-                            V::Unsupported,
-                            "private receipt storage H drop is not implemented",
-                        );
+                    DropStep::ReleaseReceipt { offset } => {
+                        if !gated(offset) {
+                            self.release_receipt(base.at(offset), owner_layout)?;
+                        }
                     }
                     DropStep::Finalize => {
                         let rid = self.resource_at(base)?;

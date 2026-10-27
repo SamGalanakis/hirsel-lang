@@ -37,19 +37,22 @@ impl<S: Stage> Program<S> {
         if self.layouts.target != self.target.digest() {
             return fail(V::Malformed, "layout table names another target");
         }
-        if self.layouts.layouts.iter().any(|layout| {
-            matches!(
-                layout.kind,
-                hirsel_lir::layout_types::LayoutKind::PayloadReceipt { .. }
-            )
-        }) {
-            return fail(
-                V::Malformed,
-                "private receipt storage ownership is not implemented",
-            );
-        }
         for abi in &self.layouts.fn_abis {
-            hirsel_lir::abi::check_implemented_transport(abi).map_err(|e| err(V::Malformed, e))?;
+            hirsel_lir::abi::check_receipt_contract(abi, &self.layouts)
+                .map_err(|e| err(V::Malformed, e))?;
+            if abi.receipts.as_ref().is_some_and(|contract| {
+                !contract.captures.is_empty()
+                    || contract.result.is_some()
+                    || contract
+                        .parameters
+                        .iter()
+                        .any(|p| p.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot)
+            }) {
+                return fail(
+                    V::Unsupported,
+                    "H mutable, result or capture receipt custody is not implemented",
+                );
+            }
         }
         for data in &self.statics {
             data.validate(&self.layouts, u64::from(self.target.pointer_bytes))
@@ -59,7 +62,16 @@ impl<S: Stage> Program<S> {
             }
         }
         for unit in &self.units {
-            if unit.tables.receipt_entry.is_some()
+            let abi = self
+                .layouts
+                .fn_abis
+                .get(unit.header.abi.0 as usize)
+                .ok_or_else(|| err(V::Malformed, "receipt unit ABI is missing"))?;
+            if let Some(entry) = &unit.tables.receipt_entry {
+                entry
+                    .check(abi, unit, &self.layouts)
+                    .map_err(|e| err(V::Malformed, e))?;
+            } else if abi.receipts.is_some()
                 || unit.slots.iter().any(|slot| {
                     matches!(
                         slot.kind,
@@ -69,13 +81,7 @@ impl<S: Stage> Program<S> {
                     )
                 })
             {
-                return fail(V::Malformed, "receipt entry ownership is not implemented");
-            }
-            if unit.tables.calls.iter().any(|call| call.receipts.is_some()) {
-                return fail(
-                    V::Malformed,
-                    "receipt call ownership transport is not implemented",
-                );
+                return fail(V::Malformed, "receipt ABI lacks entry custody");
             }
             crate::pretransfer::audit(unit, &self.layouts, &self.pretransfer_adapters)?;
             if !self.invocations.is_empty()
@@ -503,6 +509,7 @@ impl Operations for NoOperations {
 pub struct Config {
     /// Independently validated source/declaration inputs for direct graph execution.
     /// Candidate receipt tables cannot populate these inputs.
+    pub receipt_sources: Vec<hirsel_lir::sealed_payload_source::ReceiptSource>,
     pub seal_sources: Vec<hirsel_lir::sealed_payload_source::SourceSeal>,
     pub seal_descriptors: Vec<hirsel_lir::sealed::SealDescriptor>,
     /// Finite counts saturate to sticky immortality above this (small values
@@ -535,6 +542,7 @@ pub const DEFAULT_INSTRUCTION_LIMIT: u64 = 8_388_608;
 impl Default for Config {
     fn default() -> Self {
         Self {
+            receipt_sources: Vec::new(),
             seal_sources: Vec::new(),
             seal_descriptors: Vec::new(),
             count_max: u32::MAX as u64 - 1,
@@ -562,7 +570,7 @@ mod receipt_layout_tests {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep, LayoutKind};
     use hirsel_lir::operation::{NativeType, Primitive};
     #[test]
-    fn private_receipt_storage_does_not_gain_h_custody_from_a_layout_declaration() {
+    fn private_receipt_layout_can_be_linked_without_minting_a_holder() {
         let mut layouts = crate::build::Layouts::new(TargetSpec::x86_64_unknown_linux_gnu());
         let id = layouts.scalar(ScalarKind::Pointer);
         let mut program = Program::<hirsel_lir::stage::Rc> {
@@ -581,9 +589,6 @@ mod receipt_layout_tests {
         };
         record.drop = vec![DropStep::ReleaseReceipt { offset: 0 }];
         record.copy = CopyRecipe::NotCopyable;
-        let error = program.check().unwrap_err();
-        assert!(
-            format!("{error:?}").contains("private receipt storage ownership is not implemented")
-        );
+        program.check().unwrap();
     }
 }
