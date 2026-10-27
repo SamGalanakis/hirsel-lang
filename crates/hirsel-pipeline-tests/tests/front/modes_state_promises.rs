@@ -184,7 +184,7 @@ fn a_unique_sibling_cannot_replace_the_selected_handback_promise() {
     ] {
         check(
             &format!(
-                "{promise}\nfn keep(mut xs:List[u64],mut ys:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];let mut ys:unique List[u64]=[2];keep(mut xs,mut ys);need(take xs)}}"
+                "{promise}\npub fn keep(mut xs:List[u64],mut ys:List[u64]){{list.push(mut xs,1)}}\nfn need(take xs:unique List[u64]){{}}\nfn probe(){{let mut xs:unique List[u64]=[1];let mut ys:unique List[u64]=[2];keep(mut xs,mut ys);need(take xs)}}"
             ),
             expected,
         );

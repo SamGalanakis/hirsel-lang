@@ -24,13 +24,6 @@ fn lowered(
         .unwrap();
     let parsed = engine.parse_file(file, &default_context()).unwrap();
     assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
-    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
-    for name in names {
-        let mut path = entry_path(&default_context());
-        path.0.name = (*name).into();
-        let signature = engine.item_signature(&path).unwrap().value;
-        signatures.insert(signature.definition, (*signature).clone());
-    }
     let mut path = entry_path(&default_context());
     path.0.name = entry.into();
     let modes = engine.mode_definition(&path).unwrap();
@@ -39,6 +32,13 @@ fn lowered(
     // forged twins, independently of the producer's acceptance decision.
     engine.verify = Verify::Off;
     let definition = (*engine.lower_to_tir(&path).unwrap().value).clone();
+    let mut signatures = hirsel_validate::SignatureMap::new(engine.types().clone());
+    for name in names {
+        let mut path = entry_path(&default_context());
+        path.0.name = (*name).into();
+        let signature = engine.item_signature(&path).unwrap().value;
+        signatures.insert(signature.definition, (*signature).clone());
+    }
     (engine, definition, signatures)
 }
 

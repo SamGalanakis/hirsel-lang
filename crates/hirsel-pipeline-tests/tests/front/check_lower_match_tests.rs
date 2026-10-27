@@ -50,8 +50,8 @@ fn matrix_ir(width: usize, rows: &[Vec<u8>]) -> (Definition, hirsel_validate::Si
         "fn main(p:({}))->(){{match p{{_=>()}}}}",
         vec!["bool"; width].join(",")
     ));
-    let signature = engine.item_signature(&path("main")).unwrap().value;
     let mut definition = (*engine.lower_to_tir(&path("main")).unwrap().value).clone();
+    let signature = engine.item_signature(&path("main")).unwrap().value;
     let body = &mut definition.bodies[0];
     let table = &mut body.matches[0];
     let target = table.arms[0].target;
