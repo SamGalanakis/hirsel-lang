@@ -14,6 +14,8 @@ control whose independently derived sum is `1000000 * 999999 / 2 = 499999500000`
 `arena.seal` and `region.with` use reviewed library bodies. The capture-free
 heap `List[u64]` root in `conformance/MEM/MEM-4-sealed-heap-run.hir` runs on the
 reference interpreter, checked H, LLVM and Cranelift, including record/replay.
+`MEM-4-sealed-heap-charge-run.hir` also checks bounded evacuation: capacity 15
+refuses two u64 elements, while capacities 16 and 17 preserve both elements.
 Original source declarations and ordered child receipts remain mandatory.
 Captured closures, held environments, tasks, additional mutation recipes and
 fully elided payload custody remain unsupported on this path.
