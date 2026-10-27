@@ -16,7 +16,7 @@ use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 95;
+pub const ABI_VERSION: u32 = 96;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 /// Incoming mutable parameter storage, resolved through an exact call relation.
 pub const MUTABLE_PARAMETER: u32 = u32::MAX - 1;
@@ -1564,7 +1564,10 @@ impl Request<'_> {
                     && let Terminator::Call { call, .. } = body.terminators[block.index()]
                     && let Some(value) =
                         runtime_calls::spawn_parameter(body, &body.tables.calls[call.index()])
-                    && !empty[index][value.index()]
+                    && (!empty[index][value.index()]
+                        || codes[index][value.index()]
+                            .targets()
+                            .is_some_and(|targets| targets.len() == 1))
                     && marker.kind == 1
                     && marker.owner.kind == 2
                     && marker.owner.index == 1
@@ -1663,7 +1666,7 @@ impl LeafPlan {
             .iter()
             .find(|(_, marker)| marker.id == id)
             .ok_or("ownership marker has no committed operation")?;
-        if !matches!(marker.kind, 1 | 3)
+        if !matches!(marker.kind, 1 | 3 | 5)
             || !layouts
                 .layout(marker.layout)
                 .is_some_and(|record| matches!(record.kind, LayoutKind::Callable { .. }))

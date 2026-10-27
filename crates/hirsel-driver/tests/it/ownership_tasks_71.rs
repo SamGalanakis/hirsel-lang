@@ -6,12 +6,8 @@ use std::sync::Arc;
 #[test]
 #[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
 fn native_child_local_resources_keep_equal_tokens_in_distinct_tasks() {
-    hirsel_engine::with_compiler_stack(|| {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("main.hir");
-        std::fs::write(
-            &source,
-            r#"
+    child_local_source(
+        r#"
 resource type Token {}
 drop(x) {}
 pub fn main(rt:Io)->Result[(),GrantError] {
@@ -25,8 +21,16 @@ pub fn main(rt:Io)->Result[(),GrantError] {
  Ok(())
 }
 "#,
-        )
-        .unwrap();
+        2,
+        false,
+    );
+}
+
+fn child_local_source(source_text: &str, expected_tasks: usize, require_spawn_binding: bool) {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.hir");
+        std::fs::write(&source, source_text).unwrap();
         let path = directory.path().join("hirsel.json");
         std::fs::write(&path, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let grants = std::ffi::OsStr::new(r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#);
@@ -110,6 +114,18 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         let mut traces = vec![];
         for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
             let objects = execution.emit(backend).unwrap();
+            if require_spawn_binding {
+                assert!(
+                    objects
+                        .metadata()
+                        .values()
+                        .flat_map(|unit| unit.values())
+                        .any(|marker| marker.action == 5
+                            && marker.empty_environment
+                            && marker.callee.is_some()),
+                    "missing exact empty-callback source binding"
+                );
+            }
             let run = execution
                 .launch_with(
                     &objects,
@@ -128,6 +144,35 @@ pub fn main(rt:Io)->Result[(),GrantError] {
                     },
                 )
                 .unwrap();
+            if require_spawn_binding {
+                use hirsel_run_schema::ownership_trace::native::{Log, Row};
+                let rows: Log = serde_json::from_slice(
+                    &std::fs::read(
+                        directory
+                            .path()
+                            .join(backend.name())
+                            .join("ownership.rows.json"),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    rows.rows
+                        .iter()
+                        .filter(|row| matches!(row, Row::Spawn { .. }))
+                        .count(),
+                    1,
+                    "actual spawn commitment is absent"
+                );
+                assert_eq!(
+                    rows.rows
+                        .iter()
+                        .filter(|row| matches!(row, Row::Event { action: 5, .. }))
+                        .count(),
+                    1,
+                    "checked empty-callback intent is absent"
+                );
+            }
             assert_eq!(run.execution.exit, Some(0));
             assert_eq!(
                 execution
@@ -153,7 +198,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
                 .iter()
                 .map(|event| event.task.clone())
                 .collect::<std::collections::BTreeSet<_>>();
-            assert_eq!(paths.len(), 2);
+            assert_eq!(paths.len(), expected_tasks);
             assert_eq!(paths, expected_paths);
             assert!(paths.iter().all(|path| !path.0.is_empty()));
             traces.push(trace);
@@ -180,4 +225,26 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         drop(execution);
         assert_eq!(budget.reserved(), 0);
     });
+}
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn native_empty_callback_binding_keeps_actual_spawn_and_child_local_resource_lifetimes() {
+    child_local_source(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let child=task.async(s,fn(){let first=Token()
+   let second=Token()})
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        1,
+        true,
+    );
 }

@@ -7,7 +7,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 10;
+pub const VERSION: u32 = 11;
 const MUTABLE_PARAMETER: u64 = (u32::MAX - 1) as u64;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
@@ -372,6 +372,7 @@ fn decode(
         owner: Owner,
         callee: [u8; 32],
         source: Site,
+        empty: bool,
     }
     struct SpawnEnvironment {
         owner: Owner,
@@ -519,11 +520,23 @@ fn decode(
                 operation: 0,
                 site: intent.source,
             };
-            let moved = tracker
-                .move_tree(&context, &intent.owner, &owner)
-                .map_err(Error::Consistency)?;
-            if moved.is_empty() {
-                return Err(Error::RetainedEnvironment(marker));
+            if intent.empty {
+                if tracker.inventory().owners.keys().any(|at| {
+                    [&intent.owner, &owner].iter().any(|root| {
+                        at.task == root.task
+                            && at.storage == root.storage
+                            && at.path.starts_with(&root.path)
+                    })
+                }) {
+                    return Err(Error::RetainedEnvironment(marker));
+                }
+            } else {
+                let moved = tracker
+                    .move_tree(&context, &intent.owner, &owner)
+                    .map_err(Error::Consistency)?;
+                if moved.is_empty() {
+                    return Err(Error::RetainedEnvironment(marker));
+                }
             }
             environments.insert(
                 child,
@@ -908,10 +921,7 @@ fn decode(
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
                 if action == 5 {
-                    if expected.empty_environment
-                        || expected.owner >> 32 != 2
-                        || expected.owner as u32 != 1
-                    {
+                    if expected.owner >> 32 != 2 || expected.owner as u32 != 1 {
                         return Err(Error::InvalidMarker(marker));
                     }
                     let callee = expected.callee.ok_or(Error::InvalidMarker(marker))?;
@@ -944,27 +954,42 @@ fn decode(
                         operation,
                         site: expected.source.clone(),
                     };
-                    let moved = tracker
-                        .move_tree(&context, &from, &to)
-                        .map_err(Error::Consistency)?;
-                    if moved.is_empty()
-                        || spawns
-                            .insert(
-                                (
-                                    match row {
-                                        Row::Event { task, .. } => task,
-                                        _ => unreachable!(),
-                                    },
-                                    frame,
-                                    marker,
-                                ),
-                                SpawnIntent {
-                                    owner: to,
-                                    callee,
-                                    source: expected.source.clone(),
+                    if expected.empty_environment {
+                        if tracker.inventory().owners.keys().any(|at| {
+                            [&from, &to].iter().any(|root| {
+                                at.task == root.task
+                                    && at.storage == root.storage
+                                    && at.path.starts_with(&root.path)
+                            })
+                        }) {
+                            return Err(Error::RetainedEnvironment(marker));
+                        }
+                    } else {
+                        let moved = tracker
+                            .move_tree(&context, &from, &to)
+                            .map_err(Error::Consistency)?;
+                        if moved.is_empty() {
+                            return Err(Error::InvalidMarker(marker));
+                        }
+                    }
+                    if spawns
+                        .insert(
+                            (
+                                match row {
+                                    Row::Event { task, .. } => task,
+                                    _ => unreachable!(),
                                 },
-                            )
-                            .is_some()
+                                frame,
+                                marker,
+                            ),
+                            SpawnIntent {
+                                owner: to,
+                                callee,
+                                source: expected.source.clone(),
+                                empty: expected.empty_environment,
+                            },
+                        )
+                        .is_some()
                     {
                         return Err(Error::InvalidMarker(marker));
                     }

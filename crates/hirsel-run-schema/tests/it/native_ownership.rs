@@ -1928,3 +1928,117 @@ fn native_variant_projections_preserve_arm_identity_and_refuse_forged_cleanup_pa
         assert!(decode_local_calls(&log, [49; 32], &forged, &calls, 100).is_err());
     }
 }
+
+#[test]
+fn native_empty_spawn_still_binds_the_actual_child_and_rejects_hidden_capture_credit() {
+    let (_, template) = fixture();
+    let base = template[&[7; 32]][&0].clone();
+    let parameter = 2u64 << 32 | 1;
+    let child = (1u64 << 32) | 1;
+    let spawn = Metadata {
+        action: 5,
+        token: 0,
+        owner: parameter,
+        callee: Some([8; 32]),
+        empty_environment: true,
+        ..base.clone()
+    };
+    let mut units = BTreeMap::from([
+        ([7; 32], BTreeMap::from([(0, spawn), (1, base.clone())])),
+        (
+            [8; 32],
+            BTreeMap::from([(0, base.clone()), (1, Metadata { action: 2, ..base })]),
+        ),
+    ]);
+    let event = |task, frame, marker, action, token, owner| Row::Event {
+        task,
+        frame,
+        marker,
+        action,
+        token,
+        owner,
+        site: 42,
+        layout: 7,
+    };
+    let rows = vec![
+        Row::Enter {
+            task: 0,
+            frame: 1,
+            unit: [7; 32],
+        },
+        event(0, 1, 0, 5, 0, parameter),
+        Row::Task {
+            task: child,
+            depth: 1,
+        },
+        Row::TaskPart {
+            task: child,
+            index: 0,
+            ordinal: 7,
+        },
+        Row::Spawn {
+            task: 0,
+            frame: 1,
+            marker: 0,
+            child,
+        },
+        Row::Leave { task: 0, frame: 1 },
+        Row::Enter {
+            task: child,
+            frame: 2,
+            unit: [8; 32],
+        },
+        event(child, 2, 0, 0, 0, 0),
+        event(child, 2, 1, 2, 0, 0),
+        Row::Leave {
+            task: child,
+            frame: 2,
+        },
+        Row::TaskEnd { task: child },
+    ];
+    let log = Log {
+        version: VERSION,
+        program: [49; 32],
+        row_count: rows.len() as u64,
+        rows,
+        complete: true,
+    };
+    let calls = BTreeMap::from([([7; 32], [[8; 32]].into()), ([8; 32], Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert!(trace.events.iter().all(|event| event.task.0 == [7]));
+    for removed in [1, 4, 10] {
+        let mut missing = log.clone();
+        missing.rows.remove(removed);
+        missing.row_count -= 1;
+        assert!(
+            decode_local_calls(&missing, [49; 32], &units, &calls, 100).is_err(),
+            "removed {removed}"
+        );
+    }
+    let mut duplicate = log.clone();
+    duplicate.rows.insert(5, duplicate.rows[4]);
+    duplicate.row_count += 1;
+    assert!(decode_local_calls(&duplicate, [49; 32], &units, &calls, 100).is_err());
+    let mut wrong = log.clone();
+    let Row::Enter { unit, .. } = &mut wrong.rows[6] else {
+        unreachable!()
+    };
+    *unit = [7; 32];
+    assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
+    let mut hidden = log.clone();
+    hidden.rows.insert(1, event(0, 1, 1, 0, 0, 0));
+    hidden.row_count += 1;
+    assert!(decode_local_calls(&hidden, [49; 32], &units, &calls, 100).is_err());
+    units
+        .get_mut(&[7; 32])
+        .unwrap()
+        .get_mut(&0)
+        .unwrap()
+        .empty_environment = false;
+    assert!(decode_local_calls(&log, [49; 32], &units, &calls, 100).is_err());
+}
