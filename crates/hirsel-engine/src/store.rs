@@ -89,6 +89,11 @@ pub trait ResultStore: Send + Sync {
     fn enabled(&self) -> bool {
         true
     }
+    /// Whether ordinary query variants can survive this request. Transient
+    /// transport can be enabled while its selected query cache is disabled.
+    fn query_cache_enabled(&self) -> bool {
+        self.enabled()
+    }
     fn get(&self, key: &EntryKey) -> Option<Bytes>;
     fn put(&self, key: &EntryKey, value: &[u8]);
     /// The rows a request expects later revisions to adopt first, replacing

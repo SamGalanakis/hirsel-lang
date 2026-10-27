@@ -109,6 +109,9 @@ impl RequestStore {
     }
 }
 impl ResultStore for RequestStore {
+    fn query_cache_enabled(&self) -> bool {
+        self.backend.query_cache_enabled()
+    }
     fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
         self.backend.read_scope()
     }

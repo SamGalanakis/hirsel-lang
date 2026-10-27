@@ -105,6 +105,9 @@ impl Drop for ScratchStore {
     }
 }
 impl ResultStore for ScratchStore {
+    fn query_cache_enabled(&self) -> bool {
+        self.selected.query_cache_enabled()
+    }
     fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
         self.selected.read_scope()
     }

@@ -28,6 +28,9 @@ impl FrontLowerQueries {
         descriptor: Reference,
         outcome: &Outcome,
     ) {
+        if !self.store.query_cache_enabled() {
+            return;
+        }
         let (lower, constant_decode_bytes) = match &outcome.result {
             Ok(Value::Lower(lower)) => (
                 Some((
@@ -71,6 +74,9 @@ impl FrontLowerQueries {
         path: &DefPath,
         key: &EntryKey,
     ) -> Option<Result<ProductRef, Reference>> {
+        if !self.store.query_cache_enabled() {
+            return None;
+        }
         let storage = stored_key(key);
         let entry = Entry::load(&*self.store, &storage);
         let variant =
