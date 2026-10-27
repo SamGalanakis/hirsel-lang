@@ -57,19 +57,47 @@ impl NativeRecordContext {
         let mut owners = BTreeMap::new();
         let mut anchors = BTreeMap::new();
         let mut source_definitions = BTreeMap::new();
-        for (anchor, _, _) in engine.sources.anchors() {
-            if let Some(owner) = engine.record_anchor_owner(anchor) {
-                if let Some(selected) = engine.record_anchor(&owner.0, owner.1) {
-                    anchors.insert(owner.clone(), selected);
+        // Scalar owner selection takes the first item in DefPath/occurrence
+        // order. Index that same selection once, instead of scanning every
+        // declaration for every source anchor.
+        for (path, items) in &engine.items {
+            for item in items {
+                if engine.sources.anchor(item.anchor).is_some() {
+                    owners
+                        .entry(item.anchor)
+                        .or_insert_with(|| (path.clone(), item.occurrence));
                 }
-                let declaration = engine
-                    .sources
-                    .anchor(anchor)
-                    .and_then(|(file, _)| {
-                        engine.generated.iter().find_map(|(path, generated)| {
-                            (generated.file == file).then(|| DefId::intern(path))
-                        })
-                    })
+            }
+        }
+        let mut generated = BTreeMap::new();
+        for (path, source) in &engine.generated {
+            generated.entry(source.file).or_insert_with(|| {
+                (
+                    super::persistent::generated_codec_owner(path, &source.text),
+                    DefId::intern(path),
+                )
+            });
+        }
+        for (anchor, file, base) in engine.sources.anchors() {
+            let owner = owners.get(&anchor).cloned().or_else(|| {
+                generated
+                    .get(&file)
+                    .map(|(path, _)| (path.clone(), base))
+                    .or_else(|| engine.catalog.owner(anchor))
+            });
+            if let Some(owner) = owner {
+                anchors.entry(owner.clone()).or_insert_with(|| {
+                    engine
+                        .items
+                        .get(&owner.0)
+                        .and_then(|items| items.iter().find(|item| item.occurrence == owner.1))
+                        .map(|item| item.anchor)
+                        .or_else(|| engine.catalog.anchor(&owner.0, owner.1))
+                        .unwrap_or(anchor)
+                });
+                let declaration = generated
+                    .get(&file)
+                    .map(|(_, declaration)| *declaration)
                     .unwrap_or_else(|| DefId::intern(&owner.0));
                 source_definitions.insert(anchor, declaration);
                 owners.insert(anchor, owner);

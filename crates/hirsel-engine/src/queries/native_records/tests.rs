@@ -1,5 +1,55 @@
 use super::*;
 
+#[test]
+fn captured_anchor_bindings_match_scalar_selection_with_duplicate_and_generated_owners() {
+    let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
+    let file = engine
+        .sources
+        .add(
+            "duplicates.hir",
+            "fn same()->u8{1u8}\nfn same()->u8{2u8}".into(),
+        )
+        .unwrap();
+    let tokens = hirsel_lexer::lex(file, &engine.sources).tokens;
+    let context = crate::default_context();
+    let mut parsed = hirsel_parser::parse(file, tokens, &context, &mut engine.sources);
+    assert!(parsed.diagnostics.is_empty());
+    engine.index(&mut parsed.syntax, &context).unwrap();
+    let mut alias = (*engine.items.values().next().unwrap()[0]).clone();
+    alias.item.definition.0.name = "aaa_alias".into();
+    engine
+        .items
+        .insert(alias.item.definition.clone(), vec![Arc::new(alias)]);
+    let file = engine
+        .sources
+        .add("generated.hir", "    fn()->u8 {3u8}".into())
+        .unwrap();
+    engine.sources.item_anchor(file, 4);
+    engine.sources.item_anchor(file, 9);
+    for name in ["generated", "zzz_generated"] {
+        engine.generated.insert(
+            DefPath::core(name),
+            crate::queries::generation::GeneratedSource {
+                file,
+                text: "    fn()->u8 {3u8}".into(),
+                site: hirsel_span::Span::default(),
+            },
+        );
+    }
+    engine.sources.add("unowned.hir", "".into()).unwrap();
+    let captured = NativeRecordContext::capture(&engine);
+    for (anchor, _, _) in engine.sources.anchors() {
+        let owner = engine.record_anchor_owner(anchor);
+        assert_eq!(captured.record_owner(anchor), owner);
+        if let Some((owner, occurrence)) = owner {
+            assert_eq!(
+                captured.record_source_anchor(&owner, occurrence),
+                engine.record_anchor(&owner, occurrence)
+            );
+        }
+    }
+}
+
 fn context(name: &str, text: &str) -> (NativeRecordContext, Anchor, hirsel_types::TypeId) {
     let mut engine = QueryEngine::new(crate::default_environment(), Default::default());
     let file = engine.sources.add(name, text.into()).unwrap();

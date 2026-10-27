@@ -651,18 +651,21 @@ pub(crate) fn artifact_anchor_owner(
     anchor_owner(items, anchor).or_else(|| {
         let (file, base) = sources.anchor(anchor)?;
         let (owner, source) = generated.iter().find(|(_, source)| source.file == file)?;
-        let hash = ContentHash::of_bytes(source.text.as_bytes());
-        let mut identity = owner.clone();
-        identity.0.name = format!(
-            "$generated-source:{}:{}",
-            owner.0.name,
-            hash.0
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        );
-        Some((identity, base))
+        Some((generated_codec_owner(owner, &source.text), base))
     })
+}
+pub(super) fn generated_codec_owner(owner: &DefPath, text: &str) -> DefPath {
+    let hash = ContentHash::of_bytes(text.as_bytes());
+    let mut identity = owner.clone();
+    identity.0.name = format!(
+        "$generated-source:{}:{}",
+        owner.0.name,
+        hash.0
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    identity
 }
 pub(super) struct Contents(pub(super) Arc<dyn crate::store::ResultStore>);
 impl hirsel_artifact_store::Contents for Contents {
