@@ -10,7 +10,9 @@ use hirsel_types::{TypeId, TypeInterner};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod entry;
+mod environments;
 pub use entry::{SourceCallableEntry, SourceCapture, SourceEntryKind, SourceParameter};
+pub use environments::SourceEnvironment;
 
 /// Capture at the actual original-Lower miss, before discovery/import/drop.
 /// The source-query identity and owner revision come from the actual query owner.
@@ -54,6 +56,7 @@ pub struct SourceExpectation {
     witness: SealSourceWitness,
     events: Vec<SourceEvent>,
     payloads: Vec<SourcePayload>,
+    environments: Vec<SourceEnvironment>,
 }
 
 impl SourceInput {
@@ -139,7 +142,7 @@ impl SourceInput {
         request: &super::contract::registry::Request,
         types: &TypeInterner,
         parameters: &[u32],
-        substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+        mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceExpectation, SourceError> {
         let base = request.ordinary_key();
         let current = self.demand_projection(base)?;
@@ -172,27 +175,18 @@ impl SourceInput {
                 ));
             }
         }
-        let unneeded_closures = current
-            .projection()
-            .closures()
-            .iter()
-            .filter(|(_, closures)| {
-                closures.iter().all(|closure| {
-                    let required = request.declaration().requirements();
-                    !required.payload_locals.contains(&closure.result)
-                        && !required.inventory_locals.contains(&closure.result)
-                })
-            })
-            .map(|(&value, _)| value)
-            .collect();
-        self.derive_body(
+        self.check_closed_environments(request, types, &mut substitute)?;
+        let transport = request.closures().keys().copied().collect();
+        let mut expected = self.derive_body(
             request.aware_key().unwrap_or(base),
             types,
             parameters,
-            substitute,
+            &mut substitute,
             true,
-            &unneeded_closures,
-        )
+            &transport,
+        )?;
+        expected.environments = self.environment_recipes(request, types, parameters, substitute)?;
+        Ok(expected)
     }
 
     fn derive_body(
@@ -202,7 +196,7 @@ impl SourceInput {
         parameters: &[u32],
         mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
         expanded_calls: bool,
-        unneeded_closures: &BTreeSet<u32>,
+        closed_closures: &BTreeSet<u32>,
     ) -> Result<SourceExpectation, SourceError> {
         let body = self.demand_body(key)?;
         for block in &body.blocks {
@@ -224,7 +218,7 @@ impl SourceInput {
         if body.rvalues.iter().enumerate().any(|(value, r)| {
             matches!(r, Rvalue::Closure { captures, destination, .. }
             if !expanded_calls || (!captures.is_empty()
-                && !(unneeded_closures.contains(&(value as u32))
+                && !(closed_closures.contains(&(value as u32))
                     && matches!(destination, hirsel_types::Destination::Heap | hirsel_types::Destination::Inferred))))
         }) {
             return Err(SourceError::Unsupported(
@@ -346,6 +340,7 @@ impl SourceInput {
             witness,
             events,
             payloads,
+            environments: vec![],
         })
     }
 }
@@ -370,6 +365,7 @@ impl SourceExpectation {
             ),
             events,
             payloads: vec![],
+            environments: vec![],
         }
     }
 
@@ -393,6 +389,11 @@ impl SourceExpectation {
     }
     pub fn payloads(&self) -> &[SourcePayload] {
         &self.payloads
+    }
+    /// Original ordinary environments, separate from sealed root payloads.
+    /// Their captures still require executable C/H pairing before transport.
+    pub fn environments(&self) -> &[SourceEnvironment] {
+        &self.environments
     }
 }
 

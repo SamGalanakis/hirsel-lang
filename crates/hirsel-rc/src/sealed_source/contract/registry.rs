@@ -165,6 +165,28 @@ pub struct Request {
     profiles: BTreeMap<Port, ClosedStorageProfile>,
     source: SourceDemandProjection,
     calls: BTreeMap<u32, CallDemand>,
+    closures: BTreeMap<u32, ClosedClosure>,
+}
+
+/// Original selected closure context. No native environment, ABI or candidate
+/// value participates in this account. The source witness reopens its exact
+/// lexical producer before using it to describe an environment.
+#[derive(Clone, Debug)]
+pub struct ClosedClosure {
+    pub(super) base: InstanceKey,
+    pub(super) entry: SourceCallableEntry,
+    pub(super) profiles: BTreeMap<Port, ClosedStorageProfile>,
+}
+impl ClosedClosure {
+    pub fn ordinary_key(&self) -> &InstanceKey {
+        &self.base
+    }
+    pub fn entry(&self) -> &SourceCallableEntry {
+        &self.entry
+    }
+    pub fn profiles(&self) -> &BTreeMap<Port, ClosedStorageProfile> {
+        &self.profiles
+    }
 }
 impl Request {
     pub fn source(&self) -> &SourceDemandProjection {
@@ -172,6 +194,9 @@ impl Request {
     }
     pub fn calls(&self) -> &BTreeMap<u32, CallDemand> {
         &self.calls
+    }
+    pub fn closures(&self) -> &BTreeMap<u32, ClosedClosure> {
+        &self.closures
     }
 
     pub fn ordinary_key(&self) -> &InstanceKey {
@@ -609,6 +634,24 @@ impl Registry {
                     profiles: row.ports.clone(),
                     source: row.source.clone(),
                     calls: calls[index].clone(),
+                    closures: row
+                        .links
+                        .as_ref()
+                        .expect("resolved source graph")
+                        .closures
+                        .iter()
+                        .map(|(&value, target)| {
+                            let target = &self.rows[target.0];
+                            (
+                                value,
+                                ClosedClosure {
+                                    base: target.base.clone(),
+                                    entry: target.entry.clone(),
+                                    profiles: target.ports.clone(),
+                                },
+                            )
+                        })
+                        .collect(),
                 })
             })
             .collect()

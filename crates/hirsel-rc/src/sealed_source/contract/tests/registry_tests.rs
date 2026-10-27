@@ -1005,3 +1005,107 @@ fn inventory_request_97_keeps_unimplemented_retained_mutation_expansion_unavaila
         ))
     );
 }
+
+#[test]
+fn held_environment_135_reopens_the_exact_producer_and_keeps_its_complete_recipe() {
+    for duplicate in [false, true] {
+        let (types, bytes, scalar, _) = types();
+        let callable = types.intern(Type::with_kind(TypeKind::Function(function(&[], scalar))));
+        let mut parent = body(&[bytes, bytes, callable, callable, scalar], 2);
+        for ordinal in 0..if duplicate { 2 } else { 1 } {
+            assign(
+                &mut parent,
+                ordinal + 2,
+                Rvalue::Closure {
+                    body: BodyId(1),
+                    captures: vec![operand(ordinal)],
+                    context: CaptureContext::Scoped,
+                    destination: Destination::Heap,
+                },
+            );
+        }
+        let mut child = body(&[bytes, scalar], 0);
+        child.locals[0].storage = Storage::Capture;
+        call(&mut child, 0, &[(0, UseKind::Borrow)], None);
+        let mut definition = witness_definition(parent);
+        Arc::make_mut(&mut definition).bodies.push(child);
+        let signature = Signature {
+            definition: definition.path,
+            fingerprint: definition.signature_hash,
+            metadata: Default::default(),
+            kind: SignatureKind::Function(function(
+                &[(PassingMode::Borrow, bytes), (PassingMode::Borrow, bytes)],
+                scalar,
+            )),
+        };
+        let path = definition.path.path().clone();
+        let source = SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
+        let parent_key = InstanceKey::new(&path, 0, &[], &types, None, None).unwrap();
+        let child_key = InstanceKey::new(&path, 1, &[], &types, None, None).unwrap();
+        let parent = Fixture::observed(
+            source
+                .named_entry(&parent_key, &types, &signature, Ok)
+                .unwrap(),
+            source.demand_projection(&parent_key).unwrap(),
+        );
+        let child = Fixture::observed(
+            source
+                .closure_entry(&child_key, &types, BodyId(0), BlockId(0), 0, Ok)
+                .unwrap(),
+            source.demand_projection(&child_key).unwrap(),
+        );
+        let mut registry = Registry::default();
+        let parent = register(&mut registry, &parent, &types);
+        let child = register(&mut registry, &child, &types);
+        registry
+            .resolve(
+                child,
+                BTreeMap::from([(
+                    0,
+                    Expansion::External(ExternalDemand {
+                        parameters: vec![0],
+                        ..Default::default()
+                    }),
+                )]),
+                BTreeMap::new(),
+            )
+            .unwrap();
+        registry
+            .resolve(
+                parent,
+                BTreeMap::new(),
+                (0..if duplicate { 2 } else { 1 })
+                    .map(|value| (value, child))
+                    .collect(),
+            )
+            .unwrap();
+        let requests = registry.solve().unwrap();
+        let result = source.derive_request(&requests[parent.index()], &types, &[0, 1], Ok);
+        if duplicate {
+            assert_eq!(
+                result.err(),
+                Some(SourceError::Malformed(
+                    "held source closure selector differs"
+                ))
+            );
+        } else {
+            let expected = result.unwrap();
+            let [environment] = expected.environments() else {
+                panic!("one original environment")
+            };
+            assert_eq!(
+                environment.payload().recipe.inputs[0].producer,
+                hirsel_lir::sealed_payload_source::PayloadProducer::Parameter(0)
+            );
+            assert_eq!(environment.payload().recipe.inputs[0].capture_slot, Some(0));
+            assert_eq!(
+                environment.profiles()[&Port::Capture(0)].root,
+                environment.entry().captures()[0].ty
+            );
+            assert!(
+                expected.payloads().is_empty(),
+                "ordinary callback is not a sealed root payload"
+            );
+        }
+    }
+}

@@ -358,5 +358,5 @@ mod tests;
 mod witness;
 pub use witness::{
     SourceCallableEntry, SourceCapture, SourceDeclarations, SourceDemandProjection,
-    SourceEntryKind, SourceExpectation, SourceInput, SourceParameter,
+    SourceEntryKind, SourceEnvironment, SourceExpectation, SourceInput, SourceParameter,
 };

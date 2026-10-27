@@ -236,7 +236,8 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
             let graph = named_graph(&provider, roots.clone(), &mut cases).unwrap();
             graph.recheck(&provider, roots, &mut cases).unwrap();
             let mut owned = 0;
-            for request in &graph.requests {
+            let mut environments = 0;
+            for (request, context) in graph.requests.iter().zip(&graph.contexts) {
                 let Some(source) = request.receipt_source().unwrap() else {
                     continue;
                 };
@@ -263,8 +264,83 @@ fn sealed_callback_capture_129_original_graph_declares_owning_complete_profiles(
                     assert_eq!(capture.ty.profile, profile.content().unwrap());
                     owned += usize::from(mode == ReceiptMode::Take);
                 }
+                use hirsel_driver::native::receipt_source::provider::Provider;
+                let original = provider
+                    .original(request.ordinary_key().definition())
+                    .unwrap();
+                let nominals = input
+                    .signatures
+                    .iter()
+                    .filter(|(_, s)| matches!(s.kind, hirsel_types::SignatureKind::Type(_)))
+                    .map(|(p, s)| (hirsel_syntax::DefId::intern(p), s.clone()))
+                    .collect();
+                let source_input = hirsel_rc::sealed_source::SourceInput::capture(
+                    original.output().unwrap().observation_identity(),
+                    original.implementation_revision(),
+                    original.definition().clone(),
+                )
+                .with_nominals(nominals);
+                let parameters = request
+                    .declaration()
+                    .entry()
+                    .parameters()
+                    .iter()
+                    .map(|p| p.ordinal)
+                    .collect::<Vec<_>>();
+                let substitute = |ty| {
+                    hirsel_rc::instance::substitute(
+                        &input.types,
+                        &TypeMemo::new(),
+                        ty,
+                        &context.input.actuals,
+                        true,
+                    )
+                    .map_err(|e| SourceError::Type(format!("{e:?}")))
+                };
+                let expected = source_input
+                    .derive_request(request, &input.types, &parameters, substitute)
+                    .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+                expected.source().check().unwrap();
+                assert_eq!(expected.environments().len(), request.closures().len());
+                for environment in expected.environments() {
+                    assert_eq!(
+                        environment.payload().recipe.inputs.len(),
+                        environment.entry().captures().len()
+                    );
+                    environments += 1;
+                }
+                // Keeping the parent observation and recipe is insufficient:
+                // a changed original child capture must be reopened too.
+                if let Some(environment) = expected
+                    .environments()
+                    .iter()
+                    .find(|e| !e.entry().captures().is_empty())
+                {
+                    let mut changed = original.definition().clone();
+                    let child = &mut Arc::make_mut(&mut changed).bodies
+                        [environment.entry().reference().body as usize];
+                    let capture = environment.entry().captures().first().unwrap();
+                    child.locals[capture.local as usize].ty = input
+                        .types
+                        .intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+                    let changed = hirsel_rc::sealed_source::SourceInput::capture(
+                        original.output().unwrap().observation_identity(),
+                        original.implementation_revision(),
+                        changed,
+                    );
+                    assert!(
+                        changed
+                            .derive_request(request, &input.types, &parameters, substitute)
+                            .is_err(),
+                        "changed original capture was accepted"
+                    );
+                }
             }
             assert!(owned > 0, "{name} has no demanded owning capture");
+            assert!(
+                environments > 0,
+                "{name} has no closed original environments"
+            );
         }
     });
 }
