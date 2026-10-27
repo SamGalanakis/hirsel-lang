@@ -1,9 +1,13 @@
+#[cfg(test)]
+#[path = "../../../tools/tests/native_tsan.rs"]
+mod control;
+
 use crate::{
     CodegenError,
     module::{Emitted, Emitter, PTR},
 };
 use cranelift_codegen::{
-    cursor::FuncCursor,
+    cursor::{Cursor, FuncCursor},
     ir::{self, AbiParam, InstBuilder, InstructionData, Opcode},
 };
 use cranelift_module::Module;
@@ -99,6 +103,7 @@ impl Emitter<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::control;
     use super::*;
     use crate::module::Inputs;
     use cranelift_codegen::ir::{MemFlagsData, types};
@@ -150,16 +155,39 @@ mod tests {
                 emitter.compile("mapper", id, &mut context).unwrap();
                 let text = emitter.clif.as_ref().unwrap();
                 for expected in [
-                    "iadd_imm_s v0, -3",
+                    "iconst.i64 -3",
                     "iconst.i64 1",
-                    "iadd_imm_s v0, 7",
+                    "iconst.i64 7",
                     "iconst.i64 2",
                     "iconst.i64 16",
                 ] {
                     assert!(text.contains(expected), "missing {expected}: {text}");
                 }
                 assert_eq!(text.matches("call fn").count(), 6, "{text}");
+                if target.triple.starts_with("x86_64") && opt == OptLevel::Speed {
+                    let mut context = emitter.module.make_context();
+                    context.func.signature.params.push(AbiParam::new(PTR));
+                    let id = emitter
+                        .module
+                        .declare_function("tsan_mapper", Linkage::Export, &context.func.signature)
+                        .unwrap();
+                    let mut b = FunctionBuilder::new(&mut context.func, &mut frontend);
+                    let block = b.create_block();
+                    b.append_block_params_for_function_params(block);
+                    b.switch_to_block(block);
+                    let cell = b.block_params(block)[0];
+                    let value = b.ins().load(types::I64, flags, cell, 0);
+                    let next = b.ins().iadd_imm_s(value, 1);
+                    b.ins().store(flags, next, cell, 0);
+                    b.ins().return_(&[]);
+                    b.seal_all_blocks();
+                    b.finalize(emitter.module.target_config());
+                    emitter.compile("tsan_mapper", id, &mut context).unwrap();
+                }
                 let bytes = crate::object::finish(emitter.module.finish()).unwrap();
+                if target.triple.starts_with("x86_64") && opt == OptLevel::Speed {
+                    control::emitted_access_control(&bytes);
+                }
                 let object = hirsel_lir::object::ObjectFile::read(&target, bytes).unwrap();
                 assert_eq!(
                     object.imports,

@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../../tools/tests/native_tsan.rs"]
+mod control;
+
 use hirsel_lir::{emission::Manifested, stage::ObjectSymbolKind};
 
 // LLVM ThreadSanitizer.cpp initialize(): only these instrumentation imports
@@ -53,6 +57,7 @@ pub(crate) fn manifest(manifested: &mut Manifested) {
 
 #[cfg(test)]
 mod tests {
+    use super::control;
     use crate::context::{Context, Module, TargetMachine};
     use hirsel_lir::{emission::OptLevel, layout_types::TargetSpec};
 
@@ -69,6 +74,12 @@ mod tests {
   store i64 %value, ptr %output, align 1
   %old = atomicrmw add ptr %count, i64 1 monotonic
   ret i64 %old
+}
+define void @tsan_mapper(ptr %cell) {
+  %value = load i64, ptr %cell
+  %next = add i64 %value, 1
+  store i64 %next, ptr %cell
+  ret void
 }
 "#,
             )
@@ -89,6 +100,9 @@ mod tests {
                 "@__tsan_func_exit",
             ] {
                 assert!(text.contains(name), "missing {name}: {text}");
+            }
+            if opt == OptLevel::Speed {
+                control::emitted_access_control(&module.emit_object(&machine).unwrap());
             }
         }
     }

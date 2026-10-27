@@ -796,6 +796,16 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
             archives["{}/{}".format(triple, variant)] = ":" + configured
     _runtime_archives(name = name, archives = archives, visibility = ["PUBLIC"])
 
+def hirsel_tsan_runtime_archives(name):
+    """One instrumented native runtime, with its matching sanitizer and std."""
+    native.configured_alias(name = name + "-runtime", actual = ":hirsel-rt", platform = "root//tools/buck2:thread")
+    _runtime_archives(
+        name = name,
+        archives = {"x86_64-unknown-linux-gnu/default": ":" + name + "-runtime"},
+        sanitizer_archive = "root//tools/buck2/toolchains:tsan-runtime",
+        visibility = ["PUBLIC"],
+    )
+
 def _runtime_archives_impl(ctx):
     entries = {}
     llvm = ctx.attrs._llvm[DefaultInfo].default_outputs[0]
@@ -822,7 +832,7 @@ def _runtime_archives_impl(ctx):
                             objects[obj] = None
                     else:
                         fail("runtime staticlib has an unbundled native dependency: {}".format(linkable))
-        if native_archives or objects:
+        if native_archives or objects or ctx.attrs.sanitizer_archive:
             bundled = ctx.actions.declare_output(path + "/libhirsel_rt.a")
             command = cmd_args(
                 "python3", ctx.attrs._bundler,
@@ -832,6 +842,8 @@ def _runtime_archives_impl(ctx):
             )
             for lib in native_archives:
                 command.add("--archive", lib)
+            if ctx.attrs.sanitizer_archive:
+                command.add("--archive", ctx.attrs.sanitizer_archive)
             for obj in objects:
                 command.add("--object", obj)
             # Thin archives need their referenced objects as action inputs.
@@ -870,6 +882,7 @@ _runtime_archives = rule(
     impl = _runtime_archives_impl,
     attrs = {
         "archives": attrs.dict(attrs.string(), attrs.dep()),
+        "sanitizer_archive": attrs.option(attrs.source(), default = None),
         "_bundler": attrs.source(default = "//tools/buck2:bundle_archive.py"),
         "_parts": attrs.source(default = "//tools/buck2:runtime_parts.py"),
         "_llvm": attrs.exec_dep(default = "toolchains//:clang"),
