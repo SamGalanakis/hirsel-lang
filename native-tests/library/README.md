@@ -10,6 +10,14 @@ control whose independently derived sum is `1000000 * 999999 / 2 = 499999500000`
 
 `operations.tsv` pins the 242 registry operation paths, declaration SHA-256 digests and declared ownership. The final column is `ordinal:passing:cleanup;...->result_cleanup`: b borrow, t take, m mut; n noalloc, a may allocate, [ordinals] generic cleanup dependence. Adding a registry row or changing a digest/convention requires an explicit native review and fails `hirsel-pipeline-tests/tests/front/rt_operations.rs` first. No source schema is inferred from executable code.
 
+
+`arena.seal` and `region.with` use reviewed library bodies. The capture-free
+heap `List[u64]` root in `conformance/MEM/MEM-4-sealed-heap-run.hir` runs on the
+reference interpreter, checked H, LLVM and Cranelift, including record/replay.
+Original source declarations and ordered child receipts remain mandatory.
+Captured closures, held environments, tasks, additional mutation recipes and
+fully elided payload custody remain unsupported on this path.
+
 `exact-sums.txt` was retained verbatim from the interpreter's 256 Python Fraction vectors (seed 20261008). `GraphemeBreakTest.txt` is the complete official Unicode 16.0.0 fixture, including its source and license header, retained verbatim from interpreter fixtures. `hirsel-driver/tests/stdlib_wave2_num.rs` checks the rational vectors against ordinary std source; `hirsel-driver/tests/stdlib_graphemes.rs` checks the shipped source over full strings and nonzero-origin slices.
 
 Numeric algorithms execute in ordinary std source; the independent rational

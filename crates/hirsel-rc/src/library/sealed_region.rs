@@ -1,5 +1,5 @@
-//! The read-only sealed-root library body. This remains outside BODIES until
-//! independent source declarations, H and both emitters link the full pipeline.
+//! Reviewed sealed-root library bodies and their original source declarations.
+//! Heap roots require paired payload receipts and independent source inventory.
 use super::LibraryBody;
 use super::builder::{Body, Cx};
 use crate::PassError;
@@ -125,8 +125,8 @@ fn with(cx: &mut Cx<'_>) -> Result<LirUnit<Value>, PassError> {
     Ok(b.finish())
 }
 
-/// The entered seal body consumes its two declared Take parameters. This is
-/// unregistered until semantic inventory transport and both emitters are linked.
+/// Consume both declared Take parameters, including the original payload
+/// receipt paired with a heap-bearing root.
 pub static SEAL: LibraryBody = LibraryBody {
     path: || hirsel_syntax::DefPath::core("arena.seal"),
     build: seal,
