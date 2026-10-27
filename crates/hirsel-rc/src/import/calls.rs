@@ -595,8 +595,8 @@ impl Importer<'_> {
             }
             let mut carriers = Vec::new();
             for parameter in &contract.parameters {
-                if parameter.mode != hirsel_lir::sealed_payload_source::ReceiptMode::Borrow {
-                    return unsupported("receipt call requires borrowed metadata custody");
+                if parameter.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot {
+                    return unsupported("receipt call requires independent writeback custody");
                 }
                 let argument = arguments
                     .iter()
@@ -608,22 +608,25 @@ impl Importer<'_> {
                         "receipt call projected argument requires complete payload transport",
                     );
                 }
-                let ordinal = self
-                    .body
-                    .parameters
+                let value = args
                     .iter()
-                    .position(|local| *local == place.root)
-                    .ok_or_else(|| {
-                        PassError::Unsupported(
-                            "receipt call argument has no incoming metadata snapshot".into(),
-                        )
-                    })?;
+                    .find(|a| a.parameter == parameter.source)
+                    .and_then(|a| match a.value {
+                        ArgumentValue::Value(value) => Some(value),
+                        ArgumentValue::Address { .. } => None,
+                    })
+                    .ok_or_else(|| PassError::Malformed("receipt ordinary argument".into()))?;
+                let ordinal = self.incoming_receipt_parameter(value).ok_or_else(|| {
+                    PassError::Unsupported(
+                        "receipt call argument has no incoming metadata snapshot".into(),
+                    )
+                })?;
                 let binding = self
                     .out
                     .tables
                     .receipt_entry
                     .as_ref()
-                    .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal as u32))
+                    .and_then(|entry| entry.parameters.iter().find(|p| p.source == ordinal))
                     .cloned()
                     .ok_or_else(|| {
                         PassError::Unsupported(
@@ -632,20 +635,33 @@ impl Importer<'_> {
                     })?;
                 let metadata = self.whole(binding.slot);
                 let address = self.address(&metadata)?;
-                let loan = self.synthetic_loan(address);
-                let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
-                let reaching = self.reaching(binding.slot)?;
-                self.push(Inst::Read {
-                    result: receipt,
-                    address,
-                    reaching,
-                    mode: ReadMode::Borrow,
-                });
-                capture_loans.push(loan);
-                carriers.push(hirsel_lir::receipt_transport::ReceiptArgument::Borrow {
-                    parameter: parameter.source,
-                    receipt,
-                });
+                let carrier = match parameter.mode {
+                    hirsel_lir::sealed_payload_source::ReceiptMode::Borrow => {
+                        let loan = self.synthetic_loan(address);
+                        let receipt = self.value(metadata.ty, Holding::Borrowed(loan));
+                        let reaching = self.reaching(binding.slot)?;
+                        self.push(Inst::Read {
+                            result: receipt,
+                            address,
+                            reaching,
+                            mode: ReadMode::Borrow,
+                        });
+                        capture_loans.push(loan);
+                        hirsel_lir::receipt_transport::ReceiptArgument::Borrow {
+                            parameter: parameter.source,
+                            receipt,
+                        }
+                    }
+                    hirsel_lir::sealed_payload_source::ReceiptMode::Take => {
+                        let receipt = self.operand_at(UseKind::Take, &metadata, address, None)?;
+                        hirsel_lir::receipt_transport::ReceiptArgument::Take {
+                            parameter: parameter.source,
+                            receipt,
+                        }
+                    }
+                    hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot => unreachable!(),
+                };
+                carriers.push(carrier);
             }
             Some(hirsel_lir::receipt_transport::ReceiptCall {
                 contract: contract
@@ -686,6 +702,11 @@ impl Importer<'_> {
         }
         if let Callee::Indirect(v) = lir_callee {
             self.consumed(v);
+        }
+        if let Some(receipts) = &receipts {
+            for receipt in receipts.inputs() {
+                self.consumed(receipt);
+            }
         }
         for &(slot, version) in &writes {
             self.versions[slot.index()] = Some(version);
@@ -781,6 +802,58 @@ impl Importer<'_> {
         let e = self.enter(next);
         self.terminate(Terminator::Jump(e));
         Ok(())
+    }
+
+    /// Follow only whole-value SSA moves back to an incoming parameter.
+    /// Copies, projections, new payloads and unproved joins need their own
+    /// receipt producer. C recovers the final pairing independently.
+    fn incoming_receipt_parameter(&self, mut value: ValueId) -> Option<u32> {
+        let whole = |mut address: AddressId| {
+            for _ in 0..=self.out.addresses.len() {
+                let row = &self.out.addresses[address.index()];
+                if row.projection.len != 0 {
+                    return false;
+                }
+                match row.base {
+                    AddressBase::Slot(_) => return true,
+                    AddressBase::Address(parent) => address = parent,
+                    AddressBase::Value(_) => return false,
+                }
+            }
+            false
+        };
+        let mut aliases = vec![None; self.out.values.len()];
+        for instruction in self.out.blocks.iter().flat_map(|block| &block.insts) {
+            let (result, source) = match *instruction {
+                Inst::Weaken { result, value } => (result, value),
+                Inst::Read {
+                    result,
+                    reaching,
+                    address,
+                    ..
+                } if whole(address) => (result, reaching),
+                Inst::Store {
+                    version,
+                    value,
+                    address,
+                }
+                | Inst::Replace {
+                    version,
+                    value,
+                    address,
+                    ..
+                } if whole(address) => (version, value),
+                _ => continue,
+            };
+            aliases[result.index()] = Some(source);
+        }
+        for _ in 0..=aliases.len() {
+            if let Some(ordinal) = self.out.parameters.iter().position(|v| *v == value) {
+                return self.own_abi().parameters.get(ordinal).map(|p| p.source);
+            }
+            value = aliases[value.index()]?;
+        }
+        None
     }
 
     /// The element count of a flat list part into `destination`.

@@ -409,8 +409,12 @@ impl Importer<'_> {
                 .slots
                 .iter()
                 .map(|slot| {
-                    let entered =
-                        matches!(slot.kind, SlotKind::Parameter(_) | SlotKind::Capture(_));
+                    let entered = matches!(
+                        slot.kind,
+                        SlotKind::Parameter(_)
+                            | SlotKind::Capture(_)
+                            | SlotKind::ReceiptParameter(_)
+                    );
                     SlotState {
                         live: if entered || slot.kind == SlotKind::ReturnSlot {
                             Tri::Yes

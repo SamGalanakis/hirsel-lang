@@ -1,5 +1,5 @@
 //! Private snapshots use the ordinary affine holder and slot/loan proof.
-//! Only source-checked PayloadReceipt creates a holder. Metadata cannot enter
+//! Source-checked PayloadReceipt and taken entries supply holders. Metadata cannot enter
 //! a language value, ordinary ABI, static, encoded result or task environment.
 use super::{Cx, Report, Site, ViolationKind as K, structure};
 use crate::ir::*;

@@ -21,26 +21,42 @@ impl Importer<'_> {
     /// borrowed parameters released where parameters are (after inner scopes
     /// and temporaries, before the parameter-scope names).
     pub(super) fn exit_actions(&self, mut actions: Vec<Action>) -> Vec<Action> {
-        let Some(plan) = self.plan else {
-            return actions;
-        };
         let abi = &self.layouts.table().fn_abis[self.instances.abis[self.id.index()].0 as usize];
-        let mut releases: Vec<Action> = Vec::new();
-        if let Some(h) = self.holes {
-            // The constructor-tail root, past every parameter ordinal: its
-            // shell alone while open, its payload's shares once filled.
-            releases.push(Action::Release {
-                slot: h.root,
-                anchor: (LOOP_RELEASE, plan.homes.len() as u32),
-            });
-        }
-        for (k, home) in plan.homes.iter().enumerate().rev() {
-            if *home == Home::Loop && abi.parameters[k].convention == Passing::Borrow {
-                let slot = self.loop_slots[k].expect("loop slot");
+        let mut releases = self
+            .out
+            .tables
+            .receipt_entry
+            .as_ref()
+            .into_iter()
+            .flat_map(|entry| &entry.parameters)
+            .filter(|binding| {
+                abi.receipts.as_ref().is_some_and(|contract| {
+                    contract.parameters.iter().any(|p| {
+                        p.source == binding.source
+                            && p.mode == hirsel_lir::sealed_payload_source::ReceiptMode::Take
+                    })
+                })
+            })
+            .map(|binding| Action::Release {
+                slot: binding.slot,
+                anchor: (STATE_RELEASE, binding.slot.0),
+            })
+            .collect::<Vec<_>>();
+        if let Some(plan) = self.plan {
+            if let Some(h) = self.holes {
                 releases.push(Action::Release {
-                    slot,
-                    anchor: (LOOP_RELEASE, k as u32),
+                    slot: h.root,
+                    anchor: (LOOP_RELEASE, plan.homes.len() as u32),
                 });
+            }
+            for (k, home) in plan.homes.iter().enumerate().rev() {
+                if *home == Home::Loop && abi.parameters[k].convention == Passing::Borrow {
+                    let slot = self.loop_slots[k].expect("loop slot");
+                    releases.push(Action::Release {
+                        slot,
+                        anchor: (LOOP_RELEASE, k as u32),
+                    });
+                }
             }
         }
         releases.sort_by_key(|a| match a {
@@ -83,9 +99,16 @@ impl Importer<'_> {
                     SlotKind::Parameter(k) => {
                         abi.parameters.get(k as usize).map(|p| p.convention) == Some(Passing::Take)
                     }
-                    SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptParameter(_) => {
-                        false
+                    SlotKind::ReceiptParameter(source) => {
+                        abi.receipts.as_ref().is_some_and(|contract| {
+                            contract.parameters.iter().any(|p| {
+                                p.source == source
+                                    && p.mode
+                                        == hirsel_lir::sealed_payload_source::ReceiptMode::Take
+                            })
+                        })
                     }
+                    SlotKind::Capture(_) | SlotKind::ReturnSlot => false,
                     _ => true,
                 };
                 let st = &self.state.slots[s.index()];

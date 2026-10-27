@@ -274,10 +274,10 @@ impl Importer<'_> {
                 || contract
                     .parameters
                     .iter()
-                    .any(|p| p.mode != hirsel_lir::sealed_payload_source::ReceiptMode::Borrow)
+                    .any(|p| p.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot)
             {
                 return unsupported(
-                    "receipt entry requires borrowed data parameters without captures, inventory or receipt results",
+                    "receipt entry requires borrow or take data parameters without captures, inventory or receipt results",
                 );
             }
             let mut parameters = Vec::new();

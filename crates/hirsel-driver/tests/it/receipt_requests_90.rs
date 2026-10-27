@@ -23,15 +23,20 @@ use std::sync::Arc;
 
 #[test]
 fn aware_source_request_restores_a_borrowed_heap_parameter_and_replays_current_c() {
-    borrowed_request(false);
+    borrowed_request(false, false);
 }
 
 #[test]
 fn aware_source_request_forwards_paired_heap_companions_through_rc_and_reuse() {
-    borrowed_request(true);
+    borrowed_request(true, false);
 }
 
-fn borrowed_request(forward: bool) {
+#[test]
+fn aware_source_request_transfers_taken_heap_companions_through_rc_and_reuse() {
+    borrowed_request(true, true);
+}
+
+fn borrowed_request(forward: bool, take: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -42,7 +47,8 @@ fn borrowed_request(forward: bool) {
             .sources
             .add(
                 "custody.hir",
-                r#"
+                custody_source(
+                    r#"
 fn read(root: List[u64]) -> u64 {
   let mut r=arena.with(fn(a:Arena)->Region[List[u64]] {
     let independent:List[u64] in heap=copy_to(heap,root)
@@ -54,8 +60,9 @@ fn forward(root: List[u64]) -> u64 { read(root) }
 fn forward_again(root: List[u64]) -> u64 { forward(root) }
 pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
 
-"#
-                .into(),
+"#,
+                    take,
+                ),
             )
             .unwrap();
         let checked = check_progress(&mut engine, file, &default_context()).unwrap();
@@ -351,13 +358,15 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
             .sources
             .add(
                 "custody.hir",
-                r#"
+                custody_source(
+                    r#"
 fn read(root:List[u64])->u64 {list.len(root)}
 fn forward(root:List[u64])->u64 {read(root)}
 fn forward_again(root:List[u64])->u64 {forward(root)}
 pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
-"#
-                .into(),
+"#,
+                    take,
+                ),
             )
             .unwrap();
         let checked = check_progress(&mut changed, file, &default_context()).unwrap();
@@ -422,4 +431,18 @@ impl runtime::QueryContext for LowerReads {
         }
         std::task::Poll::Ready(Ok(self.rows.iter().find(|(id, _)| *id == query).unwrap().1))
     }
+}
+
+fn custody_source(text: &str, take: bool) -> String {
+    if !take {
+        return text.into();
+    }
+    text.replace("root: List[u64]", "take root: List[u64]")
+        .replace("root:List[u64]", "take root:List[u64]")
+        .replace(
+            "forward(root)+forward_again(root)",
+            "forward_again(take root)",
+        )
+        .replace("read(root)", "read(take root)")
+        .replace("forward(root)", "forward(take root)")
 }
