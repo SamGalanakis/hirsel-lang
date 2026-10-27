@@ -6,12 +6,8 @@ use std::sync::Arc;
 #[test]
 #[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
 fn native_spawn_transfers_two_equal_resources_to_its_actual_child() {
-    hirsel_engine::with_compiler_stack(|| {
-        let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join("main.hir");
-        std::fs::write(
-            &source,
-            r#"
+    capture_source(
+        r#"
 resource type Token {}
 drop(x) {}
 pub fn main(rt:Io)->Result[(),GrantError] {
@@ -28,8 +24,15 @@ pub fn main(rt:Io)->Result[(),GrantError] {
  Ok(())
 }
 "#,
-        )
-        .unwrap();
+        0,
+    );
+}
+
+fn capture_source(source_text: &str, expected_exit: i32) {
+    hirsel_engine::with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("main.hir");
+        std::fs::write(&source, source_text).unwrap();
         let path = directory.path().join("hirsel.json");
         std::fs::write(&path, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         let grants = std::ffi::OsStr::new(r#"{"io":{"tasks":"tasks.cooperative@1","dirs":[]}}"#);
@@ -51,7 +54,7 @@ pub fn main(rt:Io)->Result[(),GrantError] {
                 1000,
             )
             .unwrap();
-            assert_eq!(run.outcome.exit_code(), 0);
+            assert_eq!(run.outcome.exit_code(), expected_exit);
             let trace = run.trace.unwrap();
             let analysis = trace.analyze(run.program, 1000).unwrap();
             assert_eq!(
@@ -131,13 +134,13 @@ pub fn main(rt:Io)->Result[(),GrantError] {
                     },
                 )
                 .unwrap();
-            assert_eq!(run.execution.exit, Some(0));
+            assert_eq!(run.execution.exit, Some(expected_exit));
             assert_eq!(
                 execution
                     .observe_run(&objects, &run.execution)
                     .unwrap()
                     .exit_code(),
-                0
+                expected_exit
             );
             assert!(run.execution.stdout.is_empty());
             assert!(
@@ -183,4 +186,57 @@ pub fn main(rt:Io)->Result[(),GrantError] {
         drop(execution);
         assert_eq!(budget.reserved(), 0);
     });
+}
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn child_failure_before_taking_equal_captures_retires_each_environment_field() {
+    capture_source(
+        r#"
+resource type Token {}
+drop(x) {}
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=Token()
+  let second=Token()
+  let child=task.async(s,fn(){
+    let zero:u8=0u8
+    let _=1u8/zero
+    let x=take first
+    let y=take second
+  })
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        hirsel_run_schema::exit::FAILED,
+    );
+}
+
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn failed_finalizers_retire_both_equal_captures_in_the_actual_child() {
+    capture_source(
+        r#"
+resource type Token {}
+drop(x) { let zero:u8=0u8
+ let _=1u8/zero }
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=Token()
+  let second=Token()
+  let child=task.async(s,fn(){
+    let x=take first
+    let y=take second
+  })
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        hirsel_run_schema::exit::FAILED,
+    );
 }
