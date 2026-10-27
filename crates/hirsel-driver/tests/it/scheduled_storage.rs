@@ -231,10 +231,11 @@ fn native_source_requests_complete_storage_and_preserve_root_escape_rejection() 
                 let program = compiler.load_program(&manifest).unwrap();
                 let root = program.entry.clone();
                 drop(program);
-                let mut requests = requests::CompilerRequests::for_host(compiler, config);
+                let mut requests =
+                    hirsel_driver::requests::CompilerRequests::for_host(compiler, config);
                 let result = requests.execute(
                     &manifest,
-                    requests::CompileOperation::NativeSources {
+                    hirsel_driver::requests::CompileOperation::NativeSources {
                         roots: vec![root.clone()],
                     },
                 );
@@ -253,7 +254,9 @@ fn native_source_requests_complete_storage_and_preserve_root_escape_rejection() 
                     );
                 } else {
                     let output = result.unwrap();
-                    let requests::CompileResult::NativeSources(facts) = &output.result else {
+                    let hirsel_driver::requests::CompileResult::NativeSources(facts) =
+                        &output.result
+                    else {
                         panic!("expected completed original source products");
                     };
                     assert!(
