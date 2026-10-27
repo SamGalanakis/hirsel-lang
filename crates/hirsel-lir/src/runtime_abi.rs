@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 80;
+pub const ABI_VERSION: u32 = 82;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -612,6 +612,7 @@ pub enum RuntimeEntry {
     OrderedPrint,
     OrderedStdinRead,
     OrderedWatchNext,
+    CpuMapScoped,
 }
 
 /// One C declaration of `hirsel_rt_v2`.
@@ -683,7 +684,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 109] = [
+    pub const ALL: [RuntimeEntry; 110] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -793,6 +794,7 @@ impl RuntimeEntry {
         Self::OrderedPrint,
         Self::OrderedStdinRead,
         Self::OrderedWatchNext,
+        Self::CpuMapScoped,
     ];
 
     pub const fn declaration(self) -> RuntimeDeclaration {
@@ -1351,6 +1353,20 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::CpuMapScoped => (
+                "hirsel_rt_v2_cpu_map_scoped",
+                U8,
+                const {
+                    &[
+                        CTX,
+                        p("out", ptr(N::U32, 1)),
+                        p("tasks", cptr(N::U64)),
+                        p("width", U32),
+                        p("action", U32),
+                        p("count", U64),
+                    ]
+                },
+            ),
             Self::TaskSpawnAhead => (
                 "hirsel_rt_v2_task_spawn_ahead",
                 U8,
@@ -1722,4 +1738,5 @@ snapshot_enum!(RuntimeEntry {
     OrderedPrint,
     OrderedStdinRead,
     OrderedWatchNext,
+    CpuMapScoped,
 });

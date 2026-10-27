@@ -35,6 +35,7 @@ mod hashed {
     pub(super) type HashSet<K> = std::collections::HashSet<K, hirsel_intern::IdHasher>;
 }
 mod cleanup_proof;
+mod cpu;
 mod declaration;
 mod effects;
 mod flow;

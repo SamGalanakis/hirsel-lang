@@ -698,6 +698,39 @@ fn entry(ctx: *mut TaskCtx) {
     }
 }
 
+/// CPU admission is a recorded scalar outcome with a bound request. A replay
+/// substitutes it without querying host capacity or starting native threads.
+pub(crate) fn cpu_control(
+    ctx: *mut TaskCtx,
+    width: u32,
+    action: u32,
+    count: u64,
+    live: impl FnOnce() -> u32,
+) -> Stopped<u32> {
+    begin(ctx);
+    let replay = super::replay::token(ctx);
+    let value = if replay.is_some() { 0 } else { live() };
+    let mut request = [0u8; 16];
+    request[..4].copy_from_slice(&width.to_le_bytes());
+    request[4..8].copy_from_slice(&action.to_le_bytes());
+    request[8..].copy_from_slice(&count.to_le_bytes());
+    let value = publish_bounded(ctx, Phase::Done, PHASE.payload(request.len()), |writer| {
+        if let Some(writer) = writer {
+            writer.observation(&request);
+            writer.load(u128::from(value));
+            Ok(value)
+        } else if let Some(replay) = &replay {
+            replay.observation(&request)?;
+            u32::try_from(replay.load(0)?)
+                .map_err(|_| Stop::Diverged("CPU outcome exceeds u32".into()))
+        } else {
+            Ok(value)
+        }
+    })??;
+    unsafe { super::try_yield(&mut *ctx) }?;
+    Ok(value)
+}
+
 /// # Safety
 /// The role is held; root is a live borrowed Shared root and out writable.
 pub(crate) unsafe fn thaw(

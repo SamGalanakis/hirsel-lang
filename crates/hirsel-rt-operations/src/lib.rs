@@ -101,6 +101,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             | "$intrinsic.InlineConsume_next"
             | "net.read_into"
             | "read_half.read_into"
+            | "cpu.map_scoped"
             | "task.scope"
             | "task.scope_until"
             | "task.async"
@@ -301,6 +302,7 @@ pub fn classify(mut row: OperationRow) -> Result<OperationRow, String> {
             .find(|(n, _)| *n == name)
             .map(|(_, symbol)| (*symbol).into()),
         // The task runtime (`tasks.rs`) behind the compiled task bodies.
+        "$intrinsic.CpuMapScoped" => Some("hirsel_rt_v2_cpu_map_scoped".into()),
         "$intrinsic.TaskScopeEnter" => Some("hirsel_rt_v2_task_scope_enter".into()),
         "$intrinsic.TaskScopeExit" => Some("hirsel_rt_v2_task_scope_exit".into()),
         "$intrinsic.TaskScopeEnterUntil" => Some("hirsel_rt_v2_task_scope_enter_until".into()),
@@ -702,6 +704,18 @@ pub const HIRSEL_ABI_EXPORTS: &[AbiExport] = &[
             Physical::Pointer,
             Physical::Pointer,
             Physical::I64,
+            Physical::I64,
+        ],
+    },
+    AbiExport {
+        caller_site: false,
+        symbol: "hirsel_rt_v2_cpu_map_scoped",
+        destination: false,
+        result: Some((4, 4)),
+        parameters: &[
+            Physical::Pointer,
+            Physical::I32,
+            Physical::I32,
             Physical::I64,
         ],
     },
@@ -2552,6 +2566,8 @@ pub const NATIVE_PATHS: &[&str] = &[
     "$intrinsic.MapInsertionOrder_advance",
     "$intrinsic.NetReadInto",
     "$intrinsic.ReadHalfReadInto",
+    "cpu.map_scoped",
+    "$intrinsic.CpuMapScoped",
     "$intrinsic.TaskScopeEnter",
     "$intrinsic.TaskScopeExit",
     "$intrinsic.TaskScopeEnterUntil",

@@ -143,6 +143,11 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         ("CancelError", "", "Canceled(CancelCause)"),
         ("ChannelError", "", "Closed()|Canceled(CancelCause)"),
         (
+            "CpuPoolError",
+            "",
+            "InvalidWidth()|NotGranted()|Busy()|WidthUnavailable()|NestedPool()|BatchTooLarge()|WorkerStartFailed()|CapacityLost()|Canceled(CancelCause)|NotSupported()|ResourceLimit()",
+        ),
+        (
             "FileError",
             "",
             "FileFault(u32)|Canceled(CancelCause)|NotGranted()|NotFound()|PermissionDenied()|AlreadyExists()|IsDirectory()|NotDirectory()|DirectoryNotEmpty()|CrossDevice()|Truncated()",
@@ -945,6 +950,12 @@ pub(crate) fn registry(types: &Arc<TypeInterner>) -> BTreeMap<DefId, SignatureRe
         ),
         // 0, or 1 + the running task's `CancelCause` ordinal (CONC-3).
         ("", "$intrinsic.TaskCanceled", "s: Scope", "u32"),
+        (
+            "",
+            "$intrinsic.CpuMapScoped",
+            "tasks: Tasks, width: u32, action: u32, count: u64",
+            "u32",
+        ),
         // `mapped.with`'s compiled body: the view it lends its body, then 0, or 1 when the
         // mapped file was truncated since the mapping was made.
         (
@@ -1186,6 +1197,7 @@ fn serializable_core(name: &str, t: &mut TypeDefinition) {
             | "CancelCause"
             | "CancelError"
             | "ChannelError"
+            | "CpuPoolError"
             | "FileError"
             | "FileKind"
             | "Durability"
@@ -1595,6 +1607,10 @@ impl Builder {
                 "unique ",
                 (|t: &mut Type| t.modes.uniqueness = Uniqueness::Unique) as fn(&mut Type),
             ),
+            ("sendable ", |t: &mut Type| {
+                t.sendability_requirement = SendabilityRequirement::Sendable;
+                t.modes.sendability = Sendability::Sendable;
+            }),
             ("once ", |t: &mut Type| {
                 t.modes.multiplicity = Multiplicity::Once
             }),

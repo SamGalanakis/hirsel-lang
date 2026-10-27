@@ -47,14 +47,9 @@ use crate::fiber::{self, Stack};
 use crate::stop::{Stop, Stopped};
 use crate::{environmental, fault};
 
+pub(crate) mod cpu_scoped;
 pub(crate) mod free;
 pub(crate) mod ordered_commit;
-// The reservation owner is staged before the scoped callback entry is enabled.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "scoped CPU callback admission is not enabled yet")
-)]
-pub(crate) mod cpu_scoped;
 
 /// The most blocking-pool threads one run starts.
 pub(crate) const POOL_THREADS: usize = 64;
@@ -259,6 +254,7 @@ struct PermitState {
     held: u32,
     waiting: u32,
     lost: u32,
+    contraction: u64,
 }
 
 static PROCESS_PERMITS: std::sync::OnceLock<Arc<Permits>> = std::sync::OnceLock::new();
@@ -277,7 +273,13 @@ fn process_permits() -> Arc<Permits> {
 pub fn set_compute_grant(limit: u32) {
     assert!(limit > 0, "a compute grant must be positive");
     let permits = process_permits();
-    permits.state.lock().unwrap().limit = limit;
+    {
+        let mut state = permits.state.lock().unwrap();
+        if limit < state.limit {
+            state.contraction = state.contraction.wrapping_add(1);
+        }
+        state.limit = limit;
+    }
     permits.freed.notify_all();
 }
 
@@ -312,6 +314,7 @@ impl Permits {
                 held: 0,
                 waiting: 0,
                 lost: 0,
+                contraction: 0,
             }),
             freed: Condvar::new(),
         }
@@ -1030,7 +1033,8 @@ unsafe fn idle_of(ctx: *mut TaskCtx, execs: &Execs, me: *const Exec) -> *mut u8 
             if (*me).kind != Kind::Home {
                 fault("a worker thread without its idle fiber");
             }
-            let stack = Stack::new();
+            let mut stack = Stack::new();
+            stack.account((*ctx).run_ref().cpu_ledger.as_ref());
             let sp = stack.prepare(home_idle, (*ctx).run_ptr().cast(), std::ptr::null_mut());
             *execs.home_idle.lock().unwrap() = Some(stack);
             (*me).idle.set(sp);
@@ -1390,6 +1394,7 @@ fn grow(run: *mut RunShared, execs: &Execs, compute: &mut ComputeWorkers, width:
         unsafe { (&(*run).control).live_width.fetch_add(1, Ordering::AcqRel) };
         let thread = std::thread::Builder::new()
             .name(format!("hirsel-worker-{index}"))
+            .stack_size(2 * 1024 * 1024)
             .spawn({
                 let (exec, holders, run) =
                     (Arc::clone(&exec), Arc::clone(&execs.holders), RunPtr(run));
@@ -1797,6 +1802,7 @@ pub(crate) fn claim(ctx: *mut TaskCtx) -> Option<u16> {
     execs.holders.count.fetch_add(1, Ordering::AcqRel);
     let thread = std::thread::Builder::new()
         .name(format!("hirsel-pool-{slot}"))
+        .stack_size(2 * 1024 * 1024)
         .spawn({
             let (exec, holders) = (Arc::clone(&exec), Arc::clone(&execs.holders));
             move || worker_main(run, exec, holders)

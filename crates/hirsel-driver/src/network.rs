@@ -423,6 +423,9 @@ impl HostLibrary {
         }
         let config = SimulationConfig {
             grants,
+            cpu: record.io.as_ref().and_then(|io| io.cpu.clone()),
+            tasks_free: record.io.as_ref().and_then(|io| io.tasks.as_deref())
+                == Some("tasks.free@1"),
             // The host's source delivers every arrival; the library keeps the checks.
             signals: admitted
                 .signals_grant()

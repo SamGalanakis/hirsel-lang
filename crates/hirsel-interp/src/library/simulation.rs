@@ -92,6 +92,9 @@ pub struct SimulationConfig {
     pub net: Option<hirsel_run_schema::NetGrant>,
     /// Exact process rules; scripted runs never widen them.
     pub process: Option<hirsel_run_schema::ProcessGrant>,
+    pub cpu: Option<hirsel_run_schema::CpuGrant>,
+    /// The admitted Tasks policy, independent of whether a tape is present.
+    pub tasks_free: bool,
     /// The observed kinds and the `signals.script@1` arrivals; absent, the run has no
     /// Signals and receives no signal.
     pub signals: Option<hirsel_run_schema::SignalsGrant>,
@@ -144,6 +147,8 @@ impl Default for SimulationConfig {
             debug: SimulationDebug::default(),
             net: None,
             process: None,
+            cpu: None,
+            tasks_free: false,
             signals: None,
             random_seed: 0,
             test_seed: 0,

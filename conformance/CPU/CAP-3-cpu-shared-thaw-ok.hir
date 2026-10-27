@@ -1,0 +1,19 @@
+// rule: CAP-3
+// expect: accept
+// boundary: immutable Shared captures can be read and thawed by a closed CPU callback.
+pub fn batch(tasks: Tasks, take frozen: Shared[List[u64]]) -> Result[List[u64], CpuPoolError] {
+  core@1/cpu.map_scoped(
+    tasks,
+    1,
+    fn() -> List[u64] uses {} {
+      let thawed = shared.thaw(take frozen)
+      match take thawed {
+        Ok(jobs) => take jobs,
+        Error(_) => [],
+      }
+    },
+    fn(take job: u64) -> u64 uses {} {
+      job + 1
+    }
+  )
+}

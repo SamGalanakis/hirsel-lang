@@ -709,6 +709,9 @@ impl RegionPool {
         let mut found = self.unlink_idle(need);
         if found.is_null() {
             // SAFETY: nonzero size.
+            if let Some(cpu) = self.meter.cpu.get() {
+                cpu.charge_heap(size);
+            }
             found = unsafe { host_alloc(segment_layout(size)) }.cast::<Segment>();
             if found.is_null() {
                 environmental("the backing allocator could not supply a region segment");
@@ -856,6 +859,9 @@ impl RegionPool {
             unsafe {
                 self.idle = (*segment).prev;
                 self.idle_bytes -= (*segment).size;
+                if let Some(cpu) = self.meter.cpu.get() {
+                    cpu.credit_heap((*segment).size);
+                }
                 host_dealloc(segment.cast(), segment_layout((*segment).size));
             }
         }
@@ -874,6 +880,9 @@ impl RegionPool {
                     let next = (*segment).lent_next;
                     #[cfg(feature = "memcheck")]
                     memcheck::destroy_pool(segment.cast());
+                    if let Some(cpu) = self.meter.cpu.get() {
+                        cpu.credit_heap((*segment).size);
+                    }
                     host_dealloc(segment.cast(), segment_layout((*segment).size));
                     segment = next;
                 }

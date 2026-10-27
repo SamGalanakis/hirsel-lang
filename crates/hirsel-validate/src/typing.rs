@@ -2186,6 +2186,10 @@ impl<'a> Checker<'a> {
         destination: Option<PlaceId>,
         origins: Option<&super::flow_origins::CallOriginProof>,
     ) {
+        if matches!(callee, Callee::Definition { path, .. } if path.is_core("cpu.map_scoped") || (path.0.package.package_is("std", "1") && path.0.modules == ["cpu"] && path.0.name == "map_scoped"))
+        {
+            self.cpu_call(arguments);
+        }
         if matches!(callee, Callee::Definition { path, .. } if path.is_core("arena.seal")) {
             self.seal_type(arguments);
         }

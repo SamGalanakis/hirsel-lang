@@ -305,6 +305,16 @@ pub const OPS: &[OpDescriptor] = &[
         &[Write(TaskTree)],
         Phases::Single,
     ),
+    OpDescriptor {
+        name: "cpu.control",
+        transitions: &[Yield],
+        outcome: Outcome::Value,
+        fallible: false,
+        footprint: &[Read(CancelState), Write(TaskTree)],
+        visibility: Visibility::External,
+        phases: Phases::Single,
+        note: "fresh bounded CPU admission and drain; Ordered refuses; replay starts no workers",
+    },
     // Stores and edges with no outcome.
     op(
         "atomic.store",
@@ -962,6 +972,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_thaw", Local),
     ops("hirsel_rt_v2_thaw_turn", &["shared.thaw"]),
     // tasks.rs
+    ops("hirsel_rt_v2_cpu_map_scoped", &["cpu.control"]),
     ops("hirsel_rt_v2_task_scope_enter", &["task.scope_enter"]),
     ops("hirsel_rt_v2_task_scope_enter_until", &["task.scope_until"]),
     ops("hirsel_rt_v2_task_scope_exit", &["task.scope_exit"]),
@@ -1144,6 +1155,17 @@ pub const REGISTRY: &[(&str, &[&str])] = &[
     ("task.detach", &["task.detach"]),
     ("task.detach_all", &["task.detach_all"]),
     ("task.isolate", &["task.isolate"]),
+    (
+        "cpu.map_scoped",
+        &[
+            "cpu.control",
+            "task.scope_enter",
+            "task.scope_exit",
+            "task.async",
+            "task.await",
+        ],
+    ),
+    ("$intrinsic.CpuMapScoped", &["cpu.control"]),
     ("task.scope", &["task.scope_enter", "task.scope_exit"]),
     ("task.scope_until", &["task.scope_until", "task.scope_exit"]),
     ("task.set", &["task.set"]),

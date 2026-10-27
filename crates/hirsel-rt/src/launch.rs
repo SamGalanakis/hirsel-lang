@@ -2569,6 +2569,26 @@ pub(crate) unsafe fn execute(
         .and_then(|run| run.record().io.as_ref())
         .and_then(|io| io.tasks.as_deref())
         == Some("tasks.free@1");
+    unsafe { &mut *ctx }.run().cpu_grant = requested
+        .as_ref()
+        .and_then(|run| run.record().io.as_ref())
+        .and_then(|io| io.cpu.clone());
+    if let Some(grant) = unsafe { (*ctx).run_ref().cpu_grant.as_ref() } {
+        let ledger = crate::pool::cpu_scoped::ledger::Ledger::new(grant);
+        let _ = unsafe { (*ctx).heap_ref().meter.cpu.set(ledger.clone()) };
+        unsafe {
+            (*ctx)
+                .worker()
+                .account_cpu(&ledger, Some(crate::fiber::native_stack_bytes()))
+        };
+        unsafe { &mut *ctx }.run().cpu_ledger = Some(ledger);
+    }
+    if let Some(path) = std::env::var_os("HIRSEL_RT_CPU_PROBE") {
+        unsafe { &mut *ctx }.run().cpu_probe = Some(
+            crate::pool::cpu_scoped::probe::Probe::open(std::path::Path::new(&path))
+                .map_err(|e| format!("CPU probe: {e}"))?,
+        );
+    }
     unsafe { &mut *ctx }.run().free_production = production_free;
     unsafe { &mut *ctx }.run().free_root_env = entry.roots() & crate::standalone::ROOT_ENV != 0;
     unsafe { &mut *ctx }.run().free_return = (program.return_kind, program.success_offset);

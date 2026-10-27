@@ -5,6 +5,9 @@
 use super::{Exec, Execs, Kind, Owner, Permits, Post, RunPtr, RunShared, TaskCtx, Worker};
 use std::sync::{Arc, atomic::Ordering};
 
+pub(crate) mod ledger;
+pub(crate) mod probe;
+
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Refusal {
     InvalidWidth,
@@ -12,6 +15,7 @@ pub(crate) enum Refusal {
     Busy,
     WorkerStartFailed,
     NestedPool,
+    ResourceLimit,
 }
 
 /// Unassigned credits. Each assigned credit has an independent lifetime, so a
@@ -26,6 +30,7 @@ pub(super) struct Reservation {
 pub(super) struct Assigned {
     permits: Arc<Permits>,
     exec: Arc<Exec>,
+    topology: Option<Arc<ledger::Topology>>,
 }
 
 impl Permits {
@@ -65,6 +70,7 @@ impl Reservation {
         Some(Assigned {
             permits: Arc::clone(&self.permits),
             exec,
+            topology: None,
         })
     }
 }
@@ -100,6 +106,11 @@ pub(super) struct Workers {
     threads: Vec<std::thread::JoinHandle<()>>,
     cursor: usize,
     caller: Option<Owner>,
+    _topology: Option<Arc<ledger::Topology>>,
+    contraction: u64,
+    domain: u64,
+    caller_task: u32,
+    limits: Option<hirsel_run_config::managed_cores::LinuxLimits>,
 }
 
 impl Workers {
@@ -146,19 +157,29 @@ unsafe fn start_at(
         return Err(Refusal::Busy);
     }
     let width = reservation.unassigned;
+    let topology = match unsafe { (*run).cpu_ledger.as_ref() } {
+        Some(ledger) => Some(ledger.topology(width).ok_or(Refusal::ResourceLimit)?),
+        None => None,
+    };
     let (ready, acknowledgments) = std::sync::mpsc::sync_channel(width as usize);
     let mut workers = Workers {
         execs: Vec::with_capacity(width as usize),
         threads: Vec::with_capacity(width as usize),
         cursor: 0,
         caller: None,
+        _topology: topology.clone(),
+        contraction: execs.permits.state.lock().unwrap().contraction,
+        domain: unsafe { (*run).cpu_probe.as_ref().map_or(0, |p| p.domain()) },
+        caller_task: u32::MAX,
+        limits: hirsel_run_config::managed_cores::LinuxLimits::capture().ok(),
     };
     for index in 0..width {
         // Sequential attachment is role-owned, like grow(). No scoped task
         // has been published, so the new worker cannot touch this heap yet.
-        let worker = unsafe { Worker::create(run) };
+        let worker = unsafe { Worker::create_scoped(run) };
         let exec = Exec::new(Kind::Scoped(index as u16), worker, false);
-        let assigned = reservation.assign(Arc::clone(&exec)).unwrap();
+        let mut assigned = reservation.assign(Arc::clone(&exec)).unwrap();
+        assigned.topology = topology.clone();
         execs
             .holders
             .workers
@@ -288,6 +309,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     if execs.scoped.lock().unwrap().is_some() {
         return Err(Refusal::Busy);
     }
+    unsafe { (*ctx).frozen = Vec::new() };
     super::release_permit(ctx);
     let reservation = execs.permits.try_reserve(width);
     let owners = match reservation {
@@ -304,8 +326,15 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
             return Err(error);
         }
     };
-    let old = crate::tasks::cpu_owner(ctx, owners[0], true);
-    execs.scoped.lock().unwrap().as_mut().unwrap().caller = Some(old);
+    let first = owners[0];
+    drop(owners);
+    let old = crate::tasks::cpu_owner(ctx, first, true);
+    {
+        let mut slot = execs.scoped.lock().unwrap();
+        let workers = slot.as_mut().unwrap();
+        workers.caller = Some(old);
+        workers.caller_task = unsafe { (*ctx).task_id };
+    }
     unsafe { migrate(ctx) };
     Ok(())
 }
@@ -346,12 +375,136 @@ pub(crate) unsafe fn leave(ctx: *mut TaskCtx) {
         .take()
         .expect("scoped caller");
     crate::tasks::cpu_owner(ctx, old, false);
+    // The CPU caller's freeze scratch belongs to this invocation, including
+    // capacity retained by the existing graph walker.
+    unsafe { (*ctx).frozen = Vec::new() };
     // Exit posts run only after the caller's idle save publishes its image to
     // the original topology. Its old CPU worker then returns its reserved
     // credit, allowing the original worker to reacquire without a W+1 holder.
     request_exit(execs);
     unsafe { migrate(ctx) };
     unsafe { finish(run) };
+}
+
+fn capacity_lost(ctx: *mut TaskCtx) -> bool {
+    let execs = super::execs(ctx);
+    let slot = execs.scoped.lock().unwrap();
+    let Some(workers) = slot.as_ref() else {
+        return false;
+    };
+    let state = execs.permits.state.lock().unwrap();
+    state.contraction != workers.contraction
+        || state.limit < workers.execs.len() as u32
+        || workers.limits.as_ref().is_some_and(|reader| {
+            reader.read().map_or(true, |limits| {
+                limits
+                    .admission_affinity
+                    .intersection(&limits.effective_cpuset)
+                    .len()
+                    < workers.execs.len() as u64
+                    || limits
+                        .quota
+                        .is_some_and(|quota| quota.floor() < workers.execs.len() as u64)
+            })
+        })
+}
+
+/// Private control for the typed cpu.map_scoped body. Preparation and mapper
+/// callbacks remain ordinary generated calls and structured task children.
+/// # Safety
+/// The live task, Tasks word and output satisfy the Hirsel ABI. Only the
+/// compiler's typed CPU body issues the start, bounded-batch and leave actions.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
+    ctx: *mut TaskCtx,
+    out: *mut u32,
+    _tasks: *const u64,
+    width: u32,
+    action: u32,
+    count: u64,
+) -> u8 {
+    let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
+    if action > 2 {
+        crate::fault("invalid scoped CPU action");
+    }
+    let result = crate::tasks::free::record::cpu_control(ctx, width, action, count, || unsafe {
+        match action {
+            0 => {
+                if !matches!(width, 1 | 4 | 8 | 16) {
+                    return 1;
+                }
+                let Some(grant) = (*ctx).run_ref().cpu_grant.as_ref() else {
+                    return 2;
+                };
+                if crate::tasks::cpu_scoped(ctx) {
+                    return 5;
+                }
+                if !(*ctx).run_ref().free_mode {
+                    return 9;
+                }
+                if let Some(cause) = crate::tasks::canceled(ctx) {
+                    return 16 + cause;
+                }
+                if width > grant.max_workers
+                    || std::thread::available_parallelism().is_ok_and(|n| n.get() < width as usize)
+                {
+                    return 4;
+                }
+                match enter(ctx, width) {
+                    Ok(()) => {
+                        if let Some(cause) = crate::tasks::canceled(ctx) {
+                            leave(ctx);
+                            16 + cause
+                        } else {
+                            0
+                        }
+                    }
+                    Err(Refusal::InvalidWidth) => 1,
+                    Err(Refusal::WidthUnavailable { .. }) => 4,
+                    Err(Refusal::Busy) => 3,
+                    Err(Refusal::NestedPool) => 5,
+                    Err(Refusal::WorkerStartFailed) => 7,
+                    Err(Refusal::ResourceLimit) => 10,
+                }
+            }
+            1 => {
+                let lost = capacity_lost(ctx);
+                leave(ctx);
+                if let Some(cause) = crate::tasks::canceled(ctx) {
+                    16 + cause
+                } else if lost {
+                    8
+                } else {
+                    0
+                }
+            }
+            2 => {
+                if count > u64::from(width) * 2 {
+                    6
+                } else if capacity_lost(ctx) {
+                    8
+                } else if let Some(cause) = crate::tasks::canceled(ctx) {
+                    16 + cause
+                } else {
+                    0
+                }
+            }
+            _ => unreachable!(),
+        }
+    });
+    let value = unsafe { crate::stop::check(ctx, result) };
+    if action == 2 && count == 0 && value == 0 && unsafe { (*ctx).run_ref().cpu_probe.is_some() } {
+        let execs = super::execs(ctx);
+        let slot = execs.scoped.lock().unwrap();
+        if let Some(workers) = slot.as_ref()
+            && workers.caller_task != unsafe { (*ctx).task_id }
+            && let Kind::Scoped(worker) = unsafe { (*super::own_exec()).kind }
+        {
+            unsafe { probe::begin(ctx, workers.domain, u32::from(worker)) };
+        }
+    }
+    unsafe { out.write(value) };
+    crate::STATUS_OK
 }
 
 #[cfg(test)]
@@ -426,6 +579,77 @@ mod tests {
                     assert!(!crate::tasks::cpu_scoped(ctx));
                     assert!(workers(super::super::execs(ctx)).is_empty());
                 }
+                crate::STATUS_OK
+            },
+        );
+        assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
+        assert_eq!(outcome.pending, 0);
+    }
+
+    #[test]
+    fn control_entry_refuses_before_startup_and_drains_a_bounded_batch() {
+        let mut run = crate::host::BodyRun::new(1, false);
+        run.free = true;
+        unsafe { run.use_physical_dispatch() };
+        let outcome = run.run(
+            |_| {},
+            |ctx| unsafe {
+                let tasks = 0;
+                let mut out = u32::MAX;
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 0, 0, 0),
+                    0
+                );
+                assert_eq!(out, 1);
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 0, 0),
+                    0
+                );
+                assert_eq!(out, 2);
+                (*ctx).run().cpu_grant = Some(hirsel_run_schema::CpuGrant {
+                    provider: "cpu.scoped@1".into(),
+                    max_workers: 1,
+                    max_domains: 1,
+                    max_physical_bytes: 1 << 28,
+                    max_batch_bytes: 1 << 20,
+                });
+                let ledger = ledger::Ledger::new((*ctx).run_ref().cpu_grant.as_ref().unwrap());
+                (*ctx)
+                    .heap_ref()
+                    .meter
+                    .cpu
+                    .set(ledger.clone())
+                    .ok()
+                    .unwrap();
+                (*ctx).run().cpu_ledger = Some(ledger);
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 4, 0, 0),
+                    0
+                );
+                assert_eq!(out, 4);
+                assert!(workers(super::super::execs(ctx)).is_empty());
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 0, 0),
+                    0
+                );
+                assert_eq!(out, 0);
+                assert!(matches!((*super::super::own_exec()).kind, Kind::Scoped(0)));
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 2, 3),
+                    0
+                );
+                assert_eq!(out, 6);
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 2, 2),
+                    0
+                );
+                assert_eq!(out, 0);
+                assert_eq!(
+                    hirsel_rt_v2_cpu_map_scoped(ctx, &mut out, &tasks, 1, 1, 0),
+                    0
+                );
+                assert_eq!(out, 0);
+                assert!(workers(super::super::execs(ctx)).is_empty());
                 crate::STATUS_OK
             },
         );

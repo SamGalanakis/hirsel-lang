@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 80
+#define HIRSEL_RT_V2_ABI_VERSION 82
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -781,6 +781,9 @@ void hirsel_rt_v2_callback_failed(hirsel_rt_v2_ctx *ctx);
 /* A callback thunk returns to C: the compute permit its Hirsel code took at
    callback_context goes back. */
 void hirsel_rt_v2_callback_leave(hirsel_rt_v2_ctx *ctx);
+
+/* Private control of the typed CPU batch body. Start, bounded batch, drain. */
+uint8_t hirsel_rt_v2_cpu_map_scoped(hirsel_rt_v2_ctx *ctx, uint32_t *out, const uint64_t *tasks, uint32_t width, uint32_t action, uint64_t count);
 
 /* Additive spawn-ahead metadata (ABI 55). Physical entry/checkpoints only. */
 typedef uint8_t (*hirsel_rt_v2_task_code)(hirsel_rt_v2_ctx *, hirsel_rt_v2_header *, uint64_t, uint64_t);

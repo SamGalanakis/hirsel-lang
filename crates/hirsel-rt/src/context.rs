@@ -160,6 +160,7 @@ pub struct TaskCtx {
     /// borrowed. Policy accounting and every possible pause happen outside it.
     pub(crate) ordered_allocation: std::cell::Cell<u64>,
     pub(crate) ordered_freed: std::cell::Cell<u64>,
+    pub(crate) cpu_sample: Option<crate::pool::cpu_scoped::probe::Sample>,
     /// The task's measurement site while it is switched out.
     #[cfg(feature = "measurement")]
     site: u64,
@@ -244,6 +245,7 @@ pub(crate) struct Worker {
     pub(crate) immortalized: u64,
     /// Stacks of completed tasks, for the next spawns.
     pub(crate) idle_stacks: crate::fiber::StackPool,
+    pub(crate) native_backing: Option<crate::pool::cpu_scoped::ledger::Backing>,
     /// The stack of a task that completed; the next task to run recycles it.
     pub(crate) retired: Option<crate::fiber::Stack>,
 }
@@ -255,19 +257,45 @@ impl Worker {
     /// # Safety
     /// `run` is live and outlives the worker.
     pub(crate) unsafe fn create(run: *mut RunShared) -> *mut Worker {
+        unsafe { Self::create_accounted(run, true) }
+    }
+    pub(crate) unsafe fn create_scoped(run: *mut RunShared) -> *mut Worker {
+        unsafe { Self::create_accounted(run, false) }
+    }
+    unsafe fn create_accounted(run: *mut RunShared, account: bool) -> *mut Worker {
         // SAFETY: caller contract.
         let heaps = unsafe { &(*run).heaps };
         let id = heaps.worker_id();
         let heap = heaps.attach(id);
-        Box::into_raw(Box::new(Worker {
+        let mut worker = Box::new(Worker {
             id,
             heap,
             run,
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             immortalized: 0,
             idle_stacks: Default::default(),
+            native_backing: None,
             retired: None,
-        }))
+        });
+        if account && let Some(ledger) = unsafe { (*run).cpu_ledger.as_ref() } {
+            worker.account_cpu(ledger, None);
+        }
+        Box::into_raw(worker)
+    }
+
+    pub(crate) fn account_cpu(
+        &mut self,
+        ledger: &std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>,
+        native_bytes: Option<u64>,
+    ) {
+        self.idle_stacks.account(ledger);
+        if self.native_backing.is_none() {
+            self.native_backing =
+                Some(ledger.stack(native_bytes.unwrap_or((2 << 20) + (64 << 10))));
+        }
+        if let Some(stack) = &mut self.retired {
+            stack.account(Some(ledger));
+        }
     }
 
     /// The worker leaves: its heap stays in the registry, orphaned, and any live worker
@@ -357,6 +385,9 @@ pub(crate) struct RunShared {
     /// The admitted tasks.free@1 policy, independently of recording or
     /// physical dispatch; false for Ordered and the cooperative test harness.
     pub(crate) free_mode: bool,
+    pub(crate) cpu_grant: Option<hirsel_run_schema::CpuGrant>,
+    pub(crate) cpu_ledger: Option<std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>>,
+    pub(crate) cpu_probe: Option<crate::pool::cpu_scoped::probe::Probe>,
     /// The Free logical policy without replay, fixed at admission: immediate
     /// object operations may then act on resolved leases without the role.
     pub(crate) free_objects: std::sync::atomic::AtomicBool,
@@ -485,6 +516,7 @@ impl TaskCtx {
             recording: None,
             ordered_allocation: Default::default(),
             ordered_freed: Default::default(),
+            cpu_sample: None,
             #[cfg(feature = "measurement")]
             site: 0,
             detached_images: Default::default(),
@@ -1019,6 +1051,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_ctx_create(
         schedule: Default::default(),
         free: RoleCell::new(None),
         free_mode: false,
+        cpu_grant: None,
+        cpu_ledger: None,
+        cpu_probe: None,
         free_objects: Default::default(),
         free_replay: false,
         free_production: false,

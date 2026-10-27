@@ -30,6 +30,7 @@ pub struct Library {
     pub(super) signals: super::signals::Signals,
     pub(super) callbacks: std::collections::BTreeMap<u64, super::callbacks::Pending>,
     pub(super) next_callback: u64,
+    pub(super) cpu_active: std::collections::BTreeSet<u64>,
     pub(super) next_shared: u64,
     /// A scripted client's unmet Expect at the last handle drop (LANG-9).
     pub(super) drop_failure: Option<(String, String)>,
@@ -111,6 +112,7 @@ impl Library {
             signals: Default::default(),
             callbacks: Default::default(),
             next_callback: 0,
+            cpu_active: Default::default(),
             next_shared: 0,
             drop_failure: None,
             runners: Default::default(),
@@ -1450,6 +1452,18 @@ impl Operations for Library {
         self.tasks
             .retained_bytes()
             .saturating_add(self.channels.retained_bytes())
+            .saturating_add(
+                self.callbacks
+                    .values()
+                    .filter_map(|p| {
+                        if let super::callbacks::Pending::Cpu(b) = p {
+                            Some(b.bytes())
+                        } else {
+                            None
+                        }
+                    })
+                    .sum::<u64>(),
+            )
     }
     fn entry_returned(
         &mut self,
@@ -1480,6 +1494,18 @@ impl Operations for Library {
         updates: &[(usize, Value)],
         abandoned: bool,
     ) -> Result<Vec<Value>, Error> {
+        if abandoned
+            && matches!(
+                self.callbacks.get(&token),
+                Some(super::callbacks::Pending::Cpu(_))
+            )
+        {
+            let Some(super::callbacks::Pending::Cpu(batch)) = self.callbacks.remove(&token) else {
+                unreachable!()
+            };
+            self.cpu_active.remove(&self.tasks.current);
+            return Ok(batch.release());
+        }
         self.synchronization_writeback(token, updates, abandoned)
     }
 
@@ -1703,7 +1729,12 @@ impl Operations for Library {
         self.tasks.cancel_root(1);
     }
     fn handles_failure(&self, token: u64) -> bool {
-        self.tasks.pending.contains_key(&token) || self.synchronizers.pending.contains_key(&token)
+        self.tasks.pending.contains_key(&token)
+            || self.synchronizers.pending.contains_key(&token)
+            || matches!(
+                self.callbacks.get(&token),
+                Some(super::callbacks::Pending::Cpu(_))
+            )
     }
     fn poll(
         &mut self,
@@ -2089,6 +2120,7 @@ primary_operations! { library, call, context, name, a, value;
             }
             return library.capability(name, call, context);
             },
+    Capability: "cpu.map_scoped" => { return library.cpu_call(&call, context).map(Some); },
     Capability: "task.scope" | "task.scope_until" | "task.async" | "task.await" | "task.cancel" | "task.detach" | "task.set" | "task.add" | "task.await_any" | "task.await_at" | "task.cancel_all" | "task.detach_all" | "task.check_canceled" | "task.isolate" => { return library.task_call(name, &call, context).map(Some); },
     Capability: "channel.open" | "channel.send" | "channel.receive" | "sender.dup" => { let saved = (!context.configuration.inputs.is_empty()).then(|| library.channels.clone());
         let result = library.channel_call(name, &call, context);
@@ -2108,7 +2140,7 @@ primary_operations! { library, call, context, name, a, value;
     Capability: "io.process" | "proc.narrow" | "proc.run" | "proc.pipeline" | "test.process" | "proc.spawn" | "child.write" | "child.close_stdin" | "child.read_stdout" | "child.read_stderr" | "child.wait" | "child.kill" | "proc.spawn_pipeline" | "group.write" | "group.close_stdin" | "group.read_stdout" | "proc.wait_group" | "group.kill" => {
         return library.network_call(name, &call, context).map(Some);
     },
-    Unavailable: "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelOpen" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.SharedThawTurn" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateEnd" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" | "$intrinsic.RunnerSend" | "$intrinsic.RunnerWait" | "$intrinsic.RunnerTake" | "$intrinsic.RunnerEntry" | "$intrinsic.RunnerArgument" | "$intrinsic.RunnerIo" | "$intrinsic.RunnerTasks" | "$intrinsic.RunnerReply" | "$intrinsic.RunnerGrants" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
+    Unavailable: "$intrinsic.CpuMapScoped" | "$intrinsic.TaskScopeEnter" | "$intrinsic.TaskScopeExit" | "$intrinsic.TaskSetHas" | "$intrinsic.TaskSetTake" | "$intrinsic.TaskScopeEnterUntil" | "$intrinsic.TaskScopeExitUntil" | "$intrinsic.TaskSpawn" | "$intrinsic.TaskFinish" | "$intrinsic.TaskJoin" | "$intrinsic.ChannelOpen" | "$intrinsic.ChannelSend" | "$intrinsic.ChannelReceive" | "$intrinsic.MutexCreate" | "$intrinsic.MutexTake" | "$intrinsic.MutexPut" | "$intrinsic.MutexKill" | "$intrinsic.MutexCause" | "$intrinsic.AtomicCreate" | "$intrinsic.AtomicLoad" | "$intrinsic.AtomicStore" | "$intrinsic.SharedThawTurn" | "$intrinsic.TaskCanceled" | "$intrinsic.IsolateBegin" | "$intrinsic.IsolateEnd" | "$intrinsic.IsolateCount" | "$intrinsic.IsolateKind" | "$intrinsic.IsolateRule" | "$intrinsic.IsolateDefinition" | "$intrinsic.IsolateLine" | "$intrinsic.IsolateColumn" | "$intrinsic.IsolateSpawn" | "$intrinsic.RunnerSend" | "$intrinsic.RunnerWait" | "$intrinsic.RunnerTake" | "$intrinsic.RunnerEntry" | "$intrinsic.RunnerArgument" | "$intrinsic.RunnerIo" | "$intrinsic.RunnerTasks" | "$intrinsic.RunnerReply" | "$intrinsic.RunnerGrants" => { return Err(Error::Unavailable(format!("{name} is an entry of the native task runtime's compiled bodies; the reference executes the task operations"))); },
     Capability: "io.telemetry" | "capture.begin" | "capture.context" | "capture.event" | "capture.finish" | "capture.log" | "capture.measure" => {
         // A rejected replay never publishes effects or delivers identities.
         let saved = (!context.configuration.inputs.is_empty()).then(|| library.simulation.clone());
@@ -2692,7 +2724,7 @@ pub(super) fn bytes(v: &Value) -> Result<&[u8], Error> {
         Err(invalid("expected Bytes"))
     }
 }
-fn int(v: &Value) -> Result<Integer, Error> {
+pub(super) fn int(v: &Value) -> Result<Integer, Error> {
     if let Value::Integer(n) = v {
         Ok(*n)
     } else {

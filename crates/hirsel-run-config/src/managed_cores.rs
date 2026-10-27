@@ -110,6 +110,10 @@ impl Quota {
             period,
         }))
     }
+    /// Whole compute workers covered without fractional oversubscription.
+    pub fn floor(self) -> u64 {
+        self.quota / self.period
+    }
     pub fn ceil(self) -> u64 {
         self.quota.div_ceil(self.period)
     }

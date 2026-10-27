@@ -22,6 +22,7 @@ pub use launch::{
 };
 
 mod callbacks;
+mod cpu;
 pub mod race;
 mod root_trace;
 mod sealed;

@@ -51,6 +51,7 @@ pub(crate) fn large_charge(capacity: u64) -> u64 {
 /// Its counters move only under a budget, so an unbudgeted run pays nothing for them.
 #[derive(Debug, Default)]
 pub(crate) struct Meter {
+    pub(crate) cpu: std::sync::OnceLock<std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>>,
     /// Ordered charges were checked before borrowing the heap. Callbacks may
     /// validate a charge or record a free, but never suspend or stop here.
     ordered: AtomicPtr<crate::context::RunShared>,
@@ -278,7 +279,7 @@ impl TaskCtx {
 /// Stop the running run: a charge found the budget spent.
 #[cold]
 #[inline(never)]
-fn exceeded(kind: BudgetKind) -> ! {
+pub(crate) fn exceeded(kind: BudgetKind) -> ! {
     let ctx = crate::stop::running();
     if ctx.is_null() {
         crate::environmental("a run spent its budget outside its launcher");
@@ -296,6 +297,7 @@ fn exceeded(kind: BudgetKind) -> ! {
 /// `ctx` is the running context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_fuel_refill(ctx: *mut TaskCtx) {
+    unsafe { crate::pool::cpu_scoped::probe::checkpoint(ctx) };
     if crate::tasks::ordered::ahead::private(ctx) {
         unsafe { crate::stop::check(ctx, crate::stop::observe(ctx)) };
         unsafe { crate::tasks::ordered::ahead::refill(ctx) };

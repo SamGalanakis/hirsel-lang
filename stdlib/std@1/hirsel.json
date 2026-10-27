@@ -1361,6 +1361,12 @@
       "module": [
         "markdown"
       ]
+    },
+    {
+      "path": "cpu.hir",
+      "module": [
+        "cpu"
+      ]
     }
   ],
   "dependencies": []

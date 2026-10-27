@@ -1340,6 +1340,9 @@ impl Heap {
     #[cfg(feature = "system-allocator")]
     #[inline(always)]
     pub(crate) unsafe fn allocate_bare(&mut self, index: u32, capacity: u64) -> *mut Header {
+        if let Some(cpu) = self.meter.cpu.get() {
+            cpu.charge_heap(cpu_bare_charge(capacity));
+        }
         self.meter
             .charge_allocation(crate::budget::small_charge(capacity));
         unsafe {
@@ -1501,6 +1504,9 @@ impl Heap {
     }
 
     unsafe fn new_slab(&mut self, class: usize) {
+        if let Some(cpu) = self.meter.cpu.get() {
+            cpu.charge_heap(cpu_slab_charge(self.diagnostic));
+        }
         // SAFETY: nonzero size.
         let base = unsafe { host_alloc(slab_layout()) };
         if base.is_null() {
@@ -1593,6 +1599,9 @@ impl Heap {
         let Some(total) = (offset + HEADER_SIZE as u64).checked_add(capacity) else {
             environmental("a large allocation's size overflows")
         };
+        if let Some(cpu) = self.meter.cpu.get() {
+            cpu.charge_heap(cpu_large_charge(capacity, align));
+        }
         self.meter
             .charge_allocation(crate::budget::large_charge(capacity));
         #[cfg(not(feature = "system-allocator"))]
@@ -1694,6 +1703,9 @@ impl Heap {
     #[inline(always)]
     pub(crate) unsafe fn free_small(&mut self, block: *mut Header) {
         unsafe {
+            if let Some(cpu) = self.meter.cpu.get() {
+                cpu.credit_heap(cpu_bare_charge(self.capacity(block)));
+            }
             self.credit(block);
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             self.unlist_bare(block);
@@ -1879,6 +1891,9 @@ impl Heap {
             {
                 self.large_bytes -= total;
             }
+            if let Some(cpu) = self.meter.cpu.get() {
+                cpu.credit_heap(cpu_large_charge((*prefix).capacity, align));
+            }
             release_large(prefix, total, align);
         }
     }
@@ -1941,6 +1956,9 @@ impl Heap {
                 if (*slab).doomed != 0 {
                     *link = (*slab).next;
                     self.retire_record(slab);
+                    if let Some(cpu) = self.meter.cpu.get() {
+                        cpu.credit_heap(cpu_slab_charge(self.diagnostic));
+                    }
                     release_slab(slab);
                     #[cfg(any(feature = "diagnostic", feature = "measurement"))]
                     {
@@ -1984,6 +2002,9 @@ impl Heap {
                     }
                     #[cfg(feature = "measurement")]
                     self.measurement.free(self.capacity(block));
+                    if let Some(cpu) = self.meter.cpu.get() {
+                        cpu.credit_heap(cpu_bare_charge(self.capacity(block)));
+                    }
                     libc::free(block.cast());
                 }
             }
@@ -1998,6 +2019,9 @@ impl Heap {
                     self.measurement
                         .free_many(class_capacity(class), (*slab).live as u64);
                     self.retire_record(slab);
+                    if let Some(cpu) = self.meter.cpu.get() {
+                        cpu.credit_heap(cpu_slab_charge(self.diagnostic));
+                    }
                     release_slab(slab);
                     slab = next;
                 }
@@ -2022,6 +2046,9 @@ impl Heap {
                 }
                 #[cfg(feature = "measurement")]
                 self.measurement.free((*prefix).capacity);
+                if let Some(cpu) = self.meter.cpu.get() {
+                    cpu.credit_heap(cpu_large_charge((*prefix).capacity, (*prefix).align));
+                }
                 release_large(prefix, (*prefix).total, (*prefix).align);
                 prefix = next;
             }
@@ -2797,4 +2824,23 @@ mod page_tests {
             }
         }
     }
+}
+
+fn cpu_slab_charge(diagnostic: bool) -> u64 {
+    SLAB_SIZE as u64 * if diagnostic { 2 } else { 1 }
+}
+fn cpu_large_charge(capacity: u64, align: u64) -> u64 {
+    capacity
+        .saturating_add(large_header_offset(align))
+        .saturating_add(HEADER_SIZE as u64)
+        .saturating_add(align)
+        .saturating_add(4095)
+}
+
+#[cfg(feature = "system-allocator")]
+fn cpu_bare_charge(capacity: u64) -> u64 {
+    capacity
+        .saturating_add(HEADER_SIZE as u64)
+        .saturating_add(32)
+        .next_multiple_of(16)
 }

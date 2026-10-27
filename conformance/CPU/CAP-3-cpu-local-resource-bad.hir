@@ -1,0 +1,13 @@
+// rule: CAP-3
+// expect: reject
+// twin: CPU/CAP-3-cpu-closed-callback-ok.hir
+resource type Cleanup {}
+drop(value) {}
+pub fn batch(tasks: Tasks) -> Result[List[u64], CpuPoolError] {
+  core@1/cpu.map_scoped(tasks, 1,
+    fn() -> List[u64] uses {} { [1] },
+    fn(take job: u64) -> u64 uses {} {
+      let cleanup = Cleanup()
+      job
+    })
+}

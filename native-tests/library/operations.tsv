@@ -8,6 +8,7 @@ $intrinsic.AtomicStore	e5e2f72e3d216ba781d88547cfc6f031a1f4259e96b422a9e99d085e4
 $intrinsic.ChannelOpen	c6e279f8f563c0f65e0e95bd65f58df39a3d1a7db6820041a1888e9a08aaad02	0:b:n;1:b:[0];2:b:n->[0]
 $intrinsic.ChannelReceive	3ba26ed55b30defc5cc7f3deb5ec78cd75dc53550d874b390577403c77a64672	0:m:[0];1:m:[0]->n
 $intrinsic.ChannelSend	a38c8c22ae022cb1dc56422209bebabdbf0ccc8a12ca5bce517168f75a43204d	0:m:[0];1:m:[0]->n
+$intrinsic.CpuMapScoped	fcc4d63897f92d30ffd1ff7d75aa4906ea160a8d606ed7be98c49ec724d5dca8	0:b:n;1:b:n;2:b:n;3:b:n->n
 $intrinsic.InlineConsume_next	faaefbfc2e09bec2f781ce15cb976c3c6008afe4bae93907babdb7e0a3ac973f	0:m:[0]->[0]
 $intrinsic.InlineConsume_open	0889e32c3eb06e96259a9afcb04d36355beda77ba28d1195cb341dc5f815a753	0:t:[0]->[0]
 $intrinsic.IsolateBegin	f86d888777e8f62b5763a9c6f2fa6287c7243dfa62df079f96095be7f1cb0664	0:b:n->n
@@ -126,6 +127,7 @@ clock.wall	1e855107046905baad2d8203c5600224d476b2704b7f97c8e8e493e52e182cfb	0:b:
 codec.decode	7c133eaf0b6cd1fd8cf88543b17b973871498b1e0f810947121e9b033352e025	0:b:n->[0]
 codec.encode	df75f09421b776ed1c8a6de03ef3ef10ae107ebbdb6e3e1ffb7f817530eac218	0:b:[0]->n
 codegen.body	5ccb8ba187687392c88c6fdf793a2b662c2b0ceee64605c1ef589e429f5487b4	0:b:n->n
+cpu.map_scoped	e1e44cb1b79e2080f7773c588d186f2150a19780a611004f22274fd4f0b25c17	0:b:n;1:b:n;2:t:a;3:t:a->[1]
 dir.narrow	f3e22d3fe5db224983fc6d36101c93dc0c49d35c9cf5276fb8bbccbe084b7698	0:b:n;1:b:n->n
 dir.read_only	77d33d55a5098d3973bdbf01ecf0807543c2cf705d4daf486ead33c81ee37869	0:b:n->n
 dir.remove_all	bdfbb91758c5a1b54bf8d98e293ef4e8f055996df50d01818e851177b88d0e1d	0:b:n;1:b:n->n

@@ -32,6 +32,28 @@ pub(crate) const STACK_BYTES: usize = 8 << 20;
 /// Inaccessible bytes below each stack, so a frame larger than a page still lands in them.
 pub(crate) const GUARD_BYTES: usize = 64 << 10;
 
+/// The admitting thread may have a host-selected stack limit.
+pub(crate) fn native_stack_bytes() -> u64 {
+    let mut attributes = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
+    let (mut stack, mut guard) = (0usize, 0usize);
+    // SAFETY: attributes is initialized by pthread_getattr_np and destroyed once.
+    unsafe {
+        if libc::pthread_getattr_np(libc::pthread_self(), attributes.as_mut_ptr()) != 0 {
+            environmental("the admission stack size could not be read");
+        }
+        let mut attributes = attributes.assume_init();
+        let status = libc::pthread_attr_getstacksize(&attributes, &mut stack)
+            | libc::pthread_attr_getguardsize(&attributes, &mut guard);
+        libc::pthread_attr_destroy(&mut attributes);
+        if status != 0 {
+            environmental("the admission stack bounds could not be read");
+        }
+    }
+    (stack as u64)
+        .checked_add(guard as u64)
+        .unwrap_or_else(|| environmental("the admission stack bounds overflowed"))
+}
+
 /// Bytes at the top of each mapping for its task's context.
 const CONTEXT_BYTES: usize = size_of::<TaskCtx>().next_multiple_of(64);
 
@@ -49,11 +71,27 @@ const STACK_HOT_BYTES: usize = 64 << 10;
 const IDLE_STACKS: usize = 4;
 
 #[derive(Default)]
-pub(crate) struct StackPool(Vec<Stack>);
+pub(crate) struct StackPool(
+    Vec<Stack>,
+    Option<std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>>,
+);
 
 impl StackPool {
+    pub(crate) fn account(
+        &mut self,
+        ledger: &std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>,
+    ) {
+        for stack in &mut self.0 {
+            stack.account(Some(ledger));
+        }
+        self.1 = Some(ledger.clone());
+    }
     pub(crate) fn take(&mut self) -> Stack {
-        self.0.pop().unwrap_or_else(Stack::new)
+        self.0.pop().unwrap_or_else(|| {
+            let mut stack = Stack::new();
+            stack.account(self.1.as_ref());
+            stack
+        })
     }
 
     /// The previous context has been destroyed and no continuation can resume.
@@ -77,11 +115,20 @@ pub(crate) type Entry = unsafe extern "C" fn(*mut u8, *mut u8) -> !;
 pub(crate) struct Stack {
     base: *mut u8,
     valgrind: u64,
+    backing: Option<crate::pool::cpu_scoped::ledger::Backing>,
     #[cfg(feature = "tsan")]
     tsan: std::cell::Cell<*mut std::ffi::c_void>,
 }
 
 impl Stack {
+    pub(crate) fn account(
+        &mut self,
+        ledger: Option<&std::sync::Arc<crate::pool::cpu_scoped::ledger::Ledger>>,
+    ) {
+        if self.backing.is_none() {
+            self.backing = ledger.map(|ledger| ledger.stack((STACK_BYTES + GUARD_BYTES) as u64));
+        }
+    }
     pub(crate) fn new() -> Stack {
         let length = GUARD_BYTES + STACK_BYTES;
         // SAFETY: a fresh private anonymous mapping; the guard is then made inaccessible.
@@ -109,6 +156,7 @@ impl Stack {
         Stack {
             base,
             valgrind,
+            backing: None,
             #[cfg(feature = "tsan")]
             tsan: std::cell::Cell::new(tsan::create(
                 base.wrapping_add(GUARD_BYTES),

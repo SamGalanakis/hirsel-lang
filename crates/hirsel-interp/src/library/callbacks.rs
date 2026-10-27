@@ -10,6 +10,7 @@ pub(super) enum Comparison {
 }
 
 pub(super) enum Pending {
+    Cpu(super::cpu::Batch),
     Pull {
         next: Value,
     },
@@ -482,6 +483,9 @@ impl Library {
             .callbacks
             .remove(&token)
             .ok_or_else(|| invalid("unknown library continuation"))?;
+        if let Pending::Cpu(batch) = pending {
+            return self.cpu_resume(batch, result, arguments, context);
+        }
         // FAIL-3: a failing check ends the run where it stands; the codec cannot unwind.
         if let (Pending::Check { .. }, OperationResult::Failed(failure)) = (&pending, &result) {
             return Err(Error::Ended(failure.clone()));
@@ -490,6 +494,7 @@ impl Library {
             return Ok(OperationResult::Failed(failure));
         }
         match pending {
+            Pending::Cpu(_) => unreachable!(),
             Pending::Check { value, remaining } => match result {
                 OperationResult::Complete {
                     value: Value::Bool(true),

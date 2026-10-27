@@ -1,0 +1,16 @@
+// rule: CAP-3
+// expect: reject
+// twin: CPU/CAP-3-cpu-closed-callback-ok.hir
+pub fn batch(tasks: Tasks, width: u32) -> Result[List[u64], CpuPoolError] {
+  core@1/cpu.map_scoped(
+    tasks,
+    width,
+    fn() -> List[u64] uses {} {
+      let _ = tasks
+      [3, 7]
+    },
+    fn(take job: u64) -> u64 uses {} {
+      job * 2
+    }
+  )
+}

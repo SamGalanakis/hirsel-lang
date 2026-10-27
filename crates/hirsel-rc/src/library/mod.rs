@@ -17,6 +17,7 @@ pub mod bytes;
 pub mod channels;
 pub mod codec;
 pub mod collection;
+pub mod cpu;
 pub mod failure;
 pub mod isolate;
 pub mod iter;
@@ -152,6 +153,8 @@ pub const BODIES: &[&LibraryBody] = &[
     &tasks::AWAIT,
     &tasks::AWAIT_AT,
     &tasks::MAIN,
+    &cpu::WORKER,
+    &cpu::MAP,
     &tasks::CHECK_CANCELED,
     // mapped (fs-watch-mmap): mapped.with over its view and check entries.
     &mapped::WITH,
@@ -278,7 +281,7 @@ pub fn inline_lowering(path: &DefPath) -> Option<&'static InlineLowering> {
 
 /// Bumped by any change to a body's generated code, so every artifact keyed
 /// by an instance of it is invalidated.
-pub const REVISION: u32 = 35;
+pub const REVISION: u32 = 36;
 
 /// The implementation revision of the library body at `path`.
 pub fn revision(path: &DefPath) -> ContentHash {

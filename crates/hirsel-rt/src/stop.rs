@@ -643,12 +643,16 @@ pub(crate) unsafe fn start_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> S
 }
 
 /// Install the same run-owned frame for synchronous and polled launchers.
-unsafe fn prepare_root(ctx: *mut TaskCtx, frame: Box<LaunchFrame>) -> (*mut LaunchFrame, *mut u8) {
+unsafe fn prepare_root(
+    ctx: *mut TaskCtx,
+    mut frame: Box<LaunchFrame>,
+) -> (*mut LaunchFrame, *mut u8) {
     unsafe {
         let run = (*ctx).run_ptr();
         if !(*(*run).driver.get()).sp.is_null() || (*(*run).launch.get()).is_some() {
             crate::fault("a run context driven twice");
         }
+        frame.stack.account((*run).cpu_ledger.as_ref());
         let frame: *mut LaunchFrame = &raw mut **(*(*run).launch.get()).insert(frame);
         let sp = (*frame).stack.prepare(root_entry, ctx.cast(), frame.cast());
         (frame, sp)
