@@ -339,6 +339,7 @@ fn admitted_lower_depth_matches_scalar_after_warm_constant_dependencies() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path,"const A:u8=comptime 1u8;\nconst B:u8=comptime A;\nconst C:u8=comptime B;\npub fn main()->u8{C}\n").unwrap();
+        crate::image_fixture::core_manifest(&path, &directory.path().join("main.hir.json"));
         for jobs in [1, 2] {
             for limit in [0, 1, 2, 3, 4] {
                 for warm in [false, true] {

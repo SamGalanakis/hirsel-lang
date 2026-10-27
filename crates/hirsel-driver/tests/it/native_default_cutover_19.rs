@@ -8,6 +8,7 @@ fn public_native_build_produces_runnable_outputs_on_both_backends() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.hir");
         std::fs::write(&source, "fn helper(x:u64)->u64{x+1u64}\npub fn main()->Result[(),u64]{if helper(7u64)==8u64 {Ok(())} else {Error(9u64)}}").unwrap();
+        crate::image_fixture::core_manifest(&source, &directory.path().join("main.hir.json"));
         for backend in [Backend::Cranelift, Backend::Llvm] {
             let output = directory.path().join(backend.name());
             let built = native::build_path_native_backend_with_validation(
@@ -41,6 +42,7 @@ fn public_native_run_binds_and_launches_on_both_backends() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.hir");
         std::fs::write(&source, "fn helper(x:u64)->u64{x+1u64}\npub fn main()->Result[(),u64]{if helper(7u64)==8u64 {Ok(())} else {Error(9u64)}}").unwrap();
+        crate::image_fixture::core_manifest(&source, &directory.path().join("main.hir.json"));
         let started = std::time::Instant::now();
         for backend in [Backend::Cranelift, Backend::Llvm] {
             let _ = std::io::Write::write_fmt(
@@ -83,6 +85,7 @@ fn public_record_replay(backend: Backend) {
         let tape = directory.path().join("recording");
         let text = "pub fn main(rt:Io,args:Args)->Result[(),GrantError]{let _=out.print(io.stdout(rt)?,\"cutover replay\\n\");Ok(())}";
         std::fs::write(&source, text).unwrap();
+        crate::image_fixture::core_manifest(&source, &directory.path().join("main.hir.json"));
         let run = |launch| {
             let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
             let outcome = native::run_path_native_backend_with_validation(

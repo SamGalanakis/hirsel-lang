@@ -46,7 +46,10 @@ fn run_sealed_program(name: &str) {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/MEM")
             .join(name);
-        let mut program = load_program(&path).unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let manifest = fixture.path().join("hirsel.json");
+        crate::image_fixture::core_manifest(&path, &manifest);
+        let mut program = load_program(&manifest).unwrap();
         program.check_for_execution().unwrap();
         let run = RunConfiguration {
             entry: program.entry.clone(),
@@ -114,7 +117,10 @@ fn sealed_heap_107_snapshot_keeps_verifier_outputs_without_an_ordinary_store() {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/MEM/MEM-4-sealed-heap-run.hir");
-        let mut program = load_program(&path).unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let manifest = fixture.path().join("hirsel.json");
+        crate::image_fixture::core_manifest(&path, &manifest);
+        let mut program = load_program(&manifest).unwrap();
         program.check_for_execution().unwrap();
         let input = program.engine.export_native_input().unwrap();
         let validated = program.engine.import_native_input(input).unwrap();
@@ -141,7 +147,10 @@ fn sealed_heap_107_original_graph_names_its_seal_and_capture_free_callbacks() {
         };
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../conformance/MEM/MEM-4-sealed-heap-run.hir");
-        let mut program = load_program(&path).unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        let manifest = fixture.path().join("hirsel.json");
+        crate::image_fixture::core_manifest(&path, &manifest);
+        let mut program = load_program(&manifest).unwrap();
         program.check_for_execution().unwrap();
         let input = program.engine.export_native_input().unwrap();
         let validated = program.engine.import_native_input(input).unwrap();

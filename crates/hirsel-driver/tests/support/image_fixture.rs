@@ -93,3 +93,16 @@ pub fn std_products() -> PathBuf {
         .map(PathBuf::from)
         .expect("the harness supplies ordinary std products")
 }
+
+/// Select only the source's core declarations for fixtures that use no std API.
+#[allow(dead_code)]
+pub fn core_manifest(source: &Path, manifest: &Path) {
+    let package = serde_json::json!({
+        "schema": 1,
+        "package": {"name": "standalone", "version": "0"},
+        "sources": [{"path": source.canonicalize().unwrap(), "module": []}],
+        "dependencies": [],
+        "entry": {"module": [], "name": "main"},
+    });
+    std::fs::write(manifest, package.to_string()).unwrap();
+}

@@ -78,6 +78,7 @@ fn shipped_links_are_identical_on_repeat_and_under_concurrent_builds_on_both_tar
     std::fs::create_dir_all(&root).unwrap();
     let source = root.join("main.hir");
     std::fs::write(&source, PROGRAM).unwrap();
+    crate::image_fixture::core_manifest(&source, &root.join("main.hir.json"));
     for target in [
         TargetSpec::x86_64_unknown_linux_gnu(),
         TargetSpec::aarch64_unknown_linux_gnu(),
