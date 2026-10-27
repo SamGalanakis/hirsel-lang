@@ -7,7 +7,7 @@ use hirsel_lir::sealed_payload_source::*;
 use hirsel_syntax::{ContentHash, DefPath};
 use hirsel_tir::{DefinitionRef, InstructionKind, Rvalue, Terminator};
 use hirsel_types::{TypeId, TypeInterner};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod entry;
 pub use entry::{SourceCallableEntry, SourceCapture, SourceEntryKind, SourceParameter};
@@ -115,7 +115,7 @@ impl SourceInput {
         parameters: &[u32],
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
     ) -> Result<SourceExpectation, SourceError> {
-        self.derive_body(key, types, parameters, substitute, false)
+        self.derive_body(key, types, parameters, substitute, false, &BTreeSet::new())
     }
 
     /// Use the current source graph's complete declaration-backed expansion.
@@ -160,12 +160,26 @@ impl SourceInput {
                 ));
             }
         }
+        let unneeded_closures = current
+            .projection()
+            .closures()
+            .iter()
+            .filter(|(_, closures)| {
+                closures.iter().all(|closure| {
+                    let required = request.declaration().requirements();
+                    !required.payload_locals.contains(&closure.result)
+                        && !required.inventory_locals.contains(&closure.result)
+                })
+            })
+            .map(|(&value, _)| value)
+            .collect();
         self.derive_body(
             request.aware_key().unwrap_or(base),
             types,
             parameters,
             substitute,
             true,
+            &unneeded_closures,
         )
     }
 
@@ -176,6 +190,7 @@ impl SourceInput {
         parameters: &[u32],
         substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
         expanded_calls: bool,
+        unneeded_closures: &BTreeSet<u32>,
     ) -> Result<SourceExpectation, SourceError> {
         let body = self.demand_body(key)?;
         for block in &body.blocks {
@@ -194,9 +209,11 @@ impl SourceInput {
                 ));
             }
         }
-        if body.rvalues.iter().any(|r| {
-            matches!(r, Rvalue::Closure { captures, .. }
-            if !expanded_calls || !captures.is_empty())
+        if body.rvalues.iter().enumerate().any(|(value, r)| {
+            matches!(r, Rvalue::Closure { captures, destination, .. }
+            if !expanded_calls || (!captures.is_empty()
+                && !(unneeded_closures.contains(&(value as u32))
+                    && matches!(destination, hirsel_types::Destination::Heap | hirsel_types::Destination::Inferred))))
         }) {
             return Err(SourceError::Unsupported(
                 "source witness needs closed held code instances",
@@ -214,7 +231,8 @@ impl SourceInput {
             substitute,
         )?;
         if expanded_calls {
-            // Capture-free callback code has no language allocation or held payload.
+            // Empty code and heap environments outside the complete original
+            // seal demand contribute no retained arena or root payload.
             payloads.retain(|payload| !matches!(payload.root_type, NativeType::Function(_)));
         }
         let mut events = Vec::new();
@@ -485,5 +503,82 @@ impl<D: OperationDeclarations> OperationDeclarations for SourceDeclarations<D> {
         target: &hirsel_lir::TargetSpec,
     ) -> Result<(hirsel_lir::FnAbi, hirsel_lir::LayoutTable), hirsel_lir::layout::LayoutError> {
         self.registry.derive(operation, arguments, target)
+    }
+}
+
+#[cfg(test)]
+mod nonpayload_closure_tests {
+    use super::*;
+    use crate::sealed_source::tests::{assign, body, operand, witness_definition, witness_key};
+    use hirsel_types::*;
+    #[test]
+    fn only_source_unneeded_heap_environments_can_be_omitted() {
+        let types = TypeInterner::new(None);
+        let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+        let callable = types.intern(Type::with_kind(TypeKind::Function(FunctionType {
+            state_promises: Default::default(),
+            generics: Default::default(),
+            parameters: Default::default(),
+            result: scalar,
+            error: None,
+            allocation: Allocation::NoAlloc,
+            authority: AuthoritySummary::inert(),
+            uses: Uses::Only(AuthoritySummary::inert()),
+            contracts: Default::default(),
+            incomplete: false,
+            foreign: None,
+        })));
+        for arena in [false, true] {
+            let mut original = body(&[scalar, callable], 1);
+            assign(
+                &mut original,
+                1,
+                hirsel_tir::Rvalue::Closure {
+                    body: hirsel_tir::BodyId(1),
+                    captures: vec![operand(0)],
+                    context: CaptureContext::Scoped,
+                    destination: if arena {
+                        Destination::Arena(Origin {
+                            root: OriginRoot::Parameter(ParameterRef::bound(ParamId(0))),
+                            fields: Default::default(),
+                        })
+                    } else {
+                        Destination::Heap
+                    },
+                },
+            );
+            let definition = witness_definition(original);
+            let key = witness_key(&types, &definition);
+            let source =
+                SourceInput::capture(ContentHash([1; 32]), ContentHash([2; 32]), definition);
+            let omitted = source.derive_body(&key, &types, &[0], Ok, true, &BTreeSet::from([0]));
+            if arena {
+                assert_eq!(
+                    omitted.err(),
+                    Some(SourceError::Unsupported(
+                        "source witness needs closed held code instances"
+                    ))
+                );
+            } else {
+                let accepted = omitted.unwrap();
+                assert!(accepted.payloads().is_empty());
+                assert!(accepted.events().is_empty());
+                accepted.source().check().unwrap();
+            }
+            assert_eq!(
+                source
+                    .derive_body(&key, &types, &[0], Ok, true, &BTreeSet::new())
+                    .err(),
+                Some(SourceError::Unsupported(
+                    "source witness needs closed held code instances"
+                ))
+            );
+            assert_eq!(
+                source.derive(&key, &types, &[0], Ok).err(),
+                Some(SourceError::Unsupported(
+                    "source witness needs closed held code instances"
+                ))
+            );
+        }
     }
 }

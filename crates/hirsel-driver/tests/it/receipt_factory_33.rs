@@ -1147,6 +1147,37 @@ fn source_factory_expands_the_sealed_task_program_from_original_source() {
                     &(),
                 )
                 .unwrap();
+            for (context, request) in graph.contexts.iter().zip(&graph.requests) {
+                if request.aware_key().is_none() {
+                    continue;
+                }
+                let original = front.original(request.ordinary_key().definition()).unwrap();
+                let source = hirsel_rc::sealed_source::SourceInput::capture(
+                    original.output().unwrap().observation_identity(),
+                    original.implementation_revision(),
+                    original.definition().clone(),
+                );
+                let parameters = request
+                    .declaration()
+                    .entry()
+                    .parameters()
+                    .iter()
+                    .map(|p| p.ordinal)
+                    .collect::<Vec<_>>();
+                let expected = source
+                    .derive_request(request, front.types(), &parameters, |ty| {
+                        hirsel_rc::instance::substitute(
+                            front.types(),
+                            &hirsel_types::TypeMemo::new(),
+                            ty,
+                            &context.input.actuals,
+                            true,
+                        )
+                        .map_err(|error| SourceError::Type(format!("{error:?}")))
+                    })
+                    .unwrap();
+                expected.source().check().unwrap();
+            }
         }
     });
 }

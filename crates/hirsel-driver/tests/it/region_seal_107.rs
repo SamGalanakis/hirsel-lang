@@ -21,6 +21,11 @@ fn sealed_arena_root_117_runs_on_four_engines_and_replays() {
     run_sealed_program("MEM-4-sealed-arena-root-run.hir");
 }
 
+#[test]
+fn sealed_task_unique_list_122_runs_on_four_engines_and_replays() {
+    run_sealed_program("MEM-4-sealed-task-unique-list-run.hir");
+}
+
 fn run_sealed_program(name: &str) {
     with_compiler_stack(|| {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -43,6 +48,7 @@ fn run_sealed_program(name: &str) {
             native::Observation::of_reference(reference.observation.as_ref().unwrap());
         assert_eq!(observation.exit_code, Some(0));
         assert!(observation.failures.is_empty());
+        eprintln!("{name}: reference PASS");
         let mut matrix = native::trace_roots_matrix();
         matrix.push(native::Configuration {
             options: native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
@@ -79,6 +85,7 @@ fn run_sealed_program(name: &str) {
             Default::default(),
             &native::Fixture::default(),
         );
+        eprintln!("{name}: replay: {replay:?}");
         assert!(failures.is_empty(), "{failures:#?}; replay: {replay:?}");
         assert!(
             matches!(replay, native::Outcome::Agree),
