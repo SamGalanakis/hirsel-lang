@@ -202,3 +202,68 @@ fn admitted_source_storage_root_matches_scalar_and_rejects_root_escape() {
         }
     });
 }
+
+#[test]
+fn native_source_requests_complete_storage_and_preserve_root_escape_rejection() {
+    with_compiler_stack(|| {
+        for (source, reject) in [
+            (
+                "fn identity(x:u64)->u64{x}\npub fn main(mut r:Region[u64]){let n=region.with(mut r,identity)}\n",
+                false,
+            ),
+            (
+                "fn identity(root:List[u64])->unique List[u64]{unique root}\npub fn main(mut r:Region[List[u64]]){let escaped=region.with(mut r,identity)}\n",
+                true,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let manifest = directory.path().join("hirsel.json");
+            std::fs::write(directory.path().join("main.hir"), source).unwrap();
+            std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"storage","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+            for jobs in [1, 2] {
+                let config = CompileConfig {
+                    store: Arc::new(MemStore::default()),
+                    jobs: hirsel_intern::jobs::Jobs::new(jobs),
+                    hold_bytes: 0,
+                    ..Default::default()
+                };
+                let compiler = COMPILER.with_config(config.clone());
+                let program = compiler.load_program(&manifest).unwrap();
+                let root = program.entry.clone();
+                drop(program);
+                let mut requests = requests::CompilerRequests::for_host(compiler, config);
+                let result = requests.execute(
+                    &manifest,
+                    requests::CompileOperation::NativeSources {
+                        roots: vec![root.clone()],
+                    },
+                );
+                if reject {
+                    let Err(ToolError::Query {
+                        error: QueryError::Diagnostics(diagnostics),
+                        ..
+                    }) = result
+                    else {
+                        panic!("expected source storage rejection at jobs={jobs}");
+                    };
+                    assert!(
+                        diagnostics
+                            .iter()
+                            .any(|diagnostic| diagnostic.rule.as_str() == "MODE-1")
+                    );
+                } else {
+                    let output = result.unwrap();
+                    let requests::CompileResult::NativeSources(facts) = &output.result else {
+                        panic!("expected completed original source products");
+                    };
+                    assert!(
+                        facts
+                            .originals
+                            .iter()
+                            .any(|product| product.definition == root)
+                    );
+                }
+            }
+        }
+    });
+}
