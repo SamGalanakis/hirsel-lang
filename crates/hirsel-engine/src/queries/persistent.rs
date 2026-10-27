@@ -1308,7 +1308,10 @@ impl QueryEngine {
             &*snapshot,
         )
     }
-    pub(super) fn decode_record<T: serde::de::DeserializeOwned + Serialize>(&self, bytes: &[u8]) -> Option<T> {
+    pub(super) fn decode_record<T: serde::de::DeserializeOwned + Serialize>(
+        &self,
+        bytes: &[u8],
+    ) -> Option<T> {
         let records = self.type_records()?;
         let record: T = records.decode_record(bytes, |path, occurrence| {
             self.record_anchor(path, occurrence)

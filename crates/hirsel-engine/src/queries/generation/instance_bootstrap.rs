@@ -241,7 +241,9 @@ impl QueryEngine {
         // Same finite selection walk bound as discover_front_instances. Every
         // unfinished iteration must add a canonical instance or missing body.
         for round in 1..=65536 {
-            runtime = self.prepare_private_inference(runtime).map_err(admission_error)?;
+            runtime = self
+                .prepare_private_inference(runtime)
+                .map_err(admission_error)?;
             accepted.clear();
             if !selected.is_empty() {
                 let front = self

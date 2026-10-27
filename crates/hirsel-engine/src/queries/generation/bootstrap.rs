@@ -159,7 +159,9 @@ impl QueryEngine {
             syntax,
             metadata,
         } = admission;
-        let runtime = self.prepare_private_inference(runtime).map_err(Failure::Admission)?;
+        let runtime = self
+            .prepare_private_inference(runtime)
+            .map_err(Failure::Admission)?;
         let front = self
             .front_body_queries(&ordinary, weight, front, errors)
             .map_err(Failure::Admission)?;
