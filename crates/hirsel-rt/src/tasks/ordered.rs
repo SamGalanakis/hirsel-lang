@@ -446,8 +446,8 @@ impl Backend<Command> for Objects<'_> {
                     let mut outcome = Outcome::image(0, word.to_ne_bytes().to_vec());
                     outcome.inheritance = Some(inherited);
                     // A CPU batch publishes all its already claimed children
-                    // before joining them. Their checked scalar prefixes may
-                    // compute while this parent retains the canonical head.
+                    // before joining them. Dispatch starts when the publisher
+                    // yields to the installed batch.
                     (outcome, if preclaimed { Next::Keep } else { Next::Yield })
                 }
                 Command::RootRelease { .. } => unreachable!("handled without a scheduler borrow"),
