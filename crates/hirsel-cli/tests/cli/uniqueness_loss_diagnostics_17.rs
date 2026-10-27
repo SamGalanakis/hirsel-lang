@@ -28,7 +28,10 @@ fn accepts(source: &str) {
         if json {
             command.arg("--json");
         }
-        let output = command.arg(dir.path().join("hirsel.json")).output().unwrap();
+        let output = command
+            .arg(dir.path().join("hirsel.json"))
+            .output()
+            .unwrap();
         assert!(output.status.success(), "{output:?}");
         assert!(
             output.stdout.is_empty() && output.stderr.is_empty(),
