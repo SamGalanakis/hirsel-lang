@@ -29,10 +29,10 @@ fn bodyless_keyed_inventory_survives_cross_open_and_refuses_missing_metadata() {
             assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
             let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
             options.validation = native::Validation::Ready;
-            let (actual, ()) = crate::native_object_products_19::compile_with_context_inspect(
-                &mut engine,
+            let (actual, ()) = crate::native_object_products_19::compile_front(
+                crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
                 store.clone(),
-                &entry_path(&default_context()),
+                &[entry_path(&default_context())],
                 native::Backend::Cranelift,
                 native::OptLevel::None,
                 options,

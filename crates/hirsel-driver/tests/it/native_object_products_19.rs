@@ -199,6 +199,87 @@ pub(super) fn compile_roots_inspect<R>(
             .native_semantic_program(declarations.roots.definitions.clone())
             .unwrap(),
     );
+    compile_settled(
+        declarations,
+        original,
+        engine.signature_snapshot(),
+        semantic,
+        store,
+        source_selection,
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        verification,
+        inspect,
+        use_context,
+    )
+}
+
+pub(super) fn compile_front<R>(
+    facts: Arc<FrontNativeProducts>,
+    store: Arc<dyn ResultStore>,
+    source_selection: &[hirsel_syntax::DefPath],
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
+    inspect: impl FnOnce(
+        &mut queries::roots::RootProducts,
+        &Arc<queries::NativeRootProduct>,
+        &[Arc<queries::ReadyProduct>],
+    ),
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
+    let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
+    let original = facts
+        .original_context
+        .reader(
+            facts.originals.iter().map(|product| (**product).clone()),
+            store.clone(),
+        )
+        .unwrap();
+    compile_settled(
+        declarations,
+        original,
+        facts.signatures.clone(),
+        facts.semantic.clone(),
+        store,
+        source_selection,
+        backend,
+        opt,
+        options,
+        debug,
+        jobs,
+        verification,
+        inspect,
+        use_context,
+    )
+}
+
+fn compile_settled<R>(
+    declarations: NativeDeclarations,
+    original: NativeOriginalReader,
+    signatures: Arc<SignatureSnapshot>,
+    semantic: Arc<NativeSemanticProgram>,
+    store: Arc<dyn ResultStore>,
+    source_selection: &[hirsel_syntax::DefPath],
+    backend: native::Backend,
+    opt: native::OptLevel,
+    options: native::Options,
+    debug: bool,
+    jobs: hirsel_intern::jobs::Jobs,
+    verification: hirsel_engine::store::VerifyStore,
+    inspect: impl FnOnce(
+        &mut queries::roots::RootProducts,
+        &Arc<queries::NativeRootProduct>,
+        &[Arc<queries::ReadyProduct>],
+    ),
+    use_context: impl FnOnce(&native::ReadyProgram, &[hirsel_lir::stage::ObjectArtifact]) -> R,
+) -> (Objects, R) {
     let entries = declarations
         .context
         .sources
@@ -218,7 +299,7 @@ pub(super) fn compile_roots_inspect<R>(
                 declarations: &declarations.sources,
                 entries: &entries,
                 anchors: &declarations.source_anchors,
-                signatures: engine.signature_snapshot(),
+                signatures,
                 semantic,
                 selected: source_selection,
                 callees: None,

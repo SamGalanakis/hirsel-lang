@@ -23,15 +23,20 @@ fn same_source_call_receipt_survives_the_complete_source_inventory() {
         assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
         let input = engine.export_native_input().unwrap();
         let _validated = engine.import_native_input(input).unwrap();
-        let result = crate::native_object_products_19::compile(
-            &mut engine,
+        let result = crate::native_object_products_19::compile_front(
+            crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
             store,
+            &[entry_path(&default_context())],
             native::Backend::Cranelift,
             native::OptLevel::None,
             native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
             false,
             hirsel_intern::jobs::Jobs::ONE,
-        );
+            store::VerifyStore::Off,
+            |_, _, _| (),
+            |_, _| (),
+        )
+        .0;
         assert!(!result.objects.is_empty());
         assert_eq!(result.objects.len(), result.summaries.len());
     });

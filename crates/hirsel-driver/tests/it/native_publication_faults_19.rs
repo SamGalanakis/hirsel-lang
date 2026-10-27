@@ -98,15 +98,20 @@ fn compile(faults: Arc<Faults>, verify: Verify) -> crate::native_object_products
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let mut options = native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
     options.validation = native::Validation::Ready;
-    let result = crate::native_object_products_19::compile(
-        &mut engine,
+    let result = crate::native_object_products_19::compile_front(
+        crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
         store,
+        &[entry_path(&default_context())],
         native::Backend::Cranelift,
         native::OptLevel::None,
         options,
         false,
         hirsel_intern::jobs::Jobs::ONE,
-    );
+        store::VerifyStore::Off,
+        |_, _, _| (),
+        |_, _| (),
+    )
+    .0;
     drop(engine);
     publication.finish().unwrap();
     result

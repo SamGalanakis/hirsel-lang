@@ -38,10 +38,10 @@ fn original_retained_owners_match_at_one_two_eight_under_both_validation_policie
                         let mut options =
                             native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu());
                         options.validation = validation;
-                        let actual = crate::native_object_products_19::compile_with_context(
-                            &mut engine,
+                        let actual = crate::native_object_products_19::compile_front(
+                            crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
                             store,
-                            &entry_path(&default_context()),
+                            &[entry_path(&default_context())],
                             backend,
                             opt,
                             options,
@@ -52,6 +52,7 @@ fn original_retained_owners_match_at_one_two_eight_under_both_validation_policie
                             } else {
                                 VerifyStore::Off
                             },
+                            |_, _, _| (),
                             |_, _| (),
                         )
                         .0;

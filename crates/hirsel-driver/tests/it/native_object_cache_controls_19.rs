@@ -106,16 +106,17 @@ fn compile_source(
         native::Validation::Ready
     };
     before_native();
-    let objects = crate::native_object_products_19::compile_with_context(
-        &mut engine,
+    let objects = crate::native_object_products_19::compile_front(
+        crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
         store,
-        &entry_path(&default_context()),
+        &[entry_path(&default_context())],
         backend,
         native::OptLevel::None,
         options,
         false,
         Jobs::new(jobs),
         verification,
+        |_, _, _| (),
         |_, _| (),
     )
     .0;

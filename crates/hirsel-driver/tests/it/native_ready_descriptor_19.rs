@@ -33,10 +33,10 @@ fn actual_root_rejects_changed_owner_policy_and_c_bound_ready_summary() {
         let input = engine.export_native_input().unwrap();
         let _validated = engine.import_native_input(input).unwrap();
         let main = entry_path(&default_context());
-        crate::native_object_products_19::compile_with_context_inspect(
-            &mut engine,
+        crate::native_object_products_19::compile_front(
+            crate::native_front_fixture::products(&mut engine, &[]).unwrap(),
             store.clone(),
-            &main,
+            &[main.clone()],
             native::Backend::Cranelift,
             native::OptLevel::None,
             native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
