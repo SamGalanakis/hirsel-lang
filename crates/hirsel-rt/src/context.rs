@@ -224,6 +224,8 @@ pub struct TaskCtx {
     pub(crate) ownership_cleanup: *mut crate::ownership_trace::CleanupScope,
     pub(crate) resume_bindings: crate::continuation::binding::Bindings,
     pub(crate) ordered_inop_leave: Option<bool>,
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership_task: u64,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -545,6 +547,8 @@ impl TaskCtx {
             ownership_cleanup: std::ptr::null_mut(),
             resume_bindings: Default::default(),
             ordered_inop_leave: None,
+            #[cfg(feature = "ownership-trace")]
+            ownership_task: 0,
             invocation_sites,
             invocation_depth: 0,
             invocation_tokens,

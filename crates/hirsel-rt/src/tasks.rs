@@ -978,6 +978,18 @@ impl Task {
         path: Vec<u32>,
         canceled: Option<u32>,
     ) -> Task {
+        #[cfg(feature = "ownership-trace")]
+        if !ctx.is_null() {
+            // This context is still exclusively owned at construction. The
+            // diagnostic key stays immutable across execution and compact saves.
+            unsafe {
+                (*ctx).ownership_task = if path.is_empty() {
+                    0
+                } else {
+                    handle((*ctx).task_id, generation)
+                }
+            };
+        }
         Task {
             generation,
             control: None,
@@ -3469,6 +3481,11 @@ unsafe fn spawn_child(
         path.push(parent.spawned);
         parent.spawned += 1;
         let (index, generation) = s.take_task_slot();
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            (*child).task_id = index;
+            crate::ownership_trace::task((*child).run_ref(), handle(index, generation), &path);
+        }
         let mut task = Task::new(generation, child, Some(scope), path, canceled);
         if let Some(owner) = cpu_owner {
             task.owner = owner;

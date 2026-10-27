@@ -507,3 +507,99 @@ fn mutex_kill_leaves_payload_with_the_body_and_last_close_does_not_drop_it_again
     );
     assert_eq!(ctx.stats().live_blocks, 0);
 }
+
+#[cfg(feature = "ownership-trace")]
+unsafe extern "C" fn ownership_child(ctx: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
+    use hirsel_rt::ownership_trace::*;
+    let frame = unsafe { hirsel_rt_v2_ownership_enter(ctx, ABI_VERSION, [7; 32].as_ptr()) };
+    unsafe {
+        hirsel_rt_v2_ownership_event(ctx, frame, 0, 0, 0, 0, 42, 7);
+        yield_now(&mut *ctx);
+        hirsel_rt_v2_ownership_event(ctx, frame, 1, 2, 0, 0, 43, 7);
+        hirsel_rt_v2_ownership_leave(ctx, frame);
+    }
+    let mut slot = [1u64, 7u64];
+    unsafe {
+        hirsel_rt_v2_task_finish(
+            ctx,
+            slot.as_mut_ptr().cast(),
+            NONE.as_ptr().cast(),
+            16,
+            u32::MAX,
+        )
+    }
+}
+#[cfg(feature = "ownership-trace")]
+#[test]
+fn ownership_runtime_child_paths_survive_yields_and_slot_reuse() {
+    use hirsel_run_schema::{
+        Site,
+        ownership_trace::{TaskPath, native::*},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let destination = dir.path().join("tasks.json");
+    let ctx = Ctx::diagnostic();
+    index(ctx.0, environment());
+    unsafe { hirsel_rt::ownership_trace::start(ctx.0, [49; 32], destination.clone(), 100) }
+        .unwrap();
+    let scope = enter(ctx.0);
+    let first = spawn(ctx.0, scope, ownership_child, 0);
+    let second = spawn(ctx.0, scope, ownership_child, 0);
+    assert_eq!(join(ctx.0, scope, first), (0, [1, 7]));
+    assert_eq!(join(ctx.0, scope, second), (0, [1, 7]));
+    let third = spawn(ctx.0, scope, ownership_child, 0);
+    assert!(
+        third as u32 == first as u32 || third as u32 == second as u32,
+        "retired child slot reused"
+    );
+    assert_eq!(join(ctx.0, scope, third), (0, [1, 7]));
+    assert_eq!(exit(ctx.0, scope), 0);
+    drop(ctx);
+    let log: Log = serde_json::from_slice(&std::fs::read(destination).unwrap()).unwrap();
+    let units = std::collections::BTreeMap::from([(
+        [7; 32],
+        (0..2)
+            .map(|id| {
+                (
+                    id,
+                    Metadata {
+                        action: if id == 0 { 0 } else { 2 },
+                        empty_environment: false,
+                        callee: None,
+                        cleanup: None,
+                        cleanup_paths: Default::default(),
+                        additional_drops: vec![],
+                        token: 0,
+                        owner: 0,
+                        token_path: None,
+                        owner_path: None,
+                        site: 42 + u64::from(id),
+                        layout: 7,
+                        source: Site {
+                            definition: "runtime-child".into(),
+                            file: "tasks.rs".into(),
+                            line: 1,
+                            column: 1,
+                        },
+                        value_type: "Token".into(),
+                    },
+                )
+            })
+            .collect(),
+    )]);
+    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (3, 3, 0)
+    );
+    let paths = trace
+        .events
+        .iter()
+        .map(|e| e.task.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        paths,
+        [TaskPath(vec![0]), TaskPath(vec![1]), TaskPath(vec![2])].into()
+    );
+}

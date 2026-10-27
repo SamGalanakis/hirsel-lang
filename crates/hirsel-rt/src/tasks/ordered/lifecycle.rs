@@ -57,6 +57,10 @@ impl Spawn {
             s.tasks[self.index as usize].is_none(),
             "a reserved task row"
         );
+        #[cfg(feature = "ownership-trace")]
+        unsafe {
+            crate::ownership_trace::task(&*self.run, word, &task.path)
+        };
         s.tasks[self.index as usize] = Some(task);
         s.scope(scope).children.push(self.index);
         s.link_child(parent, self.index);

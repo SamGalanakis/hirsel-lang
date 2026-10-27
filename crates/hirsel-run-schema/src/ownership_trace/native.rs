@@ -1,25 +1,37 @@
 //! Bounded native hook rows, decoded after issuers are quiescent. Source
 //! metadata comes from the compiler's checked plan, independently of the log.
-//! This adapter currently refuses nonroot tasks and nonlocal storage.
+//! Task registrations bind reused scheduler slots to canonical task paths.
+//! Nonlocal ownership transport still requires a checked compiler relation.
 use super::{Context, Diagnostic, Owner, Storage, TaskPath, Trace, Tracker};
 use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 6;
+pub const VERSION: u32 = 7;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Row {
+    /// Runtime-owned canonical identity, published before this task can run.
+    Task {
+        task: u64,
+        depth: u32,
+    },
+    /// One canonical child ordinal; rows can interleave across registrations.
+    TaskPart {
+        task: u64,
+        index: u32,
+        ordinal: u32,
+    },
     Enter {
-        task: u32,
+        task: u64,
         frame: u64,
         unit: [u8; 32],
     },
     Event {
-        task: u32,
+        task: u64,
         frame: u64,
         marker: u32,
         action: u32,
@@ -30,7 +42,7 @@ pub enum Row {
     },
     /// Internal checked environment relation, never an ownership event.
     Alias {
-        task: u32,
+        task: u64,
         frame: u64,
         marker: u32,
         view: u64,
@@ -39,24 +51,24 @@ pub enum Row {
         layout: u32,
     },
     CleanupBegin {
-        task: u32,
+        task: u64,
         frame: u64,
         marker: u32,
     },
     CleanupDrop {
-        task: u32,
+        task: u64,
         frame: u64,
         marker: u32,
         field: u32,
         layout: u32,
     },
     CleanupEnd {
-        task: u32,
+        task: u64,
         frame: u64,
         marker: u32,
     },
     Leave {
-        task: u32,
+        task: u64,
         frame: u64,
     },
 }
@@ -118,7 +130,8 @@ pub type LocalCalls = BTreeMap<[u8; 32], BTreeSet<[u8; 32]>>;
 pub enum Error {
     Binding,
     Incomplete,
-    UnsupportedTask(u32),
+    UnsupportedTask(u64),
+    InvalidTask(u64),
     InvalidFrame(u64),
     UnknownUnit([u8; 32]),
     InvalidMarker(u32),
@@ -137,6 +150,7 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 fn projected_owner(
+    task: &TaskPath,
     frame: u64,
     parent: Option<u64>,
     environment: Option<&Owner>,
@@ -147,13 +161,13 @@ fn projected_owner(
         if path.is_some() {
             return Err(Error::InvalidLocation(location));
         }
-        return owner(frame, parent, environment, location);
+        return owner(task, frame, parent, environment, location);
     }
     let path = path.ok_or(Error::InvalidLocation(location))?;
     if path.fields.is_empty() || !matches!(path.root >> 32, 1 | 6) {
         return Err(Error::InvalidLocation(location));
     }
-    let mut at = owner(frame, parent, environment, path.root)?;
+    let mut at = owner(task, frame, parent, environment, path.root)?;
     at.path.extend(
         path.fields
             .iter()
@@ -163,6 +177,7 @@ fn projected_owner(
 }
 
 fn owner(
+    task: &TaskPath,
     frame: u64,
     parent: Option<u64>,
     environment: Option<&Owner>,
@@ -170,7 +185,7 @@ fn owner(
 ) -> Result<Owner, Error> {
     if location >> 32 == u64::from(u32::MAX) {
         return Ok(Owner {
-            task: Some(TaskPath::default()),
+            task: Some(task.clone()),
             storage: Storage::Object {
                 name: "native.parallel".into(),
                 id: frame,
@@ -191,7 +206,13 @@ fn owner(
         return Ok(owner);
     }
     if location >> 32 >= 8 {
-        let mut owner = owner(frame, parent, environment, location & u64::from(u32::MAX))?;
+        let mut owner = owner(
+            task,
+            frame,
+            parent,
+            environment,
+            location & u64::from(u32::MAX),
+        )?;
         owner.path.push(super::Projection::Field {
             field: (location >> 32) as u32 - 8,
         });
@@ -219,7 +240,7 @@ fn owner(
         _ => return Err(Error::InvalidLocation(location)),
     };
     Ok(Owner {
-        task: Some(TaskPath::default()),
+        task: Some(task.clone()),
         storage,
         path: vec![],
     })
@@ -296,10 +317,85 @@ fn decode(
         pending: Option<(Owner, [u8; 32])>,
         cleanup: Option<(u32, Owner, Vec<(u32, u32, Owner)>)>,
     }
-    let mut frames: Vec<Frame> = Vec::new();
+    struct TaskIdentity {
+        depth: u32,
+        path: TaskPath,
+    }
+    let mut tasks = BTreeMap::from([(
+        0,
+        TaskIdentity {
+            depth: 0,
+            path: TaskPath::default(),
+        },
+    )]);
+    let mut slots = BTreeMap::<u32, u64>::new();
+    let mut paths = BTreeSet::from([TaskPath::default()]);
+    let mut stacks: BTreeMap<u64, Vec<Frame>> = BTreeMap::new();
     let mut entered = BTreeSet::new();
     let mut tracker = Tracker::new(limit);
     for &row in &log.rows {
+        match row {
+            Row::Task { task, depth } => {
+                let slot = task as u32;
+                let generation = task >> 32;
+                if slot == 0
+                    || generation == 0
+                    || depth == 0
+                    || depth as usize > limit
+                    || tasks.contains_key(&task)
+                {
+                    return Err(Error::InvalidTask(task));
+                }
+                if let Some(&old_key) = slots.get(&slot) {
+                    let old = &tasks[&old_key];
+                    if generation <= old_key >> 32
+                        || old.path.0.len() != old.depth as usize
+                        || stacks
+                            .get(&old_key)
+                            .is_some_and(|frames| !frames.is_empty())
+                        || tracker
+                            .inventory()
+                            .owners
+                            .keys()
+                            .any(|owner| owner.task.as_ref() == Some(&old.path))
+                    {
+                        return Err(Error::InvalidTask(task));
+                    }
+                }
+                slots.insert(slot, task);
+                tasks.insert(
+                    task,
+                    TaskIdentity {
+                        depth,
+                        path: TaskPath::default(),
+                    },
+                );
+                continue;
+            }
+            Row::TaskPart {
+                task,
+                index,
+                ordinal,
+            } => {
+                let identity = tasks.get_mut(&task).ok_or(Error::InvalidTask(task))?;
+                if task == 0
+                    || slots.get(&(task as u32)) != Some(&task)
+                    || index != identity.path.0.len() as u32
+                    || index >= identity.depth
+                {
+                    return Err(Error::InvalidTask(task));
+                }
+                identity.path.0.push(ordinal);
+                if identity.path.0.len() == identity.depth as usize {
+                    let parent = TaskPath(identity.path.0[..identity.path.0.len() - 1].to_vec());
+                    if !paths.contains(&parent) || !paths.insert(identity.path.clone()) {
+                        return Err(Error::InvalidTask(task));
+                    }
+                }
+                continue;
+            }
+            _ => (),
+        }
         let task = match row {
             Row::Enter { task, .. }
             | Row::Event { task, .. }
@@ -308,11 +404,19 @@ fn decode(
             | Row::CleanupDrop { task, .. }
             | Row::CleanupEnd { task, .. }
             | Row::Leave { task, .. } => task,
+            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
         };
-        if task != 0 {
-            return Err(Error::UnsupportedTask(task));
+        let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
+        if task != 0 && slots.get(&(task as u32)) != Some(&task) {
+            return Err(Error::InvalidTask(task));
         }
+        if identity.path.0.len() != identity.depth as usize {
+            return Err(Error::InvalidTask(task));
+        }
+        let frames = stacks.entry(task).or_default();
+        let task = &identity.path;
         match row {
+            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
             Row::Enter { frame, unit, .. } => {
                 if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));
@@ -380,6 +484,7 @@ fn decode(
                     .ok_or(Error::InvalidMarker(marker))?;
                 let parent = None; // cleanup holders are local SSA/slots or checked captures
                 let root = projected_owner(
+                    task,
                     frame,
                     parent,
                     current.environment.as_ref(),
@@ -432,7 +537,7 @@ fn decode(
                 let (_, _, at) = fields.remove(0);
                 let source = &units[&current.unit][&marker].source;
                 let context = Context {
-                    task: TaskPath::default(),
+                    task: task.clone(),
                     operation: 0,
                     site: source.clone(),
                 };
@@ -497,6 +602,7 @@ fn decode(
                 }
                 current.pending = Some((
                     projected_owner(
+                        task,
                         frame,
                         parent,
                         current.environment.as_ref(),
@@ -571,6 +677,7 @@ fn decode(
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
                 let from = projected_owner(
+                    task,
                     frame,
                     parent,
                     current.environment.as_ref(),
@@ -578,6 +685,7 @@ fn decode(
                     token_path,
                 )?;
                 let to = projected_owner(
+                    task,
                     frame,
                     parent,
                     current.environment.as_ref(),
@@ -585,7 +693,7 @@ fn decode(
                     owner_path,
                 )?;
                 let context = Context {
-                    task: TaskPath::default(),
+                    task: task.clone(),
                     operation: 0,
                     site: expected.source.clone(),
                 };
@@ -634,7 +742,12 @@ fn decode(
             }
         }
     }
-    if !frames.is_empty() || entered.is_empty() {
+    if stacks.values().any(|frames| !frames.is_empty())
+        || entered.is_empty()
+        || tasks
+            .values()
+            .any(|task| task.path.0.len() != task.depth as usize)
+    {
         return Err(Error::Incomplete);
     }
     tracker.finish(program, true).map_err(Error::Consistency)

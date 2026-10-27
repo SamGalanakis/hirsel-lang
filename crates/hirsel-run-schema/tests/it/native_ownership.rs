@@ -315,6 +315,7 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::CleanupBegin { frame, .. }
             | Row::CleanupDrop { frame, .. }
             | Row::CleanupEnd { frame, .. } => *frame = 2,
+            Row::Task { .. } | Row::TaskPart { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);
@@ -1326,4 +1327,180 @@ fn native_parallel_cycles_and_chains_preserve_equal_resource_identities() {
             Error::Binding
         );
     }
+}
+
+fn task_rows(task: u32, generation: u32, ordinal: u32, frame: u64) -> Vec<Row> {
+    let task = (u64::from(generation) << 32) | u64::from(task);
+    let (log, _) = fixture();
+    let mut rows = vec![
+        Row::Task { task, depth: 1 },
+        Row::TaskPart {
+            task,
+            index: 0,
+            ordinal,
+        },
+    ];
+    for row in log.rows {
+        rows.push(match row {
+            Row::Enter { unit, .. } => Row::Enter { task, frame, unit },
+            Row::Event {
+                marker,
+                action,
+                token,
+                owner,
+                site,
+                layout,
+                ..
+            } => Row::Event {
+                task,
+                frame,
+                marker,
+                action,
+                token,
+                owner,
+                site,
+                layout,
+            },
+            Row::Leave { .. } => Row::Leave { task, frame },
+            _ => unreachable!(),
+        });
+    }
+    rows
+}
+#[test]
+fn native_task_paths_keep_interleaved_equal_values_and_reused_slots_distinct() {
+    use hirsel_run_schema::ownership_trace::TaskPath;
+    let (mut log, units) = fixture();
+    let first = task_rows(1, 1, 0, 2);
+    let second = task_rows(2, 1, 1, 3);
+    log.rows = first
+        .into_iter()
+        .zip(second)
+        .flat_map(|(a, b)| [a, b])
+        .collect();
+    log.rows.extend(task_rows(1, 2, 2, 4));
+    log.row_count = log.rows.len() as u64;
+    let trace = decode_leaf(&log, [49; 32], &units, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (6, 6, 0)
+    );
+    let tasks = trace
+        .events
+        .iter()
+        .map(|e| e.task.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        tasks,
+        [TaskPath(vec![0]), TaskPath(vec![1]), TaskPath(vec![2])].into()
+    );
+    let tokens = trace
+        .events
+        .iter()
+        .filter_map(|e| {
+            if let Action::Create { token, .. } = &e.action {
+                Some(token)
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(tokens.len(), 6);
+}
+#[test]
+fn native_task_identity_refuses_incomplete_reused_live_duplicate_and_forged_paths() {
+    let (mut log, units) = fixture();
+    for mutation in 0..6 {
+        let mut rows = task_rows(1, 1, 0, 2);
+        match mutation {
+            0 => {
+                rows.remove(1);
+            }
+            1 => {
+                rows.extend(task_rows(1, 1, 1, 3));
+            }
+            2 => {
+                rows.insert(
+                    3,
+                    Row::Task {
+                        task: (2 << 32) | 1,
+                        depth: 1,
+                    },
+                );
+            }
+            3 => {
+                rows.extend(task_rows(2, 1, 0, 3));
+            }
+            4 => {
+                rows[0] = Row::Task {
+                    task: (1 << 32) | 1,
+                    depth: 2,
+                };
+                rows.insert(
+                    2,
+                    Row::TaskPart {
+                        task: (1 << 32) | 1,
+                        index: 1,
+                        ordinal: 0,
+                    },
+                );
+                rows[1] = Row::TaskPart {
+                    task: (1 << 32) | 1,
+                    index: 0,
+                    ordinal: 99,
+                };
+            }
+            5 => {
+                rows[1] = Row::TaskPart {
+                    task: (2 << 32) | 1,
+                    index: 0,
+                    ordinal: 0,
+                };
+            }
+            _ => unreachable!(),
+        }
+        log.rows = rows;
+        log.row_count = log.rows.len() as u64;
+        assert!(
+            matches!(
+                decode_leaf(&log, [49; 32], &units, 100),
+                Err(Error::InvalidTask(_))
+            ),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn native_task_missing_rebind_and_stale_generation_never_relabel_owners() {
+    let (mut log, units) = fixture();
+    let first = task_rows(1, 1, 0, 2);
+    let second = task_rows(1, 2, 1, 3);
+    log.rows = first.clone();
+    log.rows.extend_from_slice(&second[2..]);
+    log.row_count = log.rows.len() as u64;
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+        Error::UnsupportedTask((2 << 32) | 1)
+    );
+    log.rows = first.clone();
+    log.rows.extend_from_slice(&second[..2]);
+    log.rows.push(first[3]);
+    log.rows.extend_from_slice(&second[2..]);
+    log.row_count = log.rows.len() as u64;
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidTask((1 << 32) | 1)
+    );
+    log.rows = first
+        .into_iter()
+        .filter(|row| !matches!(row, Row::Event { marker: 5, .. }))
+        .collect();
+    log.rows.extend(second);
+    log.row_count = log.rows.len() as u64;
+    assert_eq!(
+        decode_leaf(&log, [49; 32], &units, 100).unwrap_err(),
+        Error::InvalidTask((2 << 32) | 1)
+    );
 }

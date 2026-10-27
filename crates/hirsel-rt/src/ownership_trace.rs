@@ -9,7 +9,7 @@ use hirsel_run_schema::ownership_trace::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-pub const ABI_VERSION: u32 = 85;
+pub const ABI_VERSION: u32 = 86;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
 
@@ -35,7 +35,7 @@ impl Observer {
             rows: Buffer::new(
                 limit,
                 Row::Leave {
-                    task: u32::MAX,
+                    task: u64::MAX,
                     frame: 0,
                 },
             ),
@@ -117,6 +117,27 @@ unsafe fn observer(ctx: *mut TaskCtx) -> Option<*const Observer> {
     }
 }
 
+/// Register a runtime-created canonical identity before its first observed
+/// frame. The run owner is independent of a task's possibly saved context.
+/// Each row is copied into the admitted buffer without scheduler calls.
+pub(crate) fn task(run: &crate::context::RunShared, task: u64, path: &[u32]) {
+    let Some(observer) = run.ownership_trace.as_ref() else {
+        return;
+    };
+    let Ok(depth) = u32::try_from(path.len()) else {
+        observer.failed.store(true, Ordering::Relaxed);
+        return;
+    };
+    observer.record(Row::Task { task, depth });
+    for (index, &ordinal) in path.iter().enumerate() {
+        observer.record(Row::TaskPart {
+            task,
+            index: index as u32,
+            ordinal,
+        });
+    }
+}
+
 /// Allocate a diagnostic frame id, used only by other ownership hooks.
 /// # Safety
 /// ctx is current; unit names 32 immutable bytes of the checked emitted unit.
@@ -145,7 +166,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_enter(
         .try_into()
         .expect("32 bytes");
     observer.record(Row::Enter {
-        task: unsafe { (*ctx).task_id },
+        task: unsafe { (*ctx).ownership_task },
         frame,
         unit,
     });
@@ -169,7 +190,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_event(
     if let Some(observer) = unsafe { observer(ctx) } {
         let observer = unsafe { &*observer };
         observer.record(Row::Event {
-            task: unsafe { (*ctx).task_id },
+            task: unsafe { (*ctx).ownership_task },
             frame,
             marker,
             action,
@@ -198,7 +219,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_alias(
     if let Some(observer) = unsafe { observer(ctx) } {
         let observer = unsafe { &*observer };
         observer.record(Row::Alias {
-            task: unsafe { (*ctx).task_id },
+            task: unsafe { (*ctx).ownership_task },
             frame,
             marker,
             view,
@@ -217,7 +238,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_leave(ctx: *mut TaskCtx, frame: 
     if let Some(observer) = unsafe { observer(ctx) } {
         let observer = unsafe { &*observer };
         observer.record(Row::Leave {
-            task: unsafe { (*ctx).task_id },
+            task: unsafe { (*ctx).ownership_task },
             frame,
         });
     }
@@ -263,7 +284,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_begin(
         (*ctx).ownership_cleanup = scope;
         if let Some(observer) = observer(ctx) {
             (*observer).record(Row::CleanupBegin {
-                task: (*ctx).task_id,
+                task: (*ctx).ownership_task,
                 frame,
                 marker,
             });
@@ -287,7 +308,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_cleanup_end(
         (*ctx).ownership_cleanup = (*scope).previous;
         if let Some(observer) = observer(ctx) {
             (*observer).record(Row::CleanupEnd {
-                task: (*ctx).task_id,
+                task: (*ctx).ownership_task,
                 frame: (*scope).frame,
                 marker: (*scope).marker as u32,
             });
@@ -309,7 +330,7 @@ pub(crate) unsafe fn retired(ctx: &TaskCtx, layout: *const crate::release::Layou
                 {
                     if let Some(observer) = observer(std::ptr::from_ref(ctx).cast_mut()) {
                         (*observer).record(Row::CleanupDrop {
-                            task: ctx.task_id,
+                            task: ctx.ownership_task,
                             frame: (*scope).frame,
                             marker: (*scope).marker as u32,
                             field: row[2] as u32,
