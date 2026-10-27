@@ -104,6 +104,13 @@ pub struct FrontCheckQueries {
     _allowance: MemoryReservation,
 }
 impl FrontCheckQueries {
+    pub(super) fn matches_inputs(
+        &self,
+        front: &Arc<FrontBodyQueries>,
+        lower: &Arc<FrontLowerQueries>,
+    ) -> bool {
+        Arc::ptr_eq(&self.plan.front, front) && Arc::ptr_eq(&self.plan.lower, lower)
+    }
     fn dead_arm_warnings(&self) -> Vec<Diagnostic> {
         let Some(lint) = &self.lint else {
             return vec![];

@@ -1,3 +1,4 @@
+use hirsel_driver::CompilerRequestsExt;
 use hirsel_driver::{COMPILER, dependency_card};
 use hirsel_engine::{DefinitionQueries, QueryKind, with_compiler_stack};
 use serde_json::json;

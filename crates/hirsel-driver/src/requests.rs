@@ -59,6 +59,8 @@ pub enum CompileOperation {
     Check {
         lowering: LoweringPolicy,
     },
+    /// Populate complete source semantic, audit, Lower and constant products.
+    Precompute,
     SafeCheck,
     /// Generated bodies in primary-source order after the accepted Check.
     Expand,

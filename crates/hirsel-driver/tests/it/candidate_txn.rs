@@ -1,3 +1,4 @@
+use hirsel_driver::CompilerRequestsExt;
 use hirsel_driver::candidate::*;
 use hirsel_engine::{CompileConfig, LoweringPolicy, Verify};
 use hirsel_syntax::ContentHash;

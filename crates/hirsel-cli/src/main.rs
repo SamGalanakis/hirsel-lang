@@ -6,6 +6,7 @@ hirsel_guard::install!(allocator::Counting: allocator::Counting);
 mod simulation_world;
 
 use hirsel_cli_args::lexopt::{self, Arg::*, Parser};
+use hirsel_driver::CompilerRequestsExt;
 use hirsel_engine::{QueryError, RunOutcome, ToolError, Verify};
 use std::{env, ffi::OsString, path::Path, process::ExitCode};
 

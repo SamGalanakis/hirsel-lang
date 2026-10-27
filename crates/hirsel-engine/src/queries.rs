@@ -26,9 +26,9 @@ pub use scheduled_native_root::{
     FrontNativeQueries,
 };
 pub use scheduled_run::{
-    FRONT_RUN_BATCH_KIND, FRONT_RUN_KIND, FrontBuiltProof, FrontPreparedProof, FrontProofExport,
-    FrontProofInput, FrontProofText, FrontRunBatchOutput, FrontRunInputs, FrontRunOutput,
-    FrontRunQueries, FrontSourceProducts,
+    FRONT_RUN_BATCH_KIND, FRONT_RUN_KIND, FrontBuiltProof, FrontPrecomputeOutput,
+    FrontPreparedProof, FrontProofExport, FrontProofInput, FrontProofText, FrontRunBatchOutput,
+    FrontRunInputs, FrontRunOutput, FrontRunQueries, FrontSourceProducts,
 };
 
 mod scheduled_storage;

@@ -178,6 +178,10 @@ impl GraphProducts for SourceProducts {
         }
         match operation {
             CompileOperation::Check { lowering } => *lowering == self.lowering,
+            CompileOperation::Precompute => self
+                .run
+                .as_ref()
+                .is_some_and(|run| run.precompute_query().is_some()),
             CompileOperation::Expand => self.expansion.is_some(),
             CompileOperation::Hashes { package } => self
                 .hash_selection
@@ -198,7 +202,7 @@ impl GraphProducts for SourceProducts {
             CompileOperation::Tir { .. } => self
                 .run
                 .as_ref()
-                .is_some_and(|run| run.batch_query().is_none()),
+                .is_some_and(|run| run.precompute_query().is_none() && run.batch_query().is_none()),
             CompileOperation::TirBatch { definitions } => self
                 .run
                 .as_ref()
@@ -261,6 +265,12 @@ impl GraphProducts for SourceProducts {
             {
                 vec![self.check.query()]
             }
+            CompileOperation::Precompute => vec![
+                self.run
+                    .as_ref()
+                    .and_then(|run| run.precompute_query())
+                    .ok_or_else(|| uninstalled())?,
+            ],
             CompileOperation::Expand => vec![self.check.query()],
             CompileOperation::Hashes { .. } => vec![
                 self.run
@@ -460,6 +470,19 @@ impl GraphProducts for SourceProducts {
                                 CompileResult::Artifacts(super::host_selector::completed_artifacts(
                                     &checked, tir, None,
                                 ))
+                            }
+                        }
+                        CompileOperation::Precompute => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            let output = run
+                                .as_ref()
+                                .and_then(|run| run.precompute_outcome(*product))
+                                .ok_or_else(|| uninstalled())?;
+                            CompileResult::Precomputed {
+                                definitions: output.definitions,
+                                digest: output.digest,
                             }
                         }
                         CompileOperation::Hashes { .. } => {
@@ -1046,7 +1069,8 @@ pub(super) fn install(
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering }
         | CompileOperation::CheckedProducts { lowering, .. } => (*lowering, false),
-        CompileOperation::Tir { .. }
+        CompileOperation::Precompute
+        | CompileOperation::Tir { .. }
         | CompileOperation::TirBatch { .. }
         | CompileOperation::Hashes { .. }
         | CompileOperation::NativeOwnership(_)
@@ -1642,20 +1666,31 @@ pub(super) fn install(
         })
         .transpose()?;
     let mut run = if needs_run {
-        Some(
+        let inputs = run_inputs.take().ok_or_else(|| uninstalled())?;
+        let selected = if matches!(request.operation, CompileOperation::Precompute) {
             program
                 .engine
-                .front_run_queries_with_inputs(
-                    check.clone(),
+                .front_semantic_queries_with_inputs(
                     front.clone(),
                     lower.clone(),
-                    run_inputs.take().ok_or_else(|| uninstalled())?,
+                    inputs,
                     plan.run,
                     run,
                     errors,
                 )
-                .map_err(&query_error)?,
-        )
+                .and_then(|source| source.with_precompute(check.clone()))
+        } else {
+            program.engine.front_run_queries_with_inputs(
+                check.clone(),
+                front.clone(),
+                lower.clone(),
+                inputs,
+                plan.run,
+                run,
+                errors,
+            )
+        };
+        Some(selected.map_err(&query_error)?)
     } else {
         drop(run);
         None

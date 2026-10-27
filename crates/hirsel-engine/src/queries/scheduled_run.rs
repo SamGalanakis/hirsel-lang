@@ -1,10 +1,12 @@
 //! Immutable launch facts from the admitted source semantic closure.
 use super::*;
 mod content;
+mod precompute;
 mod proof_export;
 mod semantic;
 mod source_products;
 use hirsel_run_schema::{CallForm, CalleeFacts, CodeReach, ProgramRevision};
+pub use precompute::FrontPrecomputeOutput;
 pub use proof_export::{
     FrontBuiltProof, FrontPreparedProof, FrontProofExport, FrontProofInput, FrontProofText,
 };
@@ -84,6 +86,8 @@ impl FrontRunInputs {
 /// waits for the ordered source transaction before reading semantic products.
 pub struct FrontRunQueries {
     batch: Option<(QueryId, Vec<DefPath>)>,
+    precompute: Option<precompute::Selection>,
+    precomputed: Mutex<Option<(ProductRef, FrontPrecomputeOutput)>>,
     completed_batch: Mutex<Option<(ProductRef, Arc<FrontRunBatchOutput>)>>,
     export_hashes: bool,
     source_products: bool,
@@ -284,6 +288,9 @@ struct Factory(Arc<FrontRunQueries>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
         if let Some(task) = semantic::create(&self.0, query) {
+            return Ok(task);
+        }
+        if let Some(task) = precompute::create(&self.0, query) {
             return Ok(task);
         }
         let (root, completed) = if let Some((batch, roots)) = &self.0.batch
@@ -1374,6 +1381,17 @@ impl QueryEngine {
         errors: RuntimeErrors,
     ) -> Result<Arc<FrontRunQueries>, QueryError> {
         let inputs = self.front_run_inputs(allowance.bytes())?;
+        self.front_semantic_queries_with_inputs(front, lower, inputs, weight, allowance, errors)
+    }
+    pub fn front_semantic_queries_with_inputs(
+        &mut self,
+        front: Arc<FrontBodyQueries>,
+        lower: Arc<FrontLowerQueries>,
+        inputs: FrontRunInputs,
+        weight: MemoryWeight,
+        allowance: MemoryReservation,
+        errors: RuntimeErrors,
+    ) -> Result<Arc<FrontRunQueries>, QueryError> {
         self.front_source_queries_with_inputs(None, front, lower, inputs, weight, allowance, errors)
     }
 
@@ -1420,7 +1438,11 @@ impl QueryEngine {
                     QueryId {
                         kind: FRONT_RUN_KIND,
                         address: hirsel_artifact_store::Address(ContentHash::of_parts(
-                            "hirsel.front.semantic.address.v1",
+                            if check.is_none() {
+                                "hirsel.front.source-products.address.v1"
+                            } else {
+                                "hirsel.front.semantic.address.v1"
+                            },
                             [
                                 self.environment_value().0.as_slice(),
                                 path.fingerprint().0.as_slice(),
@@ -1454,6 +1476,8 @@ impl QueryEngine {
         let source_products = check.is_none();
         Ok(Arc::new(FrontRunQueries {
             batch: None,
+            precompute: None,
+            precomputed: Mutex::new(None),
             completed_batch: Mutex::new(None),
             export_hashes: false,
             source_products,

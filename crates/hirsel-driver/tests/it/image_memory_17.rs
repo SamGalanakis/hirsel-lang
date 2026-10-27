@@ -1,5 +1,6 @@
 //! Released query records must not keep the resolver's body-sized read logs alive.
 use crate::image_fixture::*;
+use hirsel_driver::CompilerRequestsExt;
 use hirsel_engine::*;
 use hirsel_syntax::{DefPath, ItemPath};
 

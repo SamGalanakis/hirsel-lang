@@ -121,6 +121,10 @@ pub enum CompileResult {
     /// Native pipeline failures retain their existing inner error category.
     NativeError(crate::native::NativeError),
     Check(CheckOutput),
+    Precomputed {
+        definitions: u64,
+        digest: hirsel_syntax::ContentHash,
+    },
     SafeCheck {
         checked: CheckOutput,
         reach: Option<(DefPath, Option<UnsafeReach>)>,
