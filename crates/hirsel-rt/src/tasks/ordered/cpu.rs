@@ -14,6 +14,7 @@ pub(super) struct Batch {
     width: u32,
     limit: u64,
     claims: Vec<Option<TaskId>>,
+    publisher: Option<TaskId>,
     owners: BTreeMap<TaskId, usize>,
     jobs: Jobs,
     pending: BTreeMap<TaskId, (u32, u64)>,
@@ -28,6 +29,7 @@ impl Batch {
             width,
             limit: grant.max_batch_bytes,
             claims: vec![None; count],
+            publisher: None,
             owners: BTreeMap::new(),
             jobs,
             pending: BTreeMap::new(),
@@ -55,11 +57,20 @@ impl Batch {
 
     pub(super) fn bind(&mut self, parent: TaskId, child: TaskId) -> bool {
         if let Some((width, ordinal)) = self.pending.remove(&parent) {
+            assert!(self.publisher.is_none_or(|owner| owner == parent));
+            self.publisher = Some(parent);
             self.claim(child, width, ordinal);
             true
         } else {
             false
         }
+    }
+
+    /// Keep the publisher runnable until its bounded children are installed.
+    /// Starting an early child here can monopolize its publisher's CPU and
+    /// scheduler role before the remaining workers have any work to claim.
+    pub(super) fn publishing(&self, task: TaskId, head: TaskId) -> bool {
+        self.publisher == Some(head) && self.owners.contains_key(&task)
     }
 
     pub(super) fn limit(&self, task: TaskId) -> Option<u64> {

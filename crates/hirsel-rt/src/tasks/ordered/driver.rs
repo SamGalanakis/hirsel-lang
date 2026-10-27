@@ -157,6 +157,13 @@ impl Driver {
         let order: Vec<_> = std::iter::once(head).chain(frontier.queue()).collect();
         let mut ready = Vec::new();
         for task in order {
+            if self
+                .cpu_batch
+                .as_ref()
+                .is_some_and(|batch| batch.publishing(task, head))
+            {
+                continue;
+            }
             if self.head_job.is_some_and(|(owner, _)| owner == task) {
                 continue;
             }
