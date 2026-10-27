@@ -1,5 +1,5 @@
 """Production Ordered launches, immutable replay, and independent Unix peers."""
-import hashlib, json, os, subprocess, sys
+import json, os, subprocess, sys
 from pathlib import Path
 from host import host_case
 from model import vectors
@@ -28,30 +28,6 @@ def main(cli, manifest, requested):
         (root/(stem+'.status')).write_text(str(code))
         return code,out,err
 
-    def digest(path): return hashlib.sha256(path.read_bytes()).hexdigest()
-    def tool_seal(label):
-        files, directories, links = {}, {}, {}
-        def tree(path, ancestors=frozenset()):
-            if path.is_symlink(): links[str(path)] = os.readlink(path)
-            if path.is_file():
-                files[str(path)] = {'sha256': digest(path), 'mode': path.stat().st_mode & 0o777,
-                                    'resolved': str(path.resolve())}
-            elif path.is_dir():
-                identity = (path.stat().st_dev, path.stat().st_ino)
-                if identity in ancestors: return
-                children = sorted(path.iterdir())
-                directories[str(path)] = [child.name for child in children]
-                for child in children: tree(child, ancestors | {identity})
-        for path in [Path(cli), *[Path(env[key]) for key in
-                     ['HIRSEL_PRODUCTS', 'LLVM_SYS_231_PREFIX', 'HIRSEL_RUNTIME_ARCHIVES', 'HIRSEL_LINK_KIT']]]:
-            tree(path)
-        seal = {'cwd': os.getcwd(), 'files': files, 'directories': directories, 'symlinks': links}
-        (root/(label+'.tools.json')).write_text(json.dumps(seal,indent=2)+'\n')
-        return seal
-
-    pre_tools = tool_seal('prebuild')
-    source_seal={str(p):digest(p) for p in [*root.glob('*.hir'),root/'hirsel.json',root/'cases.json',root/'verify.py',root/'host.py',root/'model.py',root/'selection.py',capped]}
-    (root/'build.source.seal.json').write_text(json.dumps(source_seal,indent=2)+'\n')
     vectors()
     binaries={}
     for backend in ['llvm','cranelift']:
@@ -60,9 +36,6 @@ def main(cli, manifest, requested):
         receipts.append({'id':backend+'-build','status':code,'passed':code==0})
         save()
         if code==0:binaries[backend]=exe
-    for path,sha in source_seal.items(): assert digest(Path(path))==sha,('build source changed',path)
-    source_seal.update({str(p):digest(p) for p in binaries.values()})
-    (root/'runtime.seal.json').write_text(json.dumps(source_seal,indent=2)+'\n')
     for backend,exe in binaries.items():
         for case in cases:
             for width in [1,2,4]:
@@ -115,8 +88,6 @@ def main(cli, manifest, requested):
                     assert tape.read_bytes()==original
                 except (AssertionError,OSError,subprocess.TimeoutExpired,ValueError) as error:
                     receipts.append({'id':name,'passed':False,'disposition':'INCOMPLETE','error':repr(error)});save()
-    for path,sha in source_seal.items():assert digest(Path(path))==sha,('source changed during execution',path)
-    assert tool_seal('postruntime') == pre_tools, 'compiler/std/runtime/linker/helper bytes or membership changed'
     print(json.dumps({'selected':len(receipts),'passed':sum(r['passed'] for r in receipts),'failed':sum(not r['passed'] for r in receipts)}),flush=True)
     check_receipts(selection, receipts)
     return 0

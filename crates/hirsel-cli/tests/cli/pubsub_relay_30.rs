@@ -326,6 +326,7 @@ fn native(selected: &[String], cases: &[Value]) {
     let mut errors = Vec::new();
     // Every immutable native tape is consumed again by both public host adapters.
     with_compiler_stack(|| {
+        let mut program = hirsel_driver::load_program(&manifest).unwrap();
         for stem in selected {
             let path = retained.join(format!("{stem}.tape"));
             let live_stdout = fs::read(retained.join(format!("{stem}.stdout")))
@@ -367,11 +368,12 @@ fn native(selected: &[String], cases: &[Value]) {
             errors.extend(replay_adapters(|checked| {
                 let name = if checked { "checked-h" } else { "reference" };
                 eprintln!("PUBSUB_30_STARTED {stem}/replay/{name}");
-                let result = if checked {
-                    hirsel_driver::replay_observations_checked(&manifest, &path, Some(10_000_000))
-                } else {
-                    hirsel_driver::replay_observations(&manifest, &path, Some(10_000_000))
-                };
+                let result = hirsel_driver::replay_loaded_observations(
+                    &mut program,
+                    &path,
+                    Some(10_000_000),
+                    checked,
+                );
                 let mut failure = None;
                 let receipt = match result {
                     Ok(observed) => {
@@ -720,5 +722,18 @@ fn pubsub_relay_30_native_and_real_unix() {
     let selected = std::env::var("PUBSUB_30_CELL")
         .map(|cell| vec![cell])
         .unwrap_or(cells);
+    native(&selected, &cases);
+}
+
+#[test]
+#[ignore = "explicit recovery of the ten historical native replay complements"]
+fn historical_native_prefix_complements() {
+    let cases = selected_cases(false);
+    let mut selected = vec!["duplicate-llvm-1".to_string()];
+    for name in ["no-subscriber", "one-receiver", "order-two"] {
+        for width in [1, 2, 4] {
+            selected.push(format!("{name}-llvm-{width}"));
+        }
+    }
     native(&selected, &cases);
 }
