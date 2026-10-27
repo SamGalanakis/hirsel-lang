@@ -932,7 +932,14 @@ impl FrontLowerQueries {
             &input.evaluate
         };
         if let Some(product) = self.load_carry(id, &path, key) {
-            return product;
+            match product {
+                // The compact descriptor can outlive V's independently
+                // evictable content. A current V miss needs the ordinary
+                // producer, even while the source observations still match.
+                Ok(product)
+                    if id.kind == FRONT_LOWER_KIND && self.native_product(product).is_none() => {}
+                product => return product,
+            }
         }
         if let Some(product) = self.load_stored(id, &path, key) {
             return product;

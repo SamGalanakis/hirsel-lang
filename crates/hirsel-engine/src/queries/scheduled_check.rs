@@ -751,7 +751,13 @@ impl QueryEngine {
                         constants.insert(DefId::intern(&item.definition));
                     }
                     if plan.front.query(&item.definition).is_none() {
-                        return Err(refusal());
+                        return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                            operation: "ordered check admission".into(),
+                            message: format!(
+                                "source Check has no front producer for {}",
+                                item.definition
+                            ),
+                        }));
                     }
                     input
                         .paths
@@ -771,11 +777,17 @@ impl QueryEngine {
             .flat_map(|file| file.paths.iter().map(|(path, _)| path.clone()))
             .collect();
         let lint = (!lint.declarations.is_empty()).then_some(lint);
-        if FrontCheckQueries::input_bytes(&definitions, files.len(), weight)
+        let required = FrontCheckQueries::input_bytes(&definitions, files.len(), weight)
             .and_then(|required| required.checked_add(lint.as_ref().map_or(0, DeadArmLint::bytes)))
-            .is_none_or(|required| required > allowance.bytes())
-        {
-            return Err(refusal());
+            .ok_or_else(refusal)?;
+        if required > allowance.bytes() {
+            return Err(QueryError::Operational(hirsel_types::OperationalFailure {
+                operation: "ordered check admission".into(),
+                message: format!(
+                    "source Check requires {required} bytes, admitted {}",
+                    allowance.bytes()
+                ),
+            }));
         }
         let mut file_identity = Vec::new();
         if let Some(package) = &plan.lint_package {
