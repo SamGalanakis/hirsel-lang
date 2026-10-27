@@ -3,9 +3,11 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import runpy
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch, Mock
@@ -140,6 +142,55 @@ class BlessCounts(unittest.TestCase):
                         self.assertEqual(bless(), 0 if success else 1)
                     self.assertIn('--test-arg=--record', run.call_args.args[0])
                     self.assertEqual(baseline.read_text(), COUNTS['table'](rows) if success else 'original')
+
+
+class FreshStdCounts(unittest.TestCase):
+    def test_whole_process_counters_must_be_positive_complete_and_unscaled(self):
+        parse = COUNTS['perf_instructions']
+        text = '# perf stat\n12345;;instructions:u;99;100.00;;\n12500;;instructions;99;100.00;;\n'
+        self.assertEqual(parse(text), {'instructions:u': 12345, 'instructions': 12500})
+        for broken in ('', text.splitlines()[1], text.replace('100.00', '99.99'),
+                       text.replace('12345', '<not supported>'), text.replace('12345', '0'),
+                       text + text, text.replace('100.00;;', '')):
+            with self.subTest(text=broken), self.assertRaises(ValueError):
+                parse(broken)
+
+    def test_manual_budget_boundary_and_fresh_environment(self):
+        fresh = COUNTS['fresh_std']
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / 'budget.json'
+            original = json.dumps(dict(counter='instructions:u', jobs=1, instructions=10000,
+                                       reason='Independent control baseline'))
+            baseline.write_text(original)
+            for count, expected in ((9900, 0), (10300, 0), (10301, 1)):
+                def measure(command, **kwargs):
+                    self.assertEqual(command[command.index('--cpu=60:60') + 1], '--')
+                    self.assertIn('instructions:u,instructions', command)
+                    self.assertEqual(command[-2:], ['check', str(ROOT / 'stdlib/std@1/hirsel.json')])
+                    env = kwargs['env']
+                    for key in ('HIRSEL_VERIFY_CACHE', 'HIRSEL_RESULTS_DIR', 'LD_PRELOAD'):
+                        self.assertNotIn(key, env)
+                    self.assertEqual((env['HIRSEL_JOBS'], env['HIRSEL_RESULTS'], env['HIRSEL_DAEMON']),
+                                     ('1', 'none@1', 'off'))
+                    self.assertFalse(Path(env['HIRSEL_PRODUCTS']).exists())
+                    Path(command[command.index('-o') + 1]).write_text(
+                        f'{count};;instructions:u;99;100.00;;\n{count + 100};;instructions;99;100.00;;\n')
+                    return Mock(returncode=0)
+                with patch.dict(fresh.__globals__, FRESH_BASELINE=baseline), \
+                        patch.dict(os.environ, HIRSEL_VERIFY_CACHE='trust', LD_PRELOAD='/poison.so'), \
+                        patch('subprocess.run', side_effect=measure), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(fresh(Path(__file__)), expected)
+                self.assertEqual(baseline.read_text(), original)
+
+    def test_failed_compiler_never_produces_a_passing_count(self):
+        fresh = COUNTS['fresh_std']
+        with tempfile.TemporaryDirectory() as directory:
+            baseline = Path(directory) / 'budget.json'
+            baseline.write_text(json.dumps(dict(counter='instructions:u', jobs=1, instructions=10000, reason='Control')))
+            with patch.dict(fresh.__globals__, FRESH_BASELINE=baseline), \
+                    patch('subprocess.run', side_effect=subprocess.CalledProcessError(137, ['compiler'])), \
+                    self.assertRaises(subprocess.CalledProcessError):
+                fresh(Path(__file__))
 
 
 if __name__ == '__main__':

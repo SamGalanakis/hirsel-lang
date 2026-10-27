@@ -3,6 +3,10 @@
 
 `tools/perf-counts --bless`, on the host, measures on the pool and rewrites
 tools/perf-counts.tsv: the reviewed step after an intended change of counts.
+`--fresh-std` builds the release compiler and checks whole-process user
+instructions on this host. tools/perf-fresh-std.json is updated manually in
+the commit that changes its baseline, with a one-line reason. Scheduled
+tools/main-runs checks it in both tiers; it is separate from the Ir ratchet.
 """
 import argparse
 import difflib
@@ -11,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import shlex
 import subprocess
 import tempfile
 import time
@@ -20,6 +25,61 @@ BASELINE = ROOT / 'tools/perf-counts.tsv'
 MARKER = 'PERF_COUNTS_RECORD '
 COLUMNS = 'case\tIr\tfunction'
 TOTAL = '<total>'
+FRESH_BASELINE = ROOT / 'tools/perf-fresh-std.json'
+
+
+def perf_instructions(text):
+    counts = {}
+    for line in text.splitlines():
+        fields = line.split(';')
+        if len(fields) > 2 and fields[2] in ('instructions:u', 'instructions'):
+            if fields[2] in counts or len(fields) < 5 or float(fields[4]) != 100:
+                raise ValueError('fresh std requires one unscaled whole-process count per counter')
+            count = int(fields[0])
+            if count <= 0:
+                raise ValueError('fresh std counted no instructions')
+            counts[fields[2]] = count
+    if counts.keys() != {'instructions:u', 'instructions'}:
+        raise ValueError('fresh std requires user and inclusive instruction counters')
+    return counts
+
+
+def fresh_std(hirsel=None):
+    """Host perf oracle; its reviewed baseline is never automatically rewritten."""
+    baseline = json.loads(FRESH_BASELINE.read_text())
+    if (baseline.get('counter') != 'instructions:u' or baseline.get('jobs') != 1
+            or type(baseline.get('instructions')) is not int or baseline['instructions'] <= 0
+            or not isinstance(baseline.get('reason'), str) or not baseline['reason'].strip()):
+        raise ValueError('invalid fresh std baseline: counter, jobs, positive count and reason required')
+    if hirsel is None:
+        command = [ROOT / '.buck2/bin/buck2', 'build', *shlex.split(os.environ.get('HIRSEL_BUCK2_CONFIG', '')),
+                   '//:hirsel-cli-bin-hirsel', '--target-platforms', '//tools/buck2:release', '--show-output']
+        output = subprocess.run([str(x) for x in command], cwd=ROOT, check=True,
+                                stdout=subprocess.PIPE, text=True).stdout
+        binaries = [line.split(maxsplit=1)[1] for line in output.splitlines()
+                    if line.startswith('root//:hirsel-cli-bin-hirsel ')]
+        if len(binaries) != 1:
+            raise ValueError('fresh std release build returned no unique compiler')
+        hirsel = ROOT / binaries[0]
+    hirsel = Path(hirsel).resolve(strict=True)
+    llvm = ROOT / 'tools/buck2/toolchains/llvm-files'
+    env = {key: os.environ[key] for key in ('PATH', 'HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS')
+           if key in os.environ}
+    env.update(LC_ALL='C', LD_LIBRARY_PATH=str(llvm / 'lib'), LLVM_SYS_231_PREFIX=str(llvm),
+               HIRSEL_DAEMON='off', HIRSEL_RESULTS='none@1', HIRSEL_JOBS='1', HIRSEL_MEMORY_LIMIT='2G')
+    with tempfile.TemporaryDirectory(prefix='hirsel-fresh-std-') as directory:
+        scratch = Path(directory)
+        env['HIRSEL_PRODUCTS'] = str(scratch / 'absent-products')
+        counters = scratch / 'perf.csv'
+        command = [ROOT / 'tools/capped', '--timeout', '120', 'prlimit', '--cpu=60:60', '--',
+                   'perf', 'stat', '-x', ';', '-o', counters, '-e', 'instructions:u,instructions', '--',
+                   hirsel, 'check', ROOT / 'stdlib/std@1/hirsel.json']
+        subprocess.run([str(x) for x in command], cwd=ROOT, env=env, check=True)
+        counts = perf_instructions(counters.read_text())
+    before, after = baseline['instructions'], counts['instructions:u']
+    print(f'fresh std: {before:,} -> {after:,} instructions:u ({100 * (after - before) / before:+.3f}%); '
+          f'{counts["instructions"]:,} inclusive; tolerance +3%', flush=True)
+    return int(after * 100 > before * 103)
 
 # Open compiler cases remain runnable with --record --filter check/<example>.
 # The owner deferred their enforcement until all cases fit five pool-minutes.
@@ -259,7 +319,15 @@ def main():
     parser.add_argument('--bless', action='store_true', help='on the host: measure on the pool and rewrite the baseline')
     parser.add_argument('--record', action='store_true', help='emit measurements for --bless; writes no inputs')
     parser.add_argument('--filter', help='one case substring, for diagnosis (never a passing gate)')
+    parser.add_argument('--fresh-std', action='store_true', help='host fresh std check against its manual +3% budget')
+    parser.add_argument('--hirsel', type=Path, help='with --fresh-std: use an already built release compiler')
     args = parser.parse_args()
+    if args.fresh_std:
+        if args.bless or args.record or args.filter:
+            parser.error('--fresh-std has a manual baseline; --bless, --record and --filter are not supported')
+        return fresh_std(args.hirsel)
+    if args.hirsel:
+        parser.error('--hirsel requires --fresh-std')
     if args.bless:
         return bless()
     env = {key: value for key, value in os.environ.items() if key in (
@@ -310,5 +378,5 @@ def main():
 if __name__ == '__main__':
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         raise SystemExit(f'perf-counts: {error}')

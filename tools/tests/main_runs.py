@@ -413,7 +413,8 @@ class Tiers(unittest.TestCase):
                 os.environ.update(env)
         fast = [n for n in named['fast'] if not n.startswith('tool tests: ')]
         self.assertEqual(fast, ['Buck2 toolchains and pool configuration', 'Buck2 build files and test-cost coverage',
-                                'workspace build', 'workspace clippy', 'formatting', 'workspace tests', 'free-mode GenMC models'])
+                                'workspace build', 'workspace clippy', 'formatting', 'workspace tests', 'free-mode GenMC models',
+                                'fresh std instruction budget'])
         self.assertEqual(named['full'][:len(named['fast'])], named['fast'])
         self.assertIn('native passing corpus with independent second hash seed', named['full'])
         # A fast tick is skipped by a full run of main; a full tick is not skipped by a fast run.

@@ -4,7 +4,8 @@
     tools/main-runs --tick [--tier fast|full] [--dry-run]
 
 The fast tier (the default) is the build, Clippy, fmt, the workspace and tool
-tests (the Loom models among them) and the GenMC models; hirsel-main-runs.timer (a systemd user unit, host config) ticks it
+tests (the Loom models among them), the GenMC models and a fresh std compiler
+instruction budget; hirsel-main-runs.timer (a systemd user unit, host config) ticks it
 every 2 h at pool priority 40 (Nice 10). The full tier is every stage below:
 the release gate, run only by hand before milestones. A fast tick skips while
 any run is going; a full tick waits for it. A tick skips when origin/main has
@@ -196,6 +197,7 @@ def stages(stage, tier, *, planning=False):
     stage('workspace tests', test(*tests), target_inventory=tests)
     # The Loom models are workspace crates (proofs/free/loom, proofs/heaps/loom), so in the stage above.
     stage('free-mode GenMC models', test('//:gate-free-genmc'))
+    stage('fresh std instruction budget', [PY, 'tools/perf-counts', '--fresh-std'])
     if tier == 'fast':
         return
     stage('full gate crate tests', full_crate_tests(*libtests))

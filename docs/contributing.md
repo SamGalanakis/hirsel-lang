@@ -290,7 +290,8 @@ adds and drop those either side removes. Resolve any other conflict by hand.
 `tools/main-runs --tick --tier fast|full` runs main's suite in one of two
 tiers at pool priority 40. The fast tier (the default) runs prepare,
 `sync.py --check`, the tool tests, the workspace build, Clippy, fmt and the
-workspace tests (about 12 min). The full tier runs those and then the release
+workspace tests, GenMC models and the fresh std compiler instruction budget
+(about 12 min). The full tier runs those and then the release
 gate: the `full_gate_` tests in debug and release, the whole conformance
 campaign and ratchet, the unrestricted source/IR and native agreement
 campaigns, the instruction budgets, native smoke, release tests, the native
@@ -355,6 +356,15 @@ and after a full run ratchets `tools/perf-counts.tsv` down to what `gate-perf-co
 beyond the 1% noise, pushing each change straight to main.
 `tools/perf-counts --bless` measures on the pool and rewrites the table: the
 reviewed step after an intended change of counts.
+
+Both tiers also run `tools/perf-counts --fresh-std` on the host. It builds the
+release compiler and checks std at jobs 1, with daemon, products and result
+reuse disabled, under `tools/capped` with 2 GiB and 60 CPU seconds. Whole-process
+`perf stat -e instructions:u` must stay within 3% of `tools/perf-fresh-std.json`;
+kernel-inclusive instructions are printed as context. Missing or multiplexed
+counters and failed checks fail the stage. Update this baseline manually in
+the commit that intentionally changes it, with a one-line `reason`. Neither
+blessing nor the automatic Cachegrind ratchet updates it.
 
 Changes to native code also run the filtered native matrix for the programs
 they add or touch on the pool. Focus runs book one CPU at priority 50:
