@@ -2,7 +2,7 @@
 //! entry points start fresh sessions on the compiler thread, so a compiler is
 //! the plain constructor of its phases and crosses threads freely.
 use crate::*;
-use std::{io::Write, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 /// A fully prepared source; constructing a batch never writes to disk.
 pub struct FormattedSource {
@@ -462,25 +462,6 @@ impl Compiler {
                 formatted,
             })
         })
-    }
-    pub fn run_path(&self, path: &Path, stdout: &mut dyn Write) -> Result<RunOutcome, ToolError> {
-        self.run_path_with_simulation(path, SimulationConfig::default(), stdout)
-    }
-    pub fn run_path_with_simulation(
-        &self,
-        path: &Path,
-        simulation: SimulationConfig,
-        stdout: &mut dyn Write,
-    ) -> Result<RunOutcome, ToolError> {
-        let mut program = self.load_program(path)?;
-        program.check_for_execution()?;
-        program.refuse_foreign_interpretation()?;
-        let config = RunConfiguration {
-            entry: program.entry,
-            hash_seed: 0,
-            inputs: vec![],
-        };
-        run_snapshot(&mut program.engine, &config, simulation, stdout)
     }
 }
 
