@@ -2,7 +2,10 @@
 //! (internal/runtime/cgroup/cgroup_linux.go:201-237, ebe2feefc400). Unlike Go's
 //! leaf-only reader, this walks every visible ancestor, as required by DET-3.
 use super::{CpuSet, HostLimits, Quota};
+
+mod root_mount;
 use crate::{RunRefusal, invalid};
+use root_mount::root_mount;
 use std::{
     fs, io,
     io::BufRead,
@@ -12,12 +15,15 @@ use std::{
 pub struct LinuxLimits {
     proc_root: PathBuf,
     admission_affinity: CpuSet,
+    probe_root_mount: bool,
 }
 impl LinuxLimits {
     /// Call on the admission thread before any pinning. Rechecks never inspect a
     /// worker's affinity. Replay must never construct this host-only reader.
     pub fn capture() -> Result<Self, RunRefusal> {
-        Self::from_proc(Path::new("/proc"))
+        let mut reader = Self::from_proc(Path::new("/proc"))?;
+        reader.probe_root_mount = true;
+        Ok(reader)
     }
     /// Alternate proc root for host adapters and deterministic filesystem fixtures.
     pub fn from_proc(proc_root: &Path) -> Result<Self, RunRefusal> {
@@ -28,6 +34,7 @@ impl LinuxLimits {
             .ok_or_else(|| invalid("affinity", "Cpus_allowed_list missing"))?;
         Ok(Self {
             proc_root: proc_root.into(),
+            probe_root_mount: false,
             admission_affinity: CpuSet::parse(affinity)?,
         })
     }
@@ -48,6 +55,49 @@ impl LinuxLimits {
             return Ok(limits);
         };
         let group = absolute(group)?;
+        // A kernel-proved filesystem root exposes every ancestor. Otherwise
+        // retain full mount discovery, including delegated and escaped mounts.
+        let (leaf, root) = match self.probe_root_mount.then(root_mount).flatten() {
+            Some(root) => (root.join(group.strip_prefix("/").unwrap()), root),
+            None => self.discover_mount(&group)?,
+        };
+        if !leaf.is_dir() {
+            return Err(invalid(
+                "cgroup",
+                "membership disappeared during resolution",
+            ));
+        }
+        let mut cpuset_found = false;
+        for directory in leaf.ancestors() {
+            if let Some(text) = optional(&directory.join("cpu.max"))?
+                && let Some(q) = Quota::parse(&text)?
+            {
+                limits.quota = Some(limits.quota.map_or(q, |old| old.minimum(q)));
+            }
+            if !cpuset_found && let Some(text) = optional(&directory.join("cpuset.cpus.effective"))?
+            {
+                if text.trim().is_empty() {
+                    return Err(invalid("cpuset", "empty effective cpuset"));
+                }
+                limits.effective_cpuset = CpuSet::parse(&text)?;
+                cpuset_found = true;
+            }
+            if directory == root {
+                break;
+            }
+        }
+        if let Some(stat) = optional(&leaf.join("cpu.stat"))? {
+            for line in stat.lines() {
+                if let Some(value) = line.strip_prefix("throttled_usec ") {
+                    limits.throttled_usec = value
+                        .parse()
+                        .map_err(|_| invalid("cpu.stat", "invalid throttled_usec"))?;
+                }
+            }
+        }
+        Ok(limits)
+    }
+    fn discover_mount(&self, group: &Path) -> Result<(PathBuf, PathBuf), RunRefusal> {
         let mountinfo = self.proc_root.join("self/mountinfo");
         let failed =
             |e: io::Error| invalid("host limits", &format!("{}: {e}", mountinfo.display()));
@@ -84,41 +134,7 @@ impl LinuxLimits {
             .into_iter()
             .next()
             .ok_or_else(|| invalid("cgroup", "no visible cgroup2 mount for membership"))?;
-        if !leaf.is_dir() {
-            return Err(invalid(
-                "cgroup",
-                "membership disappeared during resolution",
-            ));
-        }
-        let mut cpuset_found = false;
-        for directory in leaf.ancestors() {
-            if let Some(text) = optional(&directory.join("cpu.max"))?
-                && let Some(q) = Quota::parse(&text)?
-            {
-                limits.quota = Some(limits.quota.map_or(q, |old| old.minimum(q)));
-            }
-            if !cpuset_found && let Some(text) = optional(&directory.join("cpuset.cpus.effective"))?
-            {
-                if text.trim().is_empty() {
-                    return Err(invalid("cpuset", "empty effective cpuset"));
-                }
-                limits.effective_cpuset = CpuSet::parse(&text)?;
-                cpuset_found = true;
-            }
-            if directory == root {
-                break;
-            }
-        }
-        if let Some(stat) = optional(&leaf.join("cpu.stat"))? {
-            for line in stat.lines() {
-                if let Some(value) = line.strip_prefix("throttled_usec ") {
-                    limits.throttled_usec = value
-                        .parse()
-                        .map_err(|_| invalid("cpu.stat", "invalid throttled_usec"))?;
-                }
-            }
-        }
-        Ok(limits)
+        Ok((leaf, root))
     }
 }
 fn absolute(text: &str) -> Result<PathBuf, RunRefusal> {

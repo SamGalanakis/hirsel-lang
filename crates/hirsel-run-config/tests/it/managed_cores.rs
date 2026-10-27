@@ -466,3 +466,16 @@ fn mount_discovery_rejects_invalid_utf8_after_a_usable_mount() {
     fs::write(&path, bytes).unwrap();
     assert!(f.reader().read().is_err());
 }
+
+#[test]
+fn kernel_mount_query_and_mount_table_resolve_the_same_limits() {
+    let fast = LinuxLimits::capture().unwrap().read().unwrap();
+    let table = LinuxLimits::from_proc(std::path::Path::new("/proc"))
+        .unwrap()
+        .read()
+        .unwrap();
+    assert_eq!(fast.admission_affinity, table.admission_affinity);
+    assert_eq!(fast.effective_cpuset, table.effective_cpuset);
+    assert_eq!(fast.quota, table.quota);
+    assert!(fast.throttled_usec <= table.throttled_usec);
+}
