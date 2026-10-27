@@ -11,25 +11,17 @@ fn settled_native_declaration_assembly_runs_without_a_source_controller() {
             .with_result_store(store.clone());
         let file = engine.sources.add("settled-declarations.hir", "resource type R {n:u64} drop(x) {let _=x.n}\nfn keep[T](take x:T)->T{x}\npub fn main()->u64 {let r=R(n:1u64);let f=fn(x:u64)->u64{keep(x)};f(2u64)}".into()).unwrap();
         engine.parse_file(file, &default_context()).unwrap();
-        let roots = engine.native_source_roots(&[]).unwrap();
-        let selected = roots.definitions.iter().cloned().collect();
-        let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store);
-        let catalogue = roots
-            .definitions
+        let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+        let roots = facts.roots.clone();
+        let catalogue = facts
+            .catalogue
             .iter()
-            .map(|path| discovery.definition(&mut engine, path, &selected).unwrap())
+            .map(|product| (**product).clone())
             .collect::<Vec<_>>();
-        let source_constants = catalogue
-            .iter()
-            .filter(|product| product.source.constant.is_some())
-            .map(|product| product.source.definition.clone())
-            .collect();
-        let statics = engine.native_static_inputs(&selected).unwrap();
-        let extra = engine
-            .native_static_requirements(&statics, &selected, &source_constants)
-            .unwrap();
-        let signatures = engine.signature_snapshot();
-        let expected = NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
+        let statics = facts.statics.clone();
+        let extra = facts.extra.clone();
+        let signatures = facts.signatures.clone();
+        let expected = NativeDeclarations::from_front(facts).unwrap();
         let mut missing = catalogue.clone();
         missing.pop();
         assert!(
@@ -66,7 +58,6 @@ fn settled_native_declaration_assembly_runs_without_a_source_controller() {
             )
             .is_err()
         );
-        drop(discovery);
         drop(engine);
         let actual =
             NativeDeclarations::from_settled(&signatures, roots, catalogue, statics, extra)
@@ -103,11 +94,11 @@ fn native_declaration_metadata_bound_tracks_copied_buffers_without_bodies() {
             .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
         let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
-        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store);
-        let mut declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+        engine = engine.with_result_store(store);
+        let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+        let mut declarations = NativeDeclarations::from_front(facts).unwrap();
         assert!(declarations.program.definitions.is_empty());
         drop(engine);
-        drop(cache);
         let before = declarations.retained_metadata_bytes().unwrap();
         let old = declarations.constant_definitions.capacity();
         declarations.constant_definitions.reserve_exact(old + 64);

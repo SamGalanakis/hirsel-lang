@@ -57,9 +57,13 @@ fn source(text: &str) -> (QueryEngine, NativeOriginalReader, DefPath) {
     let checked = check_progress(&mut engine, file, &default_context()).unwrap();
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
     let path = entry_path(&default_context());
-    let roots = engine.native_source_roots(&[path.clone()]).unwrap();
-    let reader = engine
-        .native_original_reader(&roots.definitions, store)
+    let facts = crate::native_front_fixture::products(&mut engine, &[path.clone()]).unwrap();
+    let reader = facts
+        .original_context
+        .reader(
+            facts.originals.iter().map(|product| (**product).clone()),
+            store,
+        )
         .unwrap();
     (engine, reader, path)
 }

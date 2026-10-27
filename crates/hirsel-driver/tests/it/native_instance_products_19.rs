@@ -3,7 +3,7 @@ use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_layout::layout::LayoutBuilder;
 use hirsel_syntax::ContentHash;
-use native::queries::{InstanceAddress, declarations::NativeDeclarations, instance::*};
+use native::queries::{InstanceAddress, instance::*, source_inputs::NativeSourceProvider};
 use std::sync::Arc;
 
 #[test]
@@ -20,8 +20,9 @@ fn native_instance_product_hits_require_current_c_without_value_materialization(
             )
             .unwrap();
         engine.parse_file(file, &default_context()).unwrap();
-        let mut cache = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-        let mut declarations = NativeDeclarations::collect(&mut engine, &mut cache, &[]).unwrap();
+        let source_inputs = crate::native_front_fixture::inputs(&mut engine, &[]);
+        let declarations = &source_inputs.declarations;
+        let mut source = source_inputs.provider();
         let target = native::TargetSpec::x86_64_unknown_linux_gnu();
         let owners = hirsel_rc::library::owners(
             &declarations.program.types,
@@ -44,7 +45,7 @@ fn native_instance_product_hits_require_current_c_without_value_materialization(
                 &hirsel_rc::instance::Actuals::none(),
             )
             .unwrap();
-        let original = declarations.body(&mut engine, &main).unwrap();
+        let original = source.original_source(&main).unwrap().0;
         let (mut instances, _) = hirsel_rc::instance::discover_instance(
             &declarations.program,
             &declarations.context,
@@ -111,7 +112,8 @@ fn native_instance_product_hits_require_current_c_without_value_materialization(
         drop(checked);
         drop(inputs);
         drop(instances);
-        drop(declarations);
+        drop(source);
+        drop(source_inputs);
         drop(engine);
         drop(table);
         // Source/type context survives as independent compact declarations;

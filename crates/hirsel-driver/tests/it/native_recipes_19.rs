@@ -1,7 +1,9 @@
 use hirsel_driver::*;
 use hirsel_engine::*;
 use hirsel_rc::instance::{Actuals, InstanceRole};
-use native::queries::{declarations::NativeDeclarations, recipes::SourceRecipe};
+use native::queries::{
+    declarations::NativeDeclarations, recipes::SourceRecipe, source_inputs::NativeSourceProvider,
+};
 use std::sync::Arc;
 
 #[test]
@@ -18,9 +20,10 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
         };
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let mut first = session();
-        let records = NativeRecords::new(first.types().clone(), store.clone());
-        let mut cache = NativeDiscoveryCache::new(first.types().clone(), store.clone());
-        let mut declarations = NativeDeclarations::collect(&mut first, &mut cache, &[]).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut first, &[]);
+        let declarations = &inputs.declarations;
+        let mut source = inputs.provider();
+        let records = NativeRecords::new(declarations.program.types.clone(), store.clone());
         let main = entry_path(&default_context());
         let mut outer = main.clone();
         outer.0.name = "outer".into();
@@ -40,7 +43,7 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
         let main_id = instances
             .find(&declarations.program, &main, &Actuals::none())
             .unwrap();
-        let main_body = declarations.body(&mut first, &main).unwrap();
+        let main_body = source.original_source(&main).unwrap().0;
         let (instances, _) = hirsel_rc::instance::discover_instance(
             &declarations.program,
             &declarations.context,
@@ -58,7 +61,7 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
             })
             .unwrap();
         assert!(!instances.actuals[outer_id.index()].arguments.is_empty());
-        let outer_body = declarations.body(&mut first, &outer).unwrap();
+        let outer_body = source.original_source(&outer).unwrap().0;
         let original = Arc::downgrade(&outer_body);
         let (instances, _) = hirsel_rc::instance::discover_instance(
             &declarations.program,
@@ -84,14 +87,14 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
             .map(|id| {
                 let recipe = SourceRecipe::capture(&instances, id).unwrap();
                 let key = recipe.key().unwrap();
-                let bytes = recipe.encode(&records, &first).unwrap();
+                let bytes = recipe.encode(&records, &source).unwrap();
                 let abi = keys.fn_abi(&table.fn_abis[instances.abis[id.index()].0 as usize]);
                 (key, bytes, abi)
             })
             .collect();
         drop(instances);
-        drop(declarations);
-        drop(cache);
+        drop(source);
+        drop(inputs);
         drop(first);
         assert!(
             original.upgrade().is_none(),
@@ -100,15 +103,16 @@ fn source_recipes_restore_generic_closures_and_finalizers_without_ancestor_value
 
         let mut fresh = session();
         fresh.adapters.lowering = None;
-        let records = NativeRecords::new(fresh.types().clone(), store.clone());
-        let mut cache = NativeDiscoveryCache::new(fresh.types().clone(), store);
-        let mut declarations = NativeDeclarations::collect(&mut fresh, &mut cache, &[]).unwrap();
-        assert_eq!(cache.counts.body_demands, 0);
+        let inputs = crate::native_front_fixture::inputs(&mut fresh, &[]);
+        let declarations = &inputs.declarations;
+        let mut source = inputs.provider();
+        let records = NativeRecords::new(declarations.program.types.clone(), store.clone());
+        assert_eq!(source.body_demands, 0);
         assert!(declarations.program.definitions.is_empty());
         for (key, bytes, expected_abi) in recipes {
-            let recipe = SourceRecipe::decode(&records, &fresh, &bytes).unwrap();
+            let recipe = SourceRecipe::decode(&records, &source, &bytes).unwrap();
             assert_eq!(recipe.key().unwrap(), key);
-            let body = declarations.body(&mut fresh, key.definition()).unwrap();
+            let body = source.original_source(key.definition()).unwrap().0;
             let owners = hirsel_rc::library::owners(
                 &declarations.program.types,
                 &declarations.program.signatures,
@@ -197,9 +201,10 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
         };
         let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
         let mut first = session();
-        let records = NativeRecords::new(first.types().clone(), store.clone());
-        let mut cache = NativeDiscoveryCache::new(first.types().clone(), store.clone());
-        let mut declarations = NativeDeclarations::collect(&mut first, &mut cache, &[]).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut first, &[]);
+        let declarations = &inputs.declarations;
+        let mut source = inputs.provider();
+        let records = NativeRecords::new(declarations.program.types.clone(), store.clone());
         let owners = hirsel_rc::library::owners(
             &declarations.program.types,
             &declarations.program.signatures,
@@ -217,7 +222,7 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
         let id = instances
             .find(&declarations.program, &main, &Actuals::none())
             .unwrap();
-        let body = declarations.body(&mut first, &main).unwrap();
+        let body = source.original_source(&main).unwrap().0;
         let (mut instances, _) = hirsel_rc::instance::discover_instance(
             &declarations.program,
             &declarations.context,
@@ -247,7 +252,7 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
             .expect("iter.from has a closed environment thunk");
         let table = layouts.finish();
         let recipe = LibraryRecipe::capture(&instances, library, &table).unwrap();
-        let recipe_bytes = recipe.encode(&records, &first).unwrap();
+        let recipe_bytes = recipe.encode(&records, &source).unwrap();
         let expected_key = recipe.key().unwrap();
         let keys = hirsel_lir::LayoutKeys::new(&table);
         let expected_abi = keys.fn_abi(&table.fn_abis[instances.abis[library.index()].0 as usize]);
@@ -280,19 +285,21 @@ fn library_recipe_rebinds_its_environment_without_reconstructing_the_requiring_v
         // available to the fresh library miss below.
         drop(parent);
         drop(instances);
-        drop(declarations);
+        drop(source);
+        drop(inputs);
         drop(first);
 
         let mut fresh = session();
         fresh.adapters.lowering = None;
-        let records = NativeRecords::new(fresh.types().clone(), store.clone());
-        let mut cache = NativeDiscoveryCache::new(fresh.types().clone(), store);
-        let declarations = NativeDeclarations::collect(&mut fresh, &mut cache, &[]).unwrap();
-        assert_eq!(cache.counts.body_demands, 0);
-        let recipe = LibraryRecipe::decode(&records, &fresh, &recipe_bytes).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut fresh, &[]);
+        let declarations = &inputs.declarations;
+        let mut source = inputs.provider();
+        let records = NativeRecords::new(declarations.program.types.clone(), store.clone());
+        assert_eq!(source.body_demands, 0);
+        let recipe = LibraryRecipe::decode(&records, &source, &recipe_bytes).unwrap();
         assert_eq!(recipe.key().unwrap(), expected_key);
         assert!(
-            LibraryRecipe::decode(&records, &fresh, &recipe_bytes[..recipe_bytes.len() / 2])
+            LibraryRecipe::decode(&records, &source, &recipe_bytes[..recipe_bytes.len() / 2])
                 .is_err()
         );
         let closure: hirsel_lir::products::LayoutClosure =

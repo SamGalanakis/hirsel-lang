@@ -15,7 +15,13 @@ fn probe(a:u64,b:u64)->u64 {
 pub fn main()->u64 {probe(7u64,9u64)}
 "#;
 
-fn original(verify: Verify) -> (QueryEngine, NativeOriginalReader, NativeOriginalBody) {
+fn original(
+    verify: Verify,
+) -> (
+    Arc<SignatureSnapshot>,
+    NativeOriginalReader,
+    NativeOriginalBody,
+) {
     let store: Arc<dyn store::ResultStore> = Arc::new(store::MemStore::default());
     let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
         .with_result_store(store.clone());
@@ -27,11 +33,16 @@ fn original(verify: Verify) -> (QueryEngine, NativeOriginalReader, NativeOrigina
     engine.parse_file(file, &default_context()).unwrap();
     let mut probe = entry_path(&default_context());
     probe.0.name = "probe".into();
-    let reader = engine
-        .native_original_reader(&[probe.clone()], store)
+    let facts = crate::native_front_fixture::products(&mut engine, &[probe.clone()]).unwrap();
+    let reader = facts
+        .original_context
+        .reader(
+            facts.originals.iter().map(|product| (**product).clone()),
+            store,
+        )
         .unwrap();
     let original = reader.read(&probe).unwrap();
-    (engine, reader, original)
+    (facts.signatures.clone(), reader, original)
 }
 
 fn sites(definition: &hirsel_tir::Definition) -> Vec<(BodyId, BlockId, u32, BodyId)> {

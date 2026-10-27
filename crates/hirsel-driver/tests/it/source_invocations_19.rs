@@ -34,9 +34,17 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         };
         let mut engine = session(true);
         let main = entry_path(&default_context());
-        let input = engine.export_native_input().unwrap();
-        let validated = engine.import_native_input(input).unwrap();
-        let program = native::program(&validated);
+        let front = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+        let reader = front
+            .original_context
+            .reader(
+                front.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
+            .unwrap();
+        let declarations =
+            native::queries::declarations::NativeDeclarations::from_front(front.clone()).unwrap();
+        let program = &declarations.program;
         let mut signatures = hirsel_validate::SignatureMap::new(program.types.clone());
         signatures.extend(
             program
@@ -44,9 +52,9 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
                 .iter()
                 .map(|(path, signature)| (path, (**signature).clone())),
         );
-        let body = program.definitions[&main].clone();
+        let body = reader.read(&main).unwrap().definition().clone();
         let weak = Arc::downgrade(&body);
-        let output = engine.verified_lower_output(&main).unwrap().unwrap();
+        let output = reader.input(&main).unwrap().0.unwrap().clone();
         let facts = output.invocations();
         assert_eq!(facts.owner().path(), &main);
         assert_eq!(facts.source_identity(), output.observation_identity());
@@ -113,15 +121,24 @@ fn v_owned_invocations_match_original_source_and_survive_a_fresh_body_free_hit()
         let operations = program.operations.clone();
         drop(body);
         drop(signatures);
-        drop(program);
-        drop(validated);
+        drop(declarations);
+        drop(reader);
+        drop(front);
         drop(engine);
         assert!(
             weak.upgrade().is_none(),
             "facts retain no original Definition"
         );
         let mut fresh = session(false);
-        let reopened = fresh.verified_lower_output(&main).unwrap().unwrap();
+        let front = crate::native_front_fixture::products(&mut fresh, &[]).unwrap();
+        let reader = front
+            .original_context
+            .reader(
+                front.originals.iter().map(|product| (**product).clone()),
+                store.clone(),
+            )
+            .unwrap();
+        let reopened = reader.input(&main).unwrap().0.unwrap().clone();
         assert_eq!(reopened.invocations().entry_body(), expected_entry);
         assert_eq!(fresh.recompute_count(&main, QueryKind::Lower), 0);
         assert_eq!(

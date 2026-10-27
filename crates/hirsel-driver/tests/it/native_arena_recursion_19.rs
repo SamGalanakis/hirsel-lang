@@ -3,9 +3,8 @@ use hirsel_engine::{runtime::*, store::ResultStore, *};
 use native::queries::{
     ARENA_CANDIDATES_KIND, ARENA_CHOSEN_KIND, INSTANCE_KIND,
     arena_tasks::{ARENA_GRAPH_KIND, ArenaTaskFactory, ArenaTasks},
-    declarations::NativeDeclarations,
     instance_tasks::{DISCOVERY_KIND, INSTANCE_INPUT_KIND, InstanceTaskFactory, InstanceTasks},
-    source_inputs::NativeInstanceInputs,
+    source_inputs::NativeSourceProvider,
 };
 use std::{
     collections::BTreeMap,
@@ -55,38 +54,19 @@ fn observe(store: Arc<dyn ResultStore>, text: &str, fresh: bool, jobs: usize) ->
     if fresh {
         engine.adapters.lowering = None;
     }
-    let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-    let declarations = NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
-    let paths = declarations
+    let inputs = crate::native_front_fixture::inputs(&mut engine, &[]);
+    let mut source = inputs.provider();
+    let originals = inputs
+        .declarations
         .context
         .sources
         .keys()
-        .cloned()
+        .map(|path| {
+            let body = source.original_source(path).unwrap().0;
+            Arc::downgrade(&body)
+        })
         .collect::<Vec<_>>();
-    let context = engine.native_original_context(&paths).unwrap();
-    let records = NativeRecords::new(engine.types().clone(), store.clone());
-    let mut originals = Vec::new();
-    let mut products = Vec::new();
-    for path in &paths {
-        let source = &declarations.sources[path];
-        let (body, verified) = engine.native_definition_body_with_output(source).unwrap();
-        originals.push(Arc::downgrade(&body));
-        products.push(NativeOriginalProduct {
-            definition: path.clone(),
-            implementation_revision: source.source.implementation_revision,
-            signature: source.signature.fingerprint,
-            body: store
-                .put_content(
-                    NATIVE_ORIGINAL_BODY,
-                    &records.encode(&engine, &body).unwrap(),
-                )
-                .unwrap(),
-            verified,
-        });
-    }
-    let reader = context.reader(products, store.clone()).unwrap();
-    let inputs = NativeInstanceInputs::from_products(declarations, reader).unwrap();
-    drop(discovery);
+    drop(source);
     drop(engine);
     assert!(originals.iter().all(|body| body.upgrade().is_none()));
     let runtime_bytes = hirsel_intern::jobs::COMPILER_STACK_BYTES as u64 + (64 << 20);

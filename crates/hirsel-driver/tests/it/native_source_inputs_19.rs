@@ -20,27 +20,28 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         let main = entry_path(&default_context());
         let mut helper = main.clone();
         helper.0.name = "helper".into();
-        let context = engine
-            .native_original_context(&[main.clone(), helper.clone()])
-            .unwrap();
         assert_eq!(engine.recompute_count(&main, QueryKind::Lower), 0);
-        let descriptor = engine.native_definition_product(&main).unwrap();
-        let (body, verified) = engine
-            .native_definition_body_with_output(&descriptor)
-            .unwrap();
+        let facts = crate::native_front_fixture::products(&mut engine, &[]).unwrap();
+        let context = facts.original_context.clone();
+        let selected = facts
+            .originals
+            .iter()
+            .find(|product| product.definition == main)
+            .unwrap()
+            .as_ref()
+            .clone();
+        let descriptor = facts
+            .catalogue
+            .iter()
+            .find(|product| product.source.definition == main)
+            .unwrap()
+            .source
+            .clone();
+        let reader = context.reader([selected.clone()], store.clone()).unwrap();
+        let body = reader.read(&main).unwrap().definition().clone();
         let original = Arc::downgrade(&body);
-        let records = NativeRecords::new(engine.types().clone(), store.clone());
-        let bytes = records.encode(&engine, &body).unwrap();
-        let ordinary = store.put_content(NATIVE_ORIGINAL_BODY, &bytes).unwrap();
-        let selected = NativeOriginalProduct {
-            definition: main.clone(),
-            implementation_revision: descriptor.source.implementation_revision,
-            signature: descriptor.signature.fingerprint,
-            body: ordinary,
-            verified,
-        };
-        let mut discovery = NativeDiscoveryCache::new(engine.types().clone(), store.clone());
-        let declarations = NativeDeclarations::collect(&mut engine, &mut discovery, &[]).unwrap();
+        drop(reader);
+        let declarations = NativeDeclarations::from_front(facts.clone()).unwrap();
         let empty = context
             .reader(std::iter::empty::<NativeOriginalProduct>(), store.clone())
             .unwrap();
@@ -74,7 +75,7 @@ fn immutable_native_inputs_bind_only_the_selected_front_output_without_eager_bod
         assert!(ordinary.source_output(&main).unwrap().is_none());
         assert!(!ordinary.query_policy().reuse);
         drop(body);
-        drop(discovery);
+        drop(facts);
         drop(engine);
         assert!(
             original.upgrade().is_none(),
