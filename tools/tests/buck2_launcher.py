@@ -397,6 +397,25 @@ with open('orphan.pid', 'w') as output: output.write(str(child.pid))
 
 
 class LauncherSelection(LauncherFixture):
+    def test_isolation_preserves_other_partitions_and_explicit_selection(self):
+        before = [self.run_cases(shard=f'{i}/2')[0]['cases'] for i in (1, 2)]
+        self.env['HIRSEL_TEST_ISOLATED_CASES'] = 'pool::smoke'
+        after = [self.run_cases(shard=f'{i}/2')[0]['cases'] for i in (1, 2)]
+        for original, selected in zip(before, after):
+            self.assertEqual(selected, [case for case in original if case != 'pool::smoke'])
+        explicit, _ = self.run_cases('--exact', 'pool::smoke', shard='1/2')
+        self.assertEqual(explicit['cases'], ['pool::smoke'])
+        self.env.pop('HIRSEL_TEST_ISOLATED_CASES')
+        dedicated, _ = self.run_cases('--exact', 'pool::smoke')
+        combined = [case for part in after for case in part] + dedicated['cases']
+        self.assertCountEqual(combined, [case for part in before for case in part])
+        self.env['HIRSEL_TEST_DEDICATED_CASE'] = 'pool::smoke'
+        dedicated, _ = self.run_cases('--exact', 'pool::smoke', 'pool::other')
+        self.assertEqual(dedicated['cases'], ['pool::smoke'])
+        self.env['HIRSEL_TEST_BINARY'] = 'fixture'
+        dedicated, _ = self.run_cases('--exact', 'pool::smoke', 'full_gate_', '--ignored')
+        self.assertEqual(dedicated['cases'], [])
+
     def launcher_with_quota(self, quota):
         # Keep the real launcher's quota logic, with deterministic kernel files.
         # A wide affinity mask does not imply a wide ancestor cpu.max quota.

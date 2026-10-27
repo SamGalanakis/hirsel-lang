@@ -320,7 +320,7 @@ for argument in "$@"; do
 done
 inventory=false
 if "$full_gate" && "$ignored" && [ -n "$test_binary" ]; then inventory=true; fi
-if [ -z "$shard" ] && ! "$inventory"; then materialize_native_inputs "$@"; run_harness "$@"; exit $?; fi
+if [ -z "$shard" ] && ! "$inventory" && [ -z "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then materialize_native_inputs "$@"; run_harness "$@"; exit $?; fi
 set -f # Rust case names and declared patterns are words, never shell globs.
 list_cases() (
   remaining=$#
@@ -347,6 +347,10 @@ list_cases() (
   printf '%s\n' "$listing" | sed -n 's/: test$//p' | LC_ALL=C sort
 )
 cases="$(list_cases "$@")"
+if [ -n "${HIRSEL_TEST_DEDICATED_CASE:-}" ]; then
+  cases="$(printf '%s\n' "$cases" | awk -v selected="$HIRSEL_TEST_DEDICATED_CASE" '$0 == selected')"
+fi
+unset HIRSEL_TEST_DEDICATED_CASE
 if "$inventory"; then
   printf 'HIRSEL_FULL_GATE_BINARY %s\n' "$test_binary"
   if [ -n "$cases" ]; then
@@ -389,6 +393,14 @@ if [ -n "$shard" ]; then
         load[best] += $1; if (best == index_) print $2 }' | LC_ALL=C sort)"
   fi
 fi
+# Deal every original case before removing isolated bodies, so unrelated
+# partitions keep their cases. Explicit selections still run the named body.
+if [ -n "${HIRSEL_TEST_ISOLATED_CASES:-}" ] && [ -n "$shard" ] && ! "$filtered"; then
+  cases="$(printf '%s\n' "$cases" | awk -v isolated="$HIRSEL_TEST_ISOLATED_CASES" '
+    BEGIN { n = split(isolated, names, " "); for (i = 1; i <= n; i++) excluded[names[i]] = 1 }
+    !($0 in excluded)')"
+fi
+unset HIRSEL_TEST_ISOLATED_CASES
 # The caller's positive filters already shaped the listing. Replace them with
 # the exact selected names, preserving flags and paired values. In particular,
 # an empty partition must use an empty exact filter: no filters would run all.

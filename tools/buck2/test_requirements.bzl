@@ -16,3 +16,9 @@ EXACT_TEST_CPUS = {
     "hirsel-cli-test-cli": 4,  # pubsub and suite-runner native width four
     "hirsel-cli-test-free": 8,  # F1 actual-eight admission and replay matrices
 }
+
+# Keep indivisible slow bodies inside the same action cap without charging an
+# aggregate's other bodies for them. These retain their compiled identities.
+ISOLATED_TEST_CASES = {
+    "hirsel-driver-test-it-stdlib": ["stdlib_uri::zig_file"],
+}

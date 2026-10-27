@@ -13,7 +13,7 @@ CARGO_TARGET_TMPDIR and CARGO_BIN_EXE_<name>.
 """
 
 load(":platforms.bzl", "CLIPPY_REQUEST", "PRECHECK_REQUEST", "PROBE_CPUS", "budget_constraint", "compile_request", "doctest_properties", "dist_compile_request", "pool_budget_name", "test_budget_name", "test_executor", "test_request", "test_memory_limit")
-load(":test_requirements.bzl", "EXACT_TEST_CPUS")
+load(":test_requirements.bzl", "EXACT_TEST_CPUS", "ISOLATED_TEST_CASES")
 load(":exec_sizes.bzl", "COMPILE_CLASSES", "COMPILE_REQUESTS")
 load(":profile.bzl", "runtime_profile_flags", "workspace_profile_flags")
 load("@prelude//linking:link_info.bzl", "ArchiveLinkable", "LinkStrategy", "ObjectsLinkable")
@@ -259,6 +259,7 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
         args = [] if FULL_GATE else [argument for case in skips for argument in ("--skip", case)],
         visibility = ["PUBLIC"],
     )
+    isolated = ISOLATED_TEST_CASES.get(name, [])
     for shard in range(shards):
         _rust_test(
             name = name if shards == 1 else "{}-shard-{}".format(name, shard + 1),
@@ -268,7 +269,20 @@ def hirsel_test(name, crate, crate_root, srcs, features, deps, manifest_dir, pac
             labels = [],
             exec_compatible_with = _test_platform(name),
             pool = not TESTS_ON_HOST,
+            extra_env = {"HIRSEL_TEST_ISOLATED_CASES": " ".join(isolated)} if isolated else {},
             **common
+        )
+    isolated_common = {key: value for key, value in common.items() if key != "args"}
+    for index, case in enumerate(isolated):
+        _rust_test(
+            name = "{}-isolated-{}".format(name, index + 1),
+            args = common["args"] + ["--exact", case],
+            costs = costs,
+            labels = [],
+            exec_compatible_with = _test_platform(name),
+            pool = not TESTS_ON_HOST,
+            extra_env = {"HIRSEL_TEST_DEDICATED_CASE": case},
+            **isolated_common
         )
 
 def _rust_test_impl(ctx):

@@ -540,6 +540,14 @@ python3 tools/buck2/sync.py
 Shard flags never select cases; only positional filters do, and a filtered
 run executes in shard 1.
 
+`ISOLATED_TEST_CASES` in `test_requirements.bzl` gives an indivisible slow body
+its own `<binary>-isolated-<n>` target with the binary's existing resource request
+and deadline. The launcher removes it after ordinary cost assignment, preserving
+every other partition. Explicit body filters still work through shard 1. Main's
+test query includes the dedicated targets, and full-gate selection cannot make
+one of them execute other bodies. The URI file vectors use this partition to
+avoid spending the stdlib aggregate's deadline on repeated checked executions.
+
 After regenerating stale build files, `sync.py --check` lists each cost-balanced
 binary's cases on the pool (including ignored and macro-generated cases, without
 running test bodies). It fails if more than 5% of the driver's cases have no
