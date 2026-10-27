@@ -190,6 +190,110 @@ impl Settled {
     }
 }
 
+/// The first stopped job, indexed in the batch's serial order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct JobStop {
+    pub job: usize,
+    pub kind: BudgetKind,
+}
+
+/// Completed job summaries awaiting serial retirement. Publication order is
+/// physical only; neither publication nor a missing older job settles charges.
+/// Replay publishes the recorded summaries through this same interface.
+#[derive(Debug)]
+pub struct Jobs {
+    pending: Vec<Option<(Stretch, bool)>>,
+    next: usize,
+    settled: Settled,
+    stopped: Option<JobStop>,
+}
+
+impl Jobs {
+    /// One bounded CPU batch (at most twice its admitted width).
+    pub fn new(width: u32, count: usize, settled: Settled) -> Self {
+        assert!(matches!(width, 1 | 4 | 8 | 16), "admitted CPU width");
+        assert!(count <= width as usize * 2, "bounded CPU batch");
+        Self {
+            pending: vec![None; count],
+            next: 0,
+            settled,
+            stopped: None,
+        }
+    }
+
+    /// CPU settlement also enforces the batch grant. A stricter run memory
+    /// limit remains stricter; physical admission is checked independently.
+    pub fn cpu(
+        grant: &hirsel_run_schema::CpuGrant,
+        width: u32,
+        count: usize,
+        mut settled: Settled,
+    ) -> Self {
+        assert!(width <= grant.max_workers, "granted CPU width");
+        settled.limit = settled.limit.min(grant.max_batch_bytes);
+        Self::new(width, count, settled)
+    }
+
+    /// Publish one completed job, including its cleanup.
+    /// The caller retains a recording copy before transferring the summary.
+    pub fn publish(&mut self, job: usize, charges: Stretch) {
+        self.submit(job, charges, true);
+    }
+
+    /// Publish a prefix paused at a physical or summary bound. Settlement
+    /// checks the prefix but cannot advance to the next job until this job
+    /// publishes its continuation and cleanup. A denied allocation may be
+    /// included only when it is the next serial charge; resumption must not
+    /// charge it again after successful settlement.
+    pub fn pause(&mut self, job: usize, charges: Stretch) {
+        self.submit(job, charges, false);
+    }
+
+    fn submit(&mut self, job: usize, charges: Stretch, complete: bool) {
+        assert!(job >= self.next, "a job retires once");
+        assert!(
+            self.settled.limit == u64::MAX || charges.budgets.memory,
+            "memory-limited jobs retain allocation envelopes"
+        );
+        assert!(
+            self.settled.fuel == u64::MAX || charges.budgets.fuel,
+            "fuel-limited jobs retain allocation fuel offsets"
+        );
+        let slot = self.pending.get_mut(job).expect("job belongs to batch");
+        assert!(slot.is_none(), "a job publishes once");
+        *slot = Some((charges, complete));
+    }
+
+    /// Settle the available serial prefix. A stop is sticky: discarded younger
+    /// work cannot replace its job or kind, even when published afterward.
+    pub fn retire(&mut self) -> Result<usize, JobStop> {
+        if let Some(stop) = self.stopped {
+            return Err(stop);
+        }
+        while let Some(Some((charges, complete))) = self.pending.get(self.next) {
+            if let Err(kind) = self.settled.settle(charges) {
+                let stop = JobStop {
+                    job: self.next,
+                    kind,
+                };
+                self.stopped = Some(stop);
+                return Err(stop);
+            }
+            let complete = *complete;
+            self.pending[self.next] = None;
+            if !complete {
+                break;
+            }
+            self.next += 1;
+        }
+        Ok(self.next)
+    }
+
+    pub fn settled(&self) -> Settled {
+        self.settled
+    }
+}
+
 /// One event of a turn, in program order: the exact charge stream the summaries replace.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Event {
@@ -405,5 +509,130 @@ mod tests {
         let credits = vec![Credit(0); PIECES_MAX];
         assert_eq!(summarise(BOTH, &credits), Err(Pause::Pieces));
         assert!(summarise(BOTH, &credits[1..]).is_ok());
+    }
+
+    #[test]
+    fn cpu_jobs_keep_cleanup_highs_and_fuel_memory_first_stop_order() {
+        for width in [4, 8, 16] {
+            for (cleanup, fuel, kind) in [
+                (vec![Alloc(20), Free(20), Fuel, Fuel], 1, BudgetKind::Memory),
+                (vec![Fuel, Fuel, Alloc(20), Free(20)], 1, BudgetKind::Fuel),
+                (vec![Fuel, Alloc(20), Free(20)], 1, BudgetKind::Memory),
+                // Root death opens a piece before the cleanup allocation.
+                (
+                    vec![Credit(30), Fuel, Alloc(50), Free(50)],
+                    1,
+                    BudgetKind::Memory,
+                ),
+            ] {
+                let state = Settled {
+                    level: 70,
+                    limit: 100,
+                    fuel,
+                };
+                let first = summarise(BOTH, &[Alloc(20)]).unwrap();
+                let second = summarise(BOTH, &cleanup).unwrap();
+                let younger = summarise(BOTH, &[Alloc(200)]).unwrap();
+                let mut expected = state;
+                assert_eq!(reference(&mut expected, &[Alloc(20)]), Ok(()));
+                assert_eq!(reference(&mut expected, &cleanup), Err(kind));
+                let mut live = Jobs::new(width, 3, state);
+                live.publish(2, younger.clone());
+                live.publish(1, second.clone());
+                assert_eq!(live.retire(), Ok(0));
+                live.publish(0, first.clone());
+                let stop = Err(JobStop { job: 1, kind });
+                assert_eq!(live.retire(), stop);
+                assert_eq!(live.retire(), stop);
+                let mut replay = Jobs::new(width, 3, state);
+                replay.publish(0, first);
+                assert_eq!(replay.retire(), Ok(1));
+                replay.publish(1, second);
+                assert_eq!(replay.retire(), stop);
+                replay.publish(2, younger);
+                assert_eq!(replay.retire(), stop);
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_job_credits_and_a_stricter_run_limit_are_preserved() {
+        let grant = hirsel_run_schema::CpuGrant {
+            provider: "cpu.scoped@1".into(),
+            max_workers: 4,
+            max_domains: 1,
+            max_physical_bytes: 1 << 30,
+            max_batch_bytes: 100,
+        };
+        for (limit, expected) in [
+            (u64::MAX, Ok(2)),
+            (
+                80,
+                Err(JobStop {
+                    job: 1,
+                    kind: BudgetKind::Memory,
+                }),
+            ),
+        ] {
+            let mut jobs = Jobs::cpu(
+                &grant,
+                4,
+                2,
+                Settled {
+                    level: 60,
+                    limit,
+                    fuel: 7,
+                },
+            );
+            jobs.publish(1, summarise(BOTH, &[Credit(40), Alloc(70), Fuel]).unwrap());
+            assert_eq!(jobs.retire(), Ok(0));
+            jobs.publish(0, summarise(BOTH, &[Fuel]).unwrap());
+            assert_eq!(jobs.retire(), expected);
+            if expected.is_ok() {
+                assert_eq!(
+                    jobs.settled(),
+                    Settled {
+                        level: 90,
+                        limit: 100,
+                        fuel: 5
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_job_paused_prefix_resumes_before_younger_cleanup() {
+        let mut jobs = Jobs::new(
+            4,
+            2,
+            Settled {
+                level: 0,
+                limit: 100,
+                fuel: 8,
+            },
+        );
+        jobs.publish(1, summarise(BOTH, &[Alloc(100)]).unwrap());
+        jobs.pause(0, summarise(BOTH, &[Fuel, Alloc(80)]).unwrap());
+        assert_eq!(jobs.retire(), Ok(0));
+        assert_eq!(
+            jobs.settled(),
+            Settled {
+                level: 80,
+                limit: 100,
+                fuel: 7
+            }
+        );
+        assert_eq!(jobs.retire(), Ok(0));
+        jobs.publish(0, summarise(BOTH, &[Credit(80), Fuel]).unwrap());
+        assert_eq!(jobs.retire(), Ok(2));
+        assert_eq!(
+            jobs.settled(),
+            Settled {
+                level: 100,
+                limit: 100,
+                fuel: 6
+            }
+        );
     }
 }

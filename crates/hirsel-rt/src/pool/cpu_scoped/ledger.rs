@@ -20,6 +20,11 @@ pub(crate) struct Topology {
     bytes: u64,
 }
 
+/// Physical capacity is a refusal to allocate speculative backing, never a
+/// language budget stop. The caller pauses/discards before borrowing a heap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BackingFull;
+
 impl Ledger {
     pub(crate) fn new(grant: &hirsel_run_schema::CpuGrant) -> Arc<Self> {
         Arc::new(Self {
@@ -29,27 +34,29 @@ impl Ledger {
         })
     }
     pub(crate) fn charge_heap(&self, bytes: u64) {
-        let fits = {
-            let mut held = self.held.lock().unwrap();
-            let next = held.heap.checked_add(bytes);
-            if let Some(next) = next.filter(|&next| {
-                held.topology == 0
-                    || (next <= self.batch_limit
-                        && next
-                            .checked_add(held.topology)
-                            .and_then(|n| n.checked_add(held.stacks))
-                            .is_some_and(|n| n <= self.physical_limit))
-            }) {
-                held.heap = next;
-                true
-            } else {
-                false
-            }
-        };
-        if !fits {
+        if self.try_charge_job_heap(bytes).is_err() {
             crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
         }
     }
+    /// Job charges are summarized separately in Stretch. Backing
+    /// admission checks the grant; its order cannot select a
+    /// semantic stop. On failure no backing has been charged or allocated.
+    pub(crate) fn try_charge_job_heap(&self, bytes: u64) -> Result<(), BackingFull> {
+        let mut held = self.held.lock().unwrap();
+        let next = held.heap.checked_add(bytes).ok_or(BackingFull)?;
+        if held.topology != 0
+            && (next > self.batch_limit
+                || !next
+                    .checked_add(held.topology)
+                    .and_then(|n| n.checked_add(held.stacks))
+                    .is_some_and(|n| n <= self.physical_limit))
+        {
+            return Err(BackingFull);
+        }
+        held.heap = next;
+        Ok(())
+    }
+
     pub(crate) fn credit_heap(&self, bytes: u64) {
         let mut held = self.held.lock().unwrap();
         held.heap = held.heap.checked_sub(bytes).expect("CPU backing credit");
@@ -109,6 +116,8 @@ impl Drop for Topology {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::budget::stretch::{Budgets, Event, JobStop, Jobs, Settled, summarise};
+    use hirsel_run_schema::BudgetKind;
     fn grant(physical: u64, batch: u64) -> hirsel_run_schema::CpuGrant {
         hirsel_run_schema::CpuGrant {
             provider: "cpu.scoped@1".into(),
@@ -145,6 +154,105 @@ mod tests {
         assert!(small.topology(16).is_some());
         ledger.credit_heap(1 << 20);
         assert_eq!(ledger.held.lock().unwrap().heap, 0);
+    }
+
+    #[test]
+    fn cpu_job_cumulative_stop_is_job_three_despite_job_five_backing_refusal() {
+        for width in [4, 8, 16] {
+            let grant = grant(2 << 30, 250);
+            let ledger = Ledger::new(&grant);
+            let topology = ledger.topology(width).unwrap();
+            // Negative control: the legacy allocator callback selects job
+            // five from physical order. It cannot wait while a heap is lent.
+            let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let physical = observed.clone();
+            let legacy = ledger.clone();
+            let outcome = crate::host::BodyRun::new(1, false).run(
+                |_| {},
+                move |_| {
+                    for job in [0, 1, 4, 3, 2] {
+                        physical.store(job + 1, std::sync::atomic::Ordering::Relaxed);
+                        legacy.charge_heap(100);
+                    }
+                    crate::STATUS_OK
+                },
+            );
+            assert_eq!(
+                outcome.ended,
+                Err(crate::stop::Stop::BudgetExceeded(BudgetKind::Memory))
+            );
+            assert_eq!(observed.load(std::sync::atomic::Ordering::Relaxed), 5);
+            ledger.credit_heap(200);
+            let state = Settled {
+                level: 0,
+                limit: u64::MAX,
+                fuel: 100,
+            };
+            let mut live = Jobs::cpu(&grant, width, width as usize * 2, state);
+            let mut recorded = Vec::new();
+            // Jobs one and two retain 200 bytes. The next physical request
+            // belongs to job five, while job three is the first serial stop.
+            for job in [0, 1, 4, 3, 2] {
+                let charges = summarise(
+                    Budgets {
+                        fuel: true,
+                        memory: true,
+                    },
+                    &[Event::Fuel, Event::Alloc(100)],
+                )
+                .unwrap();
+                recorded.push((job, charges.clone(), job < 2));
+                let backing = ledger.try_charge_job_heap(100);
+                assert_eq!(backing.is_ok(), job < 2);
+                if backing.is_ok() {
+                    live.publish(job, charges);
+                } else {
+                    live.pause(job, charges);
+                }
+                match job {
+                    0 => assert_eq!(live.retire(), Ok(1)),
+                    1 | 4 | 3 => assert_eq!(live.retire(), Ok(2)),
+                    2 => assert_eq!(
+                        live.retire(),
+                        Err(JobStop {
+                            job: 2,
+                            kind: BudgetKind::Memory
+                        })
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+            let stop = live.retire();
+            assert_eq!(ledger.held.lock().unwrap().heap, 200);
+            ledger.credit_heap(200);
+            drop(topology);
+            // Replay starts no topology and does not reserve backing. It
+            // consumes the very same pieces in serial order.
+            recorded.sort_by_key(|(job, _, _)| *job);
+            let mut replay = Jobs::cpu(&grant, width, width as usize * 2, state);
+            for (job, charges, complete) in recorded {
+                if complete {
+                    replay.publish(job, charges);
+                } else {
+                    replay.pause(job, charges);
+                }
+            }
+            assert_eq!(replay.retire(), stop, "width {width}");
+        }
+    }
+
+    #[test]
+    fn job_backing_refuses_physical_exhaustion_and_overflow_without_a_semantic_stop() {
+        let template = Ledger::new(&grant(u64::MAX, 1000));
+        let overhead = template.topology(4).unwrap().bytes;
+        let ledger = Ledger::new(&grant(overhead + 100, 1000));
+        let topology = ledger.topology(4).unwrap();
+        assert_eq!(ledger.try_charge_job_heap(100), Ok(()));
+        assert_eq!(ledger.try_charge_job_heap(1), Err(BackingFull));
+        assert_eq!(ledger.try_charge_job_heap(u64::MAX), Err(BackingFull));
+        assert_eq!(ledger.held.lock().unwrap().heap, 100);
+        ledger.credit_heap(100);
+        drop(topology);
     }
 }
 
