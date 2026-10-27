@@ -175,9 +175,9 @@ class NativeProtocol(unittest.TestCase):
         env = os.environ | {'XDG_CACHE_HOME': str(cls.directory / 'cache')}
         subprocess.run([cli, 'build', '--release', manifest, '-o', cls.binary], env=env, check=True)
         cls.grants = cls.directory / 'grants.json'
-        cls.grants.write_text(json.dumps(dict(io=dict(stdout='stdout.bytes@1',
-            monotonic_clock='clock.monotonic.ns@1', wall_clock='clock.wall.unix_ns@1',
-            dirs=[dict(path='', host=str(cls.directory), access='read')]), args=[])))
+        grants = json.loads(manifest.with_name('grants.json').read_text())
+        grants['io']['dirs'] = [dict(path='', host=str(cls.directory), access='read')]
+        cls.grants.write_text(json.dumps(grants))
 
     @classmethod
     def tearDownClass(cls):
