@@ -45,7 +45,8 @@ class Registration(unittest.TestCase):
         rust = (ROOT / 'crates/hirsel-cli/tests/cli/pubsub_relay_30.rs').read_text()
         self.assertIn('[false, true].into_iter()', rust.replace('\n', '').replace('        ', ''))
         self.assertIn('replay_observations_checked(', rust)
-        self.assertIn('replay_observations(&manifest, &path, Some(10_000_000))', rust)
+        self.assertRegex(rust, r'replay_loaded_observations\(\s*&mut program,\s*&path,\s*'
+                         r'Some\(10_000_000\),\s*checked,\s*\)')
 
     def test_invalid_empty_duplicate_selection_and_missing_receipts(self):
         for requested in [(), ('unknown',), ('denied-llvm-3',), ('denied-llvm-1',) * 2]:
