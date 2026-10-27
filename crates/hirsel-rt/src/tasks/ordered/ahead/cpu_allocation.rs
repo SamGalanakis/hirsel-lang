@@ -127,6 +127,17 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> Stopped<bo
         )
     };
     unsafe { crate::alloc::cpu_allocation_done(ctx) };
+    if let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() } {
+        let task = super::super::engine::current(ctx);
+        let owner = super::super::engine::with_driver(ctx, |driver| {
+            driver
+                .cpu_batch
+                .as_ref()
+                .and_then(|batch| batch.block_owner(task))
+        })
+        .expect("a CPU allocation belongs to its claimed ordinal");
+        ledger.blocks.lock().unwrap().adopt(owner, result);
+    }
     request.result = result;
     request.phase = IDLE;
     Ok(true)

@@ -72,6 +72,7 @@ pub(crate) struct Native {
     pub(super) allocation: super::cpu_allocation::Request,
     pub(super) summary: *mut super::cpu_handoff::Summary,
     pub(super) summary_status: u32,
+    pub(super) summary_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Block>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -323,6 +324,7 @@ impl Native {
             allocation: super::cpu_allocation::Request::new(),
             summary: std::ptr::null_mut(),
             summary_status: 0,
+            summary_blocks: Vec::new(),
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary

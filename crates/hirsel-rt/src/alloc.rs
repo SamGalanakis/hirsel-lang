@@ -979,6 +979,9 @@ impl Heap {
     /// `block` is a live or raw heap block of this heap's program.
     #[inline(always)]
     unsafe fn credit(&self, block: *mut Header) {
+        if let Some(ledger) = self.meter.cpu.get() {
+            ledger.blocks.lock().unwrap().release(block);
+        }
         if self.metered {
             // SAFETY: caller contract.
             unsafe { self.credit_block(block) }

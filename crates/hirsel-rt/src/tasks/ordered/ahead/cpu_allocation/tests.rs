@@ -179,6 +179,16 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool, nonhead:
             assert!(!native.allocation.pending());
             let block = native.allocation.result;
             assert!(!block.is_null());
+            let owner = engine::with_driver(ctx, |d| {
+                d.cpu_batch.as_ref().unwrap().block_owner(task).unwrap()
+            });
+            let retained = ledger
+                .blocks
+                .lock()
+                .unwrap()
+                .retain(owner, &[block])
+                .unwrap();
+            assert_eq!(retained.len(), 1, "the real allocation adopts its claim");
             assert_eq!((*block).index(), 0);
             assert_eq!((*block).count, 1);
             assert_eq!((crate::alloc::payload(block) as usize) % align as usize, 0);
@@ -197,6 +207,10 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool, nonhead:
             assert!(native.allocation.result.is_null());
             assert_eq!(crate::alloc::payload(block).cast::<u64>().read(), 112);
             (*ctx).heap().free(block);
+            assert!(
+                !ledger.blocks.lock().unwrap().valid(&retained),
+                "the real free revokes its generation"
+            );
             (*ctx).heap().trim();
             assert_eq!((*ctx).heap_ref().backing_bytes(), before);
             assert!(ledger.reserve_heap(grant.max_batch_bytes).is_ok());

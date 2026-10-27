@@ -151,6 +151,24 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
             }
             return Ok(true);
         }
+        if let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() } {
+            // The checked saved frame owns this complete borrowed root table.
+            // Empty tables may use null, which from_raw_parts does not accept.
+            let retained = if count == 0 {
+                &[]
+            } else {
+                unsafe { std::slice::from_raw_parts(retained, count as usize) }
+            };
+            let owner = crate::pool::cpu_scoped::ledger::blocks::Owner { task, ordinal };
+            let Some(blocks) = ledger.blocks.lock().unwrap().retain(owner, retained) else {
+                unsafe {
+                    (*native).summary_status = u32::from(NOT_CERTIFIED);
+                    (*native).summary = std::ptr::null_mut();
+                }
+                return Ok(true);
+            };
+            unsafe { (*native).summary_blocks = blocks };
+        }
         super::super::engine::ahead_summary(ctx, pointer);
         unsafe { (*pointer).phase = SUMMARY_PUBLISHED };
     }
@@ -159,6 +177,16 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
         SUMMARY_PUBLISHED,
         "a CPU summary publishes once"
     );
+    if let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() } {
+        assert!(
+            ledger
+                .blocks
+                .lock()
+                .unwrap()
+                .valid(unsafe { &(*native).summary_blocks }),
+            "saved CPU summary retains its exact allocation generations"
+        );
+    }
     if !super::super::engine::host_segment_barrier(ctx)? {
         return Ok(false);
     }
@@ -166,6 +194,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
     unsafe {
         (*native).summary_status = u32::from(ACCEPTED);
         (*native).summary = std::ptr::null_mut();
+        (*native).summary_blocks.clear();
     }
     Ok(true)
 }

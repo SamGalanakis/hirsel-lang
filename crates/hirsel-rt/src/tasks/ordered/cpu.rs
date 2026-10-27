@@ -77,6 +77,18 @@ impl Batch {
         self.owners.contains_key(&task).then_some(self.limit)
     }
 
+    pub(super) fn block_owner(
+        &self,
+        task: TaskId,
+    ) -> Option<crate::pool::cpu_scoped::ledger::blocks::Owner> {
+        self.owners
+            .get(&task)
+            .map(|&ordinal| crate::pool::cpu_scoped::ledger::blocks::Owner {
+                task,
+                ordinal: ordinal as u64,
+            })
+    }
+
     pub(super) fn owns(&self, task: TaskId, ordinal: u64) -> bool {
         self.owners.get(&task).copied().map(|n| n as u64) == Some(ordinal)
     }
@@ -134,13 +146,24 @@ impl Batch {
 /// later rest follow ordinary canonical ownership and cleanup, after this job.
 pub(super) fn finish_job(ctx: *mut TaskCtx) -> Stopped<()> {
     let task = engine::current(ctx);
+    let owner = engine::with_driver(ctx, |d| {
+        d.cpu_batch
+            .as_ref()
+            .and_then(|batch| batch.block_owner(task))
+    });
     let result = engine::with_driver(ctx, |d| {
         let batch = d.cpu_batch.as_mut()?;
         let empty = Stretch::new(d.budgets);
         let state = &mut d.frontier.as_mut().unwrap().settled;
         batch.settle(task, &empty, state, true)
     });
-    result.unwrap_or(Ok(())).map_err(Stop::BudgetExceeded)
+    result.unwrap_or(Ok(())).map_err(Stop::BudgetExceeded)?;
+    if let Some(owner) = owner
+        && let Some(ledger) = unsafe { (*ctx).heap_ref().meter.cpu.get() }
+    {
+        ledger.blocks.lock().unwrap().disown(owner);
+    }
+    Ok(())
 }
 
 fn receipt(

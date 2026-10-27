@@ -1,6 +1,8 @@
 //! CPU grant storage follows backing allocations, including orphan heaps.
 use std::sync::{Arc, Mutex};
 
+pub(crate) mod blocks;
+
 #[derive(Debug, Default)]
 struct Held {
     heap: u64,
@@ -13,6 +15,7 @@ pub(crate) struct Ledger {
     physical_limit: u64,
     batch_limit: u64,
     held: Mutex<Held>,
+    pub(crate) blocks: Mutex<blocks::Blocks>,
 }
 
 pub(crate) struct Topology {
@@ -52,6 +55,7 @@ impl Ledger {
             physical_limit: grant.max_physical_bytes,
             batch_limit: grant.max_batch_bytes,
             held: Mutex::default(),
+            blocks: Mutex::default(),
         })
     }
     #[cfg(test)]
