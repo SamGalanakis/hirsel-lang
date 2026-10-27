@@ -4287,3 +4287,133 @@ fn ownership_trace_parallel_edge_cycles_preserve_logical_markers_and_stage_all_s
     row.marker.owner = row.marker.token;
     assert!(native::LeafPlan::from_relocated(&unit, &table, &forged).is_err());
 }
+
+#[test]
+fn ownership_source_variant_carriers_never_create_a_shell_resource() {
+    use hirsel_lir::layout_types::{CopyRecipe, DropStep};
+    use hirsel_lir::stage::Value;
+    for variant in [0, 1] {
+        let parameters: &[(Passing, hirsel_lir::layout_types::LayoutId)] = if variant == 0 {
+            &[]
+        } else {
+            &[(Passing::Take, l::RES)]
+        };
+        let mut t = Lir::<Value>::new(parameters, Some(l::OPT));
+        let carrier = &mut t.table.layouts[l::OPT.0 as usize];
+        carrier.tag.as_mut().unwrap().variants[1].fields[0].layout = l::RES;
+        carrier.copy = CopyRecipe::NotCopyable;
+        carrier.drop = vec![DropStep::ActiveVariant {
+            tag_offset: 0,
+            form: hirsel_lir::layout_types::TagForm::Ordinal,
+            variants: vec![(
+                1,
+                vec![DropStep::Child {
+                    offset: 8,
+                    layout: l::RES,
+                }],
+            )],
+        }];
+        let fields = if variant == 0 {
+            Vec::new()
+        } else {
+            let token = t.owned(l::RES);
+            t.param(token);
+            vec![(0, token)]
+        };
+        let symbol = t.symbol(SymbolKind::Type);
+        let placement = t.heap();
+        let construct = t.construct_site(
+            ConstructorKind::Variant {
+                definition: symbol,
+                variant,
+            },
+            l::OPT,
+            &fields,
+            placement,
+        );
+        t.builder.unit.tables.constructs[construct.index()].placement = None;
+        let result = t.owned(l::OPT);
+        let failure = t.fails();
+        t.builder.push(
+            ENTRY,
+            Inst::Construct {
+                result,
+                construct,
+                failure,
+            },
+        );
+        t.builder.ret(ENTRY, Some(result));
+        let (unit, table, _) = t.finish();
+        let unit = checked_native_fixture(unit, &table);
+        let plan = native::LeafPlan::prepare_value(&unit, &table).unwrap();
+        check(unit.unit(), &plan).unwrap();
+        assert_eq!(plan.observations.len(), if variant == 0 { 1 } else { 3 });
+        assert!(
+            plan.observations
+                .iter()
+                .all(|row| row.marker.kind == Kind::Move)
+        );
+        if let Some((field, token)) = fields.first() {
+            let row = plan
+                .observations
+                .iter()
+                .find(|row| row.marker.token == Location::Value(*token))
+                .unwrap();
+            assert_eq!(
+                row.marker.owner,
+                Location::Field {
+                    aggregate: result,
+                    field: *field
+                }
+            );
+            let mut forged = plan.clone();
+            forged
+                .observations
+                .iter_mut()
+                .find(|at| at.marker.id == row.marker.id)
+                .unwrap()
+                .marker
+                .owner = Location::Field {
+                aggregate: result,
+                field: 1,
+            };
+            assert!(check(unit.unit(), &forged).is_err());
+        }
+        let index = hirsel_lir::LayoutIndex::new(&table);
+        let placement = hirsel_rc::placement::Options::default();
+        let proofs = hirsel_rc::insert::Proofs::default();
+        let reuse = hirsel_rc::reuse::Options::default();
+        let finalizers = Default::default();
+        let output = hirsel_rc::observed::lower(
+            unit.into_raw(),
+            &plan,
+            &index,
+            &hirsel_rc::observed::Options {
+                placement: &placement,
+                proofs: &proofs,
+                elide: true,
+                reuse: &reuse,
+                finalizers: &finalizers,
+            },
+        )
+        .unwrap();
+        assert_eq!(output.recipes.len(), 10);
+        assert_eq!(
+            output
+                .plan
+                .observations
+                .iter()
+                .map(|row| &row.marker)
+                .collect::<Vec<_>>(),
+            plan.observations
+                .iter()
+                .map(|row| &row.marker)
+                .collect::<Vec<_>>()
+        );
+        let ready = checked_native_fixture(output.unit, &table);
+        assert!(
+            native::LeafPlan::from_relocated(&ready, &table, &output.plan).is_err(),
+            "native variants still need their active-arm transport proof"
+        );
+    }
+}

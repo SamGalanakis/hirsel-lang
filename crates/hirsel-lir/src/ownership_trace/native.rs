@@ -131,7 +131,10 @@ impl LeafPlan {
                     .is_some_and(|record| matches!(record.kind, LayoutKind::Aggregate));
             let source_aggregate = source_only
                 && layouts.layout(layout).is_some_and(|record| {
-                    matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource)
+                    matches!(
+                        record.kind,
+                        LayoutKind::Aggregate | LayoutKind::Resource | LayoutKind::Variant
+                    )
                 });
             let resource_tree = layouts.layout(layout).is_some_and(|record| {
                 matches!(record.kind, LayoutKind::Resource)
@@ -273,12 +276,13 @@ impl LeafPlan {
                             .get(&unit.pools.fields)
                             .ok_or("ownership construction has no checked fields")?;
                         let nested = fields.iter().any(|field| owned(field.value));
-                        // An aggregate carries existing child lineage without a new
-                        // identity. A Resource constructor also creates its own token.
-                        let aggregate = nested
-                            && layouts
-                                .layout(layout(result))
-                                .is_some_and(|record| matches!(record.kind, LayoutKind::Aggregate));
+                        // Containers carry child lineage; an empty variant has no
+                        // token even when another arm can hold a Resource. Resource
+                        // constructors also create their own nominal identity.
+                        let aggregate = layouts.layout(layout(result)).is_some_and(|record| {
+                            matches!(record.kind, LayoutKind::Variant)
+                                || (nested && matches!(record.kind, LayoutKind::Aggregate))
+                        });
                         if owned(result) && !aggregate {
                             push(
                                 after,
