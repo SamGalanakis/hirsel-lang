@@ -107,7 +107,9 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                     );
                 }
                 Inst::StorageLive { slot } | Inst::StorageDead { slot, .. }
-                    if matches!(unit.slots[slot.index()].kind, SlotKind::ReceiptParameter(_)) =>
+                    if matches!(unit.slots[slot.index()].kind, SlotKind::ReceiptParameter(_))
+                        && (matches!(inst, Inst::StorageLive { .. })
+                            || borrowed_parameter(cx, slot)) =>
                 {
                     reject(
                         site,
@@ -216,4 +218,15 @@ fn metadata_address<S>(cx: &Cx<'_, S>, mut address: AddressId, read: bool) -> bo
         }
     }
     false
+}
+
+fn borrowed_parameter<S>(cx: &Cx<'_, S>, slot: SlotId) -> bool {
+    let SlotKind::ReceiptParameter(source) = cx.unit.slots[slot.index()].kind else {
+        return false;
+    };
+    cx.layouts.0.fn_abis[cx.unit.header.abi.0 as usize]
+        .receipts
+        .as_ref()
+        .and_then(|contract| contract.parameters.iter().find(|p| p.source == source))
+        .is_some_and(|p| p.mode == crate::sealed_payload_source::ReceiptMode::Borrow)
 }

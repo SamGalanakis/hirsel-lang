@@ -18,7 +18,7 @@ use super::tokens;
 use super::{Cx, Report, Site, ViolationKind as K};
 use crate::ir::{
     AddressId, ArgumentValue, BlockId, BlockKind, CaptureUse, CleanupAnchorId, EdgeId, FailureId,
-    FlatFieldOp, Holding, INSTRUCTION_DROP, Inst, LOOP_RELEASE, LoanId, Placement,
+    FlatFieldOp, Holding, INSTRUCTION_DROP, Inst, LOOP_RELEASE, LoanId, Placement, ReceiptArgument,
     SCRATCH_DISPOSAL, STATE_RELEASE, ScopeId, ScopeInfo, SlotId, SlotKind, StorageOwner,
     Terminator, UnitOrigin, ValueId, ValueRepr,
 };
@@ -776,6 +776,13 @@ impl<S: Stage> Walker<'_, '_, S> {
                         _ => {}
                     }
                 }
+                if let Some(receipts) = &site_data.receipts {
+                    for argument in &receipts.arguments {
+                        if let ReceiptArgument::Take { receipt, .. } = *argument {
+                            self.consume(site, &st, &mut cr, receipt);
+                        }
+                    }
+                }
                 // Call entry has transferred Take actuals; callee failure
                 // excludes them from caller cleanup.
                 outs.push(self.failure(site, b, failure, st.clone(), cr.clone()));
@@ -1253,12 +1260,14 @@ impl<S: Stage> Walker<'_, '_, S> {
         // Dead storage owns nothing, so only a caller's `mut` parameter is
         // checked whatever its state; every other slot is checked where it
         // holds something.
+        let cx = self.cx;
         let passing = |id: SlotId| {
             self.facts
                 .parameters
                 .iter()
                 .find(|&&(_, p)| p == Some(id))
                 .map(|&(passing, _)| passing)
+                .or_else(|| receipt_passing(cx, id))
         };
         let written: BTreeSet<SlotId> = self
             .facts
@@ -1286,10 +1295,7 @@ impl<S: Stage> Walker<'_, '_, S> {
             let slot = &unit.slots[s];
             match (passing(id), slot.kind) {
                 (Some(Passing::Mut | Passing::Borrow), _)
-                | (
-                    _,
-                    SlotKind::Capture(_) | SlotKind::ReturnSlot | SlotKind::ReceiptParameter(_),
-                ) => {}
+                | (_, SlotKind::Capture(_) | SlotKind::ReturnSlot) => {}
                 _ => {
                     if self.cx.owns_type(slot.ty) && !self.empty(id, state) {
                         self.err(site, K::LeakedStorage(id));
@@ -1566,14 +1572,12 @@ impl<S: Stage> Walker<'_, '_, S> {
     }
 
     fn borrowed_storage(&mut self, site: Site, slot: SlotId) {
-        if matches!(
-            self.cx.unit.slots[slot.index()].kind,
-            SlotKind::ReceiptParameter(_)
-        ) || self
-            .facts
-            .parameters
-            .iter()
-            .any(|&(passing, p)| passing == Passing::Borrow && p == Some(slot))
+        if receipt_passing(self.cx, slot) == Some(Passing::Borrow)
+            || self
+                .facts
+                .parameters
+                .iter()
+                .any(|&(passing, p)| passing == Passing::Borrow && p == Some(slot))
         {
             self.err(site, K::BorrowedStorage(slot));
         }
@@ -2996,6 +3000,24 @@ impl<S: Stage> Walker<'_, '_, S> {
             Inst::Forget { value } => self.consume(site, st, cr, value),
         }
     }
+}
+
+fn receipt_passing<S>(cx: &Cx<'_, S>, slot: SlotId) -> Option<Passing> {
+    let SlotKind::ReceiptParameter(source) = cx.unit.slots[slot.index()].kind else {
+        return None;
+    };
+    let unit = cx.unit;
+    cx.layouts.0.fn_abis[unit.header.abi.0 as usize]
+        .receipts
+        .as_ref()?
+        .parameters
+        .iter()
+        .find(|p| p.source == source)
+        .map(|p| match p.mode {
+            crate::sealed_payload_source::ReceiptMode::Borrow => Passing::Borrow,
+            crate::sealed_payload_source::ReceiptMode::Take => Passing::Take,
+            crate::sealed_payload_source::ReceiptMode::MutSlot => Passing::Mut,
+        })
 }
 
 #[cfg(test)]

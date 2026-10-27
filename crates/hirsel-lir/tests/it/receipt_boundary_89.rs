@@ -21,6 +21,9 @@ struct Declarations {
     sources: Vec<ReceiptSource>,
 }
 impl OperationDeclarations for Declarations {
+    fn pretransfer_adapters(&self) -> &[hirsel_lir::pretransfer::AdapterReference] {
+        &self.ordinary.pretransfer_adapters
+    }
     fn receipt_source(&self, definition: &DefPath, instance: ContentHash) -> Option<ReceiptSource> {
         self.sources
             .iter()
@@ -48,6 +51,10 @@ impl OperationDeclarations for Declarations {
 }
 
 fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
+    fixture_mode(call, false)
+}
+
+fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
     let types = support::session();
     let scalar = types.intern(Type::with_kind(TypeKind::Primitive(P::U64)));
     let boxed = types.intern(Type::with_kind(TypeKind::Builtin {
@@ -73,10 +80,15 @@ fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
     }
     let ordinary = LayoutId(ordinary.0 + offset);
     let meta = LayoutId(meta.0 + offset);
-    let params = [(Passing::Borrow, ordinary), (Passing::Borrow, ordinary)];
+    let passing = if take { Passing::Take } else { Passing::Borrow };
+    let params = [(passing, ordinary), (passing, ordinary)];
     t.builder.unit.header.abi = t.abi(&params, None);
     for _ in 0..2 {
-        let value = t.value_as(ValueRepr::Block, ordinary, Holding::Plain);
+        let value = t.value_as(
+            ValueRepr::Block,
+            ordinary,
+            if take { Holding::Owned } else { Holding::Plain },
+        );
         t.param(value);
     }
     let profile = ClosedStorageProfile {
@@ -96,7 +108,11 @@ fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
             .map(|source| ReceiptParameter {
                 source,
                 ty: ty.clone(),
-                mode: ReceiptMode::Borrow,
+                mode: if take {
+                    ReceiptMode::Take
+                } else {
+                    ReceiptMode::Borrow
+                },
             })
             .collect(),
         None,
@@ -175,26 +191,55 @@ fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
                 projection: PoolRange::EMPTY,
                 ty,
             });
-            t.prepare(ENTRY, address, &[]);
+            if take {
+                // A whole metadata-slot address has no fallible projection.
+                let fault = t.builder.block(BlockKind::FailureCleanup, &[]);
+                t.builder.term(
+                    fault,
+                    Terminator::InvariantFault {
+                        reason: "whole metadata-slot address failed".into(),
+                    },
+                );
+                let failure = t.failure(fault);
+                t.builder.push(ENTRY, Inst::Address { address, failure });
+            } else {
+                t.prepare(ENTRY, address, &[]);
+            }
             addresses.push(address);
         }
         for (binding, address) in bindings.iter().zip(addresses) {
-            let loan = t.loan(address, false);
-            t.begin(ENTRY, loan);
-            loans.push(loan);
-            let value = t.value_as(ValueRepr::PayloadReceipt, meta, Holding::Borrowed(loan));
+            let holding = if take {
+                Holding::Owned
+            } else {
+                let loan = t.loan(address, false);
+                t.begin(ENTRY, loan);
+                loans.push(loan);
+                Holding::Borrowed(loan)
+            };
+            let value = t.value_as(ValueRepr::PayloadReceipt, meta, holding);
             t.builder.push(
                 ENTRY,
                 Inst::Read {
                     result: value,
                     address,
                     reaching: binding.version,
-                    mode: ReadMode::Borrow,
+                    mode: if take {
+                        ReadMode::Take
+                    } else {
+                        ReadMode::Borrow
+                    },
                 },
             );
-            receipts.push(ReceiptArgument::Borrow {
-                parameter: binding.source,
-                receipt: value,
+            receipts.push(if take {
+                ReceiptArgument::Take {
+                    parameter: binding.source,
+                    receipt: value,
+                }
+            } else {
+                ReceiptArgument::Borrow {
+                    parameter: binding.source,
+                    receipt: value,
+                }
             });
         }
         let next = t.builder.block(BlockKind::Body, &[]);
@@ -235,6 +280,33 @@ fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
             instance: symbol.instance.unwrap(),
             ..own_source
         });
+        if take {
+            let mut pending = t.builder.unit.tables.calls[0]
+                .receipts
+                .as_ref()
+                .unwrap()
+                .inputs()
+                .collect::<Vec<_>>();
+            pending.reverse();
+            pending.extend(t.builder.unit.parameters.iter().copied());
+            let rejected = t.releasing(&pending);
+            let failure = t.failure(rejected);
+            t.builder.unit.tables.calls[0].pretransfer_failure = Some(failure);
+            let Callee::Direct(symbol) = t.builder.unit.tables.calls[0].callee else {
+                unreachable!()
+            };
+            t.operations
+                .pretransfer_adapters
+                .push(hirsel_lir::pretransfer::AdapterReference {
+                    adapter: t.builder.unit.tables.symbols[symbol.index()].clone(),
+                    primitive: Symbol {
+                        kind: SymbolKind::Function,
+                        definition: DefPath::core("map.insert"),
+                        instance: Some(support::hash("independent primitive")),
+                    },
+                    abi: id,
+                });
+        }
         t.builder.ret(next, None);
     } else {
         t.builder.ret(ENTRY, None);
@@ -521,4 +593,121 @@ fn cached_call_output_replays_absent_and_present_callee_source_without_materiali
         hirsel_lir::construction::ValueCounts::default()
     );
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn take_data_entry_and_call_transfer_companions_only_after_admission() {
+    let (unit, table, manifest, declarations) = fixture_mode(true, true);
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+    let call = &unit.tables.calls[0];
+    assert!(call.pretransfer_failure.is_some());
+    assert!(
+        call.receipts
+            .as_ref()
+            .unwrap()
+            .arguments
+            .iter()
+            .all(|argument| matches!(argument, ReceiptArgument::Take { .. }))
+    );
+    // Normal and entered-failure continuations hold no transferred owners.
+    for mutation in 0..4 {
+        let mut unit = unit.clone();
+        match mutation {
+            0 => {
+                let receipts = unit.tables.calls[0].receipts.as_mut().unwrap();
+                let [
+                    ReceiptArgument::Take { receipt: a, .. },
+                    ReceiptArgument::Take { receipt: b, .. },
+                ] = receipts.arguments.as_mut_slice()
+                else {
+                    unreachable!()
+                };
+                std::mem::swap(a, b);
+            }
+            1 => {
+                // Rejected admission still owes every pending metadata owner.
+                let metadata = unit.tables.calls[0]
+                    .receipts
+                    .as_ref()
+                    .unwrap()
+                    .inputs()
+                    .next()
+                    .unwrap();
+                let released = unit
+                    .instructions
+                    .iter_mut()
+                    .find(|i| matches!(i, Inst::Release { value, .. } if *value == metadata))
+                    .unwrap();
+                let Inst::Release { value, .. } = released else {
+                    unreachable!()
+                };
+                *value = unit.tables.calls[0]
+                    .receipts
+                    .as_ref()
+                    .unwrap()
+                    .inputs()
+                    .nth(1)
+                    .unwrap();
+            }
+            2 => {
+                // A taken entry is a real owner, not a borrowed-slot exemption.
+                let binding = &unit.tables.receipt_entry.as_ref().unwrap().parameters[0];
+                let read = unit
+                    .instructions
+                    .iter_mut()
+                    .find(|i| {
+                        matches!(i,
+                    Inst::Read { reaching, .. } if *reaching == binding.version)
+                    })
+                    .unwrap();
+                let Inst::Read { reaching, .. } = read else {
+                    unreachable!()
+                };
+                *reaching = unit.tables.receipt_entry.as_ref().unwrap().parameters[1].version;
+            }
+            3 => {
+                // Entered failure cannot run rejected-admission cleanup again.
+                let rejected = unit.tables.calls[0].pretransfer_failure.unwrap();
+                let Terminator::Call { failure, .. } = unit.terminators[ENTRY.index()] else {
+                    unreachable!()
+                };
+                unit.tables.failures[failure.index()].cleanup =
+                    unit.tables.failures[rejected.index()].cleanup;
+            }
+            _ => unreachable!(),
+        }
+        let errors = check(&unit, &table, &manifest, &declarations);
+        assert!(!errors.is_empty(), "mutation {mutation}");
+        if mutation == 0 {
+            assert!(
+                errors.iter().any(|e| matches!(&e.kind,
+                validate::ViolationKind::Sealed(text) if text.contains("not paired"))),
+                "{errors:#?}"
+            );
+        }
+        if mutation == 1 {
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| matches!(e.kind, validate::ViolationKind::Leak(_))),
+                "{errors:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn taking_an_entry_without_disposing_its_companion_leaks_storage() {
+    let (unit, table, manifest, declarations) = fixture_mode(false, true);
+    let errors = check(&unit, &table, &manifest, &declarations);
+    let entry = unit.tables.receipt_entry.as_ref().unwrap();
+    for binding in &entry.parameters {
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.kind == validate::ViolationKind::LeakedStorage(binding.slot)),
+            "{errors:#?}"
+        );
+    }
 }

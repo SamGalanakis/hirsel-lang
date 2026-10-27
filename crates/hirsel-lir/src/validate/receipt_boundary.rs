@@ -1,19 +1,19 @@
-//! Borrowed data entry companions are source-bound snapshots, never owners.
+//! Data entry companions are source-bound snapshots with matching custody.
 //! Captures, mutation, result publication and tasks remain closed here.
 use super::{Cx, Inputs, Report, Site, ViolationKind as K};
 use crate::{ir::*, sealed_payload_source::*, stage::Stage};
 
-fn borrowed(contract: &ReceiptContract) -> Result<(), &'static str> {
+fn supported(contract: &ReceiptContract) -> Result<(), &'static str> {
     if !contract.captures.is_empty()
         || !contract.inventory.is_empty()
         || contract.result.is_some()
         || contract
             .parameters
             .iter()
-            .any(|p| p.mode != ReceiptMode::Borrow)
+            .any(|p| p.mode == ReceiptMode::MutSlot)
     {
         return Err(
-            "receipt boundary requires borrowed data parameters without captures, inventory or receipt results",
+            "receipt boundary requires borrow or take data parameters without captures, inventory or receipt results",
         );
     }
     Ok(())
@@ -32,7 +32,7 @@ fn source(
     {
         return Err("receipt source differs from the selected boundary or complete ABI contract");
     }
-    borrowed(&source.contract)
+    supported(&source.contract)
 }
 
 fn parameter_type(
@@ -170,8 +170,12 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                 .as_ref()
                 .ok_or("receipt call lacks its carriers")?;
             for argument in &receipts.arguments {
-                let ReceiptArgument::Borrow { parameter, receipt } = *argument else {
-                    return Err("receipt call requires borrowed metadata custody".into());
+                let (parameter, receipt) = match *argument {
+                    ReceiptArgument::Borrow { parameter, receipt }
+                    | ReceiptArgument::Take { parameter, receipt } => (parameter, receipt),
+                    ReceiptArgument::Mut { .. } => {
+                        return Err("receipt call requires independent writeback custody".into());
+                    }
                 };
                 let ordinary = call
                     .arguments
@@ -181,7 +185,7 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                     .find(|a| a.parameter == parameter)
                     .ok_or("receipt call lacks its ordinary argument")?;
                 let ArgumentValue::Value(value) = ordinary.value else {
-                    return Err("receipt borrow lacks its ordinary value".into());
+                    return Err("receipt input lacks its ordinary value".into());
                 };
                 if !pairs.paired(value, receipt) {
                     return Err(
