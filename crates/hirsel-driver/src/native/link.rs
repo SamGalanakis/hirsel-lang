@@ -138,11 +138,22 @@ pub(super) fn bounded(
     command: &mut Command,
     timeout: Duration,
 ) -> Result<std::process::Output, NativeError> {
+    bounded_input(command, timeout, false)
+}
+fn bounded_input(
+    command: &mut Command,
+    timeout: Duration,
+    stdin_granted: bool,
+) -> Result<std::process::Output, NativeError> {
     use std::os::unix::process::CommandExt;
     use std::process::Stdio;
     let child = command
         .process_group(0)
-        .stdin(Stdio::null())
+        .stdin(if stdin_granted {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -2682,6 +2693,8 @@ pub(crate) fn launch_ownership(
     toolchain: &Toolchain,
     dir: &Path,
     destination: &Path,
+    run: Option<&hirsel_run_config::ValidatedRun>,
+    tape: Tape<'_>,
 ) -> Result<Launched, NativeError> {
     if !toolchain.runtime_build.ownership_trace {
         return Err(NativeError::new(
@@ -2689,17 +2702,23 @@ pub(crate) fn launch_ownership(
             "ownership launch requires the explicitly selected runtime product",
         ));
     }
+    let mut stdout = std::io::sink();
+    let mut stderr = std::io::sink();
+    let live = run.map(|run| LiveRun {
+        run,
+        trace_events: None,
+        inherit: false,
+        stdout: &mut stdout,
+        stderr: &mut stderr,
+    });
     launch_impl(
         runnable,
         target,
         toolchain,
         dir,
         false,
-        Tape::Live {
-            record: None,
-            revocations: None,
-        },
-        None,
+        tape,
+        live,
         None,
         Some(destination),
     )
@@ -3017,7 +3036,13 @@ fn launch_impl(
                 .signals_grant()
                 .filter(|grant| grant.script.is_none() && !matches!(tape, Tape::Replay(_)));
             let _deferred = DeferredSignals::to_child(&mut process, observed);
-            let output = run_live(&mut process, stdin, live.inherit, live.stdout, live.stderr)?;
+            let output = if ownership.is_some() {
+                // Ownership diagnostics retain the existing bounded launch.
+                // Grants select ordinary input and effects, never a wider cap.
+                bounded_input(&mut process, toolchain.launch_timeout, stdin)?
+            } else {
+                run_live(&mut process, stdin, live.inherit, live.stdout, live.stderr)?
+            };
             if let Runnable::Image(image) = runnable {
                 if let Some(error) = super::runner::tooling_failure(&tooling) {
                     return Err(error);

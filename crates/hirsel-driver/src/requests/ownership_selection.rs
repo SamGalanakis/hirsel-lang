@@ -103,6 +103,74 @@ impl OwnershipExecution {
                     .map_err(|error| error.to_string())
             })
     }
+    /// Bind explicit grants or a replay to the same immutable source facts
+    /// used by this diagnostic compilation. This performs no compiler queries.
+    pub fn launch_with(
+        &self,
+        objects: &OwnershipObjects,
+        tools: &native::Toolchain,
+        directory: &std::path::Path,
+        event_limit: usize,
+        launch: crate::HostLaunch<'_>,
+    ) -> Result<native::ownership_trace::LeafExecution, String> {
+        use crate::{BoundHostRun, launch_binding::LaunchSelection};
+        if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
+            return Err("ownership objects belong to another selected completion".into());
+        }
+        if matches!(launch, crate::HostLaunch::Callee { .. }) {
+            return Err("ownership launch does not execute runner callees".into());
+        }
+        let source = &self._owner._source;
+        let selection = LaunchSelection::read(launch).map_err(|e| e.to_string())?;
+        if selection.requires_replayable(launch) && !source.run.foreign.unmodeled.is_empty() {
+            return Err("ownership recording requires replayable source effects".into());
+        }
+        let signature = source
+            .signatures
+            .signature(hirsel_syntax::DefId::intern(&self.entry))
+            .and_then(Result::ok)
+            .ok_or("ownership launch has no selected source signature")?;
+        let bound = selection
+            .bind(
+                launch,
+                source.signatures.types(),
+                signature,
+                &self.revision,
+                source.run.code.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+        let (run, tape) = match (bound, launch) {
+            (
+                BoundHostRun::Live(bound),
+                crate::HostLaunch::Live {
+                    record,
+                    revocations,
+                    ..
+                },
+            ) => {
+                hirsel_rt::host_launch::recording_level(bound.run(), record.is_some())
+                    .map_err(|e| e.to_string())?;
+                (
+                    bound.into_run(),
+                    native::Tape::Live {
+                        record,
+                        revocations,
+                    },
+                )
+            }
+            (BoundHostRun::Replay { run, .. }, crate::HostLaunch::Replay(path)) => {
+                (run, native::Tape::Replay(path))
+            }
+            _ => return Err("ownership launch binding changed form".into()),
+        };
+        self.tasks
+            .with_link_context(self.root, &self.link, |program, _, _, _| {
+                objects
+                    .objects
+                    .launch_selected(program, tools, directory, event_limit, Some(&run), tape)
+                    .map_err(|e| e.to_string())
+            })
+    }
     /// Decode the ordinary launch record against this exact selected source
     /// and object owner. Ownership rows and exit codes cannot invent a failure
     /// rule, source attribution or a clean runtime audit.

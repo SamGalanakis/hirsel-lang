@@ -463,6 +463,33 @@ impl LeafObjects {
         dir: &std::path::Path,
         event_limit: usize,
     ) -> Result<LeafExecution, NativeError> {
+        self.launch_selected(
+            program,
+            toolchain,
+            dir,
+            event_limit,
+            None,
+            super::Tape::Live {
+                record: None,
+                revocations: None,
+            },
+        )
+    }
+    pub(crate) fn launch_selected(
+        &self,
+        program: &ReadyProgram,
+        toolchain: &super::Toolchain,
+        dir: &std::path::Path,
+        event_limit: usize,
+        run: Option<&hirsel_run_config::ValidatedRun>,
+        tape: super::Tape<'_>,
+    ) -> Result<LeafExecution, NativeError> {
+        if run.is_some_and(|run| run.record().inputs != program.launch) {
+            return Err(NativeError::new(
+                StageName::Launch,
+                "ownership launch inputs differ from the compiled request",
+            ));
+        }
         if program
             .revision(&self.entry)
             .map(|revision| revision.digest())
@@ -482,10 +509,17 @@ impl LeafObjects {
         std::fs::create_dir_all(dir)
             .map_err(|error| NativeError::new(StageName::Link, error.to_string()))?;
         let runnable =
-            super::link_runnable(program, &self.entry, &self.objects, toolchain, dir, None)?;
+            super::link_runnable(program, &self.entry, &self.objects, toolchain, dir, run)?;
         let sidecar = dir.join("ownership.rows.json");
-        let execution =
-            super::link::launch_ownership(&runnable, &program.target, toolchain, dir, &sidecar)?;
+        let execution = super::link::launch_ownership(
+            &runnable,
+            &program.target,
+            toolchain,
+            dir,
+            &sidecar,
+            run,
+            tape,
+        )?;
         let trace = (|| -> Result<_, String> {
             use std::io::Read;
             let file = std::fs::File::open(&sidecar)
