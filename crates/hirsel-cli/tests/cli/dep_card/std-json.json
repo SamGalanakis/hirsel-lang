@@ -115,11 +115,11 @@
           "basis": "source_token_work_estimate",
           "build_ms": null,
           "check_ms": null,
-          "check_source_tokens": 2176,
-          "lower_source_tokens": 2176,
-          "native_build_source_tokens": 2176,
+          "check_source_tokens": 2175,
+          "lower_source_tokens": 2175,
+          "native_build_source_tokens": 2175,
           "prechecked_definitions": 0,
-          "reached_source_tokens": 2176
+          "reached_source_tokens": 2175
         },
         "definitions": {
           "reached": 17,

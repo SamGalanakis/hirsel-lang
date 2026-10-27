@@ -9,7 +9,7 @@ std@1/json
     unresolved authority: core@1/bytes/append, core@1/bytes/find_any, core@1/bytes/from_list, core@1/bytes/json_number_end, core@1/bytes/len, core@1/bytes/slice, core@1/char/from_u32, core@1/char/to_u32, core@1/int/narrow, core@1/int/widen, core@1/list/push, core@1/map/empty, core@1/map/get, core@1/map/insert, core@1/string/as_bytes, core@1/string/from_bytes
   Weight: 17 / 50 definitions, 1 / 1 source units reached
     dependencies: none
-    cost estimate: 2176 source tokens; check 2176, lower 2176, native build 2176; 0 prechecked definitions (timings unavailable)
+    cost estimate: 2175 source tokens; check 2175, lower 2175, native build 2175; 0 prechecked definitions (timings unavailable)
   Exposure: none
   Replay (whole public API): no_unmodeled_ffi; externs: none; Unsafe operations: none
     provider capability contracts: none (implementations selected by run record)
