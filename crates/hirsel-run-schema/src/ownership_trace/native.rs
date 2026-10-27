@@ -130,7 +130,7 @@ pub struct Metadata {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocationPath {
     pub root: u64,
-    pub fields: Vec<u32>,
+    pub fields: Vec<super::Projection>,
 }
 /// A physical child Drop bound independently to its checked declaration path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,11 +188,15 @@ fn projected_owner(
         return Err(Error::InvalidLocation(location));
     }
     let mut at = owner(task, frame, parent, environment, parameters, path.root)?;
-    at.path.extend(
-        path.fields
-            .iter()
-            .map(|&field| super::Projection::Field { field }),
-    );
+    if path.fields.iter().any(|projection| {
+        !matches!(
+            projection,
+            super::Projection::Field { .. } | super::Projection::VariantField { .. }
+        )
+    }) {
+        return Err(Error::InvalidLocation(location));
+    }
+    at.path.extend(path.fields.iter().cloned());
     Ok(at)
 }
 

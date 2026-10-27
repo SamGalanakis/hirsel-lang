@@ -3566,7 +3566,7 @@ fn ownership_trace_native_static_field_locations_keep_declaration_paths_and_refu
                 kind: 1,
                 index: slot.0
             },
-            fields: vec![1]
+            fields: vec![native::NativeProjection::Field(1)]
         })
     );
     assert!(
@@ -3635,7 +3635,13 @@ fn ownership_trace_native_compound_completions_keep_original_marker_and_exact_ch
                 .unwrap();
             paths.insert(path.fields);
         }
-        assert_eq!(paths, std::collections::BTreeSet::from([vec![0], vec![1]]));
+        assert_eq!(
+            paths,
+            std::collections::BTreeSet::from([
+                vec![native::NativeProjection::Field(0)],
+                vec![native::NativeProjection::Field(1)]
+            ])
+        );
     }
     let mut missing = plan.clone();
     missing.observations.remove(0);
@@ -4882,4 +4888,45 @@ fn ownership_trace_additional_cleanup_requires_an_introduced_release_and_the_sam
         wrong.cleanups[0].before = Some(extra);
         assert!(check_transform(&before, &input, &after, &output, Some(&wrong)).is_err());
     }
+}
+
+#[test]
+fn ownership_trace_native_variant_field_locations_keep_the_checked_arm_and_declaration() {
+    let mut t = Lir::<hirsel_lir::stage::Ready>::new(&[(Passing::Borrow, l::OPT)], None);
+    let slot = t.slot(l::OPT, SlotKind::Parameter(0), ROOT);
+    let version = t.version_of(slot);
+    t.param(version);
+    let address = t.at(
+        ENTRY,
+        slot,
+        &[ProjectionStep::VariantField {
+            variant: 1,
+            field: 0,
+        }],
+        &[],
+    );
+    t.builder.ret(ENTRY, None);
+    let (unit, table, _) = t.finish();
+    let unit = checked_native_fixture(unit, &table);
+    assert_eq!(
+        native::projected_location(
+            unit.unit(),
+            &table,
+            native::NativeLocation {
+                kind: 7,
+                index: address.0
+            }
+        )
+        .unwrap(),
+        Some(native::NativePath {
+            root: native::NativeLocation {
+                kind: 1,
+                index: slot.0
+            },
+            fields: vec![native::NativeProjection::VariantField {
+                variant: 1,
+                field: 0
+            }]
+        })
+    );
 }

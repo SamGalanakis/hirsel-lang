@@ -209,7 +209,12 @@ pub(crate) fn emit_relocated(
                 .map(|path| {
                     hirsel_run_schema::ownership_trace::native::LocationPath {
                         root: location(path.root),
-                        fields: path.fields,
+                        fields: path.fields.into_iter().map(|part| match part {
+                            hirsel_lir::ownership_trace::native::NativeProjection::Field(field) =>
+                                hirsel_run_schema::ownership_trace::Projection::Field { field },
+                            hirsel_lir::ownership_trace::native::NativeProjection::VariantField { variant, field } =>
+                                hirsel_run_schema::ownership_trace::Projection::VariantField { variant, field },
+                        }).collect(),
                     }
                 }))
             };

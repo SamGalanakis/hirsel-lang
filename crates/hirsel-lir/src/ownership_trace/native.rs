@@ -1910,7 +1910,13 @@ impl LeafPlan {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativePath {
     pub root: NativeLocation,
-    pub fields: Vec<u32>,
+    pub fields: Vec<NativeProjection>,
+}
+/// Checked declaration identity, including the variant that owns a field.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum NativeProjection {
+    Field(u32),
+    VariantField { variant: u32, field: u32 },
 }
 fn address_path<S>(
     unit: &LirUnit<S>,
@@ -1930,7 +1936,10 @@ fn address_path<S>(
         let fields = steps
             .iter()
             .map(|step| match *step {
-                ProjectionStep::Field(field) => Ok(field),
+                ProjectionStep::Field(field) => Ok(NativeProjection::Field(field)),
+                ProjectionStep::VariantField { variant, field } => {
+                    Ok(NativeProjection::VariantField { variant, field })
+                }
                 _ => Err(
                     "native ownership tracing: dynamic or non-field storage is not implemented"
                         .to_string(),
