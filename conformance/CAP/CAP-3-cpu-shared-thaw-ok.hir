@@ -1,7 +1,10 @@
 // rule: CAP-3
 // expect: accept
 // boundary: immutable Shared captures can be read and thawed by a closed CPU callback.
-pub fn batch(tasks: Tasks, take frozen: Shared[List[u64]]) -> Result[List[u64], CpuPoolError] {
+pub fn batch(tasks: Tasks, take frozen: Shared[List[u64]]) -> Result[
+  List[u64],
+  CpuPoolError
+] {
   core@1/cpu.map_scoped(
     tasks,
     1,
