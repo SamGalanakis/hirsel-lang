@@ -533,7 +533,6 @@ fn emit_write(mut out: List[u8], model: Model, j: u64) -> () uses {} {
   let mut start: u64 = 0
   while start < list.len(units) {
     let part = f"writepart_{m.hirsel}_{start}"
-    emit_line(mut out, "@preserves_unique(out)")
     emit_line(
       mut out,
       f"fn {part}(m: {m.hirsel}, mut out: List[u8]) -> () uses {{}} {{"
