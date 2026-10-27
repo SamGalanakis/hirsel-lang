@@ -469,19 +469,39 @@ impl ResultStore for NoneStore {
 /// `mem@1`: one map per process, shared by every session.
 #[derive(Debug, Default)]
 pub struct MemStore {
-    entries: Mutex<HashMap<ContentHash, (EntryKey, Bytes)>>,
+    state: Mutex<MemState>,
+    cap: Option<usize>,
     verifier: Arc<hirsel_validate::VerifierCache>,
 }
+#[derive(Debug, Default)]
+struct MemState {
+    entries: HashMap<ContentHash, (EntryKey, Bytes)>,
+    order: std::collections::VecDeque<ContentHash>,
+    bytes: usize,
+}
+fn mem_charge(value: &[u8]) -> usize {
+    value.len() + std::mem::size_of::<EntryKey>()
+}
 impl MemStore {
+    /// Bound cache-owned payloads and keys, evicting in insertion order.
+    /// Outstanding reads retain their immutable bytes independently. Like
+    /// DirStore's cap, eviction is a cache miss, never query authority.
+    pub fn bounded(bytes: usize) -> Self {
+        Self {
+            cap: Some(bytes),
+            ..Self::default()
+        }
+    }
     /// The process's shared store.
     pub fn shared() -> Arc<MemStore> {
         static SHARED: OnceLock<Arc<MemStore>> = OnceLock::new();
         SHARED.get_or_init(Default::default).clone()
     }
     pub fn len(&self) -> usize {
-        self.entries
+        self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .entries
             .len()
     }
     pub fn is_empty(&self) -> bool {
@@ -489,16 +509,15 @@ impl MemStore {
     }
     /// The bytes held, for `--mem-usage`.
     pub fn bytes(&self) -> usize {
-        self.entries
+        self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .values()
-            .map(|(_, v)| v.len() + std::mem::size_of::<EntryKey>())
-            .sum()
+            .bytes
     }
     /// Empties the store, returning what it held.
     pub fn take(&self) -> HashMap<EntryKey, Bytes> {
-        std::mem::take(&mut *self.entries.lock().unwrap_or_else(PoisonError::into_inner))
+        std::mem::take(&mut *self.state.lock().unwrap_or_else(PoisonError::into_inner))
+            .entries
             .into_values()
             .collect()
     }
@@ -508,17 +527,42 @@ impl ResultStore for MemStore {
         Some(self.verifier.clone())
     }
     fn get(&self, key: &EntryKey) -> Option<Bytes> {
-        self.entries
+        self.state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .entries
             .get(&key.0)
             .map(|(_, bytes)| bytes.clone())
     }
     fn put(&self, key: &EntryKey, value: &[u8]) {
-        self.entries
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(key.0, (*key, value.into()));
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let charge = mem_charge(value);
+        if let Some(cap) = self.cap {
+            if charge > cap {
+                return;
+            }
+            // std::collections::VecDeque supplies the FIFO; replacements keep
+            // their place, so repeated writes cannot grow eviction metadata.
+            while state.bytes
+                - state
+                    .entries
+                    .get(&key.0)
+                    .map_or(0, |(_, old)| mem_charge(old))
+                > cap - charge
+            {
+                let oldest = state.order.pop_front().expect("nonempty cache");
+                let (_, old) = state.entries.remove(&oldest).expect("queued cache entry");
+                state.bytes -= mem_charge(&old);
+            }
+            if !state.entries.contains_key(&key.0) {
+                state.order.push_back(key.0);
+            }
+        }
+        if let Some((_, old)) = state.entries.remove(&key.0) {
+            state.bytes -= mem_charge(&old);
+        }
+        state.entries.insert(key.0, (*key, value.into()));
+        state.bytes += charge;
     }
     fn name(&self) -> &'static str {
         "mem@1"

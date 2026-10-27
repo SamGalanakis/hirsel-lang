@@ -44,6 +44,35 @@ fn scratch(name: &str) -> PathBuf {
 use std::path::PathBuf;
 
 #[test]
+fn bounded_memory_cache_preserves_outstanding_reads_across_eviction_and_drain() {
+    let cap = 2 * mem_charge(b"first");
+    let store = MemStore::bounded(cap);
+    store.put(&key("a"), b"first");
+    let held = store.get(&key("a")).unwrap();
+    store.put(&key("b"), b"other");
+    for _ in 0..100 {
+        store.put(&key("a"), b"again");
+    }
+    store.put(&key("c"), b"third");
+    assert!(store.get(&key("a")).is_none());
+    assert_eq!(&*held, b"first");
+    assert_eq!(&*store.get(&key("b")).unwrap(), b"other");
+    assert_eq!(&*store.get(&key("c")).unwrap(), b"third");
+    assert!(store.bytes() <= cap);
+    store.put(&key("large"), &vec![0; cap + 1]);
+    assert!(store.get(&key("large")).is_none());
+    assert_eq!(store.len(), 2);
+    assert_eq!(store.take().len(), 2);
+    assert!(store.is_empty());
+    assert_eq!(store.bytes(), 0);
+    store.put(&key("d"), b"after");
+    assert_eq!(&*store.get(&key("d")).unwrap(), b"after");
+    let disabled = MemStore::bounded(0);
+    disabled.put(&key("empty"), b"");
+    assert!(disabled.is_empty());
+}
+
+#[test]
 fn read_binding_digest_keeps_canonical_rows_with_bounded_scratch_allocations() {
     fn original(reads: &Reads) -> ContentHash {
         let mut rows: Vec<Vec<u8>> = reads

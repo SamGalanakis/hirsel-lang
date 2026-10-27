@@ -5,11 +5,13 @@ use hirsel_engine::{QueryError, ToolError};
 /// Each compiler owns an ephemeral memory provider, so unrelated cases cannot
 /// accumulate results for the lifetime of a campaign. Oracle cold runs keep none@1.
 pub(crate) fn verifying_compiler() -> hirsel_engine::Compiler {
+    let config = hirsel_engine::CompileConfig::default();
+    let cache_bytes = usize::try_from(config.hold_bytes).unwrap_or(usize::MAX);
     hirsel_driver::COMPILER.with_config(hirsel_engine::CompileConfig {
-        retention: hirsel_engine::memo::Retention::Resident,
-        store: std::sync::Arc::new(hirsel_engine::store::MemStore::default()),
+        retention: hirsel_engine::memo::Retention::Batch,
+        store: std::sync::Arc::new(hirsel_engine::store::MemStore::bounded(cache_bytes)),
         verify_store: hirsel_engine::store::VerifyStore::Recompute,
-        ..Default::default()
+        ..config
     })
 }
 

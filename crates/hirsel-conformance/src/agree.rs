@@ -41,10 +41,7 @@ fn engine() -> QueryEngine {
     static ENVIRONMENT: OnceLock<hirsel_engine::QueryEnvironment> = OnceLock::new();
     let environment = ENVIRONMENT.get_or_init(hirsel_engine::default_environment);
     QueryEngine::new(environment.clone(), adapters)
-        .with_result_store(std::sync::Arc::new(
-            hirsel_engine::store::MemStore::default(),
-        ))
-        .with_verify_store(hirsel_engine::store::VerifyStore::Recompute)
+        .with_config(crate::compiler::verifying_compiler().configuration())
 }
 fn violation(operation: &str, message: &str) -> Classification {
     let kind = if operation.contains("TIR validation") {
@@ -2419,6 +2416,11 @@ mod tests {
         std::fs::write(
             root.join("conformance/LANG/LANG-9-fixture.hir"),
             "// rule: LANG-9\n// expect: test\n@test\nfn example(t: Test) {\n  let mut ok: bool = true\n  test.check(t, ok)\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("conformance/LANG/LANG-9-fixture.hir.json"),
+            r#"{"schema":1,"package":{"name":"test_fixture","version":"0"},"sources":[{"path":"LANG-9-fixture.hir","module":[]}],"entry":{"module":[],"name":"main"},"dependencies":[]}"#,
         )
         .unwrap();
         let report = run(&root, 1, usize::MAX).unwrap();
