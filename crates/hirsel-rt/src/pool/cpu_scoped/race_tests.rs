@@ -715,3 +715,44 @@ fn physical_cpu_publication_cannot_cross_terminal_and_torn_cuts() {
         },
     );
 }
+
+#[cfg(feature = "tsan")]
+#[test]
+fn tsan_positive_control_detects_conflicting_accesses() {
+    const CHILD: &str = "HIRSEL_CPU_TSAN_CONTROL";
+    if std::env::var_os(CHILD).is_some() {
+        unsafe extern "C" {
+            fn __tsan_write8(address: *mut std::ffi::c_void);
+        }
+        let storage = Box::new(0u64);
+        let address = (&*storage as *const u64) as usize;
+        let barrier = Barrier::new(2);
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    // Instrument the conflicting accesses without executing a Rust
+                    // data race. This is the compiler-rt hook an instrumented
+                    // eight-byte store calls.
+                    unsafe { __tsan_write8(address as *mut std::ffi::c_void) };
+                });
+            }
+        });
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "pool::cpu_scoped::race_tests::tsan_positive_control_detects_conflicting_accesses",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(66), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("ThreadSanitizer: data race"),
+        "{output:?}"
+    );
+}

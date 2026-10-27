@@ -238,6 +238,14 @@ unsafe fn start_at(
         // has been published, so the new worker cannot touch this heap yet.
         let worker = unsafe { Worker::create_scoped(run) };
         let exec = Exec::new(Kind::Scoped(index as u16), worker, false);
+        if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+            probe.event(
+                "start",
+                workers.domain,
+                Arc::as_ptr(&exec) as usize,
+                u64::from(index),
+            );
+        }
         let mut assigned = reservation.assign(Arc::clone(&exec)).unwrap();
         assigned.topology = topology.clone();
         execs
@@ -269,9 +277,15 @@ unsafe fn start_at(
         let Ok(thread) = thread else {
             execs.holders.count.fetch_sub(1, Ordering::AcqRel);
             unsafe { Worker::retire(worker) };
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.event("retire", workers.domain, Arc::as_ptr(&exec) as usize, 0);
+            }
             workers.join();
             for exec in &workers.execs {
                 unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+                if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                    probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
+                }
             }
             return Err(Refusal::WorkerStartFailed);
         };
@@ -336,6 +350,12 @@ pub(super) unsafe fn finish(run: *mut RunShared) {
         for exec in &workers.execs {
             assert!(!exec.busy());
             unsafe { Worker::retire(exec.worker.replace(std::ptr::null_mut())) };
+            if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+                probe.event("retire", workers.domain, Arc::as_ptr(exec) as usize, 0);
+            }
+        }
+        if let Some(probe) = unsafe { (*run).cpu_probe.as_ref() } {
+            probe.event("shutdown", workers.domain, 0, workers.execs.len() as u64);
         }
     }
 }
@@ -763,6 +783,8 @@ mod tests {
 
     #[test]
     fn caller_yields_its_only_credit_and_migrates_back_after_fresh_width_one_calls() {
+        #[cfg(feature = "tsan")]
+        let switches = crate::fiber::TSAN_SWITCHES.load(Ordering::Relaxed);
         let mut run = crate::host::BodyRun::new(1, false);
         run.free = true;
         unsafe { run.use_physical_dispatch() };
@@ -787,10 +809,14 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+        #[cfg(feature = "tsan")]
+        assert!(crate::fiber::TSAN_SWITCHES.load(Ordering::Relaxed) > switches);
     }
 
     #[test]
     fn ordered_caller_migrates_on_its_saved_head_and_retires_each_control_once() {
+        #[cfg(feature = "tsan")]
+        let switches = crate::fiber::TSAN_SWITCHES.load(Ordering::Relaxed);
         let mut run = crate::host::BodyRun::new(1, false);
         unsafe { run.use_physical_dispatch() };
         let outcome = run.run(
@@ -827,6 +853,8 @@ mod tests {
         );
         assert_eq!(outcome.ended, Ok(crate::STATUS_OK));
         assert_eq!(outcome.pending, 0);
+        #[cfg(feature = "tsan")]
+        assert!(crate::fiber::TSAN_SWITCHES.load(Ordering::Relaxed) > switches);
     }
 
     #[test]

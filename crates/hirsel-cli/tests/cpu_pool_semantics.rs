@@ -330,6 +330,15 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 
 #[test]
 fn ordered_uncertified_refusal_replays_without_invoking_closed_callbacks() {
+    ordered_mapper_refusal("let xs = [job]; xs[0]");
+}
+
+#[test]
+fn ordered_float_mapper_refuses_before_preparation_and_replays() {
+    ordered_mapper_refusal("core@1/f64.bits(core@1/f64.from_bits(job) + 1.0f64)");
+}
+
+fn ordered_mapper_refusal(mapper: &str) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     fs::write(
@@ -339,11 +348,12 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
   let tasks = io.tasks(rt)?
   let outcome = core@1/cpu.map_scoped(tasks, 1u32,
     fn() -> List[u64] uses {} { failure.check(false, Bounds()); [1] },
-    fn(take job: u64) -> u64 uses {} { let xs = [job]; xs[0] })
+    fn(take job: u64) -> u64 uses {} { MAPPER })
   failure.check(outcome == Error(MapperNotCertified()), Bounds())
   Ok(())
 }
-"#,
+"#
+        .replace("MAPPER", mapper),
     )
     .unwrap();
     let manifest = root.join("hirsel.json");

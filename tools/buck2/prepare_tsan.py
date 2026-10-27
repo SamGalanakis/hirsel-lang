@@ -27,7 +27,7 @@ def main():
         (project / 'src').mkdir()
         (project / 'Cargo.toml').write_text('[package]\nname="hirsel-tsan-std"\nversion="0.0.0"\nedition="2024"\n[workspace]\n')
         (project / 'src/lib.rs').write_text('pub fn bootstrap() {}\n')
-        subprocess.run(['cargo', '+' + version, 'build', '-Zbuild-std=std,panic_unwind',
+        subprocess.run(['cargo', '+' + version, 'build', '-Zbuild-std=std,panic_unwind,test',
                         '--target', triple, '--manifest-path', str(project / 'Cargo.toml'), '-j', '2'],
                        env=os.environ | {'RUSTC_BOOTSTRAP': '1', 'RUSTFLAGS': '-Zsanitizer=thread -Copt-level=1'}, check=True)
         destination = ROOT / 'tools/buck2/toolchains/tsan-files'

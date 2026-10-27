@@ -8,6 +8,9 @@ use std::sync::{
 
 pub(crate) struct Probe {
     output: std::fs::File,
+    lifecycle: Mutex<std::fs::File>,
+    jitter: u64,
+    checkpoints: AtomicU64,
     samples: [Mutex<Vec<(Sample, Sample, u64)>>; 16],
     next: AtomicU64,
 }
@@ -22,14 +25,55 @@ pub(crate) struct Sample {
 }
 impl Probe {
     pub(crate) fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        let mut lifecycle = path.as_os_str().to_os_string();
+        lifecycle.push(".lifecycle");
         Ok(Self {
             output: std::fs::File::create(path)?,
+            lifecycle: Mutex::new(std::fs::File::create(lifecycle)?),
+            jitter: std::env::var("HIRSEL_RT_CPU_JITTER")
+                .ok()
+                .and_then(|seed| seed.parse().ok())
+                .unwrap_or(0),
+            checkpoints: AtomicU64::new(0),
             samples: std::array::from_fn(|_| Mutex::new(Vec::new())),
             next: AtomicU64::new(1),
         })
     }
     pub(crate) fn domain(&self) -> u64 {
         self.next.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn event(&self, kind: &str, domain: u64, owner: usize, value: u64) {
+        writeln!(
+            self.lifecycle.lock().unwrap(),
+            "{kind} {domain} {owner} {value}"
+        )
+        .expect("CPU lifecycle probe write");
+    }
+
+    fn perturb(&self, domain: u64, worker: u32) {
+        if self.jitter == 0 {
+            return;
+        }
+        let ordinal = self.checkpoints.fetch_add(1, Ordering::Relaxed);
+        let turns = (ordinal.wrapping_mul(6364136223846793005) ^ self.jitter) % 4 + 1;
+        self.event("jitter", domain, worker as usize, turns);
+        for _ in 0..turns {
+            std::thread::yield_now();
+        }
+    }
+}
+
+/// Called only while the run and executor are retained by the native worker.
+pub(crate) unsafe fn worker(
+    run: *mut crate::context::RunShared,
+    exec: &super::super::Exec,
+    kind: &str,
+) {
+    if matches!(exec.kind, super::super::Kind::Scoped(_))
+        && let Some(probe) = unsafe { (*run).cpu_probe.as_ref() }
+    {
+        probe.event(kind, 0, exec as *const _ as usize, 0);
     }
 }
 #[cfg(target_os = "linux")]
@@ -105,6 +149,7 @@ pub(crate) unsafe fn checkpoint(ctx: *mut TaskCtx) {
         let Some(probe) = (*ctx).run_ref().cpu_probe.as_ref() else {
             return;
         };
+        probe.perturb(start.domain, start.worker);
         if let Some((end, progress)) = start.end() {
             let mut samples = probe.samples[start.worker as usize].lock().unwrap();
             if samples.len() < 4096 {
@@ -135,6 +180,12 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
                 .map(|w| w.domain)
         };
         if let Some(domain) = domain {
+            (*ctx)
+                .run_ref()
+                .cpu_probe
+                .as_ref()
+                .unwrap()
+                .perturb(domain, u32::from(worker));
             (*ctx).cpu_sample = Some(Sample::now(domain, u32::from(worker)));
         }
     }
@@ -143,6 +194,9 @@ pub(crate) unsafe fn resume(ctx: *mut TaskCtx) {
 pub(crate) unsafe fn begin(ctx: *mut TaskCtx, domain: u64, worker: u32) {
     #[cfg(target_os = "linux")]
     unsafe {
+        if let Some(probe) = (*ctx).run_ref().cpu_probe.as_ref() {
+            probe.perturb(domain, worker);
+        }
         (*ctx).cpu_sample = Some(Sample::now(domain, worker));
     }
 }

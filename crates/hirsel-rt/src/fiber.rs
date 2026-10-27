@@ -265,11 +265,17 @@ pub(crate) unsafe fn switch(save: *mut *mut u8, to: *mut u8) {
     // SAFETY: the fiber is the one suspended at `to`; flags 0 synchronizes the switch, as
     // the scheduler's handoff does.
     unsafe {
+        #[cfg(test)]
+        TSAN_SWITCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tsan::__tsan_switch_to_fiber(tsan::target(to), 0)
     };
     // SAFETY: caller contract.
     unsafe { fiber_switch(save, to) }
 }
+
+#[cfg(all(test, feature = "tsan"))]
+pub(crate) static TSAN_SWITCHES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 /// ThreadSanitizer's fibers (compiler-rt 19 include/sanitizer/tsan_interface.h:150-172):
 /// every stack mapping is a fiber of its own, and so is each thread's own stack, under the

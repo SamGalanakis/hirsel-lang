@@ -12,7 +12,7 @@
 //! by its ID and name (`T04 DropLast`); `proofs/rc/README.md` defines the IDs and the README here
 //! lists the entries. `tests/it/model.rs` runs the model's `rc-trace v1` vectors on the runtime.
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "tsan")))]
 hirsel_guard::install!(crate::io_real::borrowed_net_tests::Count: crate::io_real::borrowed_net_tests::Count);
 
 mod base64;

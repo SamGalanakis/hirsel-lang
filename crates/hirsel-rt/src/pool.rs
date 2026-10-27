@@ -1202,7 +1202,9 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
                 break post;
             }
             if exec.ready_epoch.load(Ordering::Acquire) == epoch {
+                unsafe { cpu_scoped::probe::worker(run, exec, "park") };
                 drop(exec.bell.wait(inbox).unwrap());
+                unsafe { cpu_scoped::probe::worker(run, exec, "wake") };
             }
         }
     };
@@ -1210,6 +1212,9 @@ unsafe fn serve(run: *mut RunShared, exec: &Exec) -> bool {
         exec.busy.store(true, Ordering::SeqCst);
     }
     free::cancel_search(execs, exec);
+    if matches!(&post, Post::Run { .. } | Post::Saved(_)) {
+        unsafe { cpu_scoped::probe::worker(run, exec, "run") };
+    }
     match post {
         Post::Exit => {
             // A resize may have posted Exit before the running segment pinned
@@ -1307,6 +1312,7 @@ fn worker_main_reserved(
     while unsafe { serve(run, &exec) } {}
     // SAFETY: the exec's last phase ended; `exited` below acknowledges its retirement.
     unsafe { exec.recording.retire(&*run) };
+    unsafe { cpu_scoped::probe::worker(run, &exec, "exit") };
     EXEC.with(|e| e.set(std::ptr::null()));
     if matches!(exec.kind, Kind::Compute(_)) {
         unsafe { (&(*run).control).live_width.fetch_sub(1, Ordering::AcqRel) };

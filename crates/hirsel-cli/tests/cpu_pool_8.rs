@@ -41,3 +41,9 @@ fn ordered_qualification_fuel_stop() {
 fn ordered_qualification_reserves_ordinary_control_capacity_before_preparation() {
     ordered_remaining("no-controller", ORDERED_NO_CONTROLLER, 0);
 }
+
+include!("support/cpu_pool/jitter.rs");
+#[test]
+fn cpu_integer_float_bits_and_fresh_lifecycle_survive_jitter() {
+    cpu_values_with_jitter(8);
+}

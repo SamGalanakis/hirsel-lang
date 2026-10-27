@@ -845,6 +845,7 @@ Prepare std in this checkout, then run the eight-worker control on the pool:
 ```sh
 HIRSEL_MEMORY_LIMIT=2G HIRSEL_JOBS=2 tools/capped python3 tools/buck2/prepare_tsan.py
 .buck2/bin/buck2 test -c hirsel.sanitizer=thread --target-platforms //tools/buck2:thread //:gate-io-real-tsan
+.buck2/bin/buck2 test -c hirsel.sanitizer=thread --target-platforms //tools/buck2:thread //:gate-cpu-pool-tsan
 ```
 
 Proc macros and build scripts keep the ordinary host toolchain. The generated
@@ -853,6 +854,10 @@ The sanitizer child's address-space guard is lifted for shadow mappings; its
 normal pool RSS reservation still applies. The control refuses an uninstrumented
 binary. `//:io-real-workers` is also a small file-I/O probe: arguments are worker
 count (1/2/4/8) and writes per file (default 16, 64 KiB each, eight files total).
+The CPU control runs the existing scoped-pool unit and race cases with fiber
+annotations. It requires a conflicting-access positive control and executed
+fiber switches under Free and Ordered. This does not instrument emitted mapper
+instructions or certify either native emitter.
 
 `test_requirements.bzl` declares exact CPU counts for harnesses whose assertions
 need a physical width. These override measured CPUs and the focus clamp while

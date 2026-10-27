@@ -64,6 +64,7 @@ platform(
 
 host_transition(
     name = "test_tool_transition",
+    preserve_sanitizer = True,
     configuration_name = "root//tools/buck2:checked",
     budget = ":budget",
     panic = ":panic",

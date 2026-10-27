@@ -154,6 +154,10 @@ def _rust(rule, name, **attrs):
             attrs["features"] = attrs.get("features", []) + ["operation-latency"]
         if name == "hirsel-rt" and read_root_config("hirsel", "ownership_trace", "false") == "true" and "ownership-trace" not in attrs.get("features", []):
             attrs["features"] = attrs.get("features", []) + ["ownership-trace"]
+        attrs["features"] = attrs.get("features", []) + select({
+            "root//tools/buck2:sanitizer_thread": ["tsan"],
+            "DEFAULT": [],
+        })
     rule(name = name, **attrs)
     if CLIPPY_TWINS:
         twin = attrs | dict(exec_compatible_with = [budget_constraint(pool_budget_name(*CLIPPY_REQUEST))], visibility = ["PUBLIC"])
