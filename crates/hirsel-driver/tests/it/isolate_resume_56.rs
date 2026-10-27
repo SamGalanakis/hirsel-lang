@@ -131,16 +131,30 @@ fn agrees(source: &str, output: &[u8]) {
             }
             panic!("{error}");
         }
+        let invoked: std::collections::BTreeSet<_> = program
+            .units
+            .iter()
+            .flat_map(|unit| {
+                let body = unit.unit();
+                body.tables.calls.iter().filter_map(move |call| {
+                    let hirsel_lir::ir::Callee::Direct(symbol) = call.callee else {
+                        return None;
+                    };
+                    let symbol = &body.tables.symbols[symbol.index()];
+                    symbol
+                        .definition
+                        .is_core("task.isolate")
+                        .then(|| symbol.instance.unwrap())
+                })
+            })
+            .collect();
+        assert!(
+            !invoked.is_empty(),
+            "the source must invoke an isolate wrapper"
+        );
         let mut admitted = 0;
         for unit in &program.units {
-            if unit.unit().header.definition.is_core("task.isolate")
-                && unit.unit().tables.calls.iter().any(|c| {
-                    matches!(
-                        c.callee,
-                        hirsel_lir::ir::Callee::Bound { .. } | hirsel_lir::ir::Callee::Direct(_)
-                    )
-                })
-            {
+            if invoked.contains(&unit.unit().header.instance) {
                 let plan = plans.get(unit.unit().header.instance).unwrap();
                 if plan.isolate.is_none() {
                     for body in &program.units {
@@ -160,9 +174,16 @@ fn agrees(source: &str, output: &[u8]) {
                     plan.representation
                 );
                 admitted += 1;
+            } else if unit.unit().header.definition.is_core("task.isolate") {
+                let plan = plans.get(unit.unit().header.instance).unwrap();
+                assert!(plan.isolate.is_none());
+                assert!(matches!(
+                    plan.representation,
+                    hirsel_lir::continuation::Representation::Stackful(_)
+                ));
             }
         }
-        assert!(admitted > 0);
+        assert_eq!(admitted, invoked.len());
 
         let matrix = vec![
             Configuration {
