@@ -26,9 +26,7 @@ struct Inference {
     memo: Arc<hirsel_types::TypeMemo>,
     snapshot: Arc<SignatureSnapshot>,
     declarations: Arc<Declarations>,
-    sources: SourceMap,
-    items: BTreeMap<DefPath, Vec<Arc<ItemSyntax>>>,
-    citations: crate::snapshot::OwnedSourceContext,
+    citations: Arc<crate::snapshot::OwnedSourceContext>,
     resolver: Arc<dyn ResolverPhase>,
     checker: Arc<dyn CheckerPhase>,
     modes: Arc<dyn ModesPhase>,
@@ -170,9 +168,9 @@ impl Inference {
             memo: &self.memo,
             snapshot: &self.snapshot,
             declarations: &self.declarations,
-            citations: &self.citations,
-            sources: &self.sources,
-            items: &self.items,
+            citations: &*self.citations,
+            sources: &self.citations.sources,
+            items: &self.citations.items,
             resolver: Some(&*self.resolver),
             checker: Some(&*self.checker),
             modes: None,
@@ -220,7 +218,7 @@ impl Inference {
             );
             let mut source = parallel::FrozenReadSource {
                 declarations: &self.declarations,
-                citations: &self.citations,
+                citations: &*self.citations,
                 candidates: self.snapshot.declaration_candidates(DefId::intern(path)),
                 environment: self.environment,
             };
@@ -251,7 +249,7 @@ impl Inference {
             .definition;
         let mut observed = ReadsBuilder::new();
         let mut provider =
-            FrozenProvider::for_definition(&self.snapshot, owner, &self.citations, &mut observed);
+            FrozenProvider::for_definition(&self.snapshot, owner, &*self.citations, &mut observed);
         let result = self
             .modes
             .infer_unique(&self.types, &self.memo, &bodies, &mut provider);
@@ -676,22 +674,31 @@ impl QueryEngine {
             }
             let key = self.inference_key(&paths[0]);
             let stamp = (self.declarations.revision(), self.sources.anchors().count());
-            let anchors = match &record_context {
+            let citations = match &record_context {
                 Some((previous, context)) if *previous == stamp => Arc::clone(context),
                 _ => {
-                    let context = Arc::new(crate::NativeRecordContext::capture(self));
+                    let cited = self
+                        .source_paths()
+                        .into_iter()
+                        .map(|path| {
+                            let id = DefId::intern(&path);
+                            (id, self.cited_value(&path))
+                        })
+                        .collect();
+                    let context = Arc::new(crate::snapshot::OwnedSourceContext {
+                        unique_failures: BTreeMap::new(),
+                        sources: self.sources.clone(),
+                        items: Arc::new(self.items.clone()),
+                        declarations: self.declarations.observations(),
+                        catalog: self.catalog.clone(),
+                        owners: Arc::new(crate::NativeRecordContext::capture(self)),
+                        cited,
+                        arm_fixes: BTreeMap::new(),
+                    });
                     record_context = Some((stamp, context.clone()));
                     context
                 }
             };
-            let cited = self
-                .source_paths()
-                .into_iter()
-                .map(|path| {
-                    let id = DefId::intern(&path);
-                    (id, self.cited_value(&path))
-                })
-                .collect();
             // The same per-module fixed point runs with declarations captured
             // by the existing worker. It never enters a scalar body query.
             let reference = crate::store::Domain {
@@ -736,18 +743,7 @@ impl QueryEngine {
                 memo: self.memo.clone(),
                 snapshot: snapshot.clone(),
                 declarations: declarations.clone(),
-                sources: self.sources.clone(),
-                items: self.items.clone(),
-                citations: crate::snapshot::OwnedSourceContext {
-                    unique_failures: BTreeMap::new(),
-                    sources: self.sources.clone(),
-                    items: Arc::new(self.items.clone()),
-                    declarations: self.declarations.observations(),
-                    catalog: self.catalog.clone(),
-                    owners: anchors,
-                    cited,
-                    arm_fixes: BTreeMap::new(),
-                },
+                citations,
                 resolver: self
                     .adapters
                     .resolver
