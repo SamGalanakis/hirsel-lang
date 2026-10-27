@@ -983,6 +983,7 @@ fn source_requests_install_nested_instance_views_for_check_run_and_native_owners
                 + "\nfn inner[T](v:T)->u64 uses {} = comptime inner_make(shape(T))\n"
                 + &SOURCE[SOURCE.find("fn make").unwrap()..SOURCE.find("fn generated").unwrap()]
                     .replace("make[T]", "inner_make[T]");
+            let source = source + "\nfn zzz_unrelated()->u8{1u8}\nfn aaa_unrelated()->u8{2u8}\n";
             std::fs::write(directory.path().join("main.hir"), source).unwrap();
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"instance_front","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
             let config = CompileConfig {

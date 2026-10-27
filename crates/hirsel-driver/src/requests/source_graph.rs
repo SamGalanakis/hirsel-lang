@@ -1142,6 +1142,9 @@ pub(super) fn install(
             ..limits
         };
         definitions = bootstrap.definitions().to_vec();
+        // Bootstrap publishes ordinary rows before accepted generators. The
+        // final inventory uses the host's canonical DefPath order.
+        definitions.sort();
         Some(bootstrap)
     };
     let registrations = bootstrap.as_ref().map_or(&[][..], |b| b.registrations());
