@@ -786,7 +786,7 @@ impl Task {
         );
         let checked_runtime = Arc::new(snapshot.checked_runtime(queries.runtime.forget.as_ref())?);
         let Some((batch, roots)) = &queries.batch else {
-            return self.complete_one(&self.root, self.query, hashes, checked_runtime);
+            return self.complete_one(&self.root, self.query, hashes, checked_runtime, None);
         };
         if self.query != *batch {
             return Err(operational("batch Run requires its batch root"));
@@ -816,11 +816,16 @@ impl Task {
             let mut products = Vec::with_capacity(roots.len());
             let mut outputs = BTreeMap::new();
             for root in roots {
+                let entries = outputs
+                    .values()
+                    .find(|output: &&Arc<FrontRunOutput>| output.entry.0.package == root.0.package)
+                    .map(|output| &output.entries);
                 let product = self.complete_one(
                     root,
                     queries.ids[root],
                     hashes.clone(),
                     checked_runtime.clone(),
+                    entries,
                 )?;
                 let output = queries
                     .outcome(product)
@@ -893,6 +898,7 @@ impl Task {
         query: QueryId,
         hashes: Arc<BTreeMap<DefPath, ContentHash>>,
         checked_runtime: Arc<hirsel_interp::checked::CheckedRuntime>,
+        package_entries: Option<&BTreeMap<String, (CalleeFacts, CallForm)>>,
     ) -> Result<ProductRef, QueryError> {
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
@@ -929,12 +935,15 @@ impl Task {
             let code = hashes.get(path).ok_or_else(|| {
                 operational(format!("Run callable has no definition hash: {path}"))
             })?;
+            let program = self.program(path)?;
             Ok(Some((
                 CalleeFacts {
-                    program: self.program(path)?.revision(path)?.digest(),
+                    program: program.revision(path)?.digest(),
                     code: code.0,
                     fingerprint: signature.fingerprint.0,
-                    reach: reach(path)?,
+                    reach: program
+                        .reach(path, &escapes)
+                        .map_or(CodeReach::Safe, |reach| CodeReach::Escapes(reach.spelled())),
                 },
                 if roots.is_empty() {
                     CallForm::Compute
@@ -969,15 +978,20 @@ impl Task {
                 }
             }
         }
-        let mut entries = BTreeMap::new();
-        for (path, input) in &queries.inputs {
-            if input.source
-                && path.0.package == root.0.package
-                && let Some(facts) = facts(path)?
-            {
-                entries.insert(path.to_string(), facts);
+        let entries = if let Some(entries) = package_entries {
+            entries.clone()
+        } else {
+            let mut entries = BTreeMap::new();
+            for (path, input) in &queries.inputs {
+                if input.source
+                    && path.0.package == root.0.package
+                    && let Some(facts) = facts(path)?
+                {
+                    entries.insert(path.to_string(), facts);
+                }
             }
-        }
+            entries
+        };
         let foreign = foreign_use(&program, &queries.inputs);
         // PROG-4: C called outside a deterministic wrapper makes every run of
         // this entry unrecordable, as the checked package decides it.
