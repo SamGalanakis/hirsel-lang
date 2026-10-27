@@ -9,6 +9,7 @@ use hirsel_types::{Signature, TypeInterner};
 pub(crate) struct LaunchSelection {
     entry: Option<DefPath>,
     replay: Option<(hirsel_rt::io_sim::SimIo, hirsel_run_config::ValidatedRun)>,
+    captured: Option<CapturedConfig>,
 }
 
 fn refused(error: hirsel_run_schema::RunRefusal) -> ToolError {
@@ -38,7 +39,40 @@ impl LaunchSelection {
                 ),
                 HostLaunch::Live { .. } => (None, None),
             };
-        Ok(Self { entry, replay })
+        Ok(Self {
+            entry,
+            replay,
+            captured: None,
+        })
+    }
+
+    /// Capture launch policy once. Its inputs select diagnostic emission, but
+    /// only binding to the selected source below can admit an execution.
+    pub(crate) fn read_for_compilation(launch: HostLaunch<'_>) -> Result<Self, ToolError> {
+        let mut selected = Self::read(launch)?;
+        if let HostLaunch::Live { config, .. } = launch {
+            selected.captured = Some(
+                CapturedConfig::read(config)
+                    .map_err(|error| ToolError::Runtime(error.to_string()))?,
+            );
+        }
+        Ok(selected)
+    }
+
+    pub(crate) fn compiler_inputs(&self) -> Result<(hirsel_run_schema::Inputs, bool), ToolError> {
+        let record = self
+            .captured
+            .as_ref()
+            .map(|captured| &captured.record)
+            .or_else(|| self.replay.as_ref().map(|(_, run)| run.record()))
+            .ok_or_else(|| ToolError::Runtime("ownership launch policy was not captured".into()))?;
+        Ok((
+            record.inputs.clone(),
+            record
+                .budgets
+                .as_ref()
+                .is_some_and(|budgets| budgets.fuel.is_some()),
+        ))
     }
 
     pub(crate) fn entry(&self) -> Option<&DefPath> {
@@ -74,9 +108,11 @@ impl LaunchSelection {
         };
         match (launch, self.replay) {
             (HostLaunch::Live { config, .. }, _) => {
-                let requested = config
-                    .read(revision, kind)
-                    .map_err(|e| ToolError::Runtime(e.to_string()))?;
+                let requested = match self.captured {
+                    Some(captured) => captured.bind(revision, kind),
+                    None => config.read(revision, kind),
+                }
+                .map_err(|e| ToolError::Runtime(e.to_string()))?;
                 let bound = hirsel_engine::bind_run(
                     types,
                     signature,
@@ -105,6 +141,63 @@ impl LaunchSelection {
                 Ok(BoundHostRun::Replay { run, io })
             }
             (HostLaunch::Replay(_), None) => unreachable!("a replay reads its tape first"),
+        }
+    }
+}
+
+// A grants template has no program authority until its source binding is filled
+// and validated. A supplied bound record retains its original identity fields.
+struct CapturedConfig {
+    record: hirsel_run_config::RunConfig,
+    template: bool,
+    cores: Option<u64>,
+}
+impl CapturedConfig {
+    fn read(config: crate::LaunchConfig<'_>) -> Result<Self, hirsel_run_schema::RunRefusal> {
+        use crate::LaunchConfig;
+        let (input, template, arguments, cores) = match config {
+            LaunchConfig::Record(input) => (input, false, None, None),
+            LaunchConfig::Grants { input, arguments } => (input, true, arguments, None),
+            LaunchConfig::Cores {
+                input,
+                grants,
+                arguments,
+                cores,
+            } => (input, grants, arguments, Some(cores)),
+        };
+        let mut record = if template {
+            hirsel_run_config::RunConfig::grants_template(
+                input,
+                [0; 32],
+                String::new(),
+                LaunchKind::Main,
+            )?
+        } else {
+            hirsel_run_config::RunConfig::record_template(input)?
+        };
+        if template && let Some(arguments) = arguments {
+            record.args = Some(hirsel_run_schema::snapshot_args(arguments.iter().cloned())?);
+        }
+        Ok(Self {
+            record,
+            template,
+            cores,
+        })
+    }
+    fn bind(
+        mut self,
+        revision: &ProgramRevision,
+        kind: LaunchKind,
+    ) -> Result<hirsel_run_config::ValidatedRun, hirsel_run_schema::RunRefusal> {
+        if self.template {
+            self.record.program = hirsel_run_schema::hex(&revision.digest());
+            self.record.entry = revision.entry().into();
+            self.record.launch = kind;
+        }
+        let run = self.record.validated()?;
+        match self.cores {
+            Some(cores) => run.with_cores(cores),
+            None => Ok(run),
         }
     }
 }
@@ -211,6 +304,59 @@ mod tests {
             };
             assert_eq!(bound.run().record().entry, revision.entry());
             assert_eq!(bound.run().record().launch, LaunchKind::Call);
+        });
+    }
+    #[test]
+    fn ownership_policy_capture_keeps_inputs_fuel_and_grants_after_the_file_changes() {
+        hirsel_engine::with_compiler_stack(|| {
+            let (types, signature, revision) = fixture("main", "args:Args");
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("grants.json");
+            std::fs::write(&path, r#"{"args":["kept"],"inputs":{"hash_seed":17},"budgets":{"provider":"budgets.limits@2","fuel":1000}}"#).unwrap();
+            let launch = HostLaunch::Live {
+                config: crate::LaunchConfig::Grants {
+                    input: path.as_os_str(),
+                    arguments: None,
+                },
+                record: None,
+                revocations: None,
+            };
+            let selection = LaunchSelection::read_for_compilation(launch).unwrap();
+            let (inputs, fuel) = selection.compiler_inputs().unwrap();
+            assert_eq!(inputs.hash_seed, 17);
+            assert!(fuel);
+            std::fs::write(&path, "no longer a grants template").unwrap();
+            let BoundHostRun::Live(bound) = selection
+                .bind(launch, &types, &signature, &revision, CodeReach::Safe)
+                .unwrap()
+            else {
+                panic!("captured grants bind a live run")
+            };
+            assert_eq!(bound.run().record().inputs, inputs);
+            assert_eq!(bound.run().record().args.as_ref().unwrap(), &["kept"]);
+            assert_eq!(bound.run().budgets().unwrap().fuel, Some(1000));
+            assert_eq!(bound.run().record().entry, revision.entry());
+        });
+    }
+
+    #[test]
+    fn ownership_policy_capture_keeps_a_bound_records_original_program_identity() {
+        hirsel_engine::with_compiler_stack(|| {
+            let (types, signature, revision) = fixture("main", "");
+            let mut record = hirsel_run_config::RunConfig::for_program(&revision, LaunchKind::Main);
+            record.program = hirsel_run_schema::hex(&[7; 32]);
+            let json = serde_json::to_string(&record).unwrap();
+            let launch = HostLaunch::Live {
+                config: crate::LaunchConfig::Record(std::ffi::OsStr::new(&json)),
+                record: None,
+                revocations: None,
+            };
+            let selection = LaunchSelection::read_for_compilation(launch).unwrap();
+            assert!(
+                selection
+                    .bind(launch, &types, &signature, &revision, CodeReach::Safe)
+                    .is_err()
+            );
         });
     }
 }

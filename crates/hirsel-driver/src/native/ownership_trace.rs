@@ -619,7 +619,8 @@ pub fn run_path_with_launch(
                 "launch: a runner host runs its callees interpreted".into(),
             ));
         }
-        let selection = crate::launch_binding::LaunchSelection::read(launch)?;
+        let selection = crate::launch_binding::LaunchSelection::read_for_compilation(launch)?;
+        let (inputs, fuel) = selection.compiler_inputs()?;
         let definition = selection.entry().cloned();
         let compiler = crate::COMPILER.with_verify(verify).with_owned_engines();
         let config = compiler.configuration();
@@ -635,52 +636,18 @@ pub fn run_path_with_launch(
             attempts,
         );
         let target = super::TargetSpec::x86_64_unknown_linux_gnu();
-        let selected_facts = host.request(CompileOperation::Tir {
-            definition: definition.clone(),
-        })?;
-        let CompileResult::Tir(facts) = &selected_facts.result else {
-            return Err(crate::ToolError::Runtime(
-                "ownership launch facts returned another operation".into(),
-            ));
-        };
-        if selection.requires_replayable(launch) {
-            if let Some((user, extern_)) = facts.foreign.unmodeled.first_key_value() {
-                return Err(crate::ToolError::Runtime(format!(
-                    "launch: {user} calls the extern {extern_} and is not a wrapper with a \
-                     deterministic model, so this run cannot be recorded or replayed (PROG-4)"
-                )));
-            }
-        }
-        let bound = selection.bind(
-            launch,
-            &facts.runtime.types,
-            &facts.signature,
-            &facts.revision,
-            facts.code.clone(),
-        )?;
-        let revision = facts.revision.digest();
-        drop(selected_facts);
-        let run = match &bound {
-            crate::BoundHostRun::Live(bound) => bound.run(),
-            crate::BoundHostRun::Replay { run, .. } => run,
-        };
-        let output = host.request_applied(CompileOperation::NativeOwnership(OwnershipRequest {
+        let output = host.request(CompileOperation::NativeOwnership(OwnershipRequest {
             definition,
             target: target.clone(),
             validation: super::Validation::EveryStage,
-            launch: run.record().inputs.clone(),
-            fuel: run.budgets().is_some_and(|budgets| budgets.fuel.is_some()),
+            launch: inputs,
+            fuel,
         }))?;
         let CompileResult::Ownership(execution) = &output.result else {
             return Err(crate::ToolError::Runtime(
                 "ownership request returned another operation".into(),
             ));
         };
-        if execution.revision.digest() != revision {
-            return Err(crate::ToolError::Runtime(
-                "ownership launch revision changed during selection".into(),
-            ));
-        }
         let execution = execution.clone();
         drop(output);
         drop(host);
@@ -701,7 +668,14 @@ pub fn run_path_with_launch(
             )?;
             let scratch = super::executable::Scratch::new()?;
             execution
-                .launch_bound(&objects, &toolchain, &scratch.0, event_limit, launch, bound)
+                .launch_with_selection(
+                    &objects,
+                    &toolchain,
+                    &scratch.0,
+                    event_limit,
+                    launch,
+                    selection,
+                )
                 .map_err(|error| NativeError::new(StageName::Link, error))
         })())
     })

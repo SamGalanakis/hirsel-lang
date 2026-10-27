@@ -113,7 +113,19 @@ impl OwnershipExecution {
         event_limit: usize,
         launch: crate::HostLaunch<'_>,
     ) -> Result<native::ownership_trace::LeafExecution, String> {
-        use crate::launch_binding::LaunchSelection;
+        let selection = crate::launch_binding::LaunchSelection::read(launch)
+            .map_err(|error| error.to_string())?;
+        self.launch_with_selection(objects, tools, directory, event_limit, launch, selection)
+    }
+    pub(crate) fn launch_with_selection(
+        &self,
+        objects: &OwnershipObjects,
+        tools: &native::Toolchain,
+        directory: &std::path::Path,
+        event_limit: usize,
+        launch: crate::HostLaunch<'_>,
+        selection: crate::launch_binding::LaunchSelection,
+    ) -> Result<native::ownership_trace::LeafExecution, String> {
         if objects.root != self.root || !std::ptr::eq(&*objects._owner, self) {
             return Err("ownership objects belong to another selected completion".into());
         }
@@ -121,7 +133,6 @@ impl OwnershipExecution {
             return Err("ownership launch does not execute runner callees".into());
         }
         let source = &self._owner._source;
-        let selection = LaunchSelection::read(launch).map_err(|e| e.to_string())?;
         if selection.requires_replayable(launch) && !source.run.foreign.unmodeled.is_empty() {
             return Err("ownership recording requires replayable source effects".into());
         }
