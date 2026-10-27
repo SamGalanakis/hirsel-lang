@@ -783,9 +783,12 @@ fn build_program_source(
             };
             lower_local_unit(unit, options, &facts, &finalizers, &inputs, &validation)
         },
-    )
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
+    );
+    #[cfg(test)]
+    for error in units.iter().filter_map(|unit| unit.as_ref().err()) {
+        eprintln!("native unit qualification: {error:?}");
+    }
+    let units = units.into_iter().collect::<Result<Vec<_>, _>>()?;
     let functions = instances
         .ids()
         .filter(|id| instances.roles[id.index()] == InstanceRole::Function)

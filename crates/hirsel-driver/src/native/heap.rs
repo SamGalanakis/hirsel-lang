@@ -2158,7 +2158,7 @@ fn config(
     inject: Option<u64>,
     kind: &super::link::LaunchKind,
     world: &HeapWorld,
-) -> Config {
+) -> Result<Config, NativeError> {
     let default = Config::default();
     // A raised interpreter budget raises H's instruction limit by the same factor.
     let interpreter = hirsel_interp::Limits::default()
@@ -2167,7 +2167,37 @@ fn config(
     let step_limit = world.steps.map_or(default.step_limit, |steps| {
         (default.step_limit.saturating_mul(steps) / interpreter).max(default.step_limit)
     });
-    Config {
+    // Derive H's descriptors from the independent original declarations and
+    // this validated physical table, never from the candidate unit tables.
+    use hirsel_lir::operation::OperationDeclarations;
+    let mut seal_descriptors = Vec::new();
+    for ((definition, instance), source) in &program.operations.seal_sources {
+        let roots = source.events.iter().map(|event| &event.root_type).chain(
+            source.payloads.iter().flat_map(|payload| {
+                std::iter::once(&payload.root_type)
+                    .chain(payload.recipe.inputs.iter().map(|input| &input.ty))
+            }),
+        );
+        for root in roots {
+            let descriptor = program
+                .operations
+                .seal_descriptor_for_source(
+                    definition,
+                    *instance,
+                    root,
+                    &program.table,
+                    &program.target,
+                )
+                .map_err(|e| {
+                    NativeError::new(StageName::Heap, format!("original H descriptor: {e:?}"))
+                })?;
+            if !seal_descriptors.contains(&descriptor) {
+                seal_descriptors.push(descriptor);
+            }
+        }
+    }
+    Ok(Config {
+        seal_descriptors,
         seal_sources: program.operations.seal_sources.values().cloned().collect(),
         receipt_sources: program
             .operations
@@ -2188,7 +2218,7 @@ fn config(
             }
         },
         ..default
-    }
+    })
 }
 
 fn violation(
@@ -2385,7 +2415,7 @@ pub fn run_heap_in(
         entry,
         &args,
         &mut io,
-        &config(program, None, kind, world),
+        &config(program, None, kind, world)?,
     );
     let audit = run
         .result
@@ -2460,7 +2490,7 @@ pub fn heap_campaign_in(
         entry,
         &args,
         &mut || Box::new(io.clone()),
-        &config(program, None, kind, world),
+        &config(program, None, kind, world)?,
     );
     if let Some((site, v)) = campaign.first_violation() {
         return Err(violation(entry, v, site));
