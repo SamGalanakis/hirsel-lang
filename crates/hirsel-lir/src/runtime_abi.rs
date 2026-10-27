@@ -12,7 +12,7 @@
 use crate::layout_types::{ScalarKind, StorageKind};
 use hirsel_codec::snapshot_enum;
 
-pub const ABI_VERSION: u32 = 92;
+pub const ABI_VERSION: u32 = 94;
 /// TaskSpawn physical hint bits: ordered execution and replay ignore both.
 pub const SPAWN_IMMEDIATE_AWAIT: u64 = 1;
 pub const SPAWN_OP_FREE: u64 = 2;
@@ -418,6 +418,8 @@ pub enum CName {
     TaskCode,
     SpawnAheadInfo,
     AheadPhysical,
+    CpuSummary,
+    CpuGrowth,
     HostReadRecipe,
 }
 
@@ -443,6 +445,8 @@ impl CName {
             Self::TaskCode => "hirsel_rt_v2_task_code",
             Self::SpawnAheadInfo => "hirsel_rt_v2_spawn_ahead_info",
             Self::AheadPhysical => "hirsel_rt_v2_ahead_physical",
+            Self::CpuSummary => "hirsel_rt_v2_cpu_summary",
+            Self::CpuGrowth => "hirsel_rt_v2_cpu_growth",
             Self::HostReadRecipe => "hirsel_rt_v2_host_read_recipe",
         }
     }
@@ -618,6 +622,8 @@ pub enum RuntimeEntry {
     CpuAheadArm,
     CpuAheadEnter,
     CpuAheadAlloc,
+    CpuAheadPublish,
+    CpuAheadGrow,
     ReceiptArenaConstruct,
     ReceiptArenaInventoryPaired,
 }
@@ -691,7 +697,7 @@ const OPERATION_SITE: CParam = p("operation_site", U64);
 const REGION: CParam = p("region", ptr(CName::Region, 1));
 
 impl RuntimeEntry {
-    pub const ALL: [RuntimeEntry; 117] = [
+    pub const ALL: [RuntimeEntry; 119] = [
         Self::DepthEnter,
         Self::DepthEnterAtSite,
         Self::DepthLeave,
@@ -805,6 +811,8 @@ impl RuntimeEntry {
         Self::CpuAheadArm,
         Self::CpuAheadEnter,
         Self::CpuAheadAlloc,
+        Self::CpuAheadPublish,
+        Self::CpuAheadGrow,
         Self::ReceiptConstruct,
         Self::ReceiptArenaInventory,
         Self::ReceiptArenaConstruct,
@@ -1487,6 +1495,26 @@ impl RuntimeEntry {
                     ]
                 },
             ),
+            Self::CpuAheadPublish => (
+                "hirsel_rt_v2_cpu_ahead_publish",
+                U8,
+                const {
+                    &[
+                        p("state", ptr(N::AheadPhysical, 1)),
+                        p("summary", ptr(N::CpuSummary, 1)),
+                    ]
+                },
+            ),
+            Self::CpuAheadGrow => (
+                "hirsel_rt_v2_cpu_ahead_grow",
+                U8,
+                const {
+                    &[
+                        p("state", ptr(N::AheadPhysical, 1)),
+                        p("request", ptr(N::CpuGrowth, 1)),
+                    ]
+                },
+            ),
             Self::HostArm => (
                 "hirsel_rt_v2_host_arm",
                 VOID,
@@ -1829,6 +1857,8 @@ snapshot_enum!(RuntimeEntry {
     CpuAheadArm,
     CpuAheadEnter,
     CpuAheadAlloc,
+    CpuAheadPublish,
+    CpuAheadGrow,
     ReceiptArenaConstruct,
     ReceiptArenaInventoryPaired,
 });

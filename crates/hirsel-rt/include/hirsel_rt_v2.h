@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 92
+#define HIRSEL_RT_V2_ABI_VERSION 94
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -884,6 +884,48 @@ void hirsel_rt_v2_cpu_ahead_arm(hirsel_rt_v2_ctx *ctx);
 void hirsel_rt_v2_cpu_ahead_enter(hirsel_rt_v2_ahead_physical *state);
 /* CPU-only idle allocation; ends the private segment until job settlement is certified. */
 hirsel_rt_v2_header *hirsel_rt_v2_cpu_ahead_alloc(hirsel_rt_v2_ahead_physical *state, uint32_t index, uint64_t extent, uint64_t align);
+/* CPU storage and summary handoffs, record version 1. Until an allocating
+ * certificate is admitted, return CPU_NOT_CERTIFIED without touching inputs.
+ * A summary borrows its value and retained table from the saved mapper frame;
+ * those references stay live until return. Its charges belong to the runtime,
+ * not to this ABI record, and publication never increments counted holders. */
+#define HIRSEL_RT_V2_CPU_HANDOFF_VERSION 1
+#define HIRSEL_RT_V2_CPU_ACCEPTED 0
+#define HIRSEL_RT_V2_CPU_NOT_CERTIFIED 1
+#define HIRSEL_RT_V2_CPU_SUMMARY_PENDING 0
+#define HIRSEL_RT_V2_CPU_SUMMARY_PUBLISHED 1
+#define HIRSEL_RT_V2_CPU_SUMMARY_RETIRED 2
+#define HIRSEL_RT_V2_CPU_SUMMARY_WITHDRAWN 3
+#define HIRSEL_RT_V2_CPU_GROW_BLOCK 0
+#define HIRSEL_RT_V2_CPU_GROW_SEQUENCE 1
+#define HIRSEL_RT_V2_CPU_ALLOC_REGION 2
+typedef struct hirsel_rt_v2_cpu_summary {
+    uint32_t version, phase;
+    uint64_t ordinal;
+    const uint8_t *value;
+    uint64_t value_bytes;
+    uint32_t descriptor, retained_count;
+    hirsel_rt_v2_header *const *retained;
+} hirsel_rt_v2_cpu_summary;
+typedef struct hirsel_rt_v2_cpu_growth {
+    uint32_t version, kind;
+    uint64_t ordinal;
+    hirsel_rt_v2_header *block;
+    hirsel_rt_v2_region *region;
+    uint32_t index, flags;
+    uint64_t extent, align, keep, element_size, element_align, capacity;
+} hirsel_rt_v2_cpu_growth;
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_cpu_summary, 48);
+_Static_assert(offsetof(hirsel_rt_v2_cpu_summary, retained) == 40, "cpu summary retained offset");
+HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_cpu_growth, 88);
+_Static_assert(offsetof(hirsel_rt_v2_cpu_growth, capacity) == 80, "cpu growth capacity offset");
+/* Storage calls borrow one exclusively owned input block/region. On success,
+ * growth replaces block; on refusal every field and input stays unchanged.
+ * GROW_BLOCK uses keep/extent/align; GROW_SEQUENCE uses element_size,
+ * element_align/capacity; ALLOC_REGION uses region/index/extent/align/flags.
+ * Regions are ordinal-local, never shared between saved mappers. */
+uint8_t hirsel_rt_v2_cpu_ahead_publish(hirsel_rt_v2_ahead_physical *state, hirsel_rt_v2_cpu_summary *summary);
+uint8_t hirsel_rt_v2_cpu_ahead_grow(hirsel_rt_v2_ahead_physical *state, hirsel_rt_v2_cpu_growth *request);
 uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);
 void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, hirsel_rt_v2_header *block, uint64_t fuel);
 /* A resumable frame at a boundary: 0 proceeds with the boundary call, 1 suspends. */
