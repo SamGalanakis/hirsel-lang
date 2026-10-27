@@ -82,6 +82,72 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         self.define(result, receipt)
     }
 
+    pub(in crate::emit) fn arena_inventory(
+        &mut self,
+        arena: ValueId,
+        allocation: SourceAnchorId,
+        value: ValueId,
+        shape: SealDescriptorId,
+        previous: Option<ValueId>,
+    ) -> Emitted {
+        use hirsel_lir::sealed_payload::*;
+        if previous.is_some() {
+            return self.unsupported("arena replacement requires original holder correspondence");
+        }
+        let descriptor = &self.unit.tables.seal_descriptors[shape.index()];
+        descriptor
+            .check(self.inputs.layouts)
+            .map_err(|what| crate::CodegenError::Invalid {
+                definition: self.definition().clone(),
+                what,
+            })?;
+        let layout = descriptor.root_layout;
+        let payload = match self.layout(layout)?.kind {
+            LayoutKind::Block { payload } | LayoutKind::Box { payload } => payload,
+            _ => return self.unsupported("arena inventory requires an original block"),
+        };
+        // Complete original source facts plus typed physical coverage. An empty
+        // release program alone would miss arena-local and Shared child edges.
+        if !self.layout(payload)?.scan.is_empty()
+            || !self.layout(payload)?.drop.is_empty()
+            || descriptor.logical.facts.iter().skip(1).any(|fact| {
+                !matches!(
+                    fact.class,
+                    hirsel_lir::logical_storage::StorageClass::Inline
+                )
+            })
+        {
+            return self.unsupported("arena inventory payload needs paired original receipts");
+        }
+        let source = &self.unit.tables.source_anchors[allocation.index()];
+        let bindings: Vec<_> = self
+            .unit
+            .tables
+            .seal_payloads
+            .iter()
+            .filter(|table| table.descriptor == shape)
+            .flat_map(|table| &table.bindings)
+            .filter(|binding| &binding.recipe.source == source)
+            .collect();
+        if !matches!(bindings.as_slice(), [binding] if matches!(binding.recipe.operation,
+            PayloadOperation::Allocate { destination: PayloadDestination::Arena(_) }))
+            || self.value_type(arena)?.repr != ValueRepr::Arena
+            || self.layout(self.value_type(arena)?.layout)?.kind != LayoutKind::Arena
+            || self.value_type(value)?.layout != layout
+        {
+            return self.invalid("arena inventory differs from its original allocation recipe");
+        }
+        let image = self.stack(layout)?;
+        let root = self.get(value)?;
+        self.store(self.layout_shape(layout)?, root, image);
+        let arena = self.get(arena)?;
+        let index = self.descriptor(layout)?;
+        let publish = self.runtime(RuntimeEntry::ReceiptArenaInventory)?;
+        self.builder
+            .call(publish, &[self.context, arena, index, image.ptr]);
+        Ok(())
+    }
+
     fn construction_snapshot(
         &mut self,
         value: ValueId,

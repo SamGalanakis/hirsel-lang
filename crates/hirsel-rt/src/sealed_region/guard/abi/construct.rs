@@ -16,7 +16,7 @@ unsafe fn image<'a>(source: *const u8, size: usize) -> &'a [u8] {
     }
 }
 
-unsafe fn extent(ctx: *mut TaskCtx, block: *mut Header) -> usize {
+pub(super) unsafe fn extent(ctx: *mut TaskCtx, block: *mut Header) -> usize {
     let layout = unsafe { &*(*ctx).descriptor((*block).index()) };
     let (capacity, _) = unsafe { (*ctx).heap_ref().usable(block) };
     let size = if layout.flags & crate::LAYOUT_DYNAMIC == 0 {
@@ -47,7 +47,7 @@ unsafe fn extent(ctx: *mut TaskCtx, block: *mut Header) -> usize {
     usize::try_from(size).unwrap_or_else(|_| crate::fault("construction extent overflow"))
 }
 
-unsafe fn snapshot(
+pub(super) unsafe fn snapshot(
     ctx: *mut TaskCtx,
     index: u32,
     source: *const u8,

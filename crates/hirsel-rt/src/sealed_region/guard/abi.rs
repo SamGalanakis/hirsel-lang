@@ -209,3 +209,5 @@ unsafe fn prepare(
 mod tests;
 
 mod construct;
+
+mod inventory;

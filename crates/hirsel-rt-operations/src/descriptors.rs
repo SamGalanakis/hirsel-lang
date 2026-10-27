@@ -940,6 +940,7 @@ pub const ENTRIES: &[Entry] = &[
     entry("hirsel_rt_v2_receipt_region_enter", Local),
     entry("hirsel_rt_v2_receipt_bits", Local),
     entry("hirsel_rt_v2_receipt_construct", Local),
+    entry("hirsel_rt_v2_receipt_arena_inventory", Local),
     ops("hirsel_rt_v2_seal_prepare_commit", &["root.release"]),
     ops(
         "hirsel_rt_v2_receipt_region_exit",

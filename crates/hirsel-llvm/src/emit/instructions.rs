@@ -2066,9 +2066,13 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 binding,
                 inputs,
             } => self.payload_receipt(result, value, shape, binding, inputs),
-            Inst::ArenaInventory { .. } => {
-                self.unsupported("sealed storage emission is not linked")
-            }
+            Inst::ArenaInventory {
+                arena,
+                allocation,
+                value,
+                shape,
+                previous,
+            } => self.arena_inventory(arena, allocation, value, shape, previous),
             Inst::CopyValue { .. } | Inst::Drop { .. } | Inst::Unavailable { .. } => {
                 self.invalid("an operation outside the Ready vocabulary")
             }
