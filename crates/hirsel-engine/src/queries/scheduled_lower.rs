@@ -366,6 +366,24 @@ impl FrontLowerQueries {
         self._allowance.bytes() - *self.retention.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Settled memo identities for work accounting. No read archive or body
+    /// is decoded merely to count the producer work this graph demanded.
+    pub fn memo_keys(&self) -> Vec<crate::memo::MemoKey> {
+        let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut keys = Vec::new();
+        for (path, input) in &self.inputs {
+            for (kind, phase, address) in [
+                (FRONT_LOWER_KIND, QueryKind::Lower, input.lower.0),
+                (FRONT_EVALUATE_KIND, QueryKind::Evaluate, input.evaluate.0),
+            ] {
+                if outcomes.contains_key(&(kind, address)) {
+                    keys.push(crate::memo::MemoKey::new(phase, DefId::intern(path)));
+                }
+            }
+        }
+        keys
+    }
+
     pub fn memo_snapshot(&self) -> Option<Vec<(crate::memo::MemoKey, Arc<Reads>)>> {
         let outcomes = self.outcomes.lock().unwrap_or_else(|e| e.into_inner());
         let mut rows = Vec::new();

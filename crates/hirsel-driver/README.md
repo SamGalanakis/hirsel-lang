@@ -18,7 +18,8 @@ sources and manifests of this crate and of every workspace crate it depends on,
 with Cargo.lock and the toolchain pin. Std images are keyed by it, so any edit to
 the compiler retires every std image written before it.
 
-Fresh, no-daemon and resident path calls select immutable `CompilerRequests`.
+Fresh, no-daemon and resident checks, execution and TIR exports select immutable
+`CompilerRequests`.
 The source loader installs the admitted front, Lower, Check, Run and Object
 producers, then drops its mutable engine before clients receive the graph.
 `Session` retains input observations and host policy. Query products own their

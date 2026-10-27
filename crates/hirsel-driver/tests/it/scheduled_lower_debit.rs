@@ -317,6 +317,19 @@ fn original_body_decode_admission_precedes_provider_reads_and_preserves_scalar_t
                 .unwrap();
             let request = runtime.request(&[lower.query(&program.entry).unwrap()]);
             runtime.wait(request).unwrap();
+            let expected_keys = lower
+                .memo_snapshot()
+                .unwrap()
+                .into_iter()
+                .map(|(key, _)| key)
+                .collect::<Vec<_>>();
+            store.reads.store(0, Ordering::Relaxed);
+            assert_eq!(lower.memo_keys(), expected_keys);
+            assert_eq!(
+                store.reads.load(Ordering::Relaxed),
+                0,
+                "work accounting must not reopen an archived read set or body"
+            );
             let before_work = lower.work_snapshot();
             let before_reads = store.reads.load(Ordering::Relaxed);
             let needed = lower
