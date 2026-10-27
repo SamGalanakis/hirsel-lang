@@ -113,9 +113,6 @@ impl ResultStore for ScratchStore {
     }
     fn put_content(&self, domain: Domain, bytes: &[u8]) -> Option<Reference> {
         let expected = domain.reference(bytes)?;
-        if self.selected.put_content(domain, bytes) == Some(expected) {
-            return Some(expected);
-        }
         let mut files = self.files.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((actual, _)) = files.entries.get(&expected.output.0) {
             return (*actual == expected).then_some(expected);
@@ -156,6 +153,10 @@ impl ResultStore for ScratchStore {
         files.disk += expected.len;
         files.metadata += metadata;
         files.entries.insert(expected.output.0, (expected, path));
+        drop(files);
+        // A successful cache put is still evictable. The current request owns
+        // its transport independently of later durable/cache reclamation.
+        let _ = self.selected.put_content(domain, bytes);
         Some(expected)
     }
     fn get_content(&self, reference: Reference) -> Option<Bytes> {
@@ -313,7 +314,7 @@ mod tests {
         let verifier = selected.verifier().unwrap();
         let budget = ProcessBudget::new(8 << 10);
         let request = RequestStore::with_scratch(
-            selected,
+            selected.clone(),
             budget.reserve(8 << 10).unwrap(),
             parent.path(),
             0,
@@ -321,12 +322,27 @@ mod tests {
         .unwrap();
         assert!(Arc::ptr_eq(&request.verifier().unwrap(), &verifier));
         let before = request.retained_bytes();
+        assert!(request.put_content(domain(), b"selected provider").is_none());
+        assert_eq!(request.retained_bytes(), before);
+        drop(request);
+        let request = RequestStore::with_scratch(
+            selected.clone(),
+            budget.reserve(8 << 10).unwrap(),
+            parent.path(),
+            1024,
+        )
+        .unwrap();
         let reference = request.put_content(domain(), b"selected provider").unwrap();
+        // Successful provider publication must not make an evictable cache
+        // the only owner of a settled request's original bytes.
+        assert_eq!(&*selected.get_content(reference).unwrap(), b"selected provider");
+        drop(selected.take());
+        assert!(selected.get_content(reference).is_none());
         assert_eq!(
             &*request.get_content(reference).unwrap(),
             b"selected provider"
         );
-        assert_eq!(request.retained_bytes(), before);
+        assert!(request.retained_bytes() <= 8 << 10);
         assert!(!request.exhausted());
     }
 }
