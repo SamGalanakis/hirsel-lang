@@ -213,14 +213,6 @@
       "ROUTE_PLANNER_33_ORDERED"
     ]
   },
-  "spectral_audit_35::spectral_audit_35_original_caps": {
-    "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
-    "inputs": []
-  },
-  "spectral_audit_35::spectral_audit_35_unrounded_oracle": {
-    "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
-    "inputs": []
-  },
   "spectral_audit_35::spectral_audit_35_ordered_capacity": {
     "source": "crates/hirsel-cli/tests/cli/spectral_audit_35.rs",
     "inputs": [

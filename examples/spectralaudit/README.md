@@ -1,7 +1,7 @@
 # Spectral audit
 
 `spectralaudit ROOT INPUT OUTPUT JOBS [--interruptible]` reads one JSON manifest,
-subtracts each channel's complex mean when requested, computes a direct DFT,
+subtracts each channel's complex mean when requested, computes a Fourier transform,
 then reconstructs it with the inverse. OUTPUT is committed atomically only after
 all channels pass reconstruction and Parseval checks. Status 2 diagnoses input,
 grant, file, verification or cancellation errors. Status 3 means a missing
@@ -26,9 +26,10 @@ negative values rounding to zero are spelled positively. Peak comparisons use
 unrounded energy; exact ties retain the lower bin ordinal. Tiny nonzero residual
 energies can therefore order mathematically zero bins differently.
 
-The concrete f64 kernel ports RustFFT's small O(N²) Dft with N reusable twiddles,
-explicit dirty scratch, deterministic ascending accumulation and no planner.
-This is a numerical/ownership example, with no claimed performance advantage.
+The concrete f64 kernel uses scalar radix-2 layers for power-of-two lengths and
+RustFFT's direct DFT for other lengths, with N reusable twiddles and explicit
+dirty scratch. The inverse normalizes once after all layers. No planner or
+SIMD backend is included.
 Series[T] provides borrowed map/fold callbacks; independent channel tasks share
 immutable input and twiddles and return owned results in input order. A task
 scope cancels and joins siblings on failure. `--interruptible` races the entire
@@ -72,17 +73,8 @@ RustFFT commit
 twiddles.rs:6–23, separate trigonometric oracle dft.rs:94–106, and exact vectors
 at dft.rs:284–299,327–359. See THIRD_PARTY.md for notices and deviations.
 
-The original length-32 report and 32768-byte padded input stop in the
-interpreters at the retained one-million-step budget (decimal formatting and
-JSON whitespace respectively). Their qualification identity remains explicit
-in `spectral_audit_35_original_caps` and is ignored in ordinary suites; it
-still fails with INCOMPLETE when explicitly run. The vectors and caps are
-unchanged. Native and mathematical-kernel evidence are separate obligations.
-
-Qualification completed 180 full-main engine cells, 18 physical capacity cells
-and 18 scripted width cells, retaining raw tapes and own-tape offline replays.
-Both native engines pass the original unrounded mathematical aggregate;
-32 additional reference/checked-H per-vector controls pass on the exact frozen
-vectors. The original aggregate still stops at Steps1M in both interpreters.
-Historical replay binding refusals and unrun adapters remain incomplete;
-FRICTION.md records their separate identities and owners.
+The original length-32 report, 32768-byte padded input and aggregate unrounded
+oracle pass within their retained one-million-step budgets. Their fixtures,
+independent oracles and caps remain unchanged. The input-cap workflow records
+with the current compiler and checks its own tapes across engines. Historical
+performance measurements are separate from these correctness results.

@@ -78,7 +78,9 @@ fn selected(row: &Value, ordinal: usize, part: usize) -> bool {
     }
     let cap = ["length-32", "input-cap"].contains(&row["id"].as_str().unwrap());
     if part == 6 {
-        cap
+        row["id"] == "length-32"
+    } else if part == 7 {
+        row["id"] == "input-cap"
     } else {
         !cap && ordinal % 6 == part
     }
@@ -392,9 +394,12 @@ fn spectral_audit_35_native_part_5() {
     native_workflows(5)
 }
 #[test]
-#[ignore = "original length-32 and input-cap Steps1M obligations remain INCOMPLETE; never raise their caps"]
-fn spectral_audit_35_original_caps() {
+fn spectral_audit_35_length_32_with_original_caps() {
     native_workflows(6)
+}
+#[test]
+fn spectral_audit_35_input_cap_with_original_caps() {
+    native_workflows(7)
 }
 
 fn native_workflows(part: usize) {
@@ -766,7 +771,6 @@ fn native_workflows(part: usize) {
 }
 
 #[test]
-#[ignore = "original aggregate oracle reference Steps1M; explicit missing-engine selection preserves the stop"]
 fn spectral_audit_35_unrounded_oracle() {
     hirsel_engine::with_compiler_stack(|| {
         let root = scratch("kernel-");

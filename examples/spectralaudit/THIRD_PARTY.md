@@ -9,4 +9,9 @@ reuses conjugated forward twiddles for inverse; inverse normalizes once unlike
 RustFFT's unnormalized API. Concrete f64 and unique lists replace generic Rust
 slice aliasing and mutable output slices. The test generator ports exact len2/4
 vectors from dft.rs:284–299,327–359 and uses a separate Taylor trigonometric
-oracle based on dft.rs:94–106. No FFT planner or SIMD code is included.
+oracle based on dft.rs:94–106. Power-of-two lengths also port the transpose and layered structure of
+simd/simd_radixn.rs:215-286 and the scalar radix-2 sum/difference butterfly
+of algorithm/scalar_column_butterflies.rs:16-22 from the same pin. Hirsel
+uses scalar fields, bit-reversed list copies and the existing full twiddle
+table rather than packed SIMD columns. Other lengths retain the direct DFT.
+No FFT planner or SIMD code is included.

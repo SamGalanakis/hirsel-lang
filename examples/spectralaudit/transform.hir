@@ -1,6 +1,5 @@
 // RustFFT 3bfe1afa src/algorithm/dft.rs:27-72 and twiddles.rs:6-23.
-// Precompute N twiddles; each output starts at zero and advances its index
-// with one conditional subtraction. No planner, SIMD, or FFT is involved.
+// Precompute N twiddles; power-of-two inputs use scalar radix-2 layers.
 pub type Twiddles {
   length: u64,
   values: List[samples.Complex],
@@ -59,6 +58,72 @@ pub fn apply(
     source.values
   ) != n || list.len(output) != n {
     return Error(Samples())
+  }
+  let mut factor = n
+  while factor > 1 && factor % 2 == 0 {
+    factor /= 2
+  }
+  if factor == 1 {
+    // RustFFT 3bfe1afa simd/simd_radixn.rs:215-286 transposes before
+    // crossing layers; scalar_column_butterflies.rs:16-22 sums/differences.
+    let mut i = 0u64
+    while i < n {
+      let mut index = i
+      let mut reversed = 0u64
+      let mut remaining = n
+      while remaining > 1 {
+        reversed = reversed * 2 + index % 2
+        index /= 2
+        remaining /= 2
+      }
+      output[i] = source.values[reversed]
+      i += 1
+    }
+    let mut width = 2u64
+    while width <= n {
+      let half = width / 2
+      let stride = n / width
+      let mut start = 0u64
+      while start < n {
+        let mut column = 0u64
+        while column < half {
+          let left = output[start + column]
+          let right = output[start + column + half]
+          let twiddle = twiddles.values[column * stride]
+          let imag = if inverse {
+            -twiddle.imaginary
+          } else {
+            twiddle.imaginary
+          }
+          let real: f64 = twiddle.real * right.real - imag * right.imaginary
+          let imaginary: f64 = twiddle.real * right.imaginary + imag * right.real
+          output[start + column] = samples.Complex(
+            real: left.real + real,
+            imaginary: left.imaginary + imaginary
+          )
+          output[start + column + half] = samples.Complex(
+            real: left.real - real,
+            imaginary: left.imaginary - imaginary
+          )
+          column += 1
+        }
+        start += width
+      }
+      width *= 2
+    }
+    if inverse {
+      let scale: f64 = core@1/float.from_int(n)
+      i = 0
+      while i < n {
+        let value = output[i]
+        output[i] = samples.Complex(
+          real: value.real / scale,
+          imaginary: value.imaginary / scale
+        )
+        i += 1
+      }
+    }
+    return Ok(())
   }
   let mut k = 0u64
   while k < n {
