@@ -224,13 +224,15 @@ impl QueryFactory for Factory {
             root,
             checked: false,
             pending: Vec::new(),
-            nodes: BTreeMap::new(),
-            contents: BTreeMap::new(),
-            uses: BTreeMap::new(),
+            entries: BTreeMap::new(),
             waiting: None,
             terminal: completed.map(Ok),
         }))
     }
+}
+struct GraphEntry {
+    node: content::Node,
+    content: content::Content,
 }
 struct Task {
     queries: Arc<FrontRunQueries>,
@@ -238,9 +240,7 @@ struct Task {
     root: DefPath,
     checked: bool,
     pending: Vec<DefId>,
-    nodes: BTreeMap<DefPath, content::Node>,
-    contents: BTreeMap<DefPath, content::Content>,
-    uses: BTreeMap<DefId, Box<[DefId]>>,
+    entries: BTreeMap<DefId, Box<GraphEntry>>,
     waiting: Option<QueryId>,
     terminal: Option<Result<ProductRef, Reference>>,
 }
@@ -334,7 +334,7 @@ impl Task {
         loop {
             while let Some(id) = self.pending.last().copied() {
                 let path = id.path();
-                if self.nodes.contains_key(path) {
+                if self.entries.contains_key(&DefId::intern(path)) {
                     self.pending.pop();
                     continue;
                 }
@@ -346,28 +346,17 @@ impl Task {
                         self.pending.extend(
                             dependencies
                                 .iter()
-                                .filter(|p| !self.nodes.contains_key(*p))
+                                .filter(|p| !self.entries.contains_key(&DefId::intern(p)))
                                 .map(DefId::intern),
                         );
-                        let semantic: BTreeSet<_> =
-                            node.dependencies.iter().map(|id| id.path()).collect();
-                        let semantic_dependencies = dependencies
-                            .into_iter()
-                            .filter(|p| semantic.contains(p))
-                            .map(|path| DefId::intern(&path))
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice();
-                        self.nodes.insert(path.clone(), node);
-                        self.contents.insert(
-                            path.clone(),
-                            match content::Content::new(&self.queries, content) {
-                                Ok(content) => content,
-                                Err(error) => {
-                                    return Poll::Ready(Err(self.queries.failure_record(error)));
-                                }
-                            },
-                        );
-                        self.uses.insert(id, semantic_dependencies);
+                        let content = match content::Content::new(&self.queries, content) {
+                            Ok(content) => content,
+                            Err(error) => {
+                                return Poll::Ready(Err(self.queries.failure_record(error)));
+                            }
+                        };
+                        self.entries
+                            .insert(id, Box::new(GraphEntry { node, content }));
                     }
                 }
                 // Canonical input bytes plus graph rows and decoded working bodies
@@ -379,15 +368,14 @@ impl Task {
                     return Poll::Ready(Err(self.queries.errors.resource));
                 }
             }
-            match self
-                .queries
-                .lower
-                .selected_instances(self.nodes.keys().cloned(), self.queries.weight.scratch)
-            {
+            match self.queries.lower.selected_instances(
+                self.entries.keys().map(|id| id.path().clone()),
+                self.queries.weight.scratch,
+            ) {
                 Ok(instances) => self.pending.extend(
                     instances
                         .into_iter()
-                        .filter(|p| !self.nodes.contains_key(p))
+                        .filter(|p| !self.entries.contains_key(&DefId::intern(p)))
                         .map(|path| DefId::intern(&path)),
                 ),
                 Err(error) => return Poll::Ready(Err(self.queries.failure_record(error))),
@@ -609,25 +597,16 @@ impl Task {
     }
     fn graph_bytes(&self) -> Option<u64> {
         let mut metadata = crate::NativeMetadataWeight::default();
-        metadata.tree::<DefPath, content::Content>(self.contents.len());
-        for (path, content) in &self.contents {
-            metadata.path(path);
-            content.weight(&mut metadata);
+        metadata.tree::<DefId, Box<GraphEntry>>(self.entries.len());
+        metadata.flat_vec(&self.pending);
+        for entry in self.entries.values() {
+            metadata.add(std::mem::size_of::<GraphEntry>() + 2 * std::mem::size_of::<usize>());
+            entry.node.weight(&mut metadata);
+            entry.content.weight(&mut metadata);
         }
-        let bodies = metadata.bytes();
-        let mut nodes = crate::NativeMetadataWeight::default();
-        nodes.tree::<DefPath, content::Node>(self.nodes.len());
-        for (path, node) in &self.nodes {
-            nodes.path(path);
-            node.weight(&mut nodes);
-        }
-        nodes.flat_vec(&self.pending);
-        nodes.tree::<DefId, Box<[DefId]>>(self.uses.len());
-        for dependencies in self.uses.values() {
-            nodes.add(std::mem::size_of_val(&**dependencies));
-        }
-        bodies.checked_add(nodes.bytes())
+        Some(metadata.bytes())
     }
+
     fn program(&self, root: &DefPath) -> Result<SemanticProgram, QueryError> {
         self.program_from(vec![root.clone()])
     }
@@ -637,10 +616,10 @@ impl Task {
             while let Some(path) = pending.pop() {
                 if definitions.insert(path.clone()) {
                     pending.extend(
-                        self.uses
+                        self.entries
                             .get(&DefId::intern(&path))
                             .into_iter()
-                            .flat_map(|ids| ids.iter())
+                            .flat_map(|entry| entry.node.dependencies.iter())
                             .map(|id| id.path().clone()),
                     );
                 }
@@ -658,8 +637,8 @@ impl Task {
         }
         let mut nodes = vec![super::program_revision::runtime_node()];
         for path in &definitions {
-            if let Some(node) = self.nodes.get(path) {
-                nodes.push(node.program(&self.queries, path)?);
+            if let Some(node) = self.entries.get(&DefId::intern(path)) {
+                nodes.push(node.node.program(&self.queries, path)?);
             }
         }
         Ok(SemanticProgram {
@@ -667,9 +646,17 @@ impl Task {
             uses: definitions
                 .iter()
                 .filter_map(|p| {
-                    self.uses
-                        .get(&DefId::intern(p))
-                        .map(|uses| (p.clone(), uses.iter().map(|id| id.path().clone()).collect()))
+                    self.entries.get(&DefId::intern(p)).map(|entry| {
+                        (
+                            p.clone(),
+                            entry
+                                .node
+                                .dependencies
+                                .iter()
+                                .map(|id| id.path().clone())
+                                .collect(),
+                        )
+                    })
                 })
                 .collect(),
             definitions,
@@ -679,10 +666,10 @@ impl Task {
         let queries = &self.queries;
         let snapshot = queries.lower.signatures();
         let mut references = crate::NativeMetadataWeight::default();
-        references.tree::<DefPath, Vec<DefPath>>(self.contents.len());
-        for (path, content) in &self.contents {
-            references.path(path);
-            content.reference_bytes(&mut references);
+        references.tree::<DefPath, Vec<DefPath>>(self.entries.len());
+        for (id, entry) in &self.entries {
+            references.path(id.path());
+            entry.content.reference_bytes(&mut references);
         }
         let decode_allowance = queries
             .weight
@@ -690,13 +677,14 @@ impl Task {
             .checked_sub(references.bytes())
             .ok_or_else(|| operational("Run reference map exceeds scratch admission"))?;
         let referenced = self
-            .contents
+            .entries
             .iter()
-            .map(|(path, content)| (path.clone(), content.references()))
+            .map(|(id, entry)| (id.path().clone(), entry.content.references()))
             .collect();
         let hashes =
             hirsel_proof_export::definition_hashes_loading(snapshot.types(), &referenced, |path| {
-                self.contents[path]
+                self.entries[&DefId::intern(path)]
+                    .content
                     .load(queries, path, decode_allowance)
                     .map_err(|error| format!("{error:?}"))
             })
@@ -706,7 +694,7 @@ impl Task {
             .filter(|(_, role)| *role == hirsel_types::core_roles::Intrinsic::UnsafeOperation)
             .map(|(path, _)| path)
             .collect();
-        let escapes: BTreeMap<_, _> = self.nodes.keys().filter_map(|path| {
+        let escapes: BTreeMap<_, _> = self.entries.keys().map(|id| id.path()).filter_map(|path| {
             let signature = &queries.inputs.get(path)?.signature;
             if unsafe_operations.contains(path) { Some((path.clone(), Escape::UnsafeOperation)) }
             else if matches!(&signature.kind, SignatureKind::Function(f) if f.foreign.is_some()) { Some((path.clone(), Escape::Extern)) }
@@ -749,7 +737,12 @@ impl Task {
         let program = self.program(&self.root)?;
         let mut callees = BTreeMap::new();
         for path in &program.definitions {
-            let Some(content) = self.contents.get(path).filter(|content| content.has_body()) else {
+            let Some(content) = self
+                .entries
+                .get(&DefId::intern(path))
+                .map(|entry| &entry.content)
+                .filter(|content| content.has_body())
+            else {
                 continue;
             };
             let DefinitionContent::Body { tir: Some(tir), .. } =
