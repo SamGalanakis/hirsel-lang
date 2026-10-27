@@ -392,7 +392,7 @@ impl GraphSelections {
                 graph
             }
         };
-        let (roots, output) = graph.products.select(&request.operation).map_err(|error| {
+        let (roots, mut output) = graph.products.select(&request.operation).map_err(|error| {
             retain_error(
                 error,
                 Arc::new(OutputOwner {
@@ -400,6 +400,7 @@ impl GraphSelections {
                 }),
             )
         })?;
+        let read_scope = output.read_scope.take();
         let ready_graph = graph.clone();
         let failed_graph = graph.clone();
         self.retention.keep(graph.clone());
@@ -407,6 +408,7 @@ impl GraphSelections {
             runtime: graph.runtime.clone(),
             roots,
             output: CompilerReadiness {
+                read_scope,
                 materialize: Arc::new(move |products| {
                     let completed = (output.materialize)(products)?;
                     let owner: Arc<dyn Send + Sync> = Arc::new(OutputOwner {
@@ -673,6 +675,7 @@ mod tests {
                 Ok((
                     vec![],
                     CompilerReadiness {
+                        read_scope: None,
                         materialize: Arc::new(move |_| {
                             Ok(Arc::new(CompileOutput::new(
                                 hirsel_engine::entry_path(&hirsel_engine::default_context()),

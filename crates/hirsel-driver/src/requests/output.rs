@@ -266,6 +266,7 @@ impl NativeExecution {
 /// Engine-selected materialization after query completion. The implementation
 /// is installed by the selector; hosts receive this only inside SelectedRequest.
 pub struct CompilerReadiness {
+    pub(crate) read_scope: Option<Box<dyn Send + Sync>>,
     pub(crate) materialize: Arc<Materialize>,
     pub(crate) failure: Arc<dyn Fn(hirsel_engine::store::Reference) -> ToolError + Send + Sync>,
 }
@@ -277,12 +278,14 @@ impl hirsel_engine::requests::OutputReadiness for CompilerReadiness {
     type Output = Arc<CompileOutput>;
     type Error = ToolError;
     fn failed(&mut self, failure: hirsel_engine::store::Reference) -> Option<Self::Error> {
+        let _read_scope = self.read_scope.take();
         Some((self.failure)(failure))
     }
     fn ready(
         &mut self,
         products: &[hirsel_engine::runtime::ProductRef],
     ) -> Result<Self::Output, Self::Error> {
+        let _read_scope = self.read_scope.take();
         (self.materialize)(products)
     }
 }

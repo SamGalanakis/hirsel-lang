@@ -328,6 +328,7 @@ impl GraphProducts for SourceProducts {
         Ok((
             roots,
             CompilerReadiness {
+                read_scope: store.read_scope(),
                 materialize: Arc::new(move |products| {
                     if store.exhausted() {
                         return Err(ToolError::Runtime(

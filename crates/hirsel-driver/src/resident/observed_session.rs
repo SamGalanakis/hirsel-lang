@@ -547,6 +547,7 @@ mod tests {
                     address: product.address,
                 }],
                 output: CompilerReadiness {
+                    read_scope: None,
                     materialize: Arc::new(move |_| Ok(output.clone())),
                     failure: Arc::new(|_| ToolError::Runtime("fixture query failure".into())),
                 },
