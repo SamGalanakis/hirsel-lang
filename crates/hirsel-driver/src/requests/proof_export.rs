@@ -65,6 +65,21 @@ impl ProofExport {
     pub fn query(&self) -> QueryId {
         self.query
     }
+    pub fn reusable(&self) -> bool {
+        self.completed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+            .is_none_or(|settled| {
+                settled.text.is_ok()
+                    || settled.check.completion != hirsel_engine::CheckCompletion::Complete
+                    || settled
+                        .check
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
+            })
+    }
     pub fn factory(self: &Arc<Self>) -> Arc<dyn QueryFactory> {
         Arc::new(Factory(self.clone()))
     }
@@ -90,7 +105,7 @@ impl ProofExport {
     }
     fn build(&self, product: ProductRef) -> Result<(FrontProofText, MemoryReservation), String> {
         let stage = |bytes, name| {
-            self.budget.reserve(bytes).map_err(|error| {
+            super::host_selector::GraphBudget::reserve_product(&self.budget, bytes).map_err(|error| {
                 format!("proof export {name} needs {bytes} bytes from the shared process budget: {error}")
             })
         };

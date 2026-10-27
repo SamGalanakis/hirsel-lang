@@ -188,6 +188,19 @@ impl GraphBudget {
     pub fn process_budget(&self) -> Arc<ProcessBudget> {
         self.budget.clone()
     }
+    pub fn reserve_product(
+        budget: &Arc<ProcessBudget>,
+        bytes: u64,
+    ) -> std::io::Result<MemoryReservation> {
+        let owner = Self::shared(budget);
+        match budget.reserve(bytes) {
+            Ok(reservation) => Ok(reservation),
+            Err(_) => {
+                owner.release_idle();
+                budget.reserve(bytes)
+            }
+        }
+    }
     fn shared(budget: &Arc<ProcessBudget>) -> Arc<Self> {
         let mut budgets = BUDGETS
             .get_or_init(Mutex::default)

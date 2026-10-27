@@ -204,7 +204,7 @@ impl GraphProducts for SourceProducts {
                 .is_some_and(|run| run.batch_roots() == Some(definitions.as_slice())),
             CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
             CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
-                self.export.is_some()
+                self.export.as_ref().is_some_and(|export| export.reusable())
             }
             CompileOperation::NativeOwnership(request) => self
                 .ownership
