@@ -57,7 +57,9 @@ impl CheckedReceipt {
         // Each stage is sized before it allocates. Scope, input, type capture
         // and construction are released with `built`; the receipt keeps only
         // its output text and read maps charged.
-        let scope = check.completed_scope_bytes(product).map_err(|error| refused("scope sizing", error))?;
+        let scope = check
+            .completed_scope_bytes(product)
+            .map_err(|error| refused("scope sizing", error))?;
         let scope = Arc::new(
             check
                 .completed_scope(product, stage(scope, "scope")?)
@@ -75,18 +77,32 @@ impl CheckedReceipt {
                 )
                 .map_err(|error| refused("original input capture", error))?,
         );
-        let capture = input.type_capture_bytes().map_err(|error| refused("type capture sizing", error))?;
+        let capture = input
+            .type_capture_bytes()
+            .map_err(|error| refused("type capture sizing", error))?;
         let prepared = input
             .capture_types_with_allowance(stage(capture, "type capture")?)
             .map_err(|error| refused("type capture", error))?;
         // Construction moves the uniquely owned originals and their grants
         // into the export rather than admitting a second payload copy.
-        let build = prepared.owned_build_bytes().map_err(|error| refused("construction sizing", error))?;
+        let build = prepared
+            .owned_build_bytes()
+            .map_err(|error| refused("construction sizing", error))?;
         let built = prepared
             .build_owned_with_allowance(stage(build, "construction")?)
             .map_err(|error| refused("construction", error))?;
-        let output = stage(built.output_bytes().map_err(|error| refused("output sizing", error))?, "output")?;
-        let receipt = stage(built.checked_products_bytes().map_err(|error| refused("receipt sizing", error))?, "receipt")?;
+        let output = stage(
+            built
+                .output_bytes()
+                .map_err(|error| refused("output sizing", error))?,
+            "output",
+        )?;
+        let receipt = stage(
+            built
+                .checked_products_bytes()
+                .map_err(|error| refused("receipt sizing", error))?,
+            "receipt",
+        )?;
         let products = built
             .checked_products_with_allowances(output, receipt)
             .map_err(|error| refused("receipt publication", error))?;
