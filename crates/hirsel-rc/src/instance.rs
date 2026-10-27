@@ -1304,12 +1304,20 @@ pub fn discover_library_instance(
             _ => None,
         })
         .collect::<Vec<_>>();
-    if let Some(callable) = program.types.get(instances.callables[id.index()])
-        && let TypeKind::Function(callable) = &callable.kind
-    {
-        types.extend(callable.parameters.iter().map(|parameter| parameter.ty));
-        types.push(callable.result);
-        types.extend(callable.error);
+    // Generated adapters can own a callback's result even when their own
+    // callable returns Unit: task_main[F] retains Option[F.result] at finish.
+    let callables = std::iter::once(instances.callables[id.index()])
+        .chain(types.iter().copied())
+        .collect::<Vec<_>>();
+    for callable in callables {
+        if let Some(callable) = program.types.get(callable)
+            && let TypeKind::Function(callable) = &callable.kind
+            && callable.generics.is_empty()
+        {
+            types.extend(callable.parameters.iter().map(|parameter| parameter.ty));
+            types.push(callable.result);
+            types.extend(callable.error);
+        }
     }
     let mut discovery = Expander {
         program,

@@ -26,6 +26,13 @@ fn library_private_map_entry_discovers_its_representation_without_a_public_signa
     );
 }
 
+#[test]
+fn library_detached_task_discovers_its_callable_result_finalizer() {
+    compile_objects(include_str!(
+        "../../../../conformance/CONC/CONC-2-detached-result-cleanup-run.hir"
+    ));
+}
+
 fn compile_objects(source: &str) {
     hirsel_engine::with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
