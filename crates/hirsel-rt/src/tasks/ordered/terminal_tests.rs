@@ -17,6 +17,11 @@ struct Probe {
     mode: AtomicU64,
     reported: AtomicBool,
     cleaned: AtomicBool,
+    atomic: AtomicU64,
+    root_ctx: AtomicU64,
+    cleanup_effect: AtomicU64,
+    cleanup_after_report: AtomicBool,
+    cleanup_status: AtomicU64,
 }
 
 unsafe extern "C" fn older(ctx: *mut TaskCtx, env: *mut Header, _: u64, _: u64) -> u8 {
@@ -220,21 +225,32 @@ fn root_failure_waits_for_its_final_turn_to_retire_before_publication() {
 
 unsafe extern "C" fn returned_cleanup(ctx: *mut TaskCtx, value: *mut u8, _: u64, _: u64) -> u8 {
     let probe = unsafe { &*(value.cast::<u64>().read() as *const Probe) };
-    assert!(
-        probe.reported.load(Ordering::Acquire),
-        "sink must precede result cleanup"
-    );
-    assert!(
-        probe.older_effect.load(Ordering::Acquire),
-        "cleanup overtook older turn"
-    );
+    probe
+        .cleanup_after_report
+        .store(probe.reported.load(Ordering::Acquire), Ordering::Release);
+    probe
+        .cleanup_effect
+        .store(unsafe { retired_effect(ctx, probe) }, Ordering::Release);
     let mut canceled = u32::MAX;
-    assert_eq!(
-        unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) },
-        STATUS_OK
-    );
+    let status = unsafe { hirsel_rt_v2_task_canceled(ctx, &mut canceled, &0) };
+    probe.cleanup_status.store(status.into(), Ordering::Release);
     probe.cleaned.store(true, Ordering::Release);
     STATUS_OK
+}
+
+// Observe the already-retired image without introducing another scheduling
+// point. A marker after atomic_store returns belongs to the child's next turn.
+unsafe fn retired_effect(ctx: *mut TaskCtx, probe: &Probe) -> u64 {
+    let mut value = 0u64;
+    let _role = unsafe { role::Guard::new(ctx) };
+    unsafe {
+        scheduler(ctx).sync.read(
+            probe.atomic.load(Ordering::Acquire),
+            (&raw mut value).cast(),
+            8,
+        );
+    }
+    value
 }
 
 #[test]
@@ -290,6 +306,8 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
                 ),
                 STATUS_OK
             );
+            seen.atomic.store(atomic, Ordering::Release);
+            seen.root_ctx.store(ctx as u64, Ordering::Release);
             let mut scope = 0;
             assert_eq!(
                 hirsel_rt_v2_task_scope_enter(ctx, std::ptr::null_mut(), &mut scope, &0),
@@ -335,25 +353,19 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
             STATUS_OK
         });
         let home = std::thread::current().id();
+        let mut sink_effect = 0;
+        let mut sink_home = false;
+        let mut sink_before_cleanup = false;
+        let mut reports = 0;
+        let mut rendered = String::new();
         let mut report = |returned: &crate::exit_report::Returned| {
-            assert_eq!(
-                std::thread::current().id(),
-                home,
-                "report sink is home-affine"
-            );
-            assert!(
-                probe.older_effect.load(Ordering::Acquire),
-                "sink overtook older turn"
-            );
-            assert!(!probe.cleaned.load(Ordering::Acquire));
-            assert_eq!(
-                unsafe { crate::exit_report::render(returned) },
-                "error: 42\n"
-            );
-            assert!(
-                !probe.reported.swap(true, Ordering::AcqRel),
-                "report exactly once"
-            );
+            let ctx = probe.root_ctx.load(Ordering::Acquire) as *mut TaskCtx;
+            sink_effect = unsafe { retired_effect(ctx, &probe) };
+            sink_home = std::thread::current().id() == home;
+            sink_before_cleanup = !probe.cleaned.load(Ordering::Acquire);
+            rendered = unsafe { crate::exit_report::render(returned) };
+            reports += 1;
+            probe.reported.store(true, Ordering::Release);
         };
         let mut config = crate::Config::new();
         config.layouts = layouts.as_ptr();
@@ -387,6 +399,19 @@ fn returned_error_sink_and_yielding_cleanup_follow_older_turns_on_the_production
             crate::pool::free::enable(ctx);
             let frame = crate::stop::LaunchFrame::new(entry, 0, 0, [0; 5], &mut report);
             assert_eq!(crate::stop::run_root(ctx, frame), Ok(STATUS_OK));
+            // Assert on the launcher stack. Runtime fibers deliberately have
+            // no unwind linkage, so a sink panic cannot unwind into libtest.
+            assert_eq!(sink_effect, 23, "sink overtook older retired store");
+            assert!(sink_home, "report sink is home-affine");
+            assert!(sink_before_cleanup, "sink must precede result cleanup");
+            assert_eq!(rendered, "error: 42\n");
+            assert_eq!(reports, 1, "report exactly once");
+            assert_eq!(probe.cleanup_effect.load(Ordering::Acquire), 23);
+            assert!(probe.cleanup_after_report.load(Ordering::Acquire));
+            assert_eq!(
+                probe.cleanup_status.load(Ordering::Acquire),
+                STATUS_OK as u64
+            );
             assert!(probe.reported.load(Ordering::Acquire));
             assert!(probe.cleaned.load(Ordering::Acquire));
             {
