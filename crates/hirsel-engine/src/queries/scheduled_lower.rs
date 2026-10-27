@@ -164,6 +164,7 @@ impl Outcome {
     fn archive(&self) -> Option<&reads::Archive> {
         match &self.result {
             Ok(Value::Lower(lower)) => lower.archived_metadata.as_deref(),
+            Ok(Value::Constant(value)) => value.archived_reads.as_deref(),
             _ => None,
         }
     }
@@ -183,31 +184,40 @@ impl Outcome {
         }
     }
     fn archive_reads(&mut self, reference: Reference) {
-        let Ok(Value::Lower(lower)) = &mut self.result else {
-            return;
-        };
-        if self.reads_decode_bytes == 0 {
-            return;
-        }
         let read_bytes = self
             .reads
             .allocations()
             .map(|(_, bytes)| bytes)
             .sum::<usize>();
         let archive_bytes = size_of::<reads::Archive>() + 2 * size_of::<usize>();
-        // One descriptor owns both sequences; neither retained copy is useful
-        // once their joint archive is smaller. Decode still checks both counts.
-        if read_bytes.saturating_add(lower.dependencies.retained_bytes()) > archive_bytes {
-            lower.archived_metadata = Some(Box::new(reads::Archive {
-                reference,
-                decode_bytes: self.reads_decode_bytes,
-                len: self.reads.len(),
-                dependencies: lower.dependencies.len(),
-            }));
-            self.reads = Reads::empty();
-            lower.dependencies = Vec::new().into();
+        match &mut self.result {
+            Ok(Value::Lower(lower)) if self.reads_decode_bytes != 0 => {
+                // One descriptor owns both sequences; neither retained copy is
+                // useful once their joint archive is smaller.
+                if read_bytes.saturating_add(lower.dependencies.retained_bytes()) > archive_bytes {
+                    lower.archived_metadata = Some(Box::new(reads::Archive {
+                        reference,
+                        decode_bytes: self.reads_decode_bytes,
+                        len: self.reads.len(),
+                        dependencies: lower.dependencies.len(),
+                    }));
+                    self.reads = Reads::empty();
+                    lower.dependencies = Vec::new().into();
+                }
+            }
+            Ok(Value::Constant(value)) if read_bytes > archive_bytes => {
+                value.archived_reads = Some(Box::new(reads::Archive {
+                    reference,
+                    decode_bytes: value.working_bytes(),
+                    len: self.reads.len(),
+                    dependencies: 0,
+                }));
+                self.reads = Reads::empty();
+            }
+            _ => {}
         }
     }
+
     fn retained_bytes(&self) -> Option<u64> {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(size_of::<Self>() + 2 * size_of::<usize>());
@@ -233,6 +243,9 @@ impl Outcome {
             Ok(Value::Constant(value)) => {
                 weight.add(size_of::<Constants>() + 2 * size_of::<usize>());
                 weight.add(value.retained_bytes().try_into().ok()?);
+                if value.archived_reads.is_some() {
+                    weight.add(size_of::<reads::Archive>() + 2 * size_of::<usize>());
+                }
             }
             Err(error) => weight.add(
                 crate::memo::retained::retained_query_error_bytes(error)

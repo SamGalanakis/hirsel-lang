@@ -26,6 +26,20 @@ impl Archive {
         store: &dyn ResultStore,
         allowance: u64,
     ) -> Option<Reads> {
+        if self.reference.domain == CONSTANT_DESCRIPTOR {
+            if self.reference.len > allowance || self.decode_bytes > allowance {
+                return None;
+            }
+            let bytes = store.get_content(self.reference)?;
+            let (_, _, reads, _, _): (
+                Materialized,
+                Vec<(hirsel_syntax::ExprId, Materialized)>,
+                Reads,
+                DepthEvidence<Span>,
+                bool,
+            ) = records.decode(anchors, &bytes)?;
+            return (reads.len() == self.len && self.dependencies == 0).then_some(reads);
+        }
         Some(self.descriptor(records, anchors, store, allowance)?.5)
     }
     pub(super) fn dependencies(
@@ -224,6 +238,93 @@ mod tests {
                 .load(&records, &anchors, &*store, bound)
                 .is_none()
         );
+        assert_eq!(store.gets.load(Ordering::Relaxed), 0);
+        assert!(
+            archive
+                .load(
+                    &records,
+                    &anchors,
+                    &crate::store::MemStore::default(),
+                    bound
+                )
+                .is_none()
+        );
+    }
+    #[test]
+    fn archived_constant_reads_keep_complete_dependencies_and_bound_decode_before_io() {
+        let engine = crate::QueryEngine::new(crate::default_environment(), Default::default());
+        let anchors = crate::NativeRecordContext::capture(&engine);
+        let store = Arc::new(Counting::default());
+        let records = crate::NativeRecords::new(engine.types().clone(), store.clone());
+        let reads = Reads::from_vec(
+            (0u32..128)
+                .map(|index| {
+                    (
+                        ReadKey::Signature(DefId::intern(&DefPath::core(&format!(
+                            "constant_read_{index}"
+                        )))),
+                        ContentHash::of_bytes(&index.to_le_bytes()),
+                    )
+                })
+                .collect(),
+        )
+        .unwrap();
+        let ty = engine.types().intern(hirsel_types::Type::unit());
+        let mut constants = Constants::new(
+            Materialized {
+                root: hirsel_tir::ValueNode {
+                    ty,
+                    kind: hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Unit),
+                },
+            },
+            Vec::new(),
+        );
+        let depth = DepthEvidence::leaf(32);
+        let bytes = constants
+            .encode(&records, &anchors, &reads, &depth, false)
+            .unwrap();
+        let reference = store.put_content(CONSTANT_DESCRIPTOR, &bytes).unwrap();
+        let bound = constants.working_bytes();
+        let mut outcome = Outcome {
+            result: Ok(Value::Constant(Box::new(constants))),
+            reads: reads.clone(),
+            reads_decode_bytes: 0,
+            depth: depth.into(),
+            executed: false,
+            execution: None,
+            execution_subject: ContentHash::default(),
+        };
+        let before = outcome.retained_bytes().unwrap();
+        outcome.archive_reads(reference);
+        assert!(outcome.reads.is_empty());
+        assert_eq!(outcome.read_len(), reads.len());
+        assert!(outcome.retained_bytes().unwrap() < before);
+        let archive = outcome.archive().unwrap();
+        store.gets.store(0, Ordering::Relaxed);
+        assert!(
+            archive
+                .load(&records, &anchors, &*store, bound - 1)
+                .is_none()
+        );
+        assert_eq!(store.gets.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            archive.load(&records, &anchors, &*store, bound).unwrap(),
+            reads
+        );
+        let wrong = Archive {
+            len: reads.len() - 1,
+            ..archive.clone()
+        };
+        assert!(wrong.load(&records, &anchors, &*store, bound).is_none());
+        let wrong = Archive {
+            reference: Reference {
+                domain: LOWER_MATERIALIZED,
+                ..reference
+            },
+            ..archive.clone()
+        };
+        store.gets.store(0, Ordering::Relaxed);
+        assert!(wrong.load(&records, &anchors, &*store, bound).is_none());
         assert_eq!(store.gets.load(Ordering::Relaxed), 0);
         assert!(
             archive

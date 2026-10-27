@@ -6,6 +6,7 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct Constants {
     data: Data,
+    pub(super) archived_reads: Option<Box<reads::Archive>>,
     root_bytes: u64,
     data_bytes: u64,
     decode_bytes: u64,
@@ -29,6 +30,7 @@ impl Constants {
         let data_bytes = root.bytes().saturating_add(rest.bytes());
         Self {
             data: Data::Decoded(value, substitutions),
+            archived_reads: None,
             root_bytes: root.bytes(),
             data_bytes,
             decode_bytes: 0,
