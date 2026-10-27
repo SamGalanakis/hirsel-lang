@@ -31,6 +31,20 @@ impl Request {
             result: std::ptr::null_mut(),
         }
     }
+    pub(super) fn begin(&mut self, index: u32, extent: u64, align: u64) {
+        assert_eq!(self.phase, IDLE);
+        assert!(self.result.is_null());
+        self.index = index;
+        self.extent = extent;
+        self.align = align;
+        self.phase = REQUESTED;
+    }
+    pub(super) fn take_result(&mut self) -> *mut Header {
+        assert_eq!(self.phase, IDLE);
+        let result = std::mem::replace(&mut self.result, std::ptr::null_mut());
+        assert!(!result.is_null());
+        result
+    }
     pub(super) fn pending(&self) -> bool {
         self.phase != IDLE
     }

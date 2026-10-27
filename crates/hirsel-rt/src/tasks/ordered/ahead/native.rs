@@ -73,6 +73,9 @@ pub(crate) struct Native {
     pub(super) summary: *mut super::cpu_handoff::Summary,
     pub(super) summary_status: u32,
     pub(super) summary_blocks: Vec<crate::pool::cpu_scoped::ledger::blocks::Block>,
+    pub(super) growth: *mut super::cpu_handoff::Growth,
+    pub(super) growth_status: u32,
+    pub(super) growth_plan: Option<super::cpu_handoff::growth::Plan>,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -325,6 +328,9 @@ impl Native {
             summary: std::ptr::null_mut(),
             summary_status: 0,
             summary_blocks: Vec::new(),
+            growth: std::ptr::null_mut(),
+            growth_status: 0,
+            growth_plan: None,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -509,6 +515,15 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     }
                 }
             }
+            if !pause && !(*native).growth.is_null() {
+                match super::cpu_handoff::growth::serve(ctx, native) {
+                    Ok(ready) => pause = !ready,
+                    Err(stop) => {
+                        (*run).control.request_inside(stop);
+                        pause = true;
+                    }
+                }
+            }
             if pause {
                 if !private(ctx) && (*run).control.stopped().is_none() {
                     let task = super::super::engine::current(ctx);
@@ -552,6 +567,7 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     && !(*native).pending_refill
                     && !(*native).allocation.pending()
                     && (*native).summary.is_null()
+                    && (*native).growth.is_null()
                     && exec.leaving.get().is_none()
                 {
                     (*native).physical.points_left = 1024;

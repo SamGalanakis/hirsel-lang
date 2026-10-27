@@ -2,6 +2,8 @@
 use super::native::{Native, Physical};
 use crate::{Header, TaskCtx, region::Region};
 
+pub(super) mod growth;
+
 pub const VERSION: u32 = 1;
 pub const ACCEPTED: u8 = 0;
 pub const NOT_CERTIFIED: u8 = 1;
@@ -200,9 +202,38 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
 }
 
 /// # Safety
-/// Called only by a checked CPU alternate. The request and any input block or
-/// region belong exclusively to its ordinal and remain live across save.
-/// This declaration slice refuses without reading or changing the request.
+/// Only a checked CPU alternate calls this helper. The request and its unique
+/// input block remain in that ordinal's saved custody through return.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_grow(
+    _state: *mut Physical,
+    _request: *mut Growth,
+) -> u8 {
+    core::arch::naked_asm!(
+        "test rdi, rdi", "je 2f", "test rsi, rsi", "je 2f",
+        "cmp byte ptr [rdi + {cpu}], 0", "je 2f",
+        "cmp dword ptr [rdi + {cpu_phase}], 2", "jne 2f",
+        "cmp qword ptr [rdi + {growth}], 0", "jne 3f",
+        "push rbx", "mov rbx, rdi", "mov [rbx + {growth}], rsi",
+        "mov dword ptr [rbx + {status}], {refused}",
+        "mov esi, 32", "call {handoff}",
+        "cmp qword ptr [rbx + {growth}], 0", "jne 3f",
+        "mov eax, [rbx + {status}]", "pop rbx", "ret",
+        "2:", "mov eax, {refused}", "ret", "3:", "ud2",
+        cpu = const std::mem::offset_of!(Native, cpu),
+        cpu_phase = const std::mem::offset_of!(Native, cpu_phase),
+        growth = const std::mem::offset_of!(Native, growth),
+        status = const std::mem::offset_of!(Native, growth_status),
+        refused = const NOT_CERTIFIED,
+        handoff = sym super::native::hirsel_rt_v2_ahead_handoff,
+    );
+}
+
+/// # Safety
+/// The same contract as the x86 handoff. Unsupported targets refuse it.
+#[cfg(not(target_arch = "x86_64"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn hirsel_rt_v2_cpu_ahead_grow(
     _state: *mut Physical,
@@ -233,3 +264,6 @@ mod tests {
 
 #[cfg(all(test, target_arch = "x86_64"))]
 mod naked_tests;
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod growth_tests;
