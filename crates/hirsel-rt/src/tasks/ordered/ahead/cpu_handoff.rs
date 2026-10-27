@@ -171,7 +171,7 @@ pub(super) unsafe fn serve(ctx: *mut TaskCtx, native: *mut Native) -> crate::sto
             };
             unsafe { (*native).summary_blocks = blocks };
         }
-        super::super::engine::ahead_summary(ctx, pointer);
+        super::super::engine::ahead_summary(ctx, pointer)?;
         unsafe { (*pointer).phase = SUMMARY_PUBLISHED };
     }
     assert_eq!(

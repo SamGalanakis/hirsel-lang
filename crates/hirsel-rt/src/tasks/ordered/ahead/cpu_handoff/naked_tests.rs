@@ -1,5 +1,47 @@
 use super::*;
+use crate::io::{Adapter, AdapterError, Completion, CpuSummary, Event, Request, Tree};
 use crate::tasks::ordered::{cpu, engine, events};
+use std::sync::{Arc, Mutex};
+struct Capture(Arc<Mutex<Vec<Event>>>);
+impl Adapter for Capture {
+    fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
+        Err(AdapterError::InvalidCompletion)
+    }
+    fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
+        Err(AdapterError::InvalidCompletion)
+    }
+    fn cpu_control(
+        &mut self,
+        width: u32,
+        action: u32,
+        count: u64,
+        outcome: Option<u32>,
+    ) -> Result<Option<u32>, AdapterError> {
+        if let Some(outcome) = outcome {
+            self.0.lock().unwrap().push(Event {
+                request: Request::CpuControl {
+                    width,
+                    action,
+                    count,
+                    outcome,
+                },
+                completion: Completion::Ready,
+                fault: None,
+                resources: None,
+            });
+        }
+        Ok(outcome)
+    }
+    fn cpu_summary(&mut self, summary: &CpuSummary) -> Result<(), AdapterError> {
+        self.0.lock().unwrap().push(Event {
+            request: Request::CpuSummary(summary.clone()),
+            completion: Completion::Ready,
+            fault: None,
+            resources: None,
+        });
+        Ok(())
+    }
+}
 
 unsafe extern "C" fn unused(_: *mut TaskCtx, _: *mut Header, _: u64, _: u64) -> u8 {
     crate::STATUS_OK
@@ -27,6 +69,14 @@ fn run_summary(
     width: u32,
     adapter: Option<Box<dyn crate::io::Adapter>>,
 ) -> crate::host::BodyOutcome {
+    run_prefix(width, adapter, None)
+}
+
+fn run_prefix(
+    width: u32,
+    adapter: Option<Box<dyn crate::io::Adapter>>,
+    nonhead: Option<bool>,
+) -> crate::host::BodyOutcome {
     let mut run = crate::host::BodyRun::new(width, false);
     run.adapter = adapter;
     run.run(
@@ -38,14 +88,14 @@ fn run_summary(
                 max_physical_bytes: 2 << 30,
                 max_batch_bytes: 1 << 20,
             });
-            (*ctx).set_budgets(Some(100), None);
+            (*ctx).set_budgets(Some(100), Some(1 << 20));
             engine::enable(
                 ctx,
                 crate::ordered::Policy::admit(&Default::default(), None),
             );
             events::enable(ctx);
         },
-        |ctx| unsafe {
+        move |ctx| unsafe {
             engine::fuel_in(ctx);
             assert_eq!(cpu::control(ctx, 4, 2, 1, || 0), Ok(0));
             assert_eq!(cpu::control(ctx, 4, 3, 0, || 0), Ok(0));
@@ -83,6 +133,40 @@ fn run_summary(
                 (&raw mut *native).cast(),
             );
             let initial = engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
+            if let Some(nonhead) = nonhead {
+                crate::stop::set_running(std::ptr::null_mut());
+                crate::tasks::role::enter(ctx);
+                let task = engine::current(ctx);
+                let head = nonhead.then(|| {
+                    engine::with_driver(ctx, |d| {
+                        let original = d.frontier.take().unwrap();
+                        let mut ahead = crate::ordered::Frontier::new(
+                            task.wrapping_add(1 << 32),
+                            crate::ordered::Policy::admit(&Default::default(), None),
+                            original.settled,
+                        );
+                        ahead.enqueue(task, crate::ordered::footprint::Held::empty());
+                        d.frontier = Some(ahead);
+                        original
+                    })
+                });
+                for bytes in [16, 32] {
+                    (*ctx).view.compiled.fuel -= 1;
+                    let allocation = engine::ahead_allocation(ctx, bytes).unwrap();
+                    assert!(matches!(
+                        (nonhead, allocation),
+                        (true, engine::CpuAllocation::Summarized)
+                            | (false, engine::CpuAllocation::Settled)
+                    ));
+                }
+                if let Some(head) = head {
+                    engine::with_driver(ctx, |d| d.frontier = Some(head));
+                }
+                crate::tasks::role::release(ctx);
+                crate::stop::set_running(ctx);
+            }
+            let before_publication =
+                engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled);
             (*ctx).view.compiled.fuel -= 3;
             crate::fiber::switch(&raw mut native.physical.idle_sp, sp);
             assert_eq!(native.physical.reason, 16);
@@ -90,7 +174,7 @@ fn run_summary(
             assert_eq!(summary.phase, SUMMARY_PENDING);
             assert_eq!(
                 engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled),
-                initial
+                before_publication
             );
             crate::stop::set_running(std::ptr::null_mut());
             crate::tasks::role::enter(ctx);
@@ -99,7 +183,7 @@ fn run_summary(
             assert!(native.summary.is_null());
             assert_eq!(
                 engine::with_driver(ctx, |d| d.frontier.as_ref().unwrap().settled.fuel),
-                initial.fuel - 3
+                initial.fuel - if nonhead.is_some() { 5 } else { 3 }
             );
             crate::tasks::role::release(ctx);
             crate::stop::set_running(ctx);
@@ -115,48 +199,6 @@ fn run_summary(
 
 #[test]
 fn settled_native_summary_records_once_and_replays_at_every_runtime_width() {
-    use crate::io::{Adapter, AdapterError, Completion, CpuSummary, Event, Request, Tree};
-    use std::sync::{Arc, Mutex};
-    struct Capture(Arc<Mutex<Vec<Event>>>);
-    impl Adapter for Capture {
-        fn preflight(&self, _: &Request) -> Result<Option<Completion>, AdapterError> {
-            Err(AdapterError::InvalidCompletion)
-        }
-        fn call(&mut self, _: Request) -> Result<Completion, AdapterError> {
-            Err(AdapterError::InvalidCompletion)
-        }
-        fn cpu_control(
-            &mut self,
-            width: u32,
-            action: u32,
-            count: u64,
-            outcome: Option<u32>,
-        ) -> Result<Option<u32>, AdapterError> {
-            if let Some(outcome) = outcome {
-                self.0.lock().unwrap().push(Event {
-                    request: Request::CpuControl {
-                        width,
-                        action,
-                        count,
-                        outcome,
-                    },
-                    completion: Completion::Ready,
-                    fault: None,
-                    resources: None,
-                });
-            }
-            Ok(outcome)
-        }
-        fn cpu_summary(&mut self, summary: &CpuSummary) -> Result<(), AdapterError> {
-            self.0.lock().unwrap().push(Event {
-                request: Request::CpuSummary(summary.clone()),
-                completion: Completion::Ready,
-                fault: None,
-                resources: None,
-            });
-            Ok(())
-        }
-    }
     let captured = Arc::new(Mutex::new(Vec::new()));
     let live = run_summary(4, Some(Box::new(Capture(captured.clone()))));
     assert_eq!(live.ended, Ok(crate::STATUS_OK));
@@ -185,5 +227,46 @@ fn settled_native_summary_records_once_and_replays_at_every_runtime_width() {
         );
         assert_eq!(replay.ended, Ok(crate::STATUS_OK), "replay W{width}");
         assert_eq!(replay.pending, 0);
+    }
+}
+
+#[test]
+fn head_and_nonhead_allocation_prefixes_record_identical_charges_at_every_runtime_width() {
+    for width in [1, 2, 4, 8] {
+        let mut canonical = None;
+        for nonhead in [false, true] {
+            let captured = Arc::new(Mutex::new(Vec::new()));
+            let live = run_prefix(
+                width,
+                Some(Box::new(Capture(captured.clone()))),
+                Some(nonhead),
+            );
+            assert_eq!(live.ended, Ok(crate::STATUS_OK));
+            assert_eq!(live.pending, 0);
+            let events = captured.lock().unwrap().clone();
+            assert_eq!(events.len(), 3);
+            let Request::CpuSummary(summary) = &events[2].request else {
+                panic!("summary follows the claim")
+            };
+            assert_eq!(summary.pieces.len(), 1);
+            assert_eq!(summary.pieces[0].fuel, 5);
+            assert_eq!(summary.pieces[0].net, 48);
+            assert_eq!(summary.pieces[0].envelope, [(1, 16), (2, 48)]);
+            assert_eq!(summary.level, 48);
+            assert_eq!(summary.fuel, 95);
+            if let Some(canonical) = &canonical {
+                assert_eq!(&events, canonical, "W{width}, nonhead {nonhead}");
+            } else {
+                canonical = Some(events.clone());
+            }
+            // Serial replay may choose the opposite physical settlement path.
+            let replay = run_prefix(
+                width,
+                Some(Box::new(crate::io_sim::SimIo::new(Tree::default(), events))),
+                Some(!nonhead),
+            );
+            assert_eq!(replay.ended, Ok(crate::STATUS_OK));
+            assert_eq!(replay.pending, 0);
+        }
     }
 }

@@ -2526,13 +2526,17 @@ pub(crate) fn ahead_allocation(ctx: *mut TaskCtx, bytes: u64) -> Stopped<CpuAllo
 
 /// Publish one CPU prefix from idle without retiring any budget or operation.
 /// The request stays PUBLISHED across physical retries until its owner is head.
-pub(crate) fn ahead_summary(ctx: *mut TaskCtx, summary: *mut super::ahead::cpu_handoff::Summary) {
+pub(crate) fn ahead_summary(
+    ctx: *mut TaskCtx,
+    summary: *mut super::ahead::cpu_handoff::Summary,
+) -> Stopped<()> {
     let before = stretch(ctx);
     with_current_driver(ctx, |task, driver| {
         driver
             .cpu_batch
             .as_mut()
             .expect("a claimed CPU mapper")
-            .publish(task, before, summary);
-    });
+            .publish(task, before, summary)
+            .map_err(|pause| Stop::Refused(format!("CPU summary bound: {pause:?}")))
+    })
 }

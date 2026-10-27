@@ -1,7 +1,7 @@
 //! Scoped CPU receipts retire through the existing Ordered head and Yield.
 use super::{engine, events};
 use crate::TaskCtx;
-use crate::budget::stretch::{Jobs, Settled, Stretch};
+use crate::budget::stretch::{Jobs, Pause, Settled, Stretch};
 use crate::ordered::Next;
 use crate::ordered::footprint::TaskId;
 use crate::stop::{Stop, Stopped};
@@ -20,6 +20,10 @@ pub(super) struct Batch {
     retirement: u64,
     pending: BTreeMap<TaskId, (u32, u64)>,
     summaries: BTreeMap<TaskId, *mut super::ahead::cpu_handoff::Summary>,
+    // Recording only. These charges have already passed Jobs and must never
+    // be offered to the budget frontier a second time.
+    settled_prefixes: BTreeMap<TaskId, Result<Stretch, Pause>>,
+    recorded_prefixes: BTreeMap<TaskId, Stretch>,
 }
 
 pub(super) struct RetiredSummary {
@@ -42,6 +46,8 @@ impl Batch {
             retirement: 0,
             pending: BTreeMap::new(),
             summaries: BTreeMap::new(),
+            settled_prefixes: BTreeMap::new(),
+            recorded_prefixes: BTreeMap::new(),
         }
     }
 
@@ -119,10 +125,20 @@ impl Batch {
         task: TaskId,
         before: Stretch,
         summary: *mut super::ahead::cpu_handoff::Summary,
-    ) {
+    ) -> Result<(), Pause> {
         let job = self.owners[&task];
+        let recorded = match self.settled_prefixes.remove(&task) {
+            Some(prefix) => {
+                let mut prefix = prefix?;
+                prefix.append(&before)?;
+                prefix
+            }
+            None => before.clone(),
+        };
+        assert!(self.recorded_prefixes.insert(task, recorded).is_none());
         assert!(self.summaries.insert(task, summary).is_none());
         self.jobs.pause(job, before);
+        Ok(())
     }
 
     pub(super) fn retire_summary(
@@ -148,7 +164,7 @@ impl Batch {
             descriptor: unsafe { (*summary).descriptor },
             value_bytes: unsafe { (*summary).value_bytes },
             retained_count: unsafe { (*summary).retained_count },
-            pieces: crate::io::CpuSummary::pieces(&charges),
+            pieces: crate::io::CpuSummary::pieces(&self.recorded_prefixes[&task]),
             level: settled.level,
             limit: settled.limit,
             fuel: settled.fuel,
@@ -158,6 +174,9 @@ impl Batch {
             .retirement
             .checked_add(1)
             .expect("CPU retirement overflow");
+        if result.is_ok() {
+            self.recorded_prefixes.remove(&task);
+        }
         Some(RetiredSummary {
             charges,
             result: result.map_err(|stop| stop.kind),
@@ -177,8 +196,25 @@ impl Batch {
             .jobs
             .retire_prefix_at(job, before.clone(), complete, state)
             .map_err(|stop| stop.kind);
+        if result.is_ok() {
+            use std::collections::btree_map::Entry;
+            match self.settled_prefixes.entry(task) {
+                Entry::Vacant(entry) => {
+                    entry.insert(Ok(before.clone()));
+                }
+                Entry::Occupied(mut entry) => {
+                    let prefix = entry.get_mut();
+                    if let Ok(charges) = prefix
+                        && let Err(pause) = charges.append(before)
+                    {
+                        *prefix = Err(pause);
+                    }
+                }
+            }
+        }
         if complete && result.is_ok() {
             self.owners.remove(&task);
+            self.settled_prefixes.remove(&task);
         }
         Some(result)
     }
@@ -601,11 +637,13 @@ mod tests {
                 memory: true,
                 fuel: true,
             };
-            batch.publish(
-                9,
-                summarise(budgets, &[Event::Fuel, Event::Alloc(60)]).unwrap(),
-                &raw mut summary,
-            );
+            batch
+                .publish(
+                    9,
+                    summarise(budgets, &[Event::Fuel, Event::Alloc(60)]).unwrap(),
+                    &raw mut summary,
+                )
+                .unwrap();
             for _ in 0..3 {
                 assert_eq!(summary.phase, SUMMARY_PUBLISHED);
                 assert_eq!(state.level, 0, "publication never settles a younger charge");
@@ -698,16 +736,20 @@ mod tests {
             batch.claim(7, 4, 0);
             batch.claim(9, 4, 1);
             // The younger physical publication must leave the tape untouched.
-            batch.publish(
-                9,
-                summarise(budgets, &[Charge::Fuel, Charge::Alloc(48)]).unwrap(),
-                &raw mut summaries[1],
-            );
-            batch.publish(
-                7,
-                summarise(budgets, &[Charge::Fuel, Charge::Alloc(32)]).unwrap(),
-                &raw mut summaries[0],
-            );
+            batch
+                .publish(
+                    9,
+                    summarise(budgets, &[Charge::Fuel, Charge::Alloc(48)]).unwrap(),
+                    &raw mut summaries[1],
+                )
+                .unwrap();
+            batch
+                .publish(
+                    7,
+                    summarise(budgets, &[Charge::Fuel, Charge::Alloc(32)]).unwrap(),
+                    &raw mut summaries[0],
+                )
+                .unwrap();
             assert_eq!(state.level, 0);
             let first = batch.retire_summary(7, &mut state).unwrap();
             assert_eq!(first.result, Ok(()));

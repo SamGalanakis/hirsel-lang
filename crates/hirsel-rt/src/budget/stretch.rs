@@ -151,6 +151,42 @@ impl Stretch {
     pub fn pieces(&self) -> impl Iterator<Item = (u64, &Piece)> {
         self.pieces.iter().map(|(credit, piece)| (*credit, piece))
     }
+
+    /// Join two consecutive charge prefixes without introducing a credit at
+    /// their physical settlement boundary. Failure leaves the receiver intact.
+    pub(crate) fn append(&mut self, next: &Self) -> Result<(), Pause> {
+        assert_eq!(self.budgets, next.budgets);
+        if self.pieces.len() + next.pieces.len() - 1 > PIECES_MAX {
+            return Err(Pause::Pieces);
+        }
+        let mut joined = self.clone();
+        let left = joined.piece();
+        let right = &next.pieces[0].1;
+        for &(fuel, high) in &right.envelope {
+            let fuel = if self.budgets.fuel {
+                left.fuel.saturating_add(fuel)
+            } else {
+                0
+            };
+            let high = left.level.saturating_add(high);
+            if high > left.envelope.last().map_or(0, |&(_, h)| h) {
+                let full = left.envelope.len() == ENVELOPE_MAX;
+                match left.envelope.last_mut() {
+                    Some(last) if last.0 == fuel => *last = (fuel, high),
+                    _ if full => return Err(Pause::Envelope),
+                    _ => left.envelope.push((fuel, high)),
+                }
+            }
+        }
+        left.fuel = left.fuel.saturating_add(right.fuel);
+        left.level = left.level.saturating_add(right.net);
+        left.net = left.level;
+        joined.pieces.extend_from_slice(&next.pieces[1..]);
+        #[cfg(test)]
+        joined.exact.extend_from_slice(&next.exact);
+        *self = joined;
+        Ok(())
+    }
 }
 
 /// The run's settled budget state at the retirement frontier.
@@ -434,6 +470,58 @@ mod tests {
         fuel: true,
         memory: true,
     };
+
+    #[test]
+    fn joining_physically_settled_prefixes_matches_the_unsplit_charge_stream() {
+        let vectors = [
+            vec![Fuel, Alloc(16), Fuel, Alloc(32), Free(24), Fuel, Alloc(64)],
+            vec![Free(32), Fuel, Alloc(16), Alloc(32), Credit(8), Alloc(24)],
+            vec![Alloc(8), Credit(8), Fuel, Credit(0), Fuel, Alloc(16)],
+            vec![Alloc(16), Alloc(32), Free(48), Alloc(64), Alloc(16)],
+        ];
+        for fuel in [false, true] {
+            for memory in [false, true] {
+                let budgets = Budgets { fuel, memory };
+                for events in &vectors {
+                    let expected = summarise(budgets, events).unwrap();
+                    for first in 0..=events.len() {
+                        for second in first..=events.len() {
+                            let mut joined = summarise(budgets, &events[..first]).unwrap();
+                            joined
+                                .append(&summarise(budgets, &events[first..second]).unwrap())
+                                .unwrap();
+                            joined
+                                .append(&summarise(budgets, &events[second..]).unwrap())
+                                .unwrap();
+                            assert_eq!(joined, expected, "{events:?}, {first}, {second}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn joined_prefixes_keep_the_original_envelope_and_piece_caps() {
+        let events: Vec<_> = (0..ENVELOPE_MAX).flat_map(|_| [Fuel, Alloc(1)]).collect();
+        let mut full = summarise(BOTH, &events).unwrap();
+        let before = full.clone();
+        assert_eq!(
+            full.append(&summarise(BOTH, &[Fuel, Alloc(1)]).unwrap()),
+            Err(Pause::Envelope)
+        );
+        assert_eq!(full, before);
+        // Allocations at the same fuel offset replace a high even at the cap.
+        full.append(&summarise(BOTH, &[Alloc(1)]).unwrap()).unwrap();
+        assert_eq!(full.pieces[0].1.envelope.len(), ENVELOPE_MAX);
+        let mut full = summarise(BOTH, &vec![Credit(1); PIECES_MAX - 1]).unwrap();
+        let before = full.clone();
+        assert_eq!(
+            full.append(&summarise(BOTH, &[Credit(1)]).unwrap()),
+            Err(Pause::Pieces)
+        );
+        assert_eq!(full, before);
+    }
 
     fn settle(
         state: Settled,
