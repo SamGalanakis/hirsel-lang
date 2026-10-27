@@ -333,8 +333,8 @@ fn semantic_source_products_do_not_require_a_launch_or_program_check() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            serde_json::to_value(products.constant().unwrap()).unwrap(),
-            serde_json::to_value(&expected_constant).unwrap()
+            format!("{:?}", products.constant().unwrap()),
+            format!("{expected_constant:?}")
         );
         drop(products);
         // Their 32 four-MiB continuation grants cannot all fit this existing

@@ -446,7 +446,7 @@ padded to the declaration's lines; the semantic program and lowering repeat the
 walk until no instance is new. At most `MAX_GENERATED_INSTANCES` (256) per
 declaration, then CT-1. Re-indexing a declaration's source retires its instances.
 
-Toolchain packaging uses `Compiler::precompute_package` to populate the same
+Toolchain packaging uses `CompilerRequestsExt::precompute_package` in hirsel-driver to populate the same
 ordinary query provider used for user packages. The content store maps bounded,
 checked chunks and restores canonical type rows and declaration heads on demand.
 Logical addresses select candidates; action keys bind the complete observed reads,
