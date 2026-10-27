@@ -50,7 +50,10 @@ The driver's mode-before-lowering and publication guards remain its responsibili
 
 V never trusts the producer's fingerprint. Each view V reads is identified by
 a `ValidationDigest` that V's own encoder computes over every field of the
-view, private shape and malformed rows included (`digest`). Every lookup is
+view, private shape and malformed rows included (`digest`). Its v3 binary
+encoding includes every Serde field and reachable type row, with local tables
+for types, definition paths and symbol spellings. Ambient product numbering
+does not enter the identity. Every lookup is
 recorded as a `VRead`: `View(d, digest)`, `Missing(d)`, `FirstHeap(selection)`
 (and the view that supplies the role) and `UniverseErrors(digest)`;
 `read_holds` says whether one still observes the same value.

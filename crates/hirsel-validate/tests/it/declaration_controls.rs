@@ -1187,6 +1187,50 @@ fn caller_body_ids_are_checked_at_the_structural_boundary() {
     );
 }
 
+#[test]
+fn view_digests_ignore_interner_numbers_but_preserve_literal_type_id_text() {
+    let signature = |definition, ty| Signature {
+        definition,
+        metadata: SignatureMetadata::default(),
+        kind: SignatureKind::Const {
+            ty,
+            generics: vec![].into(),
+        },
+        fingerprint: ContentHash::default(),
+    };
+    let first = TypeInterner::new(None);
+    let second = TypeInterner::new(None);
+    second.intern(ty(TypeKind::Primitive(Primitive::String)));
+    let left = first.intern(ty(TypeKind::Primitive(Primitive::U64)));
+    let right = second.intern(ty(TypeKind::Primitive(Primitive::U64)));
+    assert_ne!(left, right);
+    assert_eq!(
+        digest(&first, &signature(id("Data"), left)),
+        digest(&second, &signature(id("Data"), right)),
+    );
+    let mut definitions = hirsel_intern::persist::Numbering::default();
+    definitions.number(id("Unrelated"));
+    let mut symbols = hirsel_intern::persist::Numbering::default();
+    symbols.number("unrelated".into());
+    let row = signature(id("Data"), left);
+    let expected = digest(&first, &row);
+    assert_eq!(
+        expected,
+        hirsel_syntax::with_def_numbering(&mut definitions, || {
+            hirsel_intern::persist::with_symbol_numbering(&mut symbols, || digest(&first, &row))
+        }),
+        "ambient product numbering cannot change V's identity",
+    );
+    assert_eq!(definitions.ids().len(), 1);
+    assert_eq!(symbols.ids().len(), 1);
+    let literal = format!("{left:?}");
+    assert_ne!(
+        digest(&first, &signature(id(&literal), left)),
+        digest(&first, &signature(id("TypeId(#0)"), left)),
+        "a declaration name is text, never a type-table reference",
+    );
+}
+
 // V's input: each view is identified by V's own digest, and every verdict is
 // reused only while the reads it made still hold.
 fn id(name: &str) -> DefId {

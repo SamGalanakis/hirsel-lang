@@ -126,66 +126,50 @@ impl<T: SignatureLookup + ?Sized> SignatureLookup for &T {
 /// V's digest of a view. Every field is encoded, including private shape,
 /// malformed rows and metadata a producer could leave out of its fingerprint.
 ///
-/// The encoding is the view's derived `Debug` form, which names every field,
-/// followed by every row its types reach in first-encounter order. Each
-/// `TypeId` is written as its ordinal in that order, never as the interner's
-/// number, so the digest is the same in every session. It follows the shapes
-/// without a hand-kept field list.
+/// The encoding uses every serialized field, followed by every referenced type
+/// row. Type IDs are first-encounter positions, so interner numbering and
+/// producer fingerprints cannot hide a changed view. Missing rows remain explicit.
 pub fn digest(t: &TypeInterner, signature: &Signature) -> ValidationDigest {
-    let order = hirsel_types::closure(t, hirsel_types::signature_types(t, signature));
-    let ordinals: HashMap<u32, usize> = order
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (raw(*id), i))
-        .collect();
-    let mut encoded = renumber(&format!("{signature:?}"), &ordinals);
-    for id in order.iter() {
-        encoded.push('\n');
-        encoded.push_str(&renumber(&format!("{:?}", t.row(*id)), &ordinals));
-    }
+    let mut definitions = hirsel_intern::persist::Numbering::default();
+    let mut symbols = hirsel_intern::persist::Numbering::default();
+    let payload = hirsel_syntax::with_def_numbering(&mut definitions, || {
+        hirsel_intern::persist::with_symbol_numbering(&mut symbols, || encoded_view(t, signature))
+    });
+    let paths: Vec<_> = definitions.ids().iter().map(|d| d.path()).collect();
+    let spellings: Vec<_> = symbols.ids().iter().map(|s| s.as_str()).collect();
+    let names = bincode::serialize(&(paths, spellings)).expect("signature names serialize");
     ValidationDigest(ContentHash::of_parts(
-        "hirsel.validate.view.v2",
-        [encoded.as_bytes()],
+        "hirsel.validate.view.v3",
+        [names.as_slice(), payload.as_slice()],
     ))
 }
-const TYPE_ID: &str = "TypeId(";
-fn raw(id: hirsel_types::TypeId) -> u32 {
-    let text = format!("{id:?}");
-    type_ids(&text).next().expect("a TypeId prints its number")
-}
-/// The numbers of the `TypeId(n)`s in `text`, in order.
-fn type_ids(text: &str) -> impl Iterator<Item = u32> + '_ {
-    text.match_indices(TYPE_ID).filter_map(|(at, _)| {
-        let digits = &text[at + TYPE_ID.len()..];
-        let end = digits.find(')')?;
-        digits[..end].parse().ok()
-    })
-}
-/// `text` with each `TypeId(n)` of a row in `ordinals` written as `TypeId(#i)`,
-/// its ordinal; an id without a row keeps its number, which names the same
-/// absence for the whole session.
-fn renumber(text: &str, ordinals: &HashMap<u32, usize>) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(TYPE_ID) {
-        let (before, after) = rest.split_at(at + TYPE_ID.len());
-        out.push_str(before);
-        let end = after.find(')').unwrap_or(0);
-        match after[..end]
-            .parse::<u32>()
-            .ok()
-            .and_then(|n| ordinals.get(&n))
-        {
-            Some(ordinal) => {
-                out.push('#');
-                out.push_str(&ordinal.to_string());
-            }
-            None => out.push_str(&after[..end]),
+
+fn encoded_view(t: &TypeInterner, signature: &Signature) -> Vec<u8> {
+    let (encoded, roots) =
+        hirsel_types::with_table_collection(|| bincode::serialize_into(std::io::sink(), signature));
+    encoded.expect("signature fields serialize in a type collection scope");
+    let mut positions = std::collections::HashMap::new();
+    let mut order = Vec::new();
+    let mut pending = roots;
+    pending.reverse();
+    while let Some(id) = pending.pop() {
+        let next = order.len() as u32;
+        let std::collections::hash_map::Entry::Vacant(entry) = positions.entry(id) else {
+            continue;
+        };
+        entry.insert(next);
+        order.push(id);
+        if let Some(row) = t.get(id) {
+            let (encoded, edges) = hirsel_types::with_table_collection(|| {
+                bincode::serialize_into(std::io::sink(), row)
+            });
+            encoded.expect("type fields serialize in a type collection scope");
+            pending.extend(edges.into_iter().rev());
         }
-        rest = &after[end..];
     }
-    out.push_str(rest);
-    out
+    let rows: Vec<_> = order.iter().map(|id| t.get(*id)).collect();
+    hirsel_types::with_type_positions(positions, || bincode::serialize(&(signature, rows)))
+        .expect("all referenced type IDs have positions")
 }
 
 /// The digest of a universe's errors, in the order V reports them.
