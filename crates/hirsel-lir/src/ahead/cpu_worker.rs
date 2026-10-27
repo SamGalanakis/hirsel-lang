@@ -36,6 +36,8 @@ pub fn cpu_owned_layout(table: &LayoutTable, id: LayoutId) -> bool {
                             | ScalarKind::I16
                             | ScalarKind::I32
                             | ScalarKind::I64
+                            | ScalarKind::F32
+                            | ScalarKind::F64
                     ),
                     LayoutKind::Aggregate | LayoutKind::Variant => {
                         layout

@@ -1,4 +1,4 @@
-fn check_cpu_lifecycle(path: &std::path::Path, width: usize, jitter: bool) {
+fn check_cpu_lifecycle(path: &std::path::Path, width: usize, jitter: bool, domain_count: usize) {
     let text = fs::read_to_string(path).unwrap();
     let mut live = BTreeMap::new();
     let mut domains = BTreeMap::<u64, BTreeSet<usize>>::new();
@@ -58,8 +58,12 @@ fn check_cpu_lifecycle(path: &std::path::Path, width: usize, jitter: bool) {
         }
     }
     assert!(live.is_empty(), "CPU workers survived shutdown: {text}");
-    assert_eq!(domains.len(), 2, "each operation constructs a fresh domain");
-    assert_eq!(shutdown.len(), 2);
+    assert_eq!(
+        domains.len(),
+        domain_count,
+        "each operation constructs a fresh domain"
+    );
+    assert_eq!(shutdown.len(), domain_count);
     assert!(runs > 0);
     assert_eq!(
         perturbations > 0,
@@ -69,8 +73,6 @@ fn check_cpu_lifecycle(path: &std::path::Path, width: usize, jitter: bool) {
 }
 
 fn cpu_values_with_jitter(width: usize) {
-    let scratch = tempfile::tempdir().unwrap();
-    let root = scratch.path();
     let mut integers = vec![];
     let mut floats = vec![];
     for job in 1..=2 * width as u64 {
@@ -85,18 +87,21 @@ fn cpu_values_with_jitter(width: usize) {
         integers.push(format!("{x}u64"));
         floats.push(format!("{}u64", y.to_bits()));
     }
-    let source = |integer_only| {
-        let text = if integer_only {
-            include_str!("jitter_integer.hir")
-        } else {
-            include_str!("jitter.hir")
-        };
+    let source = || {
+        let text = include_str!("jitter.hir");
         text.replace("WIDTH", &format!("{width}u32"))
             .replace("COUNT", &format!("{}u64", 2 * width))
             .replace("EXPECTED_INTS", &format!("[{}]", integers.join(",")))
             .replace("EXPECTED_FLOATS", &format!("[{}]", floats.join(",")))
     };
-    fs::write(root.join("main.hir"), source(false)).unwrap();
+    cpu_source_with_jitter(width, &source(), 2);
+    cpu_source_with_jitter(width, &float_layout_source(width), 32 / width);
+}
+
+fn cpu_source_with_jitter(width: usize, source: &str, domain_count: usize) {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    fs::write(root.join("main.hir"), source).unwrap();
     let manifest = root.join("hirsel.json");
     fs::write(&manifest, serde_json::json!({"schema":1,"package":{"name":"cpu_jitter","version":"1"},
         "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
@@ -118,11 +123,6 @@ fn cpu_values_with_jitter(width: usize) {
     }
     for backend in ["llvm", "cranelift"] {
         for provider in ["tasks.free@1", "tasks.cooperative@1"] {
-            fs::write(
-                root.join("main.hir"),
-                source(provider == "tasks.cooperative@1"),
-            )
-            .unwrap();
             let executable = root.join(format!("{backend}-{provider}"));
             checked(
                 Command::new(cli)
@@ -169,7 +169,12 @@ fn cpu_values_with_jitter(width: usize) {
                     live.arg("--hirsel-trace-events").arg(&trace);
                 }
                 let live = checked(live.output().unwrap());
-                check_cpu_lifecycle(&root.join("cpu.probe.lifecycle"), width, seed != 0);
+                check_cpu_lifecycle(
+                    &root.join("cpu.probe.lifecycle"),
+                    width,
+                    seed != 0,
+                    domain_count,
+                );
                 let events = evidence();
                 assert!(!events.is_empty());
                 if ordered {
@@ -217,8 +222,106 @@ fn cpu_values_with_jitter(width: usize) {
                 );
             }
             eprintln!(
-                "B04/E04 {backend} {provider} W{width}: 3 live/replay cells, 2 fresh domains per live cell"
+                "B04/E04 {backend} {provider} W{width}: 3 live/replay cells, {domain_count} fresh domains per live cell"
             );
         }
     }
+}
+
+fn float_layout_source(width: usize) -> String {
+    // SEM-2 exposes one canonical NaN. Include payloads, signs and signaling
+    // encodings at entry, plus both halfway directions and gradual underflow.
+    let singles = [
+        0u32,
+        0x8000_0000,
+        0x7fc0_1234,
+        0xffc0_4321,
+        0x7f80_0001,
+        0xff80_0001,
+        0x7f80_0000,
+        0xff80_0000,
+        1,
+        0x8000_0001,
+        0x007f_ffff,
+        0x0080_0000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+        0x3f80_0001,
+        0x3f80_0003,
+        0xc079_999a,
+        0x4f00_0000,
+        0xcf00_0000,
+        0x3eaa_aaab,
+    ];
+    let doubles = [
+        0u64,
+        0x8000_0000_0000_0000,
+        0x7ff8_0000_1234_5678,
+        0xfff8_0000_8765_4321,
+        0x7ff0_0000_0000_0001,
+        0xfff0_0000_0000_0001,
+        0x7ff0_0000_0000_0000,
+        0xfff0_0000_0000_0000,
+        1,
+        0x8000_0000_0000_0001,
+        0x3690_0000_0000_0000,
+        0x3690_0000_0000_0004,
+        0x47ef_ffff_f000_0000,
+        0x47ef_ffff_efff_ffff,
+        0x3ff0_0000_1000_0000,
+        0x3ff0_0000_3000_0000,
+        (-3.9f64).to_bits(),
+        2147483648.0f64.to_bits(),
+        (-2147483648.0f64).to_bits(),
+        0x3fd5_5555_5555_5555,
+    ];
+    let bits32 = |x: f32| if x.is_nan() { 0x7fc0_0000 } else { x.to_bits() };
+    let bits64 = |x: f64| {
+        if x.is_nan() {
+            0x7ff8_0000_0000_0000
+        } else {
+            x.to_bits()
+        }
+    };
+    let mut jobs = vec![];
+    let mut expected = [vec![], vec![]];
+    for ordinal in 0..32u64 {
+        let a = singles[ordinal as usize % singles.len()];
+        let b = doubles[ordinal as usize % doubles.len()];
+        jobs.push(format!("FloatJob(single: core@1/f32.from_bits({a}u32), double: core@1/f64.from_bits({b}u64), ordinal: {ordinal}u64)"));
+        for (repeat, output) in expected.iter_mut().enumerate() {
+            let mut single = f32::from_bits(a);
+            let mut double = f64::from_bits(b);
+            if repeat == 1 {
+                for _ in 0..128 {
+                    single *= 1.0000001f32;
+                    single += 0.00000005f32;
+                    double *= 1.0000000000000002f64;
+                    double += 0.0000000000000001f64;
+                }
+            }
+            let truncated = if !double.is_finite() {
+                "Error(NotFinite)".to_owned()
+            } else if double.trunc() < f64::from(i32::MIN) || double.trunc() > f64::from(i32::MAX) {
+                "Error(OutOfRange)".to_owned()
+            } else {
+                format!("Ok({}i32)", double as i32)
+            };
+            output.push(format!(
+                "({}u32, {}u64, {}u64, {}u32, {}u64, {truncated})",
+                bits32(single),
+                bits64(double),
+                bits64(f64::from(single)),
+                bits32(double as f32),
+                bits64((ordinal + 9007199254740992) as f64)
+            ));
+        }
+    }
+    include_str!("jitter_float.hir")
+        .replace("WIDTH", &format!("{width}u32"))
+        .replace("JOB_COUNT", &format!("{}u64", 2 * width))
+        .replace("BATCHES", &format!("{}u64", 16 / width))
+        .replace("JOBS", &format!("[{}]", jobs.join(",")))
+        .replace("EXPECTED_RAW", &format!("[{}]", expected[0].join(",")))
+        .replace("EXPECTED_ROUNDED", &format!("[{}]", expected[1].join(",")))
 }

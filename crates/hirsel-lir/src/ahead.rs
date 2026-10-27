@@ -61,7 +61,7 @@ fn refused(instance: ContentHash, reason: impl Into<String>) -> Refusal {
     }
 }
 
-/// Whether a bounded image contains only inert integer/boolean bits. Walk
+/// Whether a bounded image contains only inert integer, boolean or IEEE float bits. Walk
 /// inline layouts only; a cycle is invalid evidence, never a recursive proof.
 pub fn scalar_image(table: &LayoutTable, id: LayoutId) -> bool {
     fn visit(table: &LayoutTable, id: LayoutId, active: &mut BTreeSet<LayoutId>) -> bool {
@@ -87,6 +87,8 @@ pub fn scalar_image(table: &LayoutTable, id: LayoutId) -> bool {
                             | ScalarKind::I16
                             | ScalarKind::I32
                             | ScalarKind::I64
+                            | ScalarKind::F32
+                            | ScalarKind::F64
                     ),
                     LayoutKind::Aggregate
                     | LayoutKind::Variant
@@ -265,7 +267,11 @@ impl Walker<'_> {
             let safe = match inst {
                 Inst::Const { constant, .. } => matches!(
                     unit.tables.constants[constant.index()].value,
-                    ConstantValue::Unit | ConstantValue::Bool(_) | ConstantValue::Integer(_)
+                    ConstantValue::Unit
+                        | ConstantValue::Bool(_)
+                        | ConstantValue::Integer(_)
+                        | ConstantValue::F32(_)
+                        | ConstantValue::F64(_)
                 ),
                 // Exact native depth leaves are bound by the machine helper
                 // identity and extent; they never publish a failure themselves.
@@ -291,7 +297,13 @@ impl Walker<'_> {
                 | Inst::EndOrigin { .. } => true,
                 Inst::Convert { mode, .. } => matches!(
                     mode,
-                    ConvertMode::Widen | ConvertMode::Truncate | ConvertMode::TryNarrow
+                    ConvertMode::Widen
+                        | ConvertMode::Truncate
+                        | ConvertMode::TryNarrow
+                        | ConvertMode::Reinterpret
+                        | ConvertMode::FloatResize
+                        | ConvertMode::IntToFloat
+                        | ConvertMode::FloatToI32
                 ),
                 Inst::Construct { construct, .. } => {
                     scalar_image(self.table, unit.tables.constructs[construct.index()].layout)

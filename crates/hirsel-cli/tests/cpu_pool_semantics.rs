@@ -334,8 +334,8 @@ fn ordered_uncertified_refusal_replays_without_invoking_closed_callbacks() {
 }
 
 #[test]
-fn ordered_float_mapper_refuses_before_preparation_and_replays() {
-    ordered_mapper_refusal("core@1/f64.bits(core@1/f64.from_bits(job) + 1.0f64)");
+fn ordered_unclassified_float_mapper_refuses_before_preparation_and_replays() {
+    ordered_mapper_refusal("core@1/f64.bits(float.sqrt(core@1/f64.from_bits(job)))");
 }
 
 fn ordered_mapper_refusal(mapper: &str) {

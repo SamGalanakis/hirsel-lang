@@ -1,0 +1,43 @@
+pub type FloatJob { single: f32, double: f64, ordinal: u64 }
+pub type FloatResult { single: f32, double: f64, wide: f64, narrow: f32, integer: f64, truncated: Result[i32, FloatIntError] }
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt) ? Grant
+  let scale32 = 1.0000001f32
+  let scale64 = 1.0000000000000002f64
+  for repeat in 0u64..2u64 {
+    let mut bits: List[(u32, u64, u64, u32, u64, Result[i32, FloatIntError])] = []
+    for batch in 0u64..BATCHES {
+      let outputs = core@1/cpu.map_scoped(tasks, WIDTH,
+        fn() -> List[FloatJob] uses {} {
+          let all: List[FloatJob] = JOBS
+          let mut jobs: List[FloatJob] = []
+          for q in (batch * JOB_COUNT)..((batch + 1u64) * JOB_COUNT) {
+            list.push(mut jobs, all[q])
+          }
+          take jobs
+        },
+        fn(take job: FloatJob) -> FloatResult uses {} {
+          let mut single = job.single
+          let mut double = job.double
+          if repeat == 1u64 {
+            for i in 0u64..128u64 {
+              single = single * scale32
+              single = single + 0.00000005f32
+              double = double * scale64
+              double = double + 0.0000000000000001f64
+            }
+          }
+          let integer: f64 = float.from_int(job.ordinal + 9007199254740992u64)
+          FloatResult(single: single, double: double,
+            wide: core@1/f64.from_f32(single), narrow: core@1/f32.from_f64(double), integer: integer, truncated: float.to_i32(double))
+        }) ? Pool
+      for output in outputs {
+        list.push(mut bits, (core@1/f32.bits(output.single), core@1/f64.bits(output.double),
+          core@1/f64.bits(output.wide), core@1/f32.bits(output.narrow), core@1/f64.bits(output.integer), output.truncated))
+      }
+    }
+    failure.check(bits == (if repeat == 0u64 { EXPECTED_RAW } else { EXPECTED_ROUNDED }), Bounds())
+  }
+  Ok(())
+}

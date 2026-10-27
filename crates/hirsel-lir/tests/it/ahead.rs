@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[test]
 fn scalar_images_exclude_owners_resources_and_raw_pointers() {
     let table = table();
-    for layout in [l::UNIT, l::U64, l::PAY, l::OPT] {
+    for layout in [l::UNIT, l::U64, l::F32, l::F64, l::PAY, l::OPT] {
         assert!(scalar_image(&table, layout));
     }
     for layout in [l::PTR, l::BLK, l::PAIR, l::RES] {
