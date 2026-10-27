@@ -82,6 +82,15 @@ fn with_current_driver<T>(ctx: *mut TaskCtx, f: impl FnOnce(TaskId, &mut Driver)
 /// credits; mutex roots and yielding resource drops remain strict-head.
 /// No native object exists before this admission.
 pub(crate) unsafe fn enable(ctx: *mut TaskCtx, policy: Policy) {
+    // CPU grants bound job memory even without a run memory limit. Select
+    // the metered allocation path at admission so job envelopes see every
+    // allocation and free, including on heaps created before admission.
+    if unsafe { (*ctx).run_ref().cpu_grant.is_some() && (*ctx).heap_ref().meter.limit() == 0 } {
+        unsafe { (*ctx).heap_ref().meter.set_limit(u64::MAX) };
+        for heap in unsafe { (*ctx).run_ref().heaps.heaps() } {
+            unsafe { (*heap).set_metered() };
+        }
+    }
     if policy.commit == hirsel_run_config::Commit::Dedicated {
         unsafe { crate::pool::ordered_commit::install(ctx) };
     }
@@ -282,10 +291,13 @@ fn settle_head_here(ctx: *mut TaskCtx, before: &Stretch) -> Stopped<()> {
             driver.head_ready(task),
             "retire owned work before head charges"
         );
-        (
-            task,
-            driver.frontier.as_mut().unwrap().settled.settle(before),
-        )
+        let state = &mut driver.frontier.as_mut().unwrap().settled;
+        let result = driver
+            .cpu_batch
+            .as_mut()
+            .and_then(|batch| batch.settle(task, before, state, false))
+            .unwrap_or_else(|| state.settle(before));
+        (task, result)
     });
     super::events::charges::partial(ctx, task, before, result);
     result.map_err(Stop::BudgetExceeded)

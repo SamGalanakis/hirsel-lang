@@ -22,6 +22,11 @@ pub(in crate::tasks::ordered) fn partial(
     let Logical::Ordered(driver) = &mut s.logical else {
         return;
     };
+    let limit = driver
+        .cpu_batch
+        .as_ref()
+        .and_then(|batch| batch.limit(task))
+        .unwrap_or(u64::MAX);
     let Some(log) = &mut driver.events else {
         return;
     };
@@ -29,7 +34,7 @@ pub(in crate::tasks::ordered) fn partial(
         return;
     };
     assert_eq!(
-        observer.settle(task, before),
+        observer.settle_with_limit(task, before, limit),
         result,
         "exact head charge prefix"
     );

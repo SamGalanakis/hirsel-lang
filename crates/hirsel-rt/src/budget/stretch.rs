@@ -292,6 +292,32 @@ impl Jobs {
     pub fn settled(&self) -> Settled {
         self.settled
     }
+
+    /// Retire a prefix at the native frontier. Between job prefixes the
+    /// caller may have retired orchestration work or result cleanup. Import
+    /// that state without losing this batch's stricter memory limit.
+    pub(crate) fn retire_prefix_at(
+        &mut self,
+        job: usize,
+        charges: Stretch,
+        complete: bool,
+        frontier: &mut Settled,
+    ) -> Result<(), JobStop> {
+        if let Some(stop) = self.stopped {
+            return Err(stop);
+        }
+        assert_eq!(job, self.next, "native CPU prefixes retire in job order");
+        assert!(self.pending.iter().all(Option::is_none));
+        self.settled = Settled {
+            limit: frontier.limit.min(self.settled.limit),
+            ..*frontier
+        };
+        self.submit(job, charges, complete);
+        let result = self.retire().map(|_| ());
+        frontier.level = self.settled.level;
+        frontier.fuel = self.settled.fuel;
+        result
+    }
 }
 
 /// One event of a turn, in program order: the exact charge stream the summaries replace.

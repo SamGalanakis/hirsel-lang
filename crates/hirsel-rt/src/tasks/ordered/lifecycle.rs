@@ -398,6 +398,7 @@ pub(crate) unsafe fn finish(
     }
     engine::at_head(ctx)?;
     let me = role::with_role(ctx, |s| s.current);
+    super::cpu::finish_job(ctx)?;
     unsafe { super::events::task_result(ctx, descriptor, slot) };
     if role::with_role(ctx, |s| s.task(me).detached) {
         // A detached body retains its result for its own cleanup. Its actual
@@ -779,6 +780,7 @@ pub(crate) unsafe fn receive(
 /// The child owns its last runtime frame and has dropped its environment.
 pub(crate) unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
     unsafe { crate::stop::check(ctx, engine::at_head(ctx)) };
+    unsafe { crate::stop::check(ctx, super::cpu::finish_job(ctx)) };
     let ctx_ptr = std::ptr::from_mut(ctx);
     let began_end = role::with_role(ctx_ptr, |s| s.task(index).ended);
     let effect = || {

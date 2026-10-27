@@ -70,8 +70,10 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool) {
         run.config.flags |= crate::context::CONFIG_DIAGNOSTIC;
     }
     let body_ledger = ledger.clone();
+    let admission_grant = grant.clone();
     let outcome = run.run(
         |ctx| unsafe {
+            (*ctx).run().cpu_grant = Some(admission_grant);
             (*ctx).set_budgets(Some(100), Some(batch_limit));
             (*ctx).heap().idle_cap = 0;
             (*ctx)
@@ -89,6 +91,14 @@ fn run_request(refuse: bool, extent: u64, align: u64, diagnostic: bool) {
         },
         move |ctx| unsafe {
             engine::fuel_in(ctx);
+            assert_eq!(
+                crate::tasks::ordered::cpu::control(ctx, 4, 2, 1, || 0),
+                Ok(0)
+            );
+            assert_eq!(
+                crate::tasks::ordered::cpu::control(ctx, 4, 3, 0, || 0),
+                Ok(0)
+            );
             let ledger = &body_ledger;
             let held = refuse.then(|| ledger.reserve_heap(grant.max_batch_bytes).unwrap());
             let mut live = 1;

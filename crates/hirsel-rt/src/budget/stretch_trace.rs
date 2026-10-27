@@ -130,6 +130,18 @@ impl Observer {
         }
         Ok(())
     }
+    pub(crate) fn settle_with_limit(
+        &mut self,
+        task: TaskId,
+        stretch: &Stretch,
+        limit: u64,
+    ) -> Result<(), BudgetKind> {
+        let run_limit = self.state.limit;
+        self.state.limit = run_limit.min(limit);
+        let result = self.settle(task, stretch);
+        self.state.limit = run_limit;
+        result
+    }
     pub(crate) fn credit(&mut self, bytes: u64) {
         self.state.level = self.state.level.saturating_sub(bytes);
     }
