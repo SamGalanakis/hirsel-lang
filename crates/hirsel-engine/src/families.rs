@@ -125,6 +125,8 @@ pub(crate) fn specialization(
     }
     let mut syntax = base.clone();
     syntax.item.definition = path.clone();
+    // A closed instance may name its private implementation's associated aliases.
+    syntax.item.visibility = hirsel_syntax::Visibility::Private;
     syntax.item.name = hirsel_intern::Symbol::intern(&path.0.name);
     syntax.item.generated = Some(Generated::Specialization(
         bindings

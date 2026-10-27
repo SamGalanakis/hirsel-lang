@@ -199,3 +199,13 @@ fn a_specialization_leaves_its_package_validation_digest_unchanged() {
     ));
     assert_ne!(before, other);
 }
+
+#[test]
+fn a_public_family_can_specialize_a_private_implementation() {
+    let source = DECLARATIONS
+        .replace("signature Source", "pub signature Source")
+        .replace("fn total[", "pub fn total[");
+    let (before, after, held) = digests(&source);
+    assert!(held);
+    assert_eq!(before, after);
+}
