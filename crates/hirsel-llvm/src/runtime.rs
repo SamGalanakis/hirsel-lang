@@ -41,9 +41,10 @@ pub(crate) fn substrate(module: &Module<'_>, function: Function<'_>, entry: Runt
         R::AheadState => (MemoryEffects::ArgumentRead, true, &[]),
         R::HostActive => (MemoryEffects::ArgumentRead, true, &[0]),
         R::HostEnter => (MemoryEffects::ArgumentReadWrite, true, &[0, 1]),
+        R::CpuAheadEnter => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // The block pointer is retained in the fixed task-owned cleanup slot.
         R::HostDefer => (MemoryEffects::ArgumentReadWrite, true, &[0]),
-        R::HostArm => (MemoryEffects::ReadWrite, false, &[]),
+        R::HostArm | R::CpuAheadArm => (MemoryEffects::ReadWrite, false, &[]),
         R::HashBytes => (MemoryEffects::ArgumentRead, true, &[1]),
         R::HashInit => (MemoryEffects::ArgumentReadWrite, true, &[0]),
         // The integer state carrier is not argument memory. The typed private

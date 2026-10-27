@@ -59,7 +59,7 @@ pub(crate) fn control(
             )])
         },
     )?;
-    if action == 2 && count == 0 && value == 0 {
+    if action == 2 && count == 0 && value == 0 && super::ahead::cpu_worker::armed(ctx) {
         // The claim receipt retired at head. Its CPU-only tail may overlap
         // later turns, just like an Ordered completed read's certified tail.
         engine::continue_after_read(ctx, progress)?;

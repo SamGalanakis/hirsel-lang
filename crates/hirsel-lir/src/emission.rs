@@ -783,6 +783,7 @@ mod tests {
                 identity,
                 RootPlan {
                     host: None,
+                    cpu: None,
                     graph: ScalarGraph {
                         root: identity,
                         identity,

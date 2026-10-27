@@ -12,6 +12,7 @@ use crate::{TaskCtx, budget::stretch::Stretch};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+pub(crate) mod cpu_worker;
 pub(crate) mod host_return;
 pub(crate) mod native;
 
@@ -331,7 +332,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
     } else {
         let version = unsafe { std::ptr::addr_of!((*info).version).read() };
         let flags = unsafe { std::ptr::addr_of!((*info).flags).read() };
-        if !matches!(version, 1..=4) || flags != 0 {
+        if !matches!(version, 1..=5) || flags != 0 {
             unsafe {
                 crate::stop::raise(
                     ctx,
@@ -359,7 +360,9 @@ pub unsafe extern "C" fn hirsel_rt_v2_task_spawn_ahead(
         } else {
             #[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
             let certificate = unsafe {
-                if version == 4 {
+                if version == 5 {
+                    cpu_worker::validate(ctx, environment, info.cast())
+                } else if version == 4 {
                     host_return::validate_resumable(ctx, environment, info.cast())
                 } else if version == 3 {
                     host_return::validate(ctx, environment, info.cast())

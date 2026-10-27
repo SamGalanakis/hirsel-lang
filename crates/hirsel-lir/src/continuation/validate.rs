@@ -1296,6 +1296,7 @@ pub struct ResultCleanupProof {
 /// entry's frames. Helpers are (startup, getter, handoff, depth-leaf) bytes.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct AheadCertificate {
+    pub kind: AheadKind,
     pub root: ContentHash,
     pub plan: ContentHash,
     pub ordinary_symbol: String,
@@ -1308,6 +1309,24 @@ pub struct AheadCertificate {
     /// A host-return root whose body plans Resumable enters its resumable
     /// ahead code; a save continues in its ordinary dispatcher.
     pub resume: Option<ResumeProof>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum AheadKind {
+    ScalarSpawn,
+    HostReturn,
+    CpuWorker,
+}
+
+fn ahead_kind(plan: &AheadPlan, root: ContentHash) -> AheadKind {
+    let root = &plan.roots[&root];
+    if root.cpu.is_some() {
+        AheadKind::CpuWorker
+    } else if root.host.is_some() {
+        AheadKind::HostReturn
+    } else {
+        AheadKind::ScalarSpawn
+    }
 }
 
 /// The resumable ahead entry of a root, bound to its ordinary plan: the
@@ -1341,12 +1360,23 @@ fn resume_proof(
 }
 
 fn spines_digest(plan: &AheadPlan, root: ContentHash) -> Option<ContentHash> {
-    plan.roots[&root].host.as_ref().map(|h| {
-        ContentHash::of_parts(
-            "hirsel.continuation.ahead-callers.v1",
-            [format!("{:?}", h.spines).as_bytes()],
-        )
-    })
+    plan.roots[&root]
+        .cpu
+        .as_ref()
+        .map(|cpu| {
+            ContentHash::of_parts(
+                "hirsel.continuation.cpu-callers.v1",
+                [format!("{cpu:?}").as_bytes()],
+            )
+        })
+        .or_else(|| {
+            plan.roots[&root].host.as_ref().map(|h| {
+                ContentHash::of_parts(
+                    "hirsel.continuation.ahead-callers.v1",
+                    [format!("{:?}", h.spines).as_bytes()],
+                )
+            })
+        })
 }
 
 fn reads(plan: &AheadPlan, root: ContentHash) -> ResultCleanupProof {
@@ -1380,6 +1410,7 @@ impl AheadCertificate {
             .collect::<Option<Vec<_>>>()?;
         let bound = evidence.bounds.iter().find(|(id, _)| *id == root)?.1;
         Some(Self {
+            kind: ahead_kind(plan, root),
             root,
             plan: plan.identity,
             ordinary_symbol: crate::emission::symbol_name(&symbol.definition, Some(&root)),
@@ -1403,6 +1434,9 @@ impl AheadCertificate {
         evidence: &MachineEvidence,
     ) -> Result<(), String> {
         let r = plan.roots.get(&self.root).ok_or("unknown ahead root")?;
+        if self.kind != ahead_kind(plan, self.root) {
+            return Err("ahead certificate kind".into());
+        }
         let symbol = plan.symbols.get(&self.root).ok_or("unknown ahead symbol")?;
         if self.plan != plan.identity || evidence.plan != plan.identity {
             return Err("plan identity".into());

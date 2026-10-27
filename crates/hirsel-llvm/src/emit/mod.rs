@@ -318,6 +318,21 @@ fn emit_object_inner(
     ownership: Option<hirsel_lir::ownership_trace::native::Request<'_>>,
 ) -> Result<ObjectArtifact, CodegenError> {
     // Ahead code also carries each resumable plan's state-0 alternate.
+    if inputs.alternate
+        && inputs.ahead.is_some_and(|plan| {
+            !hirsel_lir::ahead::validate_cpu_workers(
+                units,
+                inputs.layouts,
+                inputs.target,
+                plan,
+                inputs.fuel,
+            )
+        })
+    {
+        return Err(CodegenError::Object {
+            message: "invalid CPU ahead certificate".into(),
+        });
+    }
     let resume = inputs.continuation.filter(|_| inputs.alternate);
     let (bytes, manifested, plan) = lower(
         units,

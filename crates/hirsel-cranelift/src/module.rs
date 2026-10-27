@@ -317,6 +317,21 @@ pub(crate) fn emit(
     Option<String>,
     BTreeMap<String, u64>,
 )> {
+    if inputs.alternate
+        && inputs.ahead.is_some_and(|plan| {
+            !hirsel_lir::ahead::validate_cpu_workers(
+                units,
+                inputs.layouts,
+                inputs.target,
+                plan,
+                inputs.fuel,
+            )
+        })
+    {
+        return Err(CodegenError::Object {
+            message: "invalid CPU ahead certificate".into(),
+        });
+    }
     let ownership_plans = if let Some(ownership) = ownership {
         if inputs.alternate || !inputs.available_externally.is_empty() {
             return Err(CodegenError::Object {

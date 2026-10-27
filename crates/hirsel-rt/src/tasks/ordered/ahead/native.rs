@@ -37,9 +37,10 @@ pub(crate) struct Certificate {
     pub(crate) host: *const super::host_return::Root,
     /// A v4 root: the ordinary dispatcher a save continues in, and its frame.
     pub(crate) resume: Option<(crate::continuation::ResumeDispatcher, u32)>,
-    live: *mut u64,
-    mask: u64,
-    source: *mut Header,
+    pub(crate) cpu: bool,
+    pub(super) live: *mut u64,
+    pub(super) mask: u64,
+    pub(super) source: *mut Header,
 }
 #[repr(C)]
 pub(crate) struct Native {
@@ -65,6 +66,8 @@ pub(crate) struct Native {
     /// The saved frame left for its ordinary dispatcher: this physical record
     /// no longer owns any of the body's state.
     continued: bool,
+    pub(super) cpu: bool,
+    pub(super) cpu_phase: u32,
 }
 const _: () = {
     assert!(std::mem::offset_of!(Physical, points_left) == 0);
@@ -191,6 +194,7 @@ pub(super) unsafe fn validate_capture(
             stack_bytes: info.stack_bytes,
             host: std::ptr::null(),
             resume: None,
+            cpu: false,
             live,
             mask,
             source,
@@ -200,7 +204,7 @@ pub(super) unsafe fn validate_capture(
 /// A descriptor may contain canonical value/type metadata without scanning any
 /// owner. Follow only fixed inert field edges; general plain_layouts and the
 /// wrapper's TYPE_UNKNOWN remain unchanged. This runs before dispatch.
-unsafe fn inert_source(ctx: *mut TaskCtx, root: u32) -> bool {
+pub(super) unsafe fn inert_source(ctx: *mut TaskCtx, root: u32) -> bool {
     use hirsel_core_contract::handle_scan::*;
     let mut pending = vec![root];
     let mut seen = std::collections::BTreeSet::new();
@@ -283,7 +287,7 @@ impl Native {
             .map_or(std::ptr::null_mut(), |(_, frame)| frame.as_mut_ptr());
         Box::new(Self {
             physical: Physical {
-                points_left: if certificate.host.is_null() {
+                points_left: if certificate.host.is_null() && !certificate.cpu {
                     1024
                 } else {
                     i64::MAX
@@ -307,6 +311,8 @@ impl Native {
             frame,
             resume,
             continued: false,
+            cpu: certificate.cpu,
+            cpu_phase: 0,
         })
     }
     /// A v4 body saved at a boundary: its exact saved frame and the ordinary
@@ -417,9 +423,18 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                     }
                 }
             }
-            if !pause && (*native).host.active() && (*native).physical.reason & 4 != 0 {
+            if !pause
+                && ((*native).host.active() || (*native).cpu_phase == 2)
+                && (*native).physical.reason & 4 != 0
+            {
                 match super::super::engine::host_segment_barrier(ctx) {
-                    Ok(true) => super::host_return::admit(ctx, native),
+                    Ok(true) => {
+                        if (*native).cpu_phase == 2 {
+                            super::cpu_worker::admit(native);
+                        } else {
+                            super::host_return::admit(ctx, native);
+                        }
+                    }
                     Ok(false) => pause = true,
                     Err(stop) => {
                         (*run).control.request_inside(stop);
@@ -456,11 +471,12 @@ pub(crate) unsafe fn run(ctx: *mut TaskCtx, exec: &crate::pool::Exec, mut sp: *m
                             }
                         }
                     }
-                    (*native).physical.points_left = if (*native).host.active() {
-                        1024
-                    } else {
-                        i64::MAX
-                    };
+                    (*native).physical.points_left =
+                        if (*native).host.active() || (*native).cpu_phase == 2 {
+                            1024
+                        } else {
+                            i64::MAX
+                        };
                 }
             }
             if pause {

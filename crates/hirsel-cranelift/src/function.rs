@@ -2184,7 +2184,28 @@ impl<'e, 'a, 'f> FnEmitter<'e, 'a, 'f> {
                     return self.invalid("an indirect call through an ABI without an environment");
                 }
                 let (code, env) = self.callable_parts(callable)?;
-                (Some(code), Some(env), None)
+                let symbol = self
+                    .em
+                    .inputs
+                    .unit()
+                    .ahead
+                    .filter(|_| self.em.inputs.unit().alternate)
+                    .and_then(|plan| plan.cpu_mapper(unit.header.instance, call))
+                    .cloned();
+                let name = symbol.map(|symbol| {
+                    let name = hirsel_lir::ahead::alternate_name(
+                        &symbol.definition,
+                        symbol.instance.unwrap(),
+                    );
+                    self.em.manifest_import(
+                        &name,
+                        ObjectSymbolKind::Function,
+                        Some(&symbol.definition),
+                        Some(abi),
+                    );
+                    name
+                });
+                (Some(code), Some(env), name)
             }
         };
         let signature = if runtime_primitive {

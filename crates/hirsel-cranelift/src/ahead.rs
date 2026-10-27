@@ -142,6 +142,7 @@ pub(crate) fn metadata(
             .and_then(|plans| plans.get(*id))
             .filter(|p| p.representation == hirsel_lir::continuation::Representation::Resumable);
         let (version, size) = match (&root.host, resumable) {
+            _ if root.cpu.is_some() => (5u32, 48),
             (_, Some(_)) => (4u32, 56),
             (Some(_), None) => (3u32, 40),
             (None, None) => (2u32, 32),
@@ -200,6 +201,40 @@ pub(crate) fn metadata(
             let (recipe_id, _) = em.declare_data(&recipe_name, Linkage::Local)?;
             em.define_data(&recipe_name, recipe_id, &image)?;
             info[16..24].copy_from_slice(&bound.to_le_bytes());
+            if let Some(cpu) = &root.cpu {
+                let wrapper = inputs.layouts.layout(recipe.wrapper).unwrap();
+                let hirsel_lir::layout_types::LayoutKind::Block {
+                    payload: jobs_payload,
+                } = inputs
+                    .layouts
+                    .layout(wrapper.fields[1].layout)
+                    .unwrap()
+                    .kind
+                else {
+                    return Err(crate::CodegenError::Object {
+                        message: "CPU jobs are not a list".into(),
+                    });
+                };
+                for (offset, layout) in [
+                    (32, wrapper.fields[0].layout),
+                    (36, cpu.shared_payload),
+                    (40, jobs_payload),
+                ] {
+                    let descriptor =
+                        registry
+                            .index(layout)
+                            .ok_or_else(|| crate::CodegenError::Object {
+                                message: "missing CPU capture descriptor".into(),
+                            })?;
+                    info[offset..offset + 4].copy_from_slice(&descriptor.to_le_bytes());
+                }
+                let offset = u32::try_from(wrapper.fields[1].offset).map_err(|_| {
+                    crate::CodegenError::Object {
+                        message: "CPU jobs offset overflow".into(),
+                    }
+                })?;
+                info[44..48].copy_from_slice(&offset.to_le_bytes());
+            }
             if let Some(resumed) = resumable {
                 let bytes = u32::try_from(resumed.cost.frame_bytes).map_err(|_| {
                     crate::CodegenError::Object {
@@ -304,6 +339,26 @@ impl FnEmitter<'_, '_, '_> {
         let Some(state) = self.ahead_state else {
             return Ok(());
         };
+        if self
+            .em
+            .inputs
+            .unit()
+            .ahead
+            .is_some_and(|plan| plan.cpu_claim(self.unit.header.instance, call))
+        {
+            self.rt(
+                if enter {
+                    RuntimeEntry::CpuAheadEnter
+                } else {
+                    RuntimeEntry::CpuAheadArm
+                },
+                &[if enter { state } else { self.context }],
+            )?;
+            if enter {
+                self.ahead_reload();
+            }
+            return Ok(());
+        }
         let Some((buffer, name)) = self.em.inputs.unit().ahead.and_then(|p| {
             p.host_read(self.unit.header.instance, call).map(|r| {
                 (

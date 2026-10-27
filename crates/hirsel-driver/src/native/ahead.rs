@@ -10,10 +10,11 @@ pub(super) fn helper_identity() -> ContentHash {
     // otherwise identical native code. AheadPlan additionally binds every body,
     // layout, target, fuel choice and capture recipe used by these helpers.
     ContentHash::of_parts(
-        "hirsel.ahead.helpers.v4",
+        "hirsel.ahead.helpers.v5",
         [
             hirsel_rt::AHEAD_HELPERS,
             hirsel_rt::AHEAD_HOST_HELPERS,
+            hirsel_rt::AHEAD_CPU_HELPERS,
             hirsel_rt::AHEAD_SWITCH,
             hirsel_rt::DEPTH_HELPERS,
             hirsel_rt::DEPTH_LEAF_STACK_BYTES.to_le_bytes().as_slice(),
@@ -168,7 +169,11 @@ fn unknown_machine_calls(
     use hirsel_lir::{ir::*, stage::ObjectSymbolKind};
     let mut prefix_runtime = std::collections::BTreeSet::new();
     let mut prefix_functions = std::collections::BTreeSet::new();
-    if plan.roots.values().any(|r| r.host.is_some()) {
+    if plan
+        .roots
+        .values()
+        .any(|r| r.host.is_some() || r.cpu.is_some())
+    {
         // Every unclassified instruction and every non-scalar call in these
         // exact bodies barriers before its lowering. Accept explicit, known
         // runtime declarations there; machine-created libc/outline helpers

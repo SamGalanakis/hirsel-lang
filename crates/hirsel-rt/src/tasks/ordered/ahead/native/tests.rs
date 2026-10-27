@@ -9,9 +9,43 @@ fn certificate(live: *mut u64) -> Certificate {
         stack_bytes: 128,
         host: std::ptr::null(),
         resume: None,
+        cpu: false,
         live,
         mask: 1,
         source: std::ptr::null_mut(),
+    }
+}
+
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn cpu_tail_requires_its_own_certificate_and_the_canonical_claim_arm() {
+    unsafe {
+        let config = crate::Config::new();
+        let mut ctx = std::ptr::null_mut();
+        assert_eq!(
+            crate::context::hirsel_rt_v2_ctx_create(&config, &mut ctx),
+            crate::STATUS_OK
+        );
+        let mut mask = 1;
+        for cpu in [false, true] {
+            let mut cert = certificate(&raw mut mask);
+            cert.cpu = cpu;
+            let mut native = Native::new(ctx, std::ptr::null_mut(), 0, cert);
+            (*ctx).ahead_physical = &raw mut native.physical;
+            super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);
+            assert!(!super::super::cpu_worker::armed(ctx));
+            assert_eq!(native.cpu_phase, 0);
+            super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_arm(ctx);
+            assert_eq!(super::super::cpu_worker::armed(ctx), cpu);
+            super::super::cpu_worker::hirsel_rt_v2_cpu_ahead_enter((*ctx).ahead_physical);
+            assert_eq!(native.cpu_phase, if cpu { 2 } else { 0 });
+            assert!(!super::super::cpu_worker::armed(ctx));
+            if cpu {
+                assert_eq!(native.physical.points_left, 1024);
+            }
+            (*ctx).ahead_physical = std::ptr::null_mut();
+        }
+        crate::context::hirsel_rt_v2_ctx_destroy(ctx);
     }
 }
 fn reserved(live: *mut u64, generation: u32) -> super::super::Local {

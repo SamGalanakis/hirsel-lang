@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-#define HIRSEL_RT_V2_ABI_VERSION 84
+#define HIRSEL_RT_V2_ABI_VERSION 87
 /* TaskSpawn trailing flags: compiler proofs, ignored in ordered execution and replay. */
 #define HIRSEL_RT_V2_SPAWN_IMMEDIATE_AWAIT 1
 #define HIRSEL_RT_V2_SPAWN_OP_FREE 2
@@ -866,6 +866,16 @@ HIRSEL_RT_V2_ASSERT_SIZE(hirsel_rt_v2_spawn_ahead_info_v3, 40);
 _Static_assert(offsetof(hirsel_rt_v2_spawn_ahead_info_v3, host) == 32, "host offset");
 void hirsel_rt_v2_host_arm(hirsel_rt_v2_ctx *ctx, const hirsel_rt_v2_host_read_recipe *recipe, hirsel_rt_v2_header **buffer);
 void hirsel_rt_v2_host_enter(hirsel_rt_v2_ahead_physical *state, const hirsel_rt_v2_host_read_recipe *recipe);
+typedef struct {
+    hirsel_rt_v2_spawn_ahead_info prefix;
+    uint64_t stack_bytes;
+    const hirsel_rt_v2_ahead_recipe *recipe;
+    uint32_t shared_descriptor, shared_payload_descriptor, jobs_descriptor, jobs_offset;
+} hirsel_rt_v2_cpu_ahead_info;
+_Static_assert(sizeof(hirsel_rt_v2_cpu_ahead_info) == 48, "hirsel_rt_v2_cpu_ahead_info size");
+_Static_assert(offsetof(hirsel_rt_v2_cpu_ahead_info, shared_descriptor) == 32, "hirsel_rt_v2_cpu_ahead_info.shared_descriptor offset");
+void hirsel_rt_v2_cpu_ahead_arm(hirsel_rt_v2_ctx *ctx);
+void hirsel_rt_v2_cpu_ahead_enter(hirsel_rt_v2_ahead_physical *state);
 uint8_t hirsel_rt_v2_host_active(hirsel_rt_v2_ahead_physical *state);
 void hirsel_rt_v2_host_defer(hirsel_rt_v2_ahead_physical *state, uint32_t slot, hirsel_rt_v2_header *block, uint64_t fuel);
 /* A resumable frame at a boundary: 0 proceeds with the boundary call, 1 suspends. */

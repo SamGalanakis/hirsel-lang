@@ -36,6 +36,7 @@ pub struct RootPlan {
     pub graph: ScalarGraph,
     pub recipe: CaptureRecipe,
     pub host: Option<HostReturnGraph>,
+    pub cpu: Option<CpuWorkerGraph>,
 }
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct AheadPlan {
@@ -43,6 +44,9 @@ pub struct AheadPlan {
     pub bodies: BTreeMap<ContentHash, ScalarBody>,
     pub symbols: BTreeMap<ContentHash, Symbol>,
     pub spawns: BTreeMap<(ContentHash, CallId), ContentHash>,
+    /// Ownership protocols awaiting separate mapper, frame and budget proof.
+    /// These rows never authorize a spawn alternate.
+    pub cpu_workers: BTreeMap<ContentHash, CpuWorkerProtocol>,
     pub refusals: BTreeMap<ContentHash, String>,
     pub identity: ContentHash,
 }
@@ -82,12 +86,14 @@ pub fn prospective<S>(units: &[LirUnit<S>]) -> BTreeSet<usize> {
         .collect();
     let mut all = BTreeSet::new();
     for (root, unit) in units.iter().enumerate() {
-        if !unit.header.definition.is_core("$native.task_main")
-            || unit
-                .tables
-                .calls
-                .iter()
-                .any(|c| matches!(c.callee, Callee::Indirect(_)))
+        let cpu = unit.header.definition.is_core("$native.cpu_worker");
+        if !cpu
+            && (!unit.header.definition.is_core("$native.task_main")
+                || unit
+                    .tables
+                    .calls
+                    .iter()
+                    .any(|c| matches!(c.callee, Callee::Indirect(_))))
         {
             continue;
         }
@@ -124,6 +130,13 @@ pub fn prospective<S>(units: &[LirUnit<S>]) -> BTreeSet<usize> {
                 .definition
                 .is_core("$native.task_main")
                 .then_some(units[i].header.instance)
+                .or_else(|| {
+                    units[i]
+                        .header
+                        .definition
+                        .is_core("$native.cpu_worker")
+                        .then_some(units[i].header.instance)
+                })
         })
         .collect();
     for (i, u) in units.iter().enumerate() {
@@ -149,7 +162,8 @@ impl AheadPlan {
     ) -> Self {
         let mut plan = Self::default();
         for unit in units {
-            let unit = unit.unit();
+            let validated = *unit;
+            let unit = validated.unit();
             plan.symbols.insert(
                 unit.header.instance,
                 Symbol {
@@ -158,6 +172,28 @@ impl AheadPlan {
                     instance: Some(unit.header.instance),
                 },
             );
+            if unit.header.definition.is_core("$native.cpu_worker") {
+                if let Some(protocol) = CpuWorkerProtocol::derive(validated, table) {
+                    plan.cpu_workers.insert(unit.header.instance, protocol);
+                } else {
+                    plan.refusals.insert(
+                        unit.header.instance,
+                        "unproved CPU worker ownership protocol".into(),
+                    );
+                }
+                match super::cpu_worker::propose(
+                    units, table, target, validated, envs, fuel, helpers,
+                ) {
+                    Ok(root) => {
+                        plan.bodies.extend(root.graph.bodies.clone());
+                        plan.roots.insert(unit.header.instance, root);
+                    }
+                    Err(error) => {
+                        plan.refusals.insert(unit.header.instance, error.reason);
+                    }
+                }
+                continue;
+            }
             if !unit.header.definition.is_core("$native.task_main") {
                 continue;
             }
@@ -234,6 +270,7 @@ impl AheadPlan {
                     graph,
                     recipe,
                     host,
+                    cpu: None,
                 })
             })();
             match attempt {
@@ -277,11 +314,17 @@ impl AheadPlan {
         for (id, root) in &plan.roots {
             bytes.extend_from_slice(&id.0);
             bytes.extend_from_slice(&root.graph.identity.0);
-            bytes.extend_from_slice(format!("{:?}{:?}", root.recipe, root.host).as_bytes());
+            bytes.extend_from_slice(
+                format!("{:?}{:?}{:?}", root.recipe, root.host, root.cpu).as_bytes(),
+            );
             for (id, body) in &root.graph.bodies {
                 bytes.extend_from_slice(&id.0);
                 bytes.extend_from_slice(&body.body.0);
             }
+        }
+        for (id, protocol) in &plan.cpu_workers {
+            bytes.extend_from_slice(&id.0);
+            bytes.extend_from_slice(format!("{protocol:?}").as_bytes());
         }
         plan.identity = ContentHash::of_parts("hirsel.ahead.plan.v2", [bytes.as_slice()]);
         plan
@@ -679,6 +722,26 @@ impl Code {
     }
 }
 fn code_values(u: &LirUnit<Ready>, seeds: &[(ValueId, ContentHash)]) -> Vec<Code> {
+    code_values_inner(u, seeds, false)
+}
+
+pub(super) fn known_code(
+    unit: &LirUnit<Ready>,
+    value: ValueId,
+    seeds: &[(ValueId, ContentHash)],
+    frozen: bool,
+) -> Option<ContentHash> {
+    match code_values_inner(unit, seeds, frozen).get(value.index())? {
+        Code::Known(code) => Some(*code),
+        _ => None,
+    }
+}
+
+fn code_values_inner(
+    u: &LirUnit<Ready>,
+    seeds: &[(ValueId, ContentHash)],
+    frozen: bool,
+) -> Vec<Code> {
     let mut inputs = vec![Vec::new(); u.values.len()];
     let mut constants = vec![Code::Dynamic; u.values.len()];
     let mutable: BTreeSet<_> = u
@@ -729,6 +792,7 @@ fn code_values(u: &LirUnit<Ready>, seeds: &[(ValueId, ContentHash)]) -> Vec<Code
             Inst::CopyValue { result, value } | Inst::Weaken { result, value } => {
                 Some((result, value))
             }
+            Inst::Freeze { result, value } if frozen => Some((result, value)),
             _ => None,
         };
         if let Some((to, from)) = transfer {
@@ -793,6 +857,17 @@ impl AheadPlan {
             .values()
             .filter_map(|r| r.host.as_ref())
             .find_map(|h| h.spines.get(&id))
+            .or_else(|| self.roots.get(&id)?.cpu.as_ref().map(|cpu| &cpu.spine))
+    }
+    pub fn cpu_mapper(&self, unit: ContentHash, call: CallId) -> Option<&Symbol> {
+        let cpu = self.roots.get(&unit)?.cpu.as_ref()?;
+        (cpu.binding.worker.mapper == call).then_some(&cpu.binding.callback)
+    }
+    pub fn cpu_claim(&self, unit: ContentHash, call: CallId) -> bool {
+        self.roots
+            .get(&unit)
+            .and_then(|root| root.cpu.as_ref())
+            .is_some_and(|cpu| cpu.binding.worker.claim == call)
     }
     pub fn host_read(&self, id: ContentHash, call: CallId) -> Option<&ReadContinuation> {
         self.roots

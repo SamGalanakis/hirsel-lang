@@ -48,8 +48,8 @@ mod validate;
 pub use tail::{OwnedTail, TailCarrier, TailKind};
 mod cleanup;
 pub use validate::{
-    AheadCertificate, CallerProof, ContinuationError, FrameDag, ResultCleanupProof, validate,
-    validate_runtime_operations,
+    AheadCertificate, AheadKind, CallerProof, ContinuationError, FrameDag, ResultCleanupProof,
+    validate, validate_runtime_operations,
 };
 
 /// The continuation alternates of a resumable body: its dispatcher (`None`),

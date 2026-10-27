@@ -116,6 +116,23 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         let Some(state) = self.ahead_state else {
             return Ok(());
         };
+        if self
+            .inputs
+            .ahead
+            .is_some_and(|plan| plan.cpu_claim(self.unit.header.instance, call))
+        {
+            let helper = self.runtime(if enter {
+                RuntimeEntry::CpuAheadEnter
+            } else {
+                RuntimeEntry::CpuAheadArm
+            })?;
+            self.builder
+                .call(helper, &[if enter { state } else { self.context }]);
+            if enter {
+                self.ahead_reload();
+            }
+            return Ok(());
+        }
         let Some((buffer, name)) = self.inputs.ahead.and_then(|p| {
             p.host_read(self.unit.header.instance, call).map(|r| {
                 (

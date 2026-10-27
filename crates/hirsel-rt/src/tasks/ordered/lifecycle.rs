@@ -269,7 +269,9 @@ pub(crate) unsafe fn spawn_certified(
             .contains(&unsafe { (*environment).index() });
         (held, plain)
     });
-    let host = certificate.as_ref().is_some_and(|c| !c.host.is_null());
+    let host = certificate
+        .as_ref()
+        .is_some_and(|c| !c.host.is_null() || c.cpu);
     let reserve = !host && alternate.is_some() && {
         let safe_capture = !captures.roots
             && !captures.unknown
