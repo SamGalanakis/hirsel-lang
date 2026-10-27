@@ -1272,6 +1272,17 @@ pub(super) fn install(
         Some(bootstrap)
     };
     let registrations = bootstrap.as_ref().map_or(&[][..], |b| b.registrations());
+    // Accepted registrations can change private inference and its signature
+    // snapshot. Settle that inference before capturing Run and native inputs.
+    let runtime = loading.lend_runtime();
+    let runtime = match program
+        .engine
+        .prepare_private_inference_with_registrations(runtime, registrations)
+    {
+        Ok(runtime) => runtime,
+        Err(error) => return Err(loading.failed(program.error(error))),
+    };
+    loading.return_runtime(runtime);
     // Registration changes the source namespace. Capture every final consumer
     // against the same accepted views, including Run and ownership catalogues.
     if bootstrap.is_some() {
@@ -1352,10 +1363,6 @@ pub(super) fn install(
     };
     drop(transport);
     let errors = runtime_errors(store.as_ref())?;
-    let runtime = program
-        .engine
-        .prepare_private_inference_with_registrations(runtime, registrations)
-        .map_err(&query_error)?;
     let front = program
         .engine
         .front_body_queries_with_registrations(
