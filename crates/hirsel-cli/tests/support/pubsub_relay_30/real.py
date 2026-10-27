@@ -1,4 +1,4 @@
-import json,os,selectors,socket,subprocess,sys,tempfile
+import json,os,selectors,socket,subprocess,sys,tempfile,traceback
 from pathlib import Path
 from host import send,recv
 cli, manifest, destination = sys.argv[1:]
@@ -41,7 +41,7 @@ for mode in ['success','domain','cancel']:
   assert not sock.exists();grant.unlink()
   rows.append({'id':mode,'passed':True,'tape':str(tape),'stdout':out.decode(),'status':0})
  except Exception as error:
-  rows.append({'id':mode,'passed':False,'error':repr(error)})
+  rows.append({'id':mode,'passed':False,'error':repr(error),'traceback':traceback.format_exc()})
  finally:
   for s in peers:s.close()
   if child.poll() is None:child.kill()
