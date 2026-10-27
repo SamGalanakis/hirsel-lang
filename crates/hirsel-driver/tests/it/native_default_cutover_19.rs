@@ -42,6 +42,10 @@ fn public_native_run_binds_and_launches_on_both_backends() {
         let source = directory.path().join("main.hir");
         std::fs::write(&source, "fn helper(x:u64)->u64{x+1u64}\npub fn main()->Result[(),u64]{if helper(7u64)==8u64 {Ok(())} else {Error(9u64)}}").unwrap();
         for backend in [Backend::Cranelift, Backend::Llvm] {
+            let _ = std::io::Write::write_fmt(
+                &mut std::io::stderr(),
+                format_args!("native default run {backend:?} started\n"),
+            );
             let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
             let outcome = native::run_path_native_backend_with_validation(
                 &source,
@@ -57,6 +61,10 @@ fn public_native_run_binds_and_launches_on_both_backends() {
             )
             .unwrap()
             .unwrap();
+            let _ = std::io::Write::write_fmt(
+                &mut std::io::stderr(),
+                format_args!("native default run {backend:?} completed\n"),
+            );
             assert_eq!(outcome.exit_code(), 0, "{backend:?}: {outcome:?}");
             assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
             assert!(stderr.is_empty(), "{backend:?}: {stderr:?}");
