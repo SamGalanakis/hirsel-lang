@@ -63,6 +63,11 @@ impl ConcurrentIo {
     pub(crate) fn cpu_summary(&self, summary: &CpuSummary) -> Result<(), AdapterError> {
         self.core.lock().unwrap().cpu_summary(summary)
     }
+
+    pub(crate) fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.core.lock().unwrap().telemetry_context(telemetry, span)
+    }
+
     pub(crate) fn cpu_control(
         &self,
         width: u32,

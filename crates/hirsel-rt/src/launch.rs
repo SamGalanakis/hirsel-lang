@@ -103,6 +103,11 @@ impl Adapter for OrderedHome {
     fn cpu_summary(&mut self, summary: &crate::io::CpuSummary) -> Result<(), AdapterError> {
         self.io.cpu_summary(summary)
     }
+
+    fn telemetry_context(&self, telemetry: u64, span: u64) -> Option<Vec<u8>> {
+        self.io.telemetry_context(telemetry, span)
+    }
+
     fn cpu_control(
         &mut self,
         width: u32,
@@ -3435,3 +3440,7 @@ fn count_max() -> u64 {
     }
     0
 }
+
+#[cfg(test)]
+#[path = "launch_telemetry_tests.rs"]
+mod telemetry_tests;
