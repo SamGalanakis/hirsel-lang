@@ -364,14 +364,75 @@ pub fn discover(
     )
 }
 
-/// Discovery observes one immutable source namespace and accepts only the
-/// ordinary admitted Check. Wrapper text is an input to the later compilation;
-/// finding tests never checks or lowers a second mutable program.
+/// Source-only test plans. The eventual batch or native request checks the
+/// whole package together with these ordinary wrapper sources.
 pub(crate) struct TestDiscovery {
     pub inputs: hirsel_engine::loader_inputs::FrozenInputs,
     pub tests: Vec<Test>,
     pub sources: Vec<crate::requests::NativeSourceText>,
     source_paths: Vec<PathBuf>,
+}
+
+pub(crate) fn accepted_check(checked: &hirsel_engine::CheckOutput) -> Result<(), ToolError> {
+    let error = if checked
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
+    {
+        Some((
+            hirsel_engine::QueryError::Diagnostics(checked.diagnostics.clone()),
+            None,
+        ))
+    } else if let hirsel_engine::CheckCompletion::Incomplete { phase } = checked.completion {
+        Some((hirsel_engine::QueryError::NotImplemented, Some(phase)))
+    } else {
+        None
+    };
+    match error {
+        Some((error, phase)) => Err(ToolError::Query {
+            error,
+            phase,
+            sources: checked.sources.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn check_empty_selection(
+    path: &Path,
+    discovery: &TestDiscovery,
+    selector: &mut crate::requests::CompilerRequests,
+) -> Result<(), ToolError> {
+    use crate::requests::{CompileOperation, CompileRequest, CompileResult};
+    use hirsel_engine::{
+        requests::{OutputReadiness, RequestEngine},
+        runtime::QueryRuntime,
+    };
+    let mut selected = selector.select(&CompileRequest {
+        path: path.to_owned(),
+        inputs: discovery.inputs.clone(),
+        operation: CompileOperation::Check {
+            lowering: hirsel_engine::LoweringPolicy::Reachable,
+        },
+    })?;
+    let complete = {
+        let mut runtime = selected.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let request = runtime.request(&selected.roots);
+        runtime.wait(request)
+    }
+    .map_err(|reference| {
+        selected
+            .output
+            .failed(reference)
+            .unwrap_or_else(|| ToolError::Runtime("test package Check is unavailable".into()))
+    })?;
+    let output = selected.output.ready(&complete)?;
+    let CompileResult::Check(checked) = &output.result else {
+        return Err(ToolError::Runtime(
+            "test package selected another operation".into(),
+        ));
+    };
+    accepted_check(checked)
 }
 
 pub(crate) fn discover_with_selector(
@@ -381,19 +442,11 @@ pub(crate) fn discover_with_selector(
     selection: Selection,
     verify: hirsel_engine::Verify,
 ) -> Result<(TestDiscovery, crate::requests::CompilerRequests), ToolError> {
-    use crate::requests::{CompileOperation, CompileRequest, CompileResult, CompilerRequests};
-    use hirsel_engine::{
-        requests::{OutputReadiness, RequestEngine, observe_inputs},
-        runtime::QueryRuntime,
-    };
+    use crate::requests::CompilerRequests;
+    use hirsel_engine::requests::observe_inputs;
     let compiler = crate::COMPILER.with_verify(verify);
-    let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
     let compiler = selector.compiler().clone();
-    let publication = selector
-        .config()
-        .store
-        .local_product_store()
-        .map(|store| store.request());
     let (program, inputs) = observe_inputs(
         selector.input_limits(),
         selector.capture_attempts(),
@@ -401,53 +454,6 @@ pub(crate) fn discover_with_selector(
     )
     .map_err(|_| ToolError::Runtime("test package inputs changed during capture".into()))?;
     let mut program = program?;
-    let mut selected = selector.select(&CompileRequest {
-        path: path.to_owned(),
-        inputs: inputs.clone(),
-        operation: CompileOperation::Check {
-            lowering: hirsel_engine::LoweringPolicy::Reachable,
-        },
-    })?;
-    let completed = {
-        let mut runtime = selected
-            .runtime
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        let request = runtime.request(&selected.roots);
-        runtime.wait(request)
-    }
-    .map_err(|reference| {
-        selected.output.failed(reference).unwrap_or_else(|| {
-            ToolError::Runtime("test discovery Check diagnostics unavailable".into())
-        })
-    })?;
-    let output = selected.output.ready(&completed)?;
-    let CompileResult::Check(checked) = &output.result else {
-        return Err(ToolError::Runtime(
-            "test discovery completed another operation".into(),
-        ));
-    };
-    if checked
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
-    {
-        return Err(ToolError::Query {
-            error: hirsel_engine::QueryError::Diagnostics(checked.diagnostics.clone()),
-            phase: None,
-            sources: checked.sources.clone(),
-        });
-    }
-    if let hirsel_engine::CheckCompletion::Incomplete { phase } = checked.completion {
-        return Err(ToolError::Query {
-            error: hirsel_engine::QueryError::NotImplemented,
-            phase: Some(phase),
-            sources: checked.sources.clone(),
-        });
-    }
-    if let Some(publication) = publication {
-        let _ = publication.finish();
-    }
     let mut sources = Vec::new();
     let mut source_paths = Vec::new();
     let tests = plan_entries(
@@ -787,7 +793,8 @@ pub fn run_path_with_simulation_debug(
     for test in &mut discovery.tests {
         test.simulation_debug = options.debug;
     }
-    let mut execution = interpreted::Executions::new(path, &discovery, selector, max_steps)?;
+    let execution = interpreted::Executions::new(path, &discovery, selector, max_steps)?;
+    let mut execution = execution.prepare_all()?;
     Ok(discovery
         .tests
         .iter()
@@ -830,7 +837,8 @@ pub fn bench_path(
 ) -> Result<Vec<BenchResult>, ToolError> {
     let (discovery, selector) =
         discover_with_selector(path, filters, override_seed, Selection::Benches, verify)?;
-    let mut execution = interpreted::Executions::new(path, &discovery, selector, None)?;
+    let execution = interpreted::Executions::new(path, &discovery, selector, None)?;
+    let mut execution = execution.prepare_all()?;
     Ok(discovery
         .tests
         .iter()

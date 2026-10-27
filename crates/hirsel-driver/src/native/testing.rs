@@ -26,10 +26,11 @@ pub fn test_path(
     schedules: &crate::testing::Schedules,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let (discovery, selector) =
+    let (discovery, mut selector) =
         crate::testing::discover_with_selector(path, filters, seed, Selection::Tests, verify)?;
     let tests = &discovery.tests;
     if tests.is_empty() {
+        crate::testing::check_empty_selection(path, &discovery, &mut selector)?;
         return Ok(vec![]);
     }
     run(path, &discovery, tests, selector, backend, bless, schedules)
@@ -46,10 +47,11 @@ pub fn bench_path(
     target: Duration,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let (discovery, selector) =
+    let (discovery, mut selector) =
         crate::testing::discover_with_selector(path, filters, seed, Selection::Benches, verify)?;
     let benches = &discovery.tests;
     if benches.is_empty() {
+        crate::testing::check_empty_selection(path, &discovery, &mut selector)?;
         return Ok(vec![]);
     }
     bench(path, &discovery, benches, selector, backend, target)

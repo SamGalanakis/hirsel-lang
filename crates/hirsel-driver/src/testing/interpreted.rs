@@ -80,24 +80,20 @@ impl Executions {
             steps,
         })
     }
-    pub fn prepare(&mut self, entry: &DefPath) -> Result<Arc<TirExecution>, ToolError> {
-        if let Some((selected, input)) = &self.entry
-            && selected == entry
-        {
-            return Ok(input.clone());
-        }
-        self.entry = None;
-        if let Some(batch) = &self.batch {
-            let input = batch.entry(entry)?;
-            self.entry = Some((entry.clone(), input.clone()));
-            return Ok(input);
-        }
+    pub fn prepare_all(mut self) -> Result<Self, ToolError> {
+        let operation = if self.roots.is_empty() {
+            CompileOperation::Check {
+                lowering: hirsel_engine::LoweringPolicy::Reachable,
+            }
+        } else {
+            CompileOperation::TirBatch {
+                definitions: self.roots.clone(),
+            }
+        };
         let mut selected = self.selector.select(&CompileRequest {
             path: self.path.clone(),
             inputs: self.inputs.clone(),
-            operation: CompileOperation::TirBatch {
-                definitions: self.roots.clone(),
-            },
+            operation,
         })?;
         let completed = {
             let mut runtime = selected.runtime.lock().unwrap_or_else(|e| e.into_inner());
@@ -111,13 +107,29 @@ impl Executions {
                 .unwrap_or_else(|| ToolError::Runtime("interpreted test TIR is unavailable".into()))
         })?;
         let output = selected.output.ready(&completed)?;
-        let CompileResult::TirBatch(batch) = &output.result else {
-            return Err(ToolError::Runtime(
-                "interpreted test selected another operation".into(),
-            ));
-        };
-        let input = batch.entry(entry)?;
-        self.batch = Some(batch.clone());
+        match &output.result {
+            CompileResult::TirBatch(batch) => self.batch = Some(batch.clone()),
+            CompileResult::Check(checked) => super::accepted_check(checked)?,
+            _ => {
+                return Err(ToolError::Runtime(
+                    "interpreted test selected another operation".into(),
+                ));
+            }
+        }
+        Ok(self)
+    }
+    pub fn prepare(&mut self, entry: &DefPath) -> Result<Arc<TirExecution>, ToolError> {
+        if let Some((selected, input)) = &self.entry
+            && selected == entry
+        {
+            return Ok(input.clone());
+        }
+        self.entry = None;
+        let input = self
+            .batch
+            .as_ref()
+            .ok_or_else(|| ToolError::Runtime("interpreted test batch has not settled".into()))?
+            .entry(entry)?;
         self.entry = Some((entry.clone(), input.clone()));
         Ok(input)
     }
@@ -191,7 +203,10 @@ mod tests {
             )
             .unwrap();
             std::fs::write(&source, "invalid newer disk text").unwrap();
-            let mut execution = Executions::new(&path, &discovery, selector, Some(1000)).unwrap();
+            let mut execution = Executions::new(&path, &discovery, selector, Some(1000))
+                .unwrap()
+                .prepare_all()
+                .unwrap();
             let seeded = discovery
                 .tests
                 .iter()
