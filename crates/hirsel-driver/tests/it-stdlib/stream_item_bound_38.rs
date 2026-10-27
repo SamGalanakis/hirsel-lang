@@ -683,6 +683,27 @@ fn unique_receipt_shared_intermediate_and_unqualified_payload_refused() {
                 "    },\n    None",
                 "    }; let _ = take snapshot },\n    None",
             );
+        let inferred = original.replace("unique Result[unique Bytes, ()]", "Result[Bytes, ()]");
+        let mut loaded = load_program_source(&path(), Some(&inferred)).unwrap_or_else(report);
+        let run = RunConfiguration {
+            entry: loaded.entry.clone(),
+            hash_seed: 0,
+            inputs: vec![],
+        };
+        let execution =
+            hirsel_engine::run_observed_checked(&mut loaded.engine, &run, Default::default())
+                .unwrap_or_else(report);
+        assert!(matches!(
+            execution.outcome,
+            Ok(hirsel_engine::RunOutcome::Returned(
+                hirsel_run_schema::Returned::Ok
+            ))
+        ));
+        eprintln!("ITEM_BOUND_PASS private-producer/checked-H");
+        // An exported producer supplies only its declared contract. The private
+        // control above additionally proves deep uniqueness from its body.
+        let original = original.replace("fn fresh(", "pub fn fresh(");
+        let intermediate = intermediate.replace("fn fresh(", "pub fn fresh(");
         let unqualified = original.replace("unique Result[unique Bytes, ()]", "Result[Bytes, ()]");
         // An unqualified wrapper may share its declared unique payload with a
         // counted copy made before the receipt, so the receipt's root evidence
