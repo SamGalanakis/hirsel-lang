@@ -1,6 +1,26 @@
 use hirsel_driver::*;
+use hirsel_engine::store::ResultStore;
 use hirsel_engine::{runtime::*, store::MemStore, *};
 use std::sync::Arc;
+
+struct FreshBytes {
+    bytes: MemStore,
+    verifier: Arc<hirsel_validate::VerifierCache>,
+}
+impl store::ResultStore for FreshBytes {
+    fn verifier(&self) -> Option<Arc<hirsel_validate::VerifierCache>> {
+        Some(self.verifier.clone())
+    }
+    fn get(&self, key: &store::EntryKey) -> Option<store::Bytes> {
+        self.bytes.get(key)
+    }
+    fn put(&self, key: &store::EntryKey, value: &[u8]) {
+        self.bytes.put(key, value);
+    }
+    fn name(&self) -> &'static str {
+        "mem@1"
+    }
+}
 
 #[test]
 fn stored_lower_reuses_unchanged_inputs_and_rechecks_edited_constant_dependencies() {
@@ -20,11 +40,20 @@ fn check_lower_reuse(carry_across_stores: bool) {
         std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"lower_reuse","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         for verify in [Verify::On, Verify::Off] {
             for jobs in [1, 2] {
-                let store = Arc::new(MemStore::default());
+                let store: Arc<dyn store::ResultStore> = Arc::new(MemStore::default());
                 let carry_budget = ProcessBudget::new(32 << 20);
-                let carry = LowerCarry::new(carry_budget.reserve(32 << 20).unwrap()).ok().unwrap();
+                let carry = LowerCarry::new(carry_budget.reserve(32 << 20).unwrap())
+                    .ok()
+                    .unwrap();
                 for revision in 0..4 {
-                    let store = if carry_across_stores { Arc::new(MemStore::default()) } else { store.clone() };
+                    let store: Arc<dyn store::ResultStore> = if carry_across_stores {
+                        Arc::new(FreshBytes {
+                            bytes: MemStore::default(),
+                            verifier: store.verifier().unwrap(),
+                        })
+                    } else {
+                        store.clone()
+                    };
                     let value = if revision == 3 { 2 } else { 1 };
                     let extra = if revision >= 2 { "+0u8" } else { "" };
                     std::fs::write(&source, format!("const A:u8=comptime {value}u8;\nfn helper()->u8{{A}}\npub fn main()->u8{{comptime helper(){extra}}}\n")).unwrap();

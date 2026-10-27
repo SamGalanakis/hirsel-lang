@@ -368,23 +368,35 @@ mod tests {
         let record = encoder.encode_record(&cycle[0], |_| None).unwrap();
         let copied = Arc::new(Memory::default());
         let mut seen = std::collections::HashSet::new();
-        encoder.visit_record_types(&record, |reference| {
-            if !seen.insert(reference.output.0) {
-                return Some(false);
-            }
-            let bytes = source.get_content(reference)?;
-            (copied.put_content(reference.domain, &bytes)? == reference).then_some(true)
-        }).unwrap();
-        assert_eq!(seen.len(), 3, "the cycle shares one component above two dependencies");
+        encoder
+            .visit_record_types(&record, |reference| {
+                if !seen.insert(reference.output.0) {
+                    return Some(false);
+                }
+                let bytes = source.get_content(reference)?;
+                (copied.put_content(reference.domain, &bytes)? == reference).then_some(true)
+            })
+            .unwrap();
+        assert_eq!(
+            seen.len(),
+            3,
+            "the cycle shares one component above two dependencies"
+        );
         assert!(encoder.visit_record_types(&record, |_| None).is_none());
         drop(encoder);
         drop(source);
         let decoder = TypeRecords::new(TypeInterner::new(None), copied);
         let root: TypeId = decoder.decode_record(&record, |_, _| None).unwrap();
-        let TypeKind::Tuple(fields) = &decoder.types.row(root).kind else { panic!() };
-        let TypeKind::Box(back) = decoder.types.row(fields[1]).kind else { panic!() };
+        let TypeKind::Tuple(fields) = &decoder.types.row(root).kind else {
+            panic!()
+        };
+        let TypeKind::Box(back) = decoder.types.row(fields[1]).kind else {
+            panic!()
+        };
         assert_eq!(back, root);
-        let TypeKind::Box(leaf) = decoder.types.row(fields[0]).kind else { panic!() };
+        let TypeKind::Box(leaf) = decoder.types.row(fields[0]).kind else {
+            panic!()
+        };
         assert_eq!(decoder.types.row(leaf), &Type::unit());
     }
 

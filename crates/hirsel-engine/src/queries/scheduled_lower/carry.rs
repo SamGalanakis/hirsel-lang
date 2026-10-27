@@ -175,11 +175,11 @@ impl FrontLowerQueries {
         // payload. Carry those components too, including their transitive edges.
         // Otherwise a fresh graph publishes a body it cannot decode.
         let mut types = BTreeMap::new();
-        for bytes in std::iter::once(descriptor).chain(
-            contents.iter().filter_map(|(domain, bytes)| {
+        for bytes in
+            std::iter::once(descriptor).chain(contents.iter().filter_map(|(domain, bytes)| {
                 (*domain != LOWER_VERIFICATION).then_some(bytes.as_ref())
-            }),
-        ) {
+            }))
+        {
             let captured = self.records.visit_record_types(bytes, |reference| {
                 if types.contains_key(&reference.output.0) {
                     return Some(false);
@@ -200,9 +200,11 @@ impl FrontLowerQueries {
                 return;
             }
         }
-        contents.extend(types.into_values().map(|bytes| {
-            (hirsel_product_codec::TypeRecords::DOMAIN, bytes)
-        }));
+        contents.extend(
+            types
+                .into_values()
+                .map(|bytes| (hirsel_product_codec::TypeRecords::DOMAIN, bytes)),
+        );
         let charge = weight.bytes();
         carry.remember(
             (id.kind, id.address.0),
