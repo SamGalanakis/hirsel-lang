@@ -103,6 +103,14 @@ pub struct NativeRecords {
     types: Arc<hirsel_types::TypeInterner>,
 }
 impl NativeRecords {
+    /// Initial inline allocations of a fresh record codec. Its type interner
+    /// and store are shared. Valid only before any record encode or decode;
+    /// consumers that populate its caches must admit that work separately.
+    pub fn fresh_metadata_bytes() -> u64 {
+        (size_of::<TypeRecords>()
+            + size_of::<super::persistent::Contents>()
+            + 4 * size_of::<usize>()) as u64
+    }
     pub fn new(types: Arc<hirsel_types::TypeInterner>, store: Arc<dyn ResultStore>) -> Self {
         Self {
             records: TypeRecords::new(types.clone(), Arc::new(super::persistent::Contents(store))),

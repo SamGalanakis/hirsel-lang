@@ -56,6 +56,20 @@ pub struct NativeTasks {
     pub ready_transformations: AtomicU64,
 }
 impl NativeTasks {
+    pub(super) fn retained_dispatch_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata as m;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        w.packed_map(&mut self.requests, |w, _, request| {
+            w.arc(request);
+            w.flat_vec(&request.reads);
+            match &request.work {
+                Work::Instance(key) | Work::Ready(key) => m::address(w, key),
+                Work::Arena(key) => m::component(w, key),
+            }
+        });
+        w.bytes()
+    }
     pub fn new(snapshot: Arc<NativeSnapshot>, weight: MemoryWeight) -> Result<Arc<Self>, String> {
         let fallback = snapshot
             .store

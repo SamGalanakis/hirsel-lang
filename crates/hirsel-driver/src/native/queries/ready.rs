@@ -94,6 +94,9 @@ impl ReadyQueries {
         let native = Self::validator(&store);
         Self::with_validator(store, native)
     }
+    pub(super) fn fresh_validator_bytes() -> u64 {
+        (size_of::<NativeCache>() + size_of::<SelectedContents>() + 4 * size_of::<usize>()) as u64
+    }
     pub(super) fn validator(store: &Arc<dyn ResultStore>) -> Arc<NativeCache> {
         Arc::new(NativeCache::new(
             Arc::new(SelectedContents(store.clone())),

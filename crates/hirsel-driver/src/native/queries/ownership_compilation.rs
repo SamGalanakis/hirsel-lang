@@ -1,6 +1,7 @@
 //! Source-selected diagnostic compilation. Instance discovery and arena
 //! settlement precede each explicit observed Ready dependency. No ordinary
 //! object or Link task is needed to obtain a checked ownership plan.
+pub(super) mod metadata;
 use super::{
     arena_tasks::ArenaTasks,
     instance_tasks::InstanceTasks,
@@ -32,8 +33,7 @@ pub struct OwnershipCompilation {
     emission: EmissionOptions,
     query: QueryId,
     weight: MemoryWeight,
-    allowance: Arc<MemoryReservation>,
-    diagnostic_allowance: Mutex<Option<MemoryReservation>>,
+    allowance: Mutex<Option<MemoryReservation>>,
     verify_store: hirsel_engine::store::VerifyStore,
     dispatch: OnceLock<Dispatch>,
     completed: OnceLock<(ProductRef, ProductRef)>,
@@ -44,7 +44,7 @@ impl OwnershipCompilation {
         arena: Arc<ArenaTasks>,
         emission: EmissionOptions,
         weight: MemoryWeight,
-        mut allowance: MemoryReservation,
+        allowance: MemoryReservation,
         verify_store: hirsel_engine::store::VerifyStore,
     ) -> Result<Arc<Self>, String> {
         let query = QueryId {
@@ -61,16 +61,14 @@ impl OwnershipCompilation {
         if weight.retained < std::mem::size_of::<Task>() as u64 {
             return Err("ownership compilation continuation exceeds admission".into());
         }
-        let diagnostic_allowance = allowance.split(allowance.bytes() / 2).unwrap();
         Ok(Arc::new(Self {
-            diagnostic_allowance: Mutex::new(Some(diagnostic_allowance)),
             verify_store,
             instances,
             arena,
             emission,
             query,
             weight,
-            allowance: Arc::new(allowance),
+            allowance: Mutex::new(Some(allowance)),
             dispatch: OnceLock::new(),
             completed: OnceLock::new(),
         }))
@@ -122,21 +120,8 @@ impl OwnershipCompilation {
                 Err("ownership compilation dependencies changed".into())
             };
         }
-        let completed = self.instances.completed_instances(discovery)?;
-        let bytes = completed
-            .iter()
-            .try_fold(16384u64, |total, (key, output)| {
-                serde_json::to_vec(&(&output.templates, &output.emission))
-                    .map(|data| {
-                        total
-                            .saturating_add(data.len() as u64 * 4)
-                            .saturating_add((key.instance.encoding().len() as u64 + 4096) * 8)
-                    })
-                    .map_err(|e| e.to_string())
-            })?;
-        if bytes > self.allowance.bytes() {
-            return Err("ownership compilation dispatch allowance exhausted".into());
-        }
+        let mut operations = self.instances.source_operations(discovery)?;
+        let operations_bytes = metadata::operations(&mut operations);
         let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
             self.instances.products(discovery)?,
@@ -144,24 +129,54 @@ impl OwnershipCompilation {
             self.instances.options().clone(),
             self.emission.clone(),
             self.instances.source_inputs().declarations.manifest()?,
-            Arc::new(self.instances.source_operations(discovery)?),
+            Arc::new(operations),
         )?
         .with_store_verification(self.verify_store)?;
         Arc::get_mut(&mut snapshot)
             .ok_or("ownership snapshot shared before admission")?
-            .retained_allowances = vec![
-            self.allowance.clone(),
-            self.instances.retained_allowance(),
-            self.instances.retained_source_allowance(),
-            self.arena.retained_allowance(),
-        ];
-        let native = NativeTasks::new(snapshot, self.weight)?;
-        let allowance = self
-            .diagnostic_allowance
+            .retained_allowances = Vec::with_capacity(4);
+        Arc::get_mut(&mut snapshot)
+            .unwrap()
+            .retained_allowances
+            .extend([
+                self.instances.retained_allowance(),
+                self.instances.retained_source_allowance(),
+                self.arena.retained_allowance(),
+            ]);
+        let snapshot_bytes = Arc::get_mut(&mut snapshot)
+            .unwrap()
+            .retained_dispatch_bytes();
+        let mut native = NativeTasks::new(snapshot, self.weight)?;
+        let dispatch_bytes = Arc::get_mut(&mut native).unwrap().retained_dispatch_bytes();
+        let mut copied = hirsel_engine::NativeMetadataWeight::default();
+        copied.add(size_of::<Self>() + 2 * size_of::<usize>());
+        metadata::emission(&mut copied, &self.emission);
+        copied.add(size_of::<MemoryReservation>() + 2 * size_of::<usize>());
+        copied
+            .add(size_of::<super::instance_tasks::InstanceTaskFactory>() + 2 * size_of::<usize>());
+        copied.add(size_of::<super::arena_tasks::ArenaTaskFactory>() + 2 * size_of::<usize>());
+        copied.add(size_of::<Factory>() + 2 * size_of::<usize>());
+        copied.add(size_of::<super::ownership_tasks::Factory>() + 2 * size_of::<usize>());
+        copied.bulk_tree::<u32, Arc<dyn QueryFactory>>(2);
+        let bytes = operations_bytes
+            .saturating_add(snapshot_bytes)
+            .saturating_add(dispatch_bytes)
+            .saturating_add(copied.bytes());
+        let mut allowance = self
+            .allowance
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
             .ok_or("ownership dispatch admission consumed twice")?;
+        let dispatch_allowance = allowance
+            .split(bytes)
+            .ok_or("ownership compilation dispatch allowance exhausted")?;
+        // NativeTasks uniquely owns the snapshot until diagnostic factories are
+        // published. Keep each producer's reservation through the final scope.
+        Arc::get_mut(&mut Arc::get_mut(&mut native).unwrap().snapshot)
+            .unwrap()
+            .retained_allowances
+            .push(Arc::new(dispatch_allowance));
         let ownership = OwnershipTasks::new(native, self.weight, allowance)?;
         let factory = ownership.factory();
         let factories = BTreeMap::from([

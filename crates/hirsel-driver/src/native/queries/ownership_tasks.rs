@@ -88,7 +88,7 @@ impl OwnershipTasks {
         }
         let mut copied = hirsel_engine::NativeMetadataWeight::default();
         copied.add(std::mem::size_of::<Self>() + 3 * std::mem::size_of::<usize>());
-        copied.map(&requests, |w, _, request| {
+        copied.packed_map(&mut requests, |w, _, request| {
             w.path(request.owner.instance.definition());
             w.add(request.owner.instance.encoding().len());
             w.flat_vec(&request.reads);
@@ -570,7 +570,7 @@ impl OwnershipTasks {
         })
     }
 }
-struct Factory(Arc<OwnershipTasks>);
+pub(super) struct Factory(Arc<OwnershipTasks>);
 impl QueryFactory for Factory {
     fn create(&self, query: QueryId) -> Result<Box<dyn QueryTask>, Reference> {
         if query != self.0.root

@@ -10,18 +10,25 @@ use std::sync::Arc;
 
 #[test]
 fn ownership_manifest_request_preserves_resource_plans_and_last_output_admission() {
-    source_request();
+    source_request(true);
 }
 
-fn source_request() {
+#[test]
+fn ownership_request_selects_native_source_products_and_keeps_readiness_compiler_free() {
+    source_request(false);
+}
+
+fn source_request(explicit_manifest: bool) {
     hirsel_engine::with_compiler_stack(|| {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("main.hir");
         std::fs::write(&path, "resource type Token { value:u64 }\ndrop(x) {}\npub fn main()->Result[(),u64] { let first=Token(value:7u64)\nlet second=take first\nOk(()) }\n").unwrap();
-        let path = {
+        let path = if explicit_manifest {
             let manifest = dir.path().join("hirsel.json");
             std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"ownership","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
             manifest
+        } else {
+            path
         };
         let store: Arc<dyn ResultStore> = Arc::new(MemStore::default());
         let config = CompileConfig {

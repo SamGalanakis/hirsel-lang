@@ -109,6 +109,26 @@ pub struct NativeSnapshot {
     pub(super) retained_allowances: Vec<Arc<hirsel_engine::runtime::MemoryReservation>>,
 }
 impl NativeSnapshot {
+    pub(super) fn retained_dispatch_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata as m;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        m::options(&mut w, &self.options);
+        m::emission(&mut w, &self.emission);
+        w.add(super::ready::ReadyQueries::fresh_validator_bytes() as usize);
+        m::manifest(&mut w, &self.manifest);
+        w.packed_map(&mut self.owners, |w, _, key| m::address(w, key));
+        w.packed_map(&mut self.summaries, |_, _, _| ());
+        w.packed_map(&mut self.templates, |w, (path, _), (key, facts)| {
+            w.path(path);
+            m::address(w, key);
+            w.vec(&facts.references, |w, (path, _)| w.path(path));
+        });
+        w.flat_vec(&self.retained_allowances);
+        w.bytes()
+            .saturating_add(self.instances.retained_index_bytes())
+            .saturating_add(self.arena.retained_index_bytes())
+    }
     pub(super) fn guard_selection(
         &self,
     ) -> Result<Option<Arc<super::seal_demand::Selection>>, String> {

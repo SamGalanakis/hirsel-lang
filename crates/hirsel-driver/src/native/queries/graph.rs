@@ -26,6 +26,17 @@ pub struct SettledArenaGraph {
 }
 
 impl SettledArenaGraph {
+    pub(super) fn retained_index_bytes(&mut self) -> u64 {
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.flat_vec(&self.candidates);
+        w.flat_vec(&self.chosen);
+        w.vec(
+            &self.component_keys,
+            super::ownership_compilation::metadata::component,
+        );
+        w.packed_map(&mut self.chosen_by_owner, |w, (path, _), _| w.path(path));
+        w.bytes()
+    }
     /// Only components read by one local Ready query: its own chosen claim and
     /// its direct callees' chosen claims. The descriptor index is built once
     /// during settlement, so a hit does not scan unrelated graph components.

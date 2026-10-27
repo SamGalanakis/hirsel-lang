@@ -95,7 +95,15 @@ impl NativeMetadataWeight {
         mut visit: impl FnMut(&mut Self, &K, &V),
     ) {
         *values = std::mem::take(values).into_iter().collect();
-        if !values.is_empty() {
+        self.bulk_tree::<K, V>(values.len());
+        for (key, value) in values.iter() {
+            visit(self, key, value);
+        }
+    }
+    /// Bound nodes of a bulk-collected immutable map. The caller must retain
+    /// the construction invariant: no insertion or removal after collection.
+    pub fn bulk_tree<K, V>(&mut self, len: usize) {
+        if len != 0 {
             let parts = [
                 Layout::new::<usize>(),
                 Layout::new::<u16>(),
@@ -109,7 +117,7 @@ impl NativeMetadataWeight {
                 n.saturating_add(part.size())
                     .saturating_add(part.align() - 1)
             });
-            let mut keys = values.len();
+            let mut keys = len;
             let mut nodes = 0usize;
             loop {
                 keys /= 12;
@@ -119,9 +127,6 @@ impl NativeMetadataWeight {
                 }
             }
             self.add(nodes.saturating_mul(bytes));
-        }
-        for (key, value) in values.iter() {
-            visit(self, key, value);
         }
     }
     pub fn map<K, V>(&mut self, values: &BTreeMap<K, V>, mut visit: impl FnMut(&mut Self, &K, &V)) {

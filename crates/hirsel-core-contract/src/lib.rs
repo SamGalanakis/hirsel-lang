@@ -28,7 +28,7 @@ impl From<PassingMode> for Passing {
         }
     }
 }
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Canonical registry identity of one operation: its path and declaration digest.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -235,7 +235,7 @@ impl OperationRow {
 /// A manifest whose row set is fixed at construction from registry identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Manifest {
-    rows: BTreeMap<OperationId, OperationRow>,
+    rows: Box<[OperationRow]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -254,29 +254,38 @@ pub struct CoverageMismatch {
 impl Manifest {
     /// Every identity gets the conservative unclassified row.
     pub fn skeleton(ids: impl IntoIterator<Item = OperationId>) -> Self {
+        let mut rows = ids
+            .into_iter()
+            .map(OperationRow::unclassified)
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| a.id.cmp(&b.id));
+        rows.dedup_by(|a, b| a.id == b.id);
         Self {
-            rows: ids
-                .into_iter()
-                .map(|id| (id.clone(), OperationRow::unclassified(id)))
-                .collect(),
+            rows: rows.into_boxed_slice(),
         }
     }
     /// Classify an existing row. A new identity is an error, never an insertion.
     pub fn replace(&mut self, row: OperationRow) -> Result<(), ManifestError> {
-        match self.rows.get_mut(&row.id) {
-            Some(slot) => {
-                *slot = row;
+        match self
+            .rows
+            .binary_search_by(|current| current.id.cmp(&row.id))
+        {
+            Ok(index) => {
+                self.rows[index] = row;
                 Ok(())
             }
-            None => Err(ManifestError::UnknownOperation(row.id)),
+            Err(_) => Err(ManifestError::UnknownOperation(row.id)),
         }
     }
     pub fn row(&self, id: &OperationId) -> Option<&OperationRow> {
-        self.rows.get(id)
+        self.rows
+            .binary_search_by(|row| row.id.cmp(id))
+            .ok()
+            .map(|index| &self.rows[index])
     }
     /// Rows in canonical identity order.
     pub fn rows(&self) -> impl ExactSizeIterator<Item = &OperationRow> {
-        self.rows.values()
+        self.rows.iter()
     }
     pub fn len(&self) -> usize {
         self.rows.len()
@@ -290,7 +299,7 @@ impl Manifest {
         inventory: impl IntoIterator<Item = OperationId>,
     ) -> Result<(), CoverageMismatch> {
         let inventory: BTreeSet<_> = inventory.into_iter().collect();
-        let rows: BTreeSet<_> = self.rows.keys().cloned().collect();
+        let rows: BTreeSet<_> = self.rows.iter().map(|row| row.id.clone()).collect();
         let mismatch = CoverageMismatch {
             missing: inventory.difference(&rows).cloned().collect(),
             extra: rows.difference(&inventory).cloned().collect(),
@@ -303,9 +312,53 @@ impl Manifest {
     }
     /// Identities that still lack a disposition on `engine`.
     pub fn unclassified(&self, engine: Engine) -> impl Iterator<Item = &OperationId> {
-        self.rows.values().filter_map(move |row| {
+        self.rows.iter().filter_map(move |row| {
             (row.dispositions.get(engine) == &Disposition::Unavailable(Unavailable::Unclassified))
                 .then_some(&row.id)
         })
+    }
+}
+
+#[cfg(test)]
+mod manifest_storage_tests {
+    use super::*;
+    #[test]
+    fn fixed_manifest_preserves_canonical_identity_lookup_and_replacement() {
+        let ids = (0..32)
+            .map(|n| OperationId {
+                definition: DefPath::core(&format!("operation{}", n / 2)),
+                declaration_digest: ContentHash::of_bytes(&[n]),
+            })
+            .collect::<Vec<_>>();
+        let expected = ids
+            .iter()
+            .cloned()
+            .map(|id| (id.clone(), OperationRow::unclassified(id)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut manifest = Manifest::skeleton(ids.iter().rev().chain(ids.iter()).cloned());
+        assert_eq!(
+            manifest.rows().collect::<Vec<_>>(),
+            expected.values().collect::<Vec<_>>()
+        );
+        for id in &ids {
+            assert_eq!(manifest.row(id), expected.get(id));
+        }
+        let mut unknown = ids[0].clone();
+        unknown.declaration_digest = ContentHash::of_bytes(b"unknown");
+        assert!(manifest.row(&unknown).is_none());
+        assert_eq!(
+            manifest.replace(OperationRow::unclassified(unknown.clone())),
+            Err(ManifestError::UnknownOperation(unknown))
+        );
+        let mut replacement = expected[&ids[7]].clone();
+        replacement.dispositions.native = Disposition::DeclarationOnly;
+        manifest.replace(replacement.clone()).unwrap();
+        assert_eq!(manifest.row(&ids[7]), Some(&replacement));
+        assert_eq!(manifest.len(), ids.len());
+        manifest.check_coverage(ids.clone()).unwrap();
+        let encoded = hirsel_codec::to_text(&manifest);
+        let decoded: Manifest = hirsel_codec::from_text(&encoded).unwrap();
+        assert_eq!(decoded, manifest);
+        assert_eq!(hirsel_codec::to_text(&decoded), encoded);
     }
 }

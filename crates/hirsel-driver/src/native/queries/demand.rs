@@ -174,6 +174,21 @@ pub struct DemandInstances {
     pub recipe_decodes: u64,
 }
 impl DemandInstances {
+    pub(super) fn retained_index_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata as m;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.packed_map(&mut self.requests, |w, key, request| {
+            w.flat_vec(key);
+            w.add(request.retained_metadata_bytes() as usize);
+        });
+        w.packed_map(&mut self.completed, |w, key, _| w.flat_vec(key));
+        // products() creates this codec and admits descriptors without any
+        // record decode. The instance validator itself remains producer-owned.
+        w.add(hirsel_engine::NativeRecords::fresh_metadata_bytes() as usize);
+        w.vec(&self.roots, m::address);
+        m::target(&mut w, &self.target);
+        w.bytes()
+    }
     pub fn new_from_source(
         source: &impl NativeRecordSource,
         store: Arc<dyn ResultStore>,
