@@ -94,6 +94,9 @@ impl Drop for ScratchStore {
     }
 }
 impl ResultStore for ScratchStore {
+    fn read_scope(&self) -> Option<Box<dyn Send + Sync>> {
+        self.selected.read_scope()
+    }
     fn name(&self) -> &'static str {
         self.selected.name()
     }

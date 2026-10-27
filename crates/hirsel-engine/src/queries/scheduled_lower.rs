@@ -9,6 +9,7 @@ mod depth;
 mod evidence;
 mod reads;
 mod registration;
+mod stored;
 use crate::comptime::{EvaluationInput, PreparingSource, ValuePreparation};
 use crate::memo::{DepthEvidence, dependency_limit};
 use crate::runtime::*;
@@ -68,7 +69,7 @@ pub struct FrontLowerWork {
 }
 /// One original's retained decoded artifact and temporary decoding workspace.
 /// Sequential inspectors retain every artifact but reuse one scratch region.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DefinitionDecodeLayout {
     pub retained: u64,
     pub transient: u64,
@@ -920,6 +921,8 @@ impl FrontLowerQueries {
         path: DefPath,
         reads: QueryReads,
     ) -> Result<ProductRef, Reference> {
+        let _read_scope = self.store.read_scope();
+        let _publication = self.store.publication_scope();
         let input = &self.inputs[&path];
         let key = if id.kind == FRONT_LOWER_KIND {
             &input.lower
@@ -927,6 +930,9 @@ impl FrontLowerQueries {
             &input.evaluate
         };
         if let Some(product) = self.load_carry(id, &path, key) {
+            return product;
+        }
+        if let Some(product) = self.load_stored(id, &path, key) {
             return product;
         }
         // The live future and working bodies use this task's runtime weight.
@@ -1057,7 +1063,7 @@ impl FrontLowerQueries {
             execution_subject: persistent::evaluation_subject(key, &bytes),
         };
         self.remember_carry(id, key, &bytes, &outcome);
-        self.publish(id, key, domain, &bytes, outcome)
+        self.publish(id, key, domain, &bytes, outcome, true)
     }
     /// Settle one descriptor: store it, admit its outcome under this producer's
     /// retention and associate a successful product.
@@ -1068,6 +1074,7 @@ impl FrontLowerQueries {
         domain: Domain,
         bytes: &[u8],
         mut outcome: Outcome,
+        persist: bool,
     ) -> Result<ProductRef, Reference> {
         let record = self
             .store
@@ -1093,6 +1100,9 @@ impl FrontLowerQueries {
         let failed = outcome.result.is_err();
         if let Ok(Value::Constant(value)) = &mut outcome.result {
             value.pack(record);
+        }
+        if persist {
+            self.remember_stored(id, key, record, &outcome);
         }
         outcome.archive_reads(record);
         let charge = outcome.retained_bytes().ok_or(self.errors.resource)?;

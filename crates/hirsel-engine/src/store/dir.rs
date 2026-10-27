@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn installed_read_scope_reuses_regions_refreshes_and_rejects_damage() {
-        for forwarded in [false, true] {
+        for forwarded in 0..3 {
             let directory = std::env::temp_dir().join(format!(
                 "hirsel-installed-read-scope-{}-{:?}-{forwarded}",
                 std::process::id(),
@@ -458,7 +458,17 @@ mod tests {
             let statistics = reader.read_only[0].enable_statistics();
             let reader: std::sync::Arc<dyn ResultStore> = std::sync::Arc::new(reader);
             let budget = crate::runtime::ProcessBudget::new(4096);
-            let reader: std::sync::Arc<dyn ResultStore> = if forwarded {
+            let reader: std::sync::Arc<dyn ResultStore> = if forwarded == 2 {
+                std::sync::Arc::new(
+                    crate::store::RequestStore::with_scratch(
+                        reader,
+                        budget.reserve(4096).unwrap(),
+                        &directory,
+                        4096,
+                    )
+                    .unwrap(),
+                )
+            } else if forwarded == 1 {
                 std::sync::Arc::new(crate::store::RequestStore::new(
                     reader,
                     budget.reserve(4096).unwrap(),
@@ -505,6 +515,51 @@ mod tests {
             drop(reader);
             assert_eq!(budget.reserved(), 0);
             fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn request_publication_scope_coalesces_cache_index_updates() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(DirStore::new(directory.path().join("products")));
+        let statistics = store.physical.as_ref().unwrap().enable_statistics();
+        let budget = crate::runtime::ProcessBudget::new(64 << 10);
+        let request = crate::store::RequestStore::with_scratch(
+            store.clone(),
+            budget.reserve(64 << 10).unwrap(),
+            directory.path(),
+            64 << 10,
+        )
+        .unwrap();
+        let scope = request.publication_scope().unwrap();
+        let before = statistics.snapshot();
+        let domain = Domain {
+            kind: 0x4e0000fb,
+            schema: 1,
+        };
+        let references: Vec<_> = (0u64..16)
+            .map(|n| request.put_content(domain, &n.to_le_bytes()).unwrap())
+            .collect();
+        for reference in &references {
+            assert!(request.get_content(*reference).is_some());
+        }
+        let pending = statistics.snapshot();
+        assert_eq!(
+            pending.counters["IndexPublicationAttempts"],
+            before.counters["IndexPublicationAttempts"]
+        );
+        drop(scope);
+        let committed = statistics.snapshot();
+        assert!(
+            committed.counters["IndexPublicationAttempts"]
+                > pending.counters["IndexPublicationAttempts"]
+        );
+        let reopened = DirStore::new(directory.path().join("products"));
+        for (n, reference) in references.iter().enumerate() {
+            assert_eq!(
+                &*reopened.get_content(*reference).unwrap(),
+                &(n as u64).to_le_bytes()
+            );
         }
     }
 }

@@ -27,11 +27,18 @@ impl crate::snapshot::DeclarationSiblings for SiblingArchives {
                     .records
                     .decode(&*self.owners, &bytes)
                     .ok_or_else(refusal)?;
-                if self
-                    .sources
-                    .anchor(syntax.anchor)
-                    .is_none_or(|(owner, _)| owner != file)
-                    || !syntax.structurally_valid(|span| self.sources.slice(span).is_some())
+                let (owner, base) = self.sources.anchor(syntax.anchor).ok_or_else(refusal)?;
+                let text = self.sources.file(owner).ok_or_else(refusal)?.text();
+                // Structural validation also checks that every span uses this
+                // item's anchor. Resolve its file/base once for the whole tree.
+                if owner != file
+                    || !syntax.structurally_valid(|span| {
+                        text.get(
+                            base.saturating_add(span.start) as usize
+                                ..base.saturating_add(span.end) as usize,
+                        )
+                        .is_some()
+                    })
                 {
                     return Err(refusal());
                 }

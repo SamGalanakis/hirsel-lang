@@ -102,7 +102,7 @@ impl FrontLowerQueries {
     }
     /// A read's value in this graph. Body and layout texts come from this
     /// producer's own inputs; every other read is the front's source fact.
-    fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
+    pub(super) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         match *read {
             ReadKey::ExecutedBody(id) => Some(memos::optional(
                 self.inputs.get(id.path()).map(|input| input.implementation),
@@ -281,6 +281,7 @@ impl FrontLowerQueries {
                 execution,
                 execution_subject: persistent::evaluation_subject(key, &descriptor),
             },
+            false,
         ))
     }
 }

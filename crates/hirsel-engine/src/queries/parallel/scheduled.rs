@@ -999,6 +999,8 @@ impl BodyTask {
         }))
     }
     fn run(&mut self) -> Result<ProductRef, Reference> {
+        let _read_scope = self.queries.store.read_scope();
+        let _publication = self.queries.store.publication_scope();
         if !self.materialize
             && let Some(product) = self.queries.completed_product(self.query)
         {

@@ -1027,6 +1027,8 @@ pub(super) fn install(
         Ok(store) => Arc::new(store),
         Err(error) => return Err(loading.failed(ToolError::Io(error))),
     };
+    let _read_scope = store.read_scope();
+    let _publication = store.publication_scope();
     // Host requests select tools against this graph's admitted provider before
     // loading source inputs. Explicit selectors never acquire ambient tools.
     let selected_toolchain = match (&request.operation, toolchain, host_toolchain) {

@@ -257,6 +257,15 @@ impl VerifierCache {
             Backend::Memory(..) | Backend::Hosted(..) => None,
         }
     }
+    /// Join an admitted compiler operation's bounded cache publication epoch.
+    /// The guard supplies no verification authority. The caller joins its
+    /// producers before finishing it; ordinary bytes cannot seed V's rows.
+    pub fn publication_request(&self) -> Option<hirsel_artifact_store::Request> {
+        match &self.0 {
+            Backend::Directory(store) => Some(store.request()),
+            _ => None,
+        }
+    }
 
     fn load<T: serde::de::DeserializeOwned>(&self, key: ContentHash, domain: Domain) -> Option<T> {
         self.load_record(key, domain).map(|(_, value)| value)

@@ -54,6 +54,19 @@ impl EntryKey {
 /// A content-keyed byte store. Implementations never fail a compile: a
 /// missing, unreadable or corrupt entry is a miss.
 pub trait ResultStore: Send + Sync {
+    /// Coalesce ordinary product and verifier cache publication while an
+    /// admitted producer runs. Storage's existing bounded batches spill under
+    /// pressure; a scope never changes query validity or verifier authority.
+    fn publication_scope(&self) -> Option<Box<dyn Send + Sync>> {
+        let products = self.local_product_store().map(|store| store.request());
+        let verifier = self
+            .verifier()
+            .and_then(|cache| cache.publication_request());
+        if products.is_none() && verifier.is_none() {
+            return None;
+        }
+        Some(Box::new(PublicationScope { products, verifier }))
+    }
     /// Retain bounded installed-product read state for one compiler operation.
     /// Dropping the guard refreshes the next operation; it never publishes or
     /// supplies validator authority. Writable transactions remain independent.
@@ -137,6 +150,23 @@ pub trait ResultStore: Send + Sync {
     }
     /// The provider name the run config selects it by (`dir@1`, ...).
     fn name(&self) -> &'static str;
+}
+
+struct PublicationScope {
+    products: Option<hirsel_artifact_store::Request>,
+    verifier: Option<hirsel_artifact_store::Request>,
+}
+impl Drop for PublicationScope {
+    fn drop(&mut self) {
+        // Query failures may retain valid completed subproducts. Publication
+        // failure is only a cache miss; RequestStore owns live transport.
+        for request in [self.products.take(), self.verifier.take()]
+            .into_iter()
+            .flatten()
+        {
+            let _ = request.finish();
+        }
+    }
 }
 
 fn product_association_key(address: Address) -> EntryKey {
