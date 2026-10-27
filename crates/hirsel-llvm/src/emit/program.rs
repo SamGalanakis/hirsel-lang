@@ -879,6 +879,8 @@ pub fn emit_glue(inputs: &GlueInputs<'_>) -> Result<ObjectArtifact, CodegenError
         }
         let mut manifested = emitter.manifested;
         manifested.settle_imports();
+        #[cfg(feature = "native-tsan")]
+        crate::tsan::manifest(&mut manifested);
         (
             optimize_and_emit(
                 &module,

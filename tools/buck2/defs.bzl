@@ -147,6 +147,8 @@ def _compile_env(package_name, crate, version, build_script):
 CLIPPY_TWINS = read_root_config("hirsel", "clippy", "false") == "true"
 
 def _rust(rule, name, **attrs):
+    if attrs.get("crate") in ["hirsel_llvm", "hirsel_cranelift"] and read_root_config("hirsel", "native_tsan", "false") == "true":
+        attrs["features"] = attrs.get("features", []) + ["native-tsan"]
     # Runtime diagnostic features are explicit build selections. Ordinary
     # archives omit ownership hooks and their private observer state.
     if attrs.get("crate") == "hirsel_rt":

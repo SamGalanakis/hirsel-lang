@@ -159,7 +159,7 @@ impl NativePlatformSelection {
                     backends: vec![
                         crate::native::queries::compilation_tasks::CompilationBackend {
                             backend: request.backend.name().into(),
-                            backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                            backend_version: native::backend_version(),
                             target_features: target.digest(),
                             profile_options,
                             runtime_abi: ContentHash::of_bytes(
@@ -283,7 +283,7 @@ impl NativePlatformSelection {
                 test_entries: request.test_entries.clone(),
                 emit_only: matches!(request.output, super::NativeOutput::Objects { .. }),
                 backends: vec![platform.backend(
-                    ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                    native::backend_version(),
                     target.digest(),
                     profile_options,
                     ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),

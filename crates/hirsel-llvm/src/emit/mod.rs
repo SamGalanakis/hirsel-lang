@@ -86,7 +86,7 @@ use pair::{decode_word, encode_word, value_word};
 use signature::{Aliasing, Hidden, Signature};
 
 /// The pipeline LLVM runs between the two verifier passes.
-fn pipeline(opt: OptLevel) -> &'static str {
+pub(crate) fn pipeline(opt: OptLevel) -> &'static str {
     match opt {
         OptLevel::None => "default<O0>",
         OptLevel::Default => "default<O2>",
@@ -96,7 +96,14 @@ fn pipeline(opt: OptLevel) -> &'static str {
 
 /// The pinned toolchain, as the object's reproducibility record names it.
 fn toolchain() -> String {
-    format!("llvm {PINNED_LLVM}")
+    format!(
+        "llvm {PINNED_LLVM}{}",
+        if cfg!(feature = "native-tsan") {
+            " tsan"
+        } else {
+            ""
+        }
+    )
 }
 
 /// Checks that the loaded libLLVM is the pin and that LLVM's DataLayout for `target` agrees
@@ -267,6 +274,10 @@ fn optimize(
     crate::runtime::expand_fast_paths(module);
     module
         .run_passes("always-inline", machine)
+        .map_err(|message| CodegenError::Passes { message })?;
+    #[cfg(feature = "native-tsan")]
+    module
+        .instrument_thread(machine)
         .map_err(|message| CodegenError::Passes { message })?;
     if verify {
         module.verify().map_err(|message| CodegenError::Verify {
@@ -949,6 +960,8 @@ fn lower<T>(
         if let Some(debug) = &debug {
             debug.finalize();
         }
+        #[cfg(feature = "native-tsan")]
+        crate::tsan::manifest(&mut manifested);
         (finish(&module, &machine)?, profile.debug.then_some(plan))
     };
     let (finished, plan) = finished;

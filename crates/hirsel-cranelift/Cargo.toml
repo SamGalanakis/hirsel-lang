@@ -5,6 +5,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+native-tsan = []
+
 [dependencies]
 hirsel-core-contract = { path = "../hirsel-core-contract" }
 hirsel-graph = { path = "../hirsel-graph" }

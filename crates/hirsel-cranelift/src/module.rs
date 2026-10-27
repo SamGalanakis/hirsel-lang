@@ -771,6 +771,8 @@ impl<'a> Emitter<'a> {
     }
 
     pub(crate) fn compile(&mut self, name: &str, id: FuncId, context: &mut Context) -> Emitted {
+        #[cfg(feature = "native-tsan")]
+        self.instrument_thread(&mut context.func)?;
         colocate_hirsel_symbols(&self.module, &self.manifested, &mut context.func);
         if let Some(text) = &mut self.clif {
             text.push_str(&format!("; {name}\n{}\n", context.func.display()));

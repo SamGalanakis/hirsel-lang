@@ -89,6 +89,23 @@ pub fn llvm_version() -> String {
     hirsel_llvm::PINNED_LLVM.to_string()
 }
 
+pub(crate) fn backend_version() -> hirsel_syntax::ContentHash {
+    if hirsel_llvm::NATIVE_TSAN || hirsel_cranelift::NATIVE_TSAN {
+        hirsel_syntax::ContentHash::of_parts(
+            "hirsel.native-tsan.v1",
+            [
+                crate::COMPILER_IDENTITY.as_slice(),
+                &[
+                    u8::from(hirsel_llvm::NATIVE_TSAN),
+                    u8::from(hirsel_cranelift::NATIVE_TSAN),
+                ],
+            ],
+        )
+    } else {
+        hirsel_syntax::ContentHash::of_bytes(&crate::COMPILER_IDENTITY)
+    }
+}
+
 /// For a generated (`= comptime`) body, the item-relative offset of its
 /// `comptime` expression, where its sites are reported: they are offsets into the
 /// generated text, not into the item's file.

@@ -417,6 +417,32 @@ impl<'context> Module<'context> {
     }
 
     /// Runs a new-pass-manager pipeline such as `default<O3>`.
+    #[cfg(feature = "native-tsan")]
+    pub(crate) fn instrument_thread(&self, machine: &TargetMachine) -> Result<(), String> {
+        // LLVM's ThreadSanitizer pass instruments only sanitize_thread definitions.
+        // SAFETY: each function and its attribute belong to this live module.
+        unsafe {
+            let kind = LLVMGetEnumAttributeKindForName(b"sanitize_thread".as_ptr().cast(), 15);
+            assert_ne!(kind, 0);
+            let attribute = LLVMCreateEnumAttribute(self.context.raw, kind, 0);
+            let mut function = LLVMGetFirstFunction(self.raw);
+            while !function.is_null() {
+                if LLVMCountBasicBlocks(function) != 0 {
+                    LLVMAddAttributeAtIndex(
+                        function,
+                        llvm_sys::LLVMAttributeFunctionIndex,
+                        attribute,
+                    );
+                }
+                function = LLVMGetNextFunction(function);
+            }
+        }
+        // Rust's instrumented runtime supplies process initialization, including
+        // fiber annotations. No second tsan.module_ctor is needed in each object.
+        self.run_passes("function(tsan)", machine)
+    }
+
+    /// Runs a new-pass-manager pipeline such as `default<O3>`.
     pub(crate) fn run_passes(&self, pipeline: &str, machine: &TargetMachine) -> Result<(), String> {
         if matches!(pipeline, "default<O2>" | "default<O3>") {
             unsafe extern "C" {

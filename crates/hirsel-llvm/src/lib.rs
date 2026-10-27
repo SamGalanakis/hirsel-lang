@@ -17,6 +17,8 @@ mod emit;
 mod glue;
 mod runtime;
 mod scalar;
+#[cfg(feature = "native-tsan")]
+mod tsan;
 
 use std::fmt;
 
@@ -51,6 +53,9 @@ pub const PINNED_LLVM: LlvmVersion = LlvmVersion {
     minor: 1,
     patch: 4,
 };
+
+/// Whether every emitted object includes ThreadSanitizer instrumentation.
+pub const NATIVE_TSAN: bool = cfg!(feature = "native-tsan");
 
 /// The version of the libLLVM this process loaded.
 pub fn loaded_llvm_version() -> LlvmVersion {

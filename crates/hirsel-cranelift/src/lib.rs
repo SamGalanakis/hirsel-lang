@@ -38,6 +38,8 @@ mod scalar;
 mod sealed;
 mod soa;
 mod structural;
+#[cfg(feature = "native-tsan")]
+mod tsan;
 
 use std::fmt;
 
@@ -48,8 +50,15 @@ use hirsel_syntax::DefPath;
 /// The pinned Cranelift release (`=0.136.3` in this crate's manifest).
 pub const CRANELIFT_VERSION: &str = "0.136.3";
 
+/// Whether every emitted object includes ThreadSanitizer instrumentation.
+pub const NATIVE_TSAN: bool = cfg!(feature = "native-tsan");
+
 /// The backend an artifact names in its reproducibility record (`Reproducibility::toolchain`).
-pub const TOOLCHAIN: &str = "cranelift 0.136.3";
+pub const TOOLCHAIN: &str = if cfg!(feature = "native-tsan") {
+    "cranelift 0.136.3 tsan"
+} else {
+    "cranelift 0.136.3"
+};
 
 /// Why emission produced no object.
 #[derive(Clone, Debug, PartialEq, Eq)]
