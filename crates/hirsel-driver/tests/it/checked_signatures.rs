@@ -118,3 +118,28 @@ fn checked_signature_inputs_keep_exact_coverage_private_views_and_source_owner()
         assert_eq!(budget.reserved(), 0);
     });
 }
+
+#[test]
+fn generated_ps9_headers_require_the_admitted_registration_view() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(directory.path().join("main.hir"),
+            "fn make()->Result[Body[fn()->u8 uses {}],String]{Ok(codegen.body(\"fn()->u8 uses {} {7u8}\"))}\npub fn main()->u8 uses {} = comptime make()\n").unwrap();
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"generated_headers","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let config = CompileConfig {
+            store: Arc::new(MemStore::default()),
+            hold_bytes: 0,
+            ..Default::default()
+        };
+        let mut session = session::Session::open_configured(&manifest, config);
+        let output = session
+            .request(requests::CompileOperation::ExportTir)
+            .unwrap();
+        let requests::CompileResult::ExportTir(text) = &output.result else {
+            panic!("wrong export operation")
+        };
+        assert!(text.contains("generated_headers@1/main"), "{text}");
+        assert!(text.contains("generated_headers@1/make"), "{text}");
+    });
+}

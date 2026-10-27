@@ -94,6 +94,34 @@ impl FrontCheckedSignatures {
     }
 }
 impl QueryEngine {
+    fn validate_checked_registrations(
+        &mut self,
+        front: &FrontBodyQueries,
+    ) -> Result<(), QueryError> {
+        if !self.staged_constants.is_empty() || !self.staged_values.is_empty() {
+            return Err(QueryError::NotImplemented);
+        }
+        let paths: Vec<_> = self.generated.keys().cloned().collect();
+        for path in paths {
+            let accepted = front.registration(&path).ok_or_else(|| {
+                QueryError::Operational(hirsel_types::OperationalFailure {
+                    operation: "checked signature inputs".into(),
+                    message: format!(
+                        "generated declaration lacks its accepted front registration: {path}"
+                    ),
+                })
+            })?;
+            accepted.validate(self)?;
+            if self
+                .generated
+                .get(&path)
+                .is_none_or(|source| source.text != accepted.text())
+            {
+                return Err(QueryError::NotImplemented);
+            }
+        }
+        Ok(())
+    }
     /// Header-capture hold including construction metadata, without body
     /// checking, Lower, body decode or constructing the retained input table.
     pub fn front_checked_signatures_bytes(
@@ -101,13 +129,10 @@ impl QueryEngine {
         front: &Arc<FrontBodyQueries>,
     ) -> Result<u64, QueryError> {
         let snapshot = front.signatures();
-        if !Arc::ptr_eq(&snapshot, &self.signature_inputs())
-            || !self.generated.is_empty()
-            || !self.staged_constants.is_empty()
-            || !self.staged_values.is_empty()
-        {
+        if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
             return Err(QueryError::NotImplemented);
         }
+        self.validate_checked_registrations(front)?;
         let paths: BTreeSet<_> = self
             .source_paths()
             .into_iter()
@@ -165,14 +190,6 @@ impl QueryEngine {
         let snapshot = front.signatures();
         if !Arc::ptr_eq(&snapshot, &self.signature_inputs()) {
             return Err(invalid());
-        }
-        // The accepted generated/staged namespace is a separate input. Until
-        // its ledger is supplied, it must never be silently exported as empty.
-        if !self.generated.is_empty()
-            || !self.staged_constants.is_empty()
-            || !self.staged_values.is_empty()
-        {
-            return Err(QueryError::NotImplemented);
         }
         let paths: BTreeSet<_> = self
             .source_paths()
