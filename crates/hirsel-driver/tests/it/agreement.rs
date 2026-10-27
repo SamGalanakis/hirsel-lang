@@ -1168,13 +1168,16 @@ fn an_arena_only_argument_bounds_a_result_by_its_arena_unless_it_is_taken_storag
         for (place, ty) in body.places.iter_mut().zip(places) {
             place.ty = ty;
         }
-        let signatures = with(
+        let mut signatures = with(
             &signatures,
             &format!(
                 "{header}\nfn f(a: Arena, y: Bytes, take z: Bytes in a) -> Bytes in a {{ mk(a) }}\nfn main() {{}}"
             ),
             "f",
         );
+        // Only the declared result relation changes. Private uniqueness facts
+        // still describe the original body, not the replacement header's stub.
+        signatures.get_mut(f.path).unwrap().metadata.inferred_unique = f.inferred_unique.clone();
         let violations = kinds(&forged, &signatures);
         assert!(
             violations.iter().any(|v| matches!(
