@@ -7424,3 +7424,4 @@ conformance/CAP/CAP-3-cpu-opaque-function-bad.hir
 conformance/CAP/CAP-3-cpu-shared-thaw-ok.hir
 conformance/CAP/CAP-3-cpu-local-resource-bad.hir
 conformance/CAP/CAP-3-cpu-helper-value-bad.hir
+CAP/CAP-3-cpu-indirect-operation-bad.hir

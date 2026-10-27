@@ -1,0 +1,25 @@
+// rule: CAP-3
+// expect: reject CAP-3 at line 6
+// twin: CAP/CAP-3-cpu-closed-callback-ok.hir
+fn forbidden(x: u64) -> u64 uses {} {
+  x
+}
+
+pub fn batch(tasks: Tasks) -> Result[List[u64], CpuPoolError] {
+  let invoke: fn(
+    Tasks,
+    u32,
+    take sendable once fn() -> List[u64] uses {},
+    take sendable fn(take u64) -> u64 uses {}
+  ) -> Result[List[u64], CpuPoolError] = core@1/cpu.map_scoped
+  invoke(
+    tasks,
+    1u32,
+    fn() -> List[u64] uses {} {
+      [1]
+    },
+    fn(take x: u64) -> u64 uses {} {
+      forbidden(x)
+    }
+  )
+}
