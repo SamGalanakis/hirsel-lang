@@ -1041,3 +1041,58 @@ fn mutable_exit_requires_the_replacement_payload_and_receipt_to_match() {
         }
     }
 }
+
+#[test]
+fn mutable_pairing_survives_shared_cleanup_of_rejected_and_entered_outcomes() {
+    let (mut unit, table, manifest, declarations) = fixture_passing(true, Passing::Mut);
+    let Terminator::Call { failure, .. } = unit.terminators[ENTRY.index()] else {
+        unreachable!()
+    };
+    let rejected = unit.tables.calls[0].pretransfer_failure.unwrap();
+    let rejected = unit.tables.edges[unit.tables.failures[rejected.index()].cleanup.index()].target;
+    let entered = unit.tables.edges[unit.tables.failures[failure.index()].cleanup.index()].target;
+    let shared = BlockId(unit.blocks.len() as u32);
+    unit.blocks.push(Block {
+        kind: BlockKind::FailureCleanup,
+        parameters: PoolRange::EMPTY,
+        instructions: PoolRange::EMPTY,
+        anchor: SourceAnchorId(0),
+    });
+    unit.terminators.push(Terminator::Propagate);
+    for block in [entered, rejected] {
+        let edge = EdgeId(unit.tables.edges.len() as u32);
+        unit.tables.edges.push(Edge {
+            target: shared,
+            arguments: PoolRange::EMPTY,
+        });
+        unit.terminators[block.index()] = Terminator::Jump(edge);
+    }
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+    // An ordinary write without its companion invalidates the relational fact.
+    let binding = &unit.tables.receipt_entry.as_ref().unwrap().parameters[0];
+    let metadata = binding.version;
+    let pair = unit.tables.calls[0].receipts.as_ref().unwrap().arguments[0];
+    let ReceiptArgument::Mut { address, .. } = pair else {
+        unreachable!()
+    };
+    let code = unit.blocks[rejected.index()].instructions;
+    let mut instructions = code.get(&unit.instructions).unwrap().to_vec();
+    let ty = unit.values[metadata.index()].ty;
+    let result = ValueId(unit.values.len() as u32);
+    unit.values.push(ValueInfo {
+        ty,
+        holding: Holding::Owned,
+    });
+    instructions.push(Inst::Read {
+        result,
+        address,
+        reaching: metadata,
+        mode: ReadMode::Take,
+    });
+    // Taking only the receipt leaves the caller's mut slot incomplete.
+    unit.blocks[rejected.index()].instructions =
+        PoolRange::push(&mut unit.instructions, instructions);
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(!errors.is_empty(), "{errors:#?}");
+}

@@ -163,6 +163,7 @@ pub(super) struct State {
     /// Explicit Defuse regions still retaining owned fields.
     defusing: Rc<BTreeSet<(SlotId, Vec<Step>)>>,
     slots: PVec<SlotState>,
+    receipt_slots: Rc<BTreeSet<(SlotId, SlotId)>>,
     loans: PVec<Tri>,
     regions: PVec<Tri>,
     /// Views whose backing was written, moved or dropped on some path.
@@ -296,6 +297,9 @@ fn join_slot(x: &mut SlotState, y: &SlotState) {
 }
 
 fn join(a: &mut State, b: &State) {
+    if !Rc::ptr_eq(&a.receipt_slots, &b.receipt_slots) {
+        Rc::make_mut(&mut a.receipt_slots).retain(|pair| b.receipt_slots.contains(pair));
+    }
     if !Rc::ptr_eq(&a.defusing, &b.defusing) && !b.defusing.is_subset(&a.defusing) {
         Rc::make_mut(&mut a.defusing).extend(b.defusing.iter().cloned());
     }
@@ -434,6 +438,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         }
     }
     let init = State {
+        receipt_slots: Rc::default(),
         defusing: Rc::default(),
         slots: unit
             .slots
@@ -492,6 +497,48 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 BTreeMap::new()
             }
         };
+    let mut receipt_slots = BTreeSet::new();
+    if let Some(entry) = &unit.tables.receipt_entry {
+        for binding in &entry.parameters {
+            if let Some(slot) = unit
+                .slots
+                .iter()
+                .position(|s| s.kind == SlotKind::Parameter(binding.source))
+            {
+                receipt_slots.insert((SlotId(slot as u32), binding.slot));
+            }
+        }
+    }
+    for call in &unit.tables.calls {
+        for argument in call.receipts.iter().flat_map(|r| &r.arguments) {
+            if let ReceiptArgument::Mut {
+                parameter, address, ..
+            } = *argument
+            {
+                let original = call
+                    .arguments
+                    .get(&unit.pools.call_arguments)
+                    .unwrap_or(&[])
+                    .iter()
+                    .find(|a| a.parameter == parameter)
+                    .and_then(|a| match a.value {
+                        ArgumentValue::Address { address, .. } => {
+                            facts.addresses[address.index()].as_ref()
+                        }
+                        _ => None,
+                    });
+                if let (Some(original), Some(metadata)) =
+                    (original, facts.addresses[address.index()].as_ref())
+                    && original.path.is_empty()
+                    && metadata.path.is_empty()
+                    && let (Root::Slot(original), Root::Slot(metadata)) =
+                        (original.root, metadata.root)
+                {
+                    receipt_slots.insert((original, metadata));
+                }
+            }
+        }
+    }
     let mut walker = Walker {
         cx,
         facts,
@@ -505,6 +552,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         flat_reaching: BTreeMap::new(),
         open_reaching: BTreeMap::new(),
         receipt_pairs: std::cell::OnceCell::new(),
+        receipt_slots: &receipt_slots,
     };
     let ins = flow::solve(
         &facts.cfg,
@@ -531,6 +579,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         flat_reaching: BTreeMap::new(),
         open_reaching: BTreeMap::new(),
         receipt_pairs: std::cell::OnceCell::new(),
+        receipt_slots: &receipt_slots,
     };
     let mut credits_in: Vec<Option<Credits>> = vec![None; unit.blocks.len()];
     credits_in[unit.entry.index()] = Some(
@@ -638,6 +687,7 @@ struct Walker<'w, 'a, S> {
     /// The version reaching each write of an open element (`flat_open`).
     open_reaching: BTreeMap<Site, Option<ValueId>>,
     receipt_pairs: std::cell::OnceCell<super::sealed_payload::pairing::Pairing<'w, S>>,
+    receipt_slots: &'w BTreeSet<(SlotId, SlotId)>,
 }
 
 type Outs = Vec<(EdgeId, State, Credits)>;
@@ -658,6 +708,7 @@ impl<S: Stage> Walker<'_, '_, S> {
         let block = &unit.blocks[b.index()];
         let insts = block.instructions.get(&unit.instructions).unwrap_or(&[]);
         let mut outs = Vec::new();
+        self.update_receipt_slots(&st.clone(), &mut st);
         for (i, inst) in insts.iter().enumerate() {
             let site = Site::at(b, i as u32);
             // Release, reset, drop and region exit finish their cleanup
@@ -678,7 +729,11 @@ impl<S: Stage> Walker<'_, '_, S> {
                 .iter()
                 .map(|(p, &v)| (p.clone(), v, self.flag_content(&st, p.0, &p.1)))
                 .collect();
+            let receipt_before = (!self.receipt_slots.is_empty()).then(|| st.clone());
             self.inst(site, b, inst, &mut st, &mut cr);
+            if let Some(before) = receipt_before {
+                self.update_receipt_slots(&before, &mut st);
+            }
             if !flagged.is_empty() {
                 self.carry_flags(inst, &flagged, &mut st);
             }
@@ -757,6 +812,7 @@ impl<S: Stage> Walker<'_, '_, S> {
                 if let Some(rejected) = site_data.pretransfer_failure {
                     outs.push(self.failure(site, b, rejected, st.clone(), cr.clone()));
                 }
+                let receipt_before = (!self.receipt_slots.is_empty()).then(|| st.clone());
                 for arg in args {
                     match (arg.passing, arg.value) {
                         (Passing::Take, ArgumentValue::Value(v)) => {
@@ -818,6 +874,9 @@ impl<S: Stage> Walker<'_, '_, S> {
                             ReceiptArgument::Borrow { .. } => {}
                         }
                     }
+                }
+                if let Some(before) = receipt_before {
+                    self.update_receipt_slots(&before, &mut st);
                 }
                 // Call entry has transferred Take actuals; callee failure
                 // excludes them from caller cleanup.
@@ -1372,7 +1431,40 @@ impl<S: Stage> Walker<'_, '_, S> {
         }
     }
 
+    fn update_receipt_slots(&self, before: &State, state: &mut State) {
+        if self.receipt_slots.is_empty() {
+            return;
+        }
+        let pairs = self
+            .receipt_pairs
+            .get_or_init(|| super::sealed_payload::pairing::Pairing::new(self.cx.unit));
+        for &(original, metadata) in self.receipt_slots {
+            let a = &state.slots[original.index()];
+            let b = &state.slots[metadata.index()];
+            let whole = |s: &SlotState| {
+                content(s) == Tri::Yes
+                    && s.taken.values().all(|v| *v == Tri::No)
+                    && s.finalize.is_empty()
+            };
+            let preserved = before.receipt_slots.contains(&(original, metadata))
+                && before.slots[original.index()].versions == a.versions
+                && before.slots[metadata.index()].versions == b.versions;
+            let recovered = match (a.versions, b.versions) {
+                (Versions::One(a), Versions::One(b)) => pairs.paired(a, b),
+                _ => false,
+            };
+            if whole(a) && whole(b) && (preserved || recovered) {
+                Rc::make_mut(&mut state.receipt_slots).insert((original, metadata));
+            } else {
+                Rc::make_mut(&mut state.receipt_slots).remove(&(original, metadata));
+            }
+        }
+    }
+
     fn paired_slots(&self, st: &State, ordinary: SlotId, receipt: SlotId) -> bool {
+        if st.receipt_slots.contains(&(ordinary, receipt)) {
+            return true;
+        }
         let (Versions::One(value), Versions::One(metadata)) = (
             st.slots[ordinary.index()].versions,
             st.slots[receipt.index()].versions,
