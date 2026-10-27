@@ -278,4 +278,36 @@ mod tests {
             hirsel_rt_v2_ctx_destroy(root);
         }
     }
+
+    #[test]
+    fn exit_audit_collects_orphan_returns_and_preserves_a_real_leak() {
+        use crate::context::{Audit, CONFIG_DIAGNOSTIC, hirsel_rt_v2_task_exit};
+        for leak in [false, true] {
+            let mut config = Config::new();
+            config.flags = CONFIG_DIAGNOSTIC;
+            let mut root = std::ptr::null_mut();
+            // SAFETY: the test owns both workers sequentially. The orphan's
+            // returned blocks are freed once by root, before task exit.
+            unsafe {
+                assert_eq!(hirsel_rt_v2_ctx_create(&config, &mut root), 0);
+                let other = hirsel_rt_v2_worker_create(root);
+                let (small, _) = (*other).heap().allocate(0, 32, 8);
+                let (large, _) = (*other).heap().allocate(0, 5000, 8);
+                let bytes = if leak {
+                    (*other).heap().allocate(0, 48, 8).1
+                } else {
+                    0
+                };
+                hirsel_rt_v2_worker_retire(other);
+                (*root).heap().free(small);
+                (*root).heap().free(large);
+                let mut audit = Audit::default();
+                hirsel_rt_v2_task_exit(root, &mut audit);
+                assert_eq!(audit.live_blocks, u64::from(leak));
+                assert_eq!(audit.live_bytes, bytes);
+                assert_eq!(audit.retained_bytes, 0);
+                hirsel_rt_v2_ctx_destroy(root);
+            }
+        }
+    }
 }

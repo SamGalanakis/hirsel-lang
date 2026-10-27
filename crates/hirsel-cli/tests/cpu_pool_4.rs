@@ -77,3 +77,9 @@ fn native_wide_failure_after_result_transfer_every_byte_cleanup_cut() {
 fn native_wide_cancel_after_result_transfer_every_byte_cleanup_cut() {
     wide_cleanup_cuts(4, "cancel");
 }
+
+include!("support/cpu_pool/allocation_audit.rs");
+#[test]
+fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
+    typed_prefix_allocation_audit(4);
+}

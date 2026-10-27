@@ -34,3 +34,9 @@ include!("support/cpu_pool/canonical.rs");
 fn free_cpu_canonical_receipts_agree_across_emitters_and_replay() {
     cpu_free_canonical_receipts(1);
 }
+
+include!("support/cpu_pool/allocation_audit.rs");
+#[test]
+fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
+    typed_prefix_allocation_audit(1);
+}

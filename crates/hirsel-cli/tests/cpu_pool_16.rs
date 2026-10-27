@@ -31,3 +31,11 @@ fn free_generated_typed_batches_replay_with_one_permit() {
 fn free_typed_preparation_prefixes_release_each_row_root() {
     typed_preparation_prefix_census(16);
 }
+
+include!("support/cpu_pool/watchdog.rs");
+
+include!("support/cpu_pool/allocation_audit.rs");
+#[test]
+fn native_typed_prefix_allocations_are_freed_before_heap_teardown() {
+    typed_prefix_allocation_audit(16);
+}

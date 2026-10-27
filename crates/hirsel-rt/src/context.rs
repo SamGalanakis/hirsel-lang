@@ -860,6 +860,12 @@ impl TaskCtx {
             scheduler.restore_reserved_custody();
         }
         #[cfg(any(feature = "diagnostic", feature = "measurement"))]
+        for heap in self.run_ref().heaps.heaps() {
+            // Every physical owner has left. Collect already-freed remote
+            // returns before counting live values; no language cleanup runs.
+            unsafe { (*heap).collect() };
+        }
+        #[cfg(any(feature = "diagnostic", feature = "measurement"))]
         let audit = self.exit_audit();
         #[cfg(not(any(feature = "diagnostic", feature = "measurement")))]
         let audit = Audit::default();
