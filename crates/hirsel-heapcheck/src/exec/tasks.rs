@@ -1650,3 +1650,12 @@ pub(super) fn activities<'a>(stack: &'a [Activity], tasks: Option<&'a Tasks>) ->
     }
     out
 }
+
+#[cfg(test)]
+pub(super) fn sealed_owner_test_task(frame: Frame) -> Tasks {
+    let mut tasks = Tasks::new();
+    let mut receiver = Task::new(2, None, vec![0], None);
+    receiver.stack.push(Activity::Frame(Box::new(frame)));
+    tasks.tasks.push(Some(receiver));
+    tasks
+}

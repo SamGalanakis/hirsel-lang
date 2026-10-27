@@ -14,6 +14,7 @@ use hirsel_lir::sealed_payload_source::{
 use hirsel_lir::stage::Rc;
 use hirsel_lir::structural::{Shape, ShapeGraph};
 use hirsel_lir::structural_access::AccessPlan;
+mod inventory_92;
 
 fn list_type(child: T) -> T {
     T::Builtin(B::List, vec![A::Type(child)])

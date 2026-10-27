@@ -307,6 +307,7 @@ pub(crate) struct Machine<'p, S> {
     invocation_events: BTreeMap<u32, Vec<bool>>,
     seal_inventory: BTreeMap<usize, BTreeMap<AllocId, sealed_graph::Entry>>,
     seal_allocations: BTreeMap<AllocId, (usize, SourceAnchor)>,
+    seal_sources_checked: bool,
     program: &'p Program<S>,
     config: &'p Config,
     ops: &'p mut dyn Operations,
@@ -450,6 +451,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             invocation_events: BTreeMap::new(),
             seal_inventory: BTreeMap::new(),
             seal_allocations: BTreeMap::new(),
+            seal_sources_checked: false,
             entry: 0,
             output: Vec::new(),
             failures: Vec::new(),
@@ -3497,6 +3499,8 @@ impl<'p, S: Stage> Machine<'p, S> {
     // ---- Execution -------------------------------------------------------
 
     pub fn start(&mut self, entry: usize, args: &[Arg]) -> Checked<()> {
+        self.check_seal_sources()?;
+        self.seal_sources_checked = true;
         if self.config.count_max == 0 || self.config.count_max >= u32::MAX as u64 {
             return fail(
                 V::Malformed,

@@ -94,15 +94,20 @@ impl<S: Stage> Machine<'_, S> {
                 .allocations
                 .indexed()
                 .any(|(_, a)| a.owner == Owner::Region(region) && a.state == AllocState::Live);
-        let expected_retained = self.config.seal_sources.iter().any(|s| {
-            s.events.iter().any(|e| {
-                matches!(
-                    e.kind,
-                    hirsel_lir::sealed::SourceEventKind::Allocate
-                        | hirsel_lir::sealed::SourceEventKind::Replace
-                )
-            })
-        });
+        let expected_retained = self
+            .seal_inventory
+            .get(&region)
+            .is_some_and(|entries| !entries.is_empty())
+            || !self.seal_sources_checked
+                && self.config.seal_sources.iter().any(|s| {
+                    s.events.iter().any(|e| {
+                        matches!(
+                            e.kind,
+                            hirsel_lir::sealed::SourceEventKind::Allocate
+                                | hirsel_lir::sealed::SourceEventKind::Replace
+                        )
+                    })
+                });
         let (id, staged) = if bits && empty && !expected_retained {
             let size = self.size(root_layout)?;
             let mut image = Extent::new(size);

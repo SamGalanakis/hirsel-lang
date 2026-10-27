@@ -19,6 +19,103 @@ pub(super) struct Entry {
 }
 
 impl<S: Stage> Machine<'_, S> {
+    /// Check the complete static event correspondence once, including bodies
+    /// that this run never enters. Runtime inventory belongs to actual scopes;
+    /// an uncalled function or another arena cannot contribute to that scope.
+    pub(super) fn check_seal_sources(&self) -> Checked<()> {
+        let mut selected = BTreeSet::new();
+        for source in &self.config.seal_sources {
+            source.check().map_err(|e| err(V::Malformed, e))?;
+            if !selected.insert((
+                source.reference.definition.clone(),
+                source.reference.instance,
+            )) {
+                return fail(
+                    V::Malformed,
+                    "seal source inventory is ambiguous or invalid",
+                );
+            }
+            let units = self
+                .program
+                .units
+                .iter()
+                .filter(|unit| {
+                    unit.header.definition == source.reference.definition
+                        && unit.header.instance == source.reference.instance
+                })
+                .collect::<Vec<_>>();
+            let [unit] = units.as_slice() else {
+                return fail(V::Malformed, "seal source does not select one linked body");
+            };
+            if unit.header.implementation_revision != source.witness.implementation_revision {
+                return fail(V::Malformed, "seal source implementation revision differs");
+            }
+            let mut observed = Vec::new();
+            for block in &unit.blocks {
+                for inst in block
+                    .instructions
+                    .get(&unit.instructions)
+                    .ok_or_else(|| err(V::Malformed, "seal inventory block range"))?
+                {
+                    let (shape, anchor, kind) = match *inst {
+                        Inst::ArenaInventory {
+                            shape,
+                            allocation,
+                            previous,
+                            ..
+                        } => (
+                            shape,
+                            allocation,
+                            if previous.is_some() {
+                                SourceEventKind::Replace
+                            } else {
+                                SourceEventKind::Allocate
+                            },
+                        ),
+                        Inst::SealArena { shape, origin, .. } => {
+                            (shape, origin, SourceEventKind::Seal)
+                        }
+                        Inst::BorrowSealedRoot { shape, .. } => {
+                            (shape, block.anchor, SourceEventKind::BorrowRoot)
+                        }
+                        _ => continue,
+                    };
+                    let descriptor = unit
+                        .tables
+                        .seal_descriptors
+                        .get(shape.index())
+                        .ok_or_else(|| err(V::Malformed, "seal inventory descriptor is missing"))?;
+                    descriptor
+                        .check(&self.program.layouts)
+                        .map_err(|e| err(V::TypeConfusion, e))?;
+                    if !self.config.seal_descriptors.contains(descriptor) {
+                        return fail(
+                            V::TypeConfusion,
+                            "seal descriptor differs from validated module input",
+                        );
+                    }
+                    let anchor = unit
+                        .tables
+                        .source_anchors
+                        .get(anchor.index())
+                        .ok_or_else(|| err(V::Malformed, "seal inventory anchor is missing"))?;
+                    observed.push(hirsel_lir::sealed::SourceEvent {
+                        anchor: anchor.clone(),
+                        kind,
+                        root_type: descriptor.root_type.clone(),
+                    });
+                }
+            }
+            if observed != source.events {
+                return fail(
+                    V::Malformed,
+                    "independent retained allocation event correspondence differs",
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn seal_source(
         &self,
         f: &Frame,
@@ -343,7 +440,16 @@ impl<S: Stage> Machine<'_, S> {
             .unwrap_or_default();
         // Source expectations survive deletion of both physical storage and its
         // candidate event. Direct module inputs describe the entered path.
-        for (unit_index, unit) in self.program.units.iter().enumerate() {
+        // Raw instruction fixtures enter here without start's static check.
+        // Their explicit expectations describe that one entered component.
+        // Full programs checked the entire source set before their first step.
+        for (unit_index, unit) in self
+            .program
+            .units
+            .iter()
+            .enumerate()
+            .filter(|_| !self.seal_sources_checked)
+        {
             for source in self.config.seal_sources.iter().filter(|s| {
                 s.reference.definition == unit.header.definition
                     && s.reference.instance == unit.header.instance
