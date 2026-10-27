@@ -6,7 +6,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-native-tsan = []
+native-tsan = ["hirsel-driver/native-tsan"]
 
 [[bin]]
 name = "hirsel"

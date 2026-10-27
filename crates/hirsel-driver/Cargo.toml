@@ -5,6 +5,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+native-tsan = ["hirsel-llvm/native-tsan", "hirsel-cranelift/native-tsan"]
+
 [dependencies]
 hirsel-validate = { path = "../hirsel-validate" }
 base64 = "=0.22.1"
