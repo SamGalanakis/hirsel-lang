@@ -139,3 +139,46 @@ fn verify_cache_waits_for_all_module_proofs_before_comparing_signatures() {
         }
     });
 }
+
+#[test]
+fn changing_the_root_does_not_reinfer_unchanged_dependency_modules() {
+    with_compiler_stack(|| {
+        let mut engine = crate::source_std::engine();
+        let context = default_context();
+        let std = hirsel_syntax::DefPath(hirsel_syntax::ItemPath {
+            package: hirsel_syntax::PackageId {
+                name: "std".into(),
+                version: "1".into(),
+            },
+            modules: vec!["time".into()],
+            name: "read_digits".into(),
+        });
+        let previous = engine.recompute_count(&std, QueryKind::PrivateInference);
+        assert!(
+            previous > 0,
+            "source dependency inference actually executed"
+        );
+        let header = engine.item_signature(&std).unwrap().value;
+        for number in [1u8, 2] {
+            let source = format!(
+                "fn root_helper()->u8{{{number}u8}}\npub fn root_entry()->u8{{root_helper()}}\n"
+            );
+            let file = engine.sources.add("root-proof.hir", source).unwrap();
+            engine.parse_file(file, &context).unwrap();
+            let budget = ProcessBudget::new(256 << 20);
+            let reservation = engine
+                .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+                .unwrap();
+            drop(reservation);
+            assert_eq!(
+                engine.recompute_count(&std, QueryKind::PrivateInference),
+                previous
+            );
+            assert!(Arc::ptr_eq(
+                &header,
+                &engine.item_signature(&std).unwrap().value
+            ));
+            assert_eq!(budget.reserved(), 0);
+        }
+    });
+}

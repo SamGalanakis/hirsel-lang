@@ -70,6 +70,18 @@ impl QueryEngine {
                 if let Some(entry) = self.signatures.get(&id).cloned()
                     && let Ok(output) = entry.result()
                 {
+                    if summary == previous
+                        && output.value.metadata.inferred_unique == summary
+                        && (summary.is_empty()
+                            || self.private_summary_reads.get(&id).is_some_and(|reads| {
+                                reads
+                                    .iter()
+                                    .all(|(key, value)| entry.reads().get(key) == Some(*value))
+                            }))
+                        && self.memo_valid(id.path(), &entry, entry.memo.text)
+                    {
+                        continue;
+                    }
                     let mut output = (*output).clone();
                     let mut signature = (*output.value).clone();
                     signature.metadata.inferred_unique = summary.clone();
