@@ -69,7 +69,9 @@ fn run_width_policy(width: usize, provider: &str) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let source = include_str!("physical.hir");
-    let iterations = if width == 1 {
+    let iterations = if cfg!(feature = "native-tsan") {
+        300_000u64
+    } else if width == 1 {
         3_000_000u64
     } else {
         30_000_000u64
@@ -108,14 +110,32 @@ fn run_width_policy(width: usize, provider: &str) {
                 .unwrap(),
         );
         let probe = root.join("probe.txt");
-        let mut child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .arg("--hirsel-grants")
             .arg(&grants)
             .env("HIRSEL_RT_CPU_PROBE", &probe)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+            .stderr(std::process::Stdio::piped());
+        #[cfg(feature = "native-tsan")]
+        {
+            use std::os::unix::process::CommandExt;
+            // Only the sanitized child needs TSan's virtual shadow mappings.
+            unsafe {
+                command.pre_exec(|| {
+                    let mut limit = std::mem::zeroed::<libc::rlimit>();
+                    if libc::getrlimit(libc::RLIMIT_DATA, &mut limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    limit.rlim_cur = limit.rlim_max;
+                    if libc::setrlimit(libc::RLIMIT_DATA, &limit) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let mut child = command.spawn().unwrap();
         // The exact-CPU executor owns this cpuset. Place only this test's fresh
         // workers on its distinct admitted CPUs, so OS wake affinity cannot keep
         // every runnable worker on the creating CPU during the finite control.

@@ -847,7 +847,7 @@ def first_party(meta: dict) -> str:
     unguarded = []
     out = [
         HEADER,
-        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_deadline_replay_matrix", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_tsan_runtime_archives", "hirsel_script_test", "hirsel_test", "hirsel_toolchain_bundle")\n',
+        'load("//tools/buck2:defs.bzl", "hirsel_binary", "hirsel_build_script", "hirsel_command_test", "hirsel_deadline_replay_matrix", "hirsel_products", "hirsel_library", "hirsel_link_hosts_test", "hirsel_runtime_archives", "hirsel_tsan_runtime_archives", "hirsel_native_pool_tsan", "hirsel_script_test", "hirsel_test", "hirsel_toolchain_bundle")\n',
         'load("//tools/buck2:native_selection.bzl", "hirsel_native_selection")\n',
     ]
 
@@ -1004,6 +1004,9 @@ def first_party(meta: dict) -> str:
     out.append("\n" + call("hirsel_script_test", name="gate-cpu-pool-tsan", script="tools/workers-tsan", full=False,
                             data=[], sanitizer="thread", files_env={"HIRSEL_WORKERS_TSAN": ":hirsel-rt-unittest-harness"}))
     out.append("\n" + call("hirsel_tsan_runtime_archives", name="hirsel-rt-tsan-archives"))
+    for width in [4, 8]:
+        out.append("\n" + call("hirsel_native_pool_tsan", name=f"gate-cpu-pool-native-tsan-{width}", width=width,
+                               products=PRODUCTS, data=Raw('glob(["stdlib/**", "native-tests/library/**", "crates/hirsel-cli/Cargo.toml"])')))
     out.append("\n" + call("hirsel_script_test", name="gate-perf-counts", script="tools/perf-counts",
                             full=False, production=True, bin_exes={"hirsel": "//:hirsel-cli-bin-hirsel"},
                             products=PRODUCTS, runtime_archives=RUNTIME_ARCHIVES,

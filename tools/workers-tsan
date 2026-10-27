@@ -14,6 +14,24 @@ import resource
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
+
+if "HIRSEL_NATIVE_CPU_HARNESS" in os.environ:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--native", type=int, choices=[4, 8], required=True)
+    args = parser.parse_args()
+    root = Path.cwd()
+    binary = (root / os.environ["HIRSEL_NATIVE_CPU_HARNESS"]).resolve()
+    name = f"native_tsan_cpu_pool_has_physical_width_{args.native}"
+    result = subprocess.run([binary, "--exact", name, "--nocapture", "--test-threads=1"],
+                            cwd=root / "crates/hirsel-cli", timeout=180,
+                            env=os.environ | {"TSAN_OPTIONS": "symbolize=0:halt_on_error=1:exitcode=66"},
+                            capture_output=True, text=True)
+    print(result.stdout, end="", flush=True)
+    print(result.stderr, end="", file=sys.stderr, flush=True)
+    if result.returncode == 0 and "1 passed" not in result.stdout:
+        raise SystemExit("native CPU TSan harness executed no body")
+    raise SystemExit(result.returncode)
 
 if "HIRSEL_WORKERS_TSAN" in os.environ:
     def shadow_space():

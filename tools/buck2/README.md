@@ -867,3 +867,24 @@ property exact, and only upgraded Kiln workers advertise it. The launcher checks
 that inherited affinity has N CPUs and the visible quota permits N; it refuses
 a narrower grant rather than silently running fewer workers. Ordinary targets
 continue using measured sizing. No runtime worker/topology override is involved.
+
+Native CPU pool TSan qualification uses the same W4/W8 physical pool fixtures,
+with instrumented emitted instructions on both backends and a separately
+instrumented runtime, std and fiber annotations. The compiler keeps its normal
+allocator. Prepare the private TSan std as above, then run:
+
+```sh
+.buck2/bin/buck2 test -c hirsel.native_tsan=true //:hirsel-llvm-unittest //:hirsel-cranelift-unittest -- --test-arg=native_tsan
+.buck2/bin/buck2 test -c hirsel.native_tsan=true //:gate-cpu-pool-native-tsan-4 //:gate-cpu-pool-native-tsan-8
+```
+
+LLVM runs its ThreadSanitizer pass after optimization and runtime fast-path
+expansion. Cranelift annotates each lowered memory access with its actual byte
+range, including narrowed loads/stores and negative offsets, and refuses
+uncovered memory instructions. The emitter controls call the generated code
+from an unsanitized C harness: disjoint cells pass; shared cells must exit 66
+with a race report. These controls do not substitute for a production job-claim
+mutant. Instrumented pool fixtures use 300,000 loop iterations and retain the
+same switch-free overlap assertion and probe cap. Ordered ahead certificates
+remain disabled by the runtime's existing TSan selection, so a passing Free
+cell alone gives no Ordered overlap credit.

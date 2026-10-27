@@ -147,7 +147,7 @@ def _compile_env(package_name, crate, version, build_script):
 CLIPPY_TWINS = read_root_config("hirsel", "clippy", "false") == "true"
 
 def _rust(rule, name, **attrs):
-    if attrs.get("crate") in ["hirsel_llvm", "hirsel_cranelift"] and read_root_config("hirsel", "native_tsan", "false") == "true":
+    if attrs.get("crate") in ["hirsel_llvm", "hirsel_cranelift", "cpu_pool_4", "cpu_pool_8"] and read_root_config("hirsel", "native_tsan", "false") == "true":
         attrs["features"] = attrs.get("features", []) + ["native-tsan"]
     # Runtime diagnostic features are explicit build selections. Ordinary
     # archives omit ownership hooks and their private observer state.
@@ -798,12 +798,31 @@ def hirsel_runtime_archives(name, crate, crate_root, srcs, features, deps, featu
 
 def hirsel_tsan_runtime_archives(name):
     """One instrumented native runtime, with its matching sanitizer and std."""
+    if read_root_config("hirsel", "native_tsan", "false") != "true":
+        return
     native.configured_alias(name = name + "-runtime", actual = ":hirsel-rt", platform = "root//tools/buck2:thread")
     _runtime_archives(
         name = name,
         archives = {"x86_64-unknown-linux-gnu/default": ":" + name + "-runtime"},
         sanitizer_archive = "root//tools/buck2/toolchains:tsan-runtime",
         visibility = ["PUBLIC"],
+    )
+
+def hirsel_native_pool_tsan(name, width, data, products):
+    if read_root_config("hirsel", "native_tsan", "false") != "true":
+        return
+    binary = "hirsel-cli-test-cpu_pool_{}".format(width)
+    _script_binary(name = name + "-script", script = "tools/workers-tsan")
+    _rust_test(
+        name = name, harness = ":" + name + "-script", args = ["--native", str(width)],
+        test_binary = binary, data = data, cwd = ".", products = products,
+        bin_exes = {"hirsel": ":hirsel-cli-bin-hirsel"},
+        bin_exe_dir = BIN_EXE_DIR + "/" + binary + "-harness",
+        files_env = {"HIRSEL_NATIVE_CPU_HARNESS": ":" + binary + "-harness"},
+        llvm = "root//tools/buck2/native-toolchain:llvm", native_tools = native_tool_inputs(),
+        runtime_archives = ":hirsel-rt-tsan-archives", labels = ["gate"],
+        exec_compatible_with = _test_platform(binary), pool = not TESTS_ON_HOST,
+        request = _request(binary), visibility = ["PUBLIC"],
     )
 
 def _runtime_archives_impl(ctx):

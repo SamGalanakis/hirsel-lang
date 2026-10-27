@@ -5,6 +5,9 @@ edition.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+native-tsan = []
+
 [[bin]]
 name = "hirsel"
 path = "src/main.rs"
