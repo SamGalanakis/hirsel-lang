@@ -12,6 +12,7 @@ pub(crate) struct Withdrawal {
     head: TaskId,
     targets: BTreeSet<TaskId>,
     pending: BTreeSet<TaskId>,
+    prefixes: Option<Vec<super::super::cpu::Withdrawn>>,
 }
 
 impl Withdrawal {
@@ -24,6 +25,7 @@ impl Withdrawal {
             head,
             targets,
             pending,
+            prefixes: None,
         }
     }
 
@@ -88,10 +90,25 @@ pub(super) fn request(ctx: *mut TaskCtx) {
 pub(super) fn acknowledged(ctx: *mut TaskCtx) -> bool {
     let task = engine::current(ctx);
     engine::with_driver(ctx, |driver| {
-        driver
-            .cpu_withdrawal
-            .as_ref()
-            .is_none_or(|withdrawal| withdrawal.head != task || withdrawal.pending.is_empty())
+        let Some(withdrawal) = driver.cpu_withdrawal.as_mut() else {
+            return true;
+        };
+        if withdrawal.head != task {
+            return true;
+        }
+        if !withdrawal.pending.is_empty() {
+            return false;
+        }
+        if withdrawal.prefixes.is_none() {
+            withdrawal.prefixes = Some(
+                driver
+                    .cpu_batch
+                    .as_mut()
+                    .unwrap()
+                    .withdraw(task, &withdrawal.targets),
+            );
+        }
+        true
     })
 }
 
@@ -114,6 +131,11 @@ pub(super) fn release(ctx: *mut TaskCtx) {
         assert!(
             withdrawal.pending.is_empty(),
             "backing retry follows physical acknowledgements"
+        );
+        driver.cpu_batch.as_mut().unwrap().restore(
+            withdrawal
+                .prefixes
+                .expect("acknowledged withdrawal transfers its prefixes"),
         );
         for task in withdrawal.targets {
             let row = super::physical(s, TaskKey::from_word(task))

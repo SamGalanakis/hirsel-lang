@@ -7,6 +7,9 @@ use crate::ordered::footprint::TaskId;
 use crate::stop::{Stop, Stopped};
 use std::collections::BTreeMap;
 
+mod withdrawal;
+pub(super) use withdrawal::Withdrawn;
+
 /// The canonical claim binds an ordinal to a generation-qualified task, not
 /// to a physical worker. Its ordinary task-local Stretch follows saves and
 /// migration; only this batch may retire that prefix through Jobs.
