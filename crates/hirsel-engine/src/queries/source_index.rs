@@ -253,22 +253,39 @@ impl QueryEngine {
             .into_iter()
             .map(|(id, entry)| {
                 let share = crate::memo::retained::source_shared_products(&entry);
-                if entry.products.resolution.is_none() && !share {
+                let compact = crate::memo::retained::source_compact_entry(&entry);
+                let compact_output = crate::memo::retained::source_compact_output(&entry);
+                if entry.products.resolution.is_none() && !compact {
                     return (id, entry);
+                }
+                let mut memo = entry.memo.clone();
+                if compact_output {
+                    memo.value = entry
+                        .memo
+                        .value
+                        .as_ref()
+                        .map(|output| {
+                            // Clone owns only the exact vector lengths; immutable
+                            // SignatureRef and read-log owners remain shared.
+                            Arc::new((**output).clone())
+                        })
+                        .map_err(Clone::clone);
                 }
                 // Like a lazy durable Signature, this projection owns no resolver
                 // syntax. It cannot replace the complete stored publication.
                 let projected = Entry {
-                    memo: entry.memo.clone(),
+                    memo,
                     detail: entry.detail.clone(),
                     products: if share {
                         shared_products.clone()
-                    } else {
+                    } else if entry.products.resolution.is_some() {
                         Arc::new(PhaseProducts {
                             signature_persisted: true,
                             resolution: None,
                             ..(*entry.products).clone()
                         })
+                    } else {
+                        entry.products.clone()
                     },
                     covered: entry.covered.clone(),
                     depth: entry.depth.clone(),
@@ -654,6 +671,50 @@ mod tests {
             assert_eq!(budget.reserved(), 0);
         });
     }
+    #[test]
+    fn source_carry_compacts_unowned_buffers_and_keeps_shared_output_identity() {
+        crate::with_compiler_stack(|| {
+            let path = DefPath::core("source.buffers");
+            for shared in [false, true] {
+                let mut prior = engine(&[path.clone()]);
+                let id = DefId::intern(&path);
+                let mut header = Arc::try_unwrap(prior.signatures.remove(&id).unwrap())
+                    .ok()
+                    .unwrap();
+                header.detail.signatures = Vec::with_capacity(32768);
+                header.covered = Vec::with_capacity(32768);
+                let mut output = (*header.result().unwrap()).clone();
+                output.dependencies = Vec::with_capacity(32768);
+                let signature = output.value.clone();
+                let output = Arc::new(output);
+                let held = shared.then(|| output.clone());
+                header.memo.value = Ok(output);
+                prior.signatures.insert(id, Arc::new(header));
+                let required = prior.source_index_bytes().unwrap();
+                let budget = ProcessBudget::new(required);
+                let carry = prior
+                    .into_source_index(budget.reserve(required).unwrap())
+                    .unwrap();
+                let mut fresh = engine(&[]);
+                carry.restore(&mut fresh).ok().unwrap();
+                let header = &fresh.signatures[&id];
+                assert_eq!(header.detail.signatures.capacity(), 0);
+                assert_eq!(header.covered.capacity(), 0);
+                let actual = header.result().unwrap();
+                assert!(Arc::ptr_eq(&actual.value, &signature));
+                if let Some(held) = held {
+                    assert!(Arc::ptr_eq(&held, &actual));
+                    assert!(actual.dependencies.capacity() >= 32768);
+                } else {
+                    assert_eq!(actual.dependencies.capacity(), 0);
+                }
+                drop(actual);
+                drop(fresh);
+                assert_eq!(budget.reserved(), 0);
+            }
+        });
+    }
+
     #[test]
     fn refused_source_index_restore_keeps_its_reservation_and_target_untouched() {
         crate::with_compiler_stack(|| {

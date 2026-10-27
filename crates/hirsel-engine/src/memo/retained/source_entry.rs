@@ -85,7 +85,21 @@ pub(crate) fn retained_signature_entry_bytes(
     if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
         return None;
     }
-    signature_entry_bytes(entry, false, false, None)
+    signature_entry_bytes(entry, false, false, false, false, None)
+}
+
+pub(crate) fn source_compact_entry(
+    entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
+) -> bool {
+    std::sync::Arc::strong_count(entry) == 1 && std::sync::Arc::weak_count(entry) == 0
+}
+pub(crate) fn source_compact_output(
+    entry: &std::sync::Arc<crate::queries::Entry<hirsel_types::SignatureRef>>,
+) -> bool {
+    source_compact_entry(entry)
+        && entry.memo.value.as_ref().is_ok_and(|output| {
+            std::sync::Arc::strong_count(output) == 1 && std::sync::Arc::weak_count(output) == 0
+        })
 }
 
 pub(crate) fn source_shared_products(
@@ -113,7 +127,14 @@ pub(crate) fn source_signature_head_bytes(
     if entry.products.mode_archive.is_some() || entry.verification.lock().unwrap().is_some() {
         return None;
     }
-    signature_entry_bytes(entry, true, source_shared_products(entry), Some(names))
+    signature_entry_bytes(
+        entry,
+        true,
+        source_shared_products(entry),
+        source_compact_entry(entry) || entry.products.resolution.is_some(),
+        source_compact_output(entry),
+        Some(names),
+    )
 }
 
 /// Diagnostic components of the same conservative source-head bound.
@@ -145,6 +166,8 @@ fn signature_entry_bytes(
     entry: &crate::queries::Entry<hirsel_types::SignatureRef>,
     head: bool,
     shared_products: bool,
+    projected: bool,
+    compact_output: bool,
     names: Option<&mut dyn super::NameAllocationSet>,
 ) -> Option<u64> {
     let mut weight = Weight {
@@ -154,6 +177,7 @@ fn signature_entry_bytes(
     };
     weight.add(arc_bytes(entry));
     weight.reads(&entry.memo.reads);
+    weight.cloned_vectors = projected;
     weight.detail(&entry.detail);
     weight.flat_vec(&entry.covered);
     if let Some(depth) = &entry.depth {
@@ -164,6 +188,7 @@ fn signature_entry_bytes(
             w.flat_vec(arguments);
         }
     });
+    weight.cloned_vectors = false;
     if let Some(receipt) = &entry.acceptance {
         weight.bytes = weight.bytes.checked_add(receipt.retained_bytes()?)?;
     }
@@ -197,8 +222,10 @@ fn signature_entry_bytes(
             weight.bytes = weight
                 .bytes
                 .checked_add(retained_signature_payload_bytes(&output.value))?;
+            weight.cloned_vectors = compact_output;
             weight.vec(&output.diagnostics, Weight::diagnostic);
             weight.flat_vec(&output.dependencies);
+            weight.cloned_vectors = false;
         }
         Err(error) => weight.error(error),
     }

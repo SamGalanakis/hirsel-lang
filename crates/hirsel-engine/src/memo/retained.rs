@@ -4,8 +4,9 @@ mod signature;
 mod source_entry;
 pub(crate) use signature::retained_signature_payload_bytes;
 pub(crate) use source_entry::{
-    retained_signature_entry_bytes, source_shared_products, source_shared_products_bytes,
-    source_signature_head_bytes, source_signature_head_components,
+    retained_signature_entry_bytes, source_compact_entry, source_compact_output,
+    source_shared_products, source_shared_products_bytes, source_signature_head_bytes,
+    source_signature_head_components,
 };
 mod syntax;
 #[cfg(test)]
@@ -209,6 +210,7 @@ pub(crate) struct Weight<'a> {
     shared: HashSet<usize>,
     count_shared_repeats: bool,
     decode_vectors: bool,
+    cloned_vectors: bool,
     source_names: Option<&'a mut dyn NameAllocationSet>,
 }
 pub(crate) trait NameAllocationSet: Send + Sync {
@@ -489,7 +491,10 @@ impl Weight<'_> {
         };
         if first {
             self.add(bytes);
+            // Cloning a handle never clones the observation's owned buffers.
+            let cloned = std::mem::replace(&mut self.cloned_vectors, false);
             self.dependency(read);
+            self.cloned_vectors = cloned;
         }
     }
     fn read_log(&mut self, value: &std::sync::Arc<SharedPath<hirsel_types::SharedRead>>) {
@@ -532,10 +537,13 @@ impl Weight<'_> {
     }
     pub(crate) fn flat_vec<T>(&mut self, value: &Vec<T>) {
         self.add(
-            value
-                .capacity()
-                .saturating_mul(if self.decode_vectors { 2 } else { 1 })
-                .saturating_mul(size_of::<T>()),
+            (if self.cloned_vectors {
+                value.len()
+            } else {
+                value.capacity()
+            })
+            .saturating_mul(if self.decode_vectors { 2 } else { 1 })
+            .saturating_mul(size_of::<T>()),
         );
     }
     pub(crate) fn vec<T>(&mut self, value: &Vec<T>, mut visit: impl FnMut(&mut Self, &T)) {
