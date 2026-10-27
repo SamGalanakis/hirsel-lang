@@ -41,6 +41,7 @@ fn public_native_run_binds_and_launches_on_both_backends() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.hir");
         std::fs::write(&source, "fn helper(x:u64)->u64{x+1u64}\npub fn main()->Result[(),u64]{if helper(7u64)==8u64 {Ok(())} else {Error(9u64)}}").unwrap();
+        let started = std::time::Instant::now();
         for backend in [Backend::Cranelift, Backend::Llvm] {
             let _ = std::io::Write::write_fmt(
                 &mut std::io::stderr(),
@@ -63,7 +64,7 @@ fn public_native_run_binds_and_launches_on_both_backends() {
             .unwrap();
             let _ = std::io::Write::write_fmt(
                 &mut std::io::stderr(),
-                format_args!("native default run {backend:?} completed\n"),
+                format_args!("native default run {backend:?} completed after {:?}\n", started.elapsed()),
             );
             assert_eq!(outcome.exit_code(), 0, "{backend:?}: {outcome:?}");
             assert!(stdout.is_empty(), "{backend:?}: {stdout:?}");
