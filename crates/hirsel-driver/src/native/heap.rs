@@ -2196,7 +2196,30 @@ fn config(
             }
         }
     }
+    let ahead = super::ahead::plan(program);
+    let cpu_starts = program
+        .units
+        .iter()
+        .flat_map(|unit| {
+            let ahead = &ahead;
+            unit.unit()
+                .tables
+                .calls
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, _)| {
+                    let root =
+                        ahead.cpu_start(unit.unit(), hirsel_lir::ir::CallId(index as u32))?;
+                    Some((
+                        unit.unit().header.instance,
+                        index as u32,
+                        ahead.roots[&root].recipe.source_code.instance?,
+                    ))
+                })
+        })
+        .collect();
     Ok(Config {
+        cpu_starts,
         cpu_max_workers: world.cpu.as_ref().map(|grant| grant.max_workers),
         cpu_free: world.tasks_free,
         seal_descriptors,

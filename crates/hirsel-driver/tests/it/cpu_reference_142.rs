@@ -1,7 +1,7 @@
 use hirsel_driver::{compiler_adapters, native};
 use hirsel_engine::{
     QueryEngine, RunConfiguration, check_progress, default_context, default_environment,
-    entry_path, run_observed_snapshot, with_compiler_stack,
+    entry_path, run_observed_checked, run_observed_snapshot, with_compiler_stack,
 };
 
 fn grant(workers: u32) -> hirsel_run_schema::CpuGrant {
@@ -15,6 +15,16 @@ fn grant(workers: u32) -> hirsel_run_schema::CpuGrant {
 }
 
 fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8], campaign: bool) {
+    agree_in(source, cpu, expected, campaign, true);
+}
+
+fn agree_in(
+    source: &str,
+    cpu: Option<hirsel_run_schema::CpuGrant>,
+    expected: &[u8],
+    campaign: bool,
+    free: bool,
+) {
     with_compiler_stack(|| {
         let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
         let file = engine.sources.add("cpu.hir", source.to_owned()).unwrap();
@@ -23,7 +33,7 @@ fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8]
         let entry = entry_path(&default_context());
         let fixture = native::Fixture {
             cpu: cpu.clone(),
-            tasks_free: true,
+            tasks_free: free,
             ..Default::default()
         };
         let run = run_observed_snapshot(
@@ -39,6 +49,20 @@ fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8]
         let reference = native::Observation::of_reference(run.observation.as_ref().unwrap());
         assert_eq!(reference.output, expected);
         assert!(reference.failures.is_empty(), "{reference:?}");
+        let checked = run_observed_checked(
+            &mut engine,
+            &RunConfiguration {
+                entry: entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            },
+            (&fixture).into(),
+        )
+        .unwrap();
+        assert_eq!(
+            native::Observation::of_reference(checked.observation.as_ref().unwrap()),
+            reference
+        );
         let input = engine.export_native_input().unwrap();
         let validated = engine.import_native_input(input).unwrap();
         let program = native::build(
@@ -49,7 +73,7 @@ fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8]
         let sites = native::Sites::new(validated.snapshot());
         let world = native::HeapWorld {
             cpu,
-            tasks_free: true,
+            tasks_free: free,
             ..Default::default()
         };
         let heap = if campaign {
@@ -63,7 +87,11 @@ fn agree(source: &str, cpu: Option<hirsel_run_schema::CpuGrant>, expected: &[u8]
         assert_eq!(run.record().io.as_ref().unwrap().cpu, fixture.cpu);
         assert_eq!(
             run.record().io.as_ref().unwrap().tasks.as_deref(),
-            Some("tasks.free@1")
+            Some(if free {
+                "tasks.free@1"
+            } else {
+                "tasks.cooperative@1"
+            })
         );
     });
 }
@@ -181,4 +209,62 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         b"cpu-reentered\n",
         false,
     );
+}
+
+#[test]
+fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
+    for width in [1, 4, 8] {
+        let jobs = (1..=2 * width)
+            .map(|n| format!("{n}u64"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let expected = (1..=2 * width)
+            .map(|n| format!("{}u64", n + 7))
+            .collect::<Vec<_>>()
+            .join(",");
+        let source = format!(
+            r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {{
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, {width}u32,
+    fn() -> List[u64] uses {{}} {{ [{jobs}] }},
+    fn(take job: u64) -> u64 uses {{}} {{ job + 7u64 }})
+  failure.check(rows == Ok([{expected}]), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-scalar-ok\n")
+  Ok(())
+}}
+"#
+        );
+        for free in [true, false] {
+            agree_in(&source, Some(grant(width)), b"cpu-scalar-ok\n", false, free);
+        }
+    }
+}
+
+#[test]
+fn cpu_ordered_unknown_mapper_refuses_before_preparation() {
+    for mapper in [
+        "let xs = [job]; xs[0u64]",
+        "core@1/f64.bits(core@1/f64.from_bits(job))",
+    ] {
+        agree_in(
+            &format!(
+                r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {{
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {{}} {{ failure.check(false, Bounds()); [1u64] }},
+    fn(take job: u64) -> u64 uses {{}} {{ {mapper} }})
+  failure.check(rows == Error(MapperNotCertified()), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-uncertified\n")
+  Ok(())
+}}
+"#
+            ),
+            Some(grant(1)),
+            b"cpu-uncertified\n",
+            false,
+            false,
+        );
+    }
 }

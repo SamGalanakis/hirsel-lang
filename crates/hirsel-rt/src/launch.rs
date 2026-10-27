@@ -1845,10 +1845,13 @@ pub(crate) unsafe fn execute(
             return Err("fixture run binding mismatch".into());
         }
     }
+    let cpu_fixture = fixture_run
+        .as_ref()
+        .filter(|run| run.record().io.as_ref().is_some_and(|io| io.cpu.is_some()));
     let placement_run = requested.as_ref().or_else(|| {
         fixture_run
             .as_ref()
-            .filter(|run| run.record().placement.is_some())
+            .filter(|run| run.record().placement.is_some() || cpu_fixture.is_some())
     });
     // Validate call metadata before allocating a context or starting workers.
     let replay_call = requested
@@ -2607,11 +2610,13 @@ pub(crate) unsafe fn execute(
     }
     unsafe { &mut *ctx }.run().free_mode = requested
         .as_ref()
+        .or(cpu_fixture)
         .and_then(|run| run.record().io.as_ref())
         .and_then(|io| io.tasks.as_deref())
         == Some("tasks.free@1");
     unsafe { &mut *ctx }.run().cpu_grant = requested
         .as_ref()
+        .or(cpu_fixture)
         .and_then(|run| run.record().io.as_ref())
         .and_then(|io| io.cpu.clone());
     if let Some(grant) = unsafe { (*ctx).run_ref().cpu_grant.as_ref() } {
@@ -2724,6 +2729,7 @@ pub(crate) unsafe fn execute(
     // An execution of several runs (RUN-10) switches between their roots on one thread: a run
     // with runners runs on one worker too.
     if (ordered_enabled
+        || cpu_fixture.is_some()
         || production_free
         || width > 1
         || (options.workers.is_some()

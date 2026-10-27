@@ -680,6 +680,43 @@ impl<S: Stage> Machine<'_, S> {
         }
     }
 
+    fn cpu_start_selected(&mut self, f: &Frame, site: &CallSite) -> Checked<bool> {
+        let unit = self.unit(f.unit);
+        let Some(expected) = self
+            .config
+            .cpu_starts
+            .iter()
+            .find_map(|(map, call, mapper)| {
+                (*map == unit.header.instance
+                    && unit.tables.calls.get(*call as usize) == Some(site))
+                .then_some(*mapper)
+            })
+        else {
+            return Ok(false);
+        };
+        let Some((index, slot)) = unit
+            .slots
+            .iter()
+            .enumerate()
+            .find(|(_, slot)| slot.kind == SlotKind::Parameter(3))
+        else {
+            return Ok(false);
+        };
+        let ty = self.lir_type(f.unit, slot.ty)?.clone();
+        let ptr = match f.slots.get(index) {
+            Some(SlotStore::Own(ptr) | SlotStore::Alias(ptr)) => *ptr,
+            _ => return Ok(false),
+        };
+        let image = self
+            .ledger
+            .check(ptr)?
+            .extent
+            .copy(ptr.offset, self.size(ty.layout)?, None);
+        let (actual, _, _) = self.val_from(image, ty.repr, ty.layout)?;
+        Ok(matches!(actual, Val::Callable { code: Some(code), .. }
+            if self.unit(code).header.instance == expected))
+    }
+
     pub(super) fn task_operation(
         &mut self,
         f: &mut Frame,
@@ -705,6 +742,11 @@ impl<S: Stage> Machine<'_, S> {
                 let width = self.task_word(f, &Self::task_argument(&arguments, 1)?)? as u32;
                 let action = self.task_word(f, &Self::task_argument(&arguments, 2)?)? as u32;
                 let count = self.task_word(f, &Self::task_argument(&arguments, 3)?)?;
+                let action = if action == 0 && self.cpu_start_selected(f, site)? {
+                    4
+                } else {
+                    action
+                };
                 let shielded = self.shielded(f);
                 let grant = self.config.cpu_max_workers;
                 let free = self.config.cpu_free;

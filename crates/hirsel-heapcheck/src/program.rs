@@ -510,6 +510,9 @@ pub struct Config {
     /// Logical CPU grant. Physical placement is outside H's model.
     pub cpu_max_workers: Option<u32>,
     pub cpu_free: bool,
+    /// Native start selections reconstructed from the validated Ready graph.
+    /// Each row binds map instance, control call and actual mapper code.
+    pub cpu_starts: Vec<(ContentHash, u32, ContentHash)>,
     /// Independently validated source/declaration inputs for direct graph execution.
     /// Candidate receipt tables cannot populate these inputs.
     pub receipt_sources: Vec<hirsel_lir::sealed_payload_source::ReceiptSource>,
@@ -547,6 +550,7 @@ impl Default for Config {
         Self {
             cpu_max_workers: None,
             cpu_free: false,
+            cpu_starts: Vec::new(),
             receipt_sources: Vec::new(),
             seal_sources: Vec::new(),
             seal_descriptors: Vec::new(),
