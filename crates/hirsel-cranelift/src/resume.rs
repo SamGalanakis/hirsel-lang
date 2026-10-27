@@ -586,7 +586,11 @@ impl FnEmitter<'_, '_, '_> {
         let (anchor, site) = self.failure_sites(code);
         let frame = self.frame();
         let mut args = vec![self.context, frame, number, kind, bytes, anchor, site];
-        let entry = if let Some(coverage) = &state.finalizers {
+        let entry = if let Some(coverage) = state
+            .finalizers
+            .as_ref()
+            .filter(|c| !c.finalizers.is_empty())
+        {
             let rows = self.finalizer_rows(coverage)?;
             args.push(rows);
             args.push(

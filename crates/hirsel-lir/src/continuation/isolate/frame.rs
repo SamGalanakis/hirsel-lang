@@ -7,7 +7,7 @@ use crate::stage::ValidatedUnit;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IsolatePlan {
     pub protocol: IsolateProtocol,
-    pub cleanup: SynchronousCleanupPlan,
+    pub cleanup: SourceCleanupPlan,
     pub frame: ContinuationPlan,
 }
 

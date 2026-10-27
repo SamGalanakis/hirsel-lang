@@ -175,7 +175,10 @@ impl Driver {
                     FinalizerPoll::Close(word) => {
                         let builtin =
                             word & crate::sync::MUTEX != 0 || word & crate::channels::ENDPOINT != 0;
-                        if !builtin || word & crate::tasks::TASK_SET != 0 {
+                        if !builtin
+                            || word & crate::tasks::TASK_SET != 0
+                            || crate::tasks::ordered::engine::on(ctx)
+                        {
                             // Opaque adapters remain synchronous and cannot compact
                             // their unproved native caller or leak status Pending.
                             let status = unsafe {
@@ -571,7 +574,7 @@ unsafe fn invoke_cleanup(
     prepare: impl FnOnce(*mut TaskCtx, crate::continuation::binding::BoundSite) -> Option<usize>,
 ) -> Option<u8> {
     let site = unsafe { crate::continuation::binding::take_bound(ctx, kind) }?;
-    if !crate::tasks::free::enabled(ctx) {
+    if !crate::tasks::free::enabled(ctx) && !crate::tasks::ordered::engine::on(ctx) {
         unsafe { crate::continuation::binding::complete_bound(ctx, site) };
         return None;
     }

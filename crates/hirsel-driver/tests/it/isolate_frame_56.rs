@@ -191,7 +191,7 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 #[test]
 fn a_callback_local_finalizer_cannot_hide_behind_a_mechanical_isolate_environment() {
     hirsel_engine::with_compiler_stack(|| {
-        let program = super::runtime50_continuation::ready(
+        let mut program = super::runtime50_continuation::ready(
             r#"
 resource type Guard { n: u64 }
 drop(x) { failure.check(false, Bounds()) }
@@ -206,6 +206,18 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
 }
 "#,
         );
+        let proved = native::continuation::plans(&program);
+        native::continuation::validate(&program, &proved).unwrap();
+        assert!(
+            proved.plans.values().any(|p| p.isolate.is_some()),
+            "complete source finalizer proof was not admitted"
+        );
+        let finalizers: std::collections::BTreeSet<_> =
+            program.finalizers.values().copied().collect();
+        assert!(!finalizers.is_empty());
+        program
+            .units
+            .retain(|u| !finalizers.contains(&u.unit().header.instance));
         let plans = native::continuation::plans(&program);
         native::continuation::validate(&program, &plans).unwrap();
         let mut found = false;

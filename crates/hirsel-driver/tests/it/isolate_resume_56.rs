@@ -116,6 +116,54 @@ fn agrees(source: &str, output: &[u8]) {
         let validated = engine.import_native_input(input).unwrap();
         let options =
             Options::new(hirsel_lir::layout_types::TargetSpec::x86_64_unknown_linux_gnu());
+        let program = build(&validated, &options).unwrap();
+        let plans = continuation::plans(&program);
+        if let Err(error) = continuation::validate(&program, &plans) {
+            for unit in &program.units {
+                eprintln!(
+                    "ISOLATE PLAN {:?} {} {:?}",
+                    unit.unit().header.instance,
+                    unit.unit().header.definition,
+                    plans
+                        .get(unit.unit().header.instance)
+                        .map(|p| &p.representation)
+                );
+            }
+            panic!("{error}");
+        }
+        let mut admitted = 0;
+        for unit in &program.units {
+            if unit.unit().header.definition.is_core("task.isolate")
+                && unit.unit().tables.calls.iter().any(|c| {
+                    matches!(
+                        c.callee,
+                        hirsel_lir::ir::Callee::Bound { .. } | hirsel_lir::ir::Callee::Direct(_)
+                    )
+                })
+            {
+                let plan = plans.get(unit.unit().header.instance).unwrap();
+                if plan.isolate.is_none() {
+                    for body in &program.units {
+                        eprintln!(
+                            "ISOLATE REFUSAL {:?} {} {:?}",
+                            body.unit().header.instance,
+                            body.unit().header.definition,
+                            plans
+                                .get(body.unit().header.instance)
+                                .map(|p| &p.representation)
+                        );
+                    }
+                }
+                assert!(
+                    plan.isolate.is_some(),
+                    "source isolate cleanup stayed stackful: {:?}",
+                    plan.representation
+                );
+                admitted += 1;
+            }
+        }
+        assert!(admitted > 0);
+
         let matrix = vec![
             Configuration {
                 options: options.clone(),

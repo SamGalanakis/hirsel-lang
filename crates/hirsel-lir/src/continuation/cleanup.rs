@@ -2,7 +2,11 @@
 //! is separate from call states: there is no CallId for a release instruction.
 use super::*;
 
-pub(super) fn sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(BlockId, usize)> {
+pub(super) fn sites(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    environment: Option<LayoutId>,
+) -> Vec<(BlockId, usize)> {
     u.blocks
         .iter()
         .enumerate()
@@ -19,8 +23,9 @@ pub(super) fn sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(BlockId, us
                         layout,
                         live: MaskRef::All,
                         ..
-                    } if eligible(u, table, value, layout)
-                        && (has_close(table, layout, &mut BTreeSet::new())
+                    } if eligible(u, table, value, layout, environment)
+                        && (callable_root(u, table, layout, environment)
+                            || has_close(table, layout, &mut BTreeSet::new())
                             || has_finalizers(table, layout)) =>
                     {
                         Some((BlockId(b as u32), i))
@@ -37,6 +42,7 @@ pub(super) fn root_states(
     storage: &[LiveStorage],
     base: u64,
     first: u32,
+    environment: Option<LayoutId>,
 ) -> Result<Vec<CleanupResumeState>, String> {
     let live = crate::liveness::liveness(u);
     let mut out = Vec::new();
@@ -58,8 +64,9 @@ pub(super) fn root_states(
             else {
                 continue;
             };
-            if !eligible(u, table, value, layout)
-                || !(has_close(table, layout, &mut BTreeSet::new())
+            if !eligible(u, table, value, layout, environment)
+                || !(callable_root(u, table, layout, environment)
+                    || has_close(table, layout, &mut BTreeSet::new())
                     || has_finalizers(table, layout))
             {
                 continue;
@@ -175,16 +182,25 @@ pub(super) fn root_states(
 
 // Only ordinary owning representations. Donors, arenas, sealed owners and
 // metadata release protocols cannot inherit this instruction's binder.
-fn eligible(u: &LirUnit<Ready>, table: &LayoutTable, value: ValueId, layout: LayoutId) -> bool {
+fn eligible(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    value: ValueId,
+    layout: LayoutId,
+    environment: Option<LayoutId>,
+) -> bool {
     let ty = &u.types[u.values[value.index()].ty.index()];
-    table.layout(ty.layout).is_some_and(|l| {
-        matches!(
-            l.kind,
-            LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
-        )
-    }) || table.layout(layout).is_some_and(|l| {
-        matches!(l.kind, LayoutKind::Resource | LayoutKind::Handle) && l.size.storage().is_some()
-    })
+    callable_root(u, table, layout, environment)
+        || table.layout(ty.layout).is_some_and(|l| {
+            matches!(
+                l.kind,
+                LayoutKind::Shared { .. } | LayoutKind::Block { .. } | LayoutKind::Box { .. }
+            )
+        })
+        || table.layout(layout).is_some_and(|l| {
+            matches!(l.kind, LayoutKind::Resource | LayoutKind::Handle)
+                && l.size.storage().is_some()
+        })
 }
 
 /// A mechanical release without a reachable close cannot suspend. Opaque
@@ -252,4 +268,19 @@ pub(super) fn has_finalizers(table: &LayoutTable, root: LayoutId) -> bool {
         pending.extend(record.references());
     }
     false
+}
+
+// Only a specialized wrapper can supply the erased environment's independent
+// incoming-caller proof. The source admission is checked before using a state.
+fn callable_root(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    layout: LayoutId,
+    environment: Option<LayoutId>,
+) -> bool {
+    isolate::candidate(u)
+        && environment.is_some_and(|e| crate::validate::Layouts(table).destructible(e))
+        && table
+            .layout(layout)
+            .is_some_and(|l| matches!(l.kind, LayoutKind::Callable { .. }))
 }

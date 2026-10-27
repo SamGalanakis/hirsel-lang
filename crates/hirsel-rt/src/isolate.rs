@@ -279,6 +279,8 @@ pub unsafe extern "C" fn hirsel_rt_v2_isolate_begin(
     unsafe {
         let mark = (*ctx).failure.count();
         (*ctx).isolations.begin(mark);
+        #[cfg(feature = "diagnostic")]
+        crate::compact_trace::isolate_begin((*ctx).task_id);
         out.write(mark as u64);
         crate::tasks::yield_now(&mut *ctx);
     }

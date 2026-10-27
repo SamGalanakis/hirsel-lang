@@ -1,6 +1,5 @@
-//! Exact source coverage for cleanup that cannot invoke user code or close a
-//! handle. This deliberately refuses every uncertified finalizer; it is not
-//! a physical CleanupPlan and grants no compact admission.
+//! Exact Ready cleanup operands. Source coverage and retained cursor/frame
+//! custody are separate proofs; enumerating a destructor grants no admission.
 use super::*;
 use crate::stage::ValidatedUnit;
 
@@ -11,7 +10,7 @@ pub enum CleanupOwner {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SynchronousCleanup {
+pub struct SourceCleanup {
     pub at: InstructionPoint,
     pub anchor: CleanupAnchorId,
     pub failure: FailureId,
@@ -23,10 +22,11 @@ pub struct SynchronousCleanup {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct SynchronousCleanupPlan {
+pub struct SourceCleanupPlan {
     pub body: hirsel_syntax::ContentHash,
     pub digest: hirsel_syntax::ContentHash,
-    pub sites: Vec<SynchronousCleanup>,
+    pub sites: Vec<SourceCleanup>,
+    pub finalizers: Vec<InstructionPoint>,
 }
 
 fn original_closure_place(unit: &LirUnit<Ready>, address: AddressId, closure: SlotId) -> bool {
@@ -56,13 +56,28 @@ impl IsolateProtocol {
         &self,
         wrapper: &ValidatedUnit<Ready>,
         layouts: &LayoutTable,
-    ) -> Option<SynchronousCleanupPlan> {
+    ) -> Option<SourceCleanupPlan> {
+        let plan = self.source_cleanup(wrapper, layouts)?;
+        (plan.finalizers.is_empty()
+            && plan.sites.iter().all(|site| {
+                !crate::validate::Layouts(layouts)
+                    .destructible(site.environment.unwrap_or(site.layout))
+            }))
+        .then_some(plan)
+    }
+
+    pub(crate) fn source_cleanup(
+        &self,
+        wrapper: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+    ) -> Option<SourceCleanupPlan> {
         let u = wrapper.unit();
         if self.identity.wrapper != u.header.instance || self.identity.wrapper_digest != u.digest()
         {
             return None;
         }
         let mut sites = Vec::new();
+        let mut finalizers = Vec::new();
         for (block, row) in u.blocks.iter().enumerate() {
             for (instruction, inst) in row.instructions.get(&u.instructions)?.iter().enumerate() {
                 let (owner, layout, anchor, failure, known) = match *inst {
@@ -104,7 +119,13 @@ impl IsolateProtocol {
                         failure,
                         original_closure_value(u, value, self.identity.closure),
                     ),
-                    Inst::FinalizeBegin { .. } => return None,
+                    Inst::FinalizeBegin { .. } => {
+                        finalizers.push(InstructionPoint {
+                            block: BlockId(block as u32),
+                            instruction: instruction as u32,
+                        });
+                        continue;
+                    }
                     _ => continue,
                 };
                 let environment =
@@ -116,10 +137,7 @@ impl IsolateProtocol {
                     } else {
                         None
                     };
-                if crate::validate::Layouts(layouts).destructible(environment.unwrap_or(layout)) {
-                    return None;
-                }
-                sites.push(SynchronousCleanup {
+                sites.push(SourceCleanup {
                     at: InstructionPoint {
                         block: BlockId(block as u32),
                         instruction: instruction as u32,
@@ -132,10 +150,11 @@ impl IsolateProtocol {
                 });
             }
         }
-        Some(SynchronousCleanupPlan {
+        Some(SourceCleanupPlan {
             body: u.header.instance,
             digest: u.digest(),
             sites,
+            finalizers,
         })
     }
 
@@ -148,7 +167,23 @@ impl IsolateProtocol {
         wrapper: &ValidatedUnit<Ready>,
         callback: &ValidatedUnit<Ready>,
         layouts: &LayoutTable,
-        plan: &SynchronousCleanupPlan,
+        plan: &SourceCleanupPlan,
+    ) -> bool {
+        plan.finalizers.is_empty()
+            && plan.sites.iter().all(|site| {
+                !crate::validate::Layouts(layouts)
+                    .destructible(site.environment.unwrap_or(site.layout))
+            })
+            && self.check_source_cleanup(caller, wrapper, callback, layouts, plan)
+    }
+
+    pub(crate) fn check_source_cleanup(
+        &self,
+        caller: &ValidatedUnit<Ready>,
+        wrapper: &ValidatedUnit<Ready>,
+        callback: &ValidatedUnit<Ready>,
+        layouts: &LayoutTable,
+        plan: &SourceCleanupPlan,
     ) -> bool {
         if self.validate(caller, wrapper, callback, layouts).is_err() {
             return false;
@@ -254,7 +289,18 @@ impl IsolateProtocol {
             } else if site.environment.is_some() {
                 return false;
             }
-            if crate::validate::Layouts(layouts).destructible(site.environment.unwrap_or(layout)) {
+        }
+        let mut finalizers = BTreeSet::new();
+        for point in &plan.finalizers {
+            if !finalizers.insert((point.block, point.instruction))
+                || !matches!(
+                    u.blocks
+                        .get(point.block.index())
+                        .and_then(|b| b.instructions.get(&u.instructions))
+                        .and_then(|i| i.get(point.instruction as usize)),
+                    Some(Inst::FinalizeBegin { .. })
+                )
+            {
                 return false;
             }
         }
@@ -264,7 +310,11 @@ impl IsolateProtocol {
             };
             for (instruction, inst) in instructions.iter().enumerate() {
                 match inst {
-                    Inst::FinalizeBegin { .. } => return false,
+                    Inst::FinalizeBegin { .. }
+                        if !finalizers.contains(&(BlockId(block as u32), instruction as u32)) =>
+                    {
+                        return false;
+                    }
                     Inst::Drop { .. } | Inst::Release { .. } | Inst::Reset { .. }
                         if !seen.contains(&(BlockId(block as u32), instruction as u32)) =>
                     {
@@ -276,4 +326,135 @@ impl IsolateProtocol {
         }
         true
     }
+}
+
+/// C already proves the finalization lifecycle. Recheck that its actual call
+/// is the descriptor's source body, borrowing exactly the started owner.
+pub(crate) fn explicit_finalizer(
+    unit: &LirUnit<Ready>,
+    units: &[&ValidatedUnit<Ready>],
+    table: &LayoutTable,
+    point: InstructionPoint,
+) -> Result<hirsel_syntax::ContentHash, String> {
+    let block = unit
+        .blocks
+        .get(point.block.index())
+        .ok_or("finalizer block")?;
+    let Some(Inst::FinalizeBegin { address, .. }) = block
+        .instructions
+        .get(&unit.instructions)
+        .and_then(|code| code.get(point.instruction as usize))
+    else {
+        return Err("finalizer begin".into());
+    };
+    let Some(Terminator::Call { call, .. }) = unit.terminators.get(point.block.index()) else {
+        return Err("finalizer call".into());
+    };
+    let site = &unit.tables.calls[call.index()];
+    let Callee::Direct(symbol) = site.callee else {
+        return Err("indirect finalizer".into());
+    };
+    let target = &unit.tables.symbols[symbol.index()];
+    let body = target.instance.ok_or("finalizer body identity")?;
+    let layout = unit.types[unit.addresses[address.index()].ty.index()].layout;
+    let source = FinalizerSource::derive(units, table, layout, body)?;
+    if site.abi != source.abi
+        || target.definition
+            != table
+                .layout(layout)
+                .unwrap()
+                .finalizer
+                .as_ref()
+                .unwrap()
+                .definition
+    {
+        return Err("finalizer call ABI".into());
+    }
+    let args = site
+        .arguments
+        .get(&unit.pools.call_arguments)
+        .ok_or("finalizer arguments")?;
+    let [argument] = args else {
+        return Err("finalizer arguments".into());
+    };
+    let ArgumentValue::Value(value) = argument.value else {
+        return Err("finalizer self operand".into());
+    };
+    let Holding::Borrowed(loan) = unit.values[value.index()].holding else {
+        return Err("finalizer self loan".into());
+    };
+    if argument.parameter != 0
+        || argument.passing != hirsel_core_contract::Passing::Borrow
+        || unit
+            .tables
+            .loans
+            .get(loan.index())
+            .is_none_or(|l| l.mutable || l.address != *address)
+    {
+        return Err("finalizer borrowed owner".into());
+    }
+    Ok(body)
+}
+
+/// An erased child cannot borrow its enclosing source proof. Every branch
+/// of a typed cleanup graph must remain visible, including inactive variants.
+pub(crate) fn known_cleanup(table: &LayoutTable, root: LayoutId) -> bool {
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        let Some(record) = table.layout(id) else {
+            return false;
+        };
+        if matches!(
+            record.kind,
+            LayoutKind::Callable { environment: None }
+                | LayoutKind::Iterator { .. }
+                | LayoutKind::Opaque { .. }
+        ) {
+            return false;
+        }
+        pending.extend(record.references());
+    }
+    true
+}
+
+/// A callback may own a temporary closure on a rejected nested invocation.
+/// Prove its actual SSA source before treating its erased callable release as
+/// mechanical. Any destructor or opaque child still needs retained custody.
+pub(super) fn mechanical_callable_release(
+    unit: &LirUnit<Ready>,
+    units: &std::collections::BTreeMap<hirsel_syntax::ContentHash, &LirUnit<Ready>>,
+    table: &LayoutTable,
+    inst: &Inst,
+) -> bool {
+    let Inst::Release {
+        value,
+        layout,
+        live: MaskRef::All,
+        ..
+    } = *inst
+    else {
+        return false;
+    };
+    if !table
+        .layout(layout)
+        .is_some_and(|r| matches!(r.kind, LayoutKind::Callable { .. }))
+    {
+        return false;
+    }
+    units.values().any(|body| {
+        let Some(source) = target(unit, value, body, None, &mut BTreeSet::new()) else {
+            return false;
+        };
+        source
+            .symbol
+            .instance
+            .is_some_and(|id| units.contains_key(&id))
+            && source.environment.is_none_or(|root| {
+                known_cleanup(table, root) && !crate::validate::Layouts(table).destructible(root)
+            })
+    })
 }

@@ -16,11 +16,15 @@ pub use admission::{CallbackBody, IsolateEvidence};
 pub(crate) use admission::{candidate, evidence, intrinsic};
 mod begin;
 mod cleanup;
+pub(crate) use cleanup::{explicit_finalizer, known_cleanup};
 mod finalizer;
 mod finalizer_coverage;
 mod finalizer_frame;
 mod frame;
-pub use cleanup::{CleanupOwner, SynchronousCleanup, SynchronousCleanupPlan};
+pub use cleanup::{CleanupOwner, SourceCleanup, SourceCleanupPlan};
+pub use cleanup::{
+    SourceCleanup as SynchronousCleanup, SourceCleanupPlan as SynchronousCleanupPlan,
+};
 pub use finalizer::FinalizerSource;
 pub(crate) use finalizer::sources as finalizer_sources;
 pub use finalizer_coverage::FinalizerCoverage;

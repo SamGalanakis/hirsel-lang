@@ -276,3 +276,4 @@ mod isolate_finalizer_wire_56;
 mod depth_leaf_60;
 mod ownership_arena_named_62;
 mod depth_scope_63;
+mod isolate_admission_69;

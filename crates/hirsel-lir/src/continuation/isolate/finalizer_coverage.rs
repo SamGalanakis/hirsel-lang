@@ -1,5 +1,5 @@
-//! Inactive source coverage for every finalizer a typed cleanup root can
-//! reach. Runtime cursor custody and close protocols are deliberately separate.
+//! Source coverage for every finalizer reachable from a typed cleanup root.
+//! Cursor custody and pending close protocols are checked separately.
 use super::{FinalizerFrame, FinalizerSource};
 use crate::continuation::{ContinuationPlans, PlanInputs};
 use crate::layout_types::{LayoutId, LayoutKind, LayoutRecord, LayoutTable};
@@ -13,6 +13,7 @@ pub struct FinalizerCoverage {
     /// Exact descriptors include all variant/drop/obtain edges and their order.
     pub layouts: Vec<(LayoutId, LayoutRecord)>,
     pub finalizers: Vec<FinalizerFrame>,
+    pub synchronous: Vec<FinalizerSource>,
     pub end: u64,
 }
 
@@ -49,6 +50,7 @@ impl FinalizerCoverage {
         }
         let mut end = after;
         let mut finalizers = Vec::new();
+        let mut synchronous = Vec::new();
         for (&layout, record) in &found {
             if record.finalizer.is_none() {
                 continue;
@@ -57,6 +59,10 @@ impl FinalizerCoverage {
                 .get(&layout)
                 .ok_or("missing cleanup finalizer source")?;
             let source = FinalizerSource::derive(units, inputs.table, layout, body)?;
+            if super::super::validate::synchronous_source(units, inputs.table, body) {
+                synchronous.push(source);
+                continue;
+            }
             let frame = FinalizerFrame::propose_extent(&source, units, inputs, plans, end)?;
             end = frame.end;
             finalizers.push(frame);
@@ -65,6 +71,7 @@ impl FinalizerCoverage {
             root,
             layouts: found.into_iter().collect(),
             finalizers,
+            synchronous,
             end,
         };
         proposal.check_extents(units, inputs.table, plans, after)?;
@@ -72,7 +79,8 @@ impl FinalizerCoverage {
     }
 
     /// Traverse actual descriptor references, never a submitted edge list, and
-    /// require exactly one checked source frame per reachable finalizer layout.
+    /// require one checked source proof for each reachable finalizer layout,
+    /// with a retained frame whenever that finalizer can suspend.
     pub fn check(
         &self,
         units: &[&ValidatedUnit<Ready>],
@@ -91,7 +99,7 @@ impl FinalizerCoverage {
         plans: &ContinuationPlans,
         after: u64,
     ) -> Result<(), String> {
-        if self.finalizers.len() > 64 {
+        if self.finalizers.len() + self.synchronous.len() > 64 {
             return Err("cleanup finalizer resolver capacity".into());
         }
         let mut reached = BTreeSet::new();
@@ -119,16 +127,35 @@ impl FinalizerCoverage {
             }
             pending.extend(actual.references());
         }
+        let mut covered: Vec<_> = self
+            .finalizers
+            .iter()
+            .map(|f| f.source.layout)
+            .chain(self.synchronous.iter().map(|f| f.layout))
+            .collect();
+        covered.sort();
         if self.layouts.iter().map(|(id, _)| *id).collect::<Vec<_>>()
             != reached.into_iter().collect::<Vec<_>>()
-            || self
-                .finalizers
-                .iter()
-                .map(|f| f.source.layout)
-                .collect::<Vec<_>>()
-                != expected.into_iter().collect::<Vec<_>>()
+            || covered != expected.into_iter().collect::<Vec<_>>()
         {
             return Err("cleanup finalizer graph coverage".into());
+        }
+        for source in &self.synchronous {
+            source.check(units, table)?;
+            if !super::super::validate::synchronous_source(units, table, source.body) {
+                return Err("unproved synchronous finalizer graph".into());
+            }
+        }
+        if !self
+            .synchronous
+            .windows(2)
+            .all(|p| p[0].layout < p[1].layout)
+            || !self
+                .finalizers
+                .windows(2)
+                .all(|p| p[0].source.layout < p[1].source.layout)
+        {
+            return Err("noncanonical cleanup finalizer sources".into());
         }
         let mut end = after;
         for finalizer in &self.finalizers {

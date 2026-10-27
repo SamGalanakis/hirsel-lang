@@ -86,6 +86,8 @@ impl Begin {
         let _role = unsafe { crate::tasks::role::Guard::new(ctx) };
         let mark = unsafe { (*ctx).failure.count() };
         unsafe { (*ctx).isolations.begin(mark) };
+        #[cfg(feature = "diagnostic")]
+        crate::compact_trace::isolate_begin(unsafe { (*ctx).task_id });
         let scope = unsafe { (*ctx).isolations.active() };
         Self {
             generation: scope.generation,

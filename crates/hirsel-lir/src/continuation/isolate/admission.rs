@@ -14,7 +14,7 @@ pub struct CallbackBody {
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct IsolateEvidence {
     pub protocol: IsolateProtocol,
-    pub cleanup: SynchronousCleanupPlan,
+    pub cleanup: SourceCleanupPlan,
     /// Complete reachable source bodies, including failure-only cleanup.
     pub callback_bodies: Vec<CallbackBody>,
 }
@@ -89,7 +89,7 @@ pub(crate) fn evidence(
             .ok_or("unproved isolate source protocol")?;
             protocol.checked_callers(units, inputs)?;
             let cleanup = protocol
-                .synchronous_cleanup(wrapper, inputs.table)
+                .source_cleanup(wrapper, inputs.table)
                 .ok_or("isolate cleanup needs a certified entered protocol")?;
             let callback_bodies = callback_graph(units, inputs.table, target)?;
             let evidence = IsolateEvidence {
@@ -110,10 +110,18 @@ impl IsolateEvidence {
     pub(crate) fn direct_callback(
         &self,
         units: &std::collections::BTreeMap<ContentHash, &LirUnit<Ready>>,
+        table: &LayoutTable,
     ) -> bool {
         self.callback_bodies.iter().all(|body| {
             units.get(&body.body).is_some_and(|u| {
-                u.tables
+                !u.instructions.iter().any(|inst| match *inst {
+                    Inst::Release { layout, .. } | Inst::Reset { layout, .. } => {
+                        crate::validate::Layouts(table).destructible(layout)
+                    }
+                    Inst::Drop { .. } => true,
+                    _ => false,
+                }) && u
+                    .tables
                     .calls
                     .iter()
                     .all(|call| !matches!(call.callee, Callee::Operation(_)))
@@ -130,6 +138,9 @@ impl IsolateEvidence {
         table: &LayoutTable,
     ) -> Result<(), String> {
         let wrapper = self.protocol.checked_sources(units, table)?;
+        for &point in &self.cleanup.finalizers {
+            explicit_finalizer(wrapper.unit(), units, table, point)?;
+        }
         let callback = units
             .iter()
             .copied()
@@ -155,11 +166,33 @@ impl IsolateEvidence {
             if row.digest != u.digest() {
                 return Err("stale callback body".into());
             }
-            for inst in &u.instructions {
-                let layout = match *inst {
-                    Inst::FinalizeBegin { .. } => {
-                        return Err("uncertified callback finalizer".into());
+            for (b, block) in u.blocks.iter().enumerate() {
+                for (i, inst) in block
+                    .instructions
+                    .get(&u.instructions)
+                    .ok_or("callback instruction range")?
+                    .iter()
+                    .enumerate()
+                {
+                    if matches!(inst, Inst::FinalizeBegin { .. }) {
+                        explicit_finalizer(
+                            u,
+                            units,
+                            table,
+                            InstructionPoint {
+                                block: BlockId(b as u32),
+                                instruction: i as u32,
+                            },
+                        )?;
                     }
+                }
+            }
+            for inst in &u.instructions {
+                if super::cleanup::mechanical_callable_release(u, &index, table, inst) {
+                    continue;
+                }
+                let layout = match *inst {
+                    Inst::FinalizeBegin { .. } => None,
                     Inst::Drop { address, .. } => {
                         Some(u.types[u.addresses[address.index()].ty.index()].layout)
                     }
@@ -167,16 +200,29 @@ impl IsolateEvidence {
                     _ => None,
                 };
                 if let Some(layout) = layout {
-                    if table
-                        .layout(layout)
-                        .is_none_or(|l| matches!(l.kind, LayoutKind::Callable { .. }))
-                        || crate::validate::Layouts(table).destructible(layout)
+                    if !candidate(u) && !known_cleanup(table, layout) {
+                        return Err("erased callback destruction graph".into());
+                    }
+                    if table.layout(layout).is_none_or(|l| {
+                        matches!(l.kind, LayoutKind::Callable { .. }) && !candidate(u)
+                    }) || (crate::validate::Layouts(table).destructible(layout)
+                        && !matches!(
+                            inst,
+                            Inst::Release {
+                                live: MaskRef::All,
+                                ..
+                            }
+                        ))
                     {
                         return Err("unproved callback instruction destruction".into());
                     }
                 }
             }
-            for call in &u.tables.calls {
+            for term in &u.terminators {
+                let Terminator::Call { call, .. } = *term else {
+                    continue;
+                };
+                let call = &u.tables.calls[call.index()];
                 match call.callee {
                     Callee::Operation(_) => {}
                     Callee::Indirect(_) => return Err("unknown callback callee".into()),
@@ -230,7 +276,7 @@ impl IsolateEvidence {
                 .validate(caller, wrapper, callback, table)
                 .is_ok()
             {
-                return if self.protocol.check_synchronous_cleanup(
+                return if self.protocol.check_source_cleanup(
                     caller,
                     wrapper,
                     callback,
@@ -239,7 +285,7 @@ impl IsolateEvidence {
                 ) {
                     Ok(())
                 } else {
-                    Err("isolate mechanical cleanup coverage".into())
+                    Err("isolate source cleanup coverage".into())
                 };
             }
         }
@@ -266,10 +312,11 @@ fn callback_graph(
         }
         let u = index.get(&body).ok_or("unavailable callback source")?;
         for inst in &u.instructions {
+            if super::cleanup::mechanical_callable_release(u, &index, table, inst) {
+                continue;
+            }
             let layout = match *inst {
-                Inst::FinalizeBegin { .. } => {
-                    return Err("callback finalizer needs entered cleanup".into());
-                }
+                Inst::FinalizeBegin { .. } => None,
                 Inst::Release { layout, .. } | Inst::Reset { layout, .. } => Some(layout),
                 Inst::Drop { address, .. } => {
                     Some(u.types[u.addresses[address.index()].ty.index()].layout)
@@ -277,10 +324,23 @@ fn callback_graph(
                 _ => None,
             };
             if let Some(layout) = layout {
+                if !candidate(u) && !known_cleanup(table, layout) {
+                    return Err(format!(
+                        "unproved callback cleanup descriptor {} {layout:?}",
+                        u.header.definition
+                    ));
+                }
                 if table
                     .layout(layout)
-                    .is_none_or(|l| matches!(l.kind, LayoutKind::Callable { .. }))
-                    || crate::validate::Layouts(table).destructible(layout)
+                    .is_none_or(|l| matches!(l.kind, LayoutKind::Callable { .. }) && !candidate(u))
+                    || (crate::validate::Layouts(table).destructible(layout)
+                        && !matches!(
+                            inst,
+                            Inst::Release {
+                                live: MaskRef::All,
+                                ..
+                            }
+                        ))
                 {
                     return Err("callback cleanup needs physical custody proof".into());
                 }
@@ -293,7 +353,11 @@ fn callback_graph(
                 digest: u.digest(),
             },
         );
-        for call in &u.tables.calls {
+        for term in &u.terminators {
+            let Terminator::Call { call, .. } = *term else {
+                continue;
+            };
+            let call = &u.tables.calls[call.index()];
             if matches!(call.callee, Callee::Operation(_)) {
                 continue;
             }
@@ -305,4 +369,51 @@ fn callback_graph(
         }
     }
     Ok(done.into_values().collect())
+}
+
+impl IsolateEvidence {
+    pub(crate) fn check_callback_cleanup(
+        &self,
+        units: &std::collections::BTreeMap<ContentHash, &LirUnit<Ready>>,
+        table: &LayoutTable,
+        plans: &std::collections::BTreeMap<ContentHash, super::super::ContinuationPlan>,
+    ) -> Result<(), String> {
+        for body in &self.callback_bodies {
+            let u = units
+                .get(&body.body)
+                .ok_or("missing callback cleanup body")?;
+            if candidate(u) {
+                if !plans.get(&body.body).is_some_and(|p| {
+                    p.representation == super::super::Representation::Resumable
+                        && p.isolate.is_some()
+                }) {
+                    return Err("unproved nested isolate cleanup".into());
+                }
+                continue;
+            }
+            for (b, block) in u.blocks.iter().enumerate() {
+                for (i, inst) in block
+                    .instructions
+                    .get(&u.instructions)
+                    .ok_or("callback instruction range")?
+                    .iter()
+                    .enumerate()
+                {
+                    if let Inst::Release { layout, .. } = *inst
+                        && !super::cleanup::mechanical_callable_release(u, units, table, inst)
+                        && crate::validate::Layouts(table).destructible(layout)
+                        && !plans.get(&body.body).is_some_and(|p| {
+                            p.representation == super::super::Representation::Resumable
+                                && p.cleanups.iter().any(|c| {
+                                    c.block == BlockId(b as u32) && c.instruction == i as u32
+                                })
+                        })
+                    {
+                        return Err("callback destruction lacks retained cursor custody".into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }

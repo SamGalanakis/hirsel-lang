@@ -983,7 +983,9 @@ fn validate_plans(
     let mut suspends = BTreeSet::new();
     let none = BTreeSet::new();
     for (id, u) in &index {
-        if !root_instruction_sites(u, inputs.table).is_empty() {
+        if !root_instruction_sites(u, inputs.table, isolate_environment(u, inputs.environments))
+            .is_empty()
+        {
             suspends.insert(*id);
         }
         for call in &u.tables.calls {
@@ -1073,7 +1075,8 @@ fn validate_plans(
             .map(|c| call_effect(u, c, &index, &suspends, inputs.classify))
             .collect();
         let sites = super::sites(u, inputs.table, &effects, &plans.plans);
-        let cleanup_sites = root_instruction_sites(u, inputs.table);
+        let cleanup_sites =
+            root_instruction_sites(u, inputs.table, isolate_environment(u, inputs.environments));
         match &plan.representation {
             Representation::Resumable => {
                 if super::isolate::candidate(u) {
@@ -1086,6 +1089,9 @@ fn validate_plans(
                     }
                     evidence
                         .check(units, inputs.table)
+                        .map_err(|_| ContinuationError::Representation(*id))?;
+                    evidence
+                        .check_callback_cleanup(&index, inputs.table, &plans.plans)
                         .map_err(|_| ContinuationError::Representation(*id))?;
                 } else if plan.isolate.is_some() {
                     return Err(ContinuationError::Representation(*id));
@@ -1495,7 +1501,7 @@ pub fn validate_runtime_operations(
     if plans
         .plans
         .values()
-        .any(|p| p.cleanups.iter().any(|s| s.finalizers.is_some()))
+        .any(|p| p.isolate.is_some() || p.cleanups.iter().any(|s| s.finalizers.is_some()))
     {
         // Resolver rows call source dispatchers directly. Recheck the entire
         // reachable continuation graph, including ordinary boundaries inside
@@ -1528,6 +1534,23 @@ pub fn validate_runtime_operations(
         };
         validate_plans(units, &inputs, plans, false)?;
     }
+    let mut environments = BTreeMap::new();
+    for unit in units {
+        for closure in &unit.unit().tables.closures {
+            if let Some(code) = closure.code
+                && let Some(id) = unit.unit().tables.symbols[code.symbol.index()].instance
+            {
+                environments
+                    .entry(id)
+                    .and_modify(|old| {
+                        if *old != Some(closure.environment) {
+                            *old = None;
+                        }
+                    })
+                    .or_insert(Some(closure.environment));
+            }
+        }
+    }
     let index: BTreeMap<_, _> = units
         .iter()
         .map(|u| (u.unit().header.instance, u.unit()))
@@ -1547,10 +1570,13 @@ pub fn validate_runtime_operations(
             evidence
                 .check(units, table)
                 .map_err(|_| ContinuationError::Representation(*id))?;
+            evidence
+                .check_callback_cleanup(&index, table, &plans.plans)
+                .map_err(|_| ContinuationError::Representation(*id))?;
         }
         let root_sites = index
             .get(id)
-            .map(|u| root_instruction_sites(u, table))
+            .map(|u| root_instruction_sites(u, table, isolate_environment(u, &environments)))
             .unwrap_or_default();
         if !plan.states.iter().any(|s| s.runtime.is_some())
             && plan.isolate.is_none()
@@ -1604,10 +1630,15 @@ pub fn validate_runtime_operations(
         }
         let base = end.next_multiple_of(8);
         if let Some(evidence) = &plan.isolate {
-            if plan.representation != Representation::Resumable
-                || !plan.cleanups.is_empty()
-                || plan.captures.is_some()
-            {
+            for site in &evidence.cleanup.sites {
+                if crate::validate::Layouts(table)
+                    .destructible(site.environment.unwrap_or(site.layout))
+                    && !root_sites.contains(&(site.at.block, site.at.instruction as usize))
+                {
+                    return Err(ContinuationError::Representation(*id));
+                }
+            }
+            if plan.representation != Representation::Resumable || plan.captures.is_some() {
                 return Err(ContinuationError::Representation(*id));
             }
             let callback = evidence
@@ -1622,7 +1653,7 @@ pub fn validate_runtime_operations(
             let nested = match plans.get(callback) {
                 Some(p) if p.representation == Representation::Resumable => true,
                 Some(_) => return Err(ContinuationError::Representation(callback)),
-                None if evidence.direct_callback(&index) => false,
+                None if evidence.direct_callback(&index, table) => false,
                 None => return Err(ContinuationError::Representation(callback)),
             };
             // Every boundary of this reviewed wrapper is either its original
@@ -1630,10 +1661,31 @@ pub fn validate_runtime_operations(
             let mut actual = Vec::new();
             for (b, term) in u.terminators.iter().enumerate() {
                 if let Terminator::Call { call, .. } = *term {
+                    let finalizer = evidence
+                        .cleanup
+                        .finalizers
+                        .iter()
+                        .any(|p| p.block.index() == b);
+                    let finalizer_nested = finalizer
+                        && callee_symbol(u, &u.tables.calls[call.index()])
+                            .and_then(|s| s.instance)
+                            .is_some_and(|id| {
+                                plans
+                                    .get(id)
+                                    .is_some_and(|p| p.representation == Representation::Resumable)
+                            });
                     if call == evidence.protocol.begin.call
                         || (nested && call == evidence.protocol.callback.call)
+                        || finalizer_nested
                     {
                         actual.push((BlockId(b as u32), call));
+                    } else if finalizer {
+                        let body = callee_symbol(u, &u.tables.calls[call.index()])
+                            .and_then(|s| s.instance)
+                            .ok_or(ContinuationError::Body(*id))?;
+                        if !synchronous_source(units, table, body) {
+                            return Err(ContinuationError::Representation(*id));
+                        }
                     } else if call != evidence.protocol.callback.call {
                         let Callee::Operation(op) = u.tables.calls[call.index()].callee else {
                             return Err(ContinuationError::Representation(*id));
@@ -1653,14 +1705,26 @@ pub fn validate_runtime_operations(
                 .map(|s| (s.boundary.block, s.boundary.call))
                 .collect::<Vec<_>>()
                 != actual
-                || plan.cost.frame_bytes != plan.states.iter().map(|s| s.bytes).max().unwrap_or(0)
-                || plan.cost.boundaries as usize != actual.len()
+                || plan.cost.frame_bytes
+                    != plan
+                        .states
+                        .iter()
+                        .map(|s| s.bytes)
+                        .chain(plan.cleanups.iter().map(|s| s.bytes))
+                        .max()
+                        .unwrap_or(0)
+                || plan.cost.boundaries as usize != actual.len() + root_sites.len()
             {
                 return Err(ContinuationError::States(*id));
             }
             let expected: BTreeSet<_> = actual
                 .iter()
                 .flat_map(|(b, _)| storage(u, *b).0)
+                .chain(
+                    root_sites
+                        .iter()
+                        .flat_map(|(b, i)| storage_before_instruction(u, *b, *i).0),
+                )
                 .filter(|s| !matches!(u.slots[s.index()].kind, SlotKind::Parameter(_)))
                 .collect();
             if plan.storage.iter().map(|s| s.slot).collect::<Vec<_>>()
@@ -1702,6 +1766,22 @@ pub fn validate_runtime_operations(
             let site = &u.tables.calls[call.index()];
             let (operation, nested) = match site.callee {
                 Callee::Operation(op) => (u.tables.operations[op.index()].definition.clone(), None),
+                Callee::Direct(_)
+                    if plan.isolate.as_ref().is_some_and(|e| {
+                        e.cleanup
+                            .finalizers
+                            .iter()
+                            .any(|p| p.block == state.boundary.block)
+                    }) =>
+                {
+                    let symbol = callee_symbol(u, site).ok_or(ContinuationError::Body(*id))?;
+                    let body = symbol.instance.ok_or(ContinuationError::Body(*id))?;
+                    let callee = plans
+                        .get(body)
+                        .filter(|p| p.representation == Representation::Resumable)
+                        .ok_or(ContinuationError::Representation(body))?;
+                    (symbol.definition, Some((body, callee.cost.frame_bytes)))
+                }
                 Callee::Bound { .. }
                     if plan
                         .isolate
@@ -1756,7 +1836,11 @@ pub fn validate_runtime_operations(
 
 /// Identify releases from Ready instruction operands, independent of producer
 /// flags and metadata. A call coordinate is never accepted here.
-fn root_instruction_sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(BlockId, usize)> {
+fn root_instruction_sites(
+    u: &LirUnit<Ready>,
+    table: &LayoutTable,
+    environment: Option<LayoutId>,
+) -> Vec<(BlockId, usize)> {
     let mut sites = Vec::new();
     for (b, block) in u.blocks.iter().enumerate() {
         for (i, inst) in block
@@ -1782,12 +1866,23 @@ fn root_instruction_sites(u: &LirUnit<Ready>, table: &LayoutTable) -> Vec<(Block
                                 | LayoutKind::Box { .. }
                         )
                     })
+                    || (super::isolate::candidate(u)
+                        && environment
+                            .is_some_and(|e| crate::validate::Layouts(table).destructible(e))
+                        && table
+                            .layout(*layout)
+                            .is_some_and(|r| matches!(r.kind, LayoutKind::Callable { .. })))
                     || table.layout(*layout).is_some_and(|r| {
                         matches!(r.kind, LayoutKind::Resource | LayoutKind::Handle)
                             && r.size.storage().is_some()
                     }))
             {
-                if !instruction_reaches_close(table, *layout)
+                if !(super::isolate::candidate(u)
+                    && environment.is_some_and(|e| crate::validate::Layouts(table).destructible(e))
+                    && table
+                        .layout(*layout)
+                        .is_some_and(|r| matches!(r.kind, LayoutKind::Callable { .. })))
+                    && !instruction_reaches_close(table, *layout)
                     && !instruction_reaches_finalizer(table, *layout)
                 {
                     continue;
@@ -1931,9 +2026,20 @@ fn check_cleanup_instruction(
         end = retained.offset.checked_add(size).ok_or(bad.clone())?;
     }
     let root_end = end.next_multiple_of(8);
+    let root = plan
+        .isolate
+        .as_ref()
+        .and_then(|e| {
+            e.cleanup
+                .sites
+                .iter()
+                .find(|site| site.at.block == block && site.at.instruction == instruction as u32)
+                .and_then(|site| site.environment)
+        })
+        .unwrap_or(layout);
     let expected_end = match &state.finalizers {
         Some(coverage) => {
-            if coverage.root != layout {
+            if coverage.root != root {
                 return Err(ContinuationError::Frame(id));
             }
             coverage
@@ -1941,7 +2047,7 @@ fn check_cleanup_instruction(
                 .map_err(|_| ContinuationError::Frame(id))?;
             coverage.end
         }
-        None if instruction_reaches_finalizer(table, layout) => {
+        None if plan.isolate.is_some() || instruction_reaches_finalizer(table, root) => {
             return Err(ContinuationError::Frame(id));
         }
         None => root_end,
@@ -2115,7 +2221,8 @@ pub(super) fn isolate_frame(
     }
     if plan.representation != Representation::Resumable
         || !plan.cleanups.is_empty()
-        || !root_instruction_sites(u, inputs.table).is_empty()
+        || !root_instruction_sites(u, inputs.table, isolate_environment(u, inputs.environments))
+            .is_empty()
     {
         return Err(ContinuationError::Representation(id));
     }
@@ -2315,4 +2422,74 @@ fn instruction_reaches_finalizer(table: &LayoutTable, root: LayoutId) -> bool {
         pending.extend(record.references());
     }
     false
+}
+
+/// A synchronous fallback is proved from complete source, not absence of a
+/// continuation row. Recursion, indirect code, leaving operations and entered
+/// cleanup all refuse this proof.
+pub(super) fn synchronous_source(
+    units: &[&ValidatedUnit<Ready>],
+    table: &LayoutTable,
+    body: ContentHash,
+) -> bool {
+    fn walk(
+        units: &[&ValidatedUnit<Ready>],
+        table: &LayoutTable,
+        body: ContentHash,
+        active: &mut BTreeSet<ContentHash>,
+        done: &mut BTreeSet<ContentHash>,
+    ) -> bool {
+        if done.contains(&body) {
+            return true;
+        }
+        if !active.insert(body) {
+            return false;
+        }
+        let Some(unit) = units.iter().find(|u| u.unit().header.instance == body) else {
+            return false;
+        };
+        let u = unit.unit();
+        for inst in &u.instructions {
+            let layout = match *inst {
+                Inst::Drop { address, .. } => {
+                    Some(u.types[u.addresses[address.index()].ty.index()].layout)
+                }
+                Inst::Release { layout, .. } | Inst::Reset { layout, .. } => Some(layout),
+                _ => None,
+            };
+            if layout.is_some_and(|l| crate::validate::Layouts(table).destructible(l)) {
+                return false;
+            }
+        }
+        for call in &u.tables.calls {
+            match call.callee {
+                Callee::Operation(op) => {
+                    if native_class(&u.tables.operations[op.index()].definition)
+                        != Some(CalleeClass::Local)
+                    {
+                        return false;
+                    }
+                }
+                Callee::Indirect(_) | Callee::Bound { .. } => return false,
+                Callee::Direct(symbol) => {
+                    let Some(next) = u.tables.symbols[symbol.index()].instance else {
+                        return false;
+                    };
+                    if !walk(units, table, next, active, done) {
+                        return false;
+                    }
+                }
+            }
+        }
+        active.remove(&body);
+        done.insert(body);
+        true
+    }
+    walk(
+        units,
+        table,
+        body,
+        &mut BTreeSet::new(),
+        &mut BTreeSet::new(),
+    )
 }

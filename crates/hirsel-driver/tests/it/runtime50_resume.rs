@@ -536,7 +536,7 @@ pub(crate) fn exact_compact_custody(trace: &[Line], label: &str) -> usize {
                 assert_ne!(*worker, from, "{label}: task {task} did not migrate");
                 activations += 1;
             }
-            "hold" | "resume" | "point" | "runtime" | "finalizer" => {}
+            "hold" | "resume" | "point" | "runtime" | "finalizer" | "begin" => {}
             other => panic!("{label}: {other}"),
         }
     }

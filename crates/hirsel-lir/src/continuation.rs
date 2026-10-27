@@ -549,6 +549,7 @@ fn suspending(
     units: &BTreeMap<ContentHash, &LirUnit<Ready>>,
     table: &LayoutTable,
     classify: &dyn Fn(&DefPath) -> Option<CalleeClass>,
+    environments: &BTreeMap<ContentHash, Option<LayoutId>>,
 ) -> BTreeSet<ContentHash> {
     let mut out = BTreeSet::new();
     let mut changed = true;
@@ -558,7 +559,8 @@ fn suspending(
             if out.contains(id) {
                 continue;
             }
-            let suspends = !cleanup::sites(u, table).is_empty()
+            let suspends = !cleanup::sites(u, table, isolate_environment(u, environments))
+                .is_empty()
                 || u.tables.calls.iter().any(|call| {
                     match call_effect(u, call, units, &out, classify) {
                         CallEffect::Local => false,
@@ -1277,6 +1279,7 @@ fn states(
     table: &LayoutTable,
     sites: &[Site],
     base: u64,
+    environment: Option<LayoutId>,
 ) -> Result<(Vec<LiveStorage>, Vec<ResumeState>, Vec<CleanupResumeState>), String> {
     let live = crate::liveness::liveness(u);
     let mut at_sites = Vec::new();
@@ -1296,7 +1299,7 @@ fn states(
         union.extend(slots.iter().copied().filter(|s| !parameter_slot(u, *s)));
         at_sites.push((slots, loans));
     }
-    for (block, i) in cleanup::sites(u, table) {
+    for (block, i) in cleanup::sites(u, table, environment) {
         union.extend(
             storage_before(u, block, i)
                 .0
@@ -1426,7 +1429,8 @@ fn states(
             bytes,
         });
     }
-    let cleanups = cleanup::root_states(u, table, &storage, base, out.len() as u32 + 1)?;
+    let cleanups =
+        cleanup::root_states(u, table, &storage, base, out.len() as u32 + 1, environment)?;
     Ok((storage, out, cleanups))
 }
 
@@ -1544,11 +1548,20 @@ fn plan_unit(
     let mut isolate = None;
     let built = sites(u, inputs.table, &effects, done).and_then(|sites| {
         isolate = admission?;
-        if sites.is_empty() && cleanup::sites(u, inputs.table).is_empty() {
+        if sites.is_empty()
+            && cleanup::sites(u, inputs.table, isolate_environment(u, inputs.environments))
+                .is_empty()
+        {
             return Ok((Fixed::default(), Vec::new(), Vec::new(), Vec::new()));
         }
         let (parameters, records, base) = fixed_area(u, inputs.table, inputs.target)?;
-        let (storage, mut states, mut cleanups) = states(u, inputs.table, &sites, base)?;
+        let (storage, mut states, mut cleanups) = states(
+            u,
+            inputs.table,
+            &sites,
+            base,
+            isolate_environment(u, inputs.environments),
+        )?;
         if scope::candidate(u) {
             let wrapper = scope::wrapper(u, units).ok_or("unproved scope callback or exit flow")?;
             for state in &mut states {
@@ -1565,13 +1578,14 @@ fn plan_unit(
             ordered_reads::plan(u, inputs.table, state)?;
         }
         if let Some(evidence) = &isolate {
+            evidence.check_callback_cleanup(units, inputs.table, done)?;
             let callback = evidence
                 .protocol
                 .identity
                 .target
                 .instance
                 .ok_or("unknown isolate callback")?;
-            if !done.contains_key(&callback) && !evidence.direct_callback(units) {
+            if !done.contains_key(&callback) && !evidence.direct_callback(units, inputs.table) {
                 return Err("direct isolate callback requires complete local-call proof".into());
             }
             let begin = states
@@ -1585,8 +1599,15 @@ fn plan_unit(
             begin.bytes = runtime.results[0].offset + runtime.results[0].bytes;
             begin.action = ResumeAction::ResumeRuntime(begin.boundary.call);
             begin.runtime = Some(runtime);
-            if !cleanups.is_empty() {
-                return Err("uncertified isolate instruction cleanup".into());
+            for site in &evidence.cleanup.sites {
+                if crate::validate::Layouts(inputs.table)
+                    .destructible(site.environment.unwrap_or(site.layout))
+                    && !cleanups.iter().any(|state| {
+                        state.block == site.at.block && state.instruction == site.at.instruction
+                    })
+                {
+                    return Err("isolate cleanup lacks retained cursor custody".into());
+                }
             }
         }
         let sources = isolate::finalizer_sources(checked, inputs.table);
@@ -1595,9 +1616,21 @@ fn plan_unit(
             identity: ContentHash::default(),
         };
         for state in &mut cleanups {
-            if cleanup::has_finalizers(inputs.table, state.layout) {
+            let root = isolate
+                .as_ref()
+                .and_then(|e| {
+                    e.cleanup
+                        .sites
+                        .iter()
+                        .find(|site| {
+                            site.at.block == state.block && site.at.instruction == state.instruction
+                        })
+                        .and_then(|site| site.environment)
+                })
+                .unwrap_or(state.layout);
+            if isolate.is_some() || cleanup::has_finalizers(inputs.table, root) {
                 let coverage = isolate::FinalizerCoverage::propose_extents(
-                    state.layout,
+                    root,
                     &sources,
                     checked,
                     inputs,
@@ -1697,17 +1730,32 @@ fn plan_in_order(
     }
     let u = units[&id];
     let sources = isolate::finalizer_sources(checked, inputs.table);
-    for (block, instruction) in cleanup::sites(u, inputs.table) {
+    for (block, instruction) in
+        cleanup::sites(u, inputs.table, isolate_environment(u, inputs.environments))
+    {
         if let Inst::Release { layout, .. } =
             u.instructions[u.blocks[block.index()].instructions.start as usize + instruction]
         {
+            let environment = if isolate::candidate(u) {
+                u.tables.calls.iter().find_map(|c| match c.callee {
+                    Callee::Bound { .. } => callee_symbol(u, c)
+                        .and_then(|s| s.instance)
+                        .and_then(|id| inputs.environments.get(&id).copied().flatten()),
+                    _ => None,
+                })
+            } else {
+                None
+            };
             let mut pending = vec![layout];
+            pending.extend(environment);
             let mut seen = BTreeSet::new();
             while let Some(layout) = pending.pop() {
                 if !seen.insert(layout) {
                     continue;
                 }
-                if let Some(&source) = sources.get(&layout) {
+                if let Some(&source) = sources.get(&layout)
+                    && suspends.contains(&source)
+                {
                     plan_in_order(
                         source, inputs, units, suspends, digests, active, done, checked,
                     );
@@ -1746,7 +1794,7 @@ impl ContinuationPlans {
             .map(|u| (u.unit().header.instance, u.unit()))
             .collect();
         let digests: BTreeMap<_, _> = index.iter().map(|(k, u)| (*k, u.digest())).collect();
-        let suspends = suspending(&index, inputs.table, inputs.classify);
+        let suspends = suspending(&index, inputs.table, inputs.classify, inputs.environments);
         let mut plans = BTreeMap::new();
         for id in &suspends {
             plan_in_order(
@@ -1796,4 +1844,19 @@ impl ContinuationPlans {
                 && unit.header.definition.is_core("$native.task_main")
         })
     }
+}
+
+fn isolate_environment(
+    u: &LirUnit<Ready>,
+    environments: &BTreeMap<ContentHash, Option<LayoutId>>,
+) -> Option<LayoutId> {
+    if !isolate::candidate(u) {
+        return None;
+    }
+    u.tables.calls.iter().find_map(|c| match c.callee {
+        Callee::Bound { .. } => callee_symbol(u, c)
+            .and_then(|s| s.instance)
+            .and_then(|id| environments.get(&id).copied().flatten()),
+        _ => None,
+    })
 }

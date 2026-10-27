@@ -146,3 +146,41 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         false,
     );
 }
+
+#[test]
+fn proved_isolate_capture_cleanup_has_retained_source_frames() {
+    hirsel_engine::with_compiler_stack(|| {
+        let program = super::runtime50_continuation::ready(
+            r#"
+resource type Guard { output: Stdout, n: u64 }
+drop(x) { let _ = out.print(x.output, "drop\n"); failure.check(false, Bounds()) }
+fn held(tasks: Tasks, output: Stdout) {
+  let guard = Guard(output: output, n: 7u64)
+  let value: Result[u64, Failure] = task.isolate(tasks, fn() -> u64 {
+    if guard.n == 0u64 { let _ = take guard }
+    7u64
+  })
+  match value { Ok(_) => (), Error(_) => () }
+}
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  held(io.tasks(rt)?, io.stdout(rt)?)
+  Ok(())
+}
+"#,
+        );
+        let plans = hirsel_driver::native::continuation::plans(&program);
+        hirsel_driver::native::continuation::validate(&program, &plans).unwrap();
+        let wrapper = plans
+            .plans
+            .values()
+            .find(|p| p.isolate.is_some())
+            .expect("proved capture not admitted");
+        assert!(
+            wrapper.cleanups.iter().any(|s| s
+                .finalizers
+                .as_ref()
+                .is_some_and(|f| !f.finalizers.is_empty())),
+            "capture cleanup has no retained source finalizer"
+        );
+    });
+}

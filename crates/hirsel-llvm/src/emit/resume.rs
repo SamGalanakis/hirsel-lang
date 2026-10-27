@@ -343,11 +343,17 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
         };
         let (state, bytes, frame) = (state.clone(), resume.plan.cost.frame_bytes, resume.frame);
         self.materialize_live(&state.live, state.state)?;
-        let entry = self.runtime(if state.finalizers.is_some() {
-            RuntimeEntry::ResumeCleanup
-        } else {
-            RuntimeEntry::ResumeTail
-        })?;
+        let entry = self.runtime(
+            if state
+                .finalizers
+                .as_ref()
+                .is_some_and(|c| !c.finalizers.is_empty())
+            {
+                RuntimeEntry::ResumeCleanup
+            } else {
+                RuntimeEntry::ResumeTail
+            },
+        )?;
         let number = self
             .module
             .const_int(self.module.int_type(32), state.state.into());
@@ -375,7 +381,11 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
             .const_int(self.module.int_type(32), bytes.into());
         let (anchor, site) = self.failure_sites(self.cleanup_code(state.anchor)?);
         let mut arguments = vec![self.context, frame, number, kind, bytes, anchor, site];
-        if let Some(coverage) = &state.finalizers {
+        if let Some(coverage) = state
+            .finalizers
+            .as_ref()
+            .filter(|c| !c.finalizers.is_empty())
+        {
             let rows = self.finalizer_rows(coverage)?;
             arguments.push(rows);
             arguments.push(

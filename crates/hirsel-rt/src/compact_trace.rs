@@ -94,3 +94,9 @@ pub(crate) fn runtime_wait(task: u32, state: u32, kind: u32, phase: &str, invoca
 pub(crate) fn finalizer(task: u32, state: u32) {
     line(format_args!("finalizer {task} {state} {}", worker()));
 }
+
+/// Creation of a language isolate invocation, independently of which caller
+/// PC its nested suspension propagates through. No replay event is added.
+pub(crate) fn isolate_begin(task: u32) {
+    line(format_args!("begin {task} 0 {}", worker()));
+}
