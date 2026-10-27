@@ -104,9 +104,6 @@ impl NativeBootstrap {
         allowance: MemoryReservation,
         errors: RuntimeErrors,
     ) -> Result<Arc<Self>, String> {
-        if plan.options.objects.is_some() {
-            return Err("native bootstrap requires ordinary object query producers".into());
-        }
         // Evidence selects its discharge only after the source root settles;
         // a caller-planned discharge would bypass that assessment.
         if proofs.is_some() && !plan.options.discharge.is_empty() {
