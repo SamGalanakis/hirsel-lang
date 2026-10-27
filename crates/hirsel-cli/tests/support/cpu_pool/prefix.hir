@@ -1,0 +1,39 @@
+type PrefixJob { marker: Shared[List[u64]], output: unique List[u64] }
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  for prefix in 0u64..LIMIT {
+    let mut markers: List[Shared[List[u64]]] = []
+    for i in 0u64..COUNT { list.push(mut markers, shared.freeze([i])) }
+    let roots = shared.freeze(take markers)
+    let caught = {
+      let held = copy roots
+      task.isolate(tasks, fn() -> () {
+      let batch = core@1/cpu.map_scoped(tasks, WIDTH,
+        fn() -> List[unique PrefixJob] uses {} {
+          let mut jobs: List[unique PrefixJob] = []
+          for i in 0u64..COUNT {
+            failure.check(i != prefix, Bounds())
+            let marker = shared.with(held, fn(xs: List[Shared[List[u64]]]) -> Shared[List[u64]] uses {} { copy xs[i] })
+            list.push(mut jobs, PrefixJob(marker: take marker, output: [i]))
+          }
+          take jobs
+        },
+        fn(take job: unique PrefixJob) -> Shared[List[Shared[List[u64]]]] uses {} {
+          let PrefixJob(marker: moved_marker, output: moved_output) = take job
+          let marker_value = shared.with(moved_marker, fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+          failure.check(marker_value == moved_output[0], Arithmetic())
+          shared.freeze([take moved_marker])
+        })
+      failure.check(match batch { Ok(xs) => list.len(xs) == COUNT, _ => false }, Arithmetic())
+      })
+    }
+    failure.check(match caught { Error(primary) => prefix < COUNT && primary.site.line == PREPARE_LINE, Ok(_) => prefix == COUNT }, Arithmetic())
+    let Ok(unshared) = shared.thaw(take roots) else { failure.check(false, Arithmetic()); return Ok(()) }
+    let mut remaining = take unshared
+    for _ in 0u64..COUNT {
+      let Some(marker) = list.pop(mut remaining) else { failure.check(false, Arithmetic()); return Ok(()) }
+      failure.check(match shared.thaw(take marker) { Ok(_) => true, Error(_) => false }, Arithmetic())
+    }
+  }
+  Ok(())
+}

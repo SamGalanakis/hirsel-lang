@@ -1,0 +1,43 @@
+type GeneratedJob { input: Shared[List[u64]], output: unique List[u64] }
+pub type AppError = Grant(GrantError) | Pool(CpuPoolError)
+pub fn main(rt: Io) -> Result[(), AppError] {
+  let tasks = io.tasks(rt)?Grant
+  let counts = COUNTS
+  let expected = EXPECTED
+  for seed in 0u64..4u64 {
+    for case in 0u64..list.len(counts) {
+      let count = counts[case]
+      let rows = core@1/cpu.map_scoped(tasks, WIDTH,
+        fn() -> List[unique GeneratedJob] uses {} {
+          let input = shared.freeze([seed, count])
+          let mut jobs: List[unique GeneratedJob] = []
+          for i in 0u64..count {
+            list.push(mut jobs, GeneratedJob(input: copy input, output: [i, seed]))
+          }
+          take jobs
+        },
+        fn(take job: unique GeneratedJob) -> Shared[List[u64]] uses {} {
+          let GeneratedJob(input: moved_input, output: moved_output) = take job
+          let mut output = take moved_output
+          let job_seed = shared.with(moved_input, fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+          let ordinal = output[0]
+          let mut x = int.wrapping_add(ordinal, job_seed)
+          let turns = (ordinal ^ job_seed) * 37u64 + 1u64
+          for i in 0u64..turns {
+            x = int.wrapping_add(int.wrapping_mul(x, 6364136223846793005u64), i)
+            x = x ^ (x >> 29u64)
+          }
+          output[0] = x
+          output[1] = ordinal
+          shared.freeze(take output)
+        })?Pool
+      failure.check(list.len(rows) == count, Bounds())
+      for i in 0u64..count {
+        let hash = shared.with(rows[i], fn(xs: List[u64]) -> u64 uses {} { xs[0] })
+        let ordinal = shared.with(rows[i], fn(xs: List[u64]) -> u64 uses {} { xs[1] })
+        failure.check(hash == expected[seed][i] && ordinal == i, Arithmetic())
+      }
+    }
+  }
+  Ok(())
+}

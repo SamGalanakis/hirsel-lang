@@ -20,3 +20,21 @@ include!("support/cpu_pool/jitter.rs");
 fn cpu_integer_float_bits_and_fresh_lifecycle_survive_jitter() {
     cpu_values_with_jitter(4);
 }
+
+include!("support/cpu_pool/generated.rs");
+#[test]
+fn free_generated_typed_batches_replay_with_one_permit() {
+    generated_free_schedules(4);
+}
+
+include!("support/cpu_pool/watchdog.rs");
+include!("support/cpu_pool/stops.rs");
+#[test]
+fn free_diverging_mappers_stop_for_fuel_or_external_stop_and_replay() {
+    free_native_stops(4);
+}
+
+#[test]
+fn free_typed_preparation_prefixes_release_each_row_root() {
+    typed_preparation_prefix_census(4);
+}
