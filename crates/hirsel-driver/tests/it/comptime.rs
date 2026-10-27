@@ -417,8 +417,29 @@ fn a_failed_size_instantiation_retains_its_selecting_site() {
 fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
     with_compiler_stack(|| {
         let source = "fn scaled[n:size](xs:Inline[u8,n])->u64{let _=xs;comptime n*n}\npub fn main()->Result[(),()]{let xs:Inline[u8,2]=[1,2];let _=scaled(xs);Ok(())}\n";
+        let directory = tempfile::tempdir().unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        let file = directory.path().join("comptime.hir");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"standalone","version":"0"},"sources":[{"path":"comptime.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
+        let export_source = |source: &str| {
+            std::fs::write(&file, source).unwrap();
+            let mut session = session::Session::open_configured(
+                &manifest,
+                CompileConfig {
+                    store: std::sync::Arc::new(store::MemStore::default()),
+                    ..Default::default()
+                },
+            );
+            let output = session
+                .request(requests::CompileOperation::ExportTir)
+                .unwrap();
+            let requests::CompileResult::ExportTir(text) = &output.result else {
+                panic!("expected TIR export");
+            };
+            text.clone()
+        };
         let mut first = engine(source);
-        let text = first.export_tir(&path("main")).unwrap();
+        let text = export_source(source);
         let export = first.import_tir(&text).unwrap();
         assert!(export.skipped.is_empty(), "{:?}", export.skipped);
         let constant = export
@@ -434,8 +455,12 @@ fn staged_constants_survive_proof_export_and_unrelated_item_insertion() {
                 .any(|c| c.path == hirsel_tir::constant_instance_path(&constant.path, &[2]))
         );
         assert_eq!(hirsel_proof_export::export(&export.to_input()), text);
-        let mut second = engine(&format!("fn unrelated()->u64{{3}}\n{source}"));
-        let export = second.proof_export_input(&path("main")).unwrap();
+        let edited = format!("fn unrelated()->u64{{3}}\n{source}");
+        let mut second = engine(&edited);
+        let export = second
+            .import_tir(&export_source(&edited))
+            .unwrap()
+            .to_input();
         assert!(export.signatures.contains_key(&constant.path));
         assert_eq!(
             export.signatures[&constant.path].public.fingerprint,
