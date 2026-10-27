@@ -265,6 +265,10 @@ pub(super) enum CanonicalOutcome {
     },
     DetachSkipped,
     Detached,
+    JoinAbandoned {
+        task: Vec<u32>,
+        ordinal: u64,
+    },
     Joining,
     Joined {
         status: u8,

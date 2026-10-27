@@ -18,6 +18,32 @@ pub(crate) enum Refusal {
     ResourceLimit,
 }
 
+/// Credits for the run's ordinary executors while scoped workers own theirs.
+/// An active credit becomes ordinary again on drain; an idle one is returned.
+struct Controllers {
+    permits: Arc<Permits>,
+    execs: Vec<Arc<Exec>>,
+}
+
+impl Drop for Controllers {
+    fn drop(&mut self) {
+        if self.execs.is_empty() {
+            return;
+        }
+        let mut state = self.permits.state.lock().unwrap();
+        for exec in &self.execs {
+            assert!(exec.reserved.swap(false, Ordering::AcqRel));
+            if !exec.held.load(Ordering::Acquire) {
+                state.held -= 1;
+                if exec.lost.swap(false, Ordering::AcqRel) {
+                    state.lost -= 1;
+                }
+            }
+        }
+        self.permits.freed.notify_all();
+    }
+}
+
 /// Unassigned credits. Each assigned credit has an independent lifetime, so a
 /// stopped worker can outlive both startup rollback and its caller.
 pub(super) struct Reservation {
@@ -34,26 +60,57 @@ pub(super) struct Assigned {
 }
 
 impl Permits {
+    #[cfg(test)]
     pub(super) fn try_reserve(self: &Arc<Self>, width: u32) -> Result<Reservation, Refusal> {
+        self.reserve_with_controllers(width, Vec::new())
+            .map(|(reservation, _)| reservation)
+    }
+
+    fn reserve_with_controllers(
+        self: &Arc<Self>,
+        width: u32,
+        execs: Vec<Arc<Exec>>,
+    ) -> Result<(Reservation, Controllers), Refusal> {
         if !matches!(width, 1 | 4 | 8 | 16) {
             return Err(Refusal::InvalidWidth);
         }
         let mut state = self.state.lock().unwrap();
+        if execs
+            .iter()
+            .any(|exec| exec.reserved.load(Ordering::Acquire))
+        {
+            return Err(Refusal::Busy);
+        }
+        let idle = execs
+            .iter()
+            .filter(|exec| !exec.held.load(Ordering::Acquire))
+            .count() as u32;
+        let requested = width.checked_add(idle).ok_or(Refusal::ResourceLimit)?;
         let available = state
             .limit
             .saturating_sub(state.held)
             .saturating_sub(state.waiting);
-        if width > available {
+        if requested > available {
             return Err(Refusal::WidthUnavailable {
-                requested: width,
+                requested,
                 available,
             });
         }
-        state.held += width;
-        Ok(Reservation {
-            permits: Arc::clone(self),
-            unassigned: width,
-        })
+        state.held += requested;
+        for exec in &execs {
+            exec.reserved.store(true, Ordering::Release);
+        }
+        self.freed.notify_all();
+        Ok((
+            Reservation {
+                permits: Arc::clone(self),
+                unassigned: width,
+            },
+            Controllers {
+                permits: Arc::clone(self),
+                execs,
+            },
+        ))
     }
 }
 
@@ -106,6 +163,7 @@ pub(super) struct Workers {
     threads: Vec<std::thread::JoinHandle<()>>,
     cursor: usize,
     caller: Option<Owner>,
+    controllers: Option<Controllers>,
     _topology: Option<Arc<ledger::Topology>>,
     contraction: u64,
     domain: u64,
@@ -168,6 +226,7 @@ unsafe fn start_at(
         // The caller remains on worker zero while it publishes children.
         cursor: usize::from(!unsafe { (*run).free_mode }),
         caller: None,
+        controllers: None,
         _topology: topology.clone(),
         contraction: execs.permits.state.lock().unwrap().contraction,
         domain: unsafe { (*run).cpu_probe.as_ref().map_or(0, |p| p.domain()) },
@@ -310,15 +369,62 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     if execs.scoped.lock().unwrap().is_some() {
         return Err(Refusal::Busy);
     }
+    let mut controllers = Vec::new();
+    if crate::tasks::ordered::engine::on(ctx) {
+        for owner in crate::tasks::cpu_control_owners(ctx) {
+            let candidates = match owner {
+                Owner::Any => {
+                    let compute = execs.compute.lock().unwrap();
+                    if compute.active.is_empty() {
+                        vec![Arc::clone(&execs.home)]
+                    } else {
+                        compute.active.clone()
+                    }
+                }
+                Owner::Home => vec![Arc::clone(&execs.home)],
+                Owner::Pool(index) => {
+                    let address = super::pool_exec(execs, index);
+                    execs
+                        .holders
+                        .workers
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter_map(std::sync::Weak::upgrade)
+                        .filter(|exec| Arc::as_ptr(exec) == address)
+                        .collect()
+                }
+                Owner::Compute(address) => execs
+                    .holders
+                    .workers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter_map(std::sync::Weak::upgrade)
+                    .filter(|exec| Arc::as_ptr(exec).addr() == address)
+                    .collect(),
+            };
+            if candidates.is_empty() {
+                return Err(Refusal::ResourceLimit);
+            }
+            for exec in candidates {
+                if !controllers.iter().any(|old| Arc::ptr_eq(old, &exec)) {
+                    controllers.push(exec);
+                }
+            }
+        }
+    }
     unsafe { (*ctx).frozen = Vec::new() };
     super::release_permit(ctx);
-    let reservation = execs.permits.try_reserve(width);
+    let reservation = execs.permits.reserve_with_controllers(width, controllers);
     let owners = match reservation {
-        Ok(reservation) => unsafe { start(run, reservation) },
+        Ok((reservation, controllers)) => {
+            unsafe { start(run, reservation) }.map(|owners| (owners, controllers))
+        }
         Err(error) => Err(error),
     };
-    let owners = match owners {
-        Ok(owners) => owners,
+    let (owners, controllers) = match owners {
+        Ok(admitted) => admitted,
         Err(error) => {
             {
                 let _segment = unsafe { crate::tasks::role::Segment::new(ctx) };
@@ -333,6 +439,7 @@ pub(crate) unsafe fn enter(ctx: *mut TaskCtx, width: u32) -> Result<(), Refusal>
     {
         let mut slot = execs.scoped.lock().unwrap();
         let workers = slot.as_mut().unwrap();
+        workers.controllers = Some(controllers);
         workers.caller = Some(old);
         workers.caller_task = unsafe { (*ctx).task_id };
     }
@@ -537,6 +644,76 @@ pub unsafe extern "C" fn hirsel_rt_v2_cpu_map_scoped(
 mod tests {
     use super::*;
     use crate::pool::Kind;
+
+    #[test]
+    fn waiting_controller_adopts_its_reserved_credit_once() {
+        let permits = Arc::new(Permits::new(1));
+        let blocker = Exec::new(Kind::Compute(0), std::ptr::null_mut(), false);
+        let controller = Exec::new(Kind::Compute(1), std::ptr::null_mut(), false);
+        assert!(permits.acquire(&blocker, None, None).unwrap());
+        let (acquired, received) = std::sync::mpsc::channel();
+        let (release, resume) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn({
+            let permits = permits.clone();
+            let controller = controller.clone();
+            move || {
+                assert!(permits.acquire(&controller, None, None).unwrap());
+                acquired.send(()).unwrap();
+                resume.recv().unwrap();
+                permits.release(&controller);
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while permits.state.lock().unwrap().waiting == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        permits.state.lock().unwrap().limit = 4;
+        let (reservation, controls) = permits
+            .reserve_with_controllers(1, vec![controller])
+            .unwrap();
+        permits.release(&blocker);
+        received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(permits.state.lock().unwrap().held, 2);
+        drop(controls);
+        drop(reservation);
+        assert_eq!(permits.state.lock().unwrap().held, 1);
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        assert_eq!(permits.available(), 4);
+    }
+
+    #[test]
+    fn ordinary_controller_credits_survive_idle_and_contraction_without_minting_capacity() {
+        for active in [false, true] {
+            let permits = Arc::new(Permits::new(5));
+            let controller = Exec::new(Kind::Compute(0), std::ptr::null_mut(), false);
+            assert!(permits.acquire(&controller, None, None).unwrap());
+            let (reservation, controls) = permits
+                .reserve_with_controllers(4, vec![controller.clone()])
+                .unwrap();
+            permits.release(&controller);
+            assert_eq!(permits.available(), 0);
+            permits.state.lock().unwrap().limit = 4;
+            assert!(matches!(
+                permits.try_reserve(1),
+                Err(Refusal::WidthUnavailable { .. })
+            ));
+            if active {
+                assert!(permits.acquire(&controller, None, None).unwrap());
+            }
+            drop(controls);
+            drop(reservation);
+            assert_eq!(permits.state.lock().unwrap().held, u32::from(active));
+            if active {
+                permits.release(&controller);
+            }
+            assert_eq!(permits.available(), 4);
+            assert!(!controller.reserved.load(Ordering::Acquire));
+        }
+    }
 
     #[test]
     fn fresh_workers_acknowledge_and_every_failed_startup_prefix_returns_its_credits() {

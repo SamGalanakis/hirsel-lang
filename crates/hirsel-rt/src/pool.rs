@@ -334,17 +334,17 @@ impl Permits {
         if exec.held.load(Ordering::Relaxed) {
             return Ok(false);
         }
-        if exec.reserved.load(Ordering::Acquire) {
-            if let Some(stop) = control.and_then(|c| c.stopped()) {
-                return Err(stop);
-            }
-            exec.held.store(true, Ordering::Release);
-            return Ok(true);
-        }
         let started = metrics.map(|_| Instant::now());
         let mut state = self.state.lock().unwrap();
         let mut waited = false;
         loop {
+            if exec.reserved.load(Ordering::Acquire) {
+                if let Some(stop) = control.and_then(|c| c.stopped()) {
+                    return Err(stop);
+                }
+                exec.held.store(true, Ordering::Release);
+                return Ok(true);
+            }
             if let Some(stop) = control.and_then(|c| c.stopped()) {
                 return Err(stop);
             }
@@ -372,10 +372,13 @@ impl Permits {
         Ok(true)
     }
     fn release(&self, exec: &Exec) {
-        if !exec.held.swap(false, Ordering::AcqRel) {
+        if !exec.held.load(Ordering::Acquire) {
             return;
         }
         let mut state = self.state.lock().unwrap();
+        if !exec.held.swap(false, Ordering::AcqRel) {
+            return;
+        }
         if !exec.reserved.load(Ordering::Acquire) {
             state.held -= 1;
             if exec.lost.swap(false, Ordering::AcqRel) {

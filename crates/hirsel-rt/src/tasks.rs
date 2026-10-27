@@ -1749,6 +1749,25 @@ pub(crate) fn cpu_scoped(ctx: *mut TaskCtx) -> bool {
     role::with_role(ctx, |s| s.task(unsafe { (*ctx).task_id }).cpu_scoped)
 }
 
+/// Ordinary continuations that can become canonical head during a CPU batch.
+/// Their existing executors need retained credits, independently of CPU jobs.
+pub(crate) fn cpu_control_owners(ctx: *mut TaskCtx) -> Vec<Owner> {
+    role::with_role(ctx, |s| {
+        let mut owners = Vec::new();
+        for (index, row) in s.tasks.iter().enumerate() {
+            if let Some(row) = row
+                && index != unsafe { (*ctx).task_id } as usize
+                && !row.cpu_scoped
+                && matches!(row.state, State::Ready | State::Parked)
+                && !owners.contains(&row.owner)
+            {
+                owners.push(row.owner);
+            }
+        }
+        owners
+    })
+}
+
 pub(crate) fn cpu_owner(ctx: *mut TaskCtx, owner: Owner, member: bool) -> Owner {
     role::with_role(ctx, |s| {
         let row = s.task(unsafe { (*ctx).task_id });

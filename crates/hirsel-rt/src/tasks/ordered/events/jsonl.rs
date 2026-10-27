@@ -274,6 +274,9 @@ fn outcome(outcome: &CanonicalOutcome) -> Value {
         O::DetachSkipped => json!({"kind":"detach_skipped"}),
         O::Detached => json!({"kind":"detached"}),
         O::Joining => json!({"kind":"joining"}),
+        O::JoinAbandoned { task, ordinal } => {
+            json!({"kind":"join_abandoned", "task":task, "ordinal":ordinal})
+        }
         O::Joined {
             status,
             rank,

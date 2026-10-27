@@ -98,6 +98,89 @@ pub(super) fn awaits(s: &Scheduler, log: &Log) -> Result<Subevents, &'static str
         .collect()
 }
 
+/// A stopped join retains its published child/scope identities and saved
+/// continuation. Abandonment observes that prefix without reading its result.
+fn joins(s: &Scheduler, log: &Log) -> Result<Subevents, &'static str> {
+    log.joins
+        .iter()
+        .map(|(path, (scope, child))| {
+            let (owner, row) = s
+                .tasks
+                .iter()
+                .enumerate()
+                .filter_map(|(i, r)| r.as_ref().map(|r| (i, r)))
+                .find(|(_, r)| &r.path == path)
+                .ok_or("missing terminal join owner")?;
+            if !readiness::saved(s, owner as u32) {
+                return Err("terminal join owner is not saved");
+            }
+            let (&child_word, _) = log
+                .tasks
+                .iter()
+                .find(|(_, id)| *id == child)
+                .ok_or("missing terminal join child identity")?;
+            let child_row = s
+                .tasks
+                .get(child_word as u32 as usize)
+                .and_then(Option::as_ref)
+                .filter(|r| r.generation == (child_word >> 32) as u32)
+                .ok_or("stale terminal join child")?;
+            let (&scope_word, _) = log
+                .scopes
+                .iter()
+                .find(|(_, id)| *id == scope)
+                .ok_or("missing terminal join scope identity")?;
+            let scope_index = scope_word as u32;
+            let scope_row = s
+                .scopes
+                .get(scope_index as usize)
+                .and_then(Option::as_ref)
+                .filter(|r| r.generation == (scope_word >> 32) as u32)
+                .ok_or("stale terminal join scope")?;
+            if child_row.scope != Some(scope_index)
+                || !scope_row.children.contains(&(child_word as u32))
+            {
+                return Err("terminal join child left its scope");
+            }
+            match row.wait {
+                Some(Wait::Join { child: actual, .. }) if actual == child_word as u32 => {}
+                None if row.state == State::Ready => {}
+                _ => return Err("terminal join owner has no matching saved continuation"),
+            }
+            let ordinal = log
+                .ordinals
+                .get(path)
+                .and_then(|n| n.checked_sub(1))
+                .ok_or("missing terminal join ordinal")?;
+            let same = |event: &&CanonicalEvent| event.task == *path && event.ordinal == ordinal;
+            if log.last_ops.get(path) != Some(&"task.join")
+                || !log.canonical.iter().filter(same).any(|e| {
+                    e.item == CanonicalItem::Object(child.clone())
+                        && e.outcome == CanonicalOutcome::Joining
+                })
+                || !log.canonical.iter().filter(same).any(|e| {
+                    e.item == CanonicalItem::Object(scope.clone())
+                        && e.outcome == CanonicalOutcome::Alias(child.clone())
+                })
+                || log
+                    .canonical
+                    .iter()
+                    .filter(same)
+                    .any(|e| matches!(e.outcome, CanonicalOutcome::Joined { .. }))
+            {
+                return Err("missing published terminal join prefix");
+            }
+            Ok((
+                CanonicalItem::Object(child.clone()),
+                CanonicalOutcome::JoinAbandoned {
+                    task: path.clone(),
+                    ordinal,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Trace::capture owns IdleGuard and has already proved zero running workers.
 /// The original terminal charge/failure and its position remain authoritative.
 pub(super) fn close(s: &mut Scheduler, stop: &crate::stop::Stop) -> Result<(), &'static str> {
@@ -118,6 +201,7 @@ pub(super) fn close(s: &mut Scheduler, stop: &crate::stop::Stop) -> Result<(), &
     // Validate the whole await snapshot before mutating any evidence. Host
     // phases then use the same strict validation as task-local terminal cuts.
     let mut events = awaits(s, log)?;
+    events.extend(joins(s, log)?);
     let Logical::Ordered(driver) = &mut s.logical else {
         unreachable!()
     };
@@ -147,5 +231,6 @@ pub(super) fn close(s: &mut Scheduler, stop: &crate::stop::Stop) -> Result<(), &
     *next = next.checked_add(1).expect("terminal subevent overflow");
     log.canonical.push(terminal);
     log.awaiting.clear();
+    log.joins.clear();
     Ok(())
 }
