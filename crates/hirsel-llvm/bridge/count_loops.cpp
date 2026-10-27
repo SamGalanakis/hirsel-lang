@@ -206,6 +206,206 @@ public:
   }
 };
 
+// Bounded loop cloning follows LLVM LoopVersioning.cpp:96-110. Unlike loop
+// versioning, the clone returns all loop-carried SSA values to the outer header.
+static bool chunkAhead(Loop &L, DominatorTree &DT) {
+  constexpr uint64_t K = 32;
+  BasicBlock *H = L.getHeader(), *PH = L.getLoopPreheader();
+  BasicBlock *Latch = L.getLoopLatch(), *Exit = L.getExitingBlock();
+  if (!PH || !Latch || !Exit || !L.isInnermost() || L.getNumBlocks() > 12)
+    return false;
+  CallInst *Handoff = nullptr;
+  unsigned Instructions = 0;
+  for (BasicBlock *B : L.blocks()) for (Instruction &I : *B) {
+    if (++Instructions > 128) return false;
+    if (auto *Call = dyn_cast<CallBase>(&I)) {
+      auto *C = dyn_cast<CallInst>(Call);
+      auto *F = C ? C->getCalledFunction() : nullptr;
+      if (!F || F->getName() != "hirsel_rt_v2_ahead_handoff" || Handoff ||
+          C->arg_size() != 2 || !isa<ConstantInt>(C->getArgOperand(1)) ||
+          !cast<ConstantInt>(C->getArgOperand(1))->isOne()) return false;
+      Handoff = C;
+    }
+  }
+  if (!Handoff) return false;
+  BasicBlock *Cold = Handoff->getParent(), *Point = Cold->getSinglePredecessor();
+  BasicBlock *Join = Cold->getSingleSuccessor();
+  auto *Check = Point ? dyn_cast<CondBrInst>(Point->getTerminator()) : nullptr;
+  if (!Check || !Join || !DT.dominates(Point, Latch) ||
+      !L.contains(Point) || !L.contains(Join)) return false;
+  auto *Expired = dyn_cast<ICmpInst>(Check->getCondition());
+  if (!Expired || Expired->getPredicate() != ICmpInst::ICMP_EQ ||
+      Check->getSuccessor(0) != Cold || Check->getSuccessor(1) != Join)
+    return false;
+  auto *Zero = dyn_cast<ConstantInt>(Expired->getOperand(1));
+  auto *Dec = dyn_cast<BinaryOperator>(Expired->getOperand(0));
+  if (!Zero || !Zero->isZero() || !Dec || Dec->getOpcode() != Instruction::Add)
+    return false;
+  auto *MinusOne = dyn_cast<ConstantInt>(Dec->getOperand(1));
+  auto *Quota = dyn_cast<PHINode>(Dec->getOperand(0));
+  if (!MinusOne || !MinusOne->isMinusOne() || !Quota ||
+      Quota->getParent() != H || !Quota->getType()->isIntegerTy(64)) return false;
+  SmallPtrSet<Value *, 8> Visiting;
+  auto Feedback = [&](auto &&Self, Value *V) -> bool {
+    if (V == Dec) return true;
+    auto *P = dyn_cast<PHINode>(V);
+    if (!P || P->getParent() == H || !L.contains(P) ||
+        !Visiting.insert(V).second) return false;
+    bool SawHot = false, OK = true;
+    for (unsigned I = 0; I != P->getNumIncomingValues(); ++I) {
+      if (P->getIncomingBlock(I) == Cold) continue;
+      SawHot = true;
+      if (!Self(Self, P->getIncomingValue(I))) { OK = false; break; }
+    }
+    Visiting.erase(V);
+    return SawHot && OK;
+  };
+  if (!Feedback(Feedback, Quota->getIncomingValueForBlock(Latch))) return false;
+  // No fuel, observable operation, failure call, or pointer access belongs in
+  // the inner loop. Only the checkpoint's own ordinary state load/store may go.
+  for (BasicBlock *B : L.blocks()) for (Instruction &I : *B) {
+    if (&I == Handoff) continue;
+    if (auto *Load = dyn_cast<LoadInst>(&I)) {
+      if (B != Cold || Load->isVolatile() || Load->isAtomic() ||
+          Load->getPointerOperand() != Handoff->getArgOperand(0)) return false;
+    } else if (auto *Store = dyn_cast<StoreInst>(&I)) {
+      if (B != Cold || Store->isVolatile() || Store->isAtomic() ||
+          Store->getPointerOperand() != Handoff->getArgOperand(0)) return false;
+    } else if (I.mayReadOrWriteMemory() || I.mayHaveSideEffects()) {
+      if (!I.isTerminator()) return false;
+    }
+  }
+  // Every original trip contains exactly one physical point. Removing the
+  // header feedback must leave a DAG, including the handoff diamond.
+  DenseMap<BasicBlock *, unsigned> Degree;
+  SmallVector<BasicBlock *, 16> Ready;
+  for (BasicBlock *B : L.blocks()) Degree[B] = 0;
+  for (BasicBlock *B : L.blocks()) for (BasicBlock *S : successors(B))
+    if (L.contains(S) && S != H) ++Degree[S];
+  for (auto [B, D] : Degree) if (!D) Ready.push_back(B);
+  unsigned Visited = 0;
+  while (!Ready.empty()) {
+    BasicBlock *B = Ready.pop_back_val(); ++Visited;
+    for (BasicBlock *S : successors(B))
+      if (L.contains(S) && S != H && !--Degree[S]) Ready.push_back(S);
+  }
+  if (Visited != L.getNumBlocks()) return false;
+
+  auto *End = dyn_cast<CondBrInst>(Exit->getTerminator());
+  auto *Cmp = End ? dyn_cast<ICmpInst>(End->getCondition()) : nullptr;
+  if (!Cmp || !DT.dominates(Exit, Latch)) return false;
+  PHINode *Index = nullptr;
+  Value *Limit = nullptr;
+  for (PHINode &P : H->phis()) {
+    if (&P == Quota || !P.getType()->isIntegerTy(64) ||
+        P.getNumIncomingValues() != 2) continue;
+    auto *Next = dyn_cast_or_null<BinaryOperator>(P.getIncomingValueForBlock(Latch));
+    if (!Next || Next->getOpcode() != Instruction::Add || Next->getOperand(0) != &P)
+      continue;
+    auto *One = dyn_cast<ConstantInt>(Next->getOperand(1));
+    if (!One || !One->isOne()) continue;
+    for (unsigned Side = 0; Side != 2; ++Side) {
+      Value *V = Cmp->getOperand(Side), *Bound = Cmp->getOperand(1 - Side);
+      if ((V != &P && V != Next) || !L.isLoopInvariant(Bound) ||
+          !DT.dominates(Bound, PH->getTerminator())) continue;
+      auto Pred = Side ? Cmp->getSwappedPredicate() : Cmp->getPredicate();
+      bool TrueInside = L.contains(End->getSuccessor(0));
+      if ((Pred == ICmpInst::ICMP_EQ && !TrueInside) ||
+          (Pred == ICmpInst::ICMP_NE && TrueInside) ||
+          (Pred == ICmpInst::ICMP_ULT && TrueInside) ||
+          (Pred == ICmpInst::ICMP_UGE && !TrueInside)) {
+        Index = &P; Limit = Bound;
+      }
+    }
+  }
+  if (!Index) return false;
+  for (PHINode &P : H->phis())
+    if (P.getNumIncomingValues() != 2 || P.getBasicBlockIndex(PH) < 0 ||
+        P.getBasicBlockIndex(Latch) < 0) return false;
+
+  Function *F = H->getParent();
+  ValueToValueMapTy Map;
+  SmallVector<BasicBlock *, 16> Cloned;
+  for (BasicBlock *B : L.blocks())
+    Cloned.push_back(CloneBasicBlock(B, Map, ".ahead.chunk", F));
+  for (unsigned I = 0; I != Cloned.size(); ++I) Map[L.getBlocks()[I]] = Cloned[I];
+  remapInstructionsInBlocks(Cloned, Map);
+  auto *FastH = cast<BasicBlock>(Map[H]);
+  auto *FastLatch = cast<BasicBlock>(Map[Latch]);
+  auto *Outer = BasicBlock::Create(F->getContext(), "ahead.boundary", F, H);
+  SmallVector<PHINode *, 8> Phis;
+  for (PHINode &P : H->phis()) Phis.push_back(&P);
+  for (PHINode *P : Phis) {
+    auto *FastP = cast<PHINode>(Map[P]);
+    int Entry = FastP->getBasicBlockIndex(PH);
+    FastP->setIncomingBlock(Entry, Outer);
+    FastP->setIncomingValue(Entry, P);
+    Value *Next = P->getIncomingValueForBlock(Latch);
+    P->addIncoming(Map.count(Next) ? static_cast<Value *>(Map[Next]) : Next, FastLatch);
+    P->moveBefore(*Outer, Outer->end());
+  }
+  PH->getTerminator()->replaceSuccessorWith(H, Outer);
+  Latch->getTerminator()->replaceSuccessorWith(H, Outer);
+  IRBuilder<> B(Outer);
+  Value *Spent = B.CreateSub(Quota, B.getInt64(K), "ahead.chunk.remaining");
+  Quota->setIncomingValue(Quota->getBasicBlockIndex(FastLatch), Spent);
+  Value *Room = B.CreateICmpUGT(Quota, B.getInt64(K));
+  Value *Remaining = B.CreateSub(Limit, Index);
+  Value *Bounded = B.CreateAnd(B.CreateICmpULT(Index, Limit),
+                              B.CreateICmpUGT(Remaining, B.getInt64(K)));
+  B.CreateCondBr(B.CreateAnd(Room, Bounded, "ahead.chunk.room"), FastH, H);
+  auto Force = [&](BasicBlock *Original, BasicBlock *Successor) {
+    auto *BB = cast<BasicBlock>(Map[Original]);
+    auto *Old = BB->getTerminator();
+    UncondBrInst::Create(cast<BasicBlock>(Map[Successor]), Old->getIterator());
+    Old->eraseFromParent();
+  };
+  Force(Point, Join);
+  Force(Exit, L.contains(End->getSuccessor(0)) ? End->getSuccessor(0) : End->getSuccessor(1));
+  B.SetInsertPoint(FastH, FastH->begin());
+  auto *Trips = B.CreatePHI(B.getInt64Ty(), 2, "ahead.chunk.trip");
+  Trips->addIncoming(B.getInt64(0), Outer);
+  Instruction *Old = FastLatch->getTerminator();
+  B.SetInsertPoint(Old);
+  Value *NextTrip = B.CreateAdd(Trips, B.getInt64(1));
+  Trips->addIncoming(NextTrip, FastLatch);
+  auto *Backedge = B.CreateCondBr(B.CreateICmpULT(NextTrip, B.getInt64(K)), FastH, Outer);
+  Old->eraseFromParent();
+  auto &C = F->getContext();
+  Metadata *Unroll[] = {MDString::get(C, "llvm.loop.unroll.count"),
+                       ConstantAsMetadata::get(B.getInt32(4))};
+  Metadata *LoopID[] = {nullptr, MDNode::get(C, Unroll)};
+  auto *ID = MDNode::getDistinct(C, LoopID);
+  ID->replaceOperandWith(0, ID);
+  Backedge->setMetadata(LLVMContext::MD_loop, ID);
+  EliminateUnreachableBlocks(*F);
+  return true;
+}
+
+class AheadChunkPass : public PassInfoMixin<AheadChunkPass> {
+public:
+  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+    if (!F.getName().ends_with("_ahead")) return PreservedAnalyses::all();
+    bool Changed = false;
+    {
+      DominatorTree DT(F);
+      LoopInfo LI(DT);
+      for (Loop *L : LI.getLoopsInPreorder()) {
+        if (chunkAhead(*L, DT)) { Changed = true; break; }
+      }
+    }
+    if (!Changed) return PreservedAnalyses::all();
+    AM.invalidate(F, PreservedAnalyses::none());
+    FunctionPassManager Clean;
+    Clean.addPass(InstCombinePass());
+    Clean.addPass(SimplifyCFGPass());
+    Clean.addPass(LoopSimplifyPass());
+    Clean.addPass(LCSSAPass());
+    Clean.run(F, AM);
+    return PreservedAnalyses::none();
+  }
+};
+
 extern "C" void hirsel_llvm_count_pipeline(void *Raw, void *Machine,
                                           unsigned Level) noexcept {
   auto &M = *static_cast<Module *>(Raw);
@@ -222,6 +422,7 @@ extern "C" void hirsel_llvm_count_pipeline(void *Raw, void *Machine,
   PB.registerVectorizerStartEPCallback(
       [](FunctionPassManager &PM, OptimizationLevel) {
         PM.addPass(CountLoopPass());
+        PM.addPass(AheadChunkPass());
       });
   auto PM = PB.buildPerModuleDefaultPipeline(
       Level == 3 ? OptimizationLevel::O3 : OptimizationLevel::O2);

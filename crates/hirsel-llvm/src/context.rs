@@ -44,6 +44,8 @@ use hirsel_lir::layout_types::TargetSpec;
 use crate::LlvmVersion;
 
 #[cfg(test)]
+mod ahead_tests;
+#[cfg(test)]
 mod count_tests;
 mod masks;
 

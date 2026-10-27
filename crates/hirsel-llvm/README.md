@@ -629,3 +629,14 @@ operation. Library bodies forward the pair transparently. Function-reference thu
 accept the uniform callable carrier and discard it when entering an unmarked direct
 target. Failure edges fill unknown records before cleanup and preserve anchored
 children; release glue and descriptor wrappers carry both codes explicitly.
+
+Pure scalar ahead loops run in 32-point chunks when both the unsigned source
+induction bound and the physical quota have more than 32 points left. The
+chunk carries scalar state in SSA, checks neither quota nor checkpoint inside
+its loop, and subtracts exactly 32 points on returning to the outer header.
+The original loop handles source and quota tails, so the 1024-point handoff
+position, every observable boundary and all logical fuel charges stay exact.
+Loops with memory accesses, other calls, additional exits or unproved bounds
+retain their original checkpoints. Fuel builds use that path. LLVM's final
+stack-size records cover chunk exits in the same function's frame; the separate
+certificate checker still derives its bound from the actual final object.

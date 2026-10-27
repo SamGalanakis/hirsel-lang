@@ -89,3 +89,45 @@ fn input_sized_comparison_and_resource_cleanup_are_refused() {
         assert!(analyze(source, name).is_err());
     }
 }
+
+#[test]
+fn scalar_alternate_loop_ir() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let source = "fn main(seed:u64,count:u64)->u64 uses {} {let mut x=seed; for i in 0u64..count {x=int.wrapping_add(int.wrapping_mul(x ^ (x >> 7),0x9e3779b97f4a7c15u64),i)}; x}";
+        let file = engine.sources.add("chunk.hir", source.to_owned()).unwrap();
+        let checked = check_progress(&mut engine, file, &default_context()).unwrap();
+        assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
+        let input = engine.export_native_input().unwrap();
+        let validated = engine.import_native_input(input).unwrap();
+        let program = native::build(
+            &validated,
+            &native::Options::new(native::TargetSpec::x86_64_unknown_linux_gnu()),
+        )
+        .unwrap();
+        let units = program.units.iter().collect::<Vec<_>>();
+        let inputs = hirsel_lir::emission::EmitInputs {
+            ahead: None,
+            continuation: None,
+            alternate: true,
+            index: None,
+            verify_backend: true,
+            input: &program.input,
+            target: &program.target,
+            layouts: &program.table,
+            keys: &program.keys,
+            manifest: &program.manifest,
+            statics: &program.statics,
+            inline_instances: &program.inline_instances,
+            available_externally: &Default::default(),
+            callbacks: false,
+            tracking: program.tracking(),
+            foreign: &program.foreign_dispatch,
+            opt: hirsel_lir::emission::OptLevel::Speed,
+            measurement: false,
+            fuel: false,
+        };
+        let after = hirsel_llvm::emit_optimized_ir(&units, &inputs).unwrap();
+        assert!(after.contains("ahead.boundary"), "{after}");
+    });
+}
