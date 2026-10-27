@@ -31,7 +31,7 @@ impl NativeRootTasks {
         w.flat_vec(&self.reads);
         // The root later owns one canonical copy of the selected instances.
         w.add(size_of::<NativeRootProduct>() + 2 * size_of::<usize>());
-        w.add(self.native.snapshot.owners.len() * size_of::<InstanceAddress>());
+        w.add(self.native.snapshot.owners.len().max(4) * size_of::<InstanceAddress>());
         for key in self.native.snapshot.owners.values() {
             super::ownership_compilation::metadata::address(&mut w, key);
         }

@@ -361,7 +361,13 @@ impl CompilationTasks {
             w.flat_vec(&backend.foreign_inputs);
         });
         copied.flat_vec(&links);
-        copied.add(links.capacity() * size_of::<ProductRef>());
+        copied.add(
+            links
+                .len()
+                .saturating_mul(2)
+                .max(4)
+                .saturating_mul(size_of::<ProductRef>()),
+        );
         let bytes = guard_bytes
             .saturating_add(operations_bytes)
             .saturating_add(snapshot_bytes)
