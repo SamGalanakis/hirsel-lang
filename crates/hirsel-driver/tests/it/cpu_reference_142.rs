@@ -266,7 +266,7 @@ fn cpu_scalar_scopes_agree_under_free_and_ordered_at_widths_1_4_8() {
             .map(|n| format!("{}u64", n + 7))
             .collect::<Vec<_>>()
             .join(",");
-        let source = include_str!("../../../hirsel-cli/tests/support/cpu_pool/interpreter.hir")
+        let source = include_str!("../fixtures/cpu-interpreter.hir")
             .replace("WIDTH", &format!("{width}u32"))
             .replace("JOBS", &format!("[{jobs}]"))
             .replace("EXPECTED", &format!("[{expected}]"));
@@ -329,5 +329,27 @@ pub fn main(rt: Io) -> Result[(), GrantError] {
         Some(grant(4)),
         b"cpu-equal-ok\n",
         false,
+    );
+}
+
+#[test]
+fn cpu_ordered_float_bitcasts_match_native_start_selection() {
+    agree_in(
+        r#"
+pub fn main(rt: Io) -> Result[(), GrantError] {
+  let tasks = io.tasks(rt)?
+  let rows = core@1/cpu.map_scoped(tasks, 1u32,
+    fn() -> List[u64] uses {} { [1u64, 2u64] },
+    fn(take job: u64) -> u64 uses {} { core@1/f64.bits(core@1/f64.from_bits(job)) })
+  failure.check(rows == Ok([1u64, 2u64]), Bounds())
+  let _ = out.print(io.stdout(rt)?, "cpu-bits-ok\n")
+  Ok(())
+}
+"#,
+        Some(grant(1)),
+        b"cpu-bits-ok\n",
+        false,
+        false,
+        true,
     );
 }

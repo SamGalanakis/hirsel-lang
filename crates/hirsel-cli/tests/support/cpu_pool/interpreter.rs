@@ -22,7 +22,7 @@ fn cpu_interpreter_native_phases(width: usize) {
         "sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}).to_string()).unwrap();
     let grants = root.join("grants.json");
     fs::write(&grants, serde_json::json!({"placement":{"cores":1,"reorder":"auto"},
-        "io":{"dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
+        "io":{"stdout":"stdout.bytes@1","dirs":[],"tasks":"tasks.free@1","cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
     let mut reference = None;
     for backend in ["llvm", "cranelift"] {

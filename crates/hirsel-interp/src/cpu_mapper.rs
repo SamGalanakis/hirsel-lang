@@ -36,6 +36,10 @@ fn pure(path: &hirsel_syntax::DefPath) -> bool {
         "int.count_ones",
         "int.swap_bytes",
         "int.reverse_bits",
+        "f32.bits",
+        "f32.from_bits",
+        "f64.bits",
+        "f64.from_bits",
     ]
     .iter()
     .any(|name| path.is_core(name))
@@ -111,8 +115,13 @@ pub(crate) async fn certified(
         if body.rvalues.iter().any(|value| {
             !matches!(
                 value,
-                Rvalue::Constant(Constant::Unit | Constant::Bool(_) | Constant::Integer(_))
-                    | Rvalue::Use(_)
+                Rvalue::Constant(
+                    Constant::Unit
+                        | Constant::Bool(_)
+                        | Constant::Integer(_)
+                        | Constant::F32(_)
+                        | Constant::F64(_)
+                ) | Rvalue::Use(_)
                     | Rvalue::Unary { .. }
                     | Rvalue::Binary { .. }
                     | Rvalue::Size(_)
