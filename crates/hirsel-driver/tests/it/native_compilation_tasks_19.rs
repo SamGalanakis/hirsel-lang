@@ -277,6 +277,7 @@ fn run_case(
 #[derive(Clone, Copy)]
 enum ProgramCase {
     Comptime,
+    WideFrontier,
     OrdinaryCallee { optimized: bool },
 }
 impl ProgramCase {
@@ -288,6 +289,13 @@ impl ProgramCase {
             Self::Comptime => format!(
                 "const SECOND:u64=comptime {literal}u64\npub fn main()->Result[(),u64]{{Error(SECOND)}}\n"
             ),
+            Self::WideFrontier => {
+                let mut source = Self::Comptime.source(literal);
+                for n in 0..48 {
+                    source.push_str(&format!("pub fn unrelated_{n}()->u64{{1u64}}\n"));
+                }
+                source
+            }
             Self::OrdinaryCallee { .. } => format!(
                 "fn helper(x:u64)->u64{{x+{literal}u64}}\npub fn main()->Result[(),u64]{{Error(helper(0u64))}}\n"
             ),
@@ -316,6 +324,41 @@ fn run_program_case(
     use_frozen_kit: bool,
     verify_objects: bool,
     case: ProgramCase,
+) {
+    run_program_case_with_frame(
+        jobs,
+        observation_only,
+        frozen_plan,
+        use_frozen_kit,
+        verify_objects,
+        case,
+        1 << 20,
+    );
+}
+
+#[test]
+fn shared_native_selections_fit_a_small_continuation_frame() {
+    with_compiler_stack(|| {
+        run_program_case_with_frame(
+            1,
+            false,
+            false,
+            false,
+            false,
+            ProgramCase::WideFrontier,
+            16 << 10,
+        )
+    });
+}
+
+fn run_program_case_with_frame(
+    jobs: usize,
+    observation_only: bool,
+    frozen_plan: bool,
+    use_frozen_kit: bool,
+    verify_objects: bool,
+    case: ProgramCase,
+    retained: u64,
 ) {
     let directory = tempfile::tempdir().unwrap();
     // The same admitted transport is selected before source or native work.
@@ -475,7 +518,7 @@ fn run_program_case(
         // complete budget and is not installed by these native components.
         let weight = MemoryWeight {
             scratch: 32 << 20,
-            retained: 1 << 20,
+            retained,
             stack: 0,
         };
         let mut options = native::Options::new(target.clone());

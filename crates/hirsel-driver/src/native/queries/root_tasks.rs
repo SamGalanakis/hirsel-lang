@@ -24,12 +24,28 @@ pub struct NativeRootTasks {
     pub publications: AtomicU64,
 }
 impl NativeRootTasks {
+    pub(super) fn retained_dispatch_bytes(&self) -> u64 {
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        w.vec(&self.key.roots, |w, path| w.path(path));
+        w.flat_vec(&self.reads);
+        // The root later owns one canonical copy of the selected instances.
+        w.add(size_of::<NativeRootProduct>() + 2 * size_of::<usize>());
+        w.add(self.native.snapshot.owners.len() * size_of::<InstanceAddress>());
+        for key in self.native.snapshot.owners.values() {
+            super::ownership_compilation::metadata::address(&mut w, key);
+        }
+        w.bytes()
+    }
     pub fn new(
         native: Arc<NativeTasks>,
         source: Arc<NativeLinkSource>,
         key: NativeRootKey,
         weight: MemoryWeight,
     ) -> Result<Arc<Self>, String> {
+        if std::mem::size_of::<RootTask>() as u64 > weight.retained {
+            return Err("root continuation exceeds declared retained allowance".into());
+        }
         // Pure input validation: no native query and no product publication.
         RootProducts::new(native.snapshot.clone(), source.clone(), key.clone())?;
         let query = key.query_id()?;
@@ -51,9 +67,9 @@ impl NativeRootTasks {
         reads.sort_by_key(|(key, _)| key.address.0);
         if (std::mem::size_of::<RootTask>()
             + reads.len() * std::mem::size_of::<(QueryId, Reference)>()) as u64
-            > weight.retained
+            > weight.scratch
         {
-            return Err("root continuation exceeds declared retained allowance".into());
+            return Err("root reads exceed declared scratch allowance".into());
         }
         Ok(Arc::new(Self {
             native,

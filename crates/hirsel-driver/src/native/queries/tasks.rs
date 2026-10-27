@@ -233,13 +233,16 @@ impl NativeTasks {
                 }),
             );
         }
+        if std::mem::size_of::<NativeTask>() as u64 > weight.retained {
+            return Err("native continuation exceeds its declared retained allowance".into());
+        }
         if requests.values().any(|request| {
             (std::mem::size_of::<NativeTask>()
                 + request.reads.len() * std::mem::size_of::<(QueryId, Reference)>())
                 as u64
-                > weight.retained
+                > weight.scratch
         }) {
-            return Err("native continuation exceeds its declared retained allowance".into());
+            return Err("native reads exceed declared scratch allowance".into());
         }
         Ok(Arc::new(Self {
             snapshot,
@@ -400,6 +403,23 @@ pub struct CodegenTasks {
     weight: MemoryWeight,
 }
 impl CodegenTasks {
+    pub(super) fn retained_dispatch_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata as m;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        let codegen = |w: &mut hirsel_engine::NativeMetadataWeight, key: &CodegenKey| {
+            m::address(w, &key.owner);
+            w.add(key.backend.capacity());
+        };
+        w.packed_map(&mut self.requests, |w, _, key| codegen(w, key));
+        w.packed_map(&mut self.whole, |w, _, key| {
+            w.add(2 * size_of::<usize>() + size_of_val(key.units()));
+            for unit in key.units() {
+                codegen(w, unit);
+            }
+        });
+        w.bytes()
+    }
     pub fn new(
         native: Arc<NativeTasks>,
         keys: Vec<CodegenKey>,
@@ -426,11 +446,8 @@ impl CodegenTasks {
         }
         let mut whole_requests = BTreeMap::new();
         for key in whole {
-            if key
-                .retained_bytes()
-                .saturating_add(std::mem::size_of::<ObjectTaskRequest>() as u64)
-                > weight.retained
-            {
+            // WholeCodegenKey clones one Arc. The admitted dispatch owns its units.
+            if std::mem::size_of::<ObjectTaskRequest>() as u64 > weight.retained {
                 return Err("whole-module Codegen exceeds retained allowance".into());
             }
             if key.units().iter().any(|unit| {

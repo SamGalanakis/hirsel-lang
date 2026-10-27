@@ -87,7 +87,7 @@ fn inputs(store: &dyn ResultStore, fragments: Vec<FragmentProduct>) -> LinkInput
 }
 fn link_key() -> LinkKey {
     LinkKey {
-        roots: vec![key("main").owner],
+        roots: vec![key("main").owner].into(),
         target: object().target,
         linker_options: hash("linker"),
     }
@@ -113,9 +113,11 @@ fn addresses_cover_every_option_and_canonical_roots() {
         assert_ne!(original.address(), changed.address(), "axis {axis}");
     }
     let mut a = link_key();
-    a.roots.push(key("other").owner);
+    let mut roots = a.roots.to_vec();
+    roots.push(key("other").owner);
+    a.roots = roots.into();
     let mut b = a.clone();
-    b.roots.reverse();
+    Arc::make_mut(&mut b.roots).reverse();
     assert_eq!(a.address(), b.address());
     b.target = hash("different target");
     assert_ne!(a.address(), b.address());
@@ -584,7 +586,7 @@ fn actual_ready_fixture_emits_links_restores_and_exits_on_both_backends() {
                 manifest.runtime_archives =
                     vec![put_blob(link_store.as_ref(), &std::fs::read(archive).unwrap()).unwrap()];
                 let key = LinkKey {
-                    roots: vec![address.clone()],
+                    roots: vec![address.clone()].into(),
                     target: program.target.digest(),
                     linker_options: hash("actual pinned lld+kit fixture"),
                 };

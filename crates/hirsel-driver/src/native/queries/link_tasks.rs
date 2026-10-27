@@ -106,11 +106,40 @@ pub struct LinkTasks {
     observation_scope: OnceLock<(ProductRef, Vec<ProductRef>)>,
 }
 impl LinkTasks {
+    pub(super) fn retained_dispatch_bytes(&mut self) -> u64 {
+        use super::ownership_compilation::metadata as m;
+        let mut w = hirsel_engine::NativeMetadataWeight::default();
+        w.add(size_of::<Self>() + 2 * size_of::<usize>());
+        w.packed_map(&mut self.plans, |w, _, plan| {
+            w.arc(plan);
+            w.add(2 * size_of::<usize>() + size_of_val(plan.input.key.roots.as_ref()));
+            for key in plan.input.key.roots.iter() {
+                m::address(w, key);
+            }
+            w.vec(&plan.input.fragments, |w, key| {
+                m::address(w, &key.owner);
+                w.add(key.backend.capacity());
+            });
+            w.flat_vec(&plan.input.runtime_archives);
+            w.flat_vec(&plan.input.foreign_inputs);
+            w.flat_vec(&plan.runtime);
+            w.flat_vec(&plan.foreign);
+            w.flat_vec(&plan.ready);
+            w.flat_vec(&plan.fragments);
+            // Later observation_scope retains one product for each Ready.
+            w.add(plan.ready.len() * size_of::<ProductRef>());
+        });
+        w.packed_map(&mut self.requests, |w, _, request| w.arc(request));
+        w.bytes()
+    }
     pub fn new(
         root: Arc<NativeRootTasks>,
         inputs: Vec<NativeLinkPlan>,
         leaf_weight: MemoryWeight,
     ) -> Result<Arc<Self>, String> {
+        if std::mem::size_of::<LeafTask>() as u64 > leaf_weight.retained {
+            return Err("Link manifest continuation exceeds declared retained allowance".into());
+        }
         let mut owners = root
             .native
             .snapshot
@@ -145,7 +174,7 @@ impl LinkTasks {
         );
         let mut plans = BTreeMap::new();
         for input in inputs {
-            let mut selected = input.key.roots.clone();
+            let mut selected = input.key.roots.to_vec();
             selected.sort_by(InstanceAddress::canonical_cmp);
             if selected != owners
                 || input.key.target != root.native.snapshot.options.target.digest()
@@ -165,12 +194,8 @@ impl LinkTasks {
                         .into(),
                 );
             }
-            let retained = std::mem::size_of::<ObjectTaskRequest>()
-                + owners
-                    .iter()
-                    .map(|k| k.instance.encoding().len() + std::mem::size_of::<InstanceAddress>())
-                    .sum::<usize>();
-            if retained as u64 > input.weight.retained {
+            // Link clones the shared root selection, not its registry payload.
+            if std::mem::size_of::<ObjectTaskRequest>() as u64 > input.weight.retained {
                 return Err("Link continuation exceeds declared retained allowance".into());
             }
             let mut leaves = |references: &[Reference]| -> Result<Vec<QueryId>, String> {
@@ -235,8 +260,8 @@ impl LinkTasks {
         }
         let maximum_reads =
             owners.len() * std::mem::size_of::<QueryId>() + std::mem::size_of::<LeafTask>();
-        if maximum_reads as u64 > leaf_weight.retained {
-            return Err("Link manifest continuation exceeds declared retained allowance".into());
+        if maximum_reads as u64 > leaf_weight.scratch {
+            return Err("Link manifest reads exceed declared scratch allowance".into());
         }
         Ok(Arc::new(Self {
             root,

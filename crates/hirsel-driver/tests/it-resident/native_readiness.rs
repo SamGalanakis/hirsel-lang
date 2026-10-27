@@ -45,7 +45,7 @@ fn fixture(store: Arc<dyn ResultStore>) -> LinkedProduct {
         )
         .unwrap();
     let key = LinkKey {
-        roots: vec![],
+        roots: vec![].into(),
         target: ContentHash::of_bytes(b"fixture target"),
         linker_options: ContentHash::of_bytes(b"fixture linker"),
     };

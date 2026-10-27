@@ -251,31 +251,9 @@ impl CompilationTasks {
             .iter()
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        // Includes duplicated key/read metadata in native/root/object dispatch.
-        // This bounds dispatch records, not the still-separate source/C-cache
-        // memory accounting or the host's final RSS qualification.
-        let template_bytes = completed.iter().try_fold(0u64, |total, (_, output)| {
-            serde_json::to_vec(&(&output.templates, &output.emission))
-                .map(|bytes| total.saturating_add(bytes.len() as u64))
-                .map_err(|error| error.to_string())
-        })?;
-        let bytes = 16384u64
-            .saturating_add(guard_bytes)
-            .saturating_add(template_bytes.saturating_mul(4))
-            .saturating_add(
-                owners
-                    .iter()
-                    .map(|owner| {
-                        (owner.instance.encoding().len() as u64 + 4096)
-                            .saturating_mul((8 + self.backends.len() * 4) as u64)
-                    })
-                    .sum::<u64>(),
-            );
-        if bytes > self.allowance.bytes() {
-            return Err("native compilation dispatch allowance exhausted".into());
-        }
         let declarations = &self.instances.source_inputs().declarations;
-        let operations = self.instances.source_operations(discovery)?;
+        let mut operations = self.instances.source_operations(discovery)?;
+        let operations_bytes = super::ownership_compilation::metadata::operations(&mut operations);
         let manifest = declarations.manifest()?;
         let mut snapshot = NativeSnapshot::new(
             self.instances.selected_store().clone(),
@@ -303,7 +281,11 @@ impl CompilationTasks {
             .ok_or("native snapshot was shared before admission completed")?
             .retained_allowances = retained_allowances;
         Arc::get_mut(&mut snapshot).unwrap().guard_admitted_bytes = guard_bytes;
-        let native = NativeTasks::new(snapshot, self.weight)?;
+        let snapshot_bytes = Arc::get_mut(&mut snapshot)
+            .unwrap()
+            .retained_dispatch_bytes();
+        let mut native = NativeTasks::new(snapshot, self.weight)?;
+        let native_bytes = Arc::get_mut(&mut native).unwrap().retained_dispatch_bytes();
         let roots = NativeRootTasks::new(
             native.clone(),
             self.source.clone(),
@@ -347,7 +329,7 @@ impl CompilationTasks {
                 continue;
             }
             let key = LinkKey {
-                roots: owners.clone(),
+                roots: owners.clone().into(),
                 target: self.root.target_abi,
                 linker_options: backend.linker_options,
             };
@@ -361,9 +343,36 @@ impl CompilationTasks {
                 weight: self.weight,
             });
         }
-        let objects =
+        let mut objects =
             CodegenTasks::with_whole_modules(native.clone(), codegen, whole_codegen, self.weight)?;
-        let link = LinkTasks::new(roots.clone(), plans, self.weight)?;
+        let object_bytes = Arc::get_mut(&mut objects)
+            .unwrap()
+            .retained_dispatch_bytes();
+        let mut link = LinkTasks::new(roots.clone(), plans, self.weight)?;
+        let link_bytes = Arc::get_mut(&mut link).unwrap().retained_dispatch_bytes();
+        let mut copied = hirsel_engine::NativeMetadataWeight::default();
+        // Fixed controller/factory envelopes plus every owned variable buffer.
+        copied.add(16384);
+        copied.vec(&self.root.roots, |w, path| w.path(path));
+        super::ownership_compilation::metadata::emission(&mut copied, &self.emission);
+        copied.vec(&self.backends, |w, backend| {
+            w.add(backend.backend.capacity());
+            w.flat_vec(&backend.runtime_archives);
+            w.flat_vec(&backend.foreign_inputs);
+        });
+        copied.flat_vec(&links);
+        copied.add(links.capacity() * size_of::<ProductRef>());
+        let bytes = guard_bytes
+            .saturating_add(operations_bytes)
+            .saturating_add(snapshot_bytes)
+            .saturating_add(native_bytes)
+            .saturating_add(roots.retained_dispatch_bytes())
+            .saturating_add(object_bytes)
+            .saturating_add(link_bytes)
+            .saturating_add(copied.bytes());
+        if bytes > self.allowance.bytes() {
+            return Err("native compilation dispatch allowance exhausted".into());
+        }
         let leaf: Arc<dyn QueryFactory> = Arc::new(LinkInputFactory::new(link.clone()));
         let mut factories: BTreeMap<u32, Arc<dyn QueryFactory>> = BTreeMap::from([
             (

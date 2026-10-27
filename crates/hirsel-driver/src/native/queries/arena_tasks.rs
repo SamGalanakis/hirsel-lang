@@ -136,14 +136,14 @@ impl ArenaTasks {
             .iter()
             .map(component_id)
             .collect::<Result<Vec<_>, _>>()?;
-        if (std::mem::size_of::<ArenaTask>() + ids.len() * 256) as u64 > self.weight.retained {
-            return Err("arena graph reads exceed retained allowance".into());
+        if (std::mem::size_of::<ArenaTask>() + ids.len() * 256) as u64 > self.weight.scratch {
+            return Err("arena graph reads exceed scratch allowance".into());
         }
         let mut bytes = 4096u64;
         for (index, key) in queries.component_keys.iter().enumerate() {
             let reads = key.members.len() + queries.dependencies(index)?.len();
-            if (std::mem::size_of::<ArenaTask>() + reads * 256) as u64 > self.weight.retained {
-                return Err("arena component reads exceed retained allowance".into());
+            if (std::mem::size_of::<ArenaTask>() + reads * 256) as u64 > self.weight.scratch {
+                return Err("arena component reads exceed scratch allowance".into());
             }
             bytes = bytes.saturating_add(
                 4096 + (reads as u64) * 1024

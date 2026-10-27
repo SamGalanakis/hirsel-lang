@@ -34,7 +34,7 @@ pub struct FragmentProduct {
 
 #[derive(Clone, Debug)]
 pub struct LinkKey {
-    pub roots: Vec<InstanceAddress>,
+    pub roots: Arc<[InstanceAddress]>,
     pub target: ContentHash,
     /// Exact linker implementation, options, ABI and implicit toolchain inputs.
     pub linker_options: ContentHash,

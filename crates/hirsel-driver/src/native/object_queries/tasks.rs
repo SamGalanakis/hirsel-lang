@@ -121,15 +121,15 @@ impl<S: ObjectTaskSnapshot + 'static> QueryFactory for ObjectTaskFactory<S> {
         if request.id() != id {
             return Err(self.snapshot.failure("object task key/address mismatch"));
         }
-        // Per-instance Codegen owns a cloned key, not the immutable native
-        // registry behind the snapshot. Charge its actual frame and vectors;
-        // whole-module and Link requests keep their supplied ownership bound.
-        let retained = if let ObjectTaskRequest::Codegen { key, .. } = &request {
-            (std::mem::size_of::<ObjectTask<S>>() as u64)
-                .saturating_add(key.owner.instance.encoding().len() as u64)
-                .saturating_add(key.backend.capacity() as u64)
-        } else {
-            request.weight().retained
+        // Whole-module units are shared with their admitted registry. Link
+        // retains its supplied frame grant; per-instance Codegen clones a key.
+        let retained = match &request {
+            ObjectTaskRequest::Codegen { key, .. } => (std::mem::size_of::<ObjectTask<S>>() as u64)
+                .saturating_add(
+                    (key.owner.instance.encoding().len() + key.backend.capacity()) as u64,
+                ),
+            ObjectTaskRequest::WholeCodegen { .. } => std::mem::size_of::<ObjectTask<S>>() as u64,
+            ObjectTaskRequest::Link { .. } => request.weight().retained,
         };
         if retained > request.weight().retained {
             return Err(self
@@ -312,10 +312,10 @@ impl<S: ObjectTaskSnapshot> QueryTask for ObjectTask<S> {
         }
     }
     fn continuation_bytes(&self) -> u64 {
-        if matches!(&self.request, ObjectTaskRequest::Codegen { .. }) {
-            self.retained
-        } else {
+        if matches!(&self.request, ObjectTaskRequest::Link { .. }) {
             0
+        } else {
+            self.retained
         }
     }
     fn poll(&mut self, cx: &mut dyn QueryContext) -> QueryPoll {
