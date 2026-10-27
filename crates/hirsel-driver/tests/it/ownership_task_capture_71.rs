@@ -270,3 +270,29 @@ pub fn main(rt:Io)->Result[(),GrantError] {
     );
 }
 
+#[test]
+#[ignore = "requires diagnostic runtime: -c hirsel.ownership_trace=true -- --test-arg=--include-ignored"]
+fn native_free_failed_finalizers_retain_both_actual_capture_lifetimes() {
+    capture_with_tasks(
+        r#"
+resource type Token {}
+drop(x) { let zero:u8=0u8
+ let _=1u8/zero }
+pub fn main(rt:Io)->Result[(),GrantError] {
+ let tasks=io.tasks(rt)?
+ task.scope(tasks,fn(s:Scope) {
+  let first=Token()
+  let second=Token()
+  let child=task.async(s,fn(){
+    let x=take first
+    let y=take second
+  })
+  let _=task.await(s,take child)
+ })
+ Ok(())
+}
+"#,
+        hirsel_run_schema::exit::FAILED,
+        "tasks.free@1",
+    );
+}
