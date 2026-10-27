@@ -1560,6 +1560,8 @@ impl Lowering<'_, '_> {
             if self.facts.slot_of(address).is_some_and(|(_, original)| released == original) && moved.is_empty());
         let whole_finalizer = matches!(actions.as_slice(), [Action::Finalize { path: finalized, .. }]
             if self.facts.slot_of(address).is_some_and(|(_, original)| finalized == original));
+        let finalizer_fields = matches!(actions.as_slice(), [Action::Finalize { fields, .. }]
+            if !fields.is_empty());
         let version = match s.versions {
             Versions::One(v) => Some(v),
             _ if actions.is_empty() => None,
@@ -1595,18 +1597,17 @@ impl Lowering<'_, '_> {
                 index: self.ed.code[at.index()].len() as u32 - 1,
             })
             .or_else(|| {
-                whole_finalizer
+                (whole_finalizer && !finalizer_fields)
                     .then_some(hirsel_lir::ownership_trace::Point::FinalizerDrop { block: b })
             });
         let release = release.or_else(|| {
-            (!actions.is_empty() && !whole_release && !whole_finalizer).then_some(
-                hirsel_lir::ownership_trace::Point::CompoundDrop {
+            (!actions.is_empty() && !whole_release && (!whole_finalizer || finalizer_fields))
+                .then_some(hirsel_lir::ownership_trace::Point::CompoundDrop {
                     block: b,
                     normal: at,
                     index: self.ed.code[at.index()].len() as u32,
                     failure: self.ed.unit.tables.edges[site.failure.cleanup.index()].target,
-                },
-            )
+                })
         });
         report.splice(observation::Splice {
             block: b,

@@ -3287,6 +3287,19 @@ fn compound_drop_fixture(
     CleanupAnchorId,
     hirsel_lir::layout_types::LayoutTable,
 ) {
+    compound_drop_fixture_with_parent(alternatives, false)
+}
+
+fn compound_drop_fixture_with_parent(
+    alternatives: bool,
+    parent: bool,
+) -> (
+    hirsel_lir::stage::ValidatedUnit<hirsel_lir::stage::Ready>,
+    Plan,
+    Plan,
+    CleanupAnchorId,
+    hirsel_lir::layout_types::LayoutTable,
+) {
     use hirsel_lir::layout_types::{CopyRecipe, DropStep};
     let mut t = Lir::<Rc>::new(&[(Passing::Take, l::PAIR)], None);
     let pair = &mut t.table.layouts[l::PAIR.0 as usize];
@@ -3303,8 +3316,18 @@ fn compound_drop_fixture(
             layout: l::RES,
         },
     ];
+    if parent {
+        pair.kind = hirsel_lir::layout_types::LayoutKind::Resource;
+        pair.finalizer = Some(hirsel_lir::layout_types::FinalizerRef {
+            definition: support::path("Pair"),
+            body: 1,
+            unsafe_ffi_package: false,
+        });
+        pair.drop.insert(0, DropStep::Finalize);
+    }
     pair.scan.clear();
     let abi = t.abi(&[(Passing::Borrow, l::RES)], None);
+    let parent_abi = t.abi(&[(Passing::Borrow, l::PAIR)], None);
     let slot = t.slot(l::PAIR, SlotKind::Parameter(0), ROOT);
     let version = t.version_of(slot);
     t.param(version);
@@ -3370,7 +3393,7 @@ fn compound_drop_fixture(
             })
             .collect(),
     );
-    let finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
+    let mut finalizers = hirsel_rc::cleanup::Finalizers(std::collections::BTreeMap::from([(
         l::RES,
         hirsel_rc::cleanup::Finalizer {
             origin: UnitOrigin::Source,
@@ -3379,6 +3402,17 @@ fn compound_drop_fixture(
             abi,
         },
     )]));
+    if parent {
+        finalizers.0.insert(
+            l::PAIR,
+            hirsel_rc::cleanup::Finalizer {
+                origin: UnitOrigin::Source,
+                definition: support::path("Pair"),
+                instance: support::hash("Pair.drop"),
+                abi: parent_abi,
+            },
+        );
+    }
     let (after, output, _) = hirsel_rc::cleanup::lower_observed(
         unit,
         &finalizers,
@@ -4133,4 +4167,44 @@ fn ownership_trace_staged_return_keeps_original_token_and_refuses_forged_storage
         .observations
         .retain(|other| other.marker.id != row.marker.id);
     assert!(check_transform(before.unit(), &input, &placed, &omitted, Some(&recipe)).is_err());
+}
+
+#[test]
+fn ownership_trace_compound_resource_covers_parent_children_and_rejects_a_parent_only_cut() {
+    let (after, output, initial, _, _) = compound_drop_fixture_with_parent(false, true);
+    assert_eq!(
+        output.observations[0].marker,
+        initial.observations[0].marker
+    );
+    let checked = check(after.unit(), &output).unwrap();
+    let commits = checked.commits(after.unit(), MarkerId(0)).unwrap();
+    assert!(
+        commits.len() >= 9,
+        "parent and both children need every failure completion"
+    );
+    let mut prefix = output.clone();
+    let Point::Instruction { block, index, .. } = commits[0] else {
+        unreachable!()
+    };
+    let Point::CompoundDrop {
+        normal, index: cut, ..
+    } = &mut prefix.observations[0].point
+    else {
+        unreachable!()
+    };
+    *normal = block;
+    *cut = index + 1;
+    assert!(check(after.unit(), &prefix).is_err());
+    let Point::Instruction { block, index, .. } = commits[0] else {
+        unreachable!()
+    };
+    let mut missing = after.into_raw();
+    let physical = missing.blocks[block.index()].instructions.start + index;
+    assert!(matches!(
+        missing.instructions[physical as usize],
+        Inst::FinalizeEnd { .. }
+    ));
+    missing.instructions[physical as usize] = Inst::FrameLeave;
+    let missing_plan = Plan::new(&missing, output.observations);
+    assert!(check(&missing, &missing_plan).is_err());
 }

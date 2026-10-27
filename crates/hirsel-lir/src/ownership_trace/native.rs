@@ -6,6 +6,7 @@
 use super::*;
 use crate::layout_types::{LayoutId, LayoutKind, LayoutTable};
 use crate::stage::{Ready, ValidatedUnit};
+use std::collections::BTreeSet;
 
 mod calls;
 
@@ -121,7 +122,16 @@ impl LeafPlan {
                 && layouts.layout(layout).is_some_and(|record| {
                     matches!(record.kind, LayoutKind::Aggregate | LayoutKind::Resource)
                 });
-            if !leaf(layouts, layout) && !carrier_move && !source_aggregate && !aggregate_move {
+            let resource_tree = layouts.layout(layout).is_some_and(|record| {
+                matches!(record.kind, LayoutKind::Resource)
+                    && static_resource_tree(layouts, layout, &mut BTreeSet::new())
+            });
+            if !leaf(layouts, layout)
+                && !resource_tree
+                && !carrier_move
+                && !source_aggregate
+                && !aggregate_move
+            {
                 return Err(format!(
                     "native ownership tracing: nested ownership at {point:?}"
                 ));
@@ -1146,6 +1156,32 @@ fn plain(table: &LayoutTable, id: LayoutId, depth: usize) -> bool {
         | LayoutKind::Sequence { element } => plain(table, element, depth + 1),
         _ => false,
     }
+}
+
+// Static inline Resource/aggregate fields preserve independent child identities.
+// Each FinalizeEnd retires only its own Resource; no parent event drops children.
+fn static_resource_tree(
+    table: &LayoutTable,
+    layout: LayoutId,
+    active: &mut BTreeSet<LayoutId>,
+) -> bool {
+    if plain(table, layout, 0) {
+        return true;
+    }
+    let Some(record) = table.layout(layout) else {
+        return false;
+    };
+    if !matches!(record.kind, LayoutKind::Resource | LayoutKind::Aggregate)
+        || !active.insert(layout)
+    {
+        return false;
+    }
+    let supported = record
+        .fields
+        .iter()
+        .all(|field| static_resource_tree(table, field.layout, active));
+    active.remove(&layout);
+    supported
 }
 
 fn leaf(table: &LayoutTable, id: LayoutId) -> bool {

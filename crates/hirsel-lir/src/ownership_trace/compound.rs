@@ -46,10 +46,10 @@ pub(super) fn parts<S: Stage>(
     }
     let (first, anchor) = finalizer::begin(unit, block)?;
     let (slot, prefix) = path(unit, root)?;
-    let descendant = |address| {
-        path(unit, address)
-            .is_some_and(|(s, p)| s == slot && p.starts_with(&prefix) && p.len() > prefix.len())
-    };
+    // The containing Resource has its own finalizer before its child actions.
+    // The exact slot/prefix and common cleanup anchor still bind the whole cut.
+    let descendant =
+        |address| path(unit, address).is_some_and(|(s, p)| s == slot && p.starts_with(&prefix));
     if !descendant(first) {
         return None;
     }
