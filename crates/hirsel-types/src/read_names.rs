@@ -189,7 +189,7 @@ impl std::fmt::Debug for ReadContext {
 }
 impl PartialEq<FileContext> for ReadContext {
     fn eq(&self, other: &FileContext) -> bool {
-        &*self.0 == other
+        &self.0.value == other
     }
 }
 impl serde::Serialize for ReadContext {
