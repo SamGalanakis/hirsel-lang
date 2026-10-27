@@ -9,9 +9,41 @@ use hirsel_run_schema::ownership_trace::{
 };
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-pub const ABI_VERSION: u32 = 91;
+pub const ABI_VERSION: u32 = 92;
 const _: () = assert!(ABI_VERSION > crate::ABI_VERSION);
 const LIMIT: usize = 65_536;
+
+/// Checked source intent, retained by the runtime's actual spawn command.
+#[derive(Clone, Copy)]
+pub(crate) struct SpawnBinding {
+    pub(crate) task: u64,
+    pub(crate) frame: u64,
+    pub(crate) marker: u32,
+}
+
+/// Take the issuing task's checked intent without observing any language bytes.
+pub(crate) unsafe fn take_spawn(ctx: *mut TaskCtx) -> Option<SpawnBinding> {
+    unsafe { (*ctx).ownership_spawn.take() }
+}
+
+pub(crate) fn spawned(run: &crate::context::RunShared, binding: Option<SpawnBinding>, child: u64) {
+    if let (Some(observer), Some(binding)) = (run.ownership_trace.as_ref(), binding) {
+        observer.record(Row::Spawn {
+            task: binding.task,
+            frame: binding.frame,
+            marker: binding.marker,
+            child,
+        });
+    }
+}
+
+pub(crate) fn task_end(ctx: &TaskCtx) {
+    if let Some(observer) = ctx.run_ref().ownership_trace.as_ref() {
+        observer.record(Row::TaskEnd {
+            task: ctx.ownership_task,
+        });
+    }
+}
 
 pub(crate) struct Observer {
     destination: std::path::PathBuf,
@@ -202,6 +234,16 @@ pub unsafe extern "C" fn hirsel_rt_v2_ownership_event(
 ) {
     if let Some(observer) = unsafe { observer(ctx) } {
         let observer = unsafe { &*observer };
+        if action == 5 {
+            let binding = SpawnBinding {
+                task: unsafe { (*ctx).ownership_task },
+                frame,
+                marker,
+            };
+            if unsafe { (*ctx).ownership_spawn.replace(binding) }.is_some() {
+                observer.failed.store(true, Ordering::Relaxed);
+            }
+        }
         observer.record(Row::Event {
             task: unsafe { (*ctx).ownership_task },
             frame,

@@ -446,7 +446,19 @@ pub(crate) unsafe fn spawn(
                 .expect("spawn path ordinal overflow");
             assert!(s.tasks[index as usize].is_none());
             #[cfg(feature = "ownership-trace")]
-            crate::ownership_trace::task((*ctx).run_ref(), handle(index, generation), &task.path);
+            {
+                crate::ownership_trace::task(
+                    (*ctx).run_ref(),
+                    handle(index, generation),
+                    &task.path,
+                );
+                let binding = crate::ownership_trace::take_spawn(ctx);
+                crate::ownership_trace::spawned(
+                    (*ctx).run_ref(),
+                    binding,
+                    handle(index, generation),
+                );
+            }
             s.tasks[index as usize] = Some(task);
             s.scope(scope).children.push(index);
             s.link_child(current, index);

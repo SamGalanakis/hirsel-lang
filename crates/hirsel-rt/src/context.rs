@@ -226,6 +226,8 @@ pub struct TaskCtx {
     pub(crate) ordered_inop_leave: Option<bool>,
     #[cfg(feature = "ownership-trace")]
     pub(crate) ownership_task: u64,
+    #[cfg(feature = "ownership-trace")]
+    pub(crate) ownership_spawn: Option<crate::ownership_trace::SpawnBinding>,
 }
 
 const _: () = assert!(std::mem::offset_of!(TaskCtx, view) == 0);
@@ -549,6 +551,8 @@ impl TaskCtx {
             ordered_inop_leave: None,
             #[cfg(feature = "ownership-trace")]
             ownership_task: 0,
+            #[cfg(feature = "ownership-trace")]
+            ownership_spawn: None,
             invocation_sites,
             invocation_depth: 0,
             invocation_tokens,

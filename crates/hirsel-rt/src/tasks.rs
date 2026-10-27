@@ -2954,6 +2954,8 @@ pub(crate) unsafe extern "C" fn ahead_suspended(
 /// # Safety
 /// `ctx` is live and `index` is the running child.
 unsafe fn complete(ctx: &mut TaskCtx, index: u32, status: u8) -> ! {
+    #[cfg(feature = "ownership-trace")]
+    crate::ownership_trace::task_end(ctx);
     if ordered::engine::on(ctx) {
         unsafe { ordered::lifecycle::complete(ctx, index, status) }
     }
@@ -3485,6 +3487,8 @@ unsafe fn spawn_child(
         unsafe {
             (*child).task_id = index;
             crate::ownership_trace::task((*child).run_ref(), handle(index, generation), &path);
+            let binding = crate::ownership_trace::take_spawn(ctx);
+            crate::ownership_trace::spawned((*child).run_ref(), binding, handle(index, generation));
         }
         let mut task = Task::new(generation, child, Some(scope), path, canceled);
         if let Some(owner) = cpu_owner {

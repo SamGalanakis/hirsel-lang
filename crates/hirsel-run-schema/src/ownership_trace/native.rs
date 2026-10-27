@@ -7,7 +7,7 @@ use crate::Site;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 /// Copy-only callback rows fit in the preallocated ownership Buffer. No
 /// language value, payload hash or native address serves as token identity.
@@ -24,6 +24,17 @@ pub enum Row {
         task: u64,
         index: u32,
         ordinal: u32,
+    },
+    /// Actual spawn commitment, bound to the compiler-authored source intent.
+    Spawn {
+        task: u64,
+        frame: u64,
+        marker: u32,
+        child: u64,
+    },
+    /// Runtime completion after the compiled body and environment cleanup.
+    TaskEnd {
+        task: u64,
     },
     /// Canonical operation ordinal assigned by this task's runtime policy.
     /// This is a diagnostic association, never a clock or a retirement proof.
@@ -341,6 +352,19 @@ fn decode(
     let mut paths = BTreeSet::from([TaskPath::default()]);
     let mut stacks: BTreeMap<u64, Vec<Frame>> = BTreeMap::new();
     let mut entered = BTreeSet::new();
+    struct SpawnIntent {
+        owner: Owner,
+        callee: [u8; 32],
+        source: Site,
+    }
+    struct SpawnEnvironment {
+        owner: Owner,
+        callee: [u8; 32],
+        entered: bool,
+    }
+    let mut spawns = BTreeMap::<(u64, u64, u32), SpawnIntent>::new();
+    let mut environments = BTreeMap::<u64, SpawnEnvironment>::new();
+    let mut ended_tasks = BTreeSet::new();
     let mut tracker = Tracker::new(limit);
     for &row in &log.rows {
         match row {
@@ -431,7 +455,9 @@ fn decode(
             | Row::CleanupBegin { task, .. }
             | Row::CleanupDrop { task, .. }
             | Row::CleanupEnd { task, .. }
-            | Row::Leave { task, .. } => task,
+            | Row::Leave { task, .. }
+            | Row::Spawn { task, .. }
+            | Row::TaskEnd { task } => task,
             Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
         };
         let identity = tasks.get(&task).ok_or(Error::UnsupportedTask(task))?;
@@ -441,11 +467,84 @@ fn decode(
         if identity.path.0.len() != identity.depth as usize {
             return Err(Error::InvalidTask(task));
         }
+        if ended_tasks.contains(&task) {
+            return Err(Error::InvalidTask(task));
+        }
+        if let Row::Spawn {
+            frame,
+            marker,
+            child,
+            ..
+        } = row
+        {
+            let intent = spawns
+                .remove(&(task, frame, marker))
+                .ok_or(Error::InvalidMarker(marker))?;
+            let destination = tasks.get(&child).ok_or(Error::InvalidTask(child))?;
+            if child == 0
+                || destination.path.0.len() != destination.depth as usize
+                || destination.path.0.len() != identity.path.0.len() + 1
+                || !destination.path.0.starts_with(&identity.path.0)
+                || environments.contains_key(&child)
+            {
+                return Err(Error::InvalidTask(child));
+            }
+            let owner = Owner {
+                task: Some(destination.path.clone()),
+                storage: Storage::Object {
+                    name: "native.task_environment".into(),
+                    id: 0,
+                    item: 0,
+                },
+                path: vec![],
+            };
+            let context = Context {
+                task: destination.path.clone(),
+                operation: 0,
+                site: intent.source,
+            };
+            let moved = tracker
+                .move_tree(&context, &intent.owner, &owner)
+                .map_err(Error::Consistency)?;
+            if moved.is_empty() {
+                return Err(Error::RetainedEnvironment(marker));
+            }
+            environments.insert(
+                child,
+                SpawnEnvironment {
+                    owner,
+                    callee: intent.callee,
+                    entered: false,
+                },
+            );
+            continue;
+        }
+        if let Row::TaskEnd { .. } = row {
+            if task == 0 || stacks.get(&task).is_some_and(|frames| !frames.is_empty()) {
+                return Err(Error::InvalidTask(task));
+            }
+            if let Some(environment) = environments.remove(&task)
+                && (!environment.entered
+                    || tracker.inventory().owners.keys().any(|owner| {
+                        owner.task == environment.owner.task
+                            && owner.storage == environment.owner.storage
+                            && owner.path.starts_with(&environment.owner.path)
+                    }))
+            {
+                return Err(Error::RetainedEnvironment(u32::MAX));
+            }
+            ended_tasks.insert(task);
+            continue;
+        }
         let frames = stacks.entry(task).or_default();
         let task = &identity.path;
         let operation = identity.operation.unwrap_or(0);
         match row {
-            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
+            Row::Task { .. }
+            | Row::TaskPart { .. }
+            | Row::Operation { .. }
+            | Row::Spawn { .. }
+            | Row::TaskEnd { .. } => unreachable!(),
             Row::Enter { frame, unit, .. } => {
                 if frame == 0 || !entered.insert(frame) {
                     return Err(Error::InvalidFrame(frame));
@@ -462,6 +561,22 @@ fn decode(
                 if !frames.is_empty() && !metadata.is_empty() && !allowed {
                     return Err(Error::InvalidFrame(frame));
                 }
+                let runtime_environment = if frames.is_empty() {
+                    if let Some(binding) = environments.get_mut(&match row {
+                        Row::Enter { task, .. } => task,
+                        _ => unreachable!(),
+                    }) {
+                        if binding.entered || binding.callee != unit {
+                            return Err(Error::InvalidFrame(frame));
+                        }
+                        binding.entered = true;
+                        Some(binding.owner.clone())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let environment = match frames.last_mut() {
                     Some(parent)
                         if parent
@@ -479,7 +594,7 @@ fn decode(
                     {
                         return Err(Error::InvalidFrame(frame));
                     }
-                    _ => None,
+                    _ => runtime_environment,
                 };
                 frames.push(Frame {
                     id: frame,
@@ -723,6 +838,67 @@ fn decode(
                 if calls.is_none() && (!local(token) || !local(recipient)) {
                     return Err(Error::InvalidLocation(token.max(recipient)));
                 }
+                if action == 5 {
+                    if expected.empty_environment
+                        || expected.owner >> 32 != 2
+                        || expected.owner as u32 != 1
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    let callee = expected.callee.ok_or(Error::InvalidMarker(marker))?;
+                    if !calls
+                        .and_then(|calls| calls.get(&current.unit))
+                        .is_some_and(|targets| targets.contains(&callee))
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    let from = projected_owner(
+                        task,
+                        frame,
+                        parent,
+                        current.environment.as_ref(),
+                        token,
+                        token_path,
+                    )?;
+                    let to = projected_owner(
+                        task,
+                        frame,
+                        parent,
+                        current.environment.as_ref(),
+                        recipient,
+                        owner_path,
+                    )?;
+                    let context = Context {
+                        task: task.clone(),
+                        operation,
+                        site: expected.source.clone(),
+                    };
+                    let moved = tracker
+                        .move_tree(&context, &from, &to)
+                        .map_err(Error::Consistency)?;
+                    if moved.is_empty()
+                        || spawns
+                            .insert(
+                                (
+                                    match row {
+                                        Row::Event { task, .. } => task,
+                                        _ => unreachable!(),
+                                    },
+                                    frame,
+                                    marker,
+                                ),
+                                SpawnIntent {
+                                    owner: to,
+                                    callee,
+                                    source: expected.source.clone(),
+                                },
+                            )
+                            .is_some()
+                    {
+                        return Err(Error::InvalidMarker(marker));
+                    }
+                    continue;
+                }
                 // A checked resource-free runtime callback starts without a
                 // tracked parent environment. Its callable shell may still
                 // move out of a physical capture; that move carries no token.
@@ -824,7 +1000,9 @@ fn decode(
             }
         }
     }
-    if stacks.values().any(|frames| !frames.is_empty())
+    if !spawns.is_empty()
+        || !environments.is_empty()
+        || stacks.values().any(|frames| !frames.is_empty())
         || entered.is_empty()
         || tasks
             .values()

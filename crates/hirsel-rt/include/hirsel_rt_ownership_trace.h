@@ -3,7 +3,7 @@
 #ifndef HIRSEL_RT_OWNERSHIP_TRACE_H
 #define HIRSEL_RT_OWNERSHIP_TRACE_H
 #include "hirsel_rt_v2.h"
-#define HIRSEL_RT_V2_OWNERSHIP_TRACE_ABI_VERSION 89
+#define HIRSEL_RT_V2_OWNERSHIP_TRACE_ABI_VERSION 92
 #ifdef __cplusplus
 extern "C" {
 #endif

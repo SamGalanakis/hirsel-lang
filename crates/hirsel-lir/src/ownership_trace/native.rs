@@ -15,7 +15,7 @@ use runtime_calls::{resource_free_handle, runtime_call};
 
 /// Optional diagnostic extension to the base native ABI. Ordinary code and
 /// default runtime archives keep their existing ABI and context layout.
-pub const ABI_VERSION: u32 = 91;
+pub const ABI_VERSION: u32 = 92;
 const _: () = assert!(ABI_VERSION > crate::runtime_abi::ABI_VERSION);
 
 /// Scalar diagnostic operands shared by the two native emitters. A location
@@ -493,6 +493,15 @@ impl LeafPlan {
                     let call = &unit.tables.calls[call.index()];
                     if matches!(call.callee, Callee::Operation(_)) {
                         runtime_call(unit, layouts, call, None, None)?;
+                        if let Some(value) = runtime_calls::spawn_parameter(unit, call) {
+                            push(
+                                Point::CallEntered(b),
+                                Kind::Move,
+                                Location::Value(value),
+                                Location::Parameter(1),
+                                layout(value),
+                            )?;
+                        }
                         continue;
                     }
                     let once = call.callee.value().is_some()
@@ -1375,6 +1384,32 @@ impl Request<'_> {
             }
             plan.codes = Some(codes[index].clone());
             plan.empty_codes = empty[index].clone();
+            let mut spawns = BTreeSet::new();
+            for (point, marker) in &plan.commits {
+                if let Point::CallEntered(block) = *point
+                    && let Terminator::Call { call, .. } = body.terminators[block.index()]
+                    && let Some(value) =
+                        runtime_calls::spawn_parameter(body, &body.tables.calls[call.index()])
+                    && !empty[index][value.index()]
+                    && marker.kind == 1
+                    && marker.owner.kind == 2
+                    && marker.owner.index == 1
+                {
+                    spawns.insert(marker.id);
+                }
+            }
+            for (_, marker) in &mut plan.commits {
+                if spawns.contains(&marker.id) {
+                    marker.kind = 5;
+                }
+            }
+            for markers in plan.markers.values_mut() {
+                for marker in markers {
+                    if spawns.contains(&marker.id) {
+                        marker.kind = 5;
+                    }
+                }
+            }
             if prepared.insert(body.header.instance, plan).is_some() {
                 return Err("ownership emission has duplicate instance identities".into());
             }

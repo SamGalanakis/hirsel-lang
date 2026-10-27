@@ -30,6 +30,36 @@ pub(super) fn resource_free_handle(layouts: &LayoutTable, layout: LayoutId) -> b
     })
 }
 
+pub(super) fn spawn_parameter<S>(unit: &LirUnit<S>, call: &CallSite) -> Option<ValueId> {
+    let Callee::Operation(operation) = call.callee else {
+        return None;
+    };
+    if !unit
+        .tables
+        .operations
+        .get(operation.index())?
+        .definition
+        .is_core("$intrinsic.TaskSpawn")
+    {
+        return None;
+    }
+    let argument = call
+        .arguments
+        .get(&unit.pools.call_arguments)?
+        .iter()
+        .find(|argument| argument.parameter == 1)?;
+    match argument.value {
+        ArgumentValue::Value(value)
+            if argument.passing == hirsel_core_contract::Passing::Take
+                && unit.types[unit.values[value.index()].ty.index()].repr
+                    == ValueRepr::Callable =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn runtime_call<S>(
     unit: &LirUnit<S>,
     layouts: &LayoutTable,
@@ -68,7 +98,12 @@ pub(super) fn runtime_call<S>(
                     {
                         return Err("native ownership tracing: unresolved runtime callable".into());
                     }
-                    if !empty.is_some_and(|empty| empty[value.index()]) {
+                    if !empty.is_some_and(|empty| empty[value.index()])
+                        && !(spawn_parameter(unit, call) == Some(value)
+                            && codes[value.index()]
+                                .targets()
+                                .is_some_and(|targets| targets.len() == 1))
+                    {
                         return Err(
                             "native ownership tracing: owned runtime callback environment".into(),
                         );

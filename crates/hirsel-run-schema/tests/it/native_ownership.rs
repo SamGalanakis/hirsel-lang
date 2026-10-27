@@ -315,7 +315,11 @@ fn nested_local_calls() -> (Log, Units, LocalCalls) {
             | Row::CleanupBegin { frame, .. }
             | Row::CleanupDrop { frame, .. }
             | Row::CleanupEnd { frame, .. } => *frame = 2,
-            Row::Task { .. } | Row::TaskPart { .. } | Row::Operation { .. } => unreachable!(),
+            Row::Task { .. }
+            | Row::TaskPart { .. }
+            | Row::Operation { .. }
+            | Row::Spawn { .. }
+            | Row::TaskEnd { .. } => unreachable!(),
         }
     }
     log.rows.splice(2..2, child);
@@ -1596,4 +1600,124 @@ fn native_ownership_operation_stamps_preserve_task_local_ordinals_and_refuse_gap
         decode_leaf(&missing, [49; 32], &units, 100),
         Err(Error::InvalidOperation { .. })
     ));
+}
+
+#[test]
+fn native_ownership_spawn_binds_actual_child_to_checked_capture_custody() {
+    let (_, template) = fixture();
+    let base = template[&[7; 32]][&0].clone();
+    let field = 8u64 << 32 | 1;
+    let parameter = 2u64 << 32 | 1;
+    let capture = 6u64 << 32;
+    let child = (1u64 << 32) | 1;
+    let metadata = |action, token, owner, callee| Metadata {
+        action,
+        token,
+        owner,
+        callee,
+        ..base.clone()
+    };
+    let units = BTreeMap::from([
+        (
+            [7; 32],
+            BTreeMap::from([
+                (0, metadata(0, 0, 0, None)),
+                (1, metadata(1, 0, field, None)),
+                (2, metadata(5, 1, parameter, Some([8; 32]))),
+            ]),
+        ),
+        (
+            [8; 32],
+            BTreeMap::from([
+                (0, metadata(1, capture, 0, None)),
+                (1, metadata(2, 0, 0, None)),
+            ]),
+        ),
+    ]);
+    let event = |task, frame, marker, action, token, owner| Row::Event {
+        task,
+        frame,
+        marker,
+        action,
+        token,
+        owner,
+        site: 42,
+        layout: 7,
+    };
+    let rows = vec![
+        Row::Enter {
+            task: 0,
+            frame: 1,
+            unit: [7; 32],
+        },
+        event(0, 1, 0, 0, 0, 0),
+        event(0, 1, 1, 1, 0, field),
+        event(0, 1, 2, 5, 1, parameter),
+        Row::Task {
+            task: child,
+            depth: 1,
+        },
+        Row::TaskPart {
+            task: child,
+            index: 0,
+            ordinal: 0,
+        },
+        Row::Spawn {
+            task: 0,
+            frame: 1,
+            marker: 2,
+            child,
+        },
+        Row::Leave { task: 0, frame: 1 },
+        Row::Enter {
+            task: child,
+            frame: 2,
+            unit: [8; 32],
+        },
+        event(child, 2, 0, 1, capture, 0),
+        event(child, 2, 1, 2, 0, 0),
+        Row::Leave {
+            task: child,
+            frame: 2,
+        },
+        Row::TaskEnd { task: child },
+    ];
+    let log = Log {
+        version: VERSION,
+        program: [49; 32],
+        row_count: rows.len() as u64,
+        rows,
+        complete: true,
+    };
+    let calls = BTreeMap::from([([7; 32], [[8; 32]].into()), ([8; 32], Default::default())]);
+    let trace = decode_local_calls(&log, [49; 32], &units, &calls, 100).unwrap();
+    let analysis = trace.analyze([49; 32], 100).unwrap();
+    assert_eq!(
+        (analysis.created, analysis.dropped, analysis.live.len()),
+        (1, 1, 0)
+    );
+    assert!(
+        trace
+            .events
+            .iter()
+            .any(|event| !event.task.0.is_empty() && matches!(event.action, Action::Drop { .. }))
+    );
+    for removed in [6, 12] {
+        let mut missing = log.clone();
+        missing.rows.remove(removed);
+        missing.row_count -= 1;
+        assert!(decode_local_calls(&missing, [49; 32], &units, &calls, 100).is_err());
+    }
+    let mut wrong = log.clone();
+    let Row::Spawn { marker, .. } = &mut wrong.rows[6] else {
+        unreachable!()
+    };
+    *marker = 1;
+    assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
+    let mut wrong = log.clone();
+    let Row::Enter { unit, .. } = &mut wrong.rows[8] else {
+        unreachable!()
+    };
+    *unit = [7; 32];
+    assert!(decode_local_calls(&wrong, [49; 32], &units, &calls, 100).is_err());
 }

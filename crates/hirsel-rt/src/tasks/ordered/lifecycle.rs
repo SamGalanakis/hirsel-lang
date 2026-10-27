@@ -15,6 +15,8 @@ use crate::ordered::{Next, Progress};
 /// An unpublished native frame. Owning the reserved row removes it from the
 /// free list, but neither the task tree nor the logical queue can see it yet.
 pub(crate) struct Spawn {
+    #[cfg(feature = "ownership-trace")]
+    ownership: Option<crate::ownership_trace::SpawnBinding>,
     index: u32,
     owner: u64,
     scope: u64,
@@ -59,7 +61,8 @@ impl Spawn {
         );
         #[cfg(feature = "ownership-trace")]
         unsafe {
-            crate::ownership_trace::task(&*self.run, word, &task.path)
+            crate::ownership_trace::task(&*self.run, word, &task.path);
+            crate::ownership_trace::spawned(&*self.run, self.ownership, word);
         };
         s.tasks[self.index as usize] = Some(task);
         s.scope(scope).children.push(self.index);
@@ -332,6 +335,8 @@ pub(crate) unsafe fn spawn_certified(
         Some(task)
     };
     let spawn = Spawn {
+        #[cfg(feature = "ownership-trace")]
+        ownership: unsafe { crate::ownership_trace::take_spawn(ctx) },
         index,
         owner: parent,
         scope,

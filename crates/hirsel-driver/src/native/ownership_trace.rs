@@ -203,7 +203,7 @@ pub(crate) fn emit_relocated(
                 empty_environment: plan
                     .empty_environment(body, inputs.layouts, marker.id)
                     .map_err(failed)?,
-                callee: if marker.kind == 3 {
+                callee: if matches!(marker.kind, 3 | 5) {
                     let row = original
                         .observations
                         .iter()
