@@ -804,7 +804,7 @@ def hirsel_tsan_runtime_archives(name):
     _runtime_archives(
         name = name,
         archives = {"x86_64-unknown-linux-gnu/default": ":" + name + "-runtime"},
-        sanitizer_archive = "root//tools/buck2/toolchains:tsan-runtime",
+        sanitizer_archive = "toolchains//:tsan-runtime",
         visibility = ["PUBLIC"],
     )
 
