@@ -179,6 +179,41 @@ impl Executions {
 mod tests {
     use super::*;
     #[test]
+    fn invalid_selected_test_header_returns_diagnostics_before_wrapper_planning() {
+        hirsel_engine::with_compiler_stack(|| {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("suite.json");
+            std::fs::write(
+                directory.path().join("suite.hir"),
+                "@test\nfn invalid(n:u8){}\n",
+            )
+            .unwrap();
+            std::fs::write(&path, r#"{"schema":1,"package":{"name":"invalid","version":"1"},"sources":[{"path":"suite.hir","module":[]}],"dependencies":[]}"#).unwrap();
+            let error = match crate::testing::discover_with_selector(
+                &path,
+                &[],
+                None,
+                crate::testing::Selection::Tests,
+                hirsel_engine::Verify::On,
+            ) {
+                Ok(_) => panic!("invalid test signature was accepted"),
+                Err(error) => error,
+            };
+            let ToolError::Query {
+                error: hirsel_engine::QueryError::Diagnostics(diagnostics),
+                ..
+            } = error
+            else {
+                panic!("expected signature diagnostics, got {error:?}");
+            };
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.rule.as_str() == "LANG-9")
+            );
+        });
+    }
+    #[test]
     fn empty_test_selection_still_rejects_an_invalid_unselected_body() {
         hirsel_engine::with_compiler_stack(|| {
             let directory = tempfile::tempdir().unwrap();

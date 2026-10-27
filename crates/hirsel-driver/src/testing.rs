@@ -539,10 +539,19 @@ fn plan_entries(
         let signature = program
             .engine
             .item_signature(&definition)
-            .map_err(|e| program.error(e))?
-            .value;
+            .map_err(|e| program.error(e))?;
+        if signature
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.severity == hirsel_diag::Severity::Error)
+        {
+            return Err(program.error(hirsel_engine::QueryError::Diagnostics(
+                signature.diagnostics,
+            )));
+        }
+        let signature = signature.value;
         let SignatureKind::Function(f) = &signature.kind else {
-            unreachable!("checked @test")
+            return Err(program.error(hirsel_engine::QueryError::NotImplemented));
         };
         let unit = matches!(program.engine.types().get(f.result).map(|t| &t.kind), Some(TypeKind::Tuple(fields)) if fields.is_empty());
         let mut generate = |iterations: Option<u64>| -> Result<DefPath, ToolError> {
