@@ -60,20 +60,48 @@ fn regex_prefilter_17_forced_candidates_preserve_vm_results_and_work_limits() {
             "sources": [{"path": "main.hir", "module": []}],
             "dependencies": [{"manifest": std_manifest, "package": {"name": "std", "version": "1"}, "expose": []}]
         });
-        let path = directory.path().join("hirsel.json");
-        std::fs::write(&path, program.to_string()).unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(directory.path().join("main.hir.json"), program.to_string()).unwrap();
+        std::fs::write(&path, &groups[0]).unwrap();
+        let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+        let mut options = native::Options::new(target);
+        options.scoped_specialization = false;
+        let matrix = [
+            native::Configuration {
+                options: options.clone(),
+                engine: native::Engine::Native {
+                    opt: native::OptLevel::Default,
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Default,
+                },
+            },
+            native::Configuration {
+                options,
+                engine: native::Engine::Cranelift {
+                    partition: native::Partition::Whole,
+                    runtime: native::Runtime::Default,
+                },
+            },
+        ];
+        let tools =
+            native::Toolchain::for_matrix(&directory.path().join("runtime"), &matrix).unwrap();
         for (index, source) in groups.iter().enumerate() {
             eprintln!("regex prefilter group {index}: interpreter, LLVM, Cranelift");
-            std::fs::write(directory.path().join("main.hir"), source).unwrap();
-            let outcome = run_path_with_step_budget(
-                &path,
+            let mut loaded = crate::source_std::load_program_source(&path, Some(source)).unwrap();
+            loaded.check_for_execution().unwrap();
+            let run = RunConfiguration {
+                entry: loaded.entry.clone(),
+                hash_seed: 0,
+                inputs: vec![],
+            };
+            let reference = run_observed_snapshot_bounded(
+                &mut loaded.engine,
+                &run,
                 SimulationConfig::default(),
-                Some(100_000_000),
-                Verify::On,
-                &mut Vec::new(),
-                &mut Vec::new(),
+                100_000_000,
             )
             .unwrap();
+            let outcome = reference.outcome.unwrap();
             assert!(
                 matches!(
                     outcome,
@@ -81,25 +109,18 @@ fn regex_prefilter_17_forced_candidates_preserve_vm_results_and_work_limits() {
                 ),
                 "{outcome:?}"
             );
-            for backend in [native::Backend::Llvm, native::Backend::Cranelift] {
-                let outcome = native::run_path_native_backend(
-                    &path,
-                    HostLaunch::empty(),
-                    None,
-                    backend,
-                    native::Output::Streams {
-                        stdout: &mut Vec::new(),
-                        stderr: &mut Vec::new(),
-                    },
-                    Verify::On,
-                )
-                .unwrap()
-                .unwrap();
+            let observation =
+                native::Observation::of_reference(reference.observation.as_ref().unwrap());
+            let snapshot = loaded.engine.export_native_input().unwrap();
+            let input = loaded.engine.import_native_input(snapshot).unwrap();
+            let scratch = directory.path().join(format!("group-{index}"));
+            std::fs::create_dir_all(&scratch).unwrap();
+            let outcomes =
+                native::differential(&input, &run.entry, &observation, &matrix, &tools, &scratch);
+            assert_eq!(outcomes.len(), 2);
+            for (backend, outcome) in outcomes {
                 assert!(
-                    matches!(
-                        outcome,
-                        RunOutcome::Returned(hirsel_run_schema::Returned::Ok)
-                    ),
+                    matches!(outcome, native::Outcome::Agree),
                     "{backend:?}: {outcome:?}"
                 );
             }
