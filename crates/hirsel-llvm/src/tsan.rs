@@ -69,10 +69,12 @@ mod tests {
             let module = Module::parse(
                 &context,
                 "tsan",
-                r#"define i64 @mapper(ptr %input, ptr %output, ptr %count) {
+                r#"declare void @hirsel_tsan_nonunwind(ptr)
+define i64 @mapper(ptr %input, ptr %output, ptr %count) {
   %value = load i64, ptr %input, align 1
   store i64 %value, ptr %output, align 1
   %old = atomicrmw add ptr %count, i64 1 monotonic
+  call void @hirsel_tsan_nonunwind(ptr %input)
   ret i64 %old
 }
 define void @tsan_mapper(ptr %cell) {
@@ -92,6 +94,7 @@ define void @tsan_mapper(ptr %cell) {
             module.instrument_thread(&machine).unwrap();
             module.verify().unwrap();
             let text = module.text();
+            assert!(!text.contains("personality"), "{text}");
             for name in [
                 "@__tsan_unaligned_read8",
                 "@__tsan_unaligned_write8",
@@ -102,7 +105,10 @@ define void @tsan_mapper(ptr %cell) {
                 assert!(text.contains(name), "missing {name}: {text}");
             }
             if opt == OptLevel::Speed {
-                control::emitted_access_control(&module.emit_object(&machine).unwrap());
+                let bytes = module.emit_object(&machine).unwrap();
+                let object = hirsel_lir::object::ObjectFile::read(&target, bytes.clone()).unwrap();
+                assert_eq!(object.exports, ["mapper", "tsan_mapper"]);
+                control::emitted_access_control(&bytes);
             }
         }
     }

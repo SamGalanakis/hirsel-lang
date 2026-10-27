@@ -11,6 +11,7 @@ SOURCE = r'''
 #include <stdint.h>
 #include <stdlib.h>
 extern void tsan_mapper(uint64_t *);
+void hirsel_tsan_nonunwind(void *p) { (void)p; }
 static uint64_t cells[8];
 static void *worker(void *cell) {
   for (unsigned i = 0; i < 10000; ++i) tsan_mapper(cell);

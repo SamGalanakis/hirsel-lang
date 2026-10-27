@@ -425,6 +425,8 @@ impl<'context> Module<'context> {
             let kind = LLVMGetEnumAttributeKindForName(b"sanitize_thread".as_ptr().cast(), 15);
             assert_ne!(kind, 0);
             let attribute = LLVMCreateEnumAttribute(self.context.raw, kind, 0);
+            let nounwind = LLVMGetEnumAttributeKindForName(b"nounwind".as_ptr().cast(), 8);
+            let nounwind = LLVMCreateEnumAttribute(self.context.raw, nounwind, 0);
             let mut function = LLVMGetFirstFunction(self.raw);
             while !function.is_null() {
                 if LLVMCountBasicBlocks(function) != 0 {
@@ -432,6 +434,14 @@ impl<'context> Module<'context> {
                         function,
                         llvm_sys::LLVMAttributeFunctionIndex,
                         attribute,
+                    );
+                    // Hirsel's ABI reports failure through status values;
+                    // runtime and foreign calls cannot unwind across it. Tell
+                    // EscapeEnumerator so TSan adds exits, without C++ EH glue.
+                    LLVMAddAttributeAtIndex(
+                        function,
+                        llvm_sys::LLVMAttributeFunctionIndex,
+                        nounwind,
                     );
                 }
                 function = LLVMGetNextFunction(function);

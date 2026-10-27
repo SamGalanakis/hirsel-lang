@@ -25,7 +25,7 @@ def _rust(ctx):
                 "-Coverflow-checks=yes",
                 "-Cembed-bitcode=no",
                 "-Cstrip=none",
-            ],
+            ] + (["-Crelocation-model=pic"] if ctx.attrs.sanitizer else []),
             extra_rustc_flags = [],
             # The prelude gates -Zno-codegen metadata pipelining on this field;
             # stable rustc runs it under RUSTC_BOOTSTRAP.
