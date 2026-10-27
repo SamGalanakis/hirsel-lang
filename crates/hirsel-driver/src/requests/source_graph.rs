@@ -483,6 +483,10 @@ impl GraphProducts for SourceProducts {
                             CompileResult::Precomputed {
                                 definitions: output.definitions,
                                 digest: output.digest,
+                                sources: Arc::new(super::PrecomputedSources {
+                                    run: run.as_ref().ok_or_else(|| uninstalled())?.clone(),
+                                    lower: lower.clone(),
+                                }),
                             }
                         }
                         CompileOperation::Hashes { .. } => {
@@ -1066,6 +1070,13 @@ pub(super) fn install(
     toolchain: Option<&Arc<crate::native::Toolchain>>,
     host_toolchain: bool,
 ) -> Result<Arc<InstalledGraph>, ToolError> {
+    if matches!(request.operation, CompileOperation::Precompute)
+        && config.verify == hirsel_engine::Verify::Off
+    {
+        return Err(ToolError::Runtime(
+            "package precomputation requires V".into(),
+        ));
+    }
     let (lowering, needs_run) = match &request.operation {
         CompileOperation::Check { lowering }
         | CompileOperation::CheckedProducts { lowering, .. } => (*lowering, false),

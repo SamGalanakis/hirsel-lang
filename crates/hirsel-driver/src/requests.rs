@@ -30,8 +30,8 @@ mod source_graph;
 mod tir_products;
 pub use output::{
     CompileInspection, CompileOutput, CompileResult, CompilerReadiness, DefinitionWork,
-    NativeExecution, NativeObjectOutput, NativeObservation, RequestWork, TirBatchExecution,
-    TirExecution, TirProducts,
+    NativeExecution, NativeObjectOutput, NativeObservation, PrecomputedSources, RequestWork,
+    TirBatchExecution, TirExecution, TirProducts,
 };
 pub use ownership_selection::{OwnershipExecution, OwnershipObjects};
 pub use selector::{CompilerRequests, RequestLimits};

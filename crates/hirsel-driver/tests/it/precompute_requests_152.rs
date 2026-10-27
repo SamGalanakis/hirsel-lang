@@ -27,18 +27,40 @@ fn precompute_libraries_on_fresh_request_graphs_preserves_complete_source_produc
             let CompileResult::Precomputed {
                 definitions,
                 digest,
-            } = output.result
+                sources,
+            } = &output.result
             else {
                 panic!("expected precomputed source products");
             };
             assert_eq!(
-                definitions, 3,
+                *definitions, 3,
                 "every definition of this fixture, without a launch entry"
             );
+            let names = sources
+                .definitions()
+                .map(|path| path.0.name.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(names, ["ANSWER", "answer", "square"]);
+            let answer = sources
+                .definitions()
+                .find(|path| path.0.name == "ANSWER")
+                .unwrap();
+            let bound = sources.source_product_bytes(answer).unwrap().unwrap();
+            let budget = hirsel_engine::runtime::ProcessBudget::new(bound);
+            let products = sources
+                .source_products(answer, budget.reserve(bound).unwrap())
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                products.constant().unwrap().root.kind,
+                hirsel_tir::ValueKind::Constant(hirsel_tir::Constant::Integer(49))
+            ));
+            let node = sources.semantic_node(answer).unwrap();
+            assert_eq!(node.identity, answer.to_string());
             if let Some(expected) = expected {
-                assert_eq!(digest, expected);
+                assert_eq!(*digest, expected);
             } else {
-                expected = Some(digest);
+                expected = Some(*digest);
             }
         }
         std::fs::write(&source, format!("{valid}pub fn unrelated()->u64{{true}}\n")).unwrap();

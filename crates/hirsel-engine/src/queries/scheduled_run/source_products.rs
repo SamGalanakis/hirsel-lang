@@ -88,6 +88,19 @@ impl FrontSourceProducts {
     }
 }
 impl FrontRunQueries {
+    pub fn source_definitions(&self) -> impl Iterator<Item = &DefPath> {
+        self.inputs
+            .iter()
+            .filter_map(|(path, input)| input.source.then_some(path))
+    }
+    pub fn completed_semantic_product(&self, path: &DefPath) -> Option<ProductRef> {
+        let query = self.semantic_query(path)?;
+        self.semantic_completed
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&query.address.0)
+            .map(|(product, _)| *product)
+    }
     /// Decode bound of one already completed source product. No provider is read.
     pub fn source_product_bytes(&self, product: ProductRef) -> Result<Option<u64>, QueryError> {
         let entry = self

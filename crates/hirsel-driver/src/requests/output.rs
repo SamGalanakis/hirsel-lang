@@ -124,6 +124,7 @@ pub enum CompileResult {
     Precomputed {
         definitions: u64,
         digest: hirsel_syntax::ContentHash,
+        sources: Arc<PrecomputedSources>,
     },
     SafeCheck {
         checked: CheckOutput,
@@ -141,6 +142,54 @@ pub enum CompileResult {
     NativeObjects(Arc<NativeObjectOutput>),
     NativeSources(Arc<hirsel_engine::FrontNativeProducts>),
 }
+/// Read completed library source products without an entry, runtime metadata
+/// or a mutable compiler. Decoding consumes only the reader's explicit grant.
+pub struct PrecomputedSources {
+    pub(super) run: Arc<hirsel_engine::FrontRunQueries>,
+    pub(super) lower: Arc<hirsel_engine::FrontLowerQueries>,
+}
+impl PrecomputedSources {
+    fn product(&self, path: &DefPath) -> Result<hirsel_engine::runtime::ProductRef, QueryError> {
+        self.run
+            .completed_semantic_product(path)
+            .ok_or(QueryError::NotImplemented)
+    }
+    pub fn definitions(&self) -> impl Iterator<Item = &DefPath> {
+        self.run.source_definitions()
+    }
+    pub fn signatures(&self) -> Arc<hirsel_engine::SignatureSnapshot> {
+        self.lower.signatures()
+    }
+    pub fn semantic_node(
+        &self,
+        path: &DefPath,
+    ) -> Result<hirsel_run_schema::ProgramNode, QueryError> {
+        self.run.semantic_node(self.product(path)?)
+    }
+    pub fn source_product_bytes(&self, path: &DefPath) -> Result<Option<u64>, QueryError> {
+        self.run.source_product_bytes(self.product(path)?)
+    }
+    pub fn source_products(
+        &self,
+        path: &DefPath,
+        allowance: hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<Option<hirsel_engine::FrontSourceProducts>, QueryError> {
+        self.run
+            .source_products_with_allowance(self.product(path)?, allowance)
+    }
+    pub fn definition_decode_bytes(&self, path: &DefPath) -> Result<u64, QueryError> {
+        self.lower.settled_definition_decode_bytes(path)
+    }
+    pub fn definition(
+        &self,
+        path: &DefPath,
+        allowance: &hirsel_engine::runtime::MemoryReservation,
+    ) -> Result<DefinitionRef, QueryError> {
+        self.lower
+            .settled_definition_with_allowance(path, allowance)
+    }
+}
+
 /// Materialize only already settled, checked execution products. These reads
 /// may decode an owned product but never run a compiler query, evaluate a
 /// constant or mutate registration. Missing/corrupt content remains an error.
