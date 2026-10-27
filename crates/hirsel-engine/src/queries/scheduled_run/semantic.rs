@@ -5,7 +5,7 @@ use super::*;
 
 const OUTPUT: Domain = Domain {
     kind: 0x4600_0034,
-    schema: 1,
+    schema: 2,
 };
 
 impl FrontRunQueries {

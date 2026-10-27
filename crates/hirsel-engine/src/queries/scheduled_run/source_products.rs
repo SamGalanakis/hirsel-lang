@@ -9,7 +9,7 @@ const OUTPUT: Domain = Domain {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct Body {
     pub products: crate::native_audit::SourceAuditProducts,
-    pub constant: Option<hirsel_tir::Materialized>,
+    pub constant: Option<hirsel_tir::MaterializedRef>,
 }
 impl Body {
     fn weight(&self) -> u64 {
@@ -29,6 +29,7 @@ impl Body {
             weight.materialized(value)
         });
         if let Some(value) = &self.constant {
+            weight.arc(value);
             weight.materialized(value);
         }
         weight.bytes()
@@ -83,7 +84,7 @@ impl FrontSourceProducts {
         &self.body.products.materialized
     }
     pub fn constant(&self) -> Option<&hirsel_tir::Materialized> {
-        self.body.constant.as_ref()
+        self.body.constant.as_deref()
     }
 }
 impl FrontRunQueries {
