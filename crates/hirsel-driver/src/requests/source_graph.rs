@@ -152,6 +152,7 @@ struct SourceProducts {
     launch_entry: Option<DefPath>,
     run: Option<Arc<FrontRunQueries>>,
     native: Option<Arc<super::native_selection::NativeSelection>>,
+    native_artifacts: Option<Arc<super::native_artifacts::NativeArtifacts>>,
     ownership: Option<Arc<super::ownership_selection::OwnershipSelection>>,
     safe: Option<Arc<super::safe_check::SafeCheck>>,
     receipt: Option<Arc<CheckedReceipt>>,
@@ -203,8 +204,13 @@ impl GraphProducts for SourceProducts {
                 .as_ref()
                 .is_some_and(|run| run.batch_roots() == Some(definitions.as_slice())),
             CompileOperation::SafeCheck => self.safe.is_some() && self.export.is_none(),
+            CompileOperation::Artifacts { native: true } => {
+                self.native_artifacts.is_some()
+                    && self.export.as_ref().is_some_and(|export| export.reusable())
+            }
             CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
                 self.export.as_ref().is_some_and(|export| export.reusable())
+                    && self.native_artifacts.is_none()
             }
             CompileOperation::NativeOwnership(request) => self
                 .ownership
@@ -237,6 +243,14 @@ impl GraphProducts for SourceProducts {
             }
             CompileOperation::SafeCheck => {
                 vec![self.safe.as_ref().ok_or_else(|| uninstalled())?.query()]
+            }
+            CompileOperation::Artifacts { native: true } => {
+                vec![
+                    self.native_artifacts
+                        .as_ref()
+                        .ok_or_else(|| uninstalled())?
+                        .query(),
+                ]
             }
             CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
                 vec![self.export.as_ref().ok_or_else(|| uninstalled())?.query()]
@@ -290,6 +304,7 @@ impl GraphProducts for SourceProducts {
         let operation = operation.clone();
         let run = self.run.clone();
         let native = self.native.clone();
+        let native_artifacts = self.native_artifacts.clone();
         let ownership = self.ownership.clone();
         let safe = self.safe.clone();
         let export = self.export.clone();
@@ -394,6 +409,17 @@ impl GraphProducts for SourceProducts {
                                 .ok_or_else(|| uninstalled())?
                                 .outcome(*product)?;
                             CompileResult::SafeCheck { checked, reach }
+                        }
+                        CompileOperation::Artifacts { native: true } => {
+                            let [product] = products else {
+                                return Err(uninstalled());
+                            };
+                            CompileResult::Artifacts(
+                                native_artifacts
+                                    .as_ref()
+                                    .ok_or_else(|| uninstalled())?
+                                    .outcome(*product)?,
+                            )
                         }
                         CompileOperation::Artifacts { native: false }
                         | CompileOperation::ExportTir => {
@@ -604,6 +630,7 @@ impl SourceProducts {
         let storage = self.storage.clone();
         let run = self.run.clone();
         let native = self.native.clone();
+        let native_artifacts = self.native_artifacts.clone();
         let ownership = self.ownership.clone();
         let native_sources = self.native_sources.clone();
         Arc::new(move |reference| {
@@ -616,6 +643,12 @@ impl SourceProducts {
             if let Some(error) = native
                 .as_ref()
                 .and_then(|native| native.assembly.failure(reference))
+            {
+                return error;
+            }
+            if let Some(error) = native_artifacts
+                .as_ref()
+                .and_then(|artifacts| artifacts.failure(reference))
             {
                 return error;
             }
@@ -880,6 +913,7 @@ impl Plan {
         let roots = 2
             + usize::from(needs_safe)
             + usize::from(needs_export)
+            + usize::from(needs_export && needs_native)
             + usize::from(needs_storage)
             + usize::from(needs_batch)
             + 2 * usize::from(needs_native || needs_ownership);
@@ -1021,7 +1055,7 @@ pub(super) fn install(
         CompileOperation::SafeCheck => (config.lowering, true),
         CompileOperation::Expand => (LoweringPolicy::Comptime, false),
         // The oracle export reads the check and TIR of every reachable body.
-        CompileOperation::Artifacts { native: false } | CompileOperation::ExportTir => {
+        CompileOperation::Artifacts { .. } | CompileOperation::ExportTir => {
             (LoweringPolicy::Reachable, true)
         }
         CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_) => {
@@ -1186,7 +1220,9 @@ pub(super) fn install(
             needs_run,
             matches!(
                 request.operation,
-                CompileOperation::NativeBuild(_) | CompileOperation::NativeRun(_)
+                CompileOperation::NativeBuild(_)
+                    | CompileOperation::NativeRun(_)
+                    | CompileOperation::Artifacts { native: true }
             ),
             matches!(&request.operation, CompileOperation::NativeBuild(native) | CompileOperation::NativeRun(native) if native.evidence.is_some()),
             matches!(
@@ -1575,6 +1611,14 @@ pub(super) fn install(
     // Source metadata shares Run's existing snapshot partition. Export stages
     // reserve their measured buffers separately from the same process budget,
     // after source queries settle, preserving the front and Lower allowances.
+    let mut native_allowance = plan
+        .native
+        .as_ref()
+        .map(|native| {
+            run.split(native.bytes().ok_or_else(|| uninstalled())?)
+                .ok_or_else(|| uninstalled())
+        })
+        .transpose()?;
     let export_allowance = if artifacts {
         let headers = program
             .engine
@@ -1589,14 +1633,6 @@ pub(super) fn install(
     } else {
         None
     };
-    let native_allowance = plan
-        .native
-        .as_ref()
-        .map(|native| {
-            run.split(native.bytes().ok_or_else(|| uninstalled())?)
-                .ok_or_else(|| uninstalled())
-        })
-        .transpose()?;
     let mut ownership_allowance = plan
         .ownership
         .as_ref()
@@ -1657,6 +1693,37 @@ pub(super) fn install(
     } else {
         None
     };
+    let artifact_assembly = if matches!(
+        request.operation,
+        CompileOperation::Artifacts { native: true }
+    ) {
+        let entry = launch_entry
+            .clone()
+            .unwrap_or_else(|| program.entry.clone());
+        Some(super::native_selection::artifacts(
+            &mut program,
+            super::native_assembly::NativeSourceInputs {
+                definitions: definitions.clone(),
+                entry,
+                front: front.clone(),
+                lower: lower.clone(),
+                run: run.take().ok_or_else(|| uninstalled())?,
+                store: store.clone(),
+                registrations: bootstrap
+                    .as_ref()
+                    .map(|b| b.registrations().to_vec())
+                    .unwrap_or_default(),
+            },
+            plan.native.as_ref().ok_or_else(|| uninstalled())?,
+            &mut native_allowance.take().ok_or_else(|| uninstalled())?,
+            plan.body,
+            plan.native_root,
+            errors,
+            config.verify_store,
+        )?)
+    } else {
+        None
+    };
     // The export selects its own unshared Run view of the entry package; that
     // view replaces the ordinary Run for this graph.
     let mut export_products = None;
@@ -1666,15 +1733,22 @@ pub(super) fn install(
             .front_checked_signatures(front.clone(), headers)
             .map_err(&query_error)?;
         let entry = program.entry.clone();
-        let export = program
-            .engine
-            .front_proof_export(
+        let export = if let Some((native, _)) = &artifact_assembly {
+            program.engine.front_proof_export_from_native(
+                &entry,
+                native.source(),
+                headers,
+                allowance,
+            )
+        } else {
+            program.engine.front_proof_export(
                 &entry,
                 run.take().ok_or_else(|| uninstalled())?,
                 headers,
                 allowance,
             )
-            .map_err(&query_error)?;
+        }
+        .map_err(&query_error)?;
         run = Some(export.run().clone());
         export_products = Some((export, output));
     }
@@ -1700,55 +1774,79 @@ pub(super) fn install(
             errors,
         )
     });
-    let native = if let Some(footprint) = &plan.native {
-        let (native_request, purpose) = match &request.operation {
-            CompileOperation::NativeBuild(request) => {
-                (request, super::native_platform::NativePurpose::Build)
-            }
-            CompileOperation::NativeRun(request) => {
-                (request, super::native_platform::NativePurpose::Run)
-            }
-            _ => return Err(uninstalled()),
-        };
-        let entry = native_request
-            .definition
-            .as_ref()
-            .or(launch_entry.as_ref())
-            .cloned()
-            .ok_or_else(|| uninstalled())?;
-        Some(
-            super::native_selection::NativeSelection::new(
-                &mut program,
-                super::native_assembly::NativeSourceInputs {
-                    definitions: definitions.clone(),
-                    entry,
-                    front: front.clone(),
-                    lower: lower.clone(),
-                    run: run.take().ok_or_else(|| uninstalled())?,
-                    store: store.clone(),
-                    registrations: bootstrap
-                        .as_ref()
-                        .map(|bootstrap| bootstrap.registrations().to_vec())
-                        .unwrap_or_default(),
-                },
-                native_request.clone(),
-                purpose,
-                config.verify_store,
-                selected_toolchain.ok_or_else(|| {
-                    ToolError::Runtime("native request requires its selected toolchain".into())
-                })?,
-                footprint,
-                &mut native_allowance.ok_or_else(|| uninstalled())?,
-                plan.body,
-                plan.native_root,
-                errors,
-                disk_bytes,
-            )
-            .map_err(|error| super::host_selector::retain_error(error, source.clone()))?,
+    let native_artifacts = artifact_assembly.map(|(assembly, allowance)| {
+        super::native_artifacts::NativeArtifacts::new(
+            assembly,
+            export_products.as_ref().unwrap().clone(),
+            budget.process_budget(),
+            store.clone(),
+            errors,
+            plan.body,
+            allowance,
         )
-    } else {
-        None
-    };
+    });
+    let native =
+        if let Some(footprint) = plan.native.as_ref().filter(|_| native_artifacts.is_none()) {
+            let (native_request, purpose) = match &request.operation {
+                CompileOperation::NativeBuild(request) => {
+                    (request, super::native_platform::NativePurpose::Build)
+                }
+                CompileOperation::NativeRun(request) => {
+                    (request, super::native_platform::NativePurpose::Run)
+                }
+                _ => return Err(uninstalled()),
+            };
+            let entry = native_request
+                .definition
+                .as_ref()
+                .or(launch_entry.as_ref())
+                .cloned()
+                .ok_or_else(|| uninstalled())?;
+            Some(
+                super::native_selection::NativeSelection::new(
+                    &mut program,
+                    super::native_assembly::NativeSourceInputs {
+                        definitions: definitions.clone(),
+                        entry,
+                        front: front.clone(),
+                        lower: lower.clone(),
+                        run: run.take().ok_or_else(|| uninstalled())?,
+                        store: if host_toolchain {
+                            super::native_store::capture(
+                                store.clone(),
+                                native_request,
+                                purpose,
+                                &budget.process_budget(),
+                                limits.transport_bytes,
+                                scratch_parent,
+                                disk_bytes,
+                            )?
+                        } else {
+                            store.clone()
+                        },
+                        registrations: bootstrap
+                            .as_ref()
+                            .map(|bootstrap| bootstrap.registrations().to_vec())
+                            .unwrap_or_default(),
+                    },
+                    native_request.clone(),
+                    purpose,
+                    config.verify_store,
+                    selected_toolchain.ok_or_else(|| {
+                        ToolError::Runtime("native request requires its selected toolchain".into())
+                    })?,
+                    footprint,
+                    &mut native_allowance.take().ok_or_else(|| uninstalled())?,
+                    plan.body,
+                    plan.native_root,
+                    errors,
+                    disk_bytes,
+                )
+                .map_err(|error| super::host_selector::retain_error(error, source.clone()))?,
+            )
+        } else {
+            None
+        };
     let ownership = if let CompileOperation::NativeOwnership(selected) = &request.operation {
         let entry = selected
             .definition
@@ -1861,6 +1959,12 @@ pub(super) fn install(
     {
         inventory.insert((query.kind, query.address.0));
     }
+    if let Some(artifacts) = &native_artifacts {
+        inventory.insert((artifacts.query().kind, artifacts.query().address.0));
+        for query in artifacts.assembly.queries(&definitions) {
+            inventory.insert((query.kind, query.address.0));
+        }
+    }
     if let Some(native) = &native {
         for query in native.assembly.queries(&definitions) {
             inventory.insert((query.kind, query.address.0));
@@ -1916,7 +2020,14 @@ pub(super) fn install(
     runtime
         .register(hirsel_engine::FRONT_CHECK_KIND, check.factory())
         .map_err(registration)?;
-    if let Some(native) = &native {
+    if let Some(artifacts) = &native_artifacts {
+        for (kind, factory) in artifacts.assembly.factories() {
+            runtime.register(kind, factory).map_err(registration)?;
+        }
+        runtime
+            .register(super::native_artifacts::KIND, artifacts.factory())
+            .map_err(registration)?;
+    } else if let Some(native) = &native {
         for (kind, factory) in native.assembly.factories() {
             runtime.register(kind, factory).map_err(registration)?;
         }
@@ -2029,6 +2140,7 @@ pub(super) fn install(
         launch_entry,
         run,
         native,
+        native_artifacts,
         ownership,
         safe,
         receipt,

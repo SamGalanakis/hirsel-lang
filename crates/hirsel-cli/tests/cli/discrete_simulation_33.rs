@@ -112,7 +112,6 @@ fn original_steps(row: &Value) -> bool {
         "never-admitted-events",
         "cap-events",
         "cap-jobs",
-        "input-cap",
         "cap-output-exact",
         "over-output",
     ]

@@ -24,13 +24,13 @@ use std::{
     task::Poll,
 };
 
-pub(super) const KIND: u32 = 0x5200_0010;
+pub(super) const KIND: u32 = 0x5200_0030;
 const OUTPUT: Domain = Domain {
-    kind: 0x5200_0011,
+    kind: 0x5200_0031,
     schema: 1,
 };
 const FAILURE: Domain = Domain {
-    kind: 0x5200_0012,
+    kind: 0x5200_0032,
     schema: 1,
 };
 

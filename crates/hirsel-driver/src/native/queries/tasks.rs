@@ -263,6 +263,32 @@ impl NativeTasks {
             .ok_or("ownership diagnostic has no settled Ready dependency plan")?;
         Ok(&request.reads)
     }
+    pub(crate) fn receipt_queries(&self) -> Vec<QueryId> {
+        let mut owners = self.snapshot.owners.values().collect::<Vec<_>>();
+        owners.sort_by(|a, b| a.canonical_cmp(b));
+        owners
+            .into_iter()
+            .map(InstanceAddress::ready_query_id)
+            .collect()
+    }
+    pub(crate) fn receipts(&self, reads: &[ProductRef]) -> Result<Vec<u8>, String> {
+        use std::fmt::Write;
+        let mut products = SettledProducts::new(self.snapshot.clone(), reads)?;
+        let mut text = String::new();
+        for read in reads {
+            let owner = self
+                .snapshot
+                .owners
+                .get(&read.address.0)
+                .ok_or("receipt read has no native owner")?;
+            let ready = products.ready(owner)?;
+            products.with_ready(&[ready], |units, _| {
+                writeln!(text, "{:?}", units[0].receipt().raw()).unwrap();
+                Ok(())
+            })?;
+        }
+        Ok(text.into_bytes())
+    }
     pub fn guard_factory(&self) -> Option<(QueryId, Arc<dyn QueryFactory>)> {
         self.snapshot
             .guard

@@ -9,6 +9,7 @@ rust-version.workspace = true
 native-tsan = ["hirsel-llvm/native-tsan", "hirsel-cranelift/native-tsan"]
 
 [dependencies]
+hirsel-artifact-store = { path = "../hirsel-artifact-store" }
 hirsel-validate = { path = "../hirsel-validate" }
 base64 = "=0.22.1"
 hirsel-graph = { path = "../hirsel-graph" }
@@ -56,7 +57,6 @@ sha2 = "0.10"
 sha2 = "0.10"
 
 [dev-dependencies]
-hirsel-artifact-store = { path = "../hirsel-artifact-store" }
 hirsel-intern = { path = "../hirsel-intern", features = ["id-salt"] }
 hirsel-lexer = { path = "../hirsel-lexer" }
 hirsel-parser = { path = "../hirsel-parser" }

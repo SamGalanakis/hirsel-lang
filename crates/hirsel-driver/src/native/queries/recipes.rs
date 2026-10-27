@@ -19,7 +19,8 @@ pub(super) struct InstancePlan {
 impl InstancePlan {
     pub fn capture(instances: &Instances, id: InstanceId) -> Result<Self, String> {
         Ok(Self {
-            actuals: Sendless::new(&instances.types).actuals(&instances.actuals[id.index()])?,
+            actuals: NativeKeyTypes::new(&instances.types)
+                .actuals(&instances.actuals[id.index()])?,
         })
     }
     pub fn register(
@@ -92,15 +93,14 @@ impl InstancePlan {
     }
 }
 
-/// An instance key erases every actual's sendability, and no native stage reads
-/// it, so discoveries of one key in different instance tables may differ only
-/// there. Recipes and plans capture their types with it fixed, so every
-/// discovery of a key registers the same products.
-struct Sendless<'a> {
+/// Native actuals share an instance across relation, brand, uniqueness and
+/// sendability. Persist the same representative at every depth so independent
+/// discoveries of that key register the same recipe and original plan.
+struct NativeKeyTypes<'a> {
     types: &'a hirsel_types::TypeInterner,
     done: HashMap<hirsel_types::TypeId, hirsel_types::TypeId>,
 }
-impl<'a> Sendless<'a> {
+impl<'a> NativeKeyTypes<'a> {
     fn new(types: &'a hirsel_types::TypeInterner) -> Self {
         Self {
             types,
@@ -152,7 +152,11 @@ impl<'a> Sendless<'a> {
                 continue;
             }
             let mut row = row.clone();
+            row.modes.relation = hirsel_types::Relation::global();
+            row.modes.uniqueness = hirsel_types::Uniqueness::Aliased;
             row.modes.sendability = hirsel_types::Sendability::NotSendable;
+            row.sendability_requirement = hirsel_types::SendabilityRequirement::None;
+            row.brand = hirsel_types::Brand::default();
             row.kind = row.kind.map_edges(|child| self.done[&child]);
             let canonical = self.types.intern(row);
             self.done.insert(id, canonical);
@@ -214,7 +218,7 @@ impl SourceRecipe {
         Ok(Self {
             schema: 1,
             definition,
-            actuals: Sendless::new(&instances.types)
+            actuals: NativeKeyTypes::new(&instances.types)
                 .actuals(&instances.actuals[current.index()])?,
             finalizer,
             steps,
@@ -438,7 +442,7 @@ impl LibraryRecipe {
             return Err("source instance is not a library recipe".into());
         };
         let view = instances.view(id);
-        let mut sendless = Sendless::new(&instances.types);
+        let mut sendless = NativeKeyTypes::new(&instances.types);
         Ok(Self {
             schema: 1,
             definition: view.key.definition().clone(),

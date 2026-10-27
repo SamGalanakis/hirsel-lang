@@ -389,11 +389,15 @@ fn fragment_checked(
         if let Ok(fragment) = fragment_product(store, product)
             && fragment.summary == summary
         {
+            hirsel_intern::timings::count(hirsel_intern::timings::Count::ObjectHits);
             if verify_store == VerifyStore::Off {
                 return Ok(fragment);
             }
             cached = Some(fragment);
         }
+    }
+    if cached.is_none() {
+        hirsel_intern::timings::count(hirsel_intern::timings::Count::ObjectMisses);
     }
     let object = compute()?;
     let bytes = put_blob(store, &object.bytes)?;

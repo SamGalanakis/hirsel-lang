@@ -263,7 +263,7 @@ impl Store {
         self.publish_index(state, delta, &epoch.lease)?;
         // Reader sees its own committed prefix; the next pin opens once. The
         // private lease is released only after the publication outcome is known.
-        state.pinned = state.depth != 0;
+        state.pinned = state.depth != 0 && state.index.is_some();
         drop(epoch);
         // Explicit owner-boundary maintenance, separately counted and bounded;
         // publish_delta itself never compacts or retries.

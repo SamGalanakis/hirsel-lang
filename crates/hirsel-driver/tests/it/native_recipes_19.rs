@@ -406,3 +406,62 @@ fn source_operations(
         .source_operations(view.key.definition(), &selected, view.body)
         .unwrap()
 }
+
+#[test]
+fn library_recipes_share_a_key_across_erased_actual_modes() {
+    use hirsel_driver::native::queries::recipes::LibraryRecipe;
+    use hirsel_types::{GenericArgument, Primitive, Type, TypeKind, Uniqueness};
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters())
+            .with_result_store(Arc::new(store::MemStore::default()));
+        let file = engine
+            .sources
+            .add("keyed-recipes.hir", "pub fn main()->u64 {0u64}".into())
+            .unwrap();
+        engine.parse_file(file, &default_context()).unwrap();
+        let inputs = crate::native_front_fixture::inputs(&mut engine, &[]);
+        let program = &inputs.declarations.program;
+        let source = inputs.provider();
+        let records =
+            NativeRecords::new(program.types.clone(), Arc::new(store::MemStore::default()));
+        let target = hirsel_lir::TargetSpec::x86_64_unknown_linux_gnu();
+        let path = hirsel_syntax::DefPath::core("list.push");
+        let body = hirsel_rc::library::body_index(&path).unwrap();
+        let mut captures = Vec::new();
+        for unique in [false, true] {
+            let mut string = Type::with_kind(TypeKind::Primitive(Primitive::String));
+            if unique {
+                string.modes.uniqueness = Uniqueness::Unique;
+            }
+            let string = program.types.intern(string);
+            let owners = hirsel_rc::library::owners(&program.types, &program.signatures)
+                .over(&program.owners);
+            let mut layouts = hirsel_layout::layout::LayoutBuilder::new(&target, &owners);
+            layouts.prepare_native_controls();
+            let mut instances =
+                hirsel_rc::instance::Instances::new(program.types.clone(), program.memo.clone());
+            let request = hirsel_rc::library::Request::operation(
+                program,
+                body,
+                &path,
+                vec![GenericArgument::Type(string)],
+            )
+            .unwrap();
+            let id =
+                hirsel_rc::library::instantiate(&mut layouts, &mut instances, request).unwrap();
+            let table = layouts.finish();
+            let recipe = LibraryRecipe::capture(&instances, id, &table).unwrap();
+            let key = recipe.key().unwrap();
+            let bytes = recipe.encode(&records, &source).unwrap();
+            let abi = hirsel_lir::LayoutKeys::new(&table)
+                .fn_abi(&table.fn_abis[instances.abis[id.index()].0 as usize]);
+            captures.push((key, abi, bytes));
+        }
+        assert_eq!(captures[0].0, captures[1].0);
+        assert_eq!(captures[0].1, captures[1].1);
+        assert_eq!(
+            captures[0].2, captures[1].2,
+            "one native key must register one recipe"
+        );
+    });
+}

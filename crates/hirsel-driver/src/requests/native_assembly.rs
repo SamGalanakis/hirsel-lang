@@ -182,6 +182,12 @@ impl NativeAssembly {
             sources,
         }))
     }
+    pub fn source(&self) -> &Arc<FrontNativeQueries> {
+        &self.source
+    }
+    pub fn bootstrap(&self) -> &Arc<NativeBootstrap> {
+        &self.bootstrap
+    }
     pub fn query(&self) -> QueryId {
         self.bootstrap.query()
     }

@@ -1128,3 +1128,26 @@ fn index_corruption_diagnostics_are_recorded_once_per_shared_pin() {
     drop(reader);
     assert_eq!(statistics.snapshot().counters["InvalidIndexRoots"], 1);
 }
+
+#[test]
+fn large_only_admission_publication_preserves_the_first_index_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::rebuildable(dir.path().to_owned());
+    let address = Address(hash(b"previous product"));
+    let action = Action(hash(b"previous action"));
+    let reference = store.put(DOMAIN, b"previous payload").unwrap();
+    store.associate(address, action, reference).unwrap();
+    drop(store);
+
+    let reopened = Store::rebuildable(dir.path().to_owned());
+    reopened.set_private_limits(8192, 16 << 20);
+    let statistics = reopened.enable_statistics();
+    let request = reopened.request();
+    reopened.put(DOMAIN, &vec![1; 5000]).unwrap();
+    reopened.put(DOMAIN, &vec![2; 5000]).unwrap();
+    assert_eq!(statistics.snapshot().counters["AdmissionCommits"], 1);
+    assert_eq!(reopened.lookup(address).unwrap().reference, reference);
+    assert_eq!(reopened.lookup(address).unwrap().action, action);
+    assert_eq!(&*reopened.get(reference).unwrap(), b"previous payload");
+    request.finish().unwrap();
+}

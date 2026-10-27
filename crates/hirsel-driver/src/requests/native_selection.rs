@@ -290,3 +290,95 @@ fn request_key(request: &NativeRequest, purpose: NativePurpose) -> Result<Conten
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn artifacts(
+    program: &mut LoadedProgram,
+    source: NativeSourceInputs,
+    footprint: &Footprint,
+    allowance: &mut MemoryReservation,
+    weight: MemoryWeight,
+    root_weight: MemoryWeight,
+    errors: RuntimeErrors,
+    verify_store: hirsel_engine::store::VerifyStore,
+) -> Result<(Arc<NativeAssembly>, MemoryReservation), ToolError> {
+    let mut split = |bytes| {
+        allowance.split(bytes).ok_or_else(|| {
+            ToolError::Runtime("native artifacts exceed their snapshot partition".into())
+        })
+    };
+    let target = native::TargetSpec::x86_64_unknown_linux_gnu();
+    let policy = ContentHash::of_bytes(b"hirsel.native.oracle-singleton-o0.v1");
+    let backends = [native::Backend::Llvm, native::Backend::Cranelift]
+        .into_iter()
+        .map(
+            |backend| crate::native::queries::compilation_tasks::CompilationBackend {
+                backend: backend.name().into(),
+                backend_version: ContentHash::of_bytes(&crate::COMPILER_IDENTITY),
+                target_features: target.digest(),
+                profile_options: policy,
+                runtime_abi: ContentHash::of_bytes(&hirsel_lir::RUNTIME_ABI_VERSION.to_le_bytes()),
+                linker_options: policy,
+                runtime_archives: vec![],
+                foreign_inputs: vec![],
+                executor: Arc::new(ArtifactObjects),
+            },
+        )
+        .collect();
+    let roots = source
+        .definitions
+        .iter()
+        .filter(|path| path.0.package == source.entry.0.package)
+        .cloned()
+        .collect();
+    let output = split(super::native_artifacts::BYTES)?;
+    let assembly = NativeAssembly::new(
+        program,
+        source,
+        NativeAssemblyPlan {
+            native: super::native_bootstrap::NativePlan {
+                options: native::Options::new(target),
+                policy,
+                verify_store,
+                opt: native::OptLevel::None,
+                debug: false,
+                verify_backend: true,
+                measurement: false,
+                fuel: false,
+                requested_run: None,
+                test_entries: vec![],
+                emit_only: true,
+                backends,
+            },
+            output: super::NativeOutput::Objects { roots },
+            proofs: None,
+            tasks: NativeAdmission {
+                instances: split(footprint.tasks)?,
+                arena: split(footprint.tasks)?,
+                compilation: split(footprint.tasks)?,
+            },
+            catalogue: split(footprint.catalogue)?,
+            source: split(footprint.source)?,
+            routing: split(Footprint::ROUTING)?,
+            bootstrap: split(footprint.bootstrap)?,
+            weight: MemoryWeight {
+                retained: weight.retained.min(1 << 20),
+                scratch: weight.scratch.min(16 << 20),
+                stack: 0,
+            },
+            source_weight: weight,
+            root_weight,
+            errors,
+        },
+    )?;
+    Ok((assembly, output))
+}
+struct ArtifactObjects;
+impl native::queries::link_tasks::NativeLinkExecutor for ArtifactObjects {
+    fn link(
+        &self,
+        _: &mut native::queries::roots::RootProducts,
+        _: native::queries::link_tasks::LinkExecution<'_>,
+    ) -> Result<Vec<u8>, String> {
+        Err("oracle object emission cannot link an executable".into())
+    }
+}
