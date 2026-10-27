@@ -66,6 +66,9 @@ fn run_width(width: usize) {
     run_width_policy(width, "tasks.cooperative@1");
 }
 fn run_width_policy(width: usize, provider: &str) {
+    run_width_policy_backends(width, provider, &["llvm", "cranelift"]);
+}
+fn run_width_policy_backends(width: usize, provider: &str, backends: &[&str]) {
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
     let source = include_str!("physical.hir");
@@ -97,7 +100,7 @@ fn run_width_policy(width: usize, provider: &str) {
     let grants = root.join("grants.json");
     fs::write(&grants, serde_json::json!({"io":{"dirs":[],"tasks":provider,"cpu":{"provider":"cpu.scoped@1",
         "max_workers":width,"max_domains":1,"max_physical_bytes":1073741824u64,"max_batch_bytes":8388608}}}).to_string()).unwrap();
-    for backend in ["llvm", "cranelift"] {
+    for &backend in backends {
         let executable = root.join(backend);
         let cli = env!("CARGO_BIN_EXE_hirsel");
         checked(

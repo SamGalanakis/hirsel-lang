@@ -22,14 +22,14 @@ if "HIRSEL_NATIVE_CPU_HARNESS" in os.environ:
     args = parser.parse_args()
     root = Path.cwd()
     binary = (root / os.environ["HIRSEL_NATIVE_CPU_HARNESS"]).resolve()
-    name = f"native_tsan_cpu_pool_has_physical_width_{args.native}"
-    result = subprocess.run([binary, "--exact", name, "--nocapture", "--test-threads=1"],
+    name = "native_tsan_"
+    result = subprocess.run([binary, name, "--nocapture", "--test-threads=1"],
                             cwd=root / "crates/hirsel-cli", timeout=180,
                             env=os.environ | {"TSAN_OPTIONS": "symbolize=0:halt_on_error=1:exitcode=66"},
                             capture_output=True, text=True)
     print(result.stdout, end="", flush=True)
     print(result.stderr, end="", file=sys.stderr, flush=True)
-    if result.returncode == 0 and "1 passed" not in result.stdout:
+    if result.returncode == 0 and "4 passed" not in result.stdout:
         raise SystemExit("native CPU TSan harness executed no body")
     raise SystemExit(result.returncode)
 
