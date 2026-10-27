@@ -1852,6 +1852,9 @@ fn ordinary_parse_heads_restore_names_and_signatures_without_syntax_or_type_tabl
             p.0.name = name.into();
             p
         };
+        // S5 private facts are a distinct input to the stored signature.
+        // Seed that product before isolating heads-only restoration.
+        writer.signature_snapshot();
         let expected = writer
             .item_signature(&path("value"))
             .unwrap()
@@ -1943,6 +1946,9 @@ fn ordinary_parse_heads_materialize_only_demanded_files_and_preserve_resident_ed
         // ordinary header product so that this body-materialization control
         // does not force an unrelated source parse to normalize that header.
         writer.item_signature(&path("other")).unwrap();
+        // The body-free reader also needs S5's module proof. A declaration
+        // header alone cannot prove an unchanged sibling's private body.
+        writer.signature_snapshot();
         // This control exercises materialization from heads without a Parse
         // output; keep its exact parser-work and edit assertions below.
         let mut removed_syntax = 0;
