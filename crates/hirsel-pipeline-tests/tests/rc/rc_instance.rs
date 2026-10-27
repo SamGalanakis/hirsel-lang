@@ -336,13 +336,33 @@ fn nested_generic_data_captures_have_no_callable_contract() {
     assert!(abi.nonretaining_captures.is_empty());
     assert!(abi.scoped_entries.is_empty());
 
-    // Negative control: restore the old callable claim on the data parameter.
-    // Even a matching digest must not persuade the independent validator.
+    // Read-only data nonretention is legal; it does not claim a callable entry.
     abi.nonretaining.push(hirsel_lir::abi_types::ParameterPath {
         parameter: 1,
         fields: Vec::new(),
     });
     abi.scoped_contract = hirsel_lir::abi::scoped_contract_digest(&abi.nonretaining, &[]);
+    let errors = violations(&program, &lowered);
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let abi = &mut lowered.table.fn_abis[abi_id.0 as usize];
+    abi.scoped_entries.push(hirsel_lir::abi_types::ScopedEntry {
+        parameter: abi.nonretaining[0].clone(),
+        identity: abi.key.callable,
+    });
+    let errors = violations(&program, &lowered);
+    assert!(
+        errors.iter().flat_map(|(_, v)| v).any(|v| {
+            matches!(&v.kind, hirsel_lir::validate::ViolationKind::Layout(error)
+                if error.contains("invalid nested scoped entry selector"))
+        }),
+        "{errors:?}"
+    );
+
+    // The data permission still cannot certify a consuming entry.
+    let abi = &mut lowered.table.fn_abis[abi_id.0 as usize];
+    abi.scoped_entries.clear();
+    abi.parameters[1].convention = hirsel_core_contract::Passing::Take;
     assert!(
         violations(&program, &lowered)
             .iter()
