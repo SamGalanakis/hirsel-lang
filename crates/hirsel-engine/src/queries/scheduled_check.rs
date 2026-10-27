@@ -34,6 +34,17 @@ struct DeadArmLint {
     bodies: Vec<DefPath>,
 }
 impl DeadArmLint {
+    fn insert(&mut self, item: &super::catalog::SourceItem) {
+        if !item.facts.arms.is_empty() {
+            self.declarations.insert(
+                item.definition.clone(),
+                (item.anchor, item.facts.arms.clone()),
+            );
+        }
+        if item.facts.body {
+            self.bodies.push(item.definition.clone());
+        }
+    }
     fn bytes(&self) -> u64 {
         let mut weight = crate::NativeMetadataWeight::default();
         weight.add(std::mem::size_of::<Self>());
@@ -657,6 +668,39 @@ impl Task {
     }
 }
 impl QueryEngine {
+    /// Size ordered Check rows and LANG-8 facts from existing source metadata.
+    /// Fact aliases and lint rows share the original snapshot reservation with
+    /// the other producers; they are fixed inputs, not output slack.
+    pub fn front_check_input_bytes(
+        &self,
+        files: &[(FileId, FileContext)],
+        lint_package: Option<&hirsel_syntax::PackageId>,
+        weight: MemoryWeight,
+    ) -> Option<u64> {
+        let mut definitions = Vec::new();
+        let mut lint = DeadArmLint {
+            declarations: BTreeMap::new(),
+            bodies: Vec::new(),
+        };
+        for (file, context) in files {
+            for item in self.source_items(*file) {
+                if lint_package == Some(&context.package) {
+                    lint.insert(&item);
+                }
+                if item.facts.fact {
+                    definitions.push(hirsel_check_protocol::fact::fact_path(&item.definition));
+                }
+                definitions.push(item.definition);
+            }
+        }
+        FrontCheckQueries::input_bytes(&definitions, files.len(), weight)?.checked_add(
+            if lint.declarations.is_empty() {
+                0
+            } else {
+                lint.bytes()
+            },
+        )
+    }
     /// Capture the ordered file inputs. S0 uses the existing index/association
     /// checks; no body, constant, lower or old phase controller executes here.
     pub fn front_check_queries(
@@ -700,14 +744,8 @@ impl QueryEngine {
             if input.error.is_none() && !has_errors(&input.diagnostics) {
                 let linted = plan.lint_package.as_ref() == Some(&context.package);
                 for item in self.source_items(*file) {
-                    if linted && !item.facts.arms.is_empty() {
-                        lint.declarations.insert(
-                            item.definition.clone(),
-                            (item.anchor, item.facts.arms.clone()),
-                        );
-                    }
-                    if linted && item.facts.body {
-                        lint.bodies.push(item.definition.clone());
+                    if linted {
+                        lint.insert(&item);
                     }
                     if item.facts.constant {
                         constants.insert(DefId::intern(&item.definition));

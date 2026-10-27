@@ -33,6 +33,20 @@ fn ordered_check_gates_lowering_and_preserves_file_failure_prefixes() {
     });
 }
 
+#[test]
+fn ordered_check_admits_lint_rows_before_reserving_outputs() {
+    with_compiler_stack(|| {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("main.hir");
+        std::fs::write(
+            &path,
+            "type Failure = Used() | Stale()\nfn parse()->Result[u8,Failure]{Error(Used())}\npub fn main(){}\n",
+        )
+        .unwrap();
+        check_case(&path, false, false, 2, LoweringPolicy::Reachable);
+    });
+}
+
 fn check_case(
     path: &std::path::Path,
     reject_growth: bool,
@@ -125,7 +139,7 @@ fn check_case(
     // Match package checking: the requested policy applies to the root
     // package; dependencies lower only their compile-time obligations.
     let root = program.entry.0.package.clone();
-    let plan = FrontCheckPlan {
+    let plan = || FrontCheckPlan {
         files: program
             .files
             .iter()
@@ -142,11 +156,27 @@ fn check_case(
         lower: lower.clone(),
         growth: growth.clone(),
         unsafe_ffi: program.unsafe_ffi.clone(),
-        lint_package: None,
+        lint_package: Some(root.clone()),
     };
+    let input_bytes = program
+        .engine
+        .front_check_input_bytes(&program.files, Some(&root), weight)
+        .unwrap();
+    assert!(
+        program
+            .engine
+            .front_check_queries(
+                plan(),
+                weight,
+                budget.reserve(input_bytes - 1).unwrap(),
+                errors
+            )
+            .is_err(),
+        "all fixed Check inputs precede output admission"
+    );
     let check = program
         .engine
-        .front_check_queries(plan, weight, budget.reserve(16 << 20).unwrap(), errors)
+        .front_check_queries(plan(), weight, budget.reserve(input_bytes).unwrap(), errors)
         .unwrap();
     runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
     runtime

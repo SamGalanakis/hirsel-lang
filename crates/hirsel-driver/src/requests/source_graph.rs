@@ -697,7 +697,7 @@ impl Plan {
         config: &CompileConfig,
         inputs: &FrozenInputs,
         definitions: &[DefPath],
-        files: usize,
+        check_inventory: u64,
         needs_run: bool,
         needs_native: bool,
         needs_proofs: bool,
@@ -720,8 +720,6 @@ impl Plan {
             FrontLowerQueries::input_bytes(definitions).ok_or_else(|| uninstalled())?;
         let growth_inventory =
             FrontGrowthQueries::input_bytes(definitions, metadata).ok_or_else(|| uninstalled())?;
-        let check_inventory = FrontCheckQueries::input_bytes(definitions, files, metadata)
-            .ok_or_else(|| uninstalled())?;
         let run_inventory = if needs_run { run_input_bytes } else { 0 };
         let native_inventory = if needs_native {
             super::native_selection::Footprint::minimum(definitions).ok_or_else(|| uninstalled())?
@@ -1152,7 +1150,14 @@ pub(super) fn install(
             config,
             &request.inputs,
             definitions,
-            program.files.len(),
+            program
+                .engine
+                .front_check_input_bytes(
+                    &program.files,
+                    Some(&program.entry.0.package),
+                    MemoryWeight::default(),
+                )
+                .ok_or_else(|| uninstalled())?,
             needs_run,
             matches!(
                 request.operation,
