@@ -14,6 +14,7 @@ use std::{
 
 mod diff;
 pub mod impact;
+mod interpreted;
 
 #[derive(Clone, Debug)]
 pub struct Test {
@@ -370,6 +371,7 @@ pub(crate) struct TestDiscovery {
     pub inputs: hirsel_engine::loader_inputs::FrozenInputs,
     pub tests: Vec<Test>,
     pub sources: Vec<crate::requests::NativeSourceText>,
+    source_paths: Vec<PathBuf>,
 }
 
 pub(crate) fn discover_request(
@@ -379,6 +381,17 @@ pub(crate) fn discover_request(
     selection: Selection,
     verify: hirsel_engine::Verify,
 ) -> Result<TestDiscovery, ToolError> {
+    discover_with_selector(path, filters, override_seed, selection, verify)
+        .map(|(discovery, _)| discovery)
+}
+
+fn discover_with_selector(
+    path: &Path,
+    filters: &[String],
+    override_seed: Option<u64>,
+    selection: Selection,
+    verify: hirsel_engine::Verify,
+) -> Result<(TestDiscovery, crate::requests::CompilerRequests), ToolError> {
     use crate::requests::{CompileOperation, CompileRequest, CompileResult, CompilerRequests};
     use hirsel_engine::{
         requests::{OutputReadiness, RequestEngine, observe_inputs},
@@ -386,6 +399,12 @@ pub(crate) fn discover_request(
     };
     let compiler = crate::COMPILER.with_verify(verify);
     let mut selector = CompilerRequests::for_host(compiler.clone(), compiler.configuration());
+    let compiler = selector.compiler().clone();
+    let publication = selector
+        .config()
+        .store
+        .local_product_store()
+        .map(|store| store.request());
     let (program, inputs) = observe_inputs(
         selector.input_limits(),
         selector.capture_attempts(),
@@ -437,23 +456,38 @@ pub(crate) fn discover_request(
             sources: checked.sources.clone(),
         });
     }
+    if let Some(publication) = publication {
+        let _ = publication.finish();
+    }
     let mut sources = Vec::new();
+    let mut source_paths = Vec::new();
     let tests = plan_entries(
         &mut program,
         filters,
         override_seed,
         selection,
-        |_, mut source, _| {
+        |program, mut source, _| {
+            let file = program
+                .files
+                .iter()
+                .find(|(_, context)| *context == source.context)
+                .and_then(|(file, _)| program.engine.sources.file(*file))
+                .ok_or_else(|| ToolError::Runtime("test wrapper source is unavailable".into()))?;
+            source_paths.push(file.path.clone());
             source.name = format!("native-testing/{}.hir", source.name);
             sources.push(source);
             Ok(())
         },
     )?;
-    Ok(TestDiscovery {
-        inputs,
-        tests,
-        sources,
-    })
+    Ok((
+        TestDiscovery {
+            inputs,
+            tests,
+            sources,
+            source_paths,
+        },
+        selector,
+    ))
 }
 
 fn plan_entries(
@@ -754,27 +788,47 @@ pub fn run_path_with_simulation_debug(
     schedules: &Schedules,
     options: SimulationTestOptions,
 ) -> Result<Vec<TestResult>, ToolError> {
-    let mut program = crate::COMPILER
-        .with_verify(options.verify)
-        .load_test_package(path)?;
-    let mut tests = discover(&mut program, filters, override_seed, Selection::Tests)?;
-    for test in &mut tests {
+    let (mut discovery, selector) = discover_with_selector(
+        path,
+        filters,
+        override_seed,
+        Selection::Tests,
+        options.verify,
+    )?;
+    for test in &mut discovery.tests {
         test.simulation_debug = options.debug;
     }
-    program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
-        limits: hirsel_interp::Limits {
-            steps: max_steps,
-            ..Default::default()
-        },
-        ..Default::default()
-    }));
-    Ok(run_interpreted(
-        &mut program,
-        &tests,
-        false,
-        bless,
-        schedules,
-    ))
+    let mut execution = interpreted::Executions::new(path, &discovery, selector, max_steps)?;
+    Ok(discovery
+        .tests
+        .iter()
+        .map(|test| {
+            explore(test, schedules, |test| {
+                let mut result = match execution.run(test) {
+                    Ok((input, observed)) => {
+                        let stdout = match &observed.observation {
+                            Some(observation) => &observation.output,
+                            None => &observed.tooling_output,
+                        };
+                        let failure = match &observed.outcome {
+                            Ok(outcome) => outcome_failure(outcome, &input.sources),
+                            Err(error) => Some(format!("runtime error: {error:?}")),
+                        };
+                        let mut result = test.result(failure, stdout, bless);
+                        if result.failure.is_some() {
+                            for candidate in observed.race_candidates {
+                                result.report.push_str(&candidate.to_string());
+                            }
+                        }
+                        result
+                    }
+                    Err(error) => test.result(Some(format!("runtime error: {error}")), &[], bless),
+                };
+                result.scheduler = test.scheduler.clone();
+                result
+            })
+        })
+        .collect())
 }
 
 /// Benches run interpreted, each launch timed around the interpreter's execution.
@@ -785,18 +839,11 @@ pub fn bench_path(
     target: Duration,
     verify: hirsel_engine::Verify,
 ) -> Result<Vec<BenchResult>, ToolError> {
-    let mut program = crate::COMPILER
-        .with_verify(verify)
-        .load_test_package(path)?;
-    let benches = discover(&mut program, filters, override_seed, Selection::Benches)?;
-    program.engine.adapters.interpreter = Some(Box::new(hirsel_engine::InterpreterAdapter {
-        limits: hirsel_interp::Limits {
-            steps: None,
-            ..Default::default()
-        },
-        ..Default::default()
-    }));
-    Ok(benches
+    let (discovery, selector) =
+        discover_with_selector(path, filters, override_seed, Selection::Benches, verify)?;
+    let mut execution = interpreted::Executions::new(path, &discovery, selector, None)?;
+    Ok(discovery
+        .tests
         .iter()
         .map(|bench| {
             let measured = calibrate(target, |index| {
@@ -804,13 +851,18 @@ pub fn bench_path(
                     entry: bench.loops[index].1.clone(),
                     ..bench.clone()
                 };
+                // Compilation happens once per entry, before the timed interpreter launch.
+                execution
+                    .prepare(&launch.entry)
+                    .map_err(|e| format!("runtime error: {e}"))?;
                 let start = Instant::now();
-                let execution = execute(&mut program, &launch, false, 0)
+                let (input, observed) = execution
+                    .run(&launch)
                     .map_err(|e| format!("runtime error: {e}"))?;
                 let elapsed = start.elapsed();
-                match execution.outcome {
+                match observed.outcome {
                     Ok(outcome) => {
-                        outcome_failure(&outcome, &program.engine.sources).map_or(Ok(elapsed), Err)
+                        outcome_failure(&outcome, &input.sources).map_or(Ok(elapsed), Err)
                     }
                     Err(error) => Err(format!("runtime error: {error:?}")),
                 }
