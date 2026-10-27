@@ -73,6 +73,27 @@ impl<'a, S> Pairing<'a, S> {
             };
             origins[result.index()] = origin;
         }
+        for call in &unit.tables.calls {
+            if let Some(receipts) = &call.receipts {
+                for argument in &receipts.arguments {
+                    if let ReceiptArgument::Mut {
+                        parameter, version, ..
+                    } = *argument
+                        && let Some(ArgumentValue::Address {
+                            version: ordinary, ..
+                        }) = call
+                            .arguments
+                            .get(&unit.pools.call_arguments)
+                            .unwrap_or(&[])
+                            .iter()
+                            .find(|a| a.parameter == parameter)
+                            .map(|a| a.value)
+                    {
+                        origins[version.index()] = Origin::Receipt(ordinary);
+                    }
+                }
+            }
+        }
         let mut incoming = vec![vec![]; unit.blocks.len()];
         for (id, edge) in unit.tables.edges.iter().enumerate() {
             incoming[edge.target.index()].push(EdgeId(id as u32));

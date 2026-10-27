@@ -101,10 +101,12 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                 } if unit.types[unit.addresses[address.index()].ty.index()].repr
                     == ValueRepr::PayloadReceipt =>
                 {
-                    reject(
-                        site,
-                        "receipt metadata cannot be mutably borrowed without writeback custody",
-                    );
+                    if !metadata_address(cx, address, false) {
+                        reject(
+                            site,
+                            "receipt metadata cannot be mutably borrowed without writeback custody",
+                        );
+                    }
                 }
                 Inst::StorageLive { slot } | Inst::StorageDead { slot, .. }
                     if matches!(unit.slots[slot.index()].kind, SlotKind::ReceiptParameter(_))
@@ -212,7 +214,12 @@ fn metadata_address<S>(cx: &Cx<'_, S>, mut address: AddressId, read: bool) -> bo
                     && matches!(
                         cx.unit.slots[slot.index()].kind,
                         SlotKind::ReceiptParameter(_)
-                    );
+                    )
+                    || matches!(
+                        cx.unit.slots[slot.index()].kind,
+                        SlotKind::ReceiptParameter(_)
+                    ) && receipt_mode(cx, slot)
+                        == Some(crate::sealed_payload_source::ReceiptMode::MutSlot);
             }
             AddressBase::Value(_) => return false,
         }
@@ -221,12 +228,20 @@ fn metadata_address<S>(cx: &Cx<'_, S>, mut address: AddressId, read: bool) -> bo
 }
 
 fn borrowed_parameter<S>(cx: &Cx<'_, S>, slot: SlotId) -> bool {
+    receipt_mode(cx, slot) == Some(crate::sealed_payload_source::ReceiptMode::Borrow)
+}
+fn receipt_mode<S>(
+    cx: &Cx<'_, S>,
+    slot: SlotId,
+) -> Option<crate::sealed_payload_source::ReceiptMode> {
     let SlotKind::ReceiptParameter(source) = cx.unit.slots[slot.index()].kind else {
-        return false;
+        return None;
     };
     cx.layouts.0.fn_abis[cx.unit.header.abi.0 as usize]
         .receipts
-        .as_ref()
-        .and_then(|contract| contract.parameters.iter().find(|p| p.source == source))
-        .is_some_and(|p| p.mode == crate::sealed_payload_source::ReceiptMode::Borrow)
+        .as_ref()?
+        .parameters
+        .iter()
+        .find(|p| p.source == source)
+        .map(|p| p.mode)
 }

@@ -3606,6 +3606,13 @@ impl<S: Stage> Checker<'_, '_, S> {
                 self.add(site, K::Type("call argument"));
             }
         }
+        if let Some(receipts) = &call.receipts {
+            for (address, version) in receipts.writebacks() {
+                if let Some(slot) = self.slot_root(site, facts, address) {
+                    self.version_type(site, slot, version, "receipt mut call version");
+                }
+            }
+        }
         match (call.result, &abi.result) {
             (None, None) => {}
             (Some(result), Some(r)) => {
@@ -3678,16 +3685,11 @@ impl<S: Stage> Checker<'_, '_, S> {
             let Terminator::Call { call, .. } = *term else {
                 continue;
             };
-            for arg in unit.tables.calls[call.index()]
-                .arguments
-                .get(&unit.pools.call_arguments)
-                .unwrap_or(&[])
-            {
-                if let ArgumentValue::Address { address, version } = arg.value
-                    && let Some(Addr {
-                        root: Root::Slot(slot),
-                        ..
-                    }) = facts.addresses[address.index()]
+            for (address, version) in unit.tables.calls[call.index()].writebacks(&unit.pools) {
+                if let Some(Addr {
+                    root: Root::Slot(slot),
+                    ..
+                }) = facts.addresses[address.index()]
                 {
                     facts.version[version.index()] = Some(slot);
                 }
@@ -4935,14 +4937,7 @@ pub(super) fn mut_versions<'a, S>(
     cx: &'a Cx<'_, S>,
     call: &'a CallSite,
 ) -> impl Iterator<Item = ValueId> + 'a {
-    call.arguments
-        .get(&cx.unit.pools.call_arguments)
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(|arg| match arg.value {
-            ArgumentValue::Address { version, .. } => Some(version),
-            ArgumentValue::Value(_) => None,
-        })
+    call.writebacks(&cx.unit.pools).map(|(_, version)| version)
 }
 
 /// The innermost base of an address chain, or None for a cyclic chain.

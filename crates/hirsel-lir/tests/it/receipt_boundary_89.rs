@@ -55,6 +55,14 @@ fn fixture(call: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
 }
 
 fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
+    fixture_passing(call, if take { Passing::Take } else { Passing::Borrow })
+}
+fn fixture_passing(
+    call: bool,
+    passing: Passing,
+) -> (LirUnit<Rc>, LayoutTable, Manifest, Declarations) {
+    let take = passing == Passing::Take;
+    let mutable = passing == Passing::Mut;
     let types = support::session();
     let scalar = types.intern(Type::with_kind(TypeKind::Primitive(P::U64)));
     let boxed = types.intern(Type::with_kind(TypeKind::Builtin {
@@ -80,7 +88,6 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
     }
     let ordinary = LayoutId(ordinary.0 + offset);
     let meta = LayoutId(meta.0 + offset);
-    let passing = if take { Passing::Take } else { Passing::Borrow };
     let params = [(passing, ordinary), (passing, ordinary)];
     t.builder.unit.header.abi = t.abi(&params, None);
     for _ in 0..2 {
@@ -108,7 +115,9 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
             .map(|source| ReceiptParameter {
                 source,
                 ty: ty.clone(),
-                mode: if take {
+                mode: if mutable {
+                    ReceiptMode::MutSlot
+                } else if take {
                     ReceiptMode::Take
                 } else {
                     ReceiptMode::Borrow
@@ -151,13 +160,51 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
         support::l::U64,
         Holding::Plain,
     );
-    t.builder.push(
-        ENTRY,
-        Inst::SeqLen {
-            result: length,
-            value: t.builder.unit.parameters[0],
-        },
-    );
+    if mutable {
+        let constant = ConstantId(t.builder.unit.tables.constants.len() as u32);
+        let ty = t.builder.unit.values[length.index()].ty;
+        t.builder.unit.tables.constants.push(ConstantData {
+            ty,
+            value: ConstantValue::Integer(0),
+        });
+        t.builder.push(
+            ENTRY,
+            Inst::Const {
+                result: length,
+                constant,
+            },
+        );
+    } else {
+        t.builder.push(
+            ENTRY,
+            Inst::SeqLen {
+                result: length,
+                value: t.builder.unit.parameters[0],
+            },
+        );
+    }
+    let mut payload_addresses = vec![];
+    if mutable {
+        for source in 0..2 {
+            let ty = t.builder.unit.values[t.builder.unit.parameters[source as usize].index()].ty;
+            let slot = SlotId(t.builder.unit.slots.len() as u32);
+            t.builder.unit.slots.push(SlotInfo {
+                ty,
+                scope: ROOT,
+                kind: SlotKind::Parameter(source),
+            });
+            let address = AddressId(t.builder.unit.addresses.len() as u32);
+            t.builder.unit.addresses.push(AddressInfo {
+                source_place: None,
+                unchecked: vec![],
+                base: AddressBase::Slot(slot),
+                projection: PoolRange::EMPTY,
+                ty,
+            });
+            t.prepare(ENTRY, address, &[]);
+            payload_addresses.push(address);
+        }
+    }
     let mut sources = vec![];
     let own_source = ReceiptSource {
         original: hirsel_lir::invocations::ReferenceBody {
@@ -208,6 +255,15 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
             addresses.push(address);
         }
         for (binding, address) in bindings.iter().zip(addresses) {
+            if mutable {
+                let version = t.value_as(ValueRepr::PayloadReceipt, meta, Holding::Plain);
+                receipts.push(ReceiptArgument::Mut {
+                    parameter: binding.source,
+                    address,
+                    version,
+                });
+                continue;
+            }
             let holding = if take {
                 Holding::Owned
             } else {
@@ -254,8 +310,31 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
             .unit
             .parameters
             .iter()
-            .map(|v| ArgumentValue::Value(*v))
+            .enumerate()
+            .map(|(index, v)| {
+                if mutable {
+                    ArgumentValue::Address {
+                        address: payload_addresses[index],
+                        version: *v,
+                    }
+                } else {
+                    ArgumentValue::Value(*v)
+                }
+            })
             .collect::<Vec<_>>();
+        let args = if mutable {
+            args.into_iter()
+                .map(|arg| {
+                    let ArgumentValue::Address { address, .. } = arg else {
+                        unreachable!()
+                    };
+                    let version = t.value_as(ValueRepr::Block, ordinary, Holding::Plain);
+                    ArgumentValue::Address { address, version }
+                })
+                .collect::<Vec<_>>()
+        } else {
+            args
+        };
         t.call(ENTRY, &params, None, &args, (next, &[]), fail);
         let call = &mut t.builder.unit.tables.calls[0];
         let id = call.abi;
@@ -280,7 +359,7 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
             instance: symbol.instance.unwrap(),
             ..own_source
         });
-        if take {
+        if take || mutable {
             let mut pending = t.builder.unit.tables.calls[0]
                 .receipts
                 .as_ref()
@@ -288,8 +367,36 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
                 .inputs()
                 .collect::<Vec<_>>();
             pending.reverse();
-            pending.extend(t.builder.unit.parameters.iter().copied());
+            if take {
+                pending.extend(t.builder.unit.parameters.iter().copied());
+            }
             let rejected = t.releasing(&pending);
+            if mutable {
+                for binding in &bindings {
+                    let address = t
+                        .builder
+                        .unit
+                        .addresses
+                        .iter()
+                        .position(|a| a.base == AddressBase::Slot(binding.slot))
+                        .unwrap();
+                    let address = AddressId(address as u32);
+                    let loan = t.loan(address, false);
+                    t.begin(rejected, loan);
+                    let result =
+                        t.value_as(ValueRepr::PayloadReceipt, meta, Holding::Borrowed(loan));
+                    t.builder.push(
+                        rejected,
+                        Inst::Read {
+                            result,
+                            address,
+                            reaching: binding.version,
+                            mode: ReadMode::Borrow,
+                        },
+                    );
+                    t.end(rejected, loan);
+                }
+            }
             let failure = t.failure(rejected);
             t.builder.unit.tables.calls[0].pretransfer_failure = Some(failure);
             let Callee::Direct(symbol) = t.builder.unit.tables.calls[0].callee else {
@@ -306,6 +413,31 @@ fn fixture_mode(call: bool, take: bool) -> (LirUnit<Rc>, LayoutTable, Manifest, 
                     },
                     abi: id,
                 });
+        }
+        if mutable {
+            let writebacks = t.builder.unit.tables.calls[0]
+                .writebacks(&t.builder.unit.pools)
+                .collect::<Vec<_>>();
+            for block in [next, fail] {
+                for (address, version) in &writebacks {
+                    let ty = t.builder.unit.addresses[address.index()].ty;
+                    let layout = t.builder.unit.types[ty.index()].layout;
+                    let loan = t.loan(*address, false);
+                    t.begin(block, loan);
+                    let repr = t.builder.unit.types[ty.index()].repr;
+                    let result = t.value_as(repr, layout, Holding::Borrowed(loan));
+                    t.builder.push(
+                        block,
+                        Inst::Read {
+                            result,
+                            address: *address,
+                            reaching: *version,
+                            mode: ReadMode::Borrow,
+                        },
+                    );
+                    t.end(block, loan);
+                }
+            }
         }
         t.builder.ret(next, None);
     } else {
@@ -709,5 +841,203 @@ fn taking_an_entry_without_disposing_its_companion_leaks_storage() {
                 .any(|e| e.kind == validate::ViolationKind::LeakedStorage(binding.slot)),
             "{errors:#?}"
         );
+    }
+}
+
+#[test]
+fn mutable_receipts_write_back_on_normal_and_entered_failure_edges() {
+    for call in [false, true] {
+        let (unit, table, manifest, declarations) = fixture_passing(call, Passing::Mut);
+        let errors = check(&unit, &table, &manifest, &declarations);
+        assert!(errors.is_empty(), "{errors:#?}");
+    }
+}
+
+#[test]
+fn mutable_receipts_refuse_crossed_input_slots_and_stale_entered_versions() {
+    let (unit, table, manifest, declarations) = fixture_passing(true, Passing::Mut);
+    let errors = check(&unit, &table, &manifest, &declarations);
+    assert!(errors.is_empty(), "{errors:#?}");
+    for mutation in 0..5 {
+        let mut bad = unit.clone();
+        let entry = bad.tables.receipt_entry.as_ref().unwrap().clone();
+        match mutation {
+            0 | 1 => {
+                let receipts = bad.tables.calls[0].receipts.as_mut().unwrap();
+                let ReceiptArgument::Mut { address: first, .. } = receipts.arguments[0] else {
+                    unreachable!()
+                };
+                let ReceiptArgument::Mut {
+                    address: second, ..
+                } = receipts.arguments[1]
+                else {
+                    unreachable!()
+                };
+                if mutation == 0 {
+                    let a = bad.addresses[first.index()].base;
+                    bad.addresses[first.index()].base = bad.addresses[second.index()].base;
+                    bad.addresses[second.index()].base = a;
+                } else {
+                    let ReceiptArgument::Mut { address, .. } = &mut receipts.arguments[1] else {
+                        unreachable!()
+                    };
+                    *address = first;
+                }
+            }
+            2 | 3 | 4 => {
+                let Terminator::Call {
+                    normal, failure, ..
+                } = bad.terminators[ENTRY.index()]
+                else {
+                    unreachable!()
+                };
+                let edge = if mutation == 2 {
+                    normal.unwrap()
+                } else if mutation == 3 {
+                    bad.tables.failures[failure.index()].cleanup
+                } else {
+                    bad.tables.failures[bad.tables.calls[0].pretransfer_failure.unwrap().index()]
+                        .cleanup
+                };
+                let replacement = if mutation == 4 {
+                    let ReceiptArgument::Mut { version, .. } =
+                        bad.tables.calls[0].receipts.as_ref().unwrap().arguments[0]
+                    else {
+                        unreachable!()
+                    };
+                    version
+                } else {
+                    entry.parameters[0].version
+                };
+                let block = &bad.blocks[bad.tables.edges[edge.index()].target.index()];
+                let instructions = block.instructions;
+                for inst in &mut bad.instructions
+                    [instructions.start as usize..(instructions.start + instructions.len) as usize]
+                {
+                    if let Inst::Read {
+                        reaching, result, ..
+                    } = inst
+                        && bad.types[bad.values[result.index()].ty.index()].repr
+                            == ValueRepr::PayloadReceipt
+                    {
+                        *reaching = replacement;
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !check(&bad, &table, &manifest, &declarations).is_empty(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[test]
+fn mutable_exit_requires_the_replacement_payload_and_receipt_to_match() {
+    let (unit, table, manifest, declarations) = fixture_passing(false, Passing::Mut);
+    for paired in [true, false] {
+        let mut unit = unit.clone();
+        let mut instructions = unit.blocks[ENTRY.index()]
+            .instructions
+            .get(&unit.instructions)
+            .unwrap()
+            .to_vec();
+        let slots = unit
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                matches!(s.kind, SlotKind::Parameter(_)).then_some(SlotId(i as u32))
+            })
+            .collect();
+        let versions = unit.parameters.clone();
+        let bindings = unit
+            .tables
+            .receipt_entry
+            .as_ref()
+            .unwrap()
+            .parameters
+            .clone();
+        let mut swap = |slots: Vec<SlotId>, versions: Vec<ValueId>| {
+            let mut values = vec![];
+            let mut addresses = vec![];
+            for (slot, reaching) in slots.iter().zip(versions) {
+                let ty = unit.slots[slot.index()].ty;
+                let address = AddressId(unit.addresses.len() as u32);
+                unit.addresses.push(AddressInfo {
+                    source_place: None,
+                    unchecked: vec![],
+                    base: AddressBase::Slot(*slot),
+                    projection: PoolRange::EMPTY,
+                    ty,
+                });
+                // All whole-slot addresses are infallible and the fault has no cleanup.
+                let target = BlockId(unit.blocks.len() as u32);
+                unit.blocks.push(Block {
+                    parameters: PoolRange::EMPTY,
+                    instructions: PoolRange::EMPTY,
+                    kind: BlockKind::FailureCleanup,
+                    anchor: SourceAnchorId(0),
+                });
+                unit.terminators.push(Terminator::InvariantFault {
+                    reason: "whole slot address".into(),
+                });
+                let edge = EdgeId(unit.tables.edges.len() as u32);
+                unit.tables.edges.push(Edge {
+                    target,
+                    arguments: PoolRange::EMPTY,
+                });
+                let failure = FailureId(unit.tables.failures.len() as u32);
+                unit.tables.failures.push(FailureEdge {
+                    cleanup: edge,
+                    rule: None,
+                    anchor: SourceAnchorId(0),
+                    dispose: PoolRange::EMPTY,
+                });
+                instructions.push(Inst::Address { address, failure });
+                let result = ValueId(unit.values.len() as u32);
+                unit.values.push(ValueInfo {
+                    ty,
+                    holding: Holding::Owned,
+                });
+                instructions.push(Inst::Read {
+                    result,
+                    address,
+                    reaching,
+                    mode: ReadMode::Take,
+                });
+                values.push(result);
+                addresses.push(address);
+            }
+            for (address, value) in addresses.into_iter().zip(values.into_iter().rev()) {
+                let ty = unit.addresses[address.index()].ty;
+                let version = ValueId(unit.values.len() as u32);
+                unit.values.push(ValueInfo {
+                    ty,
+                    holding: Holding::Plain,
+                });
+                instructions.push(Inst::Store {
+                    address,
+                    value,
+                    version,
+                });
+            }
+        };
+        swap(slots, versions);
+        if paired {
+            swap(
+                bindings.iter().map(|p| p.slot).collect(),
+                bindings.iter().map(|p| p.version).collect(),
+            );
+        }
+        unit.blocks[ENTRY.index()].instructions =
+            PoolRange::push(&mut unit.instructions, instructions);
+        let errors = check(&unit, &table, &manifest, &declarations);
+        if paired {
+            assert!(errors.is_empty(), "{errors:#?}");
+        } else {
+            assert!(errors.iter().any(|e| matches!(&e.kind, validate::ViolationKind::Sealed(message) if message.contains("mutable receipt exit"))), "{errors:#?}");
+        }
     }
 }

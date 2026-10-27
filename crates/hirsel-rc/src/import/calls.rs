@@ -595,9 +595,6 @@ impl Importer<'_> {
             }
             let mut carriers = Vec::new();
             for parameter in &contract.parameters {
-                if parameter.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot {
-                    return unsupported("receipt call requires independent writeback custody");
-                }
                 let argument = arguments
                     .iter()
                     .find(|a| a.parameter.0 == parameter.source)
@@ -613,7 +610,13 @@ impl Importer<'_> {
                     .find(|a| a.parameter == parameter.source)
                     .and_then(|a| match a.value {
                         ArgumentValue::Value(value) => Some(value),
-                        ArgumentValue::Address { .. } => None,
+                        ArgumentValue::Address { address, .. } => {
+                            let AddressBase::Slot(slot) = self.out.addresses[address.index()].base
+                            else {
+                                return None;
+                            };
+                            self.versions[slot.index()]
+                        }
                     })
                     .ok_or_else(|| PassError::Malformed("receipt ordinary argument".into()))?;
                 let ordinal = self.incoming_receipt_parameter(value).ok_or_else(|| {
@@ -659,7 +662,15 @@ impl Importer<'_> {
                             receipt,
                         }
                     }
-                    hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot => unreachable!(),
+                    hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot => {
+                        let version = self.value(metadata.ty, Holding::Plain);
+                        writes.push((binding.slot, version));
+                        hirsel_lir::receipt_transport::ReceiptArgument::Mut {
+                            parameter: parameter.source,
+                            address,
+                            version,
+                        }
+                    }
                 };
                 carriers.push(carrier);
             }
@@ -846,6 +857,25 @@ impl Importer<'_> {
                 _ => continue,
             };
             aliases[result.index()] = Some(source);
+        }
+        for call in &self.out.tables.calls {
+            for (address, version) in call.writebacks(&self.out.pools) {
+                if let AddressBase::Slot(slot) = self.out.addresses[address.index()].base
+                    && let SlotKind::Parameter(source) = self.out.slots[slot.index()].kind
+                    && let Some(&parameter) = self.out.parameters.get(source as usize)
+                {
+                    aliases[version.index()] = Some(parameter);
+                }
+            }
+        }
+        for block in &self.out.blocks {
+            for &(slot, version) in &block.phis {
+                if let SlotKind::Parameter(source) = self.out.slots[slot.index()].kind
+                    && let Some(&parameter) = self.out.parameters.get(source as usize)
+                {
+                    aliases[version.index()] = Some(parameter);
+                }
+            }
         }
         for _ in 0..=aliases.len() {
             if let Some(ordinal) = self.out.parameters.iter().position(|v| *v == value) {

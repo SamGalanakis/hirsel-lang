@@ -47,6 +47,14 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
                 _ => {}
             }
         }
+        if let Some(receipts) = &site.receipts {
+            reached.extend(receipts.inputs());
+            for (address, _) in receipts.writebacks() {
+                if let Some(a) = &facts.addresses[address.index()] {
+                    places.push((address, a.root, a.path.clone()));
+                }
+            }
+        }
         if places.is_empty() {
             continue;
         }

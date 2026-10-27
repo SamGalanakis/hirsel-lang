@@ -1,19 +1,13 @@
 //! Data entry companions are source-bound snapshots with matching custody.
-//! Captures, mutation, result publication and tasks remain closed here.
+//! Captures, result publication and tasks remain closed here.
 use super::{Cx, Inputs, Report, Site, ViolationKind as K};
 use crate::{ir::*, sealed_payload_source::*, stage::Stage};
 
 fn supported(contract: &ReceiptContract) -> Result<(), &'static str> {
-    if !contract.captures.is_empty()
-        || !contract.inventory.is_empty()
-        || contract.result.is_some()
-        || contract
-            .parameters
-            .iter()
-            .any(|p| p.mode == ReceiptMode::MutSlot)
+    if !contract.captures.is_empty() || !contract.inventory.is_empty() || contract.result.is_some()
     {
         return Err(
-            "receipt boundary requires borrow or take data parameters without captures, inventory or receipt results",
+            "receipt boundary requires data parameters without captures, inventory or receipt results",
         );
     }
     Ok(())
@@ -173,8 +167,41 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
                 let (parameter, receipt) = match *argument {
                     ReceiptArgument::Borrow { parameter, receipt }
                     | ReceiptArgument::Take { parameter, receipt } => (parameter, receipt),
-                    ReceiptArgument::Mut { .. } => {
-                        return Err("receipt call requires independent writeback custody".into());
+                    ReceiptArgument::Mut {
+                        parameter,
+                        address,
+                        version,
+                    } => {
+                        let ordinary = call
+                            .arguments
+                            .get(&unit.pools.call_arguments)
+                            .unwrap_or(&[])
+                            .iter()
+                            .find(|a| a.parameter == parameter)
+                            .ok_or("receipt call lacks its ordinary mutable argument")?;
+                        let ArgumentValue::Address {
+                            address: payload, ..
+                        } = ordinary.value
+                        else {
+                            return Err("receipt call lacks its ordinary mutable address".into());
+                        };
+                        if !whole_address(unit, payload) || !whole_address(unit, address) {
+                            return Err("mutable receipt requires paired whole slots".into());
+                        }
+                        parameter_type(
+                            selected,
+                            parameter,
+                            cx.value_layout(version),
+                            unit.types[unit.addresses[payload.index()].ty.index()].layout,
+                            (&symbol.definition, instance),
+                            super::UnitInputs {
+                                target: cx.target,
+                                layouts: cx.layouts.0,
+                                manifest: cx.manifest,
+                            },
+                            cx.operations,
+                        )?;
+                        continue;
                     }
                 };
                 let ordinary = call
@@ -213,4 +240,19 @@ pub(super) fn calls<S: Stage>(cx: &Cx<'_, S>, report: &mut Report) {
             report.add(Site::UNIT, K::Sealed(error));
         }
     }
+}
+
+fn whole_address<S>(unit: &LirUnit<S>, mut address: AddressId) -> bool {
+    for _ in 0..=unit.addresses.len() {
+        let row = &unit.addresses[address.index()];
+        if row.projection.len != 0 {
+            return false;
+        }
+        match row.base {
+            AddressBase::Slot(_) => return true,
+            AddressBase::Address(parent) => address = parent,
+            AddressBase::Value(_) => return false,
+        }
+    }
+    false
 }

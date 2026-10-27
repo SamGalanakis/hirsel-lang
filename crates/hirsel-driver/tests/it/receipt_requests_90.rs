@@ -41,7 +41,16 @@ fn aware_source_request_borrows_then_releases_a_taken_entry_companion() {
     borrowed_request(false, true);
 }
 
+#[test]
+fn aware_source_request_writes_back_mutable_companions_through_rc_and_replay() {
+    request(true, false, true);
+}
+
 fn borrowed_request(forward: bool, take: bool) {
+    request(forward, take, false);
+}
+
+fn request(forward: bool, take: bool, mutable: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let store: Arc<dyn ResultStore> =
@@ -52,7 +61,7 @@ fn borrowed_request(forward: bool, take: bool) {
             .sources
             .add(
                 "custody.hir",
-                custody_source(
+                request_source(
                     r#"
 fn read(root: List[u64]) -> u64 {
   let mut r=arena.with(fn(a:Arena)->Region[List[u64]] {
@@ -68,6 +77,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
 "#,
                     take,
                     !forward,
+                    mutable,
                 ),
             )
             .unwrap();
@@ -364,7 +374,7 @@ pub fn inspect(root: List[u64]) -> u64 { forward(root)+forward_again(root) }
             .sources
             .add(
                 "custody.hir",
-                custody_source(
+                request_source(
                     r#"
 fn read(root:List[u64])->u64 {list.len(root)}
 fn forward(root:List[u64])->u64 {read(root)}
@@ -373,6 +383,7 @@ pub fn inspect(root:List[u64])->u64 {forward(root)+forward_again(root)}
 "#,
                     take,
                     !forward,
+                    mutable,
                 ),
             )
             .unwrap();
@@ -457,6 +468,22 @@ fn custody_source(text: &str, take: bool, borrow_leaf: bool) -> String {
         source
             .replace("fn read(take root", "fn read(root")
             .replace("read(take root)", "read(root)")
+    } else {
+        source
+    }
+}
+
+fn request_source(text: &str, take: bool, borrow_leaf: bool, mutable: bool) -> String {
+    let source = custody_source(text, take, borrow_leaf);
+    if mutable {
+        source
+            .replace("root: List[u64]", "mut root: List[u64]")
+            .replace("root:List[u64]", "mut root:List[u64]")
+            .replace("read(root)", "read(mut root)")
+            .replace("forward(root)", "forward(mut root)")
+            .replace("forward_again(root)", "forward_again(mut root)")
+            .replace("fn forward_again(mut root: List[u64]) -> u64 { forward(mut root) }",
+                "fn forward_again(mut root: List[u64]) -> u64 { if list.len(root)==0u64 { forward(mut root); } else { forward(mut root); }; forward(mut root) }")
     } else {
         source
     }

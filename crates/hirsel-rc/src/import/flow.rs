@@ -271,13 +271,9 @@ impl Importer<'_> {
             if !contract.captures.is_empty()
                 || !contract.inventory.is_empty()
                 || contract.result.is_some()
-                || contract
-                    .parameters
-                    .iter()
-                    .any(|p| p.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot)
             {
                 return unsupported(
-                    "receipt entry requires borrow or take data parameters without captures, inventory or receipt results",
+                    "receipt entry requires data parameters without captures, inventory or receipt results",
                 );
             }
             let mut parameters = Vec::new();
@@ -406,6 +402,18 @@ impl Importer<'_> {
         for local in written {
             if let Some(slot) = self.local_slot[local] {
                 self.versioned[slot.index()] = true;
+            }
+        }
+        if let Some(entry) = &self.out.tables.receipt_entry {
+            for binding in &entry.parameters {
+                if self.own_abi().receipts.as_ref().is_some_and(|contract| {
+                    contract.parameters.iter().any(|p| {
+                        p.source == binding.source
+                            && p.mode == hirsel_lir::sealed_payload_source::ReceiptMode::MutSlot
+                    })
+                }) {
+                    self.versioned[binding.slot.index()] = true;
+                }
             }
         }
         for slot in self.loop_slots.clone().into_iter().flatten() {

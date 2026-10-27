@@ -504,6 +504,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
         open_reaching: BTreeMap::new(),
+        receipt_pairs: std::cell::OnceCell::new(),
     };
     let ins = flow::solve(
         &facts.cfg,
@@ -529,6 +530,7 @@ pub(super) fn check<S: Stage>(cx: &Cx<'_, S>, facts: &Facts, report: &mut Report
         discharged: BTreeSet::new(),
         flat_reaching: BTreeMap::new(),
         open_reaching: BTreeMap::new(),
+        receipt_pairs: std::cell::OnceCell::new(),
     };
     let mut credits_in: Vec<Option<Credits>> = vec![None; unit.blocks.len()];
     credits_in[unit.entry.index()] = Some(
@@ -635,6 +637,7 @@ struct Walker<'w, 'a, S> {
     flat_reaching: BTreeMap<Site, Option<ValueId>>,
     /// The version reaching each write of an open element (`flat_open`).
     open_reaching: BTreeMap<Site, Option<ValueId>>,
+    receipt_pairs: std::cell::OnceCell<super::sealed_payload::pairing::Pairing<'w, S>>,
 }
 
 type Outs = Vec<(EdgeId, State, Credits)>;
@@ -741,6 +744,15 @@ impl<S: Stage> Walker<'_, '_, S> {
                     for receipt in receipts.inputs() {
                         self.borrow(site, &st, &cr, receipt);
                     }
+                    for argument in &receipts.arguments {
+                        if let ReceiptArgument::Mut {
+                            parameter, address, ..
+                        } = *argument
+                        {
+                            self.still_placed(site, &st, address);
+                            self.check_mut_receipt(site, &st, site_data, parameter, address);
+                        }
+                    }
                 }
                 if let Some(rejected) = site_data.pretransfer_failure {
                     outs.push(self.failure(site, b, rejected, st.clone(), cr.clone()));
@@ -778,8 +790,32 @@ impl<S: Stage> Walker<'_, '_, S> {
                 }
                 if let Some(receipts) = &site_data.receipts {
                     for argument in &receipts.arguments {
-                        if let ReceiptArgument::Take { receipt, .. } = *argument {
-                            self.consume(site, &st, &mut cr, receipt);
+                        match *argument {
+                            ReceiptArgument::Take { receipt, .. } => {
+                                self.consume(site, &st, &mut cr, receipt)
+                            }
+                            ReceiptArgument::Mut {
+                                address, version, ..
+                            } => {
+                                if let Some((Root::Slot(slot), path)) = self.place(address) {
+                                    self.require(site, &st, slot, &path, false);
+                                    self.holder_loans(site, &st, &cr, slot);
+                                    self.borrowed_storage(site, slot);
+                                    self.invalidate(&mut st, slot, &path);
+                                    let state = &mut st.slots[slot.index()];
+                                    state.moved.retain(|p, _| !overlap(p, &path));
+                                    state.moved.extend(
+                                        state
+                                            .taken
+                                            .iter()
+                                            .filter(|(p, _)| overlap(p, &path))
+                                            .map(|(p, &t)| (p.clone(), t)),
+                                    );
+                                    state.owned_empty = false;
+                                    state.versions = Versions::One(version);
+                                }
+                            }
+                            ReceiptArgument::Borrow { .. } => {}
                         }
                     }
                 }
@@ -1274,6 +1310,12 @@ impl<S: Stage> Walker<'_, '_, S> {
             .parameters
             .iter()
             .filter_map(|&(_, p)| p)
+            .chain(
+                unit.tables
+                    .receipt_entry
+                    .iter()
+                    .flat_map(|e| e.parameters.iter().map(|p| p.slot)),
+            )
             .filter(|&id| passing(id) == Some(Passing::Mut))
             .collect();
         for id in written {
@@ -1288,6 +1330,25 @@ impl<S: Stage> Walker<'_, '_, S> {
                     .any(|(path, t)| t.may() && state.phase(path) != LIVE);
             if state.init != Tri::Yes || missing {
                 self.err(site, K::MutExit(id));
+            }
+        }
+        if let Some(entry) = &unit.tables.receipt_entry {
+            for binding in &entry.parameters {
+                if receipt_passing(cx, binding.slot) == Some(Passing::Mut) {
+                    let ordinary = unit
+                        .slots
+                        .iter()
+                        .position(|s| s.kind == SlotKind::Parameter(binding.source))
+                        .map(|s| SlotId(s as u32));
+                    if !ordinary.is_some_and(|slot| self.paired_slots(st, slot, binding.slot)) {
+                        self.err(
+                            site,
+                            K::Sealed(
+                                "mutable receipt exit is not paired with its ordinary slot".into(),
+                            ),
+                        );
+                    }
+                }
             }
         }
         for (s, state) in st.slots.lacking(EMPTY) {
@@ -1308,6 +1369,56 @@ impl<S: Stage> Walker<'_, '_, S> {
         }
         for (r, _) in st.regions.lacking(DEAD) {
             self.err(site, K::RegionState(crate::ir::RegionInstanceId(r as u32)));
+        }
+    }
+
+    fn paired_slots(&self, st: &State, ordinary: SlotId, receipt: SlotId) -> bool {
+        let (Versions::One(value), Versions::One(metadata)) = (
+            st.slots[ordinary.index()].versions,
+            st.slots[receipt.index()].versions,
+        ) else {
+            return false;
+        };
+        self.receipt_pairs
+            .get_or_init(|| super::sealed_payload::pairing::Pairing::new(self.cx.unit))
+            .paired(value, metadata)
+    }
+
+    fn check_mut_receipt(
+        &mut self,
+        site: Site,
+        st: &State,
+        call: &crate::ir::CallSite,
+        parameter: u32,
+        address: AddressId,
+    ) {
+        let ordinary = call
+            .arguments
+            .get(&self.cx.unit.pools.call_arguments)
+            .unwrap_or(&[])
+            .iter()
+            .find(|a| a.parameter == parameter)
+            .map(|a| a.value);
+        let paired = match (ordinary, self.place(address)) {
+            (Some(ArgumentValue::Address { address, .. }), Some((Root::Slot(receipt), path)))
+                if path.is_empty() =>
+            {
+                match self.place(address) {
+                    Some((Root::Slot(slot), path)) if path.is_empty() => {
+                        self.paired_slots(st, slot, receipt)
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !paired {
+            self.err(
+                site,
+                K::Sealed(
+                    "mutable receipt input is not paired with its ordinary slot snapshot".into(),
+                ),
+            );
         }
     }
 

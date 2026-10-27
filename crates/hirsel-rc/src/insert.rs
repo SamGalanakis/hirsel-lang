@@ -867,10 +867,8 @@ impl Facts {
         }
         for term in &unit.terminators {
             if let Terminator::Call { call, .. } = *term {
-                for a in call_arguments(unit, call) {
-                    if let ArgumentValue::Address { address, version } = a.value
-                        && let Some(s) = slot_root(address)
-                    {
+                for (address, version) in unit.tables.calls[call.index()].writebacks(&unit.pools) {
+                    if let Some(s) = slot_root(address) {
                         version_of[version.index()] = Some(s);
                     }
                 }
@@ -1974,15 +1972,15 @@ impl<S: Stage> Flow<'_, S> {
                                 take_credit(&mut st.credits, v);
                             }
                         }
-                        ArgumentValue::Address { address, version } => {
-                            if let Some((slot, path)) = self.facts.slot_path(address) {
-                                let slot = &mut st.slots[slot.index()];
-                                slot.expose(path, &self.facts.paths());
-                                slot.owned_empty = false;
-                                slot.versions = Versions::One(version);
-                            }
-                        }
                         _ => {}
+                    }
+                }
+                for (address, version) in unit.tables.calls[call.index()].writebacks(&unit.pools) {
+                    if let Some((slot, path)) = self.facts.slot_path(address) {
+                        let slot = &mut st.slots[slot.index()];
+                        slot.expose(path, &self.facts.paths());
+                        slot.owned_empty = false;
+                        slot.versions = Versions::One(version);
                     }
                 }
                 if failure != PENDING_FAILURE {
@@ -2665,13 +2663,11 @@ impl<S: Stage> Flow<'_, S> {
         let unit = self.unit;
         let mut used = Vec::new();
         if let Terminator::Call { call, .. } = *term {
-            for a in call_arguments(unit, call) {
-                if let ArgumentValue::Address { address, .. } = a.value {
-                    match self.facts.places[address.index()].as_ref().map(|p| p.root) {
-                        Some(Root::Slot(s)) => used.push(s),
-                        Some(Root::Value(v)) => used.extend(self.view_slot(v)),
-                        None => {}
-                    }
+            for (address, _) in unit.tables.calls[call.index()].writebacks(&unit.pools) {
+                match self.facts.places[address.index()].as_ref().map(|p| p.root) {
+                    Some(Root::Slot(s)) => used.push(s),
+                    Some(Root::Value(v)) => used.extend(self.view_slot(v)),
+                    None => {}
                 }
             }
         }

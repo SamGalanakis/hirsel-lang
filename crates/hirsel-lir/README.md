@@ -815,3 +815,10 @@ slots start initialized with version-only names; immutable loans govern reads,
 and call companions must describe the same ordinary SSA snapshot. Retirement,
 mutation, capture/task transport, inventory and receipt results remain refused.
 Ready, H and both backends still refuse executable receipt ABI transport.
+
+C validator revision 32 checks mutable data companions in whole slots. It proves
+the ordinary and receipt snapshots agree before entry, applies both writebacks
+on normal return and entered failure, and preserves the incoming snapshots on
+rejected admission. Mutable exits require complete paired payload and metadata
+slots. Call alias checks include exclusive receipt addresses and borrowed
+companions. Captures, result publication, tasks and inventory remain closed.
