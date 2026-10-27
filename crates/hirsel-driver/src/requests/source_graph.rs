@@ -160,6 +160,10 @@ struct SourceProducts {
     lower: Arc<FrontLowerQueries>,
     check: Arc<FrontCheckQueries>,
     _growth: Arc<FrontGrowthQueries>,
+    storage: Option<(
+        Arc<hirsel_engine::FrontStorageQueries>,
+        Arc<hirsel_engine::FrontStorageGraphQueries>,
+    )>,
     sources: SourceMap,
     store: Arc<RequestStore>,
     errors: RuntimeErrors,
@@ -566,6 +570,7 @@ impl SourceProducts {
         let sources = self.sources.clone();
         let errors = self.errors;
         let growth = self._growth.clone();
+        let storage = self.storage.clone();
         let run = self.run.clone();
         let native = self.native.clone();
         let ownership = self.ownership.clone();
@@ -598,6 +603,12 @@ impl SourceProducts {
                         let outcome = front.outcome(reference)?.outcome;
                         outcome.result.err().map(|error| (error, outcome.phase))
                     })
+            });
+            let selected = selected.or_else(|| {
+                storage
+                    .as_ref()
+                    .and_then(|(_, graph)| graph.failure(reference))
+                    .map(|error| (error, Some(QueryKind::Check)))
             });
             let selected = selected.or_else(|| {
                 growth
@@ -672,6 +683,7 @@ impl Plan {
         needs_safe: bool,
         needs_receipt: bool,
         needs_export: bool,
+        needs_storage: bool,
         footprint: FrontInputFootprint,
         run_input_bytes: u64,
         native_catalogue_bytes: u64,
@@ -831,10 +843,12 @@ impl Plan {
         let per_definition = 4
             + usize::from(needs_run)
             + 2 * usize::from(needs_native)
-            + usize::from(needs_ownership);
+            + usize::from(needs_ownership)
+            + usize::from(needs_storage);
         let roots = 2
             + usize::from(needs_safe)
             + usize::from(needs_export)
+            + usize::from(needs_storage)
             + 2 * usize::from(needs_native || needs_ownership);
         let inventory = definitions
             .len()
@@ -870,7 +884,11 @@ impl Plan {
         let native_frames = u64::from(needs_native || needs_ownership);
         // Run accumulates the selected semantic closure, the largest retained
         // root graph, so it holds two of the root shares.
-        let root_shares = 2 + 2 * u64::from(needs_run) + u64::from(needs_safe) + native_frames;
+        let root_shares = 2
+            + 2 * u64::from(needs_run)
+            + u64::from(needs_safe)
+            + native_frames
+            + u64::from(needs_storage);
         let root_bound = suspended / (2 * root_shares);
         let body_bound = suspended / (2 * (BODY_CONTINUATIONS + native_frames));
         // Only demanded Lower outputs consume producer retention. Potential
@@ -1151,6 +1169,7 @@ pub(super) fn install(
             ),
             matches!(request.operation, CompileOperation::CheckedProducts { .. }),
             artifacts,
+            matches!(request.operation, CompileOperation::NativeSources { .. }),
             footprint,
             run_input_bytes,
             native_catalogue_bytes,
@@ -1317,7 +1336,7 @@ pub(super) fn install(
         source,
         front,
         lower,
-        growth,
+        mut growth,
         check,
         transport,
         mut run,
@@ -1368,10 +1387,49 @@ pub(super) fn install(
             .install_carry(carry.lower.clone())
             .map_err(|_| uninstalled())?;
     }
+    let storage_allowance = if matches!(request.operation, CompileOperation::NativeSources { .. }) {
+        let share = growth.bytes() / 3;
+        Some((
+            growth.split(share).ok_or_else(|| uninstalled())?,
+            growth.split(share).ok_or_else(|| uninstalled())?,
+        ))
+    } else {
+        None
+    };
     let growth = program
         .engine
         .front_growth_queries(&program.entry, front.clone(), plan.root, growth, errors)
         .map_err(&query_error)?;
+    let storage = storage_allowance
+        .map(|(recipe_allowance, graph_allowance)| {
+            let recipes = program
+                .engine
+                .front_storage_queries(
+                    front.clone(),
+                    MemoryWeight {
+                        retained: plan.body.retained.min(64 << 10),
+                        ..plan.body
+                    },
+                    recipe_allowance,
+                    errors,
+                )
+                .map_err(&query_error)?;
+            let graph = program
+                .engine
+                .front_storage_graph_queries(
+                    &program.entry,
+                    front.clone(),
+                    growth.clone(),
+                    recipes.clone(),
+                    lower.clone(),
+                    plan.root,
+                    graph_allowance,
+                    errors,
+                )
+                .map_err(&query_error)?;
+            Ok::<_, ToolError>((recipes, graph))
+        })
+        .transpose()?;
     // The receipt's headers share the Check partition; their constructor
     // refuses metadata beyond this split.
     let receipt = if matches!(request.operation, CompileOperation::CheckedProducts { .. }) {
@@ -1461,6 +1519,11 @@ pub(super) fn install(
             errors,
         )
         .map_err(&query_error)?;
+    let check = if let Some((_, storage)) = &storage {
+        check.with_storage(storage.clone()).map_err(&query_error)?
+    } else {
+        check
+    };
     let safe_allowance = if matches!(
         request.operation,
         CompileOperation::SafeCheck
@@ -1776,6 +1839,14 @@ pub(super) fn install(
             }
         }
     }
+    if let Some((recipes, graph)) = &storage {
+        inventory.insert((graph.query().kind, graph.query().address.0));
+        for path in &definitions {
+            if let Some(query) = recipes.query(path) {
+                inventory.insert((query.kind, query.address.0));
+            }
+        }
+    }
     if inventory.len() > plan.query_capacity {
         return Err(ToolError::Runtime(
             "compiler query inventory exceeds its planned admission".into(),
@@ -1833,6 +1904,14 @@ pub(super) fn install(
     if let Some(export) = &export_products {
         runtime
             .register(super::proof_export::KIND, export.factory())
+            .map_err(registration)?;
+    }
+    if let Some((recipes, graph)) = &storage {
+        runtime
+            .register(hirsel_engine::FRONT_STORAGE_KIND, recipes.factory())
+            .map_err(registration)?;
+        runtime
+            .register(hirsel_engine::FRONT_STORAGE_GRAPH_KIND, graph.factory())
             .map_err(registration)?;
     }
     let (input_operations, input_bytes) = request.inputs.read_work();
@@ -1907,6 +1986,7 @@ pub(super) fn install(
         lower,
         check,
         _growth: growth,
+        storage,
         sources,
         store,
         errors,

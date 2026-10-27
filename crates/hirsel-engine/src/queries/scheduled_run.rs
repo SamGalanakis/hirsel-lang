@@ -318,7 +318,10 @@ impl Task {
                 return Poll::Ready(Err(self.queries.errors.protocol));
             };
             if output.checked.completion != CheckCompletion::Complete {
-                return Poll::Ready(Err(self.queries.failure_record(QueryError::NotImplemented)));
+                return Poll::Ready(Err(self.queries.failure_record(operational(format!(
+                    "Run source check is incomplete: {:?}",
+                    output.checked.completion
+                )))));
             }
             if has_errors(&output.checked.diagnostics) {
                 return Poll::Ready(Err(self
@@ -731,7 +734,7 @@ impl Task {
             let signature = &queries
                 .inputs
                 .get(path)
-                .ok_or(QueryError::NotImplemented)?
+                .ok_or_else(|| operational(format!("Run callable has no signature: {path}")))?
                 .signature;
             let Ok(roots) = crate::admission::entry_roots(
                 snapshot.types(),
@@ -740,7 +743,9 @@ impl Task {
             ) else {
                 return Ok(None);
             };
-            let code = hashes.get(path).ok_or(QueryError::NotImplemented)?;
+            let code = hashes.get(path).ok_or_else(|| {
+                operational(format!("Run callable has no definition hash: {path}"))
+            })?;
             Ok(Some((
                 CalleeFacts {
                     program: self.program(path)?.revision(path)?.digest(),
@@ -858,7 +863,7 @@ impl Task {
                     output.foreign.unmodeled.iter().collect::<Vec<_>>(),
                 ),
             )
-            .ok_or(QueryError::NotImplemented)?;
+            .ok_or_else(|| operational("Run output metadata encoding failed"))?;
         if let Some(hashes) = &output.definition_hashes {
             bytes = queries
                 .records

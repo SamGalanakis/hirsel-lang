@@ -438,7 +438,9 @@ impl Task {
                     self.stage = Stage::Storage;
                 }
                 Stage::Storage => {
-                    if self.files.iter().any(File::clean) {
+                    if self.files.iter().any(File::clean)
+                        && self.files.iter().any(|file| file.source_rules)
+                    {
                         if let Some(storage) = &self.queries.storage {
                             let id = storage.query();
                             let result = match cx.read(id) {
