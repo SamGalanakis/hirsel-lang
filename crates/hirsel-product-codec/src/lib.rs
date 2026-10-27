@@ -127,6 +127,26 @@ fn record_decode_bytes(record: &Record, encoded: usize) -> Option<u64> {
     bytes.try_into().ok()
 }
 impl TypeRecords {
+    /// Visit the complete canonical type closure of an ordinary record, without
+    /// interning its payload. The visitor admits and copies a component before
+    /// traversal. Return false only for a component whose closure was already
+    /// copied, or None to abandon the entire copy.
+    pub fn visit_record_types(
+        &self,
+        bytes: &[u8],
+        mut visit: impl FnMut(hirsel_artifact_store::Reference) -> Option<bool>,
+    ) -> Option<()> {
+        let record: Record = options(bytes.len()).deserialize(bytes).ok()?;
+        let mut pending = record.types;
+        while let Some(reference) = pending.pop() {
+            if visit(reference.reference())? {
+                let component = types::component(self.store.as_ref(), reference)?;
+                pending.extend(component.dependencies);
+            }
+        }
+        Some(())
+    }
+
     /// The ordinary record plus metadata to pre-admit its outer decode buffers.
     /// Typed payload layout must be supplied by its producing phase separately.
     pub fn encode_record_with_decode_bytes<T: Serialize>(
@@ -329,6 +349,43 @@ mod tests {
                 .deserialize::<Record>(&forged)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn copying_record_types_preserves_transitive_and_cyclic_components() {
+        use hirsel_artifact_store::Contents;
+        use hirsel_types::TypeKind;
+        let source = Arc::new(Memory::default());
+        let encoder = TypeRecords::new(TypeInterner::new(None), source.clone());
+        let unit = encoder.types.intern(Type::unit());
+        let boxed = encoder.types.intern(Type::with_kind(TypeKind::Box(unit)));
+        let cycle = encoder.types.intern_graph(2, |ids| {
+            vec![
+                Type::with_kind(TypeKind::Tuple(vec![boxed, ids[1]].into())),
+                Type::with_kind(TypeKind::Box(ids[0])),
+            ]
+        });
+        let record = encoder.encode_record(&cycle[0], |_| None).unwrap();
+        let copied = Arc::new(Memory::default());
+        let mut seen = std::collections::HashSet::new();
+        encoder.visit_record_types(&record, |reference| {
+            if !seen.insert(reference.output.0) {
+                return Some(false);
+            }
+            let bytes = source.get_content(reference)?;
+            (copied.put_content(reference.domain, &bytes)? == reference).then_some(true)
+        }).unwrap();
+        assert_eq!(seen.len(), 3, "the cycle shares one component above two dependencies");
+        assert!(encoder.visit_record_types(&record, |_| None).is_none());
+        drop(encoder);
+        drop(source);
+        let decoder = TypeRecords::new(TypeInterner::new(None), copied);
+        let root: TypeId = decoder.decode_record(&record, |_, _| None).unwrap();
+        let TypeKind::Tuple(fields) = &decoder.types.row(root).kind else { panic!() };
+        let TypeKind::Box(back) = decoder.types.row(fields[1]).kind else { panic!() };
+        assert_eq!(back, root);
+        let TypeKind::Box(leaf) = decoder.types.row(fields[0]).kind else { panic!() };
+        assert_eq!(decoder.types.row(leaf), &Type::unit());
     }
 
     #[test]

@@ -181,6 +181,14 @@ impl NativeRecords {
             source.record_source_anchor(owner, occurrence)
         })
     }
+
+    pub(crate) fn visit_record_types(
+        &self,
+        bytes: &[u8],
+        visit: impl FnMut(hirsel_artifact_store::Reference) -> Option<bool>,
+    ) -> Option<()> {
+        self.records.visit_record_types(bytes, visit)
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,15 @@ use std::sync::Arc;
 
 #[test]
 fn stored_lower_reuses_unchanged_inputs_and_rechecks_edited_constant_dependencies() {
+    check_lower_reuse(false);
+}
+
+#[test]
+fn carried_lower_republishes_type_components_into_a_fresh_store() {
+    check_lower_reuse(true);
+}
+
+fn check_lower_reuse(carry_across_stores: bool) {
     with_compiler_stack(|| {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("main.hir");
@@ -12,7 +21,10 @@ fn stored_lower_reuses_unchanged_inputs_and_rechecks_edited_constant_dependencie
         for verify in [Verify::On, Verify::Off] {
             for jobs in [1, 2] {
                 let store = Arc::new(MemStore::default());
+                let carry_budget = ProcessBudget::new(32 << 20);
+                let carry = LowerCarry::new(carry_budget.reserve(32 << 20).unwrap()).ok().unwrap();
                 for revision in 0..4 {
+                    let store = if carry_across_stores { Arc::new(MemStore::default()) } else { store.clone() };
                     let value = if revision == 3 { 2 } else { 1 };
                     let extra = if revision >= 2 { "+0u8" } else { "" };
                     std::fs::write(&source, format!("const A:u8=comptime {value}u8;\nfn helper()->u8{{A}}\npub fn main()->u8{{comptime helper(){extra}}}\n")).unwrap();
@@ -67,6 +79,9 @@ fn stored_lower_reuses_unchanged_inputs_and_rechecks_edited_constant_dependencie
                             errors,
                         )
                         .unwrap();
+                    if carry_across_stores {
+                        lower.install_carry(carry.clone()).ok().unwrap();
+                    }
                     runtime.register(FRONT_BODY_KIND, front.factory()).unwrap();
                     runtime
                         .register_local(FRONT_LOWER_KIND, lower.factory())

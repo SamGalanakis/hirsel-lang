@@ -146,40 +146,71 @@ impl FrontLowerQueries {
             Ok(Value::Constant(..)) => (None, vec![]),
             Err(_) => return,
         };
-        let Some(contents) = references
-            .into_iter()
-            .map(|(domain, reference)| {
-                let bytes = self.store.get_content(reference)?;
-                Some((domain, Arc::<[u8]>::from(&*bytes)))
-            })
-            .collect::<Option<Box<[_]>>>()
-        else {
-            return;
-        };
         let mut weight = crate::NativeMetadataWeight::default();
         // At most one full internal node per row bounds every BTree split.
         weight.tree::<(u32, ContentHash), Row>(0);
         weight.add(size_of::<Row>() + descriptor.len());
-        for (_, bytes) in &contents {
-            weight.add(size_of::<(Domain, Arc<[u8]>)>() + 2 * size_of::<usize>() + bytes.len());
-        }
         for (_, bytes) in outcome.reads.allocations() {
             weight.add(bytes);
         }
-        let mut charge = weight.bytes();
         if let Some(receipt) = &outcome.execution {
             let Some(bytes) = receipt.retained_bytes() else {
                 return;
             };
-            charge = charge.saturating_add(bytes);
+            weight.add(bytes.try_into().unwrap_or(usize::MAX));
         }
+        let mut contents = Vec::new();
+        for (domain, reference) in references {
+            weight.add(size_of::<(Domain, Arc<[u8]>)>() + 2 * size_of::<usize>());
+            weight.add(reference.len.try_into().unwrap_or(usize::MAX));
+            if weight.bytes() > carry.allowance.bytes() {
+                return;
+            }
+            let Some(bytes) = self.store.get_content(reference) else {
+                return;
+            };
+            contents.push((domain, Arc::<[u8]>::from(&*bytes)));
+        }
+        // Ordinary records refer to canonical type components outside their
+        // payload. Carry those components too, including their transitive edges.
+        // Otherwise a fresh graph publishes a body it cannot decode.
+        let mut types = BTreeMap::new();
+        for bytes in std::iter::once(descriptor).chain(
+            contents.iter().filter_map(|(domain, bytes)| {
+                (*domain != LOWER_VERIFICATION).then_some(bytes.as_ref())
+            }),
+        ) {
+            let captured = self.records.visit_record_types(bytes, |reference| {
+                if types.contains_key(&reference.output.0) {
+                    return Some(false);
+                }
+                weight.add(size_of::<(Domain, Arc<[u8]>)>() + 2 * size_of::<usize>());
+                weight.add(reference.len.try_into().ok()?);
+                // Bound both retained bytes and the temporary deduplication map.
+                let mut peak = crate::NativeMetadataWeight::default();
+                peak.tree::<ContentHash, Arc<[u8]>>(types.len() + 1);
+                if weight.bytes().saturating_add(peak.bytes()) > carry.allowance.bytes() {
+                    return None;
+                }
+                let bytes = self.store.get_content(reference)?;
+                types.insert(reference.output.0, Arc::<[u8]>::from(&*bytes));
+                Some(true)
+            });
+            if captured.is_none() {
+                return;
+            }
+        }
+        contents.extend(types.into_values().map(|bytes| {
+            (hirsel_product_codec::TypeRecords::DOMAIN, bytes)
+        }));
+        let charge = weight.bytes();
         carry.remember(
             (id.kind, id.address.0),
             Row {
                 text: key.1,
                 reads: outcome.reads.clone(),
                 descriptor: descriptor.into(),
-                contents,
+                contents: contents.into_boxed_slice(),
                 lower,
                 constant_decode_bytes: match &outcome.result {
                     Ok(Value::Constant(value)) => value.working_bytes(),
