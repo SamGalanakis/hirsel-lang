@@ -91,7 +91,8 @@ impl<'m, 'a> FnEmitter<'m, 'a> {
                 }
             }
         }
-        let receipt = self.construction_snapshot_in(value, kind, &children, arena)?;
+        let receipt =
+            self.construction_snapshot_in(value, kind, &children, arena.filter(|_| kind != 0))?;
         for child in temporary {
             let release = self.runtime(RuntimeEntry::ReceiptRelease)?;
             self.builder.call(release, &[child]);

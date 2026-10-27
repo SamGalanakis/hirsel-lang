@@ -695,3 +695,96 @@ fn source_demand_projection_33_binds_original_instance_and_releases_definition()
     .unwrap();
     assert_eq!(requirements, vec![demand::Requirements::default()]);
 }
+
+#[test]
+fn source_nominal_121_classifies_current_representations_and_refuses_missing_declarations() {
+    use hirsel_syntax::{DefId, DefPath};
+    use hirsel_types::{Signature, SignatureKind, TypeDefinition};
+    use std::sync::Arc;
+    let types = TypeInterner::new(None);
+    let arena = types.intern(Type::with_kind(TypeKind::Named {
+        definition: DefId::intern(&DefPath::core("Arena")),
+        arguments: vec![].into(),
+    }));
+    let scalar = types.intern(Type::with_kind(TypeKind::Primitive(Primitive::U64)));
+    let nominal = DefId::intern(&DefPath::core("source_nominal_121"));
+    let root = types.intern(Type::with_kind(TypeKind::Named {
+        definition: nominal,
+        arguments: vec![].into(),
+    }));
+    let mut original = body(&[arena, scalar, root], 2);
+    let origin = hirsel_types::Origin {
+        root: hirsel_types::OriginRoot::Parameter(hirsel_types::ParameterRef::bound(
+            hirsel_types::ParamId(0),
+        )),
+        fields: Default::default(),
+    };
+    original.places[0].binding = Some(origin.clone());
+    assign(
+        &mut original,
+        2,
+        Rvalue::Construct {
+            constructor: Constructor::Record(nominal.path().clone()),
+            fields: vec![ConstructField {
+                field: 0,
+                value: operand(1),
+            }],
+            destination: Destination::Arena(origin),
+        },
+    );
+    let definition = witness_definition(original);
+    let key = witness_key(&types, &definition);
+    let source = SourceInput::capture(witness_input(1), witness_input(2), definition);
+    assert!(source.derive(&key, &types, &[0, 1], Ok).is_err());
+    for boxed in [false, true] {
+        let shape = types.intern(Type::with_kind(if boxed {
+            TypeKind::Box(scalar)
+        } else {
+            TypeKind::Tuple(vec![scalar].into())
+        }));
+        let declaration = Arc::new(Signature {
+            definition: nominal,
+            metadata: Default::default(),
+            fingerprint: witness_input(3),
+            kind: SignatureKind::Type(TypeDefinition {
+                loop_source: None,
+                format: None,
+                destructor_allocation: Allocation::NoAlloc,
+                generics: vec![],
+                representation: Some(shape),
+                bounds: vec![],
+                authority: AuthoritySummary::inert(),
+                capability: None,
+                implementation_authority: None,
+                serializable: false,
+                serializable_check: None,
+                layout: Default::default(),
+                distinct: true,
+                resource: false,
+                drop: None,
+                fact: None,
+                captures: None,
+            }),
+        });
+        let expected = source
+            .clone()
+            .with_nominals([(nominal, declaration.clone())].into())
+            .derive(&key, &types, &[0, 1], Ok)
+            .unwrap();
+        assert!(expected.events().is_empty());
+        assert_eq!(expected.payloads().len(), 1);
+        expected.source().check().unwrap();
+        let mut opaque = declaration;
+        let SignatureKind::Type(ty) = &mut Arc::make_mut(&mut opaque).kind else {
+            unreachable!()
+        };
+        ty.representation = None;
+        assert!(
+            source
+                .clone()
+                .with_nominals([(nominal, opaque)].into())
+                .derive(&key, &types, &[0, 1], Ok)
+                .is_err()
+        );
+    }
+}

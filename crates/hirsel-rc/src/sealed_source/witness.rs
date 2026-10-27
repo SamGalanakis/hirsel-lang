@@ -19,6 +19,7 @@ pub struct SourceInput {
     source: ContentHash,
     revision: ContentHash,
     definition: DefinitionRef,
+    nominals: BTreeMap<hirsel_syntax::DefId, hirsel_types::SignatureRef>,
 }
 
 /// Body-free demand data bound to the actual original source observation and
@@ -61,7 +62,18 @@ impl SourceInput {
             source,
             revision,
             definition,
+            nominals: BTreeMap::new(),
         }
+    }
+
+    /// Current original declarations, supplied separately from native recipes.
+    /// Missing or opaque representations remain unavailable to classification.
+    pub fn with_nominals(
+        mut self,
+        nominals: BTreeMap<hirsel_syntax::DefId, hirsel_types::SignatureRef>,
+    ) -> Self {
+        self.nominals = nominals;
+        self
     }
 
     /// Select the retained original source body for demand expansion, before
@@ -188,7 +200,7 @@ impl SourceInput {
         key: &InstanceKey,
         types: &TypeInterner,
         parameters: &[u32],
-        substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
+        mut substitute: impl FnMut(TypeId) -> Result<TypeId, SourceError>,
         expanded_calls: bool,
         unneeded_closures: &BTreeSet<u32>,
     ) -> Result<SourceExpectation, SourceError> {
@@ -228,7 +240,7 @@ impl SourceInput {
                 source_anchors: &anchors,
                 parameters,
             },
-            substitute,
+            &mut substitute,
         )?;
         if expanded_calls {
             // Empty code and heap environments outside the complete original
@@ -264,7 +276,49 @@ impl SourceInput {
                     | NativeType::Record(_)
                     | NativeType::Variant(_)
                     | NativeType::Primitive(_) => false,
-                    NativeType::Named(..) | NativeType::Function(_) => {
+                    NativeType::Named(..) => {
+                        use hirsel_type_analysis::logical::{
+                            Logical, LogicalNominal, Resolved, Scope,
+                        };
+                        use hirsel_types::SignatureKind;
+                        let instruction = &body.blocks[payload.recipe.source.block as usize]
+                            .instructions[payload.recipe.source.statement as usize];
+                        let InstructionKind::Assign { destination, .. } = instruction.kind else {
+                            return Err(SourceError::Malformed("nominal construction source"));
+                        };
+                        let ty = substitute(body.places[destination.0 as usize].ty)?;
+                        let nominal = |definition| {
+                            let signature = self.nominals.get(&definition)?;
+                            if signature.definition != definition {
+                                return None;
+                            }
+                            let SignatureKind::Type(declaration) = &signature.kind else {
+                                return None;
+                            };
+                            if declaration.resource || declaration.layout.flat {
+                                return None;
+                            }
+                            Some(LogicalNominal::Representation {
+                                shape: declaration.representation?,
+                            })
+                        };
+                        match Logical::new(&nominal)
+                            .resolve(ty, &Scope::root(types))
+                            .map_err(|e| {
+                                SourceError::Type(format!("source nominal classification: {e:?}"))
+                            })? {
+                            // A nominal constructor builds its inline wrapper,
+                            // even when its representation contains a box or List.
+                            // That child's construction owns its own allocation event.
+                            Resolved::Structural(_, _) => false,
+                            Resolved::Opaque => {
+                                return Err(SourceError::Unsupported(
+                                    "source nominal allocation needs its original representation",
+                                ));
+                            }
+                        }
+                    }
+                    NativeType::Function(_) => {
                         return Err(SourceError::Unsupported(
                             "source allocation classification needs complete held/nominal declarations",
                         ));

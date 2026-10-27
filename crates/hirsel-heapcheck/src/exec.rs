@@ -202,6 +202,7 @@ pub(crate) struct Frame {
     loans: Snapshot<Option<Ptr>>,
     /// Actual Take reads of Arena parameter storage, independent of candidate grant uses.
     seal_grants: Vec<(ValueId, usize)>,
+    inline_constructions: BTreeMap<ValueId, ConstructId>,
     sealed_loans: Snapshot<
         Option<(
             crate::ledger::sealed::SealedId,
@@ -568,6 +569,7 @@ impl<'p, S: Stage> Machine<'p, S> {
             spills: (0..u.addresses.len()).map(|_| None).collect(),
             loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             seal_grants: Vec::new(),
+            inline_constructions: BTreeMap::new(),
             sealed_loans: (0..u.tables.loans.len()).map(|_| None).collect(),
             failing: false,
             admitted: 0,
@@ -5584,6 +5586,9 @@ impl<'p, S: Stage> Machine<'p, S> {
                 {
                     let anchor = self.unit(unit).tables.source_anchors[site.anchor.index()].clone();
                     self.seal_allocations.insert(ptr.alloc, (unit, anchor));
+                }
+                if !self.config.seal_sources.is_empty() && matches!(val, Val::Image(_)) {
+                    f.inline_constructions.insert(result, construct);
                 }
                 self.define_fresh(f, result, val)?;
             }

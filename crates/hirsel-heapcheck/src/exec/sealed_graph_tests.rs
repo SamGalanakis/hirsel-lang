@@ -15,6 +15,7 @@ use hirsel_lir::stage::Rc;
 use hirsel_lir::structural::{Shape, ShapeGraph};
 use hirsel_lir::structural_access::AccessPlan;
 mod inventory_92;
+mod receipts_121;
 mod receipts_97;
 
 fn list_type(child: T) -> T {

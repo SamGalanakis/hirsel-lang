@@ -26,8 +26,17 @@ cleanup retains the child credits until seal or exit.
 bounded admission: capacities 7, 8 and 15 refuse, while capacity 16 preserves
 the nested element. Rejected construction drops its taken children before
 entering the caller's failure cleanup.
+`MEM-4-sealed-aggregate-inline-run.hir` qualifies a capture-free
+`Region[Wrap[Root]]` whose inline root owns an Arena `List[Item]`, an Arena
+`box Item` and copied heap list children. `Item` has both empty and dataful
+variants. Its callback observes scalar fields and list length inline; forwarding
+borrowed sealed data to ordinary helpers still needs a nonretention contract.
+The original `MEM-4-sealed-aggregate-roots-run.hir` remains refused at that
+forwarding boundary, so tuple and distinct roots are not yet qualified.
+`MEM-4-sealed-task-unique-list-run.hir` also qualifies moving a unique heap
+list's Region into a task, reading it there and awaiting completion.
 Original source declarations and ordered child receipts remain mandatory.
-Captured closures, held environments, tasks, additional mutation recipes and
+Captured receipt transport, additional mutation recipes and
 fully elided payload custody remain unsupported on this path.
 
 `exact-sums.txt` was retained verbatim from the interpreter's 256 Python Fraction vectors (seed 20261008). `GraphemeBreakTest.txt` is the complete official Unicode 16.0.0 fixture, including its source and license header, retained verbatim from interpreter fixtures. `hirsel-driver/tests/stdlib_wave2_num.rs` checks the rational vectors against ordinary std source; `hirsel-driver/tests/stdlib_graphemes.rs` checks the shipped source over full strings and nonzero-origin slices.

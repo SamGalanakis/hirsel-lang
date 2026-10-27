@@ -2657,6 +2657,7 @@ conformance/MEM/MEM-4-named-arena.hir
 conformance/MEM/MEM-4-seal-definition.hir
 conformance/MEM/MEM-4-seal-noalloc-bad.hir
 conformance/MEM/MEM-4-seal-noalloc-ok.hir
+conformance/MEM/MEM-4-sealed-aggregate-inline-run.hir
 conformance/MEM/MEM-4-sealed-aggregate-roots-run.hir
 conformance/MEM/MEM-4-sealed-arena-child-charge-run.hir
 conformance/MEM/MEM-4-sealed-arena-root-run.hir

@@ -1,0 +1,34 @@
+// rule: MEM-4
+// expect: run
+type Item = Empty | Values(xs: List[u64])
+
+type Root {
+  tag: u64,
+  items: List[Item],
+  extra: box Item,
+}
+
+type Wrap[T] {
+  value: T,
+}
+
+pub fn main(t: Test) -> Result[(), ()] {
+  let mut r = arena.with(
+    fn(a: Arena) -> Region[Wrap[Root]] {
+      let xs: List[u64] in heap = [3u64, 4u64]
+      let items: List[Item] in a = [Empty(), Values(xs: copy xs)]
+      let extra: (box Item) in a = box Values(xs: copy xs)
+      let payload = Root(tag: 9u64, items: take items, extra: take extra)
+      let root = Wrap(value: take payload)
+      arena.seal(take a, take root)
+    }
+  )
+  let score = region.with(
+    mut r,
+    fn(view: Wrap[Root]) -> u64 {
+      view.value.tag + list.len(view.value.items)
+    }
+  )
+  failure.check(score == 11u64, Bounds())
+  Ok(())
+}

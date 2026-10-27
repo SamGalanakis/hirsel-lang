@@ -3,27 +3,36 @@ use hirsel_lir::ir::{ConstructId, PayloadBindingId, ReceiptInput, SealDescriptor
 use hirsel_lir::sealed_payload::*;
 
 impl Importer<'_> {
-    fn construction_receipt_source(&self, anchor: &SourceAnchor) -> Option<&SourcePayload> {
-        use hirsel_lir::operation::{BuiltinType, NativeType, OperationArgument, Primitive};
-        let scalar_list = |ty: &NativeType| {
-            matches!(ty,
-            NativeType::Builtin(BuiltinType::List, arguments)
-                if matches!(arguments.as_slice(), [OperationArgument::Type(NativeType::Primitive(Primitive::U64))]))
-        };
-        self.instances.payload_sources(self.id).iter().find(|source| {
-            if &source.recipe.source != anchor { return false; }
-            match &source.recipe.operation {
-                PayloadOperation::Allocate { destination: PayloadDestination::Heap } => scalar_list(&source.root_type),
-                PayloadOperation::Allocate { destination: PayloadDestination::Arena(_) } => {
-                    matches!(&source.root_type, NativeType::Builtin(BuiltinType::List, arguments)
-                        if matches!(arguments.as_slice(), [OperationArgument::Type(child)] if scalar_list(child)))
-                }
-                _ => false,
-            }
-        })
+    fn construction_receipt_source(&mut self, anchor: &SourceAnchor) -> Option<SourcePayload> {
+        let source = self
+            .instances
+            .payload_sources(self.id)
+            .iter()
+            .find(|source| {
+                &source.recipe.source == anchor
+                    && matches!(source.recipe.operation, PayloadOperation::Allocate { .. })
+            })?
+            .clone();
+        let descriptor = self
+            .layouts
+            .seal_descriptor(&self.program.operation_registry(), &source.root_type)
+            .ok()?;
+        descriptor
+            .logical
+            .facts
+            .iter()
+            .any(|fact| {
+                matches!(
+                    fact.class,
+                    hirsel_lir::logical_storage::StorageClass::Block
+                        | hirsel_lir::logical_storage::StorageClass::Bytes
+                        | hirsel_lir::logical_storage::StorageClass::Shared
+                )
+            })
+            .then_some(source)
     }
 
-    pub(super) fn needs_construction_receipt(&self) -> bool {
+    pub(super) fn needs_construction_receipt(&mut self) -> bool {
         !self.instances.payload_sources(self.id).is_empty()
             && self
                 .construction_receipt_source(&self.source_anchor_here())
@@ -32,8 +41,8 @@ impl Importer<'_> {
 
     pub(super) fn construct_receipt(&mut self, value: ValueId, construct: ConstructId) -> R<()> {
         let site = &self.out.tables.constructs[construct.index()];
-        let anchor = &self.out.tables.source_anchors[site.anchor.index()];
-        let Some(source) = self.construction_receipt_source(anchor).cloned() else {
+        let anchor = self.out.tables.source_anchors[site.anchor.index()].clone();
+        let Some(source) = self.construction_receipt_source(&anchor) else {
             return Ok(());
         };
         let descriptor = self
@@ -43,6 +52,7 @@ impl Importer<'_> {
         if descriptor.root_layout != self.layout_of(self.value_type(value)) {
             return malformed("original receipt construction root layout");
         }
+        let site = &self.out.tables.constructs[construct.index()];
         let fields = site
             .fields
             .get(&self.out.pools.fields)
@@ -67,10 +77,16 @@ impl Importer<'_> {
         let mut loans = Vec::new();
         let mut inputs = Vec::new();
         for (field, original) in fields.iter().zip(&source.recipe.inputs) {
-            let receipt = if matches!(
-                original.ty,
-                hirsel_lir::operation::NativeType::Primitive(hirsel_lir::operation::Primitive::U64)
-            ) {
+            let plain = self
+                .layouts
+                .seal_descriptor(&self.program.operation_registry(), &original.ty)
+                .is_ok_and(|descriptor| {
+                    matches!(
+                        descriptor.logical.shape.nodes.as_slice(),
+                        [hirsel_lir::structural::Shape::Leaf]
+                    ) && descriptor.bits_root(self.layouts.table()).is_ok()
+                });
+            let receipt = if plain {
                 None
             } else {
                 let slot = self.receipt_slot(field.value).ok_or_else(|| {

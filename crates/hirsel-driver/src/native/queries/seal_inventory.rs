@@ -33,11 +33,23 @@ pub(super) fn current(
         let output = original
             .output()
             .ok_or("inventory needs current original V output")?;
+        let nominals = program
+            .signatures
+            .iter()
+            .filter(|(_, signature)| matches!(signature.kind, hirsel_types::SignatureKind::Type(_)))
+            .map(|(path, _)| {
+                provider
+                    .signature(path)
+                    .map(|signature| (hirsel_syntax::DefId::intern(path), signature))
+                    .map_err(|e| format!("inventory original nominal declaration: {e:?}"))
+            })
+            .collect::<Result<_, _>>()?;
         let source = SourceInput::capture(
             output.observation_identity(),
             original.implementation_revision(),
             original.definition().clone(),
-        );
+        )
+        .with_nominals(nominals);
         let parameters = request
             .declaration()
             .entry()

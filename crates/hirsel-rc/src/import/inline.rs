@@ -39,6 +39,7 @@ impl Inline for Importer<'_> {
             construct,
             failure,
         });
+        self.construct_receipt(result, construct)?;
         if self.holds(result) {
             self.failure.pending.push(result);
         }

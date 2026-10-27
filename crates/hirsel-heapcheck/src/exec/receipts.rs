@@ -260,11 +260,9 @@ impl<S: Stage> Machine<'_, S> {
                 };
                 let layout = self.value_type(f.unit, receipt)?.layout;
                 let snapshot = self.receipt_control(control, layout)?;
-                // Original operands may have been consumed by construction.
-                // Inspect their H identity without rereading their storage.
-                if snapshot.root != original.ty
-                    || snapshot.value != self.get(f, input.original)?.val
-                {
+                // Construction may consume the operand. Compare its complete
+                // normalized snapshot below, without reading it as a live use.
+                if snapshot.root != original.ty {
                     return fail(
                         V::TypeConfusion,
                         "receipt child names another original value",
@@ -295,14 +293,21 @@ impl<S: Stage> Machine<'_, S> {
         {
             return fail(V::TypeConfusion, "receipt root and private layout differ");
         }
+        let value_id = value;
         let value = self.read_use(f, value)?;
-        let Val::Ptr(ptr) = &value else {
-            return fail(
-                V::Unsupported,
-                "receipt needs H inline construction correspondence",
-            );
+        let constructed = match &value {
+            Val::Ptr(ptr) => {
+                self.seal_allocations.get(&ptr.alloc) == Some(&(f.unit, source_anchor))
+            }
+            Val::Image(_) => f
+                .inline_constructions
+                .get(&value_id)
+                .is_some_and(|construct| {
+                    sites.as_slice() == [&unit.tables.constructs[construct.index()]]
+                }),
+            _ => false,
         };
-        if self.seal_allocations.get(&ptr.alloc) != Some(&(f.unit, source_anchor)) {
+        if !constructed {
             return fail(V::Malformed, "receipt has no actual H construction event");
         }
         self.check_receipt_construction(f, &sites, binding, root_layout, &value, arena)?;
@@ -312,7 +317,7 @@ impl<S: Stage> Machine<'_, S> {
         self.define_fresh(f, result, Val::Ptr(control))
     }
 
-    fn check_receipt_construction(
+    pub(super) fn check_receipt_construction(
         &self,
         f: &Frame,
         sites: &[&ConstructSite],
@@ -365,7 +370,8 @@ impl<S: Stage> Machine<'_, S> {
                         "receipt Arena differs from its original destination slot",
                     );
                 }
-                matches!(value, Val::Ptr(ptr) if self.ledger.check(*ptr).is_ok_and(|a| a.owner == Owner::Region(region)))
+                matches!(value, Val::Image(_))
+                    || matches!(value, Val::Ptr(ptr) if self.ledger.check(*ptr).is_ok_and(|a| a.owner == Owner::Region(region)))
             }
             _ => false,
         };
@@ -375,39 +381,146 @@ impl<S: Stage> Machine<'_, S> {
                 "receipt needs its original construction destination",
             );
         }
-        let (Val::Ptr(ptr), LayoutKind::Block { payload }) = (value, &self.record(layout)?.kind)
-        else {
-            return fail(
-                V::Unsupported,
-                "H receipt needs sequence construction correspondence",
-            );
+        let record = self.record(layout)?;
+        let (payload, image) = match (value, &record.kind) {
+            (Val::Ptr(ptr), LayoutKind::Block { payload } | LayoutKind::Box { payload }) => {
+                if ptr.offset != 0 || self.ledger.check(*ptr)?.layout != Some(*payload) {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt construction has another physical payload",
+                    );
+                }
+                (*payload, &self.ledger.check(*ptr)?.extent)
+            }
+            (Val::Image(image), _) => (layout, image),
+            _ => {
+                return fail(
+                    V::TypeConfusion,
+                    "receipt construction has another value representation",
+                );
+            }
         };
-        let LayoutKind::Sequence { element } = self.record(*payload)?.kind else {
-            return fail(
-                V::Unsupported,
-                "H receipt needs sequence construction correspondence",
-            );
-        };
-        if site.layout != *payload
-            || site.constructor != ConstructorKind::Sequence
-            || ptr.offset != 0
-            || self.ledger.check(*ptr)?.layout != Some(*payload)
-        {
+        if site.layout != payload {
             return fail(
                 V::TypeConfusion,
                 "receipt construction has another physical payload",
             );
         }
-        let image = &self.ledger.check(*ptr)?.extent;
-        let count = self.scan_scalar(*ptr, 8)? as u64;
-        if count != binding.values.len() as u64 {
-            return fail(
-                V::TypeConfusion,
-                "receipt construction length differs from original operands",
-            );
-        }
-        let mut scan = self.scan_cell_offsets(image, *payload, true)?;
-        scan.extend(self.scan_cell_offsets(image, *payload, false)?);
+        let payload_record = self.record(payload)?;
+        let fields = self.pool(site.fields, &self.unit(f.unit).pools.fields)?;
+        let parts = match (site.constructor, &payload_record.kind) {
+            (ConstructorKind::Sequence, LayoutKind::Sequence { element }) => {
+                image.check_range(0, 8)?;
+                if !image.all_init(0, 8) {
+                    return fail(
+                        V::UninitializedRead,
+                        "receipt sequence length is uninitialized",
+                    );
+                }
+                let count = u64::from_le_bytes(
+                    image
+                        .read_bytes(0, 8)
+                        .try_into()
+                        .map_err(|_| err(V::OutOfExtent, "receipt sequence length"))?,
+                );
+                if count != fields.len() as u64 {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt construction length differs from original operands",
+                    );
+                }
+                let (start, stride) = self.sequence_shape(*element)?;
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        if field.field as usize != index {
+                            return fail(
+                                V::TypeConfusion,
+                                "receipt sequence has another field order",
+                            );
+                        }
+                        let offset = (index as u64)
+                            .checked_mul(stride)
+                            .and_then(|n| n.checked_add(start))
+                            .ok_or_else(|| {
+                                err(V::OutOfExtent, "receipt element offset overflow")
+                            })?;
+                        Ok((offset, *element))
+                    })
+                    .collect::<Checked<Vec<_>>>()?
+            }
+            (ConstructorKind::Box, _)
+                if matches!(record.kind, LayoutKind::Box { .. }) && fields.len() == 1 =>
+            {
+                vec![(0, payload)]
+            }
+            (ConstructorKind::Tuple | ConstructorKind::Record(_), LayoutKind::Aggregate) => {
+                if fields.len() != payload_record.fields.len() {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt aggregate does not cover every field",
+                    );
+                }
+                fields
+                    .iter()
+                    .zip(&payload_record.fields)
+                    .map(|(field, declared)| {
+                        if field.field != declared.ordinal {
+                            return fail(
+                                V::TypeConfusion,
+                                "receipt aggregate has another field order",
+                            );
+                        }
+                        Ok((declared.offset, declared.layout))
+                    })
+                    .collect::<Checked<Vec<_>>>()?
+            }
+            (ConstructorKind::Variant { variant, .. }, LayoutKind::Variant) => {
+                let tag = payload_record
+                    .tag
+                    .as_ref()
+                    .ok_or_else(|| err(V::Malformed, "receipt variant has no tag"))?;
+                if image.active(tag.offset, tag.form, self.word)? != variant {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt variant differs from its original constructor",
+                    );
+                }
+                let active = tag
+                    .variants
+                    .iter()
+                    .find(|v| v.ordinal == variant)
+                    .ok_or_else(|| err(V::Malformed, "receipt variant has no declared arm"))?;
+                if fields.len() != active.fields.len() {
+                    return fail(
+                        V::TypeConfusion,
+                        "receipt variant does not cover every active field",
+                    );
+                }
+                fields
+                    .iter()
+                    .zip(&active.fields)
+                    .map(|(field, declared)| {
+                        if field.field != declared.ordinal {
+                            return fail(
+                                V::TypeConfusion,
+                                "receipt variant has another field order",
+                            );
+                        }
+                        Ok((declared.offset, declared.layout))
+                    })
+                    .collect::<Checked<Vec<_>>>()?
+            }
+            _ => {
+                return fail(
+                    V::Unsupported,
+                    "H receipt needs structural construction correspondence",
+                );
+            }
+        };
+        let mut scan = self.scan_cell_offsets(image, payload, true)?;
+        scan.extend(self.scan_cell_offsets(image, payload, false)?);
         let scanned = scan.into_iter().collect::<std::collections::BTreeSet<_>>();
         let actual = image
             .cells
@@ -420,31 +533,20 @@ impl<S: Stage> Machine<'_, S> {
                 "receipt construction cells differ from its complete scan",
             );
         }
-        let (start, stride) = self.sequence_shape(element)?;
-        let size = self.size(element)?;
-        for (index, (value, original)) in binding
-            .values
-            .iter()
-            .zip(&binding.recipe.inputs)
-            .enumerate()
+        for ((field, original), (offset, child_layout)) in
+            fields.iter().zip(&binding.recipe.inputs).zip(parts)
         {
-            let ty = self.value_type(f.unit, *value)?;
-            if ty.layout != element {
-                return fail(V::TypeConfusion, "receipt input has another element layout");
+            let ty = self.value_type(f.unit, field.value)?;
+            if ty.layout != child_layout {
+                return fail(V::TypeConfusion, "receipt input has another field layout");
             }
-            let offset = start
-                .checked_add(
-                    (index as u64)
-                        .checked_mul(stride)
-                        .ok_or_else(|| err(V::OutOfExtent, "receipt element offset overflow"))?,
-                )
-                .ok_or_else(|| err(V::OutOfExtent, "receipt element offset overflow"))?;
+            let size = self.size(child_layout)?;
             image.check_range(offset, size)?;
             let child = self
-                .val_from(image.copy(offset, size, None), ty.repr, element)?
+                .val_from(image.copy(offset, size, None), ty.repr, child_layout)?
                 .0;
             let expected =
-                self.receipt_snapshot(original.ty.clone(), self.get(f, *value)?.val.clone())?;
+                self.receipt_snapshot(original.ty.clone(), self.get(f, field.value)?.val.clone())?;
             let actual = self.receipt_snapshot(original.ty.clone(), child)?;
             if expected != actual {
                 return fail(
