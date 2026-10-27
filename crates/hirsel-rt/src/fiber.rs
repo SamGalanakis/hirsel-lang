@@ -374,9 +374,6 @@ fn initial_frame(entry: Entry, first: *mut u8, second: *mut u8) -> [u64; 8] {
     ]
 }
 
-#[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
-pub(crate) use fiber_switch_raw as fiber_switch;
-
 #[cfg(all(target_arch = "x86_64", feature = "tsan"))]
 unsafe extern "C" fn tsan_switch_target(to: *mut u8) -> *mut std::ffi::c_void {
     #[cfg(test)]
@@ -402,32 +399,40 @@ pub(crate) unsafe extern "C" fn fiber_switch(_save: *mut *mut u8, _to: *mut u8) 
 }
 
 #[cfg(target_arch = "x86_64")]
-#[unsafe(naked)]
-pub(crate) unsafe extern "C" fn fiber_switch_raw(_save: *mut *mut u8, _to: *mut u8) {
-    core::arch::naked_asm!(
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "sub rsp, 8",
-        "stmxcsr [rsp]",
-        "fnstcw [rsp + 4]",
-        "mov [rdi], rsp",
-        "mov rsp, rsi",
-        "ldmxcsr [rsp]",
-        "fldcw [rsp + 4]",
-        "add rsp, 8",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbx",
-        "pop rbp",
-        "ret",
-    )
+macro_rules! x86_switch {
+    ($name:ident) => {
+        #[unsafe(naked)]
+        pub(crate) unsafe extern "C" fn $name(_save: *mut *mut u8, _to: *mut u8) {
+            core::arch::naked_asm!(
+                "push rbp",
+                "push rbx",
+                "push r12",
+                "push r13",
+                "push r14",
+                "push r15",
+                "sub rsp, 8",
+                "stmxcsr [rsp]",
+                "fnstcw [rsp + 4]",
+                "mov [rdi], rsp",
+                "mov rsp, rsi",
+                "ldmxcsr [rsp]",
+                "fldcw [rsp + 4]",
+                "add rsp, 8",
+                "pop r15",
+                "pop r14",
+                "pop r13",
+                "pop r12",
+                "pop rbx",
+                "pop rbp",
+                "ret",
+            )
+        }
+    };
 }
+#[cfg(all(target_arch = "x86_64", not(feature = "tsan")))]
+x86_switch!(fiber_switch);
+#[cfg(all(target_arch = "x86_64", feature = "tsan"))]
+x86_switch!(fiber_switch_raw);
 
 #[cfg(target_arch = "x86_64")]
 #[unsafe(naked)]
