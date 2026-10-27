@@ -2,14 +2,14 @@
 //! (`rt_replay`), beside the rest of them in `crates/hirsel-rt/tests/it/net.rs`.
 use crate::rt_support::loopback::*;
 use hirsel_rt::io::*;
-use hirsel_rt::launch::{parse_tape, render_tape};
+use hirsel_rt::launch::render_tape;
 #[test]
 fn loopback_recording_replays_without_sockets() {
     let (rules, port, tape, chunks) = record_exchange();
     // The server is gone: replay must not touch the network at all.
     let text = render_tape(&tape).unwrap();
     assert!(text.starts_with("hirsel-io-tape 7\n"));
-    let parsed = parse_tape(&text).unwrap();
+    let parsed = crate::rt_support::tape::events(&tape);
     assert_eq!(parsed, tape);
     let mut sim = replay(&rules, parsed);
     assert_eq!(exchange(&mut sim, port, b"ping"), chunks);
