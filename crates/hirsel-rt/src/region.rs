@@ -30,6 +30,10 @@ use crate::memcheck::REGION_REDZONE;
 use crate::release::{LAYOUT_NO_EXTENT, drain, push, release_block};
 use crate::{STATUS_OK, environmental, fault};
 
+#[cfg(test)]
+#[path = "region/cpu_tests.rs"]
+mod cpu_tests;
+
 /// `hirsel_rt_v2_arena_alloc`'s flag of a tracked arena block (runtime ABI 11).
 pub const ALLOC_TRACKED: u32 = 1;
 /// Bytes before a tracked arena block's header that hold its arena's record.
@@ -620,6 +624,7 @@ pub(crate) struct RegionPool {
     pub(crate) backing_allocations: u64,
     /// The run's memory budget, shared with its heap.
     meter: std::sync::Arc<crate::budget::Meter>,
+    cpu_allocation: Option<crate::pool::cpu_scoped::ledger::HeapReservation>,
 }
 
 // SAFETY: a pool is reached by its heap's collector only, or through `returns`, whose pushes
@@ -692,7 +697,49 @@ impl RegionPool {
             #[cfg(any(feature = "diagnostic", feature = "measurement"))]
             backing_allocations: 0,
             meter,
+            cpu_allocation: None,
         }
+    }
+
+    fn idle_fits(&self, size: u64, need: u64) -> bool {
+        if need <= SEGMENT_SIZE as u64 {
+            size == SEGMENT_SIZE as u64
+        } else if self.meter.metered() {
+            size == canonical_size(need)
+        } else {
+            size >= need
+        }
+    }
+
+    /// Admission returns before the caller handles physical refusal. No pool
+    /// borrow or popped segment survives into a save, migration or stop.
+    fn reserve_cpu_backing(
+        &mut self,
+        need: u64,
+    ) -> Result<(), crate::pool::cpu_scoped::ledger::BackingFull> {
+        if self.meter.cpu.get().is_none() {
+            return Ok(());
+        }
+        assert!(self.cpu_allocation.is_none(), "one CPU region preflight");
+        self.collect();
+        let mut segment = self.idle;
+        while !segment.is_null() {
+            // SAFETY: only the pool's collector reads its idle list.
+            unsafe {
+                if self.idle_fits((*segment).size, need) {
+                    return Ok(());
+                }
+                segment = (*segment).prev;
+            }
+        }
+        self.cpu_allocation = Some(
+            self.meter
+                .cpu
+                .get()
+                .unwrap()
+                .reserve_heap(canonical_size(need))?,
+        );
+        Ok(())
     }
 
     /// A segment with at least `need` bytes including its header, lent to a region. A standard
@@ -709,8 +756,11 @@ impl RegionPool {
         let mut found = self.unlink_idle(need);
         if found.is_null() {
             // SAFETY: nonzero size.
-            if let Some(cpu) = self.meter.cpu.get() {
-                cpu.charge_heap(size);
+            if self.meter.cpu.get().is_some() {
+                self.cpu_allocation
+                    .as_mut()
+                    .expect("CPU region allocation must preflight its backing")
+                    .consume(size);
             }
             found = unsafe { host_alloc(segment_layout(size)) }.cast::<Segment>();
             if found.is_null() {
@@ -728,6 +778,7 @@ impl RegionPool {
         }
         // SAFETY: `found` is this pool's segment.
         unsafe { self.lend(found) };
+        self.cpu_allocation = None;
         found
     }
 
@@ -747,8 +798,6 @@ impl RegionPool {
 
     /// Unlink and return the pooled segment a request of `need` bytes takes, or null.
     fn unlink_idle(&mut self, need: u64) -> *mut Segment {
-        let standard = need <= SEGMENT_SIZE as u64;
-        let exact = self.meter.metered();
         let mut found = ptr::null_mut();
         let mut link: *mut *mut Segment = &mut self.idle;
         // SAFETY: the idle list holds this pool's segments.
@@ -756,13 +805,7 @@ impl RegionPool {
             while !(*link).is_null() {
                 let segment = *link;
                 let size = (*segment).size;
-                if if standard {
-                    size == SEGMENT_SIZE as u64
-                } else if exact {
-                    size == canonical_size(need)
-                } else {
-                    size >= need
-                } {
+                if self.idle_fits(size, need) {
                     *link = (*segment).prev;
                     self.idle_bytes -= size;
                     found = segment;
@@ -870,6 +913,7 @@ impl RegionPool {
     /// Run teardown, after all workers quiesce: return idle, active and sealed
     /// segments. Region records may belong to vanished task frames and are not read.
     pub(crate) fn release_all(&mut self) {
+        self.cpu_allocation = None;
         // Returned segments are still on the lent list, freed below.
         self.returns.take();
         self.trim(0);
@@ -983,6 +1027,10 @@ unsafe fn reserve_in(
             need
         };
         crate::alloc::ordered_reserve(ctx, canonical_size(need));
+        let backing = ctx.pool().reserve_cpu_backing(need);
+        if backing.is_err() {
+            crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+        }
         // Preflight may migrate. Reborrow the task-local region only after
         // it returns, then take the new worker's pool.
         let region = &mut *record;

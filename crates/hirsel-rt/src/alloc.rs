@@ -730,6 +730,7 @@ pub(crate) struct Heap {
     pub(crate) meter: std::sync::Arc<crate::budget::Meter>,
     /// Whether the run has a memory budget, so every allocation and free reaches the meter.
     metered: bool,
+    cpu_allocation: Option<crate::pool::cpu_scoped::ledger::HeapReservation>,
 }
 
 #[inline]
@@ -931,6 +932,7 @@ impl Heap {
             measurement: Default::default(),
             meter,
             metered: false,
+            cpu_allocation: None,
         }
     }
 
@@ -1309,6 +1311,46 @@ impl Heap {
         self.slab_count * SLAB_SIZE as u64 + self.large_bytes
     }
 
+    fn charge_cpu_backing(&mut self, bytes: u64) {
+        if self.meter.cpu.get().is_some() {
+            self.cpu_allocation
+                .as_mut()
+                .expect("CPU allocation must preflight its backing")
+                .consume(bytes);
+        }
+    }
+
+    /// Collect returns before checking the existing page lists. The next
+    /// allocation can need at most one new slab, or its one large/bare block.
+    unsafe fn cpu_backing_request(&mut self, index: u32, extent: u64, align: u64) -> u64 {
+        #[cfg(feature = "system-allocator")]
+        {
+            if let Some(capacity) = self.bare_capacity(index, extent, align) {
+                return cpu_bare_charge(capacity);
+            }
+        }
+        let _ = index;
+        if cfg!(feature = "system-allocator") || extent > SMALL_MAX || align > SMALL_ALIGN_MAX {
+            return cpu_large_charge(request_capacity(extent, align), align.max(8));
+        }
+        self.collect();
+        let class = &self.classes[pool_of(extent, align)];
+        let current = class.current;
+        // A published return after this check can only reduce backing needed.
+        if !class.available.is_null()
+            || (!current.is_null()
+                && unsafe {
+                    !(*current).free.is_null()
+                        || !(*current).local_free.is_null()
+                        || (*current).bump < (*current).end
+                })
+        {
+            0
+        } else {
+            cpu_slab_charge(self.diagnostic)
+        }
+    }
+
     /// T01 Alloc — fresh unpublished storage with one holder and its exact usable bytes.
     /// `extent` and `align` are validated.
     /// A bare system request is one malloc; any other system request takes the large path.
@@ -1340,11 +1382,9 @@ impl Heap {
     #[cfg(feature = "system-allocator")]
     #[inline(always)]
     pub(crate) unsafe fn allocate_bare(&mut self, index: u32, capacity: u64) -> *mut Header {
-        if let Some(cpu) = self.meter.cpu.get() {
-            cpu.charge_heap(cpu_bare_charge(capacity));
-        }
         self.meter
             .charge_allocation(crate::budget::small_charge(capacity));
+        self.charge_cpu_backing(cpu_bare_charge(capacity));
         unsafe {
             let block = libc::malloc(HEADER_SIZE + capacity as usize).cast::<Header>();
             if block.is_null() {
@@ -1504,9 +1544,7 @@ impl Heap {
     }
 
     unsafe fn new_slab(&mut self, class: usize) {
-        if let Some(cpu) = self.meter.cpu.get() {
-            cpu.charge_heap(cpu_slab_charge(self.diagnostic));
-        }
+        self.charge_cpu_backing(cpu_slab_charge(self.diagnostic));
         // SAFETY: nonzero size.
         let base = unsafe { host_alloc(slab_layout()) };
         if base.is_null() {
@@ -1599,11 +1637,9 @@ impl Heap {
         let Some(total) = (offset + HEADER_SIZE as u64).checked_add(capacity) else {
             environmental("a large allocation's size overflows")
         };
-        if let Some(cpu) = self.meter.cpu.get() {
-            cpu.charge_heap(cpu_large_charge(capacity, align));
-        }
         self.meter
             .charge_allocation(crate::budget::large_charge(capacity));
+        self.charge_cpu_backing(cpu_large_charge(capacity, align));
         #[cfg(not(feature = "system-allocator"))]
         let Ok(host) = HostLayout::from_size_align(total as usize, align as usize) else {
             environmental("a large allocation exceeds the host address space")
@@ -1985,6 +2021,7 @@ impl Heap {
     /// Storage other heaps published back is still on this heap's lists, so the published
     /// lists are only forgotten.
     pub(crate) fn release_all(&mut self) {
+        self.cpu_allocation = None;
         self.queue.take();
         self.large_returns.take();
         #[cfg(all(
@@ -2188,7 +2225,48 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
     site: u64,
 ) -> *mut Header {
     unsafe {
-        ordered_preflight(ctx, index, extent, align);
+        allocation_preflight(ctx, index, extent, align);
+        let block = alloc_prepared(ctx, index, extent, align, destination, site);
+        (*ctx).heap().cpu_allocation = None;
+        block
+    }
+}
+
+pub(crate) unsafe fn allocation_preflight(ctx: *mut TaskCtx, index: u32, extent: u64, align: u64) {
+    unsafe { ordered_preflight(ctx, index, extent, align) };
+    // No heap reference survives refusal handling. CPU ahead work can use
+    // this same preflight result to save/withdraw instead of selecting a stop.
+    if unsafe { cpu_preflight(ctx, index, extent, align) }.is_err() {
+        crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
+    }
+}
+
+/// Internal allocating operations use the same admission as T01. No caller
+/// may hold a heap borrow across this call, which can settle Ordered work.
+pub(crate) unsafe fn allocate_heap(
+    ctx: *mut TaskCtx,
+    index: u32,
+    extent: u64,
+    align: u64,
+) -> (*mut Header, u64) {
+    unsafe {
+        allocation_preflight(ctx, index, extent, align);
+        let heap = (*ctx).heap();
+        let result = heap.allocate(index, extent, align);
+        heap.cpu_allocation = None;
+        result
+    }
+}
+
+unsafe fn alloc_prepared(
+    ctx: *mut TaskCtx,
+    index: u32,
+    extent: u64,
+    align: u64,
+    destination: u8,
+    site: u64,
+) -> *mut Header {
+    unsafe {
         let heap = &mut (*ctx).heap();
         // A bare system block needs its layout's bare entry, so the index is checked.
         #[cfg(feature = "system-allocator")]
@@ -2221,6 +2299,30 @@ pub unsafe extern "C" fn hirsel_rt_v2_alloc(
         });
         block
     }
+}
+
+/// Refusal is physical only. The caller handles it after this short heap
+/// borrow ends, before entering the allocation path or retaining heap pointers.
+pub(crate) unsafe fn cpu_preflight(
+    ctx: *mut TaskCtx,
+    index: u32,
+    extent: u64,
+    align: u64,
+) -> Result<(), crate::pool::cpu_scoped::ledger::BackingFull> {
+    let heap = unsafe { (*ctx).heap() };
+    if heap.meter.cpu.get().is_none() {
+        return Ok(());
+    }
+    check_request(extent, align);
+    assert!(
+        heap.cpu_allocation.is_none(),
+        "one CPU allocation preflight"
+    );
+    let bytes = unsafe { heap.cpu_backing_request(index, extent, align) };
+    if bytes != 0 {
+        heap.cpu_allocation = Some(heap.meter.cpu.get().unwrap().reserve_heap(bytes)?);
+    }
+    Ok(())
 }
 
 /// Reserve ordered speculative storage before borrowing a worker heap. The
@@ -2434,8 +2536,7 @@ pub unsafe extern "C" fn hirsel_rt_v2_reuse(
         #[cfg(feature = "system-allocator")]
         if (*token).kind() == KIND_SMALL && ctx.heap().bare_capacity(index, extent, align).is_none()
         {
-            ordered_preflight(ctx, index, extent, align);
-            let (block, _) = ctx.heap().allocate(index, extent, align);
+            let (block, _) = allocate_heap(ctx, index, extent, align);
             ptr::copy_nonoverlapping(payload(token), payload(block), capacity as usize);
             ctx.heap().free(token);
             out_block.write(block);
@@ -2607,8 +2708,7 @@ unsafe fn detach_reserved(
                 .unwrap_or_else(|| fault("a sequence capacity overflows its extent"));
             let align = element_align.max(8);
             check_request(extent, align);
-            ordered_preflight(ctx, (*block).index(), extent, align);
-            let (fresh, bytes) = (*ctx).heap().allocate((*block).index(), extent, align);
+            let (fresh, bytes) = allocate_heap(ctx, (*block).index(), extent, align);
             if (*ctx).heap().diagnostic {
                 ptr::write_bytes(payload(fresh), UNINIT_POISON, bytes as usize);
             }
@@ -2670,9 +2770,8 @@ unsafe fn grow(
         if keep > (*ctx).heap_ref().capacity(old) || keep > extent {
             fault("a sequence count exceeds its storage");
         }
-        ordered_preflight(ctx, (*old).index(), extent, align);
+        let (new, bytes) = allocate_heap(ctx, (*old).index(), extent, align);
         let heap = &mut (*ctx).heap();
-        let (new, bytes) = heap.allocate((*old).index(), extent, align);
         if heap.diagnostic {
             check_poison(new);
             ptr::write_bytes(payload(new), UNINIT_POISON, bytes as usize);
@@ -2699,6 +2798,10 @@ pub extern "C" fn hirsel_rt_v2_payload(block: *mut Header) -> *mut u8 {
 pub unsafe extern "C" fn hirsel_rt_v2_capacity(block: *mut Header) -> u64 {
     unsafe { (*block).capacity() }
 }
+
+#[cfg(test)]
+#[path = "alloc/cpu_tests.rs"]
+mod cpu_tests;
 
 #[cfg(test)]
 mod sequence_tests {

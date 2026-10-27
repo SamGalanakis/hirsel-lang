@@ -25,6 +25,27 @@ pub(crate) struct Topology {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BackingFull;
 
+/// Capacity reserved before an allocator borrow. An abandoned request returns
+/// its reservation; backing actually obtained keeps its charge until freed.
+pub(crate) struct HeapReservation {
+    ledger: Arc<Ledger>,
+    bytes: u64,
+}
+
+impl HeapReservation {
+    pub(crate) fn consume(&mut self, bytes: u64) {
+        self.bytes = self.bytes.checked_sub(bytes).expect("reserved CPU backing");
+    }
+}
+
+impl Drop for HeapReservation {
+    fn drop(&mut self) {
+        if self.bytes != 0 {
+            self.ledger.credit_heap(self.bytes);
+        }
+    }
+}
+
 impl Ledger {
     pub(crate) fn new(grant: &hirsel_run_schema::CpuGrant) -> Arc<Self> {
         Arc::new(Self {
@@ -33,10 +54,21 @@ impl Ledger {
             held: Mutex::default(),
         })
     }
-    pub(crate) fn charge_heap(&self, bytes: u64) {
+    #[cfg(test)]
+    fn charge_heap(&self, bytes: u64) {
         if self.try_charge_job_heap(bytes).is_err() {
             crate::budget::exceeded(hirsel_run_schema::BudgetKind::Memory);
         }
+    }
+    pub(crate) fn reserve_heap(
+        self: &Arc<Self>,
+        bytes: u64,
+    ) -> Result<HeapReservation, BackingFull> {
+        self.try_charge_job_heap(bytes)?;
+        Ok(HeapReservation {
+            ledger: self.clone(),
+            bytes,
+        })
     }
     /// Job charges are summarized separately in Stretch. Backing
     /// admission checks the grant; its order cannot select a
@@ -127,6 +159,23 @@ mod tests {
             max_batch_bytes: batch,
         }
     }
+    #[test]
+    fn outstanding_heap_reservations_share_the_cap_and_return_only_unused_bytes() {
+        let ledger = Ledger::new(&grant(2 << 30, 200));
+        let topology = ledger.topology(4).unwrap();
+        let mut first = ledger.reserve_heap(100).unwrap();
+        let second = ledger.reserve_heap(100).unwrap();
+        assert!(matches!(ledger.reserve_heap(1), Err(BackingFull)));
+        first.consume(60);
+        drop(first);
+        assert_eq!(ledger.held.lock().unwrap().heap, 160);
+        drop(second);
+        assert_eq!(ledger.held.lock().unwrap().heap, 60);
+        ledger.credit_heap(60);
+        assert_eq!(ledger.held.lock().unwrap().heap, 0);
+        drop(topology);
+    }
+
     #[test]
     fn retained_backing_is_not_reset_by_topology_exit_and_blocks_the_next_reservation() {
         let ledger = Ledger::new(&grant(2 << 30, 1 << 29));

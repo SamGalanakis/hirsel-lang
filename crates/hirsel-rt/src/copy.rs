@@ -728,8 +728,7 @@ pub(crate) unsafe fn detach_sized(
         if (*ctx.descriptor((*block).index())).finalizer.is_some() {
             fault("a detach reached a resource, which is noncopyable");
         }
-        crate::alloc::ordered_preflight(raw, (*block).index(), extent, align);
-        let (copy, capacity) = ctx.heap().allocate((*block).index(), extent, align);
+        let (copy, capacity) = crate::alloc::allocate_heap(raw, (*block).index(), extent, align);
         if ctx.heap().diagnostic {
             ptr::write_bytes(
                 payload(copy),
