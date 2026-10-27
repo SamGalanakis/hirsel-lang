@@ -8,9 +8,11 @@ fn keyed_export_keeps_its_snapshot_and_matches_the_artifact_oracle_after_an_edit
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("main.hir");
         std::fs::write(&path, "const A:u8=comptime 7u8; pub fn main()->u8{A}\n").unwrap();
+        let manifest = directory.path().join("hirsel.json");
+        std::fs::write(&manifest, r#"{"schema":1,"package":{"name":"export_snapshot","version":"1"},"sources":[{"path":"main.hir","module":[]}],"dependencies":[],"entry":{"module":[],"name":"main"}}"#).unwrap();
         for jobs in [1, 2] {
             let mut session = Session::open_configured(
-                &path,
+                &manifest,
                 CompileConfig {
                     store: Arc::new(MemStore::default()),
                     jobs: hirsel_intern::jobs::Jobs::new(jobs),
@@ -22,7 +24,7 @@ fn keyed_export_keeps_its_snapshot_and_matches_the_artifact_oracle_after_an_edit
             let CompileResult::ExportTir(text) = &first.result else {
                 panic!("expected export")
             };
-            let verifier = COMPILER.load_program(&path).unwrap();
+            let verifier = COMPILER.load_program(&manifest).unwrap();
             let imported = verifier.engine.import_tir(text).unwrap();
             assert!(imported.definition(&first.entry).is_some());
             let again = session.request(CompileOperation::ExportTir).unwrap();
