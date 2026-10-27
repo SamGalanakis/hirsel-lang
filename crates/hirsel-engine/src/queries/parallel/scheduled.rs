@@ -420,6 +420,14 @@ impl FrontBodyQueries {
     pub(crate) fn observe(&self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         use crate::memo::LookupSource;
         Some(match *read {
+            ReadKey::PrivateSummary(id) => memos::private_summary_value(
+                &self
+                    .snapshot
+                    .signature(id)
+                    .and_then(Result::ok)?
+                    .metadata
+                    .inferred_unique,
+            ),
             ReadKey::DeclaredSignature(id) => {
                 let signature = self.snapshot.signature(id).and_then(Result::ok)?;
                 memos::declared_signature_value(&self.types, signature)?

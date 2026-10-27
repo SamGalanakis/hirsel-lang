@@ -147,7 +147,7 @@ impl Inference {
         candidates: &BTreeSet<DefId>,
     ) {
         for &(key, value) in observed {
-            if matches!(key, ReadKey::Signature(id) | ReadKey::DeclaredSignature(id) if candidates.contains(&id))
+            if matches!(key, ReadKey::Signature(id) | ReadKey::DeclaredSignature(id) | ReadKey::PrivateSummary(id) if candidates.contains(&id))
             {
                 continue;
             }
@@ -180,7 +180,7 @@ impl Inference {
         let mut reads = ReadsBuilder::new();
         reads.merge(&self.base);
         let mut bodies = Vec::new();
-        let candidates = self
+        let candidates: BTreeSet<DefId> = self
             .inputs
             .iter()
             .map(|input| input.signature.value.definition)
@@ -196,7 +196,10 @@ impl Inference {
                     input
                         .reads
                         .iter()
-                        .filter(|(key, _)| self.base.get(key).is_none())
+                        .filter(|(key, _)| {
+                            self.base.get(key).is_none()
+                                && !matches!(key, ReadKey::PrivateSummary(id) if candidates.contains(id))
+                        })
                         .copied()
                         .collect(),
                 )
@@ -364,6 +367,25 @@ impl QueryEngine {
                 .all(|(id, _)| hirsel_types::unique_summary::same_module(id.path(), path)))
         .then_some(facts)
     }
+    pub(super) fn restored_private_summary(
+        &mut self,
+        id: DefId,
+    ) -> Option<hirsel_types::UniqueSummary> {
+        if let Some(summary) = self.private_summaries.get(&id) {
+            return Some(summary.clone());
+        }
+        // A body-free consumer can validate the producer's complete module
+        // reads and adopt its proof without installing a Modes adapter.
+        let facts = self.load_inference(id.path())?;
+        let reads = Arc::new(facts.reads);
+        for (definition, proof) in facts.proofs {
+            self.private_summaries.insert(definition, proof.summary);
+            self.private_unique_failures
+                .insert(definition, proof.failures);
+            self.private_summary_reads.insert(definition, reads.clone());
+        }
+        self.private_summaries.get(&id).cloned()
+    }
     fn adopt_inference(
         &mut self,
         facts: Facts,
@@ -419,6 +441,15 @@ impl QueryEngine {
                 Ok(reservation)
             });
         self.private_summary_active = false;
+        if result.is_err() {
+            let mut changes = crate::memo::ChangeSet::default();
+            for id in self.private_summaries.keys() {
+                let read = ReadKey::PrivateSummary(*id);
+                changes.read(read, self.durability_of(&read));
+            }
+            self.apply_changes(&changes);
+            self.retire_snapshot();
+        }
         self.private_summary_failure = result
             .as_ref()
             .err()
@@ -461,7 +492,6 @@ impl QueryEngine {
                 }
             }
             let previous = local.remove(&(package, module));
-            let resident = previous.is_some();
             let previous = previous.filter(|facts| {
                 generated
                     .iter()
@@ -512,16 +542,6 @@ impl QueryEngine {
                 .collect();
             if potential.is_empty() {
                 continue;
-            }
-            // A signature may have survived a header-preserving body edit
-            // while carrying the old inference's representation/body receipts.
-            // Normalize missed candidates again before freezing this inference;
-            // the fresh declaration cannot inherit an invalid previous proof.
-            if resident {
-                for path in &potential {
-                    self.signatures.remove(&DefId::intern(path));
-                }
-                self.retire_snapshot();
             }
             pending.push((package, module, paths, potential, expected));
         }

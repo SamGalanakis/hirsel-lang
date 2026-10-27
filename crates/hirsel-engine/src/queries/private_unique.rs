@@ -22,14 +22,11 @@ impl QueryEngine {
     }
 
     pub(super) fn observe_private_summary(&self, id: DefId, observed: &mut Observed) {
-        // Empty facts grant no capability. Keep their body receipts on the
-        // inference query; a later nonempty proof explicitly changes the
-        // signature and invalidates its subscribers during publication.
-        if self.private_summaries.get(&id).is_none_or(|s| s.is_empty()) {
-            return;
-        }
-        if let Some(reads) = self.private_summary_reads.get(&id) {
-            observed.merged.merge(reads);
+        if let Some(summary) = self.private_summaries.get(&id) {
+            observed.merged.record(
+                crate::memo::ReadKey::PrivateSummary(id),
+                memos::private_summary_value(summary),
+            );
         }
     }
 
@@ -72,12 +69,6 @@ impl QueryEngine {
                 {
                     if summary == previous
                         && output.value.metadata.inferred_unique == summary
-                        && (summary.is_empty()
-                            || self.private_summary_reads.get(&id).is_some_and(|reads| {
-                                reads
-                                    .iter()
-                                    .all(|(key, value)| entry.reads().get(key) == Some(*value))
-                            }))
                         && self.memo_valid(id.path(), &entry, entry.memo.text)
                     {
                         continue;
@@ -94,10 +85,7 @@ impl QueryEngine {
                         let mut observed = Observed::default();
                         observed.products = entry.products.clone();
                         for (key, value) in entry.reads().iter() {
-                            if !matches!(key, crate::memo::ReadKey::NameSet(..))
-                                && !matches!(key, crate::memo::ReadKey::CitedText(d)
-                                if hirsel_types::unique_summary::same_module(d.path(), id.path()))
-                            {
+                            if !matches!(key, crate::memo::ReadKey::PrivateSummary(d) if *d == id) {
                                 observed.merged.record(*key, *value);
                             }
                         }

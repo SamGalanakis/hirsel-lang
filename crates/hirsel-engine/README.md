@@ -684,6 +684,13 @@ and the environment (design §1b). A memo's own content is its text: the item's
 text hash (headers' hashes for a signature) with its package's closure
 manifest.
 
+Private inference owns its module's body, membership and declaration reads.
+A normalized private signature reads the settled `PrivateSummary` output,
+so a body edit with the same inferred proof preserves the header and its
+subscribers. A changed proof updates the signature before the next immutable
+snapshot is published. Persisted reads append the private-summary kind after
+all existing tags.
+
 The `MemoGraph` keeps each memo's record and the reverse index `ReadKey →
 subscribers`. Indexing a file diffs each affected definition's inputs (body,
 headers, candidates, anchors, name kind and visibility) and marks exactly the

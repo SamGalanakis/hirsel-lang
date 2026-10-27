@@ -270,3 +270,145 @@ fn generated()->Bytes uses {} = comptime make()
         }
     });
 }
+
+#[test]
+fn changed_private_result_proofs_invalidate_unchanged_callers() {
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let source = "const NAME:String=\"shared\"\nfn code()->String{\"fresh\"}\nfn need(take value:unique String){}\npub fn main(){need(code())}\n";
+        let mut code = entry_path(&default_context());
+        code.0.name = "code".into();
+        let entry = entry_path(&default_context());
+        let check = |engine: &mut QueryEngine, source: &str| {
+            let file = engine
+                .sources
+                .add("private-result-edits.hir", source.into())
+                .unwrap();
+            check_progress(engine, file, &default_context()).unwrap()
+        };
+        let accepted = check(&mut engine, source);
+        assert!(
+            accepted.diagnostics.is_empty(),
+            "{:?}",
+            accepted.diagnostics
+        );
+        engine.lower_to_tir(&entry).unwrap();
+        let fingerprint = engine.item_signature(&code).unwrap().value.fingerprint;
+        let before = engine.recompute_count(&entry, QueryKind::Modes);
+
+        let rejected = check(&mut engine, &source.replace("{\"fresh\"}", "{NAME}"));
+        assert!(
+            rejected
+                .diagnostics
+                .iter()
+                .any(|d| d.rule.as_str() == "MODE-2")
+        );
+        assert_ne!(
+            engine.item_signature(&code).unwrap().value.fingerprint,
+            fingerprint
+        );
+        assert!(engine.recompute_count(&entry, QueryKind::Modes) > before);
+
+        let accepted = check(&mut engine, source);
+        assert!(
+            accepted.diagnostics.is_empty(),
+            "{:?}",
+            accepted.diagnostics
+        );
+        assert_eq!(
+            engine.item_signature(&code).unwrap().value.fingerprint,
+            fingerprint
+        );
+        engine.lower_to_tir(&entry).unwrap();
+    });
+}
+
+#[test]
+fn failed_private_inference_cannot_reuse_a_successful_signature_snapshot() {
+    struct RefuseInference(Arc<dyn ModesPhase>);
+    impl ModesPhase for RefuseInference {
+        fn infers_private_unique(&self) -> bool {
+            true
+        }
+        fn infer_unique(
+            &self,
+            _: &hirsel_types::TypeInterner,
+            _: &hirsel_types::TypeMemo,
+            _: &[(Arc<TypedBody>, hirsel_types::SignatureRef)],
+            _: &mut dyn hirsel_types::SignatureProvider,
+        ) -> Result<
+            Vec<(hirsel_syntax::DefId, hirsel_types::UniqueInference)>,
+            hirsel_types::QueryError,
+        > {
+            Err(hirsel_types::QueryError::NotImplemented)
+        }
+        fn check_modes(
+            &self,
+            types: &hirsel_types::TypeInterner,
+            memo: &hirsel_types::TypeMemo,
+            body: Arc<TypedBody>,
+            signature: &hirsel_types::Signature,
+            products: &mut PhaseProducts,
+            signatures: &mut dyn hirsel_types::SignatureProvider,
+        ) -> Result<hirsel_types::QueryOutput<AnalyzedBody>, hirsel_types::QueryError> {
+            self.0
+                .check_modes(types, memo, body, signature, products, signatures)
+        }
+    }
+    with_compiler_stack(|| {
+        let mut engine = QueryEngine::new(default_environment(), compiler_adapters());
+        let context = default_context();
+        let entry = entry_path(&context);
+        let file = engine
+            .sources
+            .add("failed-inference.hir", "fn main()->u64{1u64}".into())
+            .unwrap();
+        assert!(
+            check_progress(&mut engine, file, &context)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
+        let original = engine.signature_snapshot();
+        assert!(
+            original
+                .signature(hirsel_syntax::DefId::intern(&entry))
+                .unwrap()
+                .is_ok()
+        );
+        let modes = engine.adapters.modes.clone().unwrap();
+        engine.adapters.modes = Some(Arc::new(RefuseInference(modes.clone())));
+        let file = engine
+            .sources
+            .add("failed-inference.hir", "fn main()->u64{2u64}".into())
+            .unwrap();
+        engine.parse_file(file, &context).unwrap();
+        let budget = ProcessBudget::new(256 << 20);
+        assert!(
+            engine
+                .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+                .is_err()
+        );
+        assert_eq!(budget.reserved(), 0);
+        assert!(engine.item_signature(&entry).is_err());
+        assert!(
+            engine
+                .signature_snapshot()
+                .signature(hirsel_syntax::DefId::intern(&entry))
+                .unwrap()
+                .is_err()
+        );
+        engine.adapters.modes = Some(modes);
+        engine
+            .prepare_private_inference(budget.reserve(256 << 20).unwrap())
+            .unwrap();
+        assert!(engine.item_signature(&entry).is_ok());
+        assert!(
+            engine
+                .signature_snapshot()
+                .signature(hirsel_syntax::DefId::intern(&entry))
+                .unwrap()
+                .is_ok()
+        );
+    });
+}

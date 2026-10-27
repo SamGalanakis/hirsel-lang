@@ -114,6 +114,10 @@ pub(crate) fn declared_signature_value(
     declaration.metadata.inferred_unique = Default::default();
     hirsel_types::encoding::fingerprint(types, &declaration, &[]).ok()
 }
+pub(crate) fn private_summary_value(summary: &hirsel_types::UniqueSummary) -> ContentHash {
+    let encoded = bincode::serialize(summary).expect("in-memory private summary encoding");
+    tag("hirsel.read.private-summary.v1", &[&encoded])
+}
 /// The observed value of a signature read: its fingerprint, or failure.
 pub(crate) fn signature_value(result: Option<ContentHash>) -> ContentHash {
     result.unwrap_or_else(|| tag("hirsel.read.failed-signature", &[]))
@@ -457,6 +461,17 @@ impl QueryEngine {
     /// The value `owner` observes for `read` now.
     pub(crate) fn observe(&mut self, owner: &DefPath, read: &ReadKey) -> Option<ContentHash> {
         Some(match *read {
+            ReadKey::PrivateSummary(d) => {
+                if !self.private_summary_active
+                    && self
+                        .private_summary_failure
+                        .as_ref()
+                        .is_some_and(|(revision, _)| *revision == self.graph.revision())
+                {
+                    return None;
+                }
+                private_summary_value(&self.restored_private_summary(d)?)
+            }
             ReadKey::DeclaredSignature(d) => {
                 let signature = self
                     .current_snapshot_signature(d)
@@ -882,6 +897,7 @@ impl QueryEngine {
             for k in [
                 ReadKey::Signature(id),
                 ReadKey::DeclaredSignature(id),
+                ReadKey::PrivateSummary(id),
                 ReadKey::FailedSignature(id),
                 ReadKey::ExecutedSignature(id),
                 ReadKey::DeclarationCandidates(id),
